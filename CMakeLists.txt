@@ -38,7 +38,6 @@ option(TRANSCRIBE_BUILD_EXAMPLES "Build example CLI"        ON)
 option(TRANSCRIBE_BUILD_TOOLS    "Build inspect / quantize" OFF)  # post pass 2
 option(TRANSCRIBE_METAL          "Enable Metal backend"     ${TRANSCRIBE_IS_APPLE_SILICON})
 option(TRANSCRIBE_VULKAN         "Enable Vulkan backend"    OFF)  # post-v1
-option(TRANSCRIBE_BLAS           "Enable BLAS for encoder matmuls" ON)
 option(TRANSCRIBE_SANITIZE       "Enable ASan + UBSan"      OFF)
 option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 
@@ -118,18 +117,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 set(GGML_METAL    ${TRANSCRIBE_METAL}  CACHE BOOL "" FORCE)
 set(GGML_VULKAN   ${TRANSCRIBE_VULKAN} CACHE BOOL "" FORCE)
-set(GGML_BLAS     ${TRANSCRIBE_BLAS}   CACHE BOOL "" FORCE)
-
-# On Apple, Accelerate provides BLAS; elsewhere let ggml's find_package
-# probe for OpenBLAS / MKL / BLIS. If nothing is found, ggml gracefully
-# disables the BLAS backend at configure time.
-if(TRANSCRIBE_BLAS)
-    if(APPLE)
-        set(GGML_BLAS_VENDOR "Apple" CACHE STRING "" FORCE)
-    elseif(NOT DEFINED CACHE{GGML_BLAS_VENDOR})
-        set(GGML_BLAS_VENDOR "OpenBLAS" CACHE STRING "")
-    endif()
-endif()
+set(GGML_BLAS OFF CACHE BOOL "" FORCE)
 
 # We don't want ggml's tests / examples leaking into our build tree. They
 # default to OFF when ggml is added as a subdirectory (GGML_STANDALONE OFF),
