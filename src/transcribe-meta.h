@@ -1,0 +1,153 @@
+// transcribe-meta.h - shared GGUF KV reading helpers + post-load
+// metadata reads (capabilities, languages).
+//
+// This header is INTERNAL. The public C ABI in include/transcribe.h
+// knows nothing about gguf_context; the helpers here are how loader
+// code and family handlers talk to a gguf_context once it's open.
+//
+// What lives here:
+//
+//   - KvResult: a tri-state {Absent, Ok, BadType} return type for
+//     low-level KV readers. The whole point is to distinguish "the
+//     converter didn't write this key" (Absent — usually fine for
+//     optional keys) from "the converter wrote it with the wrong
+//     type" (BadType — always a converter bug, surface as
+//     TRANSCRIBE_ERR_GGUF). The original 2B implementation collapsed
+//     these two into a single boolean and silently treated bad-type
+//     optional KV as missing, which papered over real converter
+//     mistakes.
+//
+//   - read_*_kv low-level helpers: one per scalar / string / string-
+//     array KV type. Each returns KvResult and writes the parsed
+//     value into an out parameter on Ok. On Absent or BadType the
+//     out parameter is left untouched.
+//
+//   - read_capability_kv / read_languages_kv: post-load helpers that
+//     family handlers call after applying their own family defaults.
+//     Capabilities and languages are family-agnostic in the sense
+//     that any family handler reads the same keys via the same
+//     helpers; per-family code only fills in defaults for keys the
+//     converter chose to omit.
+//
+// Why this is its own header instead of squatting on transcribe-loader.h:
+// the loader is the "open a GGUF and identify it" object. These helpers
+// are the "now that the GGUF is open, here is how shared metadata is
+// read." Different jobs.
+
+#pragma once
+
+#include "transcribe.h"
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+struct gguf_context;
+struct transcribe_model;
+
+namespace transcribe {
+
+// Tri-state result for a single GGUF KV read. The strict-now intent is
+// that any consumer of these helpers explicitly handles BadType — the
+// type system makes "I forgot about wrong type" a compile-time
+// observation rather than a silent runtime fallback.
+enum class KvResult {
+    Absent,    // Key not present in the gguf.
+    Ok,        // Key present, type matches expectation, value extracted.
+    BadType,   // Key present but the GGUF type does not match. Always a
+               // converter bug; callers should surface as TRANSCRIBE_ERR_GGUF.
+};
+
+// ---------------------------------------------------------------------------
+// Low-level scalar / string / string-array readers
+// ---------------------------------------------------------------------------
+//
+// Every helper takes the gguf_context, the key, and an out parameter.
+// On Absent / BadType the out parameter is NOT modified, so callers can
+// safely pre-populate a default and rely on the read leaving it alone
+// when the key is missing.
+
+KvResult read_string_kv(const gguf_context * ctx, const char * key,
+                        std::string & out);
+
+KvResult read_bool_kv  (const gguf_context * ctx, const char * key,
+                        bool & out);
+
+KvResult read_uint32_kv(const gguf_context * ctx, const char * key,
+                        uint32_t & out);
+
+KvResult read_int32_kv (const gguf_context * ctx, const char * key,
+                        int32_t & out);
+
+KvResult read_float32_kv(const gguf_context * ctx, const char * key,
+                         float & out);
+
+// Convenience: special-token id KV. The GGUF tokenizer schema has not
+// standardized whether token ids are uint32 or int32 (different
+// converters in the wider ecosystem use different types). This helper
+// accepts either and casts to int. BadType only fires when the key is
+// present and is neither uint32 nor int32.
+KvResult read_token_id_kv(const gguf_context * ctx, const char * key,
+                          int & out);
+
+// String array. The destination vector is cleared and replaced with
+// the parsed contents only on Ok. On Absent / BadType the destination
+// is left untouched (caller's responsibility to pre-populate or
+// post-validate).
+KvResult read_string_array_kv(const gguf_context * ctx, const char * key,
+                              std::vector<std::string> & out);
+
+// int32 scalar array. Same Absent/Ok/BadType semantics as the other
+// readers; the destination vector is replaced only on Ok. Used by the
+// Parakeet TDT durations KV (`stt.parakeet.tdt.durations`); generic
+// enough to live alongside the other low-level readers.
+KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
+                             std::vector<int32_t> & out);
+
+// ---------------------------------------------------------------------------
+// Post-load shared metadata
+// ---------------------------------------------------------------------------
+//
+// These are the "every family handler does this" pieces of post-load
+// state population. They live here rather than in each family's
+// arch/<family>/ directory because the schema (stt.capability.*,
+// general.languages) is shared across families by design.
+
+// Read all currently-recognized stt.capability.* boolean keys into
+// caps, leaving fields untouched for absent keys. Callers should call
+// this AFTER their own family-default population (apply_family_invariants
+// or equivalent), so KV present overrides the family default and KV
+// absent leaves the family default in place. This matches PLAN.md's
+// "GGUF KV is authoritative; if a key is absent, the architecture
+// supplies a default" rule.
+//
+// In 2B the recognized keys are stt.capability.translate,
+// stt.capability.lang_detect, and stt.capability.streaming. The
+// timestamp granularity capability fields are deliberately deferred
+// until the public-header semantics are sharpened — see RESUME.md
+// open question 4.
+//
+// Returns:
+//   TRANSCRIBE_OK              on success or "all keys absent".
+//   TRANSCRIBE_ERR_INVALID_ARG if gguf is null.
+//   TRANSCRIBE_ERR_GGUF        if any recognized key is present with
+//                              the wrong type.
+transcribe_status read_capability_kv(const gguf_context *      gguf,
+                                     transcribe_capabilities & caps);
+
+// Read general.languages (string array of BCP-47-ish short codes) and
+// install it on the model via transcribe_model::set_languages(). On
+// Absent the model's language list is left unchanged (the caller is
+// expected to pre-populate it as zero / nullptr — see the
+// "information gap, not a claim" comment in arch/parakeet/model.cpp).
+//
+// Returns:
+//   TRANSCRIBE_OK              on success or absent.
+//   TRANSCRIBE_ERR_INVALID_ARG if gguf is null.
+//   TRANSCRIBE_ERR_GGUF        if general.languages is present but is
+//                              not a string array, or any element is
+//                              null.
+transcribe_status read_languages_kv(const gguf_context * gguf,
+                                    transcribe_model &   model);
+
+} // namespace transcribe

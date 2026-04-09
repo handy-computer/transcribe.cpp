@@ -1,0 +1,50 @@
+# Build trees
+/build/
+/build-*/
+/cmake-build-*/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+# Claude Code
+.claude/
+
+# Python (for converters under scripts/)
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+
+# Generated artifacts that should not be committed
+*.gguf
+*.nemo
+*.safetensors
+*.onnx
+*.onnx.data
+
+# Local model artifacts (converter output, etc).
+/models/
+
+# Local-only fetched golden assets (kept out of git - they
+# should be fetchable, not assumed present in every contributor environment)
+/tests/golden/**/*.f32
+/tests/golden/**/*.bin
+/tests/golden/**/*.npy
+
+# Symlinked references stash for editor grepping
+/references/
+
+# WER evaluation data + reports (large audio datasets, generated reports).
+/samples/wer/
+/reports/
+
+# Internal planning docs (not committed)
+PORTING.md
+RESUME.md
+PERF.md
+WER_TESTING.md

@@ -1,0 +1,732 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""
+make_gguf_fixtures.py - emit synthetic GGUF files for the loader tests.
+
+We deliberately implement the GGUF binary format directly here instead
+of pulling in a third-party gguf-py package. The format is documented
+in ggml/include/gguf.h, and a from-scratch writer keeps the test
+surface hermetic and uv-friendly (no dependency resolution at
+configure time). Tensor data emission uses Python struct only — no
+numpy dep — because the toy tensors are tiny (~3000 fp32 elements).
+
+Five fixtures are emitted:
+
+  arch_parakeet.gguf       -- valid header, KV pairs:
+                                general.architecture = "parakeet"
+                                stt.variant          = "tdt-0.6b-v2"
+                              No tokenizer KV. Used to assert the loader
+                              recognizes the architecture and dispatches
+                              to the Parakeet handler, which now
+                              requires tokenizer KV and so returns
+                              TRANSCRIBE_ERR_GGUF for this fixture.
+
+  arch_unknown.gguf        -- valid header, KV pair:
+                                general.architecture = "banana"
+                              Used to assert the loader returns
+                              TRANSCRIBE_ERR_UNSUPPORTED_ARCH for an
+                              arch the registry does not know about.
+
+  corrupt_magic.gguf       -- four bytes of garbage where "GGUF" should
+                              be, followed by an otherwise plausible
+                              header. Used to assert the loader returns
+                              TRANSCRIBE_ERR_GGUF when
+                              gguf_init_from_file rejects the file.
+
+  tokenizer_minimal.gguf   -- a structurally complete minimal Parakeet
+                              model: parakeet arch, stt.variant
+                              "tdt-0.6b-v2", full tokenizer payload, the
+                              full stt.parakeet.* / stt.frontend.* KV
+                              block (toy hparams: 2 encoder layers,
+                              d_model=8, n_heads=2, ...), and all 78
+                              weight tensors with deterministic toy
+                              float32 data. No capability KV and no
+                              general.languages — exercises the
+                              family-default code path. Despite the
+                              "tokenizer_" name, this is now a complete
+                              Parakeet model the loader walks
+                              end-to-end (tokenizer + capabilities +
+                              hparams + weights). Both
+                              transcribe_tokenizer_smoke and
+                              transcribe_parakeet_smoke load this file
+                              and assert different things about it.
+
+  tokenizer_minimal_v3.gguf -- structurally identical to
+                              tokenizer_minimal.gguf except:
+                                stt.variant              = "tdt-0.6b-v3"
+                                stt.capability.lang_detect = true
+                                general.languages = ["en","de","fr","es"]
+                              Same toy vocabulary, same hparams, same
+                              tensor catalog. The only behavioral
+                              difference at the loader level is the
+                              variant string + capability + language
+                              KV — proves the v2 / v3 split is fully
+                              KV-driven and shares the same code path.
+
+Run:
+
+    uv run tests/fixtures/make_gguf_fixtures.py [output_dir]
+
+If output_dir is omitted the script writes next to itself
+(tests/fixtures/). It is also invoked from CMake as a custom target so
+a local `cmake --build build --target fixtures` regenerates the files.
+"""
+
+from __future__ import annotations
+
+import struct
+import sys
+from pathlib import Path
+
+# These match the constants in ggml/include/gguf.h. Pinned here so the
+# generator does not silently drift if upstream renumbers (it would just
+# stop matching the loader, which the loader tests would catch).
+GGUF_MAGIC = b"GGUF"
+GGUF_VERSION = 3
+GGUF_DEFAULT_ALIGNMENT = 32
+
+# gguf_type enum values (only the ones we use).
+GGUF_TYPE_UINT32  = 4
+GGUF_TYPE_INT32   = 5
+GGUF_TYPE_FLOAT32 = 6
+GGUF_TYPE_BOOL    = 7
+GGUF_TYPE_STRING  = 8
+GGUF_TYPE_ARRAY   = 9
+
+# ggml_type enum values used for tensor data. Pinned here so we are not
+# at the mercy of upstream renumbering — a mismatch would surface as a
+# loader test failure (the most useful possible signal).
+GGML_TYPE_F32 = 0
+
+# Bytes per element for each ggml_type we emit.
+GGML_TYPE_SIZE = {
+    GGML_TYPE_F32: 4,
+}
+
+
+def _pack_string(s: str) -> bytes:
+    # GGUF strings: uint64 length followed by raw bytes (NO trailing null).
+    data = s.encode("utf-8")
+    return struct.pack("<Q", len(data)) + data
+
+
+def _pack_kv_string(key: str, value: str) -> bytes:
+    return (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_STRING)
+        + _pack_string(value)
+    )
+
+
+def _pack_kv_uint32(key: str, value: int) -> bytes:
+    return (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_UINT32)
+        + struct.pack("<I", value)
+    )
+
+
+def _pack_kv_bool(key: str, value: bool) -> bytes:
+    # GGUF stores bool values as int8 on the wire (see gguf.h: "All bool
+    # values are stored as int8_t").
+    return (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_BOOL)
+        + struct.pack("<b", 1 if value else 0)
+    )
+
+
+def _pack_kv_float32(key: str, value: float) -> bytes:
+    return (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_FLOAT32)
+        + struct.pack("<f", value)
+    )
+
+
+def _pack_kv_array_string(key: str, values: list[str]) -> bytes:
+    body = (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_ARRAY)
+        + struct.pack("<i", GGUF_TYPE_STRING)
+        + struct.pack("<Q", len(values))
+    )
+    for v in values:
+        body += _pack_string(v)
+    return body
+
+
+def _pack_kv_array_float32(key: str, values: list[float]) -> bytes:
+    body = (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_ARRAY)
+        + struct.pack("<i", GGUF_TYPE_FLOAT32)
+        + struct.pack("<Q", len(values))
+    )
+    for v in values:
+        body += struct.pack("<f", v)
+    return body
+
+
+def _pack_kv_array_int32(key: str, values: list[int]) -> bytes:
+    body = (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_ARRAY)
+        + struct.pack("<i", GGUF_TYPE_INT32)
+        + struct.pack("<Q", len(values))
+    )
+    for v in values:
+        body += struct.pack("<i", v)
+    return body
+
+
+def _build_header(magic: bytes, kv_blobs: list[bytes]) -> bytes:
+    """Build a complete GGUF file with N pre-encoded KV blobs and zero tensors.
+
+    Each entry in `kv_blobs` is the full key+type+value byte sequence for
+    one KV pair, as produced by one of the _pack_kv_* helpers above.
+    Mixing string / array / scalar KV in one file would otherwise need a
+    polymorphic representation that the test fixtures do not benefit from.
+
+    Pads to GGUF_DEFAULT_ALIGNMENT after the KV section because the loader
+    seeks to that aligned offset before declaring "data section starts
+    here", even when there are no tensors. Without the padding the seek
+    lands past EOF — POSIX permits that, but we are explicit.
+    """
+    body = bytearray()
+    body += magic
+    body += struct.pack("<I", GGUF_VERSION)
+    body += struct.pack("<q", 0)  # n_tensors
+    body += struct.pack("<q", len(kv_blobs))  # n_kv
+    for blob in kv_blobs:
+        body += blob
+    # Pad to alignment so the (empty) tensor data section starts on a
+    # boundary the loader is happy with.
+    pad = (-len(body)) % GGUF_DEFAULT_ALIGNMENT
+    body += b"\x00" * pad
+    return bytes(body)
+
+
+def _string_kvs(pairs: list[tuple[str, str]]) -> list[bytes]:
+    return [_pack_kv_string(k, v) for k, v in pairs]
+
+
+# ---------------------------------------------------------------------------
+# Tensor emission
+# ---------------------------------------------------------------------------
+#
+# A "Tensor" here is just a (name, ne, dtype, data_bytes) tuple. ne is
+# fast-to-slow dim order matching ggml_tensor::ne[]. data_bytes is the
+# raw little-endian bytes of the tensor's elements, length must equal
+# product(ne) * GGML_TYPE_SIZE[dtype].
+#
+# _build_full_gguf assembles header + KV section + tensor info section
+# + aligned tensor data blob in one pass. The layout follows
+# ggml/include/gguf.h section headers exactly (we read the format from
+# there, not from any third-party gguf-py).
+
+
+class Tensor:
+    __slots__ = ("name", "ne", "dtype", "data")
+
+    def __init__(
+        self, name: str, ne: list[int], dtype: int, data: bytes
+    ) -> None:
+        nbytes = 1
+        for d in ne:
+            nbytes *= d
+        nbytes *= GGML_TYPE_SIZE[dtype]
+        if len(data) != nbytes:
+            raise ValueError(
+                f"tensor {name!r}: ne={ne} dtype={dtype} expects "
+                f"{nbytes} bytes, got {len(data)}"
+            )
+        if not (1 <= len(ne) <= 4):
+            raise ValueError(
+                f"tensor {name!r}: ne must have 1..4 dims, got {len(ne)}"
+            )
+        self.name = name
+        self.ne = list(ne)
+        self.dtype = dtype
+        self.data = data
+
+
+def _ggml_pad(x: int, align: int = GGUF_DEFAULT_ALIGNMENT) -> int:
+    """Round x up to the next multiple of align."""
+    return (x + align - 1) // align * align
+
+
+def _pack_tensor_info(t: Tensor, data_offset: int) -> bytes:
+    body = _pack_string(t.name)
+    body += struct.pack("<I", len(t.ne))
+    for d in t.ne:
+        body += struct.pack("<q", d)
+    body += struct.pack("<i", t.dtype)
+    body += struct.pack("<Q", data_offset)
+    return body
+
+
+def _build_full_gguf(
+    magic: bytes,
+    kv_blobs: list[bytes],
+    tensors: list[Tensor],
+) -> bytes:
+    """Assemble a complete GGUF file with KV pairs AND tensor data.
+
+    Layout (from gguf.h):
+      header (24 bytes: magic, version, n_tensors, n_kv)
+      KV section (concatenated kv_blobs)
+      tensor info section (one entry per tensor)
+      [pad to alignment]
+      tensor data blob (each tensor's bytes at its declared offset
+                        within the blob)
+
+    Each tensor's data offset within the data blob is aligned to
+    GGUF_DEFAULT_ALIGNMENT. ggml_get_alignment defaults to 32 when
+    general.alignment is absent (we don't write it), so emitting at the
+    same alignment matches what the loader expects.
+    """
+    body = bytearray()
+    body += magic
+    body += struct.pack("<I", GGUF_VERSION)
+    body += struct.pack("<q", len(tensors))  # n_tensors
+    body += struct.pack("<q", len(kv_blobs))  # n_kv
+
+    for blob in kv_blobs:
+        body += blob
+
+    # Compute per-tensor offsets within the (yet-to-be-written) data
+    # blob. Each tensor starts on a GGUF_DEFAULT_ALIGNMENT boundary;
+    # the size of each tensor is its raw byte count (no internal
+    # padding required because the next tensor's start is realigned).
+    offsets: list[int] = []
+    cursor = 0
+    for t in tensors:
+        cursor = _ggml_pad(cursor)
+        offsets.append(cursor)
+        cursor += len(t.data)
+    data_blob_size = _ggml_pad(cursor)
+
+    for t, off in zip(tensors, offsets):
+        body += _pack_tensor_info(t, off)
+
+    # Pad from end of tensor info section to start of data blob.
+    body_len = len(body)
+    data_blob_start = _ggml_pad(body_len)
+    body += b"\x00" * (data_blob_start - body_len)
+
+    # Emit each tensor's bytes at its declared offset within the data
+    # blob. The data_blob_start above already aligned us to a 32-byte
+    # boundary, so each per-tensor offset (which is also a multiple of
+    # 32) lands at the right absolute position relative to data_blob_start.
+    data_blob = bytearray(data_blob_size)
+    for t, off in zip(tensors, offsets):
+        data_blob[off : off + len(t.data)] = t.data
+    body += bytes(data_blob)
+
+    return bytes(body)
+
+
+def _f32_bytes(values: list[float]) -> bytes:
+    return struct.pack(f"<{len(values)}f", *values)
+
+
+def _f32_seq(num_elements: int, tensor_index: int) -> bytes:
+    """Build deterministic float32 data for a toy tensor.
+
+    The first element of tensor i is exactly float(i). Subsequent
+    elements step by 0.0001. This means a C++ test that loads the
+    fixture and reads `tensor.data[0]` for a known tensor index can
+    assert an exact value, proving the bytes were copied (not zeroed
+    or filled with garbage). Different tensors have different first
+    elements, so a wrong-index swap shows up as a wrong first element.
+    """
+    return _f32_bytes(
+        [tensor_index + j * 0.0001 for j in range(num_elements)]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Toy parakeet hparams + tensor catalog
+# ---------------------------------------------------------------------------
+#
+# The numeric values here are pinned by the parakeet_smoke test (and by
+# the loader's read_parakeet_hparams cross-field validation). They are
+# small enough that the resulting fixture is ~20 KB but structurally
+# complete: every named slot in ParakeetWeights gets a real tensor with
+# the right shape, so the C++ ingest code path is exercised end-to-end.
+
+PARAKEET_HP = {
+    "enc_n_layers":             2,
+    "enc_d_model":              8,
+    "enc_n_heads":              2,
+    "enc_d_ff":                 16,
+    "enc_conv_kernel":          3,
+    "enc_subsampling_factor":   2,
+    "enc_subsampling_channels": 4,
+    "enc_pos_emb_max_len":      32,
+    "pred_hidden":              4,
+    "pred_n_layers":            1,
+    # pred_vocab is the embed table row count, which is (raw vocab + 1)
+    # for the prepended "no previous token" / start row. The toy vocab
+    # is 16 tokens, so pred_vocab is 17.
+    "pred_vocab":               17,
+    "joint_hidden":             4,
+    "joint_num_extra_outputs":  2,
+    # Joint output activation. Real Parakeet 0.6B v2/v3 ship "relu"
+    # (verified from config.json on both variants); we mirror that
+    # in the toy fixture so the loader exercises the same allow-list
+    # branch.
+    "joint_activation":         "relu",
+    # TDT durations. The loader requires len(durations) ==
+    # joint_num_extra_outputs, so a 2-output toy needs a 2-entry
+    # durations list. The exact values are not interesting at the
+    # loader level — the decoder uses them, not the loader.
+    "tdt_durations":            [0, 1],
+    # TDT max_symbols stuck-prevention cap. Mirror the real default.
+    "tdt_max_symbols":          10,
+    # Full stt.frontend.* block. Toy values that satisfy the loader's
+    # cross-field invariants (win_length <= n_fft, f_max > f_min, etc.)
+    # but are otherwise a miniature of NeMo Parakeet's mel pipeline.
+    "fe_type":         "mel",
+    "fe_num_mels":     4,
+    "fe_sample_rate":  16000,
+    "fe_n_fft":        16,
+    "fe_win_length":   8,
+    "fe_hop_length":   4,
+    "fe_window":       "hann",
+    "fe_normalize":    "per_feature",
+    "fe_dither":       1e-5,
+    "fe_pre_emphasis": 0.97,
+    "fe_f_min":        0.0,
+    "fe_f_max":        8000.0,
+}
+
+
+def _parakeet_hparams_kv() -> list[bytes]:
+    """KV blobs for the stt.parakeet.* / stt.frontend.* hparams the
+    loader's read_parakeet_hparams() requires."""
+    hp = PARAKEET_HP
+    return [
+        _pack_kv_uint32("stt.parakeet.encoder.n_layers",             hp["enc_n_layers"]),
+        _pack_kv_uint32("stt.parakeet.encoder.d_model",              hp["enc_d_model"]),
+        _pack_kv_uint32("stt.parakeet.encoder.n_heads",              hp["enc_n_heads"]),
+        _pack_kv_uint32("stt.parakeet.encoder.d_ff",                 hp["enc_d_ff"]),
+        _pack_kv_uint32("stt.parakeet.encoder.conv_kernel",          hp["enc_conv_kernel"]),
+        _pack_kv_uint32("stt.parakeet.encoder.subsampling_factor",   hp["enc_subsampling_factor"]),
+        _pack_kv_uint32("stt.parakeet.encoder.subsampling_channels", hp["enc_subsampling_channels"]),
+        _pack_kv_uint32("stt.parakeet.encoder.pos_emb_max_len",      hp["enc_pos_emb_max_len"]),
+        _pack_kv_uint32("stt.parakeet.predictor.hidden",             hp["pred_hidden"]),
+        _pack_kv_uint32("stt.parakeet.predictor.n_layers",           hp["pred_n_layers"]),
+        _pack_kv_uint32("stt.parakeet.predictor.vocab",              hp["pred_vocab"]),
+        _pack_kv_uint32("stt.parakeet.joint.hidden",                 hp["joint_hidden"]),
+        _pack_kv_uint32("stt.parakeet.joint.num_extra_outputs",      hp["joint_num_extra_outputs"]),
+        _pack_kv_string("stt.parakeet.joint.activation",             hp["joint_activation"]),
+        _pack_kv_array_int32("stt.parakeet.tdt.durations",           hp["tdt_durations"]),
+        _pack_kv_uint32("stt.parakeet.tdt.max_symbols",              hp["tdt_max_symbols"]),
+        _pack_kv_string ("stt.frontend.type",         hp["fe_type"]),
+        _pack_kv_uint32 ("stt.frontend.num_mels",     hp["fe_num_mels"]),
+        _pack_kv_uint32 ("stt.frontend.sample_rate",  hp["fe_sample_rate"]),
+        _pack_kv_uint32 ("stt.frontend.n_fft",        hp["fe_n_fft"]),
+        _pack_kv_uint32 ("stt.frontend.win_length",   hp["fe_win_length"]),
+        _pack_kv_uint32 ("stt.frontend.hop_length",   hp["fe_hop_length"]),
+        _pack_kv_string ("stt.frontend.window",       hp["fe_window"]),
+        _pack_kv_string ("stt.frontend.normalize",    hp["fe_normalize"]),
+        _pack_kv_float32("stt.frontend.dither",       hp["fe_dither"]),
+        _pack_kv_float32("stt.frontend.pre_emphasis", hp["fe_pre_emphasis"]),
+        _pack_kv_float32("stt.frontend.f_min",        hp["fe_f_min"]),
+        _pack_kv_float32("stt.frontend.f_max",        hp["fe_f_max"]),
+    ]
+
+
+# Index list of (name, ne) pairs in the canonical order. The C++
+# parakeet_smoke test relies on the index of a few specific tensors so
+# it can assert exact first-element values via _f32_seq above.
+def _parakeet_tensor_descriptors() -> list[tuple[str, list[int]]]:
+    hp = PARAKEET_HP
+    d_model      = hp["enc_d_model"]
+    d_ff         = hp["enc_d_ff"]
+    n_heads      = hp["enc_n_heads"]
+    head_dim     = d_model // n_heads
+    k            = hp["enc_conv_kernel"]
+    channels     = hp["enc_subsampling_channels"]
+    n_mels       = hp["fe_num_mels"]
+    subs         = hp["enc_subsampling_factor"]
+    pre_in       = channels * (n_mels // subs)
+    n_layers     = hp["enc_n_layers"]
+    pred_h       = hp["pred_hidden"]
+    pred_v       = hp["pred_vocab"]
+    pred_layers  = hp["pred_n_layers"]
+    gates        = 4 * pred_h
+    joint_h      = hp["joint_hidden"]
+    joint_n      = (pred_v - 1) + hp["joint_num_extra_outputs"] + 1
+
+    out: list[tuple[str, list[int]]] = []
+
+    # ----- pre_encode -----
+    out += [
+        ("enc.pre_encode.conv.0.weight", [3, 3, 1, channels]),
+        ("enc.pre_encode.conv.0.bias",   [channels]),
+        ("enc.pre_encode.conv.2.weight", [3, 3, 1, channels]),
+        ("enc.pre_encode.conv.2.bias",   [channels]),
+        ("enc.pre_encode.conv.3.weight", [1, 1, channels, channels]),
+        ("enc.pre_encode.conv.3.bias",   [channels]),
+        ("enc.pre_encode.conv.5.weight", [3, 3, 1, channels]),
+        ("enc.pre_encode.conv.5.bias",   [channels]),
+        ("enc.pre_encode.conv.6.weight", [1, 1, channels, channels]),
+        ("enc.pre_encode.conv.6.bias",   [channels]),
+        ("enc.pre_encode.out.weight",    [pre_in, d_model]),
+        ("enc.pre_encode.out.bias",      [d_model]),
+    ]
+
+    # ----- encoder blocks -----
+    for i in range(n_layers):
+        out += [
+            (f"enc.blocks.{i}.norm_ff1.weight",        [d_model]),
+            (f"enc.blocks.{i}.norm_ff1.bias",          [d_model]),
+            (f"enc.blocks.{i}.ff1.linear1.weight",     [d_model, d_ff]),
+            (f"enc.blocks.{i}.ff1.linear2.weight",     [d_ff, d_model]),
+
+            (f"enc.blocks.{i}.norm_attn.weight",       [d_model]),
+            (f"enc.blocks.{i}.norm_attn.bias",         [d_model]),
+            (f"enc.blocks.{i}.attn.linear_q.weight",   [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.linear_k.weight",   [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.linear_v.weight",   [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.linear_out.weight", [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.linear_pos.weight", [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.pos_bias_u",        [head_dim, n_heads]),
+            (f"enc.blocks.{i}.attn.pos_bias_v",        [head_dim, n_heads]),
+
+            (f"enc.blocks.{i}.norm_conv.weight",       [d_model]),
+            (f"enc.blocks.{i}.norm_conv.bias",         [d_model]),
+            (f"enc.blocks.{i}.conv.pointwise1.weight", [1, d_model, 2 * d_model]),
+            (f"enc.blocks.{i}.conv.depthwise.weight",  [k, 1, d_model]),
+            (f"enc.blocks.{i}.conv.pointwise2.weight", [1, d_model, d_model]),
+            (f"enc.blocks.{i}.conv.bn.weight",         [d_model]),
+            (f"enc.blocks.{i}.conv.bn.bias",           [d_model]),
+            (f"enc.blocks.{i}.conv.bn.running_mean",   [d_model]),
+            (f"enc.blocks.{i}.conv.bn.running_var",    [d_model]),
+
+            (f"enc.blocks.{i}.norm_ff2.weight",        [d_model]),
+            (f"enc.blocks.{i}.norm_ff2.bias",          [d_model]),
+            (f"enc.blocks.{i}.ff2.linear1.weight",     [d_model, d_ff]),
+            (f"enc.blocks.{i}.ff2.linear2.weight",     [d_ff, d_model]),
+
+            (f"enc.blocks.{i}.norm_out.weight",        [d_model]),
+            (f"enc.blocks.{i}.norm_out.bias",          [d_model]),
+        ]
+
+    # ----- predictor -----
+    out += [("pred.embed.weight", [pred_h, pred_v])]
+    for i in range(pred_layers):
+        out += [
+            (f"pred.lstm.{i}.Wx",   [pred_h, gates]),
+            (f"pred.lstm.{i}.Wh",   [pred_h, gates]),
+            (f"pred.lstm.{i}.bias", [gates]),
+        ]
+
+    # ----- joint -----
+    out += [
+        ("joint.enc.weight",  [d_model, joint_h]),
+        ("joint.enc.bias",    [joint_h]),
+        ("joint.pred.weight", [pred_h,  joint_h]),
+        ("joint.pred.bias",   [joint_h]),
+        ("joint.out.weight",  [joint_h, joint_n]),
+        ("joint.out.bias",    [joint_n]),
+    ]
+
+    return out
+
+
+def _parakeet_tensors() -> list[Tensor]:
+    descriptors = _parakeet_tensor_descriptors()
+    tensors: list[Tensor] = []
+    for idx, (name, ne) in enumerate(descriptors):
+        n_elem = 1
+        for d in ne:
+            n_elem *= d
+        tensors.append(
+            Tensor(name, ne, GGML_TYPE_F32, _f32_seq(n_elem, idx))
+        )
+    return tensors
+
+
+def _write(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    print(f"wrote {path} ({len(data)} bytes)")
+
+
+# Sixteen-token toy vocabulary. Indices used downstream by the tokenizer
+# smoke test, so they are pinned here:
+#
+#   0  <unk>           special, unk_id
+#   1  <s>             special, bos_id
+#   2  </s>            special, eos_id
+#   3  ▁hello          word "hello" with the SentencePiece word-boundary
+#                       marker U+2581
+#   4  ▁world          word "world" same
+#   5  ▁foo
+#   6  ▁bar
+#   7  ▁baz
+#   8  s               continuation piece (no leading marker)
+#   9  ed              continuation piece
+#  10  ing             continuation piece
+#  11  ▁the
+#  12  ▁a
+#  13  ▁of
+#  14  .               punctuation
+#  15  <blank>         CTC / transducer blank id
+TOY_VOCAB: list[str] = [
+    "<unk>",
+    "<s>",
+    "</s>",
+    "\u2581hello",
+    "\u2581world",
+    "\u2581foo",
+    "\u2581bar",
+    "\u2581baz",
+    "s",
+    "ed",
+    "ing",
+    "\u2581the",
+    "\u2581a",
+    "\u2581of",
+    ".",
+    "<blank>",
+]
+# Sentinel scores. The values are not interesting; the test only checks
+# that read-back round-trips and that length-must-match is enforced.
+TOY_SCORES = [-float(i) for i in range(len(TOY_VOCAB))]
+# Token types: 1 == NORMAL, 3 == CONTROL (matches the llama.cpp /
+# whisper.cpp convention). The test does not assert specific values, only
+# that the array survives the round trip.
+TOY_TOKEN_TYPES = [
+    3, 3, 3,        # <unk> <s> </s>
+    1, 1, 1, 1, 1,  # ▁hello ▁world ▁foo ▁bar ▁baz
+    1, 1, 1,        # s ed ing
+    1, 1, 1,        # ▁the ▁a ▁of
+    1,              # .
+    3,              # <blank>
+]
+
+
+def emit_fixtures(out_dir: Path) -> None:
+    # Recognized architecture; no tokenizer payload. The Parakeet handler
+    # rejects this with TRANSCRIBE_ERR_GGUF in 2B because tokenizer load
+    # is now part of the contract.
+    _write(
+        out_dir / "arch_parakeet.gguf",
+        _build_header(
+            GGUF_MAGIC,
+            _string_kvs(
+                [
+                    ("general.architecture", "parakeet"),
+                    ("stt.variant", "tdt-0.6b-v2"),
+                ]
+            ),
+        ),
+    )
+
+    # Architecture string the registry has never heard of.
+    _write(
+        out_dir / "arch_unknown.gguf",
+        _build_header(
+            GGUF_MAGIC,
+            _string_kvs([("general.architecture", "banana")]),
+        ),
+    )
+
+    # Bad magic. Everything after the magic is a structurally valid
+    # header so we are testing magic-rejection specifically, not "the
+    # file is short and the loader fails on something else first".
+    _write(
+        out_dir / "corrupt_magic.gguf",
+        _build_header(
+            b"NOPE",
+            _string_kvs([("general.architecture", "parakeet")]),
+        ),
+    )
+
+    # Recognized arch + complete minimal Parakeet model. The fixture
+    # has tokenizer + capabilities (defaulted) + parakeet hparams +
+    # all 78 weight tensors with deterministic toy fp32 data. The
+    # loader walks every code path on this file: arch dispatch,
+    # tokenizer ingest, capability KV (absent → family defaults),
+    # languages KV (absent → information gap), parakeet hparams,
+    # second-pass GGUF open with tensor data, build_parakeet_weights.
+    assert len(TOY_VOCAB) == 16
+    assert len(TOY_SCORES) == len(TOY_VOCAB)
+    assert len(TOY_TOKEN_TYPES) == len(TOY_VOCAB)
+    tokenizer_kv = [
+        _pack_kv_string("tokenizer.ggml.model", "unigram"),
+        _pack_kv_array_string("tokenizer.ggml.tokens", TOY_VOCAB),
+        _pack_kv_array_float32("tokenizer.ggml.scores", TOY_SCORES),
+        _pack_kv_array_int32("tokenizer.ggml.token_type", TOY_TOKEN_TYPES),
+        _pack_kv_uint32("tokenizer.ggml.unknown_token_id", 0),
+        _pack_kv_uint32("tokenizer.ggml.bos_token_id", 1),
+        _pack_kv_uint32("tokenizer.ggml.eos_token_id", 2),
+        _pack_kv_uint32("tokenizer.ggml.blank_token_id", 15),
+    ]
+    parakeet_hparams_kv = _parakeet_hparams_kv()
+    parakeet_tensors    = _parakeet_tensors()
+
+    _write(
+        out_dir / "tokenizer_minimal.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "parakeet"),
+                _pack_kv_string("stt.variant", "tdt-0.6b-v2"),
+                *tokenizer_kv,
+                *parakeet_hparams_kv,
+            ],
+            parakeet_tensors,
+        ),
+    )
+
+    # v3 fixture: same toy vocabulary, same hparams, same tensor
+    # catalog — only the descriptive metadata (variant string) and
+    # the capability + language KV differ. Pins "v2 vs v3 are the
+    # same code path" structurally: build_parakeet_weights walks the
+    # same 78 tensors regardless of which fixture it's called on,
+    # and only the post-load capability struct differs.
+    _write(
+        out_dir / "tokenizer_minimal_v3.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "parakeet"),
+                _pack_kv_string("stt.variant", "tdt-0.6b-v3"),
+                # Capability KV: v3 adds language detect.
+                _pack_kv_bool("stt.capability.lang_detect", True),
+                # Languages: toy four-language list, not the full 25
+                # NeMo emits. The real list arrives in 2C with the
+                # converter; the test only needs to assert that the
+                # array round-trips and the count matches.
+                _pack_kv_array_string(
+                    "general.languages",
+                    ["en", "de", "fr", "es"],
+                ),
+                *tokenizer_kv,
+                *parakeet_hparams_kv,
+            ],
+            parakeet_tensors,
+        ),
+    )
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) > 2:
+        print(f"usage: {argv[0]} [output_dir]", file=sys.stderr)
+        return 2
+    out_dir = Path(argv[1]) if len(argv) == 2 else Path(__file__).resolve().parent
+    emit_fixtures(out_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
