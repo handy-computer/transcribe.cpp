@@ -288,38 +288,20 @@ ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,
     return result;
 }
 
-// BatchNorm in eval mode, applied per-channel across the time axis.
-// At inference NeMo's BN reduces to:
-//
-//   out = (x - running_mean) / sqrt(running_var + eps) * weight + bias
-//
-// All four catalog tensors are 1-D [d_model]. We reshape each to
-// ne=[1, d_model, 1, 1] so the math broadcasts cleanly across the
-// time axis of the conv-module activation [T, d_model, 1, 1].
-//
-// eps is fused into (var + eps) via ggml_scale_bias, then sqrt'd.
-// This avoids any host-side pre-folding and keeps the graph
-// self-contained.
-ggml_tensor * batch_norm(ggml_context * ctx,
-                         ggml_tensor *  x,
-                         ggml_tensor *  weight_1d,
-                         ggml_tensor *  bias_1d,
-                         ggml_tensor *  rmean_1d,
-                         ggml_tensor *  rvar_1d)
+// Fused BatchNorm: y = x * scale + bias, where scale and bias are
+// precomputed at load time from the raw BN parameters. Replaces the
+// 4-op batch_norm (sub, div/sqrt, mul, add) with 2 ops (mul, add).
+// The 1-D tensors [d_model] are reshaped to [1, d_model, 1, 1] to
+// broadcast across the time axis of [T, d_model, 1, 1].
+ggml_tensor * fused_batch_norm(ggml_context * ctx,
+                               ggml_tensor *  x,
+                               ggml_tensor *  scale_1d,
+                               ggml_tensor *  bias_1d)
 {
-    const int64_t C = weight_1d->ne[0];
-
-    ggml_tensor * mean_4d   = ggml_reshape_4d(ctx, rmean_1d,   1, C, 1, 1);
-    ggml_tensor * var_4d    = ggml_reshape_4d(ctx, rvar_1d,    1, C, 1, 1);
-    ggml_tensor * weight_4d = ggml_reshape_4d(ctx, weight_1d,  1, C, 1, 1);
-    ggml_tensor * bias_4d   = ggml_reshape_4d(ctx, bias_1d,    1, C, 1, 1);
-
-    ggml_tensor * var_eps = ggml_scale_bias(ctx, var_4d, 1.0f, kLayerNormEps);
-    ggml_tensor * denom   = ggml_sqrt(ctx, var_eps);
-
-    ggml_tensor * y = ggml_sub(ctx, x, mean_4d);
-    y = ggml_div(ctx, y, denom);
-    y = ggml_mul(ctx, y, weight_4d);
+    const int64_t C = scale_1d->ne[0];
+    ggml_tensor * scale_4d = ggml_reshape_4d(ctx, scale_1d, 1, C, 1, 1);
+    ggml_tensor * bias_4d  = ggml_reshape_4d(ctx, bias_1d,  1, C, 1, 1);
+    ggml_tensor * y = ggml_mul(ctx, x, scale_4d);
     y = ggml_add(ctx, y, bias_4d);
     return y;
 }
@@ -328,68 +310,64 @@ ggml_tensor * batch_norm(ggml_context * ctx,
 // the post-LayerNorm activation; the LN is applied OUTSIDE this
 // helper by the block forward.
 //
-// Sub-block ordering:
-//   1. transpose [d_model, T, 1, 1] -> [T, d_model, 1, 1] for conv1d
-//   2. pointwise_conv1: Conv1d k=1, d_model -> 2*d_model
-//   3. GLU: split channel axis in half, gate * sigmoid(value)
-//   4. depthwise_conv: Conv1d k=conv_kernel, groups=d_model, padding=(k-1)/2
-//   5. BatchNorm (eval mode)
-//   6. SiLU
-//   7. pointwise_conv2: Conv1d k=1, d_model -> d_model
-//   8. transpose back [T, d_model, 1, 1] -> [d_model, T, 1, 1]
+// Pointwise convs (k=1) are direct mul_mats in [d_model, T] layout,
+// avoiding the im2col overhead of conv_1d_f32. The layout transposes
+// only around the depthwise conv which needs [T, d_model].
 //
-// All convs are bias-free per Parakeet's enc_use_bias=false.
+// BatchNorm uses precomputed fused scale + bias (2 ops instead of 4).
 ggml_tensor * conv_module(ggml_context * ctx,
                           ggml_tensor *  x,
                           const ParakeetBlock & b,
                           int            conv_kernel)
 {
     const int padding = (conv_kernel - 1) / 2;
+    const int64_t d_model = x->ne[0];
 
-    // Transpose [d_model, T, 1, 1] -> [T, d_model, 1, 1] so the
-    // conv1d's "W" axis is time.
+    // Pointwise conv 1 as direct mul_mat in [d_model, T] layout.
+    // Kernel ne=[1, d_model, 2*d_model] → reshape to [d_model, 2*d_model].
+    {
+        ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pw1_w,
+                                            d_model, 2 * d_model);
+        x = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T]
+    }
+
+    // GLU: split ne[0] in half, gate * sigmoid(value).
+    {
+        const int64_t T    = x->ne[1];
+        const int64_t half = x->ne[0] / 2;
+        ggml_tensor * gate  = ggml_view_2d(ctx, x, half, T,
+                                           x->nb[1], /*offset=*/0);
+        ggml_tensor * value = ggml_view_2d(ctx, x, half, T,
+                                           x->nb[1],
+                                           half * ggml_element_size(x));
+        x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
+    }
+    // x ne = [d_model, T]
+
+    // Transpose for depthwise conv: [d_model, T] -> [T, d_model].
     x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
 
-    // Pointwise conv 1: d_model -> 2*d_model. Catalog kernel ne=[1, d_model, 2*d_model].
-    x = conv_1d_f32(ctx, b.conv_pw1_w, x, /*s=*/1, /*p=*/0, /*d=*/1);
-    // x ne = [T, 2*d_model, 1, 1]
-
-    // GLU: split axis 1 (channel) in half. Each part is half the
-    // channels and has the same time + batch dims. We use views into
-    // the same backing tensor to avoid a copy.
-    const int64_t half = x->ne[1] / 2;
-    ggml_tensor * gate = ggml_view_4d(ctx, x,
-                                      x->ne[0], half, x->ne[2], x->ne[3],
-                                      x->nb[1], x->nb[2], x->nb[3],
-                                      /*offset=*/0);
-    ggml_tensor * value = ggml_view_4d(ctx, x,
-                                       x->ne[0], half, x->ne[2], x->ne[3],
-                                       x->nb[1], x->nb[2], x->nb[3],
-                                       /*offset=*/x->nb[1] * half);
-    x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
-    // x ne = [T, d_model, 1, 1] (potentially non-contiguous via the view)
-
     // Depthwise conv: kernel size from hparams, groups=d_model.
-    // Catalog kernel ne=[k, 1, d_model]. Symmetric padding so the
-    // time dim stays the same.
-    x = ggml_cont(ctx, x);  // dw conv requires contiguous input
     x = conv_1d_dw_f32(ctx, b.conv_dw_w, x,
                        /*s=*/1, /*p=*/padding, /*d=*/1);
-    // x ne = [T, d_model, 1, 1]
 
-    // BatchNorm (eval mode).
-    x = batch_norm(ctx, x,
-                   b.conv_bn_w, b.conv_bn_b, b.conv_bn_rm, b.conv_bn_rv);
+    // Fused BatchNorm (precomputed scale + bias).
+    x = fused_batch_norm(ctx, x,
+                         b.conv_bn_fused_scale, b.conv_bn_fused_bias);
 
     // SiLU activation.
     x = ggml_silu(ctx, x);
 
-    // Pointwise conv 2: d_model -> d_model. Catalog kernel ne=[1, d_model, d_model].
-    x = conv_1d_f32(ctx, b.conv_pw2_w, x, /*s=*/1, /*p=*/0, /*d=*/1);
-
-    // Transpose back to [d_model, T, 1, 1] so the residual add and
-    // downstream sub-blocks see the same layout as before.
+    // Transpose back: [T, d_model] -> [d_model, T].
     x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+
+    // Pointwise conv 2 as direct mul_mat in [d_model, T] layout.
+    {
+        ggml_tensor * pw2 = ggml_reshape_2d(ctx, b.conv_pw2_w,
+                                            d_model, d_model);
+        x = ggml_mul_mat(ctx, pw2, x);  // [d_model, T]
+    }
+
     return x;
 }
 

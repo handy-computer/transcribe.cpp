@@ -74,6 +74,11 @@ struct ParakeetModel final : public transcribe_model {
     std::vector<ggml_backend_t> backends;
     ggml_backend_buffer_t       backend_buffer = nullptr;
 
+    // Fused BN parameters live in a separate ggml context + buffer,
+    // computed at load time from the raw BN tensors. Freed in dtor.
+    ggml_context *          bn_fused_ctx    = nullptr;
+    ggml_backend_buffer_t   bn_fused_buffer = nullptr;
+
     // Mel front-end. Constructed once at load() time from the
     // hparams (precomputes the periodic Hann window + Slaney mel
     // filterbank). MelFrontend is documented as const-after-ctor

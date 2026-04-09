@@ -109,6 +109,14 @@ ParakeetModel::~ParakeetModel() {
     // independent. backend_buffer must be freed before backends
     // because the buffer was allocated against a backend and may
     // hold a reference to it. Backends freed in reverse init order.
+    if (bn_fused_ctx != nullptr) {
+        ggml_free(bn_fused_ctx);
+        bn_fused_ctx = nullptr;
+    }
+    if (bn_fused_buffer != nullptr) {
+        ggml_backend_buffer_free(bn_fused_buffer);
+        bn_fused_buffer = nullptr;
+    }
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
@@ -124,6 +132,66 @@ ParakeetModel::~ParakeetModel() {
 }
 
 namespace {
+
+constexpr float kBnEps = 1e-5f;
+
+// Fuse inference-time BatchNorm into precomputed scale + bias tensors.
+// BN eval: y = (x - mean) / sqrt(var + eps) * weight + bias
+// Fused:   y = x * scale + shift
+//   where scale = weight / sqrt(var + eps)
+//         shift = bias - mean * scale
+//
+// Allocates fused tensors in a separate ggml context + CPU buffer on
+// the model. Called once at load time; the fused tensors are then
+// referenced by the encoder graph instead of the raw BN parameters.
+transcribe_status fuse_batch_norm(ParakeetModel & m) {
+    const size_t n_blocks = m.weights.blocks.size();
+    if (n_blocks == 0) return TRANSCRIBE_OK;
+
+    const int64_t d = m.hparams.enc_d_model;
+    const size_t tensor_bytes = static_cast<size_t>(d) * sizeof(float);
+
+    // Create a context for the fused tensors (2 per block).
+    const size_t ctx_size = n_blocks * 2 * ggml_tensor_overhead() + 256;
+    ggml_init_params params = {ctx_size, nullptr, /*no_alloc=*/true};
+    m.bn_fused_ctx = ggml_init(params);
+    if (m.bn_fused_ctx == nullptr) return TRANSCRIBE_ERR_BACKEND;
+
+    // Create all tensors first, then allocate a buffer.
+    for (size_t i = 0; i < n_blocks; ++i) {
+        auto & b = m.weights.blocks[i];
+        b.conv_bn_fused_scale = ggml_new_tensor_1d(m.bn_fused_ctx, GGML_TYPE_F32, d);
+        b.conv_bn_fused_bias  = ggml_new_tensor_1d(m.bn_fused_ctx, GGML_TYPE_F32, d);
+    }
+
+    // Allocate on the CPU backend (last in the list).
+    m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(
+        m.bn_fused_ctx, m.backends.back());
+    if (m.bn_fused_buffer == nullptr) return TRANSCRIBE_ERR_BACKEND;
+
+    // Compute fused values from the raw BN tensors.
+    std::vector<float> bn_w(d), bn_b(d), rm(d), rv(d);
+    std::vector<float> fused_s(d), fused_b(d);
+
+    for (size_t i = 0; i < n_blocks; ++i) {
+        auto & b = m.weights.blocks[i];
+        ggml_backend_tensor_get(b.conv_bn_w,  bn_w.data(), 0, tensor_bytes);
+        ggml_backend_tensor_get(b.conv_bn_b,  bn_b.data(), 0, tensor_bytes);
+        ggml_backend_tensor_get(b.conv_bn_rm, rm.data(),   0, tensor_bytes);
+        ggml_backend_tensor_get(b.conv_bn_rv, rv.data(),   0, tensor_bytes);
+
+        for (int64_t c = 0; c < d; ++c) {
+            const float s = bn_w[c] / std::sqrt(rv[c] + kBnEps);
+            fused_s[c] = s;
+            fused_b[c] = bn_b[c] - rm[c] * s;
+        }
+
+        ggml_backend_tensor_set(b.conv_bn_fused_scale, fused_s.data(), 0, tensor_bytes);
+        ggml_backend_tensor_set(b.conv_bn_fused_bias,  fused_b.data(), 0, tensor_bytes);
+    }
+
+    return TRANSCRIBE_OK;
+}
 
 // Default variant string when the GGUF did not carry stt.variant.
 // Defaulting belongs in the family handler, not the loader: each
@@ -446,6 +514,14 @@ transcribe_status load(
     // above. m->ctx_meta + m->backend_buffer + m->backend_handle +
     // m->weights are now the model's entire state.
     gguf_free(gguf_data);
+
+    // Fuse BatchNorm parameters into scale + bias for the encoder
+    // graph. This replaces 4 elementwise ops per block with 2.
+    if (const transcribe_status st = fuse_batch_norm(*m);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
 
     // Phase 5: build the host mirror of the predictor + joint
     // weights. This is a one-shot copy from backend memory into

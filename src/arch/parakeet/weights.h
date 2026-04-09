@@ -217,6 +217,13 @@ struct ParakeetBlock {
     ggml_tensor * conv_bn_rm   = nullptr; // [d_model]   running_mean
     ggml_tensor * conv_bn_rv   = nullptr; // [d_model]   running_var
 
+    // Fused BN parameters (computed at load time, replaces batch_norm()
+    // in the graph with a single mul + add):
+    //   fused_scale = bn_w / sqrt(bn_rv + eps)
+    //   fused_bias  = bn_b - bn_rm * fused_scale
+    ggml_tensor * conv_bn_fused_scale = nullptr; // [d_model]
+    ggml_tensor * conv_bn_fused_bias  = nullptr; // [d_model]
+
     // Macaron feed-forward 2.
     ggml_tensor * norm_ff2_w = nullptr; // [d_model]
     ggml_tensor * norm_ff2_b = nullptr; // [d_model]
