@@ -310,11 +310,18 @@ ggml_tensor * fused_batch_norm(ggml_context * ctx,
 // the post-LayerNorm activation; the LN is applied OUTSIDE this
 // helper by the block forward.
 //
-// Pointwise convs (k=1) are direct mul_mats in [d_model, T] layout,
-// avoiding the im2col overhead of conv_1d_f32. The layout transposes
-// only around the depthwise conv which needs [T, d_model].
+// By default, pointwise convs (k=1) are direct mul_mats in [d_model, T]
+// layout, avoiding im2col overhead. Set TRANSCRIBE_CONV_NO_DIRECT_PW=1
+// to fall back to the im2col path (useful for backends where the
+// reshape-based path is slower, e.g. some Vulkan drivers).
 //
 // BatchNorm uses precomputed fused scale + bias (2 ops instead of 4).
+
+bool use_direct_pw() {
+    static const bool val = (std::getenv("TRANSCRIBE_CONV_NO_DIRECT_PW") == nullptr);
+    return val;
+}
+
 ggml_tensor * conv_module(ggml_context * ctx,
                           ggml_tensor *  x,
                           const ParakeetBlock & b,
@@ -323,29 +330,48 @@ ggml_tensor * conv_module(ggml_context * ctx,
     const int padding = (conv_kernel - 1) / 2;
     const int64_t d_model = x->ne[0];
 
-    // Pointwise conv 1 as direct mul_mat in [d_model, T] layout.
-    // Kernel ne=[1, d_model, 2*d_model] → reshape to [d_model, 2*d_model].
-    {
-        ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pw1_w,
-                                            d_model, 2 * d_model);
-        x = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T]
-    }
+    if (use_direct_pw()) {
+        // Pointwise conv 1 as direct mul_mat in [d_model, T] layout.
+        // Kernel ne=[1, d_model, 2*d_model] → reshape to [d_model, 2*d_model].
+        {
+            ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pw1_w,
+                                                d_model, 2 * d_model);
+            x = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T]
+        }
 
-    // GLU: split ne[0] in half, gate * sigmoid(value).
-    {
-        const int64_t T    = x->ne[1];
-        const int64_t half = x->ne[0] / 2;
-        ggml_tensor * gate  = ggml_view_2d(ctx, x, half, T,
-                                           x->nb[1], /*offset=*/0);
-        ggml_tensor * value = ggml_view_2d(ctx, x, half, T,
-                                           x->nb[1],
-                                           half * ggml_element_size(x));
+        // GLU: split ne[0] in half, gate * sigmoid(value).
+        {
+            const int64_t T    = x->ne[1];
+            const int64_t half = x->ne[0] / 2;
+            ggml_tensor * gate  = ggml_view_2d(ctx, x, half, T,
+                                               x->nb[1], /*offset=*/0);
+            ggml_tensor * value = ggml_view_2d(ctx, x, half, T,
+                                               x->nb[1],
+                                               half * ggml_element_size(x));
+            x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
+        }
+        // x ne = [d_model, T]
+
+        // Transpose for depthwise conv: [d_model, T] -> [T, d_model].
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+    } else {
+        // Fallback: im2col path in [T, d_model] layout.
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+
+        x = conv_1d_f32(ctx, b.conv_pw1_w, x, /*s=*/1, /*p=*/0, /*d=*/1);
+
+        const int64_t half = x->ne[1] / 2;
+        ggml_tensor * gate = ggml_view_4d(ctx, x,
+                                          x->ne[0], half, x->ne[2], x->ne[3],
+                                          x->nb[1], x->nb[2], x->nb[3], 0);
+        ggml_tensor * value = ggml_view_4d(ctx, x,
+                                           x->ne[0], half, x->ne[2], x->ne[3],
+                                           x->nb[1], x->nb[2], x->nb[3],
+                                           x->nb[1] * half);
         x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
-    }
-    // x ne = [d_model, T]
 
-    // Transpose for depthwise conv: [d_model, T] -> [T, d_model].
-    x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+        x = ggml_cont(ctx, x);
+    }
 
     // Depthwise conv: kernel size from hparams, groups=d_model.
     x = conv_1d_dw_f32(ctx, b.conv_dw_w, x,
@@ -358,14 +384,17 @@ ggml_tensor * conv_module(ggml_context * ctx,
     // SiLU activation.
     x = ggml_silu(ctx, x);
 
-    // Transpose back: [T, d_model] -> [d_model, T].
-    x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+    if (use_direct_pw()) {
+        // Transpose back: [T, d_model] -> [d_model, T].
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
 
-    // Pointwise conv 2 as direct mul_mat in [d_model, T] layout.
-    {
+        // Pointwise conv 2 as direct mul_mat in [d_model, T] layout.
         ggml_tensor * pw2 = ggml_reshape_2d(ctx, b.conv_pw2_w,
                                             d_model, d_model);
-        x = ggml_mul_mat(ctx, pw2, x);  // [d_model, T]
+        x = ggml_mul_mat(ctx, pw2, x);
+    } else {
+        x = conv_1d_f32(ctx, b.conv_pw2_w, x, /*s=*/1, /*p=*/0, /*d=*/1);
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     }
 
     return x;
