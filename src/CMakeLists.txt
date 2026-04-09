@@ -65,9 +65,19 @@ else()
     # (e.g. -DBLA_VENDOR=OpenBLAS). find_package probes the system.
     find_package(BLAS QUIET)
     if(BLAS_FOUND)
-        target_link_libraries(transcribe PRIVATE ${BLAS_LIBRARIES})
-        target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_BLAS=1)
-        message(STATUS "transcribe: BLAS found — decoder will use cblas_sgemv")
+        # find_package(BLAS) may find a Fortran-only BLAS (e.g. libblas3
+        # on Debian/Ubuntu) that lacks the cblas C wrappers. Verify that
+        # cblas.h exists before enabling; otherwise the build compiles
+        # cblas_sgemv calls but the linker can't resolve them.
+        include(CheckIncludeFile)
+        check_include_file(cblas.h HAVE_CBLAS_H)
+        if(HAVE_CBLAS_H)
+            target_link_libraries(transcribe PRIVATE ${BLAS_LIBRARIES})
+            target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_BLAS=1)
+            message(STATUS "transcribe: BLAS found — decoder will use cblas_sgemv")
+        else()
+            message(STATUS "transcribe: BLAS found but cblas.h missing — decoder uses scalar fallback (install libopenblas-dev)")
+        endif()
     else()
         message(STATUS "transcribe: no BLAS found — decoder uses scalar fallback")
     endif()

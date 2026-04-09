@@ -11,12 +11,17 @@ cmake -B build
 cmake --build build
 ```
 
-Metal is enabled automatically on Apple Silicon. For Vulkan:
+Metal is enabled automatically on Apple Silicon. For Vulkan (Linux/Windows):
 
 ```bash
+# Ubuntu/Debian
+sudo apt install build-essential cmake libvulkan-dev glslc libopenblas-dev
+
 cmake -B build -DTRANSCRIBE_VULKAN=ON
 cmake --build build
 ```
+
+`libopenblas-dev` is optional but recommended — it accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
 
 To build the quantization tool:
 
@@ -55,7 +60,7 @@ uv run scripts/convert-parakeet.py path/to/parakeet-tdt-0.6b-v2 parakeet-v2.f16.
 The `transcribe-quantize` tool produces smaller models from an f32 or f16 GGUF. Available presets: `q8_0`, `q5_k_m`, `q4_k_m`.
 
 ```bash
-build/bin/transcribe-quantize parakeet-v2.f32.gguf parakeet-v2.q4_k_m.gguf q4_k_m
+build/bin/transcribe-quantize parakeet-v2.f32.gguf parakeet-v2.q4_k_m.gguf --quant q4_k_m
 ```
 
 ## Usage

@@ -41,6 +41,7 @@ struct cli_args {
     bool        quiet     = false;
     bool        batch_jsonl = false; // --batch-jsonl: output JSONL
     int         repeat    = 1;
+    int         n_threads = 0; // 0 = library default (all cores)
 };
 
 void print_usage(const char * argv0) {
@@ -53,6 +54,7 @@ void print_usage(const char * argv0) {
         "  -t, --translate       set task to TRANSLATE\n"
         "  -q, --quiet           suppress library log output\n"
         "  -r, --repeat N        run N times per file (benchmark)\n"
+        "  --threads N           CPU threads (default: all cores)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
         "  -h, --help            show this help\n",
@@ -90,6 +92,11 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) return false;
             out.repeat = std::atoi(v);
             if (out.repeat < 1) out.repeat = 1;
+        } else if (a == "--threads") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.n_threads = std::atoi(v);
+            if (out.n_threads < 1) out.n_threads = 1;
         } else if (a == "--batch") {
             const char * v = take_value(a.c_str());
             if (!v) return false;
@@ -204,6 +211,7 @@ int main(int argc, char ** argv) {
 
         // Init context once (reused across all files via run()).
         struct transcribe_context_params cp = transcribe_context_default_params();
+        cp.n_threads = args.n_threads;
         struct transcribe_context *      ctx = nullptr;
         const transcribe_status          init_st =
             transcribe_context_init(model, &cp, &ctx);
@@ -316,6 +324,7 @@ int main(int argc, char ** argv) {
         std::printf("  backend:    %s\n", transcribe_model_backend(model));
 
         struct transcribe_context_params cp = transcribe_context_default_params();
+        cp.n_threads = args.n_threads;
         struct transcribe_context *      ctx = nullptr;
         const transcribe_status          init_st =
             transcribe_context_init(model, &cp, &ctx);
