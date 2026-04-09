@@ -400,13 +400,11 @@ const float * predictor_step(const HostPredictor & predictor,
 
 // Run the joint network for one decode step.
 //
-// Inputs are one encoder frame (`d_enc` floats) and one predictor
-// hidden state (`pred_hidden` floats). Output is the full
-// `joint_n` logits vector. Both projections share the joint_h
-// hidden width; they're added then passed through the configured
-// activation, then a final linear collapses to joint_n.
+// `enc_proj` is the precomputed encoder projection for this frame
+// (enc_w @ enc_frame + enc_b, `joint_h` floats). The caller batches
+// all T_enc projections via sgemm before the decode loop so they
+// are computed once rather than redundantly per iteration.
 //
-//   enc_proj  = enc_w  @ enc_frame  + enc_b      [joint_h]
 //   pred_proj = pred_w @ pred_state + pred_b     [joint_h]
 //   summed    = enc_proj + pred_proj             [joint_h]
 //   activated = activation(summed)               [joint_h]
@@ -416,25 +414,21 @@ const float * predictor_step(const HostPredictor & predictor,
 // allow-list guarantees we'll see exactly one of those at run
 // time. Parakeet 0.6B v2/v3 ship "relu".
 void joint_step(const HostJoint &     j,
-                const float *         enc_frame,
+                const float *         enc_proj,
                 const float *         pred_state,
-                std::vector<float> &  scratch_enc_proj,
                 std::vector<float> &  scratch_pred_proj,
                 std::vector<float> &  scratch_summed,
                 std::vector<float> &  out_logits)
 {
-    if (static_cast<int>(scratch_enc_proj.size())  < j.joint_h) scratch_enc_proj.resize(static_cast<size_t>(j.joint_h));
     if (static_cast<int>(scratch_pred_proj.size()) < j.joint_h) scratch_pred_proj.resize(static_cast<size_t>(j.joint_h));
     if (static_cast<int>(scratch_summed.size())    < j.joint_h) scratch_summed.resize(static_cast<size_t>(j.joint_h));
     if (static_cast<int>(out_logits.size())        < j.joint_n) out_logits.resize(static_cast<size_t>(j.joint_n));
 
-    linear(j.enc_w.data(),  enc_frame,  j.enc_b.data(),  j.joint_h, j.d_enc,
-           scratch_enc_proj.data());
     linear(j.pred_w.data(), pred_state, j.pred_b.data(), j.joint_h, j.pred_hidden,
            scratch_pred_proj.data());
 
     for (int i = 0; i < j.joint_h; ++i) {
-        scratch_summed[i] = scratch_enc_proj[i] + scratch_pred_proj[i];
+        scratch_summed[i] = enc_proj[i] + scratch_pred_proj[i];
     }
 
     if (j.activation == "relu") {
@@ -553,11 +547,43 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     state.reset(n_layers, H);
     next_state.reset(n_layers, H);
 
+    // Precompute encoder projections for all T_enc frames. The joint
+    // network's enc_w @ enc_frame + enc_b is independent of decode
+    // state, so batching it into one sgemm (or T_enc sgemv calls
+    // without BLAS) eliminates redundant per-iteration projections
+    // and gives BLAS a much larger matrix to work with.
+    const int joint_h = w.joint.joint_h;
+    std::vector<float> enc_proj_all(
+        static_cast<size_t>(T_enc) * static_cast<size_t>(joint_h));
+
+    const int64_t t_enc_proj_start = ggml_time_us();
+#if TRANSCRIBE_HAS_BLAS
+    // C[T_enc, joint_h] = enc_out[T_enc, d_enc] @ enc_w^T[d_enc, joint_h]
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                T_enc, joint_h, d_enc,
+                1.0f, enc_out, d_enc,
+                w.joint.enc_w.data(), d_enc,
+                0.0f, enc_proj_all.data(), joint_h);
+#else
+    for (int t = 0; t < T_enc; ++t) {
+        const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
+        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        linear(w.joint.enc_w.data(), frame, nullptr, joint_h, d_enc, proj);
+    }
+#endif
+    // Add bias to every row.
+    for (int t = 0; t < T_enc; ++t) {
+        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        for (int j = 0; j < joint_h; ++j) {
+            proj[j] += w.joint.enc_b[static_cast<size_t>(j)];
+        }
+    }
+    const int64_t t_enc_proj_us = ggml_time_us() - t_enc_proj_start;
+
     // Per-call scratch reused across every decode step.
     std::vector<float> scratch_x;
     std::vector<float> scratch_gates;
     std::vector<float> scratch_hh;
-    std::vector<float> scratch_enc_proj;
     std::vector<float> scratch_pred_proj;
     std::vector<float> scratch_summed;
     std::vector<float> scratch_probs;
@@ -586,11 +612,11 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
             scratch_x, scratch_gates, scratch_hh);
         const int64_t t1 = ggml_time_us();
 
-        // ----- Joint -----
-        const float * enc_frame =
-            enc_out + static_cast<size_t>(step) * static_cast<size_t>(d_enc);
-        joint_step(w.joint, enc_frame, decoder_out,
-                   scratch_enc_proj, scratch_pred_proj, scratch_summed,
+        // ----- Joint (using precomputed encoder projection) -----
+        const float * enc_proj =
+            enc_proj_all.data() + static_cast<size_t>(step) * static_cast<size_t>(joint_h);
+        joint_step(w.joint, enc_proj, decoder_out,
+                   scratch_pred_proj, scratch_summed,
                    logits);
         const int64_t t2 = ggml_time_us();
         t_pred_us  += t1 - t0;
@@ -687,13 +713,14 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
 
     std::fprintf(stderr,
                  "decoder: %d iters, %d tokens, T_enc=%d  "
-                 "pred=%.1f ms  joint=%.1f ms  conf=%.1f ms  "
+                 "enc_proj=%.1f ms  pred=%.1f ms  joint=%.1f ms  conf=%.1f ms  "
                  "total=%.1f ms  per_iter=%.0f us\n",
                  iter, static_cast<int>(out_tokens.size()), T_enc,
+                 t_enc_proj_us / 1000.0,
                  t_pred_us  / 1000.0,
                  t_joint_us / 1000.0,
                  t_conf_us  / 1000.0,
-                 (t_pred_us + t_joint_us + t_conf_us) / 1000.0,
+                 (t_enc_proj_us + t_pred_us + t_joint_us + t_conf_us) / 1000.0,
                  static_cast<double>(t_pred_us + t_joint_us) / std::max(iter, 1));
 
     if (iter >= max_iters) {
