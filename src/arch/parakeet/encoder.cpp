@@ -545,14 +545,18 @@ ggml_tensor * rel_pos_mhsa(ggml_context * ctx,
     ggml_tensor * q_v = ggml_add(ctx, q, b.attn_pos_v);
 
     // All of Q, K, V need [head_dim, T, n_head, 1] for flash_attn.
-    q_u = ggml_cont(ctx, ggml_permute(ctx, q_u, 0, 2, 1, 3));
+    // The permute is a zero-cost view (no data copy). flash_attn_ext
+    // accesses data via strides, so contiguous materialization (cont)
+    // is not required for q_u/k/v. q_v and p still need cont because
+    // they feed into mul_mat for the position score computation.
+    q_u = ggml_permute(ctx, q_u, 0, 2, 1, 3);
     q_v = ggml_cont(ctx, ggml_permute(ctx, q_v, 0, 2, 1, 3));
 
     k = ggml_reshape_4d(ctx, k, head_dim, n_head, T_q, 1);
-    k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
+    k = ggml_permute(ctx, k, 0, 2, 1, 3);
 
     v = ggml_reshape_4d(ctx, v, head_dim, n_head, T_q, 1);
-    v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
+    v = ggml_permute(ctx, v, 0, 2, 1, 3);
 
     p = ggml_reshape_4d(ctx, p, head_dim, n_head, pos_len, 1);
     p = ggml_cont(ctx, ggml_permute(ctx, p, 0, 2, 1, 3));
