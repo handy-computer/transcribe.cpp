@@ -136,41 +136,10 @@ ggml_tensor * macaron_ff_residual(ggml_context * ctx,
     return ggml_add(ctx, x, y);
 }
 
-// Shaw / Transformer-XL relative-position skew. The input is the
-// position scoring matrix `(q + pos_bias_v) @ p^T` with ggml ne
-// [pos_len, T_q, n_head, 1] (pos_len = 2*T_q - 1). The output has
-// the same ne shape but with each row rotated so that column k
-// holds the score for query position t with absolute key offset k.
-//
-// MLX implementation (attention.py:82-91):
-//
-//   x = mx.pad(x, [..., (1, 0)])         # pad pos_len axis on the left with 1 zero
-//   x = x.reshape(B, H, pos_len + 1, T_q)
-//   x = x[:, :, 1:, :]                   # drop the new first row
-//   x = x.reshape(B, H, T_q, pos_len)
-//
-// In ggml fast-to-slow ne, the pos_len axis is innermost. The
-// equivalent op sequence:
-//
-//   1. prepend a [1, T_q, H, B] zero column along axis 0
-//                                       ne -> [pos_len+1, T_q, H, 1]
-//   2. ggml_reshape_4d(T_q, pos_len+1) ne -> [T_q, pos_len+1, H, 1]
-//      (a no-op on memory; just relabels axes 0 and 1 because total
-//       elements are the same and the prior output is contiguous)
-//   3. ggml_view_4d(skip first row of axis 1)
-//                                       ne -> [T_q, pos_len, H, 1] (non-contig)
-//   4. ggml_cont                        materialize as contiguous
-//   5. ggml_reshape_4d(pos_len, T_q)    ne -> [pos_len, T_q, H, 1]
-//
-// Step 1 used to be `ggml_pad_ext(lp0=1, ...)`, which is the
-// natural one-op solution. Metal's PAD kernel only supports
-// right-side padding (the supports_op check at
-// ggml-metal-device.m:1131 requires lp* to be zero), so on Metal
-// we have to build the zero column ourselves and prepend via
-// ggml_concat. Both `ggml_fill` (used to make the zeros) and
-// `ggml_concat` are Metal-supported.
-//
-// Verified by hand-tracing a 3x5 example (see RESUME.md notes).
+// Shaw / Transformer-XL relative-position skew. See attention.py:82-91
+// in parakeet-mlx. Transforms the position scoring matrix from
+// [pos_len, T_q, H, 1] to the same shape but with each row rotated
+// so that column k holds the score for relative offset k.
 ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
     const int64_t pos_len = x->ne[0];
     const int64_t T_q     = x->ne[1];
@@ -478,29 +447,23 @@ ggml_tensor * build_conformer_block(ggml_context * ctx,
     return x;
 }
 
-// Relative-position multi-head self-attention (NeMo
-// RelPositionMultiHeadAttention, attention.py:52-144).
+// Relative-position multi-head self-attention using flash attention.
 //
-// Inputs (all in ggml fast-to-slow ne):
-//   x       : [d_model, T_q, 1, 1]    pre-LN activation
-//   pos_emb : [d_model, pos_len, 1, 1]  sinusoidal positional embedding,
-//                                      pos_len = 2*T_q - 1
+// Uses ggml_flash_attn_ext to fuse Q@K^T, scale, softmax, and @V into
+// a single op. The relative position contribution is precomputed and
+// passed as the additive mask (F16).
 //
-// Layout decisions:
-//   - Each q/k/v projection produces [d_model, T_q, 1, 1].
-//   - We reshape to [head_dim, n_head, T_q, 1] then permute(0, 2, 1, 3)
-//     to [head_dim, T_q, n_head, 1] which matches MLX's
-//     [B, n_head, T_q, head_dim] post-transpose layout.
-//   - V is permuted differently to [T_v, head_dim, n_head, 1] so the
-//     final attn @ v matmul can use ggml_mul_mat directly without
-//     another transpose.
+// ggml_flash_attn_ext expected layouts:
+//   Q:    [head_dim, T_q,    n_head, 1]
+//   K:    [head_dim, T_k,    n_head, 1]
+//   V:    [head_dim, T_k,    n_head, 1]  (NOT transposed)
+//   mask: [T_k,      T_q,    n_head, 1]  F16, additive
+//   out:  [head_dim, n_head, T_q,    1]  (already permuted)
 //
-// Score formula (matching MLX SDPA semantics with mask=matrix_bd):
-//   scores = scale * ((q_u @ k^T) + rel_shift(q_v @ p^T)[:, :, :, :T_k])
-//   attn   = softmax(scores)         (over the inner T_k axis)
-//   out    = attn @ v
-//
-// scale = 1 / sqrt(head_dim).
+// Score formula:
+//   flash_attn computes: softmax(q_u @ k^T * scale + mask) @ v
+//   We set mask = rel_shift(q_v @ p^T)[:T_k] * scale
+//   Which gives: softmax((q_u @ k^T + rel_pos_bias) * scale) @ v
 ggml_tensor * rel_pos_mhsa(ggml_context * ctx,
                            ggml_tensor *  x,
                            ggml_tensor *  pos_emb,
@@ -514,96 +477,48 @@ ggml_tensor * rel_pos_mhsa(ggml_context * ctx,
     const int64_t pos_len  = pos_emb->ne[1];
 
     // ----- Q, K, V, P projections (all bias-free) ------------------
-    ggml_tensor * q = ggml_mul_mat(ctx, b.attn_q_w, x);   // [d_model, T_q, 1, 1]
-    ggml_tensor * k = ggml_mul_mat(ctx, b.attn_k_w, x);   // [d_model, T_q, 1, 1]
-    ggml_tensor * v = ggml_mul_mat(ctx, b.attn_v_w, x);   // [d_model, T_q, 1, 1]
-    ggml_tensor * p = ggml_mul_mat(ctx, b.attn_pos_w, pos_emb);  // [d_model, pos_len, 1, 1]
+    ggml_tensor * q = ggml_mul_mat(ctx, b.attn_q_w, x);
+    ggml_tensor * k = ggml_mul_mat(ctx, b.attn_k_w, x);
+    ggml_tensor * v = ggml_mul_mat(ctx, b.attn_v_w, x);
+    ggml_tensor * p = ggml_mul_mat(ctx, b.attn_pos_w, pos_emb);
 
     // ----- Split heads ---------------------------------------------
-    //
-    // q/k go to [head_dim, T, n_head, 1] for the score matmul.
-    // v goes to [T, head_dim, n_head, 1] so the final attn @ v
-    // matmul can be done directly via ggml_mul_mat.
-    //
-    // pos_bias_u/v are stored in the catalog as ne=[head_dim, n_head, 1, 1].
-    // They broadcast naturally onto q reshaped as
-    // [head_dim, n_head, T, 1] (BEFORE the permute that moves T past
-    // n_head), so we add the bias FIRST then permute.
-
-    // q reshape -> [head_dim, n_head, T_q, 1]
+    // pos_bias_u/v broadcast onto [head_dim, n_head, T, 1] BEFORE
+    // the permute that moves T past n_head.
     q = ggml_reshape_4d(ctx, q, head_dim, n_head, T_q, 1);
-    // q_u = q + pos_bias_u (broadcasts over T_q axis)
     ggml_tensor * q_u = ggml_add(ctx, q, b.attn_pos_u);
-    // q_v = q + pos_bias_v
     ggml_tensor * q_v = ggml_add(ctx, q, b.attn_pos_v);
-    // permute to [head_dim, T_q, n_head, 1]. ggml_permute semantic:
-    // arg[i] = the destination axis where source axis i ends up.
-    // src axes (0=head_dim, 1=n_head, 2=T_q, 3=_) -> dst (0=head_dim,
-    // 1=T_q, 2=n_head, 3=_) means head_dim stays at 0, n_head goes
-    // to 2, T_q goes to 1 -> permute(0, 2, 1, 3).
+
+    // All of Q, K, V need [head_dim, T, n_head, 1] for flash_attn.
     q_u = ggml_cont(ctx, ggml_permute(ctx, q_u, 0, 2, 1, 3));
     q_v = ggml_cont(ctx, ggml_permute(ctx, q_v, 0, 2, 1, 3));
 
-    // k reshape + permute -> [head_dim, T_k, n_head, 1]
     k = ggml_reshape_4d(ctx, k, head_dim, n_head, T_q, 1);
     k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
 
-    // v reshape -> [head_dim, n_head, T_v, 1]
-    // then permute to [T_v, head_dim, n_head, 1]
-    //
-    // ggml_permute semantic: arg[i] says where source axis i ENDS UP
-    // in the destination. So to move src axis 0 (head_dim) to dst
-    // axis 1, src axis 1 (n_head) to dst axis 2, src axis 2 (T_v)
-    // to dst axis 0, we pass (1, 2, 0, 3).
     v = ggml_reshape_4d(ctx, v, head_dim, n_head, T_q, 1);
-    v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));
+    v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
 
-    // p reshape + permute -> [head_dim, pos_len, n_head, 1]
     p = ggml_reshape_4d(ctx, p, head_dim, n_head, pos_len, 1);
     p = ggml_cont(ctx, ggml_permute(ctx, p, 0, 2, 1, 3));
 
-    // ----- Content scores: q_u @ k^T --------------------------------
-    //
-    // ggml_mul_mat(K, Q) computes K @ Q^T conceptually, with both
-    // having ne[0]=head_dim. The result is K.ne[1] × Q.ne[1] =
-    // [T_k, T_q] per head.
-    ggml_tensor * matrix_ac = ggml_mul_mat(ctx, k, q_u);
-    // matrix_ac ne = [T_k=T_q, T_q, n_head, 1]
-
-    // ----- Position scores: q_v @ p^T -------------------------------
+    // ----- Position mask for flash attention -----------------------
+    // Compute rel_shift(q_v @ p^T)[:T_k] * scale, cast to F16.
     ggml_tensor * matrix_bd = ggml_mul_mat(ctx, p, q_v);
-    // matrix_bd ne = [pos_len, T_q, n_head, 1]
     matrix_bd = rel_shift(ctx, matrix_bd);
-    // Slice to T_k (= T_q for self-attention) inner columns. The
-    // view's nb[1..] still reflect pos_len*4 bytes per row, so it's
-    // non-contiguous; cont before adding to matrix_ac.
     matrix_bd = ggml_view_4d(ctx, matrix_bd,
                              T_q, T_q, n_head, 1,
                              matrix_bd->nb[1], matrix_bd->nb[2],
                              matrix_bd->nb[3], /*offset=*/0);
     matrix_bd = ggml_cont(ctx, matrix_bd);
+    matrix_bd = ggml_scale(ctx, matrix_bd, scale);
+    matrix_bd = ggml_cast(ctx, matrix_bd, GGML_TYPE_F16);
 
-    // ----- Combined scores + softmax (with scale fused in) ----------
-    ggml_tensor * scores = ggml_add(ctx, matrix_ac, matrix_bd);
-    // ggml_soft_max_ext(a, mask=null, scale, max_bias=0) computes
-    // softmax(a*scale). Softmax is along ne[0] which here is T_k.
-    ggml_tensor * attn = ggml_soft_max_ext(ctx, scores,
-                                           /*mask=*/nullptr,
-                                           scale, /*max_bias=*/0.0f);
-
-    // ----- attn @ v -------------------------------------------------
-    //
-    // V is already in [T_v, head_dim, n_head, 1] so ggml_mul_mat(V, attn)
-    // gives result ne[0]=V.ne[1]=head_dim, ne[1]=attn.ne[1]=T_q,
-    // ne[2]=n_head, ne[3]=1.
-    ggml_tensor * o = ggml_mul_mat(ctx, v, attn);
-    // o ne = [head_dim, T_q, n_head, 1]
-
-    // ----- Recombine heads -----------------------------------------
-    //
-    // [head_dim, T_q, n_head, 1] -> permute(0, 2, 1, 3) -> [head_dim, n_head, T_q, 1]
-    // -> reshape to [d_model, T_q, 1, 1].
-    o = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
+    // ----- Flash attention -----------------------------------------
+    ggml_tensor * o = ggml_flash_attn_ext(ctx, q_u, k, v, matrix_bd,
+                                          scale, /*max_bias=*/0.0f,
+                                          /*logit_softcap=*/0.0f);
+    // Output is [head_dim, n_head, T_q, 1] — already permuted.
     o = ggml_reshape_2d(ctx, o, d_model, T_q);
 
     // ----- Output linear -------------------------------------------
