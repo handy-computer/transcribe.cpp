@@ -60,6 +60,8 @@
 
 #ifdef __APPLE__
 #  include <Accelerate/Accelerate.h>
+#elif TRANSCRIBE_HAS_BLAS
+#  include <cblas.h>
 #endif
 
 #include <algorithm>
@@ -380,26 +382,36 @@ transcribe_status MelFrontend::compute(
     std::vector<double>().swap(padded);
 
     // ---- 4. Mel filterbank matmul + log ----
-    // mel_fb_ is [num_mels * n_freq] row-major. Loop order (t, m, k):
-    // for each frame, for each mel bin, sum over freq. The inner loop
-    // walks one mel filter row and one power-spectrum row in stride 1.
     //
-    // Output layout: log_mel[num_mels * n_frames] row-major as
-    // [num_mels, n_frames]. We transpose vs power's [n_frames,
-    // n_freq] layout because every downstream operation (per-feature
-    // normalize, encoder pre_encode conv) is most naturally indexed
-    // by (mel, time).
+    // Computes log_mel = log(mel_fb @ power^T + eps).
+    //   mel_fb: [n_mels, n_freq] row-major
+    //   power:  [n_frames, n_freq] row-major
+    //   result: [n_mels, n_frames] row-major
+    //
+    // When BLAS is available, this is a single sgemm call; otherwise
+    // falls back to the scalar triple loop.
     std::vector<float> log_mel(
         static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames));
+
+#if defined(__APPLE__) || TRANSCRIBE_HAS_BLAS
+    // C = A @ B^T  where A=[n_mels, n_freq], B=[n_frames, n_freq].
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                n_mels, n_frames, n_freq,
+                1.0f, mel_fb_.data(), n_freq,
+                power.data(), n_freq,
+                0.0f, log_mel.data(), n_frames);
+    {
+        const size_t total = static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames);
+        for (size_t i = 0; i < total; ++i) {
+            log_mel[i] = std::log(log_mel[i] + kLogEps);
+        }
+    }
+#else
     for (int t = 0; t < n_frames; ++t) {
         const float * pwr = power.data() + static_cast<size_t>(t) * n_freq;
         for (int m = 0; m < n_mels; ++m) {
             const float * fb_row =
                 mel_fb_.data() + static_cast<size_t>(m) * n_freq;
-            // Single fp32 accumulator matches the ONNX matmul
-            // precision exactly. Switching to fp64 here would drift
-            // ~1 ULP per element away from the ONNX golden in
-            // pursuit of higher (but unverifiable) "correctness."
             float acc = 0.0f;
             for (int k = 0; k < n_freq; ++k) {
                 acc += fb_row[k] * pwr[k];
@@ -408,6 +420,7 @@ transcribe_status MelFrontend::compute(
                 std::log(acc + kLogEps);
         }
     }
+#endif
     std::vector<float>().swap(power);
 
     // ---- 5. Per-feature normalize, unbiased ----

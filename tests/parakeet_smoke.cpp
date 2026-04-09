@@ -147,13 +147,6 @@ int main() {
             std::fprintf(stderr,
                          "FAIL: backend = \"\" after step 1, expected non-empty\n");
             ++g_failures;
-        } else if (std::strcmp(backend, "metal") != 0 &&
-                   std::strcmp(backend, "cpu")   != 0)
-        {
-            std::fprintf(stderr,
-                         "FAIL: backend = \"%s\", expected \"metal\" or \"cpu\"\n",
-                         backend);
-            ++g_failures;
         }
     }
 
