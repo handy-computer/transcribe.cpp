@@ -57,6 +57,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 namespace transcribe::parakeet {
 
