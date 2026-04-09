@@ -686,8 +686,8 @@ transcribe_status run(
     {
         int n_threads = pc->n_threads;
         if (n_threads <= 0) {
-            n_threads = std::max(1, static_cast<int>(
-                std::thread::hardware_concurrency()));
+            n_threads = std::min(4, std::max(1, static_cast<int>(
+                std::thread::hardware_concurrency())));
         }
         for (int i = 0; i < ggml_backend_sched_get_n_backends(pc->sched); ++i) {
             ggml_backend_t be = ggml_backend_sched_get_backend(pc->sched, i);
