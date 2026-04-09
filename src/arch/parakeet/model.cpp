@@ -668,7 +668,7 @@ transcribe_status run(
 
     EncoderBuild eb = build_encoder_graph(
         pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames,
-        resolved_kv);
+        resolved_kv, pm->backend.c_str());
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         // build_encoder_graph already logged the diagnostic.
         return TRANSCRIBE_ERR_GGUF;

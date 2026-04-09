@@ -306,6 +306,31 @@ ggml_tensor * fused_batch_norm(ggml_context * ctx,
     return y;
 }
 
+// Auto-detect optimal conv strategy from backend name. Env vars
+// override if set: TRANSCRIBE_CONV_NO_DIRECT_PW=1 forces im2col pw,
+// TRANSCRIBE_CONV_DIRECT_DW=1 forces direct dw conv.
+bool detect_direct_pw(const char * backend) {
+    const char * env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_PW");
+    if (env != nullptr) return false; // user override
+    env = std::getenv("TRANSCRIBE_CONV_DIRECT_PW");
+    if (env != nullptr) return true;  // user override
+    // Vulkan reshape hurts; Metal and CPU benefit from direct pw.
+    if (std::strstr(backend, "Vulkan") != nullptr) return false;
+    return true;
+}
+
+bool detect_direct_dw(const char * backend) {
+    const char * env = std::getenv("TRANSCRIBE_CONV_DIRECT_DW");
+    if (env != nullptr) return true;  // user override
+    env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW");
+    if (env != nullptr) return false; // user override
+    // Vulkan and CPU have native CONV_2D_DW; Metal does not.
+    if (std::strstr(backend, "Vulkan") != nullptr) return true;
+    // CPU-only (no GPU prefix) also benefits, but for now keep
+    // im2col as default since the win is small on CPU.
+    return false;
+}
+
 // Conformer convolution module (conformer.py:51-103). Operates on
 // the post-LayerNorm activation; the LN is applied OUTSIDE this
 // helper by the block forward.
@@ -317,20 +342,18 @@ ggml_tensor * fused_batch_norm(ggml_context * ctx,
 //
 // BatchNorm uses precomputed fused scale + bias (2 ops instead of 4).
 
-bool use_direct_pw() {
-    static const bool val = (std::getenv("TRANSCRIBE_CONV_NO_DIRECT_PW") == nullptr);
-    return val;
-}
 
 ggml_tensor * conv_module(ggml_context * ctx,
                           ggml_tensor *  x,
                           const ParakeetBlock & b,
-                          int            conv_kernel)
+                          int            conv_kernel,
+                          bool           direct_pw,
+                          bool           direct_dw)
 {
     const int padding = (conv_kernel - 1) / 2;
     const int64_t d_model = x->ne[0];
 
-    if (use_direct_pw()) {
+    if (direct_pw) {
         // Pointwise conv 1 as direct mul_mat in [d_model, T] layout.
         // Kernel ne=[1, d_model, 2*d_model] → reshape to [d_model, 2*d_model].
         {
@@ -374,8 +397,25 @@ ggml_tensor * conv_module(ggml_context * ctx,
     }
 
     // Depthwise conv: kernel size from hparams, groups=d_model.
-    x = conv_1d_dw_f32(ctx, b.conv_dw_w, x,
-                       /*s=*/1, /*p=*/padding, /*d=*/1);
+    if (direct_dw) {
+        // Fused single-op depthwise conv (no im2col). Input is [T, d_model]
+        // from the transpose above. Reshape to 4D [T, 1, d_model, 1] for
+        // ggml_conv_2d_dw_direct which expects [W, H, C, N].
+        // Kernel [k, 1, d_model] → [k, 1, 1, d_model] (KW, KH, 1, C).
+        ggml_tensor * knl = ggml_reshape_4d(ctx, b.conv_dw_w,
+                                            conv_kernel, 1, 1, d_model);
+        ggml_tensor * data = ggml_reshape_4d(ctx, x,
+                                             x->ne[0], 1, x->ne[1], 1);
+        x = ggml_conv_2d_dw_direct(ctx, knl, data,
+                                   /*s0=*/1, /*s1=*/1,
+                                   /*p0=*/padding, /*p1=*/0,
+                                   /*d0=*/1, /*d1=*/0);
+        // Output: [T_out, 1, d_model, 1] → [T, d_model].
+        x = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[2]);
+    } else {
+        x = conv_1d_dw_f32(ctx, b.conv_dw_w, x,
+                           /*s=*/1, /*p=*/padding, /*d=*/1);
+    }
 
     // Fused BatchNorm (precomputed scale + bias).
     x = fused_batch_norm(ctx, x,
@@ -384,7 +424,7 @@ ggml_tensor * conv_module(ggml_context * ctx,
     // SiLU activation.
     x = ggml_silu(ctx, x);
 
-    if (use_direct_pw()) {
+    if (direct_pw) {
         // Transpose back: [T, d_model] -> [d_model, T].
         x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
 
@@ -422,7 +462,9 @@ ggml_tensor * build_conformer_block(ggml_context * ctx,
                                     int            d_model,
                                     int            n_head,
                                     int            conv_kernel,
-                                    ggml_type      kv_type)
+                                    ggml_type      kv_type,
+                                    bool           direct_pw,
+                                    bool           direct_dw)
 {
     // Macaron FF1: x = x + 0.5 * FF1(LN_ff1(x))
     x = macaron_ff_residual(ctx, x,
@@ -442,7 +484,8 @@ ggml_tensor * build_conformer_block(ggml_context * ctx,
     {
         ggml_tensor * x_norm = layer_norm(ctx, x,
                                           b.norm_conv_w, b.norm_conv_b);
-        ggml_tensor * conv_out = conv_module(ctx, x_norm, b, conv_kernel);
+        ggml_tensor * conv_out = conv_module(ctx, x_norm, b, conv_kernel,
+                                             direct_pw, direct_dw);
         x = ggml_add(ctx, x, conv_out);
     }
 
@@ -730,8 +773,13 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
                                  const ParakeetWeights & w,
                                  const ParakeetHParams & hp,
                                  int                     n_mel_frames,
-                                 ggml_type               kv_type)
+                                 ggml_type               kv_type,
+                                 const char *            backend_name)
 {
+    // Detect optimal conv strategy from backend, with env var overrides.
+    const bool direct_pw = detect_direct_pw(backend_name);
+    const bool direct_dw = detect_direct_dw(backend_name);
+
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_mel_frames <= 0) {
@@ -827,7 +875,8 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
             ggml_tensor * x_norm = layer_norm(ctx, x,
                                               b0.norm_conv_w, b0.norm_conv_b);
             ggml_tensor * conv_out = conv_module(ctx, x_norm, b0,
-                                                 hp.enc_conv_kernel);
+                                                 hp.enc_conv_kernel,
+                                                 direct_pw, direct_dw);
             x = ggml_add(ctx, x, conv_out);
             x = named(x, "enc.block.0.after_conv");
             eb.dumps.block0_after_conv = x;
@@ -860,7 +909,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
                                   hp.enc_d_model,
                                   hp.enc_n_heads,
                                   hp.enc_conv_kernel,
-                                  kv_type);
+                                  kv_type, direct_pw, direct_dw);
         if (i == 12) {
             x = named(x, "enc.block.12.out");
             eb.dumps.block12_out = x;

@@ -130,10 +130,13 @@ struct EncoderBuild {
 // a diagnostic is logged via stderr; the caller must check.
 // kv_type: GGML type for K/V activations in flash attention.
 // GGML_TYPE_COUNT means "auto" (f16 for quantized weights, f32 for f32).
+// backend_name: primary backend name (e.g. "MTL0", "Vulkan0", "CPU") for
+// auto-detecting optimal conv strategy. Env vars override if set.
 EncoderBuild build_encoder_graph(ggml_context *          compute_ctx,
                                  const ParakeetWeights & weights,
                                  const ParakeetHParams & hp,
                                  int                     n_mel_frames,
-                                 ggml_type               kv_type = GGML_TYPE_COUNT);
+                                 ggml_type               kv_type = GGML_TYPE_COUNT,
+                                 const char *            backend_name = "");
 
 } // namespace transcribe::parakeet
