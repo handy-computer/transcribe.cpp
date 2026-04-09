@@ -574,14 +574,17 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     // never approach it.
     const int max_iters = 16 * T_enc + 1024;
     int iter = 0;
+    int64_t t_pred_us = 0, t_joint_us = 0, t_conf_us = 0;
 
     while (step < T_enc && iter < max_iters) {
         ++iter;
 
         // ----- Predictor (one LSTM step) -----
+        const int64_t t0 = ggml_time_us();
         const float * decoder_out = predictor_step(
             w.predictor, last_token, state, next_state,
             scratch_x, scratch_gates, scratch_hh);
+        const int64_t t1 = ggml_time_us();
 
         // ----- Joint -----
         const float * enc_frame =
@@ -589,6 +592,9 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         joint_step(w.joint, enc_frame, decoder_out,
                    scratch_enc_proj, scratch_pred_proj, scratch_summed,
                    logits);
+        const int64_t t2 = ggml_time_us();
+        t_pred_us  += t1 - t0;
+        t_joint_us += t2 - t1;
 
         // ----- Argmax (token + duration) -----
         const float * token_logits    = logits.data();
@@ -637,8 +643,10 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         // ----- TDT emit + state advance -----
         const bool is_blank = (pred_token == blank_id);
         if (!is_blank) {
+            const int64_t tc0 = ggml_time_us();
             const float p = token_confidence(token_logits, n_token_cls,
                                              scratch_probs);
+            t_conf_us += ggml_time_us() - tc0;
             TdtToken tok;
             tok.id              = pred_token;
             tok.p               = p;
@@ -676,6 +684,17 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
             }
         }
     }
+
+    std::fprintf(stderr,
+                 "decoder: %d iters, %d tokens, T_enc=%d  "
+                 "pred=%.1f ms  joint=%.1f ms  conf=%.1f ms  "
+                 "total=%.1f ms  per_iter=%.0f us\n",
+                 iter, static_cast<int>(out_tokens.size()), T_enc,
+                 t_pred_us  / 1000.0,
+                 t_joint_us / 1000.0,
+                 t_conf_us  / 1000.0,
+                 (t_pred_us + t_joint_us + t_conf_us) / 1000.0,
+                 static_cast<double>(t_pred_us + t_joint_us) / std::max(iter, 1));
 
     if (iter >= max_iters) {
         std::fprintf(stderr,
