@@ -371,6 +371,16 @@ int main(int argc, char ** argv) {
 
         transcribe_print_timings(ctx);
 
+        {
+            struct transcribe_timings tm = transcribe_get_timings(ctx);
+            const double total_ms = tm.mel_ms + tm.encode_ms + tm.decode_ms;
+            if (total_ms > 0.0 && duration_s > 0.0) {
+                std::printf("  realtime:   %.0fx (%.1f ms for %.1f s)\n",
+                            (duration_s * 1000.0) / total_ms,
+                            total_ms, duration_s);
+            }
+        }
+
         transcribe_context_free(ctx);
         transcribe_model_free(model);
 
