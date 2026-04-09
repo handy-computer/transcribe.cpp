@@ -328,9 +328,8 @@ bool detect_direct_dw(const char * backend) {
     if (env != nullptr) return false; // user override
     // Vulkan and CPU have native CONV_2D_DW; Metal does not.
     if (std::strstr(backend, "Vulkan") != nullptr) return true;
-    // CPU-only (no GPU prefix) also benefits, but for now keep
-    // im2col as default since the win is small on CPU.
-    return false;
+    // CPU also benefits from direct dw (avoids 31x im2col expansion).
+    return true;
 }
 
 // Conformer convolution module (conformer.py:51-103). Operates on
