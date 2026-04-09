@@ -42,6 +42,7 @@ struct cli_args {
     bool        batch_jsonl = false; // --batch-jsonl: output JSONL
     int         repeat    = 1;
     int         n_threads = 0; // 0 = library default (all cores)
+    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 };
 
 void print_usage(const char * argv0) {
@@ -55,6 +56,7 @@ void print_usage(const char * argv0) {
         "  -q, --quiet           suppress library log output\n"
         "  -r, --repeat N        run N times per file (benchmark)\n"
         "  --threads N           CPU threads (default: all cores)\n"
+        "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
         "  -h, --help            show this help\n",
@@ -97,6 +99,17 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) return false;
             out.n_threads = std::atoi(v);
             if (out.n_threads < 1) out.n_threads = 1;
+        } else if (a == "--kv-type") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            const std::string vs = v;
+            if      (vs == "auto") out.kv_type = TRANSCRIBE_KV_TYPE_AUTO;
+            else if (vs == "f32")  out.kv_type = TRANSCRIBE_KV_TYPE_F32;
+            else if (vs == "f16")  out.kv_type = TRANSCRIBE_KV_TYPE_F16;
+            else {
+                std::fprintf(stderr, "error: --kv-type must be auto, f32, or f16\n");
+                return false;
+            }
         } else if (a == "--batch") {
             const char * v = take_value(a.c_str());
             if (!v) return false;
@@ -212,6 +225,7 @@ int main(int argc, char ** argv) {
         // Init context once (reused across all files via run()).
         struct transcribe_context_params cp = transcribe_context_default_params();
         cp.n_threads = args.n_threads;
+        cp.kv_type   = args.kv_type;
         struct transcribe_context *      ctx = nullptr;
         const transcribe_status          init_st =
             transcribe_context_init(model, &cp, &ctx);
@@ -325,6 +339,7 @@ int main(int argc, char ** argv) {
 
         struct transcribe_context_params cp = transcribe_context_default_params();
         cp.n_threads = args.n_threads;
+        cp.kv_type   = args.kv_type;
         struct transcribe_context *      ctx = nullptr;
         const transcribe_status          init_st =
             transcribe_context_init(model, &cp, &ctx);

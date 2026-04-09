@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include "ggml.h" // ggml_type
+
 struct ggml_context;
 struct ggml_tensor;
 struct ggml_cgraph;
@@ -126,9 +128,12 @@ struct EncoderBuild {
 // On any failure (insufficient mem_size, weights/hparams mismatch,
 // degenerate frame count) the returned struct has nullptr fields and
 // a diagnostic is logged via stderr; the caller must check.
+// kv_type: GGML type for K/V activations in flash attention.
+// GGML_TYPE_COUNT means "auto" (f16 for quantized weights, f32 for f32).
 EncoderBuild build_encoder_graph(ggml_context *          compute_ctx,
                                  const ParakeetWeights & weights,
                                  const ParakeetHParams & hp,
-                                 int                     n_mel_frames);
+                                 int                     n_mel_frames,
+                                 ggml_type               kv_type = GGML_TYPE_COUNT);
 
 } // namespace transcribe::parakeet

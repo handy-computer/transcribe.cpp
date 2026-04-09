@@ -564,6 +564,7 @@ transcribe_status init_context(
     auto pc = std::make_unique<ParakeetContext>();
     pc->model     = model;
     pc->n_threads = params->n_threads;
+    pc->kv_type   = params->kv_type;
 
     *out_ctx = pc.release();
     return TRANSCRIBE_OK;
@@ -659,8 +660,15 @@ transcribe_status run(
         }
     }
 
+    // Resolve kv_type from the public enum to ggml_type.
+    // GGML_TYPE_COUNT is the sentinel for "auto" inside the encoder.
+    ggml_type resolved_kv = GGML_TYPE_COUNT; // auto
+    if (pc->kv_type == TRANSCRIBE_KV_TYPE_F32) resolved_kv = GGML_TYPE_F32;
+    if (pc->kv_type == TRANSCRIBE_KV_TYPE_F16) resolved_kv = GGML_TYPE_F16;
+
     EncoderBuild eb = build_encoder_graph(
-        pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames);
+        pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames,
+        resolved_kv);
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         // build_encoder_graph already logged the diagnostic.
         return TRANSCRIBE_ERR_GGUF;

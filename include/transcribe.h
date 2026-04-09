@@ -192,6 +192,22 @@ typedef enum {
     TRANSCRIBE_TIMESTAMPS_TOKEN   = 4,
 } transcribe_timestamp_kind;
 
+/*
+ * KV cache type for the encoder's flash-attention path.
+ *
+ * AUTO:  f16 when model weights are quantized, f32 when weights are f32.
+ *        Best default — matches the bandwidth profile of the model.
+ * F32:   full-precision KV. Maximum accuracy, highest bandwidth.
+ * F16:   half-precision KV. Halves attention bandwidth with minimal
+ *        precision loss (~3 decimal digits). Best for bandwidth-bound
+ *        backends (integrated GPUs, CPU).
+ */
+typedef enum {
+    TRANSCRIBE_KV_TYPE_AUTO = 0,
+    TRANSCRIBE_KV_TYPE_F32  = 1,
+    TRANSCRIBE_KV_TYPE_F16  = 2,
+} transcribe_kv_type;
+
 /* ----------------------------------------------------------------------- */
 /* Handles                                                                 */
 /* ----------------------------------------------------------------------- */
@@ -226,9 +242,13 @@ TRANSCRIBE_API struct transcribe_model_params transcribe_model_default_params(vo
  *
  * n_threads: number of CPU threads for ops that run on CPU. 0 means
  *            "library picks a sensible default".
+ *
+ * kv_type:   data type for K/V activations in flash attention.
+ *            AUTO (default) uses f16 for quantized models, f32 for f32.
  */
 struct transcribe_context_params {
-    int n_threads;
+    int                n_threads;
+    transcribe_kv_type kv_type;
 };
 
 TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_params(void);

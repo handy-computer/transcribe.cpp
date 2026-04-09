@@ -128,6 +128,7 @@ extern "C" struct transcribe_model_params transcribe_model_default_params(void) 
 extern "C" struct transcribe_context_params transcribe_context_default_params(void) {
     struct transcribe_context_params p = {};
     p.n_threads = 0; // 0 = library picks a default
+    p.kv_type   = TRANSCRIBE_KV_TYPE_AUTO;
     return p;
 }
 

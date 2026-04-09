@@ -406,7 +406,8 @@ ggml_tensor * rel_pos_mhsa(ggml_context * ctx,
                            ggml_tensor *  pos_emb,
                            const ParakeetBlock & b,
                            int            d_model,
-                           int            n_head);
+                           int            n_head,
+                           ggml_type      kv_type);
 
 // One conformer block forward (conformer.py:186-203). The macaron
 // structure: FF1 (0.5x residual), MHSA (full residual), Conv (full
@@ -420,7 +421,8 @@ ggml_tensor * build_conformer_block(ggml_context * ctx,
                                     const ParakeetBlock & b,
                                     int            d_model,
                                     int            n_head,
-                                    int            conv_kernel)
+                                    int            conv_kernel,
+                                    ggml_type      kv_type)
 {
     // Macaron FF1: x = x + 0.5 * FF1(LN_ff1(x))
     x = macaron_ff_residual(ctx, x,
@@ -432,7 +434,7 @@ ggml_tensor * build_conformer_block(ggml_context * ctx,
         ggml_tensor * x_norm = layer_norm(ctx, x,
                                           b.norm_attn_w, b.norm_attn_b);
         ggml_tensor * attn_out = rel_pos_mhsa(ctx, x_norm, pos_emb,
-                                              b, d_model, n_head);
+                                              b, d_model, n_head, kv_type);
         x = ggml_add(ctx, x, attn_out);
     }
 
@@ -476,7 +478,8 @@ ggml_tensor * rel_pos_mhsa(ggml_context * ctx,
                            ggml_tensor *  pos_emb,
                            const ParakeetBlock & b,
                            int            d_model,
-                           int            n_head)
+                           int            n_head,
+                           ggml_type      kv_type)
 {
     const int     head_dim = d_model / n_head;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
@@ -522,6 +525,23 @@ ggml_tensor * rel_pos_mhsa(ggml_context * ctx,
     matrix_bd = ggml_cast(ctx, matrix_bd, GGML_TYPE_F16);
 
     // ----- Flash attention -----------------------------------------
+    // Optionally cast K/V activations to a narrower type to reduce
+    // bandwidth in the attention kernel. GGML_TYPE_COUNT means "auto"
+    // (f16 for quantized weights, f32 for f32 weights). The flash_attn
+    // accumulator is f32 internally regardless of K/V type.
+    {
+        ggml_type effective_kv = kv_type;
+        if (effective_kv == GGML_TYPE_COUNT) {
+            // Auto: f16 for quantized models, f32 for f32 models.
+            effective_kv = (b.attn_k_w->type != GGML_TYPE_F32)
+                         ? GGML_TYPE_F16 : GGML_TYPE_F32;
+        }
+        if (effective_kv != GGML_TYPE_F32) {
+            k = ggml_cast(ctx, k, effective_kv);
+            v = ggml_cast(ctx, v, effective_kv);
+        }
+    }
+
     ggml_tensor * o = ggml_flash_attn_ext(ctx, q_u, k, v, matrix_bd,
                                           scale, /*max_bias=*/0.0f,
                                           /*logit_softcap=*/0.0f);
@@ -709,7 +729,8 @@ ggml_tensor * build_pre_encode(ggml_context *          ctx,
 EncoderBuild build_encoder_graph(ggml_context *          ctx,
                                  const ParakeetWeights & w,
                                  const ParakeetHParams & hp,
-                                 int                     n_mel_frames)
+                                 int                     n_mel_frames,
+                                 ggml_type               kv_type)
 {
     EncoderBuild eb {};
 
@@ -794,7 +815,8 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
                                               b0.norm_attn_w, b0.norm_attn_b);
             ggml_tensor * attn_out = rel_pos_mhsa(ctx, x_norm, eb.pos_emb_in,
                                                   b0,
-                                                  hp.enc_d_model, hp.enc_n_heads);
+                                                  hp.enc_d_model, hp.enc_n_heads,
+                                                  kv_type);
             x = ggml_add(ctx, x, attn_out);
             x = named(x, "enc.block.0.after_attn");
             eb.dumps.block0_after_attn = x;
@@ -837,7 +859,8 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
                                   w.blocks[i],
                                   hp.enc_d_model,
                                   hp.enc_n_heads,
-                                  hp.enc_conv_kernel);
+                                  hp.enc_conv_kernel,
+                                  kv_type);
         if (i == 12) {
             x = named(x, "enc.block.12.out");
             eb.dumps.block12_out = x;

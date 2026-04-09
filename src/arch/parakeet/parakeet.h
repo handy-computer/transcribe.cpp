@@ -142,6 +142,9 @@ struct ParakeetContext final : public transcribe_context {
     // result_kind / has_result), populated by Parakeet::run during
     // decode. No per-family result fields here.
 
+    // KV type for flash attention, resolved from the context params.
+    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
+
     ParakeetContext() = default;
     ~ParakeetContext() override;
 };
