@@ -13,6 +13,8 @@
 
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
+#include "transcribe-flash-policy.h"
+#include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
@@ -295,27 +297,15 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
 // (unused) — dropping them individually isn't supported by ggml's
 // backend buffer model, and the ~235 MB cost is acceptable for the
 // CPU-only path.
+//
+// Weight collection is the only family-specific bit: we walk
+// m.weights.blocks and hand the shared helper a list of (slot, src)
+// pairs. The helper does the backend check, allocation, dequantize,
+// and repoint.
 transcribe_status promote_conv_pw_to_f32_on_cpu(CohereModel & m) {
-    if (m.backends.empty()) return TRANSCRIBE_OK;
-
-    ggml_backend_dev_t primary_dev =
-        ggml_backend_get_device(m.backends.front());
-    if (primary_dev == nullptr) return TRANSCRIBE_OK;
-    if (ggml_backend_dev_type(primary_dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        return TRANSCRIBE_OK;
-    }
-
-    const size_t n_blocks = m.weights.blocks.size();
-    if (n_blocks == 0) return TRANSCRIBE_OK;
-
-    // Collect the slots that need promotion. Only F16 slots matter —
-    // if a model was converted with F32 convs already we have nothing
-    // to do.
-    struct Slot { ggml_tensor ** slot; ggml_tensor * src; };
-    std::vector<Slot> slots;
-    slots.reserve(n_blocks * 2);
-    for (size_t i = 0; i < n_blocks; ++i) {
-        auto & b = m.weights.blocks[i];
+    std::vector<load_common::ConvPwF32Slot> slots;
+    slots.reserve(m.weights.blocks.size() * 2);
+    for (auto & b : m.weights.blocks) {
         if (b.conv_pw1_w != nullptr && b.conv_pw1_w->type == GGML_TYPE_F16) {
             slots.push_back({&b.conv_pw1_w, b.conv_pw1_w});
         }
@@ -323,69 +313,9 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CohereModel & m) {
             slots.push_back({&b.conv_pw2_w, b.conv_pw2_w});
         }
     }
-    if (slots.empty()) return TRANSCRIBE_OK;
-
-    const size_t ctx_size = slots.size() * ggml_tensor_overhead() + 256;
-    ggml_init_params params = {ctx_size, nullptr, true};
-    m.conv_pw_f32_ctx = ggml_init(params);
-    if (m.conv_pw_f32_ctx == nullptr) return TRANSCRIBE_ERR_BACKEND;
-
-    // Allocate F32 replacements in the new ctx, matching each source's
-    // full n-d shape. Names are copied so debug dumps still find them.
-    std::vector<ggml_tensor *> replacements;
-    replacements.reserve(slots.size());
-    for (const auto & s : slots) {
-        ggml_tensor * r = ggml_new_tensor(
-            m.conv_pw_f32_ctx, GGML_TYPE_F32,
-            ggml_n_dims(s.src), s.src->ne);
-        if (r == nullptr) return TRANSCRIBE_ERR_BACKEND;
-        ggml_set_name(r, s.src->name);
-        replacements.push_back(r);
-    }
-
-    m.conv_pw_f32_buffer = ggml_backend_alloc_ctx_tensors(
-        m.conv_pw_f32_ctx, m.backends.front());
-    if (m.conv_pw_f32_buffer == nullptr) {
-        std::fprintf(stderr,
-            "cohere: conv_pw f32 promotion buffer alloc failed\n");
-        return TRANSCRIBE_ERR_BACKEND;
-    }
-    ggml_backend_buffer_set_usage(m.conv_pw_f32_buffer,
-                                  GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-    // Dequantize each F16 tensor into its F32 replacement.
-    const auto * f16_traits = ggml_get_type_traits(GGML_TYPE_F16);
-    if (f16_traits == nullptr || f16_traits->to_float == nullptr) {
-        std::fprintf(stderr,
-            "cohere: no f16 to_float trait — skipping conv pw promotion\n");
-        return TRANSCRIBE_OK;
-    }
-
-    std::vector<uint8_t> f16_staging;
-    std::vector<float>   f32_staging;
-    for (size_t i = 0; i < slots.size(); ++i) {
-        ggml_tensor * src = slots[i].src;
-        ggml_tensor * dst = replacements[i];
-        const int64_t n_elem = ggml_nelements(src);
-        const size_t f16_bytes = ggml_nbytes(src);
-        const size_t f32_bytes = static_cast<size_t>(n_elem) * sizeof(float);
-
-        if (f16_staging.size() < f16_bytes) f16_staging.resize(f16_bytes);
-        if (f32_staging.size() < static_cast<size_t>(n_elem)) {
-            f32_staging.resize(n_elem);
-        }
-
-        ggml_backend_tensor_get(src, f16_staging.data(), 0, f16_bytes);
-        f16_traits->to_float(f16_staging.data(), f32_staging.data(), n_elem);
-        ggml_backend_tensor_set(dst, f32_staging.data(), 0, f32_bytes);
-
-        *slots[i].slot = dst;
-    }
-
-    std::fprintf(stderr,
-        "cohere: promoted %zu conv pointwise weights from F16 → F32 "
-        "for CPU backend\n", slots.size());
-    return TRANSCRIBE_OK;
+    return load_common::promote_conv_pw_f16_to_f32_on_cpu(
+        m.backends, slots, "cohere",
+        &m.conv_pw_f32_ctx, &m.conv_pw_f32_buffer);
 }
 
 constexpr const char k_default_variant[] = "cohere-asr";
@@ -403,7 +333,9 @@ transcribe_status load(
     const transcribe_model_params *   params,
     transcribe_model **               out_model)
 {
-    (void)params;
+    // params->use_gpu is consumed below in the backend init block;
+    // params->gpu_device is reserved (the registry walk doesn't yet
+    // honor a caller-supplied device index).
 
     const int64_t t_load_start = ggml_time_us();
 
@@ -451,6 +383,20 @@ transcribe_status load(
     // Set special token IDs from tokenizer.
     m->hparams.bos_token_id = m->tok.bos_id();
     m->hparams.eos_token_id = m->tok.eos_id();
+
+    // Hard-fail at load time if the tokenizer did not supply an EOS
+    // token id. Previously this was papered over at decode time with a
+    // fallback to token id 3 plus a stderr warning; that is worse than
+    // refusing the model because (a) id 3 is a random guess that only
+    // happens to match this family's current checkpoint, and (b) a
+    // missing EOS is a GGUF-builder bug that should surface during
+    // conversion, not hide behind a runtime fallback in production.
+    if (m->hparams.eos_token_id < 0) {
+        std::fprintf(stderr,
+                     "cohere: GGUF tokenizer has no eos_token_id -- "
+                     "regenerate with an up-to-date converter\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
 
     // Mel frontend.
     {
@@ -517,49 +463,18 @@ transcribe_status load(
     }
 
     // Initialize backends.
-    const char * force_cpu_env = std::getenv("TRANSCRIBE_FORCE_CPU");
-    const bool   force_cpu     = force_cpu_env != nullptr && force_cpu_env[0] != '\0' &&
-                                 force_cpu_env[0] != '0';
+    //
+    // transcribe_model_params::use_gpu == false skips the GPU backend
+    // init below and leaves CPU as the primary backend. ACCEL backends
+    // (e.g. Accelerate sgemm) run on host memory and are included in
+    // either case.
+    const bool force_cpu = (params != nullptr && !params->use_gpu);
+    if (const transcribe_status st = transcribe::load_common::init_backends(
+            force_cpu, "cohere", m->backends);
+        st != TRANSCRIBE_OK)
     {
-        if (!force_cpu) {
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                const auto dev_type = ggml_backend_dev_type(dev);
-                if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU ||
-                    dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                    ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
-                    if (be != nullptr) {
-                        std::fprintf(stderr, "cohere: using GPU backend: %s\n",
-                                     ggml_backend_dev_name(dev));
-                        m->backends.push_back(be);
-                        break;
-                    }
-                }
-            }
-        }
-
-        {
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
-                    ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
-                    if (be != nullptr) {
-                        std::fprintf(stderr, "cohere: using ACCEL backend: %s\n",
-                                     ggml_backend_dev_name(dev));
-                        m->backends.push_back(be);
-                    }
-                }
-            }
-        }
-
-        ggml_backend_t cpu_be =
-            ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
-        if (cpu_be == nullptr) {
-            gguf_free(gguf_data);
-            std::fprintf(stderr, "cohere: failed to initialize CPU backend\n");
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        m->backends.push_back(cpu_be);
+        gguf_free(gguf_data);
+        return st;
     }
 
     m->backend = ggml_backend_name(m->backends.front());
@@ -576,63 +491,14 @@ transcribe_status load(
     ggml_backend_buffer_set_usage(weights_buffer,
                                   GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    // Stream tensor data.
+    // Stream tensor data from the GGUF file into the backend buffer
+    // slots. See transcribe-load-common.h for the shared loop.
+    if (const transcribe_status st = transcribe::load_common::stream_tensor_data(
+            loader.path(), gguf_data, m->ctx_meta, "cohere");
+        st != TRANSCRIBE_OK)
     {
-        std::ifstream fin(loader.path(), std::ios::binary);
-        if (!fin) {
-            gguf_free(gguf_data);
-            std::fprintf(stderr,
-                         "cohere: failed to reopen %s for tensor data\n",
-                         loader.path().c_str());
-            return TRANSCRIBE_ERR_GGUF;
-        }
-
-        const size_t data_offset = gguf_get_data_offset(gguf_data);
-        std::vector<uint8_t> staging;
-
-        for (ggml_tensor * t = ggml_get_first_tensor(m->ctx_meta);
-             t != nullptr;
-             t = ggml_get_next_tensor(m->ctx_meta, t))
-        {
-            const int64_t idx = gguf_find_tensor(gguf_data, t->name);
-            if (idx < 0) {
-                std::fprintf(stderr,
-                             "cohere: tensor \"%s\" not in gguf data\n",
-                             t->name);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-            const size_t toffset = gguf_get_tensor_offset(gguf_data, idx);
-            const size_t nbytes  = ggml_nbytes(t);
-
-            const std::streamoff abs_offset =
-                static_cast<std::streamoff>(data_offset) +
-                static_cast<std::streamoff>(toffset);
-            fin.seekg(abs_offset);
-            if (!fin) {
-                std::fprintf(stderr,
-                             "cohere: seek failed for tensor \"%s\"\n",
-                             t->name);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-
-            if (staging.size() < nbytes) {
-                staging.resize(nbytes);
-            }
-            fin.read(reinterpret_cast<char *>(staging.data()),
-                     static_cast<std::streamsize>(nbytes));
-            if (!fin) {
-                std::fprintf(stderr,
-                             "cohere: short read for tensor \"%s\" "
-                             "(%zu bytes)\n",
-                             t->name, nbytes);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-
-            ggml_backend_tensor_set(t, staging.data(), 0, nbytes);
-        }
+        gguf_free(gguf_data);
+        return st;
     }
 
     gguf_free(gguf_data);
@@ -680,30 +546,22 @@ transcribe_status init_context(
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
-    // Encoder flash-attention policy:
-    //   - The Cohere encoder uses head_dim=160, which upstream ggml's
-    //     Metal backend does NOT support in flash_attn_ext. Benchmarks
-    //     also showed the manual mul_mat + softmax + mul_mat path ties
-    //     (or slightly beats) flash at this model's encoder sequence
-    //     lengths (~100-500 frames), so we default it off on Metal.
-    //   - TRANSCRIBE_NO_FLASH=1 forces it off everywhere.
-    //   - TRANSCRIBE_FORCE_FLASH=1 forces it on (intended for backends
-    //     that do support dk=160, or for benchmarking).
+    // Flash-attention policy -- see CohereContext (cohere.h) for why
+    // this is split into encoder vs decoder. The short version:
+    // encoder dk=160 is unsupported by upstream ggml Metal flash, so
+    // the encoder auto-disables on Metal; decoder dk=128 works on
+    // every backend we ship, so the decoder defaults on. The env-var
+    // overrides (TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH) are
+    // applied globally in transcribe::flash::apply_env_overrides.
     auto * cm = static_cast<CohereModel *>(model);
-    const char * backend_name = cm->backend.c_str();
-    const bool is_metal = std::strstr(backend_name, "MTL")   != nullptr ||
-                          std::strstr(backend_name, "Metal") != nullptr;
+    const bool is_metal = transcribe::flash::is_metal_backend(
+        cm->backend.c_str());
 
-    cc->use_flash = !is_metal;
+    cc->encoder_use_flash = !is_metal;
+    cc->decoder_use_flash = true;
 
-    const char * no_flash_env = std::getenv("TRANSCRIBE_NO_FLASH");
-    if (no_flash_env != nullptr && no_flash_env[0] == '1') {
-        cc->use_flash = false;
-    }
-    const char * force_flash_env = std::getenv("TRANSCRIBE_FORCE_FLASH");
-    if (force_flash_env != nullptr && force_flash_env[0] == '1') {
-        cc->use_flash = true;
-    }
+    transcribe::flash::apply_env_overrides(
+        cc->encoder_use_flash, cc->decoder_use_flash);
 
     *out_ctx = cc.release();
     return TRANSCRIBE_OK;
@@ -776,7 +634,7 @@ transcribe_status run(
 
     EncoderBuild eb = build_encoder_graph(
         cc->compute_ctx, cm->weights, cm->hparams, mel_n_frames,
-        resolved_kv, cc->use_flash, cm->backend.c_str());
+        resolved_kv, cc->encoder_use_flash, cm->backend.c_str());
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -1020,11 +878,20 @@ transcribe_status run(
     }
 
     // Helper to create a fresh compute context.
+    //
+    // Any ggml_tensor pointer we hold that was allocated inside the
+    // previous compute_ctx becomes dangling the instant we ggml_free
+    // it below, so null them out here. Today cc->encoder_out is the
+    // only such pointer -- its *data* was already copied to
+    // cc->enc_host above, and cross-attn graphs below re-declare a
+    // fresh encoder_out input tensor -- but keeping a stale pointer
+    // around invites a future edit to use-after-free it.
     auto new_compute_ctx = [&](size_t mem_size) -> bool {
         if (cc->compute_ctx != nullptr) {
             ggml_free(cc->compute_ctx);
             cc->compute_ctx = nullptr;
         }
+        cc->encoder_out = nullptr;
         ggml_init_params init_params {};
         init_params.mem_size   = mem_size;
         init_params.mem_buffer = nullptr;
@@ -1106,7 +973,8 @@ transcribe_status run(
             cc->compute_ctx, cm->weights, cm->hparams,
             cc->kv_cache,
             prompt_len, /*n_past=*/0, T_enc,
-            /*skip_log_softmax=*/prompt_skip_softmax);
+            /*skip_log_softmax=*/prompt_skip_softmax,
+            cc->decoder_use_flash);
         if (db.out == nullptr || db.graph == nullptr) {
             std::fprintf(stderr,
                          "cohere run: build_decoder_graph_kv (prompt) failed\n");
@@ -1170,13 +1038,10 @@ transcribe_status run(
         // Greedy decode from last prompt position.
         cc->clear_result();
 
-        const int eos_id = cm->hparams.eos_token_id >= 0
-                         ? cm->hparams.eos_token_id : 3;
-        if (eos_id == 3 && cm->hparams.eos_token_id < 0) {
-            std::fprintf(stderr,
-                         "cohere run: WARNING eos_token_id not set, "
-                         "falling back to 3\n");
-        }
+        // Load-time validation guarantees eos_token_id >= 0; no
+        // fallback is needed here. See the tokenizer.eos_id() check
+        // in cohere::load() at the top of this file.
+        const int eos_id = cm->hparams.eos_token_id;
         const int max_tokens = std::min(512,
                                         cc->kv_cache.n_ctx - prompt_len);
 
@@ -1237,7 +1102,8 @@ transcribe_status run(
                     cc->compute_ctx, cm->weights, cm->hparams,
                     cc->kv_cache,
                     /*n_tokens=*/1, worst_n_past, T_enc,
-                    /*skip_log_softmax=*/true);
+                    /*skip_log_softmax=*/true,
+                    cc->decoder_use_flash);
                 if (db_reserve.graph != nullptr) {
                     ggml_backend_sched_reserve(cc->sched, db_reserve.graph);
                 }
@@ -1273,7 +1139,8 @@ transcribe_status run(
                 cc->compute_ctx, cm->weights, cm->hparams,
                 cc->kv_cache,
                 /*n_tokens=*/1, n_past, T_enc,
-                /*skip_log_softmax=*/true);
+                /*skip_log_softmax=*/true,
+                cc->decoder_use_flash);
             if (db_step.out == nullptr || db_step.graph == nullptr) break;
             t_step_ctx += ggml_time_us() - t_ctx_start;
 
@@ -1328,7 +1195,13 @@ transcribe_status run(
 
         // Report per-phase step-loop breakdown so we can see whether
         // CPU overhead (ctx+build, alloc) or GPU compute dominates.
-        if (n_steps > 0) {
+        // Debug-gated: only emit when TRANSCRIBE_DUMP_DIR is set. The
+        // step-loop timing breakdown is useful during Cohere bringup
+        // and perf work but would be noise in normal transcription
+        // runs. debug::enabled() keys on the same env var as the
+        // tensor-dump hooks, so "I want to see everything" is a single
+        // toggle.
+        if (n_steps > 0 && transcribe::debug::enabled()) {
             const int64_t t_known =
                 t_step_ctx + t_step_alloc + t_step_upload +
                 t_step_compute + t_step_readback;

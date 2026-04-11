@@ -10,6 +10,7 @@
 #include "weights.h"
 
 #include "transcribe-meta.h"
+#include "transcribe-weights-util.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -277,103 +278,44 @@ const char * lname(const char * fmt, int layer_idx) {
     return buf;
 }
 
-ggml_tensor * find_tensor(const gguf_context *               gguf,
-                          ggml_context *                     ctx_meta,
-                          const char *                       name,
-                          std::initializer_list<ggml_type>   allowed_types,
-                          std::initializer_list<int64_t>     expected_ne)
-{
-    (void)gguf;
-    ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
-    if (t == nullptr) {
-        std::fprintf(stderr, "cohere: missing tensor \"%s\"\n", name);
-        return nullptr;
-    }
-
-    bool type_ok = false;
-    for (ggml_type allowed : allowed_types) {
-        if (t->type == allowed) { type_ok = true; break; }
-    }
-    if (!type_ok) {
-        char allowed_buf[128] = {0};
-        size_t off = 0;
-        bool first = true;
-        for (ggml_type allowed : allowed_types) {
-            const char * tn = ggml_type_name(allowed);
-            const int n = std::snprintf(allowed_buf + off,
-                                        sizeof(allowed_buf) - off,
-                                        "%s%s", first ? "" : ",", tn);
-            if (n < 0 || static_cast<size_t>(n) >= sizeof(allowed_buf) - off) break;
-            off += static_cast<size_t>(n);
-            first = false;
-        }
-        std::fprintf(stderr,
-                     "cohere: tensor \"%s\" type mismatch: "
-                     "expected one of {%s}, got %s\n",
-                     name, allowed_buf, ggml_type_name(t->type));
-        return nullptr;
-    }
-
-    const size_t n_expected = expected_ne.size();
-    if (n_expected == 0 || n_expected > GGML_MAX_DIMS) {
-        std::fprintf(stderr,
-                     "cohere: bad expected_ne size %zu for \"%s\"\n",
-                     n_expected, name);
-        return nullptr;
-    }
-
-    auto it = expected_ne.begin();
-    for (size_t i = 0; i < n_expected; ++i, ++it) {
-        if (t->ne[i] != *it) {
-            std::fprintf(stderr,
-                         "cohere: tensor \"%s\" shape mismatch: "
-                         "expected ne[%zu]=%lld, got %lld\n",
-                         name, i, static_cast<long long>(*it),
-                         static_cast<long long>(t->ne[i]));
-            return nullptr;
-        }
-    }
-    for (size_t i = n_expected; i < GGML_MAX_DIMS; ++i) {
-        if (t->ne[i] != 1) {
-            std::fprintf(stderr,
-                         "cohere: tensor \"%s\" has unexpected non-1 "
-                         "ne[%zu]=%lld (rank too high)\n",
-                         name, i, static_cast<long long>(t->ne[i]));
-            return nullptr;
-        }
-    }
-
-    return t;
-}
+// The canonical find_tensor() helper lives in
+// src/transcribe-weights-util.{h,cpp}; see that header for rationale.
+// It is shared between every per-family weights.cpp. The GET_*
+// macros below still live here because their type allowlists encode
+// a per-family quantization policy, not a shared convention.
+constexpr const char * kTag = "cohere";
 
 #define GET_F32(slot, name, ...) \
     do { \
-        ggml_tensor * _t = find_tensor(gguf, ctx_meta, (name), \
-                                       {GGML_TYPE_F32}, {__VA_ARGS__}); \
+        ggml_tensor * _t = transcribe::weights::find_tensor( \
+            gguf, ctx_meta, (name), \
+            {GGML_TYPE_F32}, {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \
     } while (0)
 
 #define GET_CONV(slot, name, ...) \
     do { \
-        ggml_tensor * _t = find_tensor(gguf, ctx_meta, (name), \
-                                       {GGML_TYPE_F32, GGML_TYPE_F16}, \
-                                       {__VA_ARGS__}); \
+        ggml_tensor * _t = transcribe::weights::find_tensor( \
+            gguf, ctx_meta, (name), \
+            {GGML_TYPE_F32, GGML_TYPE_F16}, \
+            {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \
     } while (0)
 
 #define GET_LIN(slot, name, ...) \
     do { \
-        ggml_tensor * _t = find_tensor(gguf, ctx_meta, (name), \
-                                       {GGML_TYPE_F32, GGML_TYPE_F16, \
-                                        GGML_TYPE_BF16, \
-                                        GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, \
-                                        GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, \
-                                        GGML_TYPE_Q8_0, \
-                                        GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, \
-                                        GGML_TYPE_Q6_K}, \
-                                       {__VA_ARGS__}); \
+        ggml_tensor * _t = transcribe::weights::find_tensor( \
+            gguf, ctx_meta, (name), \
+            {GGML_TYPE_F32, GGML_TYPE_F16, \
+             GGML_TYPE_BF16, \
+             GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, \
+             GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, \
+             GGML_TYPE_Q8_0, \
+             GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, \
+             GGML_TYPE_Q6_K}, \
+            {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \
     } while (0)

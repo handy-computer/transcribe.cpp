@@ -16,6 +16,10 @@ add_library(transcribe
     transcribe-model.cpp
     transcribe-tokenizer.cpp
     transcribe-debug.cpp
+    transcribe-flash-policy.cpp
+    transcribe-load-common.cpp
+    transcribe-weights-util.cpp
+    conformer/conformer.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp

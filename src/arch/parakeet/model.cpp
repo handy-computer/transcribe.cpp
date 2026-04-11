@@ -44,6 +44,7 @@
 
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
+#include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
@@ -116,6 +117,16 @@ ParakeetModel::~ParakeetModel() {
     if (bn_fused_buffer != nullptr) {
         ggml_backend_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
+    }
+    // The CPU conv_pw F32 promotion ctx + buffer (no-op on GPU primary
+    // backends; non-null only when promote_conv_pw_to_f32_on_cpu ran).
+    if (conv_pw_f32_ctx != nullptr) {
+        ggml_free(conv_pw_f32_ctx);
+        conv_pw_f32_ctx = nullptr;
+    }
+    if (conv_pw_f32_buffer != nullptr) {
+        ggml_backend_buffer_free(conv_pw_f32_buffer);
+        conv_pw_f32_buffer = nullptr;
     }
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
@@ -193,6 +204,42 @@ transcribe_status fuse_batch_norm(ParakeetModel & m) {
     return TRANSCRIBE_OK;
 }
 
+// On a CPU primary backend, dequantize the conformer 1×1 pointwise
+// conv weights (pw1, pw2) from F16 back to F32. The shared quantizer
+// (post commit 6fee9b9) routes Conformer ConvPw to F16 across all
+// presets so GPU backends with native F16 compute (Metal, Vulkan,
+// CUDA) get the bandwidth halving for free; on CPUs without native
+// F16 arithmetic (Zen 2 and earlier) the per-element F16→F32
+// upconvert per matmul erases the bandwidth win and outweighs the
+// original cost.
+//
+// Today's parakeet GGUFs predate the universal F16 conv_pw policy
+// and ship F32 conv_pw weights, so this function is a no-op against
+// the current on-disk artifacts. The wiring is in place so the next
+// regen does the right thing automatically. See the same comment
+// block on the cohere side for the cost trade and the ~235 MB of
+// "wasted" originals that stay resident in the main weight buffer
+// (ggml's backend buffer model does not support freeing individual
+// tensors).
+//
+// The machinery itself lives in transcribe::load_common — this
+// function is just the parakeet-specific weight walk.
+transcribe_status promote_conv_pw_to_f32_on_cpu(ParakeetModel & m) {
+    std::vector<load_common::ConvPwF32Slot> slots;
+    slots.reserve(m.weights.blocks.size() * 2);
+    for (auto & b : m.weights.blocks) {
+        if (b.conv_pw1_w != nullptr && b.conv_pw1_w->type == GGML_TYPE_F16) {
+            slots.push_back({&b.conv_pw1_w, b.conv_pw1_w});
+        }
+        if (b.conv_pw2_w != nullptr && b.conv_pw2_w->type == GGML_TYPE_F16) {
+            slots.push_back({&b.conv_pw2_w, b.conv_pw2_w});
+        }
+    }
+    return load_common::promote_conv_pw_f16_to_f32_on_cpu(
+        m.backends, slots, "parakeet",
+        &m.conv_pw_f32_ctx, &m.conv_pw_f32_buffer);
+}
+
 // Default variant string when the GGUF did not carry stt.variant.
 // Defaulting belongs in the family handler, not the loader: each
 // family knows its own canonical default and the loader does not.
@@ -214,9 +261,9 @@ transcribe_status load(
     // The dispatcher has already verified out_model is non-null and
     // the loader has a valid gguf_context with general.architecture
     // set. *out_model is currently null (the dispatcher cleared it).
-    (void)params; // GPU fallback / device selection lands when there
-                  // is actually a backend to fall back from. 2C runs
-                  // entirely in CPU memory with no ggml_backend_t.
+    // params->use_gpu is consumed below in the backend init block;
+    // params->gpu_device is reserved (the registry walk doesn't yet
+    // honor a caller-supplied device index).
 
     const int64_t t_load_start = ggml_time_us();
 
@@ -368,58 +415,18 @@ transcribe_status load(
     // #if TRANSCRIBE_METAL / #if TRANSCRIBE_VULKAN guards. Whatever
     // backends ggml was compiled with are discovered here.
     //
-    // TRANSCRIBE_FORCE_CPU=1 skips GPU/ACCEL backends for debugging
-    // and strict numerical reference.
-    const char * force_cpu_env = std::getenv("TRANSCRIBE_FORCE_CPU");
-    const bool   force_cpu     = force_cpu_env != nullptr && force_cpu_env[0] != '\0' &&
-                                 force_cpu_env[0] != '0';
+    // transcribe_model_params::use_gpu == false skips the GPU backend
+    // init below and leaves CPU as the primary backend. ACCEL backends
+    // (e.g. Accelerate sgemm) run on host memory and are included in
+    // either case.
+    const bool force_cpu = (params != nullptr && !params->use_gpu);
 
+    if (const transcribe_status st = transcribe::load_common::init_backends(
+            force_cpu, "parakeet", m->backends);
+        st != TRANSCRIBE_OK)
     {
-        // GPU backend (Metal, Vulkan, CUDA — whichever ggml found).
-        if (!force_cpu) {
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                const auto dev_type = ggml_backend_dev_type(dev);
-                if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU ||
-                    dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                    ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
-                    if (be != nullptr) {
-                        std::fprintf(stderr, "parakeet: using GPU backend: %s\n",
-                                     ggml_backend_dev_name(dev));
-                        m->backends.push_back(be);
-                        break; // use first available GPU
-                    }
-                }
-            }
-        }
-
-        // ACCEL backends (BLAS on CPU, etc.) — these accelerate
-        // specific ops (matmul) while the CPU backend handles the rest.
-        // ACCEL backends are always included, even with FORCE_CPU,
-        // because they run on host memory (e.g. Accelerate sgemm).
-        {
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
-                    ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
-                    if (be != nullptr) {
-                        std::fprintf(stderr, "parakeet: using ACCEL backend: %s\n",
-                                     ggml_backend_dev_name(dev));
-                        m->backends.push_back(be);
-                    }
-                }
-            }
-        }
-
-        // CPU backend (always present, always last).
-        ggml_backend_t cpu_be =
-            ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
-        if (cpu_be == nullptr) {
-            gguf_free(gguf_data);
-            std::fprintf(stderr, "parakeet: failed to initialize CPU backend\n");
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        m->backends.push_back(cpu_be);
+        gguf_free(gguf_data);
+        return st;
     }
 
     // Label for the public API: report the first (highest-priority) backend.
@@ -442,71 +449,17 @@ transcribe_status load(
     ggml_backend_buffer_set_usage(weights_buffer,
                                   GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    // Stream tensor data into the backend buffer. We use a plain
-    // std::ifstream rather than going through gguf's loader a third
-    // time: ifstream::seekg takes a streamoff (signed 64-bit on
-    // every platform we target), so multi-GB tensor offsets work
-    // without #ifdef'ing fseeko vs _fseeki64.
-    //
-    // ggml_backend_tensor_set is the right call regardless of
-    // backend: on host buffers (CPU + Metal unified memory on Apple
-    // Silicon) it's a memcpy; on discrete GPUs it does the upload.
+    // Stream tensor data from the GGUF file into the backend buffer
+    // slots. See transcribe-load-common.h for the shared loop; it
+    // uses ggml_backend_tensor_set so this works for both host-
+    // memory backends (CPU, Metal on Apple Silicon) and discrete
+    // GPUs.
+    if (const transcribe_status st = transcribe::load_common::stream_tensor_data(
+            loader.path(), gguf_data, m->ctx_meta, "parakeet");
+        st != TRANSCRIBE_OK)
     {
-        std::ifstream fin(loader.path(), std::ios::binary);
-        if (!fin) {
-            gguf_free(gguf_data);
-            std::fprintf(stderr,
-                         "parakeet: failed to reopen %s for tensor data\n",
-                         loader.path().c_str());
-            return TRANSCRIBE_ERR_GGUF;
-        }
-
-        const size_t data_offset = gguf_get_data_offset(gguf_data);
-        std::vector<uint8_t> staging;
-
-        for (ggml_tensor * t = ggml_get_first_tensor(m->ctx_meta);
-             t != nullptr;
-             t = ggml_get_next_tensor(m->ctx_meta, t))
-        {
-            const int64_t idx = gguf_find_tensor(gguf_data, t->name);
-            if (idx < 0) {
-                std::fprintf(stderr,
-                             "parakeet: tensor \"%s\" not in gguf data\n",
-                             t->name);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-            const size_t toffset = gguf_get_tensor_offset(gguf_data, idx);
-            const size_t nbytes  = ggml_nbytes(t);
-
-            const std::streamoff abs_offset =
-                static_cast<std::streamoff>(data_offset) +
-                static_cast<std::streamoff>(toffset);
-            fin.seekg(abs_offset);
-            if (!fin) {
-                std::fprintf(stderr,
-                             "parakeet: seek failed for tensor \"%s\"\n",
-                             t->name);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-
-            if (staging.size() < nbytes) {
-                staging.resize(nbytes);
-            }
-            fin.read(reinterpret_cast<char *>(staging.data()),
-                     static_cast<std::streamsize>(nbytes));
-            if (!fin) {
-                std::fprintf(stderr,
-                             "parakeet: short read for tensor \"%s\" "
-                             "(%zu bytes)\n",
-                             t->name, nbytes);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-
-            ggml_backend_tensor_set(t, staging.data(), 0, nbytes);
-        }
+        gguf_free(gguf_data);
+        return st;
     }
 
     // gguf_data only carried tensor offsets + names; both have been
@@ -518,6 +471,18 @@ transcribe_status load(
     // Fuse BatchNorm parameters into scale + bias for the encoder
     // graph. This replaces 4 elementwise ops per block with 2.
     if (const transcribe_status st = fuse_batch_norm(*m);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+
+    // On CPU primary backend, dequantize conv pointwise weights back
+    // to F32 — Zen 2 class CPUs don't have native F16 compute and the
+    // upconvert cost per matmul outweighs the bandwidth savings from
+    // the smaller weight. No-op on GPU backends and on parakeet GGUFs
+    // that predate the universal F16 conv_pw quantizer policy (today,
+    // all of them).
+    if (const transcribe_status st = promote_conv_pw_to_f32_on_cpu(*m);
         st != TRANSCRIBE_OK)
     {
         return st;

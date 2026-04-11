@@ -79,6 +79,31 @@ struct ParakeetModel final : public transcribe_model {
     ggml_context *          bn_fused_ctx    = nullptr;
     ggml_backend_buffer_t   bn_fused_buffer = nullptr;
 
+    // On a CPU primary backend the conformer 1×1 pointwise conv weights
+    // are dequantized from their on-disk F16 form to F32 at load time.
+    // The current quantizer (transcribe-quantize, post commit 6fee9b9)
+    // routes every Conformer ConvPw to F16 across all presets so that
+    // GPU backends with native F16 compute (Metal, Vulkan, CUDA) get
+    // the bandwidth halving for free; on CPUs without native F16
+    // arithmetic (Zen 2 and earlier) the per-matmul F16→F32 upconvert
+    // erases the bandwidth win and dwarfs the original cost. Promoting
+    // back to F32 at load time pays the conversion exactly once.
+    //
+    // Today's parakeet GGUFs predate the universal F16 conv_pw policy
+    // and ship F32 conv_pw, so the promotion is a no-op for them. The
+    // wiring is in place so the next regen does the right thing
+    // automatically. The promotion is also a no-op on every non-CPU
+    // primary backend.
+    //
+    // The CohereBlock comment about ~235 MB of "wasted" originals
+    // applies symmetrically: ggml backend buffers don't support
+    // freeing individual tensor slots, so the F16 source tensors stay
+    // resident in the main weight buffer after promotion. The wired
+    // weight slot is repointed at the F32 copy and the encoder graph
+    // never touches the originals again.
+    ggml_context *          conv_pw_f32_ctx    = nullptr;
+    ggml_backend_buffer_t   conv_pw_f32_buffer = nullptr;
+
     // Mel front-end. Constructed once at load() time from the
     // hparams (precomputes the periodic Hann window + Slaney mel
     // filterbank). MelFrontend is documented as const-after-ctor

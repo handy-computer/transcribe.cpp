@@ -147,20 +147,14 @@ int main(int argc, char ** argv) {
     }
     const double sample_duration_s = static_cast<double>(pcm.size()) / 16000.0;
 
-    // Load model.
-    // --cpu-only sets TRANSCRIBE_FORCE_CPU=1 before load; the per-family
-    // loader checks this env var to skip GPU/ACCEL backend init. Note the
-    // public transcribe_model_params::use_gpu flag is declared but not yet
-    // consumed by the loader, so the env var is the only reliable knob.
-    if (args.cpu_only) {
-#if defined(_WIN32)
-        _putenv("TRANSCRIBE_FORCE_CPU=1");
-#else
-        setenv("TRANSCRIBE_FORCE_CPU", "1", 1);
-#endif
-    }
+    // Load model. --cpu-only sets transcribe_model_params::use_gpu
+    // = false, which the per-family loader honors as the single
+    // CPU-only knob.
     if (!quiet) std::fprintf(stderr, "loading model %s\n", args.model_path.c_str());
     struct transcribe_model_params mp = transcribe_model_default_params();
+    if (args.cpu_only) {
+        mp.use_gpu = false;
+    }
     struct transcribe_model *      model = nullptr;
     if (const transcribe_status st =
             transcribe_model_load_file(args.model_path.c_str(), &mp, &model);

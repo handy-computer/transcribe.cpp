@@ -26,8 +26,8 @@
 //     If neither path exists, the test exits 77 (CTest "skipped").
 //   - The WAV path comes from TRANSCRIBE_TEST_AUDIO env var, falling
 //     back to samples/jfk.wav.
-//   - TRANSCRIBE_FORCE_CPU=1 is set before model load for
-//     deterministic results across platforms.
+//   - transcribe_model_params::use_gpu is set to false before model
+//     load for deterministic results across platforms.
 //
 // CI never builds this -- it is a developer-local manual gate. The
 // synthetic fixture-based test (when written) covers structural
@@ -144,13 +144,6 @@ constexpr int k_max_edit_distance = 3;
 } // namespace
 
 int main() {
-    // ---- Force CPU for determinism -----------------------------------
-#ifdef _WIN32
-    _putenv_s("TRANSCRIBE_FORCE_CPU", "1");
-#else
-    setenv("TRANSCRIBE_FORCE_CPU", "1", /*overwrite=*/1);
-#endif
-
     // ---- Resolve model path ------------------------------------------
     std::string model_path;
     {
@@ -196,6 +189,7 @@ int main() {
     const auto t_start = std::chrono::steady_clock::now();
 
     transcribe_model_params mp = transcribe_model_default_params();
+    mp.use_gpu = false;  // CPU for cross-platform determinism
     struct transcribe_model * model = nullptr;
     {
         const transcribe_status st =

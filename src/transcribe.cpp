@@ -253,6 +253,47 @@ extern "C" transcribe_status transcribe_run(
     {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
+
+    // Centralized run-param validation. The per-family run() handlers
+    // can assume the params struct has been sanity-checked here, so
+    // they don't need to repeat the same enum-range and capability
+    // checks. Family-specific validation (e.g. is this BCP-47 short
+    // code in the model's languages list?) stays in the family handler
+    // because the answer depends on per-model metadata.
+    //
+    // Out-of-range enum values are handled separately from
+    // capability-mediated rejections so the caller can distinguish
+    // "you passed garbage" (ERR_INVALID_ARG) from "this model doesn't
+    // support that legitimate request" (ERR_UNSUPPORTED_TASK).
+    switch (params->task) {
+        case TRANSCRIBE_TASK_TRANSCRIBE:
+        case TRANSCRIBE_TASK_TRANSLATE:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    switch (params->timestamps) {
+        case TRANSCRIBE_TIMESTAMPS_NONE:
+        case TRANSCRIBE_TIMESTAMPS_AUTO:
+        case TRANSCRIBE_TIMESTAMPS_SEGMENT:
+        case TRANSCRIBE_TIMESTAMPS_WORD:
+        case TRANSCRIBE_TIMESTAMPS_TOKEN:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Reject TRANSLATE for models that don't declare support. The
+    // capability is set per-arch in apply_family_invariants and may
+    // be overridden by stt.capability.* KV. Models that DO support
+    // translate may still validate target_language inside their own
+    // run() handler against the model-specific language list.
+    if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
+        !ctx->model->caps.supports_translate)
+    {
+        return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
+    }
+
     return ctx->model->arch->run(ctx, pcm, n_samples, params);
 }
 

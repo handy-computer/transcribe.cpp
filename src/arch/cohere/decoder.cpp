@@ -61,10 +61,12 @@ ggml_tensor * layer_norm(ggml_context * ctx,
 }
 
 // Standard multi-head attention (no relative position encoding).
-// x:       [hidden, seq_len]
-// context: [hidden, T_ctx] (for cross-attn) or nullptr (for self-attn)
-// mask:    additive mask in f16, or nullptr
-// Returns: [hidden, seq_len]
+// x:         [hidden, seq_len]
+// context:   [hidden, T_ctx] (for cross-attn) or nullptr (for self-attn)
+// mask:      additive mask in f16, or nullptr
+// use_flash: true  -> ggml_flash_attn_ext (fused GPU kernel)
+//            false -> manual mul_mat + soft_max_ext + mul_mat
+// Returns:   [hidden, seq_len]
 ggml_tensor * mha(ggml_context * ctx,
                   ggml_tensor *  x,
                   ggml_tensor *  context,
@@ -74,7 +76,8 @@ ggml_tensor * mha(ggml_context * ctx,
                   ggml_tensor *  v_w, ggml_tensor * v_b,
                   ggml_tensor *  out_w, ggml_tensor * out_b,
                   int            n_heads,
-                  int            hidden)
+                  int            hidden,
+                  bool           use_flash)
 {
     const int head_dim = hidden / n_heads;
     const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
@@ -92,7 +95,7 @@ ggml_tensor * mha(ggml_context * ctx,
     if (v_b != nullptr) v = ggml_add(ctx, v, v_b);
 
     // Split into heads: [head_dim, n_heads, T, 1] -> permute to
-    // [head_dim, T, n_heads, 1] for flash_attn.
+    // [head_dim, T, n_heads, 1] for flash_attn / standard.
     q = ggml_reshape_4d(ctx, q, head_dim, n_heads, T_q, 1);
     q = ggml_permute(ctx, q, 0, 2, 1, 3);
 
@@ -102,11 +105,41 @@ ggml_tensor * mha(ggml_context * ctx,
     v = ggml_reshape_4d(ctx, v, head_dim, n_heads, T_k, 1);
     v = ggml_permute(ctx, v, 0, 2, 1, 3);
 
-    // Flash attention.
-    ggml_tensor * o = ggml_flash_attn_ext(ctx, q, k, v, mask,
-                                          scale, 0.0f, 0.0f);
-    // Output: [head_dim, n_heads, T_q, 1] -> reshape to [hidden, T_q].
-    o = ggml_reshape_2d(ctx, o, hidden, T_q);
+    ggml_tensor * o;
+    if (use_flash) {
+        // Flash attention path: fused Q @ K^T + mask + softmax + @V.
+        o = ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0.0f, 0.0f);
+        // [head_dim, n_heads, T_q, 1] -> [hidden, T_q]
+        o = ggml_reshape_2d(ctx, o, hidden, T_q);
+    } else {
+        // Manual attention path: explicit matmuls + soft_max_ext.
+        //   K is [head_dim, T_k, n_heads, 1] after the permute above.
+        //   mul_mat(K, Q) computes Q^T @ K per head -> [T_k, T_q, n_heads, 1]
+        ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+
+        // soft_max_ext fuses scale + optional mask into softmax. Mask
+        // shape must be [T_k, T_q] (or broadcastable); the caller
+        // already prepared it as f16 at that shape.
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask,
+                                                   scale, 0.0f);
+
+        // V needs transposing for the value matmul.
+        //   V is [head_dim, T_k, n_heads, 1]; we need
+        //        [T_k, head_dim, n_heads, 1].
+        ggml_tensor * v_t = ggml_cont(ctx,
+                                       ggml_permute(ctx, v, 1, 0, 2, 3));
+
+        // attn_weights @ V -> [head_dim, T_q, n_heads, 1]
+        o = ggml_mul_mat(ctx, v_t, kq_soft);
+
+        // Merge heads: permute [head_dim, T_q, n_heads] ->
+        //                      [head_dim, n_heads, T_q], then reshape
+        // to [hidden, T_q]. The permute makes heads contiguous for
+        // the reshape, as in the encoder's manual path.
+        o = ggml_permute(ctx, o, 0, 2, 1, 3);
+        o = ggml_cont(ctx, o);
+        o = ggml_reshape_2d(ctx, o, hidden, T_q);
+    }
 
     // Output projection with bias.
     o = ggml_mul_mat(ctx, out_w, o);
@@ -140,7 +173,8 @@ ggml_tensor * mha_self_cached(
     int            hidden,
     int            il,
     int            n_past,
-    int            n_tokens)
+    int            n_tokens,
+    bool           use_flash)
 {
     const int head_dim = hidden / n_heads;
     const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
@@ -199,14 +233,31 @@ ggml_tensor * mha_self_cached(
         ggml_element_size(kv_cache.self_v) * static_cast<size_t>(
             static_cast<int64_t>(il) * n_ctx * hidden));
 
-    // Flash attention: Q=[head_dim, n_tokens, n_heads],
-    //                  K=[head_dim, n_kv, n_heads],
-    //                  V=[head_dim, n_kv, n_heads].
-    ggml_tensor * o = ggml_flash_attn_ext(ctx, Q, K, V, mask,
-                                          scale, 0.0f, 0.0f);
+    // Attention. Flash path is fused; manual path is the usual
+    // mul_mat + soft_max_ext + mul_mat triple. See `mha` above for
+    // the shape argument.
+    ggml_tensor * o;
+    if (use_flash) {
+        o = ggml_flash_attn_ext(ctx, Q, K, V, mask, scale, 0.0f, 0.0f);
+        o = ggml_reshape_2d(ctx, o, hidden, n_tokens);
+    } else {
+        // K is [head_dim, n_kv, n_heads, 1] from the cache view.
+        // mul_mat(K, Q) -> [n_kv, n_tokens, n_heads, 1]
+        ggml_tensor * kq = ggml_mul_mat(ctx, K, Q);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask,
+                                                   scale, 0.0f);
 
-    // Output: [head_dim, n_heads, n_tokens] -> [hidden, n_tokens].
-    o = ggml_reshape_2d(ctx, o, hidden, n_tokens);
+        // V is [head_dim, n_kv, n_heads, 1]; we need
+        //      [n_kv, head_dim, n_heads, 1] for the value matmul.
+        ggml_tensor * v_t = ggml_cont(ctx,
+                                       ggml_permute(ctx, V, 1, 0, 2, 3));
+
+        // attn_weights @ V -> [head_dim, n_tokens, n_heads, 1]
+        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        o = ggml_permute(ctx, o, 0, 2, 1, 3);
+        o = ggml_cont(ctx, o);
+        o = ggml_reshape_2d(ctx, o, hidden, n_tokens);
+    }
 
     // Output projection.
     o = ggml_mul_mat(ctx, out_w, o);
@@ -231,7 +282,8 @@ ggml_tensor * mha_cross_cached(
     int            n_heads,
     int            hidden,
     int            il,
-    int            T_enc)
+    int            T_enc,
+    bool           use_flash)
 {
     const int head_dim = hidden / n_heads;
     const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
@@ -260,11 +312,31 @@ ggml_tensor * mha_cross_cached(
         ggml_element_size(kv_cache.cross_v) * static_cast<size_t>(
             static_cast<int64_t>(il) * T_enc * hidden));
 
-    // No mask for cross-attention.
-    ggml_tensor * o = ggml_flash_attn_ext(ctx, Q, K, V, nullptr,
-                                          scale, 0.0f, 0.0f);
+    // No mask for cross-attention. Flash path is the fused kernel;
+    // manual path is the usual triple.
+    ggml_tensor * o;
+    if (use_flash) {
+        o = ggml_flash_attn_ext(ctx, Q, K, V, nullptr,
+                                scale, 0.0f, 0.0f);
+        o = ggml_reshape_2d(ctx, o, hidden, n_tokens);
+    } else {
+        // K is [head_dim, T_enc, n_heads, 1] from the cache view.
+        // mul_mat(K, Q) -> [T_enc, n_tokens, n_heads, 1]
+        ggml_tensor * kq = ggml_mul_mat(ctx, K, Q);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, nullptr,
+                                                   scale, 0.0f);
 
-    o = ggml_reshape_2d(ctx, o, hidden, n_tokens);
+        // V is [head_dim, T_enc, n_heads, 1]; transpose for the
+        // value matmul.
+        ggml_tensor * v_t = ggml_cont(ctx,
+                                       ggml_permute(ctx, V, 1, 0, 2, 3));
+
+        // attn_weights @ V -> [head_dim, n_tokens, n_heads, 1]
+        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        o = ggml_permute(ctx, o, 0, 2, 1, 3);
+        o = ggml_cont(ctx, o);
+        o = ggml_reshape_2d(ctx, o, hidden, n_tokens);
+    }
 
     // Output projection.
     o = ggml_mul_mat(ctx, out_w, o);
@@ -282,7 +354,8 @@ DecoderBuild build_decoder_graph(ggml_context *         ctx,
                                  const CohereWeights &  w,
                                  const CohereHParams &  hp,
                                  int                    seq_len,
-                                 int                    T_enc)
+                                 int                    T_enc,
+                                 bool                   use_flash)
 {
     DecoderBuild db {};
 
@@ -362,7 +435,8 @@ DecoderBuild build_decoder_graph(ggml_context *         ctx,
                                          blk.self_k_w, blk.self_k_b,
                                          blk.self_v_w, blk.self_v_b,
                                          blk.self_out_w, blk.self_out_b,
-                                         n_heads, static_cast<int>(hidden));
+                                         n_heads, static_cast<int>(hidden),
+                                         use_flash);
             x = ggml_add(ctx, x, self_out);
         }
 
@@ -375,7 +449,8 @@ DecoderBuild build_decoder_graph(ggml_context *         ctx,
                                           blk.cross_k_w, blk.cross_k_b,
                                           blk.cross_v_w, blk.cross_v_b,
                                           blk.cross_out_w, blk.cross_out_b,
-                                          n_heads, static_cast<int>(hidden));
+                                          n_heads, static_cast<int>(hidden),
+                                          use_flash);
             x = ggml_add(ctx, x, cross_out);
         }
 
@@ -512,7 +587,8 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
                                     int                    n_tokens,
                                     int                    n_past,
                                     int                    T_enc,
-                                    bool                   skip_log_softmax)
+                                    bool                   skip_log_softmax,
+                                    bool                   use_flash)
 {
     DecoderBuild db {};
 
@@ -599,7 +675,8 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
                 blk.self_v_w, blk.self_v_b,
                 blk.self_out_w, blk.self_out_b,
                 n_heads, static_cast<int>(hidden),
-                i, n_past, n_tokens);
+                i, n_past, n_tokens,
+                use_flash);
             x = ggml_add(ctx, x, self_out);
         }
 
@@ -612,7 +689,8 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
                 blk.cross_q_w, blk.cross_q_b,
                 blk.cross_out_w, blk.cross_out_b,
                 n_heads, static_cast<int>(hidden),
-                i, T_enc);
+                i, T_enc,
+                use_flash);
             x = ggml_add(ctx, x, cross_out);
         }
 
