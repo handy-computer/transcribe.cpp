@@ -307,6 +307,74 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 # -----------------------------------------------------------------------------
+# Cohere ASR end-to-end smoke test (real-model gated)
+# -----------------------------------------------------------------------------
+#
+# Loads a real Cohere ASR GGUF, runs transcription on a WAV file, and
+# verifies the output text contains expected content words, timing info
+# is present and reasonable, and no crashes or leaks occur.
+#
+# Same gating as the Parakeet real-model tests: built only when
+# TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON. At run time,
+# TRANSCRIBE_COHERE_MODEL must point at a Cohere ASR GGUF; the test
+# falls back to models/cohere/cohere.f16.gguf if unset. Exits 77
+# (CTest "skipped") when no model file is found.
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_cohere_smoke
+        cohere_smoke.cpp)
+
+    target_link_libraries(transcribe_cohere_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_cohere_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
+        "TRANSCRIBE_TEST_MODELS_DIR=\"${CMAKE_SOURCE_DIR}/models\"")
+
+    transcribe_apply_warnings(transcribe_cohere_smoke)
+
+    add_test(NAME transcribe_cohere_smoke COMMAND transcribe_cohere_smoke)
+    set_tests_properties(transcribe_cohere_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
+# Cohere ASR structural / loader test (real-model gated)
+# -----------------------------------------------------------------------------
+#
+# Loads a real Cohere ASR GGUF (same one cohere_smoke uses), then
+# reaches into the CohereModel via PRIVATE include of ${CMAKE_SOURCE_DIR}/src
+# and asserts the full hparams catalog, the 2103-tensor count formula,
+# the language list ordering, and a handful of canonical weight shapes.
+# This is the converter regression gate -- if read_cohere_hparams or
+# build_cohere_weights ever drift from the converter tables, this test
+# trips well before any numerical test would.
+#
+# Gated two ways: by TRANSCRIBE_BUILD_REAL_MODEL_TESTS (so the binary
+# is not built unless the developer opts in) AND by the runtime
+# TRANSCRIBE_COHERE_MODEL env var (same var that cohere_smoke.cpp
+# uses, so a single export drives both tests). Skipped via
+# SKIP_RETURN_CODE 77 when the env var is unset or the file is
+# missing.
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_cohere_real_smoke
+        cohere_real_smoke.cpp)
+
+    target_link_libraries(transcribe_cohere_real_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_cohere_real_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    transcribe_apply_warnings(transcribe_cohere_real_smoke)
+
+    add_test(NAME transcribe_cohere_real_smoke
+        COMMAND transcribe_cohere_real_smoke)
+    set_tests_properties(transcribe_cohere_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Debug tensor dumper round-trip unit
 # -----------------------------------------------------------------------------
 #

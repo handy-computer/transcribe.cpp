@@ -49,15 +49,21 @@ namespace {
 // Tensor classification
 // ---------------------------------------------------------------------------
 //
-// Mirrors classify_tensor() in scripts/convert-parakeet.py. The two
-// implementations MUST agree on the bucket for every canonical Parakeet
-// tensor name; the C++ side is the gate at re-quant time and the Python
-// side is the gate at first conversion.
+// Mirrors classify_tensor() in scripts/convert-parakeet.py AND
+// scripts/convert-cohere.py. The two implementations MUST agree on the
+// bucket for every canonical Parakeet / Cohere tensor name; the C++
+// side is the gate at re-quant time and the Python side is the gate at
+// first conversion.
 
 enum class Bucket {
     Linear, // ggml_mul_mat operands. Eligible for Q8_0 / Q4_K / Q5_K / etc.
+    Embed,  // tied token embedding + head bias. Like Linear but mixed
+            // k-quant presets bump this to Q6_K, matching llama.cpp's
+            // _M convention. Falls back to Linear when a preset has
+            // no explicit embed override.
     Conv,   // conv kernels. F32 / F16 only.
-    Norm,   // biases, LayerNorm/BN weight+bias, attn pos_bias_u/v. F32.
+    Norm,   // biases, LayerNorm/BN weight+bias, pos_bias, pos_enc,
+            // frontend buffers. F32.
 };
 
 // Substring helpers — std::string::find returns npos if not found.
@@ -70,6 +76,13 @@ inline bool ends_with(const std::string & s, const char * suffix) {
 }
 
 Bucket classify_tensor(const std::string & name) {
+    // Cohere: tied token embedding → Embed bucket so mixed k-quant
+    // presets can bump it to Q6_K. head.bias stays in the Norm
+    // bucket (the loader requires it as F32 since it's a 1D
+    // per-logit offset added after the matmul).
+    if (name == "dec.embed.token.weight") {
+        return Bucket::Embed;
+    }
     // Biases of every kind — short and precision-sensitive.
     if (ends_with(name, ".bias")) {
         return Bucket::Norm;
@@ -79,13 +92,29 @@ Bucket classify_tensor(const std::string & name) {
         return Bucket::Norm;
     }
     // LayerNorm scale (norm_ff1.weight, norm_attn.weight, norm_conv.weight,
-    // norm_out.weight, etc). The .bias case was already caught above.
+    // norm_out.weight, norm_self.weight, norm_cross.weight, norm_ff.weight,
+    // etc). The .bias case was already caught above.
     if (contains(name, "norm_") && ends_with(name, ".weight")) {
+        return Bucket::Norm;
+    }
+    // Cohere: dec.embed.norm.weight and dec.final_norm.weight — layer
+    // norm scale tensors that use a "." separator instead of "_".
+    if (ends_with(name, ".final_norm.weight") ||
+        ends_with(name, ".embed.norm.weight")) {
         return Bucket::Norm;
     }
     // Per-head positional biases — added directly to fp32 q via ggml_add
     // inside rel_pos_mhsa.
     if (ends_with(name, ".pos_bias_u") || ends_with(name, ".pos_bias_v")) {
+        return Bucket::Norm;
+    }
+    // Cohere: sinusoidal positional encoding table, precision-sensitive.
+    if (ends_with(name, ".pos_enc")) {
+        return Bucket::Norm;
+    }
+    // Cohere: mel frontend buffers (filterbank + window) — stored as
+    // F32 by the converter and consumed as-is by the mel stage.
+    if (name == "frontend.mel_filterbank" || name == "frontend.window") {
         return Bucket::Norm;
     }
     // Conv kernels: enc.pre_encode.conv.{0,2,3,5,6}.weight and
@@ -124,8 +153,14 @@ struct Preset {
     // F16 here than risk a per-block scale on a misaligned tail.
     ggml_type linear_fallback;
     // Linear-bucket type returned for the attention output projection
-    // (attn.linear_out.weight).
+    // (attn.linear_out.weight). Parakeet-specific bump; cohere's
+    // equivalent uses a different name so this is a no-op there.
     ggml_type linear_attn_out;
+    // Embed-bucket type for the tied token embedding + head bias
+    // (cohere). Mixed k-quant presets bump this to Q6_K; other
+    // presets use GGML_TYPE_COUNT as "no explicit override" and fall
+    // back to linear_main.
+    ggml_type linear_embed;
     // Conv-bucket type. F32 today across every preset; reserved here
     // so a future "lite" preset could ship F16 conv kernels once Metal
     // covers them.
@@ -143,19 +178,25 @@ struct Preset {
 // tool is not the canonical path for those (the converter does it
 // directly from MLX). They exist as cheap test cases for the round-trip
 // machinery.
+// GGML_TYPE_COUNT in the linear_embed slot means "no explicit override";
+// resolve_target_type() falls back to linear_main for Embed tensors in
+// that case. This keeps f16 / q8_0 / q6_k presets uniform across
+// Linear and Embed while letting _M presets bump embeddings to Q6_K.
 const Preset PRESETS[] = {
     // f16: linear bucket → F16; conv + norm → F32. Fallback irrelevant
     // (F16 has no shape constraint).
-    {"f16",    GGML_TYPE_F16,  GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_F16*/   1 },
-    // q8_0: linear → Q8_0 (block 32, no fallback ever needed for Parakeet).
-    {"q8_0",   GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_Q8_0*/  7 },
-    // q5_k_m: K-quant for the encoder, F16 fallback for predictor +
-    // joint linears (ne0=640, not divisible by 256). attn.out_w gets
-    // bumped to Q8_0 per the llama.cpp _M recipe.
-    {"q5_k_m", GGML_TYPE_Q5_K, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_Q5_K_M*/ 17 },
+    {"f16",    GGML_TYPE_F16,  GGML_TYPE_F16, GGML_TYPE_F16,  GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_F16*/    1 },
+    // q8_0: linear → Q8_0 (block 32, no fallback ever needed).
+    {"q8_0",   GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_Q8_0*/   7 },
+    // q6_k: pure Q6_K across the linear bucket, embed inherits.
+    {"q6_k",   GGML_TYPE_Q6_K, GGML_TYPE_F16, GGML_TYPE_Q6_K, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_Q6_K*/  18 },
+    // q5_k_m: K-quant for the encoder, F16 fallback for tensors with
+    // ne0 not divisible by 256. attn.linear_out bumped to Q8_0 per
+    // the llama.cpp _M recipe. Token embedding bumped to Q6_K.
+    {"q5_k_m", GGML_TYPE_Q5_K, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_Q5_K_M*/ 17 },
     // q4_k_m: same shape as q5_k_m, smaller bit budget on the encoder
     // matmul bucket.
-    {"q4_k_m", GGML_TYPE_Q4_K, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_Q4_K_M*/ 15 },
+    {"q4_k_m", GGML_TYPE_Q4_K, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F32, /*MOSTLY_Q4_K_M*/ 15 },
 };
 
 const Preset * find_preset(const char * name) {
@@ -184,6 +225,18 @@ ggml_type resolve_target_type(const Preset & preset,
     switch (b) {
         case Bucket::Norm: return preset.norm;
         case Bucket::Conv: return preset.conv;
+        case Bucket::Embed: {
+            // If the preset has no explicit embed override, fall back
+            // to the linear_main bucket (including its ne0 fallback).
+            ggml_type target = (preset.linear_embed != GGML_TYPE_COUNT)
+                ? preset.linear_embed
+                : preset.linear_main;
+            const int64_t blk = blck_size_of(target);
+            if (blk > 1 && (ne0 % blk) != 0) {
+                return preset.linear_fallback;
+            }
+            return target;
+        }
         case Bucket::Linear: {
             // attn.linear_out.weight bumped per _M recipe.
             if (ends_with(name, "attn.linear_out.weight")) {

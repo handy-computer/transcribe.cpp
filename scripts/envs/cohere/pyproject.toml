@@ -1,0 +1,13 @@
+[project]
+name = "transcribe-cohere-env"
+version = "0.1.0"
+description = "Python env for Cohere ASR reference dumps"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.2",
+    "safetensors>=0.4",
+    "sentencepiece>=0.2",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "transformers>=4.40",
+]

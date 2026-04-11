@@ -31,6 +31,7 @@
 #include "transcribe.h"
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace transcribe {
@@ -51,6 +52,17 @@ struct MelConfig {
     float pre_emphasis   = 0.97f;     // 0.0 disables
     float f_min          = 0.0f;
     float f_max          = 8000.0f;
+    std::string pad_mode = "reflect"; // "reflect" or "constant"
+
+    // Optional checkpoint-provided mel filterbank [num_mels * (n_fft/2+1)]
+    // row-major, Slaney-normalised. When non-empty, used instead of
+    // computing from scratch. Set by the loader when the GGUF contains
+    // frontend.mel_filterbank.
+    std::vector<float> filterbank;
+
+    // Optional checkpoint-provided window [win_length]. When non-empty,
+    // used instead of computing a periodic Hann window.
+    std::vector<float> window;
 };
 
 // Pure C++ log-mel extractor. Construct once, call compute() any

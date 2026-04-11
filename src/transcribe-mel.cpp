@@ -236,12 +236,30 @@ void fft_radix2(double * data, int n) {
 
 MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
     n_freq_ = cfg.n_fft / 2 + 1;
-    build_hann_window_symmetric_padded(cfg.win_length, cfg.n_fft, window_);
-    build_mel_filterbank_slaney(
-        cfg.sample_rate, cfg.n_fft, cfg.num_mels,
-        static_cast<double>(cfg.f_min),
-        static_cast<double>(cfg.f_max),
-        mel_fb_);
+
+    // Use checkpoint-provided window if available, else compute.
+    if (!cfg.window.empty()) {
+        // Convert f32 checkpoint window to f64 and zero-pad to n_fft.
+        window_.resize(cfg.n_fft, 0.0);
+        const int total_pad = cfg.n_fft - cfg.win_length;
+        const int left_pad  = total_pad / 2;
+        for (int i = 0; i < cfg.win_length && i < static_cast<int>(cfg.window.size()); ++i) {
+            window_[left_pad + i] = static_cast<double>(cfg.window[i]);
+        }
+    } else {
+        build_hann_window_symmetric_padded(cfg.win_length, cfg.n_fft, window_);
+    }
+
+    // Use checkpoint-provided mel filterbank if available, else compute.
+    if (!cfg.filterbank.empty()) {
+        mel_fb_ = cfg.filterbank;
+    } else {
+        build_mel_filterbank_slaney(
+            cfg.sample_rate, cfg.n_fft, cfg.num_mels,
+            static_cast<double>(cfg.f_min),
+            static_cast<double>(cfg.f_max),
+            mel_fb_);
+    }
 }
 
 int MelFrontend::n_frames_for(size_t n_samples) const {
@@ -272,7 +290,8 @@ transcribe_status MelFrontend::compute(
     // Per-feature normalize divides by (n_frames - 1) and the
     // reflect pad needs at least pad+1 input samples to reflect
     // without going off the end. Both constraints fold into:
-    if (n_frames < 2 || n_samples < static_cast<size_t>(pad + 1)) {
+    const bool use_reflect = (cfg_.pad_mode != "constant");
+    if (n_frames < 2 || (use_reflect && n_samples < static_cast<size_t>(pad + 1))) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -291,20 +310,33 @@ transcribe_status MelFrontend::compute(
         }
     }
 
-    // ---- 2. Reflect-pad by n_fft/2 on each side ----
-    // For input [a, b, c, d] padded by 2: [c, b, a, b, c, d, c, b].
-    // Boundary samples are NOT repeated (reflect not symmetric).
+    // ---- 2. Pad by n_fft/2 on each side ----
     std::vector<double> padded(n_samples + 2 * static_cast<size_t>(pad));
-    for (int i = 0; i < pad; ++i) {
-        padded[i] = emph[static_cast<size_t>(pad - i)];
-    }
-    std::memcpy(
-        padded.data() + pad,
-        emph.data(),
-        n_samples * sizeof(double));
-    for (int i = 0; i < pad; ++i) {
-        padded[static_cast<size_t>(pad) + n_samples + i] =
-            emph[n_samples - 2 - static_cast<size_t>(i)];
+    if (use_reflect) {
+        // Reflect padding.
+        // For input [a, b, c, d] padded by 2: [c, b, a, b, c, d, c, b].
+        // Boundary samples are NOT repeated (reflect not symmetric).
+        for (int i = 0; i < pad; ++i) {
+            padded[i] = emph[static_cast<size_t>(pad - i)];
+        }
+        std::memcpy(
+            padded.data() + pad,
+            emph.data(),
+            n_samples * sizeof(double));
+        for (int i = 0; i < pad; ++i) {
+            padded[static_cast<size_t>(pad) + n_samples + i] =
+                emph[n_samples - 2 - static_cast<size_t>(i)];
+        }
+    } else {
+        // Constant (zero) padding.
+        std::memset(padded.data(), 0,
+                    static_cast<size_t>(pad) * sizeof(double));
+        std::memcpy(
+            padded.data() + pad,
+            emph.data(),
+            n_samples * sizeof(double));
+        std::memset(padded.data() + pad + n_samples, 0,
+                    static_cast<size_t>(pad) * sizeof(double));
     }
     // Free emph eagerly; it's not needed past this point.
     std::vector<double>().swap(emph);
@@ -425,18 +457,27 @@ transcribe_status MelFrontend::compute(
 
     // ---- 5. Per-feature normalize, unbiased ----
     // For each mel bin m: subtract the mean across time, divide by
-    // (std + 1e-5). The variance uses (n_frames - 1) in the
+    // (std + 1e-5). The variance uses (n_norm - 1) in the
     // denominator (Bessel's correction) to match NeMo's
     // normalize_batch. fp64 accumulators throughout to keep the row
     // sums numerically stable; cast back to fp32 at storage.
     //
+    // When pad_mode is "constant" (Cohere), the last STFT frame is
+    // a padding artifact. The normalization statistics are computed
+    // over the first seq_len = n_samples / hop frames (not n_frames
+    // = seq_len + 1), and the last frame is zeroed after
+    // normalization. This matches the Cohere reference
+    // (processing_cohere_asr.py get_seq_len / normalize_batch).
+    //
+    // When pad_mode is "reflect" (Parakeet), all n_frames frames
+    // are valid and used for normalization.
+    //
     // resize() instead of assign(): the loop below writes every
     // element exactly once, so the zero-fill that assign() would do
-    // is dead work. For a caller that reuses the same out_mel
-    // buffer across calls of the same length (e.g. --repeat N on
-    // one audio file), resize() is a no-op while assign() would
-    // touch every byte. Real-world saving is small (the buffer is
-    // ~565 KB for jfk.wav) but it's free.
+    // is dead work.
+    const bool mask_last = (cfg_.pad_mode == "constant");
+    const int  n_norm    = mask_last ? (n_frames - 1) : n_frames;
+
     out_mel.resize(
         static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames));
     for (int m = 0; m < n_mels; ++m) {
@@ -445,23 +486,28 @@ transcribe_status MelFrontend::compute(
         float * dst = out_mel.data() + static_cast<size_t>(m) * n_frames;
 
         double sum = 0.0;
-        for (int t = 0; t < n_frames; ++t) {
+        for (int t = 0; t < n_norm; ++t) {
             sum += static_cast<double>(src[t]);
         }
-        const double mean = sum / static_cast<double>(n_frames);
+        const double mean = sum / static_cast<double>(n_norm);
 
         double sumsq = 0.0;
-        for (int t = 0; t < n_frames; ++t) {
+        for (int t = 0; t < n_norm; ++t) {
             const double d = static_cast<double>(src[t]) - mean;
             sumsq += d * d;
         }
-        const double var    = sumsq / static_cast<double>(n_frames - 1);
+        const double var    = sumsq / static_cast<double>(n_norm - 1);
         const double stddev = std::sqrt(var);
         const double inv    = 1.0 / (stddev + static_cast<double>(kNormEps));
 
-        for (int t = 0; t < n_frames; ++t) {
+        for (int t = 0; t < n_norm; ++t) {
             dst[t] = static_cast<float>(
                 (static_cast<double>(src[t]) - mean) * inv);
+        }
+
+        // Zero the last frame when it's a padding artifact.
+        if (mask_last) {
+            dst[n_norm] = 0.0f;
         }
     }
 

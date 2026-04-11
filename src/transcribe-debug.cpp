@@ -11,6 +11,7 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -75,6 +76,16 @@ std::vector<int64_t> row_major_shape(const ggml_tensor * t) {
         out.push_back(t->ne[i]);
     }
     return out;
+}
+
+// Write a float value that is safe for JSON. Inf and NaN are not valid
+// JSON numbers, so we output null for those.
+void write_json_float(std::ofstream & js, double v) {
+    if (std::isnan(v) || std::isinf(v)) {
+        js << "null";
+    } else {
+        js << v;
+    }
 }
 
 void warn(const char * fmt, ...) {
@@ -236,9 +247,9 @@ void dump_tensor(const char *        name,
         // value round-trips visibly. The .f32 file is the
         // bit-precise source of truth; these are for humans.
         js.precision(9);
-        js << "  \"min\": "  << vmin  << ",\n";
-        js << "  \"max\": "  << vmax  << ",\n";
-        js << "  \"mean\": " << vmean << ",\n";
+        js << "  \"min\": ";  write_json_float(js, vmin);  js << ",\n";
+        js << "  \"max\": ";  write_json_float(js, vmax);  js << ",\n";
+        js << "  \"mean\": "; write_json_float(js, vmean); js << ",\n";
         js << "  \"source\": { \"kind\": \"cpp\" }\n";
         js << "}\n";
         if (!js) {
@@ -342,9 +353,9 @@ void dump_host_f32(const char *      name,
         js << "  \"dtype\": \"f32\",\n";
         js << "  \"layout\": \"row-major\",\n";
         js.precision(9);
-        js << "  \"min\": "  << vmin  << ",\n";
-        js << "  \"max\": "  << vmax  << ",\n";
-        js << "  \"mean\": " << vmean << ",\n";
+        js << "  \"min\": ";  write_json_float(js, vmin);  js << ",\n";
+        js << "  \"max\": ";  write_json_float(js, vmax);  js << ",\n";
+        js << "  \"mean\": "; write_json_float(js, vmean); js << ",\n";
         js << "  \"source\": { \"kind\": \"cpp\" }\n";
         js << "}\n";
         if (!js) {
