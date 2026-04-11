@@ -6,3 +6,4 @@
 # is just a dispatch.
 
 add_subdirectory(transcribe-quantize)
+add_subdirectory(transcribe-bench)
