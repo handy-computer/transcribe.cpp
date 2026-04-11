@@ -36,10 +36,11 @@ Usage:
     --out-dir PATH                   override reports output root
     --dry-run                        print the selected backends + matrix
 
-Backend resolution:
-    metal  -> repo/build/bin/transcribe-bench         (no extra flags)
-    cpu    -> repo/build/bin/transcribe-bench         (+ --cpu-only)
-    vulkan -> repo/build-vulkan/bin/transcribe-bench  (no extra flags)
+Backend resolution (each run also passes --backend <name> to the
+bench binary so the library selector is exercised end-to-end):
+    metal  -> repo/build/bin/transcribe-bench         --backend metal
+    cpu    -> repo/build/bin/transcribe-bench         --backend cpu
+    vulkan -> repo/build-vulkan/bin/transcribe-bench  --backend vulkan
 
 Auto-detection (when --backends is unset or 'all'):
     metal  available if build/bin/transcribe-bench exists AND sys.platform=='darwin'
@@ -84,7 +85,12 @@ class Cell:
 class BackendSpec:
     name: str          # canonical id: "metal" | "cpu" | "vulkan"
     binary: Path       # resolved bench binary path
-    cpu_only: bool     # whether to pass --cpu-only
+    backend_arg: str   # value passed as `--backend <arg>` to the bench
+                       # binary. "metal"|"cpu"|"vulkan"|"auto". We always
+                       # pass --backend explicitly so the library's
+                       # backend selector is exercised end-to-end, even
+                       # for cpu runs (strict-CPU on a BLAS/AMX host is
+                       # a real regression target).
 
 
 def find_repo_root(start: Path) -> Path:
@@ -302,7 +308,7 @@ def resolve_backends(repo: Path, requested: str | None,
     for name in names:
         if name == "metal":
             binary = bench_bin_override or _metal_binary(repo)
-            cpu_only = False
+            backend_arg = "metal"
             if not binary.exists():
                 missing.append(f"metal: {binary}")
             elif sys.platform != "darwin" and bench_bin_override is None:
@@ -310,18 +316,21 @@ def resolve_backends(repo: Path, requested: str | None,
                 missing.append(f"metal: requires darwin host (got {sys.platform})")
                 continue
         elif name == "cpu":
+            # We reuse the darwin bench binary for cpu runs — the
+            # --backend cpu flag makes it a strict-CPU run regardless
+            # of what's compiled in.
             binary = bench_bin_override or _metal_binary(repo)
-            cpu_only = True
+            backend_arg = "cpu"
             if not binary.exists():
                 missing.append(f"cpu: {binary}")
         elif name == "vulkan":
             binary = bench_bin_override or _vulkan_binary(repo)
-            cpu_only = False
+            backend_arg = "vulkan"
             if not binary.exists():
                 missing.append(f"vulkan: {binary}")
         else:  # pragma: no cover
             continue
-        specs.append(BackendSpec(name=name, binary=binary, cpu_only=cpu_only))
+        specs.append(BackendSpec(name=name, binary=binary, backend_arg=backend_arg))
 
     if missing:
         print("error: requested backend(s) unavailable:", file=sys.stderr)
@@ -336,10 +345,13 @@ def resolve_backends(repo: Path, requested: str | None,
 
 
 def run_bench_binary(bench_bin: Path, cell: Cell, iters: int, warmup: int,
-                     cpu_only: bool) -> dict | None:
+                     backend_arg: str) -> dict | None:
     with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
+        # Always pass --backend explicitly so the library's backend
+        # selector is exercised end-to-end on every run (including
+        # metal/vulkan, which used to be implicit via binary choice).
         cmd = [
             str(bench_bin),
             "--model", str(cell.model_path),
@@ -348,9 +360,8 @@ def run_bench_binary(bench_bin: Path, cell: Cell, iters: int, warmup: int,
             "--warmup", str(warmup),
             "--json-out", str(tmp_path),
             "--quiet",
+            "--backend", backend_arg,
         ]
-        if cpu_only:
-            cmd.append("--cpu-only")
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             print(f"  binary failed (exit {proc.returncode}):", file=sys.stderr)
@@ -457,7 +468,7 @@ def _run_one_backend(backend: BackendSpec, by_family: dict[str, list[Cell]],
             print(f"[{backend.name}][{family}] {cell.quant} \u00d7 {cell.sample} ...",
                   file=sys.stderr, flush=True)
             result = run_bench_binary(backend.binary, cell, args.iters,
-                                      args.warmup, backend.cpu_only)
+                                      args.warmup, backend.backend_arg)
             if result is None:
                 print("  FAILED, skipping", file=sys.stderr)
                 exit_code = 1
@@ -529,8 +540,7 @@ def main() -> int:
               + (f" name={args.name}" if args.name else ""))
         print(f"backends ({len(backends)}):")
         for b in backends:
-            extras = " --cpu-only" if b.cpu_only else ""
-            print(f"  {b.name:<7} {b.binary}{extras}")
+            print(f"  {b.name:<7} {b.binary} --backend {b.backend_arg}")
         if not by_family:
             print("(no cells resolved)")
             return 0

@@ -1,12 +1,14 @@
 // transcribe-load-common.cpp - shared model-load scaffolding.
 //
 // See transcribe-load-common.h for rationale. The functions here
-// are verbatim hoists of the common backend-init and tensor-stream
-// logic that used to live duplicated in every per-family model.cpp.
-// The pre-hoist copies differed only in the "parakeet:"/"cohere:"
-// log prefix and were otherwise character-identical.
+// are the common backend-init and tensor-stream logic that used to
+// live duplicated in every per-family model.cpp. The pre-hoist copies
+// differed only in the "parakeet:"/"cohere:" log prefix and were
+// otherwise character-identical.
 
 #include "transcribe-load-common.h"
+
+#include "transcribe-backend.h"
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -21,58 +23,195 @@
 
 namespace transcribe::load_common {
 
-transcribe_status init_backends(bool                           force_cpu,
-                                const char *                   error_tag,
-                                std::vector<ggml_backend_t> &  out)
+namespace {
+
+// Try to discover and initialize the first device whose classified
+// BackendKind matches `wanted`. On success returns the initialized
+// backend and writes the classified kind of the device that actually
+// succeeded to out_kind (which may differ from `wanted` when
+// `wanted == BackendKind::OtherGpu`). Returns nullptr if no matching
+// device initializes.
+//
+// When `wanted == BackendKind::OtherGpu`, this acts as a "first GPU
+// or IGPU of any vendor" probe — used by the AUTO path. Critically,
+// out_kind is derived from the device that actually initialized, not
+// from a separate post-hoc registry walk, so a failing first-GPU
+// followed by a succeeding second-GPU yields the correct kind.
+ggml_backend_t try_init_kind(BackendKind   wanted,
+                             const char *  error_tag,
+                             BackendKind & out_kind)
 {
-    // GPU/iGPU backend (Metal, Vulkan, CUDA — whichever ggml found).
-    //
-    // Skipped entirely when the caller requested CPU-only via
-    // transcribe_model_params::use_gpu == false. ACCEL backends
-    // (BLAS on CPU, etc.) are NOT skipped because they run on host
-    // memory and are orthogonal to the GPU/CPU split.
-    if (!force_cpu) {
-        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-            const auto dev_type = ggml_backend_dev_type(dev);
-            if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU ||
-                dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
-                if (be != nullptr) {
-                    std::fprintf(stderr, "%s: using GPU backend: %s\n",
-                                 error_tag, ggml_backend_dev_name(dev));
-                    out.push_back(be);
-                    break; // first available GPU wins
-                }
-            }
-        }
-    }
-
-    // ACCEL backends (BLAS on CPU, etc.). These accelerate specific
-    // ops (matmul) while CPU handles the rest of the graph, so they
-    // layer cleanly on top of both CPU-only and GPU configurations.
-    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+    const size_t n = ggml_backend_dev_count();
+    for (size_t i = 0; i < n; ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
-            ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
-            if (be != nullptr) {
-                std::fprintf(stderr, "%s: using ACCEL backend: %s\n",
-                             error_tag, ggml_backend_dev_name(dev));
-                out.push_back(be);
-            }
-        }
-    }
 
-    // CPU backend (always present, always last).
+        if (wanted == BackendKind::OtherGpu) {
+            // "Any GPU" probe: accept the first GPU/IGPU device,
+            // regardless of vendor.
+            const auto dev_type = ggml_backend_dev_type(dev);
+            if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU &&
+                dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                continue;
+            }
+        } else if (classify_device(dev) != wanted) {
+            continue;
+        }
+
+        ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
+        if (be == nullptr) continue;
+
+        const BackendKind kind = classify_device(dev);
+        std::fprintf(stderr, "%s: using %s backend: %s\n",
+                     error_tag,
+                     kind_name(kind),
+                     ggml_backend_dev_name(dev));
+        out_kind = kind;
+        return be;
+    }
+    return nullptr;
+}
+
+// Append every ACCEL device as a scheduler backend. ACCEL backends
+// (BLAS, AMX, …) accelerate specific ops on host memory, so they
+// layer cleanly on top of both CPU and GPU primaries. They are
+// excluded only on strict-CPU requests, where the whole point is to
+// avoid any backend dispatch ambiguity.
+void append_accel_backends(std::vector<ggml_backend_t> & out,
+                           const char *                  error_tag)
+{
+    const size_t n = ggml_backend_dev_count();
+    for (size_t i = 0; i < n; ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+            continue;
+        }
+        ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
+        if (be == nullptr) continue;
+
+        std::fprintf(stderr, "%s: using accel backend: %s\n",
+                     error_tag, ggml_backend_dev_name(dev));
+        out.push_back(be);
+    }
+}
+
+// Initialize the CPU backend. Always runs — it is the universal
+// fallback and the strict-CPU primary.
+ggml_backend_t init_cpu_backend(const char * error_tag) {
     ggml_backend_t cpu_be =
         ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     if (cpu_be == nullptr) {
         std::fprintf(stderr,
                      "%s: failed to initialize CPU backend\n", error_tag);
-        return TRANSCRIBE_ERR_GGUF;
     }
-    out.push_back(cpu_be);
-    return TRANSCRIBE_OK;
+    return cpu_be;
+}
+
+} // namespace
+
+transcribe_status init_backends(transcribe_backend_request requested,
+                                const char *               error_tag,
+                                BackendPlan &              out)
+{
+    out = BackendPlan{};
+    out.requested = requested;
+
+    // Explicit switch over the enum so an unknown / garbage value
+    // from a C caller never silently collapses into AUTO. Unknown
+    // values are a programming error on the caller's side, not a
+    // fallback we want to tolerate.
+    switch (requested) {
+    case TRANSCRIBE_BACKEND_CPU: {
+        // Strict CPU: primary is CPU, no ACCEL, no GPU. This is the
+        // only caller-visible way to guarantee primary_kind == Cpu
+        // even on machines where ggml has ACCEL (BLAS/AMX) available
+        // — which matters for the F16→F32 conv pointwise promotion
+        // and for any other CPU-keyed policy decision.
+        ggml_backend_t cpu_be = init_cpu_backend(error_tag);
+        if (cpu_be == nullptr) return TRANSCRIBE_ERR_BACKEND;
+        std::fprintf(stderr, "%s: using cpu backend (strict)\n", error_tag);
+        out.primary      = cpu_be;
+        out.primary_kind = BackendKind::Cpu;
+        out.scheduler_list.push_back(cpu_be);
+        return TRANSCRIBE_OK;
+    }
+
+    case TRANSCRIBE_BACKEND_METAL:
+    case TRANSCRIBE_BACKEND_VULKAN: {
+        // Specific GPU backend request: must find a matching device
+        // or fail. ACCEL is still layered on because it's host-memory
+        // and orthogonal to the GPU/CPU split.
+        const BackendKind wanted = (requested == TRANSCRIBE_BACKEND_METAL)
+                                 ? BackendKind::Metal
+                                 : BackendKind::Vulkan;
+        BackendKind got_kind = BackendKind::Unknown;
+        ggml_backend_t gpu_be = try_init_kind(wanted, error_tag, got_kind);
+        if (gpu_be == nullptr) {
+            std::fprintf(stderr,
+                         "%s: %s backend requested but not available\n",
+                         error_tag, kind_name(wanted));
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+        out.primary      = gpu_be;
+        out.primary_kind = got_kind;
+        out.scheduler_list.push_back(gpu_be);
+
+        append_accel_backends(out.scheduler_list, error_tag);
+
+        ggml_backend_t cpu_be = init_cpu_backend(error_tag);
+        if (cpu_be == nullptr) return TRANSCRIBE_ERR_BACKEND;
+        out.scheduler_list.push_back(cpu_be);
+        return TRANSCRIBE_OK;
+    }
+
+    case TRANSCRIBE_BACKEND_AUTO: {
+        // AUTO: take the first GPU/IGPU device that successfully
+        // initializes, regardless of vendor. ggml registers devices
+        // in build-time priority order (Metal on Apple, Vulkan on
+        // Linux, etc.), which matches the documented preference.
+        // If every GPU fails init or none is compiled in, fall
+        // through to CPU + ACCEL.
+        //
+        // try_init_kind yields the classified kind of the device
+        // that actually succeeded, so a failing-then-succeeding probe
+        // can't misclassify primary_kind.
+        BackendKind got_kind = BackendKind::Unknown;
+        ggml_backend_t gpu_be =
+            try_init_kind(BackendKind::OtherGpu, error_tag, got_kind);
+        if (gpu_be != nullptr) {
+            out.primary      = gpu_be;
+            out.primary_kind = got_kind;
+            out.scheduler_list.push_back(gpu_be);
+        }
+
+        append_accel_backends(out.scheduler_list, error_tag);
+
+        ggml_backend_t cpu_be = init_cpu_backend(error_tag);
+        if (cpu_be == nullptr) {
+            // If we already have at least a GPU or ACCEL backend,
+            // losing CPU is catastrophic — the scheduler needs CPU
+            // as a fallback for every op it can't dispatch
+            // elsewhere. Fail hard.
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+
+        // If the GPU probe failed and AUTO picked nothing so far, CPU
+        // becomes the primary.
+        if (out.primary == nullptr) {
+            out.primary      = cpu_be;
+            out.primary_kind = BackendKind::Cpu;
+        }
+        out.scheduler_list.push_back(cpu_be);
+        return TRANSCRIBE_OK;
+    }
+    }
+
+    // Unknown enumerator: reject loudly so callers catch ABI drift
+    // during development. Do not let "everything else" silently map
+    // to AUTO — that hides bugs.
+    std::fprintf(stderr,
+                 "%s: invalid transcribe_backend_request value %d\n",
+                 error_tag, static_cast<int>(requested));
+    return TRANSCRIBE_ERR_INVALID_ARG;
 }
 
 transcribe_status stream_tensor_data(const std::string &   path,
@@ -143,24 +282,18 @@ transcribe_status stream_tensor_data(const std::string &   path,
 }
 
 transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
-    const std::vector<ggml_backend_t> & backends,
-    const std::vector<ConvPwF32Slot> &  slots,
-    const char *                        error_tag,
-    ggml_context **                     out_ctx,
-    ggml_backend_buffer_t *             out_buffer)
+    const BackendPlan &                plan,
+    const std::vector<ConvPwF32Slot> & slots,
+    const char *                       error_tag,
+    ggml_context **                    out_ctx,
+    ggml_backend_buffer_t *            out_buffer)
 {
-    if (backends.empty()) return TRANSCRIBE_OK;
-
-    // Only the primary backend (backends.front()) matters: that's
-    // where the encoder graph actually runs. ACCEL backends only
-    // accelerate specific ops on host memory; they don't change where
-    // the matmul dispatches.
-    ggml_backend_dev_t primary_dev =
-        ggml_backend_get_device(backends.front());
-    if (primary_dev == nullptr) return TRANSCRIBE_OK;
-    if (ggml_backend_dev_type(primary_dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        return TRANSCRIBE_OK;
-    }
+    // Key off the classified primary kind, not off ACCEL/CPU
+    // ordering in the backend list. This is the fix for the latent
+    // bug where strict-CPU requests could be silently shadowed by
+    // an ACCEL backend sitting ahead of CPU.
+    if (plan.primary_kind != BackendKind::Cpu) return TRANSCRIBE_OK;
+    if (plan.primary == nullptr)               return TRANSCRIBE_OK;
 
     if (slots.empty()) return TRANSCRIBE_OK;
 
@@ -188,7 +321,7 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
     }
 
     ggml_backend_buffer_t buffer =
-        ggml_backend_alloc_ctx_tensors(ctx, backends.front());
+        ggml_backend_alloc_ctx_tensors(ctx, plan.primary);
     if (buffer == nullptr) {
         std::fprintf(stderr,
             "%s: conv_pw f32 promotion buffer alloc failed\n", error_tag);

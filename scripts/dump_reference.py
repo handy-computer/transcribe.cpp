@@ -360,10 +360,11 @@ def cmd_decode(args: argparse.Namespace) -> int:
     Strict-comparison protocol (when chasing a real divergence in
     the joint or LSTM forward):
 
-      1. Run the C++ side with transcribe_model_params::use_gpu = false
-         (e.g. transcribe-bench --cpu-only) so the encoder lands on the
-         strict fp32 reference path (~3.8e-6 vs MLX), not Metal's
-         simdgroup-f16 matmul (~3.5e-3 vs MLX).
+      1. Run the C++ side with transcribe_model_params::backend =
+         TRANSCRIBE_BACKEND_CPU (e.g. transcribe-bench --backend cpu)
+         so the encoder lands on the strict fp32 reference path
+         (~3.8e-6 vs MLX), not Metal's simdgroup-f16 matmul
+         (~3.5e-3 vs MLX).
       2. Pass `--mel-from-cpp <prefix>` to this subcommand so
          parakeet-mlx consumes the C++ mel instead of its own
          periodic-Hann variant (which differs by ~6e-3 from NeMo's

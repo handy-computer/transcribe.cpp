@@ -26,8 +26,8 @@
 //     If neither path exists, the test exits 77 (CTest "skipped").
 //   - The WAV path comes from TRANSCRIBE_TEST_AUDIO env var, falling
 //     back to samples/jfk.wav.
-//   - transcribe_model_params::use_gpu is set to false before model
-//     load for deterministic results across platforms.
+//   - transcribe_model_params::backend is set to TRANSCRIBE_BACKEND_CPU
+//     before model load for deterministic results across platforms.
 //
 // CI never builds this -- it is a developer-local manual gate. The
 // synthetic fixture-based test (when written) covers structural
@@ -189,7 +189,7 @@ int main() {
     const auto t_start = std::chrono::steady_clock::now();
 
     transcribe_model_params mp = transcribe_model_default_params();
-    mp.use_gpu = false;  // CPU for cross-platform determinism
+    mp.backend = TRANSCRIBE_BACKEND_CPU;  // strict CPU for cross-platform determinism
     struct transcribe_model * model = nullptr;
     {
         const transcribe_status st =

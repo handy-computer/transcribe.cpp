@@ -30,6 +30,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 
 // ---------------------------------------------------------------------------
 // Status
@@ -120,7 +121,7 @@ extern "C" void transcribe_log_set(transcribe_log_callback cb, void * userdata) 
 
 extern "C" struct transcribe_model_params transcribe_model_default_params(void) {
     struct transcribe_model_params p = {};
-    p.use_gpu    = true;
+    p.backend    = TRANSCRIBE_BACKEND_AUTO;
     p.gpu_device = -1;
     return p;
 }
@@ -156,6 +157,23 @@ extern "C" transcribe_status transcribe_model_load_file(
     }
     *out_model = nullptr;
     if (path == nullptr || params == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Reserved-field validation. gpu_device is documented in the
+    // public header as MUST-be-(-1) in 0.x, reserved for future
+    // multi-device selection. Reject anything else now so that
+    // callers who pass a stale "device 0" (or garbage) get a clean
+    // error today rather than a silent success followed by surprise
+    // behavior when we actually wire device selection up. A stderr
+    // line is included because "invalid argument" alone doesn't tell
+    // the caller which field tripped. When multi-device support
+    // lands this check relaxes to `< -1 || >= n_devices`.
+    if (params->gpu_device != -1) {
+        std::fprintf(stderr,
+            "transcribe_model_load_file: gpu_device must be -1 in 0.x "
+            "(got %d); multi-device selection is reserved for a "
+            "future release\n", params->gpu_device);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 

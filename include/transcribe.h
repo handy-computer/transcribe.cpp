@@ -220,19 +220,59 @@ struct transcribe_context;
 /* ----------------------------------------------------------------------- */
 
 /*
+ * Backend request.
+ *
+ * AUTO    Pick the best available backend. Takes the first GPU/IGPU
+ *         device that successfully initializes in ggml's device
+ *         registry order — which is build-time prioritized (Metal on
+ *         Apple, Vulkan / CUDA / SYCL on Linux, …). Host-memory
+ *         accelerators (BLAS, AMX, …) are additionally layered onto
+ *         the scheduler when present — they run on the same memory
+ *         as the CPU backend and are orthogonal to the GPU/CPU split.
+ *         Always succeeds: CPU is the final fallback when no GPU
+ *         initializes.
+ *
+ * CPU     Strict CPU only. No GPU, no IGPU, and no host-memory
+ *         accelerators (BLAS/AMX). This is the right choice for
+ *         numerical reference runs, cross-platform determinism, and
+ *         for exercising the pure-CPU kernels under test. Always
+ *         succeeds.
+ *
+ * METAL   Require the Metal backend. Returns TRANSCRIBE_ERR_BACKEND
+ *         if Metal is not available in this build. Host-memory
+ *         accelerators are still layered on when present.
+ *
+ * VULKAN  Require the Vulkan backend. Returns TRANSCRIBE_ERR_BACKEND
+ *         if Vulkan is not available in this build. Host-memory
+ *         accelerators are still layered on when present.
+ *
+ * Callers that need to know which backend they actually landed on
+ * can query transcribe_model_backend() after load.
+ */
+typedef enum {
+    TRANSCRIBE_BACKEND_AUTO   = 0,
+    TRANSCRIBE_BACKEND_CPU    = 1,
+    TRANSCRIBE_BACKEND_METAL  = 2,
+    TRANSCRIBE_BACKEND_VULKAN = 3,
+} transcribe_backend_request;
+
+/*
  * Model load params.
  *
- * use_gpu: request GPU backend if available. If true but no GPU backend
- *          can be brought up, the library logs a warning, falls back to
- *          CPU silently, and returns TRANSCRIBE_OK. Callers that need to
- *          detect the fallback should query transcribe_model_backend()
- *          after load.
+ * backend:    which backend to request. See transcribe_backend_request
+ *             for the semantics of each value. Default is AUTO.
  *
- * gpu_device: backend-specific device index. -1 means "default device".
+ * gpu_device: Reserved for future multi-device selection. MUST be
+ *             set to -1 in 0.x; any other value returns
+ *             TRANSCRIBE_ERR_INVALID_ARG. AUTO always picks the first
+ *             device of the chosen kind in ggml's registry order;
+ *             explicit METAL/VULKAN requests likewise pick the first
+ *             matching device. There is no per-device selection in
+ *             the current release.
  */
 struct transcribe_model_params {
-    bool use_gpu;
-    int  gpu_device;
+    transcribe_backend_request backend;
+    int                        gpu_device;
 };
 
 TRANSCRIBE_API struct transcribe_model_params transcribe_model_default_params(void);

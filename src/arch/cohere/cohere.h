@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "transcribe-backend.h"
 #include "transcribe-context.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
@@ -114,8 +115,13 @@ struct CohereModel final : public transcribe_model {
     CohereWeights   weights;
     ggml_context *  ctx_meta = nullptr;
 
-    std::vector<ggml_backend_t> backends;
-    ggml_backend_buffer_t       backend_buffer = nullptr;
+    // Runtime backend plan — see transcribe-backend.h. Replaces the
+    // old `std::vector<backends>` field: the plan's scheduler_list
+    // holds the same handles, plus a classified primary kind so
+    // helpers don't have to re-derive it via ggml_backend_name
+    // string matching.
+    transcribe::BackendPlan plan;
+    ggml_backend_buffer_t   backend_buffer = nullptr;
 
     // Fused BN parameters (same as Parakeet).
     ggml_context *          bn_fused_ctx    = nullptr;

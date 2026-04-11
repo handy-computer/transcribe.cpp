@@ -6,10 +6,10 @@
 // Every per-family load() walks the same three steps after the GGUF
 // catalog has been built:
 //
-//   1. Initialize backends (GPU → ACCEL → CPU) honoring
-//      transcribe_model_params::use_gpu.
+//   1. Resolve a BackendPlan from transcribe_model_params::backend.
+//      (See transcribe-backend.h for the plan type.)
 //   2. Allocate a backend buffer for every tensor in ctx_meta on the
-//      preferred (first) backend.
+//      primary backend from the plan.
 //   3. Stream each tensor's bytes from the GGUF data section into
 //      its backend slot via ggml_backend_tensor_set.
 //
@@ -22,6 +22,7 @@
 #pragma once
 
 #include "transcribe.h"
+#include "transcribe-backend.h"
 
 #include <string>
 #include <vector>
@@ -36,25 +37,34 @@ struct gguf_context;
 
 namespace transcribe::load_common {
 
-// Discover and initialize backends via ggml's device registry.
-// Order: [optional GPU/iGPU] → ACCEL (BLAS, etc.) → CPU.
+// Resolve a BackendPlan from a caller's backend request by walking
+// ggml's device registry.
 //
-//   force_cpu:   true skips the GPU/iGPU discovery pass. ACCEL
-//                backends still run (they operate on host memory).
+//   requested:   the caller's transcribe_backend_request.
+//                  AUTO   - best available: GPU/IGPU → ACCEL → CPU.
+//                  CPU    - strict CPU only. No GPU, no ACCEL.
+//                  METAL  - require Metal; error if not present.
+//                  VULKAN - require Vulkan; error if not present.
+//                Library-internal classification of what each value
+//                actually picks up is documented in
+//                transcribe-backend.h.
 //   error_tag:   log prefix, e.g. "parakeet".
-//   out:         appended in priority order. On success, out.back()
-//                is the CPU backend. out[0] is the preferred (first
-//                discovered) backend -- GPU if one was found and
-//                force_cpu is false, otherwise the first ACCEL, else
-//                CPU.
+//   out:         populated on success. out.primary is the backend
+//                that owns the weight buffer; out.scheduler_list
+//                always has at least the primary and typically has
+//                CPU last as a fallback. See BackendPlan for the
+//                full semantic.
 //
-// Returns TRANSCRIBE_OK on success. Returns TRANSCRIBE_ERR_GGUF if
-// CPU backend initialization fails (there is no fallback past CPU).
-// GPU / ACCEL discovery failures are non-fatal and logged at their
-// discovery site.
-transcribe_status init_backends(bool                           force_cpu,
-                                const char *                   error_tag,
-                                std::vector<ggml_backend_t> &  out);
+// Returns:
+//   TRANSCRIBE_OK         on success.
+//   TRANSCRIBE_ERR_BACKEND if the caller asked for a specific
+//                          backend (METAL / VULKAN) that could not
+//                          be initialized, or if the CPU backend
+//                          itself fails to initialize (there is no
+//                          fallback past CPU).
+transcribe_status init_backends(transcribe_backend_request requested,
+                                const char *               error_tag,
+                                BackendPlan &              out);
 
 // Stream every tensor in `ctx_meta` from the GGUF data section on
 // disk into its already-allocated backend buffer slot via
@@ -103,18 +113,22 @@ struct ConvPwF32Slot {
 // tensors); the cost is ~235 MB for cohere, much less for parakeet.
 //
 // Behavior:
-//   - If `backends` is empty or the primary backend is not CPU: no-op,
-//     returns TRANSCRIBE_OK; *out_ctx and *out_buffer are NOT touched.
+//   - If plan.primary_kind != BackendKind::Cpu: no-op, returns
+//     TRANSCRIBE_OK; *out_ctx and *out_buffer are NOT touched. This is
+//     the important semantic: strict-CPU is keyed off the classified
+//     kind, not off ACCEL-vs-CPU ordering in a backend list, so a
+//     request for TRANSCRIBE_BACKEND_CPU reliably triggers promotion
+//     even on machines where ACCEL would otherwise sort ahead of CPU.
 //   - If `slots` is empty: no-op, same return semantics.
 //   - If the F16 → float type trait is missing: logs a warning and
 //     returns TRANSCRIBE_OK without modifying anything.
 //
 // error_tag: log prefix, e.g. "parakeet" or "cohere".
 transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
-    const std::vector<ggml_backend_t> & backends,
-    const std::vector<ConvPwF32Slot> &  slots,
-    const char *                        error_tag,
-    ggml_context **                     out_ctx,
-    ggml_backend_buffer_t *             out_buffer);
+    const BackendPlan &                plan,
+    const std::vector<ConvPwF32Slot> & slots,
+    const char *                       error_tag,
+    ggml_context **                    out_ctx,
+    ggml_backend_buffer_t *            out_buffer);
 
 } // namespace transcribe::load_common

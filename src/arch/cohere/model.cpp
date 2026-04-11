@@ -160,10 +160,14 @@ CohereModel::~CohereModel() {
         ggml_backend_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
-    for (auto it = backends.rbegin(); it != backends.rend(); ++it) {
+    for (auto it = plan.scheduler_list.rbegin();
+         it != plan.scheduler_list.rend(); ++it)
+    {
         ggml_backend_free(*it);
     }
-    backends.clear();
+    plan.scheduler_list.clear();
+    plan.primary      = nullptr;
+    plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
 namespace {
@@ -189,7 +193,7 @@ transcribe_status fuse_batch_norm(CohereModel & m) {
     }
 
     m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(
-        m.bn_fused_ctx, m.backends.back());
+        m.bn_fused_ctx, m.plan.scheduler_list.back());
     if (m.bn_fused_buffer == nullptr) return TRANSCRIBE_ERR_BACKEND;
 
     std::vector<float> bn_w(d), bn_b(d), rm(d), rv(d);
@@ -314,7 +318,7 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CohereModel & m) {
         }
     }
     return load_common::promote_conv_pw_f16_to_f32_on_cpu(
-        m.backends, slots, "cohere",
+        m.plan, slots, "cohere",
         &m.conv_pw_f32_ctx, &m.conv_pw_f32_buffer);
 }
 
@@ -333,9 +337,10 @@ transcribe_status load(
     const transcribe_model_params *   params,
     transcribe_model **               out_model)
 {
-    // params->use_gpu is consumed below in the backend init block;
-    // params->gpu_device is reserved (the registry walk doesn't yet
-    // honor a caller-supplied device index).
+    // params->backend is consumed below in the backend init block;
+    // params->gpu_device is reserved per the public header contract
+    // and is not yet honored (multi-device selection is a future
+    // release).
 
     const int64_t t_load_start = ggml_time_us();
 
@@ -462,25 +467,28 @@ transcribe_status load(
         return st;
     }
 
-    // Initialize backends.
-    //
-    // transcribe_model_params::use_gpu == false skips the GPU backend
-    // init below and leaves CPU as the primary backend. ACCEL backends
-    // (e.g. Accelerate sgemm) run on host memory and are included in
-    // either case.
-    const bool force_cpu = (params != nullptr && !params->use_gpu);
+    // Resolve the backend plan from the caller request. See
+    // transcribe-backend.h + transcribe-load-common.h for the
+    // semantics (AUTO / CPU / METAL / VULKAN). The important case
+    // for cohere is strict CPU: the F16→F32 conv pointwise
+    // promotion below depends on `plan.primary_kind ==
+    // BackendKind::Cpu`, which only a TRANSCRIBE_BACKEND_CPU
+    // request reliably produces.
+    const transcribe_backend_request backend_req =
+        (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
+
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            force_cpu, "cohere", m->backends);
+            backend_req, "cohere", m->plan);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
         return st;
     }
 
-    m->backend = ggml_backend_name(m->backends.front());
+    m->backend = ggml_backend_name(m->plan.primary);
 
     ggml_backend_buffer_t weights_buffer =
-        ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->backends.front());
+        ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         std::fprintf(stderr,
@@ -553,9 +561,13 @@ transcribe_status init_context(
     // every backend we ship, so the decoder defaults on. The env-var
     // overrides (TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH) are
     // applied globally in transcribe::flash::apply_env_overrides.
+    //
+    // We check the classified primary BackendKind here instead of
+    // string-matching on ggml_backend_name — the plan already has
+    // the kind ready.
     auto * cm = static_cast<CohereModel *>(model);
-    const bool is_metal = transcribe::flash::is_metal_backend(
-        cm->backend.c_str());
+    const bool is_metal =
+        (cm->plan.primary_kind == transcribe::BackendKind::Metal);
 
     cc->encoder_use_flash = !is_metal;
     cc->decoder_use_flash = true;
@@ -579,7 +591,7 @@ transcribe_status run(
 
     auto * cc = static_cast<CohereContext *>(ctx);
     auto * cm = static_cast<CohereModel *>(cc->model);
-    if (cm == nullptr || cm->backends.empty()) {
+    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -642,8 +654,8 @@ transcribe_status run(
     // ----- Allocate + compute encoder graph -------------------------
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(
-            cm->backends.data(), nullptr,
-            static_cast<int>(cm->backends.size()),
+            cm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(cm->plan.scheduler_list.size()),
             16384, false, true);
         if (cc->sched == nullptr) {
             std::fprintf(stderr,
@@ -859,7 +871,7 @@ transcribe_status run(
             ggml_type cache_type = resolved_kv;
             if (cache_type == GGML_TYPE_COUNT) cache_type = GGML_TYPE_F16;
             if (!kv_cache_init(cc->kv_cache,
-                               cm->backends.front(),
+                               cm->plan.primary,
                                n_ctx, T_enc,
                                static_cast<int>(cm->hparams.dec_hidden),
                                cm->hparams.dec_n_layers,

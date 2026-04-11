@@ -5,17 +5,18 @@
 //
 // Flash-attention support in ggml is per-backend and per-head-dim.
 // Each family picks its own defaults based on encoder/decoder head
-// dimensions and which backend it was loaded on; this header hoists
-// the two pieces that are always the same:
+// dimensions and which backend it was loaded on.
 //
-//   1. Detecting whether the primary backend is Metal (so the
-//      family can auto-disable flash on head dims the Metal backend
-//      lacks a template for).
+// The "which backend" half of that decision now lives in
+// transcribe-backend.h as BackendKind — families check
+// `plan.primary_kind == BackendKind::Metal` directly instead of
+// calling a helper here.
 //
-//   2. Honoring the TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH
-//      environment overrides -- these are a global "no flash
-//      anywhere" / "flash everywhere" debug lever, not a per-family
-//      policy knob.
+// What stays in this header is the one cross-family concern that is
+// not backend-classification: honoring the TRANSCRIBE_NO_FLASH /
+// TRANSCRIBE_FORCE_FLASH environment overrides. These are a global
+// "no flash anywhere" / "flash everywhere" debug lever, not a
+// per-family policy knob.
 //
 // The default on/off decision itself is still per-family: it
 // depends on the family's head dim (cohere encoder=160 unsupported
@@ -26,15 +27,6 @@
 #pragma once
 
 namespace transcribe::flash {
-
-// Return true if the named backend is ggml's Metal backend.
-// Matches either "MTL*" (Metal's short name, e.g. "MTL0") or
-// "Metal*" (Metal's long name). All other backends return false.
-//
-//   backend_name: the string returned by ggml_backend_name() on
-//                 the model's primary backend (first in the
-//                 backend list). May be nullptr -- returns false.
-bool is_metal_backend(const char * backend_name);
 
 // Apply the TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH
 // environment overrides to a pair of encoder/decoder flash flags.

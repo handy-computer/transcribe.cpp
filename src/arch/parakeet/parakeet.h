@@ -15,6 +15,7 @@
 #pragma once
 
 #include "decoder.h"
+#include "transcribe-backend.h"
 #include "transcribe-context.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
@@ -66,13 +67,15 @@ struct ParakeetModel final : public transcribe_model {
     ParakeetWeights weights;
     ggml_context *  ctx_meta = nullptr;
 
-    // Runtime backends. Discovered at load() time via ggml's device
-    // registry (GPU → ACCEL/BLAS → CPU). The first entry is the
-    // preferred backend for weights; the scheduler dispatches ops
-    // to the best backend per-op. All are freed in ~ParakeetModel
-    // in reverse order.
-    std::vector<ggml_backend_t> backends;
-    ggml_backend_buffer_t       backend_buffer = nullptr;
+    // Runtime backend plan. Resolved at load() time from
+    // transcribe_model_params::backend via
+    // transcribe::load_common::init_backends. See
+    // transcribe-backend.h for the plan semantics. The plan's
+    // `scheduler_list` owns the backends; the destructor frees
+    // them in reverse order. Helpers that key off "is this CPU?"
+    // check `plan.primary_kind == BackendKind::Cpu` directly.
+    transcribe::BackendPlan plan;
+    ggml_backend_buffer_t   backend_buffer = nullptr;
 
     // Fused BN parameters live in a separate ggml context + buffer,
     // computed at load time from the raw BN tensors. Freed in dtor.

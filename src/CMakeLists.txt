@@ -1,11 +1,14 @@
-# transcribe library
+# transcribe library.
 #
-# Pass 2C: real Parakeet weight ingest. ParakeetModel now owns a
-# ggml_context with every weight tensor's data; load() does a two-stage
-# open (header-only via Loader, then full data via gguf_init_from_file
-# with no_alloc=false). run() is still NOT_IMPLEMENTED — compute is
-# phase 3 (frontend) + phase 4 (encoder / decoder). The public ABI is
-# unchanged.
+# Sources are listed explicitly. Per-family code lives under arch/<fam>/;
+# shared scaffolding (loader, mel frontend, tokenizer, load-common,
+# backend classification, flash-policy, ...) lives alongside the
+# dispatcher at the top level of src/.
+#
+# Backend libraries (Metal, Vulkan, ...) are compiled into ggml by the
+# top-level CMake via GGML_METAL / GGML_VULKAN. This target discovers
+# them at runtime via the ggml device registry; no per-backend compile
+# defs are needed on libtranscribe itself.
 
 add_library(transcribe
     transcribe.cpp
@@ -17,6 +20,7 @@ add_library(transcribe
     transcribe-tokenizer.cpp
     transcribe-debug.cpp
     transcribe-flash-policy.cpp
+    transcribe-backend.cpp
     transcribe-load-common.cpp
     transcribe-weights-util.cpp
     conformer/conformer.cpp
@@ -46,14 +50,6 @@ target_compile_definitions(transcribe
     PRIVATE
         TRANSCRIBE_BUILD
 )
-
-# Phase 4 step 1: Parakeet::load tries Metal first when compiled in.
-# When TRANSCRIBE_METAL is OFF the source falls through to CPU
-# unconditionally and ggml-metal.h is never included.
-# Backend-specific compile defs are no longer needed on the library —
-# model.cpp discovers backends at runtime via ggml's device registry.
-# TRANSCRIBE_METAL / TRANSCRIBE_VULKAN still control what ggml itself
-# compiles (set in the top-level CMakeLists.txt → GGML_METAL / GGML_VULKAN).
 
 # ggml is the runtime substrate. Linked PRIVATE because the public header
 # stays ggml-free (callers never include <ggml.h>).

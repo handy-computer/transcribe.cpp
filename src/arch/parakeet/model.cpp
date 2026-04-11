@@ -88,8 +88,8 @@ static_assert(std::is_base_of_v<transcribe_context, ParakeetContext>);
 ParakeetContext::~ParakeetContext() {
     // Tear down per-call compute state. Order matters: the scheduler
     // owns the compute buffers, the context owns the tensor metadata,
-    // both must be freed before the model's backends (which outlive
-    // the context, owned by ParakeetModel).
+    // both must be freed before the model's backend plan (which
+    // outlives the context, owned by ParakeetModel).
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -102,12 +102,13 @@ ParakeetContext::~ParakeetContext() {
 }
 
 ParakeetModel::~ParakeetModel() {
-    // Teardown order: ctx_meta → backend_buffer → backends (reverse).
+    // Teardown order: ctx_meta → backend_buffer → plan backends
+    // (reverse init order).
     //
     // ctx_meta owns the tensor metadata (ggml_tensor structs); the
     // tensors' data pointers reference backend_buffer's interior.
     // Freeing ctx_meta drops the metadata only — the buffer is
-    // independent. backend_buffer must be freed before backends
+    // independent. backend_buffer must be freed before the backends
     // because the buffer was allocated against a backend and may
     // hold a reference to it. Backends freed in reverse init order.
     if (bn_fused_ctx != nullptr) {
@@ -136,10 +137,14 @@ ParakeetModel::~ParakeetModel() {
         ggml_backend_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
-    for (auto it = backends.rbegin(); it != backends.rend(); ++it) {
+    for (auto it = plan.scheduler_list.rbegin();
+         it != plan.scheduler_list.rend(); ++it)
+    {
         ggml_backend_free(*it);
     }
-    backends.clear();
+    plan.scheduler_list.clear();
+    plan.primary      = nullptr;
+    plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
 namespace {
@@ -175,9 +180,11 @@ transcribe_status fuse_batch_norm(ParakeetModel & m) {
         b.conv_bn_fused_bias  = ggml_new_tensor_1d(m.bn_fused_ctx, GGML_TYPE_F32, d);
     }
 
-    // Allocate on the CPU backend (last in the list).
+    // Allocate on the CPU backend. The plan's scheduler list always
+    // has CPU last as the fallback; for strict-CPU loads it is the
+    // only entry.
     m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(
-        m.bn_fused_ctx, m.backends.back());
+        m.bn_fused_ctx, m.plan.scheduler_list.back());
     if (m.bn_fused_buffer == nullptr) return TRANSCRIBE_ERR_BACKEND;
 
     // Compute fused values from the raw BN tensors.
@@ -236,7 +243,7 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(ParakeetModel & m) {
         }
     }
     return load_common::promote_conv_pw_f16_to_f32_on_cpu(
-        m.backends, slots, "parakeet",
+        m.plan, slots, "parakeet",
         &m.conv_pw_f32_ctx, &m.conv_pw_f32_buffer);
 }
 
@@ -261,9 +268,10 @@ transcribe_status load(
     // The dispatcher has already verified out_model is non-null and
     // the loader has a valid gguf_context with general.architecture
     // set. *out_model is currently null (the dispatcher cleared it).
-    // params->use_gpu is consumed below in the backend init block;
-    // params->gpu_device is reserved (the registry walk doesn't yet
-    // honor a caller-supplied device index).
+    // params->backend is consumed below in the backend init block;
+    // params->gpu_device is reserved per the public header contract
+    // and is not yet honored (multi-device selection is a future
+    // release).
 
     const int64_t t_load_start = ggml_time_us();
 
@@ -409,36 +417,34 @@ transcribe_status load(
         return st;
     }
 
-    // Initialize runtime backends via ggml's device registry.
-    // Discovery order: GPU/iGPU → ACCEL (BLAS, etc.) → CPU.
-    // This is runtime-dynamic: the library code has no compile-time
-    // #if TRANSCRIBE_METAL / #if TRANSCRIBE_VULKAN guards. Whatever
-    // backends ggml was compiled with are discovered here.
-    //
-    // transcribe_model_params::use_gpu == false skips the GPU backend
-    // init below and leaves CPU as the primary backend. ACCEL backends
-    // (e.g. Accelerate sgemm) run on host memory and are included in
-    // either case.
-    const bool force_cpu = (params != nullptr && !params->use_gpu);
+    // Resolve the backend plan via ggml's device registry. The
+    // caller's requested backend (AUTO, CPU, METAL, VULKAN) is
+    // honored here; see transcribe-backend.h + transcribe-load-common.h
+    // for the full semantic. This is runtime-dynamic: the library
+    // code has no compile-time #if TRANSCRIBE_METAL / #if
+    // TRANSCRIBE_VULKAN guards. Whatever backends ggml was compiled
+    // with are discovered here.
+    const transcribe_backend_request backend_req =
+        (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
 
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            force_cpu, "parakeet", m->backends);
+            backend_req, "parakeet", m->plan);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
         return st;
     }
 
-    // Label for the public API: report the first (highest-priority) backend.
-    m->backend = ggml_backend_name(m->backends.front());
+    // Label for the public API: report the primary backend.
+    m->backend = ggml_backend_name(m->plan.primary);
 
     // Allocate a backend buffer for every tensor in ctx_meta on the
-    // preferred backend (first in the list). After this returns, each
-    // ggml_tensor in ctx_meta has its `buffer` and `data` slot bound
-    // to the backend allocation. We still need to upload the actual
-    // weight bytes from the GGUF data section.
+    // primary backend. After this returns, each ggml_tensor in
+    // ctx_meta has its `buffer` and `data` slot bound to the backend
+    // allocation. We still need to upload the actual weight bytes
+    // from the GGUF data section.
     ggml_backend_buffer_t weights_buffer =
-        ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->backends.front());
+        ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         std::fprintf(stderr,
@@ -556,7 +562,7 @@ transcribe_status run(
 
     auto * pc = static_cast<ParakeetContext *>(ctx);
     auto * pm = static_cast<ParakeetModel *>(pc->model);
-    if (pm == nullptr || pm->backends.empty()) {
+    if (pm == nullptr || pm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -647,8 +653,8 @@ transcribe_status run(
     // live-range packing. Created lazily, persists across calls.
     if (pc->sched == nullptr) {
         pc->sched = ggml_backend_sched_new(
-            pm->backends.data(), nullptr,
-            static_cast<int>(pm->backends.size()),
+            pm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(pm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
         if (pc->sched == nullptr) {
             std::fprintf(stderr,

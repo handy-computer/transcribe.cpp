@@ -23,14 +23,14 @@
 namespace {
 
 struct bench_args {
-    std::string model_path;
-    std::string sample_path;
-    std::string json_out;
-    int         iters     = 2;
-    int         warmup    = 1;
-    int         n_threads = 0;
-    bool        quiet     = false;
-    bool        cpu_only  = false;
+    std::string                model_path;
+    std::string                sample_path;
+    std::string                json_out;
+    int                        iters     = 2;
+    int                        warmup    = 1;
+    int                        n_threads = 0;
+    bool                       quiet     = false;
+    transcribe_backend_request backend   = TRANSCRIBE_BACKEND_AUTO;
 };
 
 void print_usage(const char * argv0) {
@@ -44,9 +44,27 @@ void print_usage(const char * argv0) {
         "  --json-out PATH    write result JSON here (default: stdout)\n"
         "  --quiet            suppress progress lines on stderr\n"
         "  --threads N        CPU threads (default 0 = all cores)\n"
-        "  --cpu-only         force CPU backend (disable GPU)\n"
+        "  --backend KIND     request a specific backend: auto|cpu|metal|vulkan\n"
+        "                     (default auto). cpu is strict CPU — no GPU,\n"
+        "                     no BLAS/AMX.\n"
         "  -h, --help         show this help\n",
         argv0);
+}
+
+// Parse --backend KIND into the public enum. Returns false and logs a
+// diagnostic on an unknown value.
+bool parse_backend_kind(const char *                   s,
+                        transcribe_backend_request &   out)
+{
+    if (s == nullptr) return false;
+    if (std::strcmp(s, "auto")   == 0) { out = TRANSCRIBE_BACKEND_AUTO;   return true; }
+    if (std::strcmp(s, "cpu")    == 0) { out = TRANSCRIBE_BACKEND_CPU;    return true; }
+    if (std::strcmp(s, "metal")  == 0) { out = TRANSCRIBE_BACKEND_METAL;  return true; }
+    if (std::strcmp(s, "vulkan") == 0) { out = TRANSCRIBE_BACKEND_VULKAN; return true; }
+    std::fprintf(stderr,
+        "error: --backend value '%s' not recognized "
+        "(expected one of: auto, cpu, metal, vulkan)\n", s);
+    return false;
 }
 
 bool parse_args(int argc, char ** argv, bench_args & out) {
@@ -68,7 +86,10 @@ bool parse_args(int argc, char ** argv, bench_args & out) {
         else if (a == "--warmup")   { auto v = need_val(i, "--warmup");   if (!v) return false; out.warmup    = std::atoi(v); if (out.warmup < 0) out.warmup = 0; }
         else if (a == "--threads")  { auto v = need_val(i, "--threads");  if (!v) return false; out.n_threads = std::atoi(v); if (out.n_threads < 0) out.n_threads = 0; }
         else if (a == "--quiet")    { out.quiet = true; }
-        else if (a == "--cpu-only") { out.cpu_only = true; }
+        else if (a == "--backend")  {
+            auto v = need_val(i, "--backend"); if (!v) return false;
+            if (!parse_backend_kind(v, out.backend)) return false;
+        }
         else {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -147,14 +168,12 @@ int main(int argc, char ** argv) {
     }
     const double sample_duration_s = static_cast<double>(pcm.size()) / 16000.0;
 
-    // Load model. --cpu-only sets transcribe_model_params::use_gpu
-    // = false, which the per-family loader honors as the single
-    // CPU-only knob.
+    // Load model. --backend propagates directly to
+    // transcribe_model_params::backend, which the per-family loader
+    // consumes via transcribe::load_common::init_backends.
     if (!quiet) std::fprintf(stderr, "loading model %s\n", args.model_path.c_str());
     struct transcribe_model_params mp = transcribe_model_default_params();
-    if (args.cpu_only) {
-        mp.use_gpu = false;
-    }
+    mp.backend = args.backend;
     struct transcribe_model *      model = nullptr;
     if (const transcribe_status st =
             transcribe_model_load_file(args.model_path.c_str(), &mp, &model);
