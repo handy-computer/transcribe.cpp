@@ -214,9 +214,19 @@ transcribe_status read_capability_kv(const gguf_context *      gguf,
     }
 
     // 2B-recognized capability keys. The schema is in PLAN.md
-    // "Speech-specific metadata" / `stt.capability.*`. Timestamp
-    // granularity keys are deliberately NOT read here — see
-    // RESUME.md open question 4 (max_timestamp_kind semantics).
+    // "Speech-specific metadata" / `stt.capability.*`.
+    //
+    // Timestamp granularity (`max_timestamp_kind`) is deliberately
+    // NOT read here. Both shipped families have a fixed, code-set
+    // ceiling (Parakeet=TOKEN, Cohere=NONE) and no converter emits
+    // `stt.capability.timestamps`. A KV-driven override is a
+    // future change — the loader would need rules for how the KV
+    // interacts with what the family code can actually produce
+    // (the KV should only lower the ceiling, never raise it, since
+    // code is the floor of what can physically be emitted). When a
+    // second checkpoint of an existing family ships with a
+    // different ceiling, resolve that interaction before wiring
+    // the reader.
     if (auto st = read_capability_bool(gguf, "stt.capability.translate",
                                        caps.supports_translate);
         st != TRANSCRIBE_OK)

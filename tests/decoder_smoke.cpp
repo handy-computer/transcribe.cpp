@@ -366,6 +366,106 @@ int main() {
     CHECK(t.encode_ms > 0.0f);
     CHECK(t.decode_ms > 0.0f);
 
+    // ---- Timestamp ceiling: re-run with coarser requests -----------
+    //
+    // Parakeet advertises max_timestamp_kind = TOKEN. A caller that
+    // asks for WORD, SEGMENT, or NONE gets a result at exactly that
+    // granularity, with finer-grained tables elided. This is the
+    // ceiling contract: the request is an upper bound, not an exact
+    // match. The default run above already covered AUTO→TOKEN.
+    {
+        transcribe_params rp2 = transcribe_default_params();
+        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
+        const transcribe_status st =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        CHECK(st == TRANSCRIBE_OK);
+        CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_WORD);
+        // Word table still present with real timings.
+        const int w_n_words = transcribe_n_words(ctx);
+        CHECK(w_n_words > 0);
+        if (w_n_words > 0) {
+            CHECK(transcribe_word_t1_ms(ctx, 0) >= transcribe_word_t0_ms(ctx, 0));
+        }
+        // Token table elided at WORD granularity, and every word's
+        // back-reference into the now-empty token table must be
+        // zeroed so a caller iterating word_first_token /
+        // word_n_tokens cannot index into a cleared table.
+        CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
+        for (int i = 0; i < w_n_words; ++i) {
+            CHECK_EQ_INT(transcribe_word_first_token(ctx, i), 0);
+            CHECK_EQ_INT(transcribe_word_n_tokens(ctx, i),    0);
+        }
+        // Segment's token back-references also zeroed.
+        CHECK_EQ_INT(transcribe_segment_first_token(ctx, 0), 0);
+        CHECK_EQ_INT(transcribe_segment_n_tokens(ctx, 0),    0);
+        // Full text still populated.
+        const char * full2 = transcribe_full_text(ctx);
+        CHECK(full2 != nullptr && full2[0] != '\0');
+    }
+    {
+        transcribe_params rp2 = transcribe_default_params();
+        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+        const transcribe_status st =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        CHECK(st == TRANSCRIBE_OK);
+        CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_SEGMENT);
+        CHECK_EQ_INT(transcribe_n_words(ctx),  0);
+        CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
+        CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
+        // Segment timings are still real at SEGMENT granularity.
+        CHECK(transcribe_segment_t1_ms(ctx, 0) > transcribe_segment_t0_ms(ctx, 0));
+        const char * seg_text2 = transcribe_segment_text(ctx, 0);
+        CHECK(seg_text2 != nullptr && seg_text2[0] != '\0');
+    }
+    {
+        transcribe_params rp2 = transcribe_default_params();
+        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
+        const transcribe_status st =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        CHECK(st == TRANSCRIBE_OK);
+        CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
+        CHECK_EQ_INT(transcribe_n_words(ctx),  0);
+        CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
+        // Segment survives as the text carrier; its t0/t1 are zeroed.
+        CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
+        CHECK_EQ_INT(transcribe_segment_t0_ms(ctx, 0), 0);
+        CHECK_EQ_INT(transcribe_segment_t1_ms(ctx, 0), 0);
+        const char * seg_text2 = transcribe_segment_text(ctx, 0);
+        CHECK(seg_text2 != nullptr && seg_text2[0] != '\0');
+    }
+
+    // ---- Failed transcribe_run clears the prior result -------------
+    //
+    // Parakeet's max_timestamp_kind is TOKEN, so the dispatcher
+    // cannot reject a valid enum request on ceiling grounds. Use an
+    // out-of-range enum value cast through int to trip the enum-
+    // range switch at INVALID_ARG. The result-replacement contract
+    // (include/transcribe.h "Results") says a failing transcribe_run
+    // must leave the context in the empty sentinel state, not
+    // silently re-expose the prior successful run's output.
+    {
+        // First, seed the context with a real successful run so
+        // there is a previous result to clobber.
+        transcribe_params rp_ok = transcribe_default_params();
+        const transcribe_status st_ok =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_ok);
+        CHECK(st_ok == TRANSCRIBE_OK);
+        CHECK(transcribe_n_tokens(ctx) > 0);
+
+        transcribe_params rp_bad = transcribe_default_params();
+        rp_bad.timestamps =
+            static_cast<transcribe_timestamp_kind>(9999);
+        const transcribe_status st_bad =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_bad);
+        CHECK(st_bad == TRANSCRIBE_ERR_INVALID_ARG);
+        // All accessors return their safe sentinels.
+        CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
+        CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
+        CHECK_EQ_INT(transcribe_n_words(ctx),    0);
+        CHECK_EQ_INT(transcribe_n_tokens(ctx),   0);
+        CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
+    }
+
     // ---- Teardown --------------------------------------------------
     transcribe_context_free(ctx);
     transcribe_model_free(model);

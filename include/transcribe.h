@@ -121,6 +121,16 @@ typedef enum {
     TRANSCRIBE_ERR_SAMPLE_RATE          = 9,
     TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE = 10,
     TRANSCRIBE_ERR_UNSUPPORTED_TASK     = 11,
+    /*
+     * Returned by transcribe_run when the caller asks for a
+     * timestamp granularity finer than the model can produce.
+     * Compared against transcribe_capabilities::max_timestamp_kind,
+     * which is set per family at load time. AUTO never trips this
+     * code: the dispatcher passes AUTO through unconditionally and
+     * the per-family run() handler resolves it to the model's
+     * maximum when it assembles the result.
+     */
+    TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS = 12,
 } transcribe_status;
 
 /*
@@ -178,10 +188,16 @@ typedef enum {
 } transcribe_task;
 
 /*
- * AUTO timestamp policy: when the caller asks for AUTO, the library
- * resolves to the finest granularity the architecture supports, with
- * fallback order word -> segment -> token -> none. The actual
- * granularity returned by a run is reported by
+ * AUTO timestamp policy: AUTO is treated as "equal to the model's
+ * max_timestamp_kind." The dispatcher never rejects AUTO, and the
+ * per-family run() handler resolves it to the finest granularity
+ * the model can actually produce when it assembles the result. A
+ * non-AUTO request is treated as a ceiling: if the request is
+ * finer than the model's max, transcribe_run returns
+ * TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS. If the request is
+ * coarser-or-equal, the family handler emits only that granularity
+ * and any finer per-run data is elided. The actual granularity
+ * returned by a run is reported by
  * transcribe_returned_timestamp_kind(ctx).
  */
 typedef enum {
@@ -341,6 +357,15 @@ TRANSCRIBE_API struct transcribe_params transcribe_default_params(void);
  *
  * languages is an array of n_languages NUL-terminated short codes,
  * owned by the model. The pointer is valid until transcribe_model_free.
+ *
+ * max_timestamp_kind is the finest granularity the family's run()
+ * handler can produce. NONE means the model emits text but no
+ * alignment data; SEGMENT / WORD / TOKEN expose progressively finer
+ * alignment. The dispatcher rejects any transcribe_run request
+ * whose timestamps field is finer than this value. AUTO is not
+ * validated against this field: the dispatcher passes AUTO through
+ * unconditionally and the per-family run() handler resolves AUTO
+ * to its own max_timestamp_kind when it assembles the result.
  */
 struct transcribe_capabilities {
     int32_t                   native_sample_rate;

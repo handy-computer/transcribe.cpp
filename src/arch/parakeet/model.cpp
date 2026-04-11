@@ -547,15 +547,13 @@ transcribe_status run(
     int                       n_samples,
     const transcribe_params * params)
 {
-    // Phase 4 step 3a: this runs the encoder pre_encode subgraph
-    // end-to-end. The conformer blocks (3b-3f) and the predictor +
-    // joint + TDT decode driver (phase 5) are still TODO. We return
-    // OK so the smoke harness can call this and observe the dump
-    // outputs (gated on TRANSCRIBE_DUMP_DIR), but no result text is
-    // populated yet — every transcribe_full_text() / segment / word
-    // / token accessor still returns its safe sentinel.
-    (void)params;
-
+    // The dispatcher (transcribe.cpp) has already enum-range
+    // validated params->task / params->timestamps, rejected
+    // TRANSLATE against this family's supports_translate=false, and
+    // rejected any timestamp request finer than our advertised
+    // max_timestamp_kind=TOKEN. What arrives here is guaranteed
+    // sane — we only need to resolve AUTO and downcast finer-grained
+    // output to the requested ceiling when the result is built.
     if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -986,13 +984,71 @@ transcribe_status run(
         seg.text       = full;
         pc->full_text  = std::move(full);
         pc->segments.push_back(std::move(seg));
+
         // Parakeet TDT produces token-level timestamps from the
         // encoder frame indices (each emitted token's
         // step_at_emit). Word and segment timestamps are derived
-        // by aggregating contained tokens. The public
-        // transcribe_returned_timestamp_kind reflects the finest
-        // granularity actually produced.
-        pc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
+        // by aggregating contained tokens. TOKEN is therefore the
+        // family's max_timestamp_kind, and everything above has
+        // already been populated at TOKEN granularity.
+        //
+        // Clamp to the caller's requested ceiling. AUTO resolves to
+        // the family max (TOKEN). A coarser request elides the
+        // finer levels: WORD drops the token list, SEGMENT drops
+        // tokens+words, NONE drops tokens+words and zeros the
+        // segment's t0/t1 so nothing dresses up as alignment data
+        // the caller did not ask for.
+        //
+        // The dispatcher has already rejected any request finer
+        // than TOKEN, so after the AUTO resolution below, eff is in
+        // {NONE, SEGMENT, WORD, TOKEN}.
+        transcribe_timestamp_kind eff = params->timestamps;
+        if (eff == TRANSCRIBE_TIMESTAMPS_AUTO) {
+            eff = pm->caps.max_timestamp_kind; // = TOKEN for parakeet
+        }
+        if (eff == TRANSCRIBE_TIMESTAMPS_NONE) {
+            // Keep the segment and its text, but drop alignment
+            // data. Tokens + words are a finer granularity than
+            // the caller asked for; segment timings are alignment
+            // too, so zero them.
+            pc->tokens.clear();
+            pc->words.clear();
+            auto & s = pc->segments.back();
+            s.t0_ms      = 0;
+            s.t1_ms      = 0;
+            s.first_word = 0;
+            s.n_words    = 0;
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        } else if (eff == TRANSCRIBE_TIMESTAMPS_SEGMENT) {
+            // Keep segment timings, drop token + word tables.
+            pc->tokens.clear();
+            pc->words.clear();
+            auto & s = pc->segments.back();
+            s.first_word  = 0;
+            s.n_words     = 0;
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        } else if (eff == TRANSCRIBE_TIMESTAMPS_WORD) {
+            // Keep segment + word timings, drop the token table.
+            // Every back-reference into the cleared token table
+            // must also be zeroed so a caller iterating words or
+            // the segment can never index into a now-empty
+            // pc->tokens. The word_* / segment_* accessors return
+            // safe sentinels when n_tokens == 0, which is the
+            // documented behavior for "coarser than requested."
+            pc->tokens.clear();
+            for (auto & w : pc->words) {
+                w.first_token = 0;
+                w.n_tokens    = 0;
+            }
+            auto & s = pc->segments.back();
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        }
+        // TRANSCRIBE_TIMESTAMPS_TOKEN: nothing to elide.
+
+        pc->result_kind = eff;
         pc->has_result  = true;
     }
 

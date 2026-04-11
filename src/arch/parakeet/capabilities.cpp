@@ -54,6 +54,13 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // wrote stt.capability.translate could in principle override
     // this — but for Parakeet we never expect that to happen.
     caps.supports_translate = false;
+
+    // Parakeet's TDT decoder emits one token per acoustic frame the
+    // encoder kept, with step_at_emit carrying the frame index.
+    // run() converts that to per-token t0/t1 and aggregates up to
+    // word- and segment-level timings. TOKEN is the finest the
+    // family can honestly produce, and that is what we advertise.
+    caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 }
 
 } // namespace transcribe::parakeet

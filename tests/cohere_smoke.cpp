@@ -319,6 +319,60 @@ int main() {
         CHECK(seg_text != nullptr && seg_text[0] != '\0');
     }
 
+    // Cohere advertises max_timestamp_kind = NONE, which means
+    // "text but no alignment data." The run handler must honor
+    // that contract: no word-level entries AND no token-level
+    // entries (the old implementation fabricated a single
+    // WordEntry containing the entire transcript and also
+    // populated zero-timed TokenEntry rows). result_kind reports
+    // NONE. segment_n_{words,tokens} are both zero because the
+    // family does not expose sub-segment structure.
+    CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
+    CHECK_EQ_INT(transcribe_n_words(ctx),  0);
+    CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
+    if (n_segments > 0) {
+        CHECK_EQ_INT(transcribe_segment_n_words(ctx, 0),  0);
+        CHECK_EQ_INT(transcribe_segment_n_tokens(ctx, 0), 0);
+    }
+
+    // ---- Verify capability-aware dispatcher rejections ---------------
+    //
+    // A second run with a request that exceeds NONE must be rejected
+    // by the dispatcher before the family handler is entered. This
+    // locks in the ceiling contract: asking Cohere for WORD or TOKEN
+    // alignment returns ERR_UNSUPPORTED_TIMESTAMPS, not a synthetic
+    // fake entry.
+    //
+    // Critically, a failed transcribe_run must replace the prior
+    // result with the empty-sentinel state — not silently leave
+    // the last successful run's text hanging on the context. This
+    // is the "transcribe_run replaces the previous result" rule
+    // from include/transcribe.h applied to the failure path.
+    {
+        transcribe_params rp2 = transcribe_default_params();
+        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
+        const transcribe_status st =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
+        // The prior successful result must be gone: no stale text,
+        // no stale segments/words/tokens, returned_timestamp_kind
+        // back to the pre-run sentinel.
+        CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
+        CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
+        CHECK_EQ_INT(transcribe_n_words(ctx),    0);
+        CHECK_EQ_INT(transcribe_n_tokens(ctx),   0);
+        CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
+    }
+    {
+        transcribe_params rp2 = transcribe_default_params();
+        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+        const transcribe_status st =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
+        CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
+        CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
+    }
+
     // ---- Teardown ----------------------------------------------------
     transcribe_context_free(ctx);
     transcribe_model_free(model);

@@ -63,6 +63,7 @@ static void test_status_string(void) {
         TRANSCRIBE_ERR_SAMPLE_RATE,
         TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE,
         TRANSCRIBE_ERR_UNSUPPORTED_TASK,
+        TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS,
     };
     for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
         const char * s = transcribe_status_string(all[i]);

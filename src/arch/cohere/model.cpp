@@ -799,33 +799,15 @@ transcribe_status run(
     //
     const char * lang = (params && params->language) ? params->language : "en";
 
-    // Validate language against the model's supported_languages metadata.
-    // The tokenizer vocabulary may contain a "<|<lang>|>" token even for
-    // languages the model was not trained on (e.g. ru, hi), so relying on
-    // the tokenizer lookup alone produces plausible-looking garbage. MLX
-    // enforces this check at the model level — we mirror that here.
-    if (cm->caps.n_languages > 0 && cm->caps.languages != nullptr) {
-        bool lang_ok = false;
-        for (int i = 0; i < cm->caps.n_languages; ++i) {
-            if (cm->caps.languages[i] != nullptr &&
-                std::strcmp(cm->caps.languages[i], lang) == 0) {
-                lang_ok = true;
-                break;
-            }
-        }
-        if (!lang_ok) {
-            std::fprintf(stderr,
-                         "cohere run: language '%s' is not in the model's "
-                         "supported_languages list (", lang);
-            for (int i = 0; i < cm->caps.n_languages; ++i) {
-                std::fprintf(stderr, "%s%s",
-                             i == 0 ? "" : ",",
-                             cm->caps.languages[i] ? cm->caps.languages[i] : "?");
-            }
-            std::fprintf(stderr, ")\n");
-            return TRANSCRIBE_ERR_INVALID_ARG;
-        }
-    }
+    // Language validation lives in the central dispatcher
+    // (transcribe_run), which rejects unsupported caller-provided
+    // languages with TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE before
+    // reaching this handler. The NULL → "en" default above applies
+    // only when the caller did not specify a language; "en" is
+    // always in the model's list for every published Cohere ASR
+    // checkpoint. If that ever ceases to hold, the dispatcher's
+    // check still covers non-NULL cases and we'd revisit the
+    // default here.
 
     const std::string lang_token = std::string("<|") + lang + "|>";
     const std::vector<std::string> prompt_pieces = {
@@ -1240,23 +1222,29 @@ transcribe_status run(
                 t_known / 1000.0);
         }
 
-        // Build result hierarchy.
+        // Build result hierarchy. Cohere advertises
+        // max_timestamp_kind == NONE: "text but no alignment data".
+        // That means no per-token, per-word, or per-segment timing
+        // surface at all — not even a zero-timed placeholder. The
+        // honest output shape is:
+        //
+        //   full_text   - the whole transcript
+        //   segments[0] - single segment whose text == full_text,
+        //                 with zeroed timings and zero first/n
+        //                 counts (the caller asked for NONE, so
+        //                 they should not see a token or word
+        //                 structure)
+        //   tokens      - empty
+        //   words       - empty
+        //
+        // The previous implementation populated cc->tokens with
+        // zero-timed entries and set seg.n_tokens to the token
+        // count, which made transcribe_n_tokens > 0 and let a
+        // caller enumerate token_text / token_t0_ms for a model
+        // that is not supposed to expose alignment data. That
+        // undercut the NONE contract. Drop them.
         if (!generated_ids.empty()) {
             const transcribe::Tokenizer & tok = cm->tok;
-
-            // Build tokens.
-            cc->tokens.reserve(generated_ids.size());
-            for (size_t i = 0; i < generated_ids.size(); ++i) {
-                transcribe_context::TokenEntry te;
-                te.id    = generated_ids[i];
-                te.p     = 1.0f; // no confidence for now
-                te.t0_ms = 0;
-                te.t1_ms = 0;
-                te.text  = tok.decode(&generated_ids[i], 1);
-                te.seg_index  = 0;
-                te.word_index = 0;
-                cc->tokens.push_back(std::move(te));
-            }
 
             // Full text.
             std::string full = tok.decode(generated_ids.data(),
@@ -1265,27 +1253,20 @@ transcribe_status run(
                 full.erase(full.begin());
             }
 
-            // Single segment, single word (simplified).
+            // Single segment, text-only. first/n pairs are all
+            // zero because this family exposes neither word nor
+            // token substructure.
             transcribe_context::SegmentEntry seg;
             seg.t0_ms       = 0;
             seg.t1_ms       = 0;
             seg.first_token = 0;
-            seg.n_tokens    = static_cast<int>(cc->tokens.size());
+            seg.n_tokens    = 0;
             seg.first_word  = 0;
-            seg.n_words     = 1;
+            seg.n_words     = 0;
             seg.text        = full;
 
-            transcribe_context::WordEntry wd;
-            wd.t0_ms       = 0;
-            wd.t1_ms       = 0;
-            wd.seg_index   = 0;
-            wd.first_token = 0;
-            wd.n_tokens    = static_cast<int>(cc->tokens.size());
-            wd.text        = full;
-
             cc->segments.push_back(std::move(seg));
-            cc->words.push_back(std::move(wd));
-            cc->full_text  = std::move(full);
+            cc->full_text   = std::move(full);
             cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
             cc->has_result  = true;
         }
