@@ -211,6 +211,9 @@ bool detect_direct_pw(const char * backend) {
     if (env != nullptr) return false;
     env = std::getenv("TRANSCRIBE_CONV_DIRECT_PW");
     if (env != nullptr) return true;
+    // Vulkan: controlled A/B on Renoir showed the im2col+mul_mat path is
+    // ~200 ms/encode faster than the direct mul_mat path for F32 weights.
+    // Keep im2col as the default unless an override is set.
     if (std::strstr(backend, "Vulkan") != nullptr) return false;
     return true;
 }
@@ -531,7 +534,8 @@ ggml_tensor * build_conformer_block(ggml_context * ctx,
 ggml_tensor * build_pre_encode(ggml_context *         ctx,
                                const CohereWeights &  w,
                                const CohereHParams &  hp,
-                               ggml_tensor *          mel_in)
+                               ggml_tensor *          mel_in,
+                               bool                   direct_dw)
 {
     const auto & pe = w.pre_encode;
 
@@ -544,7 +548,11 @@ ggml_tensor * build_pre_encode(ggml_context *         ctx,
     x = ggml_relu(ctx, x);
 
     // conv2 (depthwise) -> conv3 (pointwise) -> ReLU
-    x = conv_2d_dw_f32(ctx, pe.conv2_w, x, 2, 2, 1, 1, 1, 1);
+    if (direct_dw) {
+        x = ggml_conv_2d_dw_direct(ctx, pe.conv2_w, x, 2, 2, 1, 1, 1, 1);
+    } else {
+        x = conv_2d_dw_f32(ctx, pe.conv2_w, x, 2, 2, 1, 1, 1, 1);
+    }
     x = add_conv_bias(ctx, x, pe.conv2_b);
 
     x = ggml_conv_2d(ctx, pe.conv3_w, x, 1, 1, 0, 0, 1, 1);
@@ -552,7 +560,11 @@ ggml_tensor * build_pre_encode(ggml_context *         ctx,
     x = ggml_relu(ctx, x);
 
     // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
-    x = conv_2d_dw_f32(ctx, pe.conv5_w, x, 2, 2, 1, 1, 1, 1);
+    if (direct_dw) {
+        x = ggml_conv_2d_dw_direct(ctx, pe.conv5_w, x, 2, 2, 1, 1, 1, 1);
+    } else {
+        x = conv_2d_dw_f32(ctx, pe.conv5_w, x, 2, 2, 1, 1, 1, 1);
+    }
     x = add_conv_bias(ctx, x, pe.conv5_b);
 
     x = ggml_conv_2d(ctx, pe.conv6_w, x, 1, 1, 0, 0, 1, 1);
@@ -632,7 +644,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     ggml_set_input(eb.mel_in);
 
     // Pre-encode.
-    ggml_tensor * x = build_pre_encode(ctx, w, hp, eb.mel_in);
+    ggml_tensor * x = build_pre_encode(ctx, w, hp, eb.mel_in, direct_dw);
     if (x == nullptr) return eb;
     eb.dumps.pre_encode_out = x;
     mark_for_dump(x);

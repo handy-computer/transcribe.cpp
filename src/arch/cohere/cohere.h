@@ -121,6 +121,14 @@ struct CohereModel final : public transcribe_model {
     ggml_context *          bn_fused_ctx    = nullptr;
     ggml_backend_buffer_t   bn_fused_buffer = nullptr;
 
+    // On CPU primary backend, the conformer 1×1 pointwise conv weights
+    // are dequantized from their on-disk F16 form to F32 at load time
+    // — Zen 2 class CPUs pay an F16→F32 upconvert on every matmul that
+    // erases the bandwidth win. Tensors live in this ctx, and the
+    // CohereBlock slots point here instead of the main weight buffer.
+    ggml_context *          conv_pw_f32_ctx    = nullptr;
+    ggml_backend_buffer_t   conv_pw_f32_buffer = nullptr;
+
     std::optional<transcribe::MelFrontend> mel;
 
     CohereModel() = default;

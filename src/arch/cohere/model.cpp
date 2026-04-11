@@ -142,6 +142,14 @@ CohereModel::~CohereModel() {
         ggml_backend_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
+    if (conv_pw_f32_ctx != nullptr) {
+        ggml_free(conv_pw_f32_ctx);
+        conv_pw_f32_ctx = nullptr;
+    }
+    if (conv_pw_f32_buffer != nullptr) {
+        ggml_backend_buffer_free(conv_pw_f32_buffer);
+        conv_pw_f32_buffer = nullptr;
+    }
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
@@ -269,6 +277,114 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
             "cohere: fused Q bias into pos_u/pos_v for %zu encoder blocks\n",
             fused);
     }
+    return TRANSCRIBE_OK;
+}
+
+// On a CPU primary backend, dequantize the conformer 1×1 pointwise
+// conv weights (pw1, pw2) from F16 back to F32. Step 3 moved them to
+// F16 in the GGUF to halve the Vulkan/Metal matmul cost, but Zen 2
+// (and anything else without native F16 compute) pays an F16→F32
+// upconvert per-element that outweighs the bandwidth win — a ~600 ms
+// regression on a 9.3 s q4_k_m CPU encode.
+//
+// The cleanest fix without shipping two GGUFs is to hoist the
+// conversion to load time: dequantize into a separate backend buffer
+// and point the weight slots at the F32 copies. Vulkan/Metal/CUDA
+// primary backends skip this step and keep the F16 weights. The
+// original F16 tensors stay allocated in the main weight buffer
+// (unused) — dropping them individually isn't supported by ggml's
+// backend buffer model, and the ~235 MB cost is acceptable for the
+// CPU-only path.
+transcribe_status promote_conv_pw_to_f32_on_cpu(CohereModel & m) {
+    if (m.backends.empty()) return TRANSCRIBE_OK;
+
+    ggml_backend_dev_t primary_dev =
+        ggml_backend_get_device(m.backends.front());
+    if (primary_dev == nullptr) return TRANSCRIBE_OK;
+    if (ggml_backend_dev_type(primary_dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+        return TRANSCRIBE_OK;
+    }
+
+    const size_t n_blocks = m.weights.blocks.size();
+    if (n_blocks == 0) return TRANSCRIBE_OK;
+
+    // Collect the slots that need promotion. Only F16 slots matter —
+    // if a model was converted with F32 convs already we have nothing
+    // to do.
+    struct Slot { ggml_tensor ** slot; ggml_tensor * src; };
+    std::vector<Slot> slots;
+    slots.reserve(n_blocks * 2);
+    for (size_t i = 0; i < n_blocks; ++i) {
+        auto & b = m.weights.blocks[i];
+        if (b.conv_pw1_w != nullptr && b.conv_pw1_w->type == GGML_TYPE_F16) {
+            slots.push_back({&b.conv_pw1_w, b.conv_pw1_w});
+        }
+        if (b.conv_pw2_w != nullptr && b.conv_pw2_w->type == GGML_TYPE_F16) {
+            slots.push_back({&b.conv_pw2_w, b.conv_pw2_w});
+        }
+    }
+    if (slots.empty()) return TRANSCRIBE_OK;
+
+    const size_t ctx_size = slots.size() * ggml_tensor_overhead() + 256;
+    ggml_init_params params = {ctx_size, nullptr, true};
+    m.conv_pw_f32_ctx = ggml_init(params);
+    if (m.conv_pw_f32_ctx == nullptr) return TRANSCRIBE_ERR_BACKEND;
+
+    // Allocate F32 replacements in the new ctx, matching each source's
+    // full n-d shape. Names are copied so debug dumps still find them.
+    std::vector<ggml_tensor *> replacements;
+    replacements.reserve(slots.size());
+    for (const auto & s : slots) {
+        ggml_tensor * r = ggml_new_tensor(
+            m.conv_pw_f32_ctx, GGML_TYPE_F32,
+            ggml_n_dims(s.src), s.src->ne);
+        if (r == nullptr) return TRANSCRIBE_ERR_BACKEND;
+        ggml_set_name(r, s.src->name);
+        replacements.push_back(r);
+    }
+
+    m.conv_pw_f32_buffer = ggml_backend_alloc_ctx_tensors(
+        m.conv_pw_f32_ctx, m.backends.front());
+    if (m.conv_pw_f32_buffer == nullptr) {
+        std::fprintf(stderr,
+            "cohere: conv_pw f32 promotion buffer alloc failed\n");
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    ggml_backend_buffer_set_usage(m.conv_pw_f32_buffer,
+                                  GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    // Dequantize each F16 tensor into its F32 replacement.
+    const auto * f16_traits = ggml_get_type_traits(GGML_TYPE_F16);
+    if (f16_traits == nullptr || f16_traits->to_float == nullptr) {
+        std::fprintf(stderr,
+            "cohere: no f16 to_float trait — skipping conv pw promotion\n");
+        return TRANSCRIBE_OK;
+    }
+
+    std::vector<uint8_t> f16_staging;
+    std::vector<float>   f32_staging;
+    for (size_t i = 0; i < slots.size(); ++i) {
+        ggml_tensor * src = slots[i].src;
+        ggml_tensor * dst = replacements[i];
+        const int64_t n_elem = ggml_nelements(src);
+        const size_t f16_bytes = ggml_nbytes(src);
+        const size_t f32_bytes = static_cast<size_t>(n_elem) * sizeof(float);
+
+        if (f16_staging.size() < f16_bytes) f16_staging.resize(f16_bytes);
+        if (f32_staging.size() < static_cast<size_t>(n_elem)) {
+            f32_staging.resize(n_elem);
+        }
+
+        ggml_backend_tensor_get(src, f16_staging.data(), 0, f16_bytes);
+        f16_traits->to_float(f16_staging.data(), f32_staging.data(), n_elem);
+        ggml_backend_tensor_set(dst, f32_staging.data(), 0, f32_bytes);
+
+        *slots[i].slot = dst;
+    }
+
+    std::fprintf(stderr,
+        "cohere: promoted %zu conv pointwise weights from F16 → F32 "
+        "for CPU backend\n", slots.size());
     return TRANSCRIBE_OK;
 }
 
@@ -530,6 +646,16 @@ transcribe_status load(
 
     // Fuse encoder Q bias into pos_bias_u/v (drops one add per layer).
     if (const transcribe_status st = fuse_encoder_q_bias(*m);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+
+    // On CPU backend, dequantize conv pointwise weights back to F32 —
+    // Zen 2 class CPUs don't have native F16 compute and the upconvert
+    // cost per matmul outweighs the bandwidth savings from the smaller
+    // weight. No-op on GPU backends.
+    if (const transcribe_status st = promote_conv_pw_to_f32_on_cpu(*m);
         st != TRANSCRIBE_OK)
     {
         return st;
