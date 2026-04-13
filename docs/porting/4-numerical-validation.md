@@ -22,14 +22,22 @@ reset the scale of activations and attenuate accumulated error. These
 are the natural gate points — where a correct implementation should
 produce tight agreement and a bug would produce obvious divergence.
 
-**Dump symmetrically.** Every tensor dumped on one side must exist on
-the other. A MISSING tensor in `compare_tensors.py` output is a gap in
-coverage, not a pass.
+**Distinguish gate tensors from debug tensors.** Gate tensors are the
+validation contract — they must be dumped on both sides (symmetric)
+and must have entries in the tolerance file. Debug tensors are
+additional C++-only dumps useful during development (e.g. conformer
+sub-stage outputs like `enc.block.0.ff1`). Debug tensors show as
+MISSING in the comparison but don't cause validation failure as long
+as they're not in the tolerance file.
 
-**Dump all per-layer outputs.** They're small (one hidden-state tensor
-per layer) and they're how you bisect divergence to a specific layer.
-Dumping only first/mid/last leaves you blind when something breaks in
-between.
+**Gate tensors must be symmetric.** Every gate tensor dumped on one
+side must exist on the other. A MISSING gate tensor (one that has a
+tolerance entry) is a real failure.
+
+**Dump all per-layer outputs as gate tensors.** They're small (one
+hidden-state tensor per layer) and they're how you bisect divergence
+to a specific layer. Dumping only first/mid/last leaves you blind
+when something breaks in between.
 
 **Dump pre-softmax logits as the numerical gate.** Post-softmax
 log-probabilities produce `-inf` for near-zero-probability tokens, and
@@ -159,7 +167,8 @@ that are completely wrong (off by orders of magnitude or wrong shape).
 
 ### Step 4: Classify tensors and set tolerances
 
-Once all stages pass informally, classify each tensor:
+Once all stages pass informally, classify each tensor into one of
+three roles:
 
 **Gate** — post-normalization tensors where drift is small and stable.
 A real bug (wrong weights, wrong op, wrong layer order) would produce
@@ -170,6 +179,16 @@ divergence far beyond the observed baseline. Examples: `enc.final`,
 the dominant divergence is from known precision differences, not
 implementation bugs. Reported for visibility but set wide tolerances.
 Examples: `enc.pre_encode.out`, `enc.block.0.out`.
+
+**Debug** — C++-only tensors useful during development but not part
+of the validation contract. These are dumped by the C++ graph builder
+but not by the reference script, and are not listed in the tolerance
+file. They show as MISSING in the comparison output but don't cause
+failure. Examples: conformer sub-stage outputs like
+`enc.block.0.{ff1,attn,conv,ff2}`.
+
+Both gate and informational tensors go in the tolerance file and
+must be symmetric (present on both sides). Debug tensors do not.
 
 Set tolerances from observed data:
 - Gate tensors: ~10x the observed CPU max_abs.
@@ -182,23 +201,45 @@ divergence causes, and the attenuation profile you observed.
 
 ### Step 5: Verify
 
-```bash
-# CPU vs reference (strictest)
-uv run scripts/compare_tensors.py \
-  build/validate/<family>/jfk/cpp \
-  build/validate/<family>/jfk/ref \
-  --tolerances tests/tolerances/<family>.json
+Once the bring-up is complete, use `validate.py` for end-to-end
+validation:
 
-# Primary accelerator (Metal, Vulkan) vs same reference
+```bash
+# Full validation: ref dumps + C++ dumps + comparison
+uv run scripts/validate.py all --family <family>
+
+# Or step by step
+uv run scripts/validate.py ref     --family <family>
+uv run scripts/validate.py cpp     --family <family>
+uv run scripts/validate.py compare --family <family>
+
+# With a different backend
+uv run scripts/validate.py cpp --family <family> --backend metal
+```
+
+During incremental development, you can still run the pieces manually:
+
+```bash
+TRANSCRIBE_DUMP_DIR=build/validate/<family>/<variant>/jfk/cpp \
+  build/bin/transcribe-cli --backend cpu -m <model.gguf> samples/jfk.wav
+
 uv run scripts/compare_tensors.py \
-  build/validate/<family>/jfk/cpp-metal \
-  build/validate/<family>/jfk/ref \
+  build/validate/<family>/<variant>/jfk/cpp \
+  build/validate/<family>/<variant>/jfk/ref \
   --tolerances tests/tolerances/<family>.json
 ```
 
-Both should exit 0 with all matched tensors within tolerance. If the
-accelerator adds drift beyond CPU, add backend-specific tolerance
-overrides.
+All comparisons should exit 0 with every matched tensor within
+tolerance. If the reference side writes `transcript.json`, `validate.py`
+also requires the C++ transcript text to match the reference text
+character-for-character. CPU validation is the default gate. If an
+accelerator backend needs different tolerance policy, use a separate
+tolerance file for that backend and document the command in the family
+note.
+
+`validate.py` assumes an accuracy GGUF already exists. It can auto-pick a
+GGUF under `models/<family>/` or accept `--gguf`, but conversion belongs
+to the converter path rather than validation.
 
 ## Known Patterns
 
@@ -277,6 +318,21 @@ Each family's tolerance file (`tests/tolerances/<family>.json`) is the
 authoritative source for that family's expected divergence profile,
 reference framework, and known causes. Don't duplicate profiles here —
 they change as implementations improve.
+
+The current tolerance parser supports a flat mapping from tensor name to
+`max_abs` and `mean_abs`, plus `_comment` for documentation:
+
+```json
+{
+  "_comment": ["why the tolerances are what they are"],
+  "enc.final": {"max_abs": 0.5, "mean_abs": 0.01}
+}
+```
+
+Tensor names present in the tolerance file are the validation contract.
+If a contract tensor is missing on either side, comparison fails.
+C++-only debug tensors may appear as MISSING in comparison output without
+failing as long as they are not in the tolerance file.
 
 ## Failure Handling
 

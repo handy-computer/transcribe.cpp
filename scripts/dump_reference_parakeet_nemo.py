@@ -27,9 +27,6 @@ Tensor output uses the shared reference dump contract:
     <name>.json   sidecar metadata (shape, dtype, source provenance)
 
 The decode command also writes transcript.json as a behavioral artifact.
-
-Bridge validation: compare outputs against the existing MLX-based dumps
-from scripts/dump_reference.py using scripts/compare_tensors.py.
 """
 
 from __future__ import annotations
@@ -394,8 +391,8 @@ def cmd_decode(args: argparse.Namespace) -> int:
         # ----- 2. Decoder start state -----------------------------------
         # C++ decoder starts with zero input + zero LSTM state, one step.
         # NeMo predict(add_sos=True) prepends a SOS zero vector, making
-        # a 2-step sequence — use add_sos=False to get the single-step
-        # output that matches C++ and MLX.
+        # a 2-step sequence. Use add_sos=False to get the single-step
+        # output expected by the C++ decoder.
         pred_hidden = model.decoder.pred_hidden
         embed_zeros = np.zeros((pred_hidden,), dtype=np.float32)
         dump("dec.embed.0", embed_zeros, "decoder.embed")

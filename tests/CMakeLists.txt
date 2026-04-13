@@ -205,7 +205,7 @@ endif()
 # -----------------------------------------------------------------------------
 #
 # Loads a real Parakeet GGUF (the output of scripts/convert-parakeet.py
-# against a real NeMo MLX model directory) and asserts that the
+# against a real exported model directory) and asserts that the
 # loader produces a fully populated ParakeetModel with the right
 # 0.6B-variant hparams and a populated 697-tensor catalog.
 #
@@ -233,53 +233,14 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 # -----------------------------------------------------------------------------
-# Encoder accuracy test (real-model gated)
-# -----------------------------------------------------------------------------
-#
-# Phase 4 step 4. Loads a real Parakeet v2 GGUF, runs the C++
-# encoder forward on samples/jfk.wav, and compares the result
-# element-wise to tests/golden/parakeet/enc.final.f32 (the
-# parakeet-mlx-derived golden, fp32, generated against the C++
-# mel via scripts/dump_reference.py encoder --mel-from-cpp).
-#
-# Same gating as parakeet_real_smoke: built only when
-# TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON, and skipped at run time
-# (return 77) when TRANSCRIBE_REAL_PARAKEET_GGUF is unset.
-#
-# Reaches into internal headers (arch/parakeet/parakeet.h) to
-# pull `encoder_out` off the ParakeetContext via the test target's
-# PRIVATE include path — same pattern as the loader / weight smoke
-# tests. The public C ABI does not expose ggml_tensor pointers.
-
-if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
-    add_executable(transcribe_encoder_smoke
-        encoder_smoke.cpp)
-
-    target_link_libraries(transcribe_encoder_smoke
-        PRIVATE transcribe transcribe-common-example ggml)
-
-    target_include_directories(transcribe_encoder_smoke PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-
-    target_compile_definitions(transcribe_encoder_smoke PRIVATE
-        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
-        "TRANSCRIBE_TEST_GOLDEN_DIR=\"${CMAKE_SOURCE_DIR}/tests/golden/parakeet\"")
-
-    transcribe_apply_warnings(transcribe_encoder_smoke)
-
-    add_test(NAME transcribe_encoder_smoke COMMAND transcribe_encoder_smoke)
-    set_tests_properties(transcribe_encoder_smoke PROPERTIES
-        SKIP_RETURN_CODE 77)
-endif()
-
-# -----------------------------------------------------------------------------
 # Decoder + result accessor accuracy test (real-model gated)
 # -----------------------------------------------------------------------------
 #
 # Phase 5 acceptance gate: end-to-end transcription on jfk.wav. Loads
-# the same v2 GGUF as the encoder smoke, runs transcribe_run, and
-# asserts the full text matches the parakeet-mlx greedy reference
-# within Levenshtein edit distance 3 (PLAN.md's WER acceptance budget).
+# a real Parakeet v2 GGUF, runs transcribe_run, and asserts the full
+# text is within Levenshtein edit distance 3 of the canonical JFK
+# reference text. Tensor-level numerical validation lives in
+# scripts/validate.py.
 # Also exercises every public result accessor (segment / word / token
 # levels) including the safe-sentinel out-of-bounds path.
 #
@@ -312,13 +273,14 @@ endif()
 #
 # Loads a real Cohere ASR GGUF, runs transcription on a WAV file, and
 # verifies the output text contains expected content words, timing info
-# is present and reasonable, and no crashes or leaks occur.
+# is present and reasonable, and no crashes or leaks occur. This is an
+# API and structural behavior test, not a numerical accuracy gate;
+# tensor-level validation lives in scripts/validate.py.
 #
 # Same gating as the Parakeet real-model tests: built only when
 # TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON. At run time,
-# TRANSCRIBE_COHERE_MODEL must point at a Cohere ASR GGUF; the test
-# falls back to models/cohere/cohere.f16.gguf if unset. Exits 77
-# (CTest "skipped") when no model file is found.
+# TRANSCRIBE_COHERE_MODEL must point at a Cohere ASR GGUF. Exits 77
+# (CTest "skipped") when the env var is unset or the file is missing.
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_executable(transcribe_cohere_smoke
@@ -328,8 +290,7 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         PRIVATE transcribe transcribe-common-example)
 
     target_compile_definitions(transcribe_cohere_smoke PRIVATE
-        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
-        "TRANSCRIBE_TEST_MODELS_DIR=\"${CMAKE_SOURCE_DIR}/models\"")
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
 
     transcribe_apply_warnings(transcribe_cohere_smoke)
 
@@ -424,37 +385,6 @@ target_include_directories(transcribe_mel_unit PRIVATE
 transcribe_apply_warnings(transcribe_mel_unit)
 
 add_test(NAME transcribe_mel_unit COMMAND transcribe_mel_unit)
-
-# -----------------------------------------------------------------------------
-# Frontend smoke (full pipeline against the ONNX golden)
-# -----------------------------------------------------------------------------
-#
-# Loads samples/jfk.wav via the example WAV loader, runs the C++
-# log-mel pipeline, and compares element-wise against
-# tests/golden/parakeet/jfk-mel.f32 (raw f32 produced by
-# scripts/dump_reference.py from nemo128.onnx). Tolerances are
-# tighter than PLAN.md's open-question 1 (5e-3 max / 1e-3 mean) by
-# an order of magnitude because the C++ pipeline runs STFT in fp64,
-# matching the ONNX precision.
-
-if(TRANSCRIBE_BUILD_EXAMPLES)
-    add_executable(transcribe_frontend_smoke
-        frontend_smoke.cpp)
-
-    target_link_libraries(transcribe_frontend_smoke
-        PRIVATE transcribe transcribe-common-example)
-
-    target_include_directories(transcribe_frontend_smoke PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-
-    target_compile_definitions(transcribe_frontend_smoke PRIVATE
-        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
-        "TRANSCRIBE_TEST_GOLDEN_DIR=\"${CMAKE_SOURCE_DIR}/tests/golden/parakeet\"")
-
-    transcribe_apply_warnings(transcribe_frontend_smoke)
-
-    add_test(NAME transcribe_frontend_smoke COMMAND transcribe_frontend_smoke)
-endif()
 
 # -----------------------------------------------------------------------------
 # WAV loader unit smoke (example helper)

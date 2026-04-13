@@ -6,8 +6,8 @@
 // asserts:
 //
 //   1. transcribe_run completes OK on the canonical sample.
-//   2. transcribe_full_text matches the parakeet-mlx reference text
-//      to within edit distance 3 (PLAN.md's WER acceptance budget).
+//   2. transcribe_full_text matches the canonical JFK reference text
+//      to within edit distance 3.
 //   3. transcribe_n_tokens > 0 and the per-token accessors return
 //      non-sentinel values: ids in range, text non-empty, t0_ms ≤
 //      t1_ms, p in [0, 1].
@@ -21,21 +21,18 @@
 //      frame indices).
 //   7. transcribe_get_timings reports non-zero mel + encode + decode.
 //
-// The reference text comes from running parakeet-mlx (greedy decode)
-// against the same v2 mlx model directory; the constant below is the
-// verbatim output. If parakeet-mlx ever changes its decode behavior
-// the constant will need updating, but the WER tolerance gives the
-// test 3 character-edits of slack so minor upstream tokenizer
-// tweaks won't break the gate immediately.
+// The reference text is the same JFK quote used by validate.py's exact
+// transcript comparison. This smoke keeps a small edit-distance budget
+// because its job is public API behavior, not tensor-level numerical
+// validation.
 //
-// Gating: same two-knob pattern as parakeet_real_smoke /
-// encoder_smoke. Built only when TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON;
-// at run time TRANSCRIBE_REAL_PARAKEET_GGUF must point at a v2 GGUF.
-// The test exits 77 (CTest "skipped") when either knob is unset.
+// Gating: built only when TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON; at run
+// time TRANSCRIBE_REAL_PARAKEET_GGUF must point at a v2 GGUF. The test
+// exits 77 (CTest "skipped") when the model path is unset or missing.
 //
-// The golden was generated against v2; v3's encoder weights are
-// different and the resulting text would differ, so the test hard-
-// fails on v3 rather than silently mis-validating.
+// The reference text was validated against v2; v3's encoder weights are
+// different and the resulting text may differ, so the test hard-fails
+// on v3 rather than silently mis-validating.
 
 #include "transcribe.h"
 
@@ -111,9 +108,7 @@ int edit_distance(const std::string & a, const std::string & b) {
 // SentencePiece word-boundary marker U+2581 in UTF-8.
 constexpr const char k_sp_marker[] = "\xE2\x96\x81";
 
-// Reference text from parakeet-mlx greedy decode against the v2
-// model on samples/jfk.wav. Captured at phase 5 bring-up; matches
-// our C++ output exactly under greedy decode.
+// Reference text for the canonical jfk.wav validation sample.
 const char * const k_jfk_reference_text =
     "And so, my fellow Americans, ask not what your country can do for you, "
     "ask what you can do for your country.";

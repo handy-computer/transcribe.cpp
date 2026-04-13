@@ -144,26 +144,40 @@ def load_audio(audio_path: Path) -> tuple[np.ndarray, int]:
     return np.ascontiguousarray(pcm, dtype=np.float32), int(sr)
 
 
+def resolve_model(raw: str) -> tuple[str, bool]:
+    """Resolve a model argument to (model_id_or_path, local_files_only).
+
+    If the raw string points to an existing local directory, resolve it
+    and use local_files_only=True. Otherwise treat it as a HuggingFace
+    model ID and let the library download it.
+    """
+    local = Path(raw).expanduser().resolve()
+    if local.is_dir():
+        return str(local), True
+    return raw, False
+
+
 def load_reference(args: argparse.Namespace):
     import torch
     import transformers
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
-    model_dir = resolve_path(args.model)
+    model_id, local_only = resolve_model(args.model)
     dtype = torch_dtype(args.model_dtype)
+    source = "local path" if local_only else "HuggingFace"
     print(
-        f"Loading Cohere ASR model from {model_dir} "
-        f"(Transformers {transformers.__version__}, dtype={args.model_dtype}, device={args.device})..."
+        f"Loading Cohere ASR model from {model_id} ({source}, "
+        f"Transformers {transformers.__version__}, dtype={args.model_dtype}, device={args.device})..."
     )
     processor = AutoProcessor.from_pretrained(
-        model_dir,
+        model_id,
         trust_remote_code=False,
-        local_files_only=True,
+        local_files_only=local_only,
     )
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_dir,
+        model_id,
         trust_remote_code=False,
-        local_files_only=True,
+        local_files_only=local_only,
         dtype=dtype,
     ).eval()
     model.to(args.device)
@@ -173,7 +187,7 @@ def load_reference(args: argparse.Namespace):
 def make_source(
     *,
     args: argparse.Namespace,
-    model_dir: Path,
+    model_id: str,
     audio_path: Path,
     n_samples: int,
     sample_rate: int,
@@ -186,7 +200,7 @@ def make_source(
         "kind": "cohere-transformers-native",
         "transformers_version": transformers.__version__,
         "transformers_file": transformers.__file__,
-        "model": model_dir.name,
+        "model": model_id,
         "model_dtype": args.model_dtype,
         "device": args.device,
         "torch_threads": args.torch_threads,
@@ -364,15 +378,16 @@ def cmd_mel(args: argparse.Namespace) -> int:
     import transformers
     from transformers import AutoProcessor
 
-    model_dir = resolve_path(args.model)
+    model_id, local_only = resolve_model(args.model)
+    source = "local path" if local_only else "HuggingFace"
     print(
-        f"Loading Cohere ASR processor from {model_dir} "
-        f"(Transformers {transformers.__version__}, device={args.device})..."
+        f"Loading Cohere ASR processor from {model_id} ({source}, "
+        f"Transformers {transformers.__version__}, device={args.device})..."
     )
     processor = AutoProcessor.from_pretrained(
-        model_dir,
+        model_id,
         trust_remote_code=False,
-        local_files_only=True,
+        local_files_only=local_only,
     )
 
     audio_path = resolve_path(args.audio)
@@ -385,7 +400,7 @@ def cmd_mel(args: argparse.Namespace) -> int:
     inputs = frontend_inputs(processor, pcm, sr, args.device, args.language)
     source = make_source(
         args=args,
-        model_dir=model_dir,
+        model_id=model_id,
         audio_path=audio_path,
         n_samples=pcm.size,
         sample_rate=sr,
@@ -410,7 +425,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     audio_path = resolve_path(args.audio)
     out_dir = resolve_path(args.out)
-    model_dir = resolve_path(args.model)
+    model_id, _ = resolve_model(args.model)
     pcm, sr = load_audio(audio_path)
     if sr != 16000:
         print(f"error: audio sample rate is {sr}, expected 16000", file=sys.stderr)
@@ -420,7 +435,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
     inputs = frontend_inputs(processor, pcm, sr, args.device, args.language)
     source = make_source(
         args=args,
-        model_dir=model_dir,
+        model_id=model_id,
         audio_path=audio_path,
         n_samples=pcm.size,
         sample_rate=sr,
@@ -444,7 +459,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
     audio_path = resolve_path(args.audio)
     out_dir = resolve_path(args.out)
-    model_dir = resolve_path(args.model)
+    model_id, _ = resolve_model(args.model)
     language = args.language or "en"
     pcm, sr = load_audio(audio_path)
     if sr != 16000:
@@ -455,7 +470,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
     inputs = frontend_inputs(processor, pcm, sr, args.device, language)
     source = make_source(
         args=args,
-        model_dir=model_dir,
+        model_id=model_id,
         audio_path=audio_path,
         n_samples=pcm.size,
         sample_rate=sr,

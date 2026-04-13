@@ -74,8 +74,8 @@ Use three labels, even if two labels point at the same implementation.
 - **Canonical reference**: the implementation closest to the model
   publisher. This is the semantic source of truth.
 - **Instrumented reference**: the implementation used to dump tensors.
-  This may be MLX or another third-party implementation if it is easier
-  to instrument.
+  Prefer the canonical implementation here too. If that is not feasible,
+  document the exception before using another implementation.
 - **Cross-check reference**: any additional implementation used to catch
   mistakes in the first two.
 
@@ -83,9 +83,12 @@ Policy:
 
 - Prefer first-party or publisher-supported code as the canonical
   reference.
-- It is acceptable to use MLX or another third-party implementation as
-  the instrumented reference, but only after bridge validation.
+- Prefer the same first-party or publisher-supported code for tensor
+  dumps.
 - Do not treat "easy to instrument" as equivalent to "canonical".
+- Third-party implementations are useful for implementation research and
+  performance context, but they should not be the default source of
+  numerical goldens when a canonical reference can be instrumented.
 
 ## Bridge Validation
 
@@ -103,13 +106,10 @@ At minimum:
 
 For existing families:
 
-- Parakeet currently uses NeMo/ONNX for the frontend golden and
-  `parakeet-mlx` for encoder/decoder dumps. The family note should make
-  that split explicit.
-- Cohere now uses native Transformers (`trust_remote_code=False`) for
-  manifest-driven dumps and keeps `mlx-audio` as a bridge reference. The
-  family note should record drift found between those references,
-  including frontend layout differences.
+- Parakeet now uses NeMo as both canonical and instrumented reference for
+  manifest-driven validation.
+- Cohere now uses native Transformers (`trust_remote_code=False`) as both
+  canonical and instrumented reference for manifest-driven validation.
 
 ## Reference Run Gate
 
@@ -125,16 +125,12 @@ The run should produce:
 - model and audio hashes
 - hardware summary
 
-The target shape is a command like:
+The current command shape is:
 
 ```bash
-uv run scripts/reference/run.py \
-  --family <family> \
-  --model <reference-model-dir> \
-  --audio samples/jfk.wav \
-  --out reports/reference/<family>/jfk.json
+uv run scripts/validate.py ref --family <family>
 ```
 
-If the unified runner does not exist yet, use the current family script
-or a temporary script, but put the command and output path in the family
-note.
+Use `--model <reference-model-dir-or-id>` when the manifest's model value
+is not the source you want to validate. The family note should record any
+extra setup needed for the canonical reference environment.

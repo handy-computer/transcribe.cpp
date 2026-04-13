@@ -1,8 +1,8 @@
 # Cohere ASR
 
-Status: supported with historical validation shape; has a manifest-driven
-native Transformers dump path for Cohere goldens; still needs tolerance
-acceptance against C++ and synthetic fixture smoke.
+Status: supported with manifest-driven numerical validation against
+native Transformers. C++ CPU validation passes locally; Cohere still
+needs a synthetic fixture smoke.
 
 ## Identity
 
@@ -15,12 +15,11 @@ acceptance against C++ and synthetic fixture smoke.
 ## References
 
 - Canonical reference: native Hugging Face Transformers
-  (`trust_remote_code=False`) from a local Transformers checkout.
+  (`trust_remote_code=False`), either from `scripts/envs/cohere` or an
+  optional local Transformers checkout.
 - Instrumented reference: `scripts/dump_reference_cohere_transformers.py`
   run through `scripts/envs/cohere`; it must keep
   `trust_remote_code=False`.
-- Bridge reference: `mlx-audio`, still available via
-  `scripts/dump_reference_cohere.py` for cross-checking.
 - Initial manifest:
   `tests/golden/cohere/cohere-transcribe-03-2026.manifest.json`.
 
@@ -29,61 +28,28 @@ discussion #28 records garbage generations on that path and Cohere
 recommends the native Transformers path going forward:
 <https://huggingface.co/CohereLabs/cohere-transcribe-03-2026/discussions/28>.
 
-Bridge validation to document:
+Validation status:
 
-- Transformers vs C++ frontend, encoder, encoder-decoder projection, and
-  decoder prompt logits.
-- Native Transformers currently emits a 10-token prompt for English
-  punctuation mode: `[13764, 7, 4, 16, 62, 62, 5, 9, 11, 13]`.
-  C++ currently dumps a 9-token prompt, so decoder tensor comparison is
-  blocked until prompt policy is aligned or explicitly sliced.
-- Transformers vs `mlx-audio` drift. The frontend currently differs in
-  layout (`[n_mels, T]` for Transformers/C++, `[T, n_mels]` in the
-  historical MLX dumper) and is not byte-identical after transposition.
+- Native Transformers and C++ both use the 10-token English punctuation
+  prompt: `[13764, 7, 4, 16, 62, 62, 5, 9, 11, 13]`.
+- `uv run scripts/validate.py compare --family cohere` passes for CPU
+  dumps generated from `models/cohere/cohere.bf16.gguf`.
 - Backend-specific drift for CPU and accelerators.
 
 ## Current Commands
 
-Reference encoder dump:
+Full validation (reference dumps + C++ dumps + comparison):
 
 ```bash
-uv run scripts/golden.py plan \
-  --manifest tests/golden/cohere/cohere-transcribe-03-2026.manifest.json
+uv run scripts/validate.py all --family cohere
 ```
 
-Generate reference dumps:
+Or step by step:
 
 ```bash
-uv run scripts/golden.py generate \
-  --manifest tests/golden/cohere/cohere-transcribe-03-2026.manifest.json
-```
-
-Direct Transformers encoder dump:
-
-```bash
-uv run --project scripts/envs/cohere \
-  scripts/dump_reference_cohere_transformers.py encoder \
-  --model ../models/cohere-transcribe-03-2026 \
-  --transformers-ref ../refs/huggingface/transformers \
-  --audio samples/jfk.wav \
-  --out build/validate/cohere/cohere-transcribe-03-2026/jfk/encoder/ref \
-  --model-dtype f32 \
-  --torch-threads 1
-```
-
-Direct Transformers decode + transcript dump:
-
-```bash
-uv run --project scripts/envs/cohere \
-  scripts/dump_reference_cohere_transformers.py decode \
-  --model ../models/cohere-transcribe-03-2026 \
-  --transformers-ref ../refs/huggingface/transformers \
-  --audio samples/jfk.wav \
-  --out build/validate/cohere/cohere-transcribe-03-2026/jfk/decode/ref \
-  --language en \
-  --max-new-tokens 256 \
-  --model-dtype f32 \
-  --torch-threads 1
+uv run scripts/validate.py ref     --family cohere
+uv run scripts/validate.py cpp     --family cohere
+uv run scripts/validate.py compare --family cohere
 ```
 
 Conversion:
@@ -91,8 +57,8 @@ Conversion:
 ```bash
 uv run scripts/convert-cohere.py \
   <path-to-cohere-transcribe-03-2026> \
-  models/cohere/cohere.f16.gguf \
-  --quant f16
+  models/cohere/cohere.bf16.gguf \
+  --quant bf16
 ```
 
 Real-model smokes:
@@ -101,19 +67,15 @@ Real-model smokes:
 cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
 cmake --build build
 
-TRANSCRIBE_COHERE_MODEL=models/cohere/cohere.f16.gguf \
+TRANSCRIBE_COHERE_MODEL=models/cohere/cohere.bf16.gguf \
   ctest --test-dir build --output-on-failure -R cohere
 ```
 
 ## Gaps
 
 - No synthetic fixture smoke for Cohere.
-- Manifest exists, but its Hugging Face snapshot revision still needs to
-  be filled in.
-- C++ comparison against the native Transformers encoder dump is close
-  but the early-layer mean tolerances need an explicit acceptance pass.
-- Decoder tensor comparison against native Transformers is blocked by
-  the prompt-length mismatch described above.
+- Manifest exists, but the v2 schema does not yet record Hugging Face
+  snapshot revision or local artifact hashes.
 - Reference hardware should still be captured for benchmark reports.
 - `dump_reference_cohere.py` duplicates dump-writing logic from
   `dump_reference.py`.

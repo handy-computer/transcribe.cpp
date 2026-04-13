@@ -40,8 +40,6 @@ Reference baseline rows should identify their runtime, for example:
 ```text
 runtime = "nemo"
 runtime = "transformers"
-runtime = "mlx-audio"
-runtime = "parakeet-mlx"
 runtime = "transcribe.cpp"
 ```
 
@@ -86,4 +84,3 @@ Suggested initial gates:
 
 Per-op or per-block timing is optional for general CI, but required when
 optimizing encoder/decoder internals.
-

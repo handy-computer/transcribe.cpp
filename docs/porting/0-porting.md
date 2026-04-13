@@ -67,12 +67,13 @@ Every family should end with:
 - `tests/<family>_real_smoke.cpp`
 - `tests/<family>_e2e_smoke.cpp` or an equivalent legacy-named test
 - bench matrix support in `scripts/bench/run.py`
-- validate-family support for dump -> reference -> compare
+- manifest support under `tests/golden/<family>/` so `scripts/validate.py`
+  can run reference -> C++ -> compare
 
 Recommended local workspace setup is described in
-[`7-workspace-setup.md`](7-workspace-setup.md). Manifests may provide
-defaults for that layout, but paths must remain overridable with
-environment variables.
+[`7-workspace-setup.md`](7-workspace-setup.md). Current manifests use
+model ids by default; local model and GGUF paths remain overridable with
+`--model` and `--gguf`.
 
 ## Naming
 
@@ -90,17 +91,25 @@ from the repo family key, record both in the family note.
 
 ## Current Gaps
 
-The existing Parakeet and Cohere ports contain the pieces, but not all of
-the process is centralized:
+The existing Parakeet and Cohere ports now have the central numerical
+validation path in place:
 
-- Reference lineage is documented in script comments, not in family notes.
+```bash
+uv run scripts/validate.py all --family parakeet
+uv run scripts/validate.py all --family cohere
+```
+
+Remaining gaps are narrower:
+
 - Parakeet has synthetic fixtures; Cohere does not yet have a synthetic
   fixture smoke.
 - Reference dump scripts are split by family.
-- Goldens are not driven by committed manifests.
-- Full dump/compare validation is not yet one command.
+- Golden manifests are intentionally minimal v2 manifests and do not yet
+  record full snapshot hashes or artifact cache keys.
 - Benchmark comparison exists as a script, but the porting process does
   not yet require reference baseline rows and accuracy hashes.
+- Default `ctest` no longer depends on source-tree numerical golden
+  payloads; numerical payloads are generated under `build/validate/`.
 
 New families should follow this guide rather than copying the historical
 shape verbatim.

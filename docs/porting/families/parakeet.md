@@ -1,7 +1,7 @@
 # Parakeet
 
-Status: supported with historical validation shape; NeMo canonical reference
-wired up, needs first run and bridge validation against MLX.
+Status: supported with manifest-driven numerical validation against the
+NeMo canonical reference. C++ CPU validation passes locally.
 
 ## Identity
 
@@ -18,18 +18,14 @@ wired up, needs first run and bridge validation against MLX.
   Script: `scripts/dump_reference_parakeet_nemo.py`.
 - Instrumented reference: **NeMo** (same script, using forward hooks to
   capture per-stage intermediates without modifying NeMo internals).
-- Cross-check reference: **parakeet-mlx** via `scripts/dump_reference.py`.
-  Historical MLX-based dumps used during initial port. Apple Silicon only.
 - Legacy frontend reference: NeMo ONNX (`nemo128.onnx`) via
   `scripts/dump_reference.py mel-onnx`.
 
-Bridge validation to establish:
+Validation status:
 
-- NeMo mel vs C++ mel (fp64 STFT in C++ vs NeMo's torch STFT).
-- NeMo mel vs MLX mel (periodic-Hann vs symmetric-Hann known divergence).
-- NeMo encoder vs MLX encoder (block-by-block comparison).
-- NeMo decoder first-step vs MLX decoder first-step.
-- NeMo full transcript vs C++ full transcript.
+- NeMo reference dumps and C++ CPU dumps pass via
+  `uv run scripts/validate.py compare --family parakeet`.
+- C++ and NeMo transcripts match exactly on `samples/jfk.wav`.
 
 ## Environment
 
@@ -47,59 +43,25 @@ Python env: `scripts/envs/parakeet/pyproject.toml`
 
 ## Current Commands
 
-NeMo mel reference:
+Full validation:
 
 ```bash
-uv run --project scripts/envs/parakeet \
-  scripts/dump_reference_parakeet_nemo.py mel \
-  --model nvidia/parakeet-tdt-0.6b-v2 \
-  --audio samples/jfk.wav \
-  --out build/validate/parakeet/parakeet-tdt-0.6b-v2/jfk/mel/ref
+uv run scripts/validate.py all --family parakeet
 ```
 
-NeMo encoder reference:
+Or step by step:
 
 ```bash
-uv run --project scripts/envs/parakeet \
-  scripts/dump_reference_parakeet_nemo.py encoder \
-  --model nvidia/parakeet-tdt-0.6b-v2 \
-  --audio samples/jfk.wav \
-  --out build/validate/parakeet/parakeet-tdt-0.6b-v2/jfk/encoder/ref
-```
-
-NeMo decode reference (encoder + decoder + joint + transcript):
-
-```bash
-uv run --project scripts/envs/parakeet \
-  scripts/dump_reference_parakeet_nemo.py decode \
-  --model nvidia/parakeet-tdt-0.6b-v2 \
-  --audio samples/jfk.wav \
-  --out build/validate/parakeet/parakeet-tdt-0.6b-v2/jfk/decode/ref
-```
-
-MLX encoder reference (legacy, Apple Silicon only):
-
-```bash
-uv run scripts/dump_reference.py encoder \
-  --model <path-to-parakeet-mlx-model> \
-  --audio samples/jfk.wav \
-  --out build/validate/parakeet/jfk/ref
-```
-
-Bridge validation (NeMo vs MLX):
-
-```bash
-uv run scripts/compare_tensors.py \
-  build/validate/parakeet/parakeet-tdt-0.6b-v2/jfk/encoder/ref \
-  build/validate/parakeet/jfk/ref \
-  --tolerances tests/tolerances/parakeet.json
+uv run scripts/validate.py ref     --family parakeet
+uv run scripts/validate.py cpp     --family parakeet
+uv run scripts/validate.py compare --family parakeet
 ```
 
 Conversion:
 
 ```bash
 uv run scripts/convert-parakeet.py \
-  <path-to-parakeet-tdt-0.6b-v2-mlx> \
+  <path-to-exported-parakeet-safetensors-dir> \
   models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf
 ```
 
@@ -115,13 +77,9 @@ TRANSCRIBE_REAL_PARAKEET_GGUF=models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf \
 
 ## Gaps
 
-- NeMo dump script written but not yet run — first execution will
-  validate that NeMo installs cleanly and produces sane outputs.
-- Bridge validation (NeMo vs MLX) not yet performed. Need to run both
-  dump scripts on jfk.wav and compare with compare_tensors.py.
-- HF snapshot revision not recorded in manifest.
-- `frontend_smoke` currently assumes a source-tree `.f32` payload exists.
-- `encoder_smoke` is a historical C++ numerical gate; future families
-  should use validate-family dump comparison instead of cloning it.
-- Converter reads MLX-format safetensors; if NeMo reference reveals
-  weight layout differences, converter may need updating.
+- Manifest exists, but the v2 schema does not yet record Hugging Face
+  snapshot revision or local artifact hashes.
+- Default CTest no longer has Parakeet source-tree numerical golden
+  payloads; use `validate.py` for numerical comparison.
+- Converter still reads the historical exported safetensors layout,
+  while the canonical numerical reference is NeMo.

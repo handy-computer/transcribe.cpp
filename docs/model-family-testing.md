@@ -112,13 +112,12 @@ Expected shape:
 C++ dump -> reference dump -> compare_tensors.py --tolerances tests/tolerances/<family>.json
 ```
 
-The orchestration should become one command, for example:
+Current orchestration:
 
 ```bash
-make validate-family FAMILY=parakeet
+uv run scripts/validate.py all --family parakeet
+uv run scripts/validate.py all --family cohere
 ```
-
-or an equivalent CMake/custom script target.
 
 Inputs:
 
@@ -126,16 +125,12 @@ Inputs:
 - Reference dumps come from `scripts/dump_reference.py` or the family
   reference dumper.
 - Tolerances come from `tests/tolerances/<family>.json`.
+- Transcript artifacts are `transcript.json`; when the reference writes
+  one, validation requires exact C++ vs reference text equality.
 
-Do not grow one C++ `encoder_smoke.cpp` clone per family for this. C++
+Do not grow bespoke C++ tensor-comparison smoke tests per family. C++
 smokes should cover load/run/API behavior; the dump/compare workflow
 should cover numerical localization.
-
-Current examples:
-
-- `tests/encoder_smoke.cpp` is a Parakeet-specific historical gate.
-  It can stay, but family #3 should follow the dump/compare workflow
-  instead of copying this file.
 
 ### 5. Benchmark Gate
 
@@ -159,46 +154,18 @@ Tolerances are data, not C++ literals. The source of truth is:
 tests/tolerances/<family>.json
 ```
 
-Use the same flat tensor-name mapping across families:
+Use the current flat tensor-name mapping across families:
 
 ```json
 {
-  "_schema": "transcribe-tolerances-v1",
   "_comment": ["why the tolerances are what they are"],
-
-  "_defaults": {
-    "max_abs": 1e-3,
-    "mean_abs": 1e-4
-  },
-
-  "enc.final": {
-    "max_abs": 1e-4,
-    "mean_abs": 1e-6,
-    "backends": {
-      "metal": {
-        "max_abs": 1e-2,
-        "mean_abs": 1e-3
-      }
-    }
-  }
+  "enc.final": {"max_abs": 1e-4, "mean_abs": 1e-6}
 }
 ```
 
-Lookup order should be:
-
-```text
-tensor.backends[backend].max_abs
-tensor.max_abs
-_defaults.max_abs
-tool default max_abs
-```
-
-and the same for `mean_abs`.
-
-Generic tool defaults belong in the tool, for example
+Generic fallback tolerances belong in the tool, for example
 `compare_tensors.py --max-abs` and `--mean-abs`. Family-specific
-defaults and tensor-specific overrides belong in
-`tests/tolerances/<family>.json`.
+tensor tolerances belong in `tests/tolerances/<family>.json`.
 
 Quantization accuracy tolerances are separate for now because
 `quant_accuracy.py` uses relative error bands by quant/family, while
@@ -223,8 +190,6 @@ Example shape:
 #define TRANSCRIBE_TOL_PARAKEET_ENC_MEL_IN_MEAN_ABS 5e-5
 #define TRANSCRIBE_TOL_PARAKEET_ENC_FINAL_MAX_ABS 1e-4
 #define TRANSCRIBE_TOL_PARAKEET_ENC_FINAL_MEAN_ABS 1e-6
-#define TRANSCRIBE_TOL_PARAKEET_ENC_FINAL_METAL_MAX_ABS 1e-2
-#define TRANSCRIBE_TOL_PARAKEET_ENC_FINAL_METAL_MEAN_ABS 1e-3
 ```
 
 Do not add this generator with a dependency that makes default C++
@@ -245,7 +210,7 @@ For a new family, add or update:
 - `tests/<family>_real_smoke.cpp`
 - `tests/<family>_e2e_smoke.cpp` or equivalent public ABI transcript gate
 - bench matrix support
-- validate-family support
+- `scripts/validate.py` manifest support
 - `scripts/envs/<family>/pyproject.toml`
 
 The checklist is the contract. The file names may vary for legacy

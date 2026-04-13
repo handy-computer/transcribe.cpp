@@ -26,10 +26,9 @@ C++ TensorDumper writes the same shape/json pair, so a comparator can
 diff a C++ dump dir against a Python dump dir without translation.
 
 Subcommands:
-    mel-onnx    Run a NeMo .onnx preprocessor (e.g. nemo128.onnx) on a
-                wav and dump the resulting log-mel as the byte-level
-                reference. PLAN.md mandates this as the source for the
-                Parakeet frontend golden test (open question #1).
+    mel-onnx    Legacy helper: run a NeMo .onnx preprocessor
+                (e.g. nemo128.onnx) on a wav and dump the resulting
+                log-mel in the shared tensor-dump format.
     encoder     Run parakeet-mlx's encoder forward on a wav and dump
                 named intermediates per-block. Apple Silicon only —
                 parakeet-mlx and mlx are only installable there.
@@ -44,7 +43,7 @@ Usage:
     uv run scripts/dump_reference.py mel-onnx \\
         --onnx ~/code/cjpais/transcribe-rs/models/parakeet-v3-fp32/nemo128.onnx \\
         --audio samples/jfk.wav \\
-        --out tests/golden/parakeet \\
+        --out /tmp/transcribe-ref-dump \\
         --name jfk-mel
 
     uv run scripts/dump_reference.py encoder \\
@@ -519,7 +518,7 @@ def main() -> int:
         "mel-onnx",
         help=(
             "Dump log-mel from a NeMo .onnx preprocessor on a wav "
-            "(byte-level reference for the Parakeet frontend golden test)"
+            "(legacy helper)"
         ),
     )
     mp.add_argument("--onnx", required=True, help="Path to nemo128.onnx (or another NeMo preprocessor ONNX)")

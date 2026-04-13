@@ -21,9 +21,9 @@
 //   - The CMake option TRANSCRIBE_BUILD_REAL_MODEL_TESTS (default OFF)
 //     controls whether this binary is built.
 //   - At runtime, the GGUF path comes from TRANSCRIBE_COHERE_MODEL
-//     env var. If unset, the test falls back to
-//     models/cohere/cohere.f16.gguf (relative to CMAKE_SOURCE_DIR).
-//     If neither path exists, the test exits 77 (CTest "skipped").
+//     env var. If unset, the test exits 77 (CTest "skipped").
+//     Numerical accuracy validation lives in validate.py; this
+//     test covers API behavior and structural correctness only.
 //   - The WAV path comes from TRANSCRIBE_TEST_AUDIO env var, falling
 //     back to samples/jfk.wav.
 //   - transcribe_model_params::backend is set to TRANSCRIBE_BACKEND_CPU
@@ -48,10 +48,6 @@
 
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
 #  define TRANSCRIBE_TEST_SAMPLES_DIR "samples"
-#endif
-
-#ifndef TRANSCRIBE_TEST_MODELS_DIR
-#  define TRANSCRIBE_TEST_MODELS_DIR "models"
 #endif
 
 namespace {
@@ -128,13 +124,10 @@ int edit_distance(const std::string & a, const std::string & b) {
     return prev[static_cast<size_t>(m)];
 }
 
-// Reference text from the Cohere ASR greedy decode against the
-// cohere-transcribe-03-2026 checkpoint on samples/jfk.wav. This
-// matches parakeet-mlx's output character-for-character (same JFK
-// quote, same punctuation), which is the point -- the text is
-// unambiguous so any reasonable STT system should produce it. The
-// Levenshtein tolerance gives us 3 character-edits of slack for
-// minor tokenizer / detokenizer changes.
+// Reference text for the canonical jfk.wav validation sample. Exact
+// transcript comparison against Transformers lives in validate.py; this
+// smoke keeps a small edit-distance budget because it is checking public
+// API behavior.
 const char * const k_jfk_reference_text =
     "And so, my fellow Americans, ask not what your country can do for you, "
     "ask what you can do for your country.";
@@ -148,19 +141,20 @@ int main() {
     std::string model_path;
     {
         const char * env = std::getenv("TRANSCRIBE_COHERE_MODEL");
-        if (env != nullptr && env[0] != '\0') {
-            model_path = env;
-        } else {
-            model_path = std::string(TRANSCRIBE_TEST_MODELS_DIR)
-                         + "/cohere/cohere.f16.gguf";
+        if (env == nullptr || env[0] == '\0') {
+            std::fprintf(stderr,
+                         "cohere_smoke: TRANSCRIBE_COHERE_MODEL not set. "
+                         "Skipping.\n");
+            return 77; // CTest "skipped"
         }
+        model_path = env;
     }
 
     if (!file_exists(model_path)) {
         std::fprintf(stderr,
                      "cohere_smoke: model not found: %s\n"
-                     "Set TRANSCRIBE_COHERE_MODEL or place the GGUF at the "
-                     "default path. Skipping.\n",
+                     "Set TRANSCRIBE_COHERE_MODEL to a valid GGUF path. "
+                     "Skipping.\n",
                      model_path.c_str());
         return 77; // CTest "skipped"
     }

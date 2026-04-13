@@ -21,8 +21,8 @@ Both sides agree on the same on-disk format:
     <name>.f32   raw little-endian fp32, row-major (C order)
     <name>.json  shape, dtype, layout, optional stage / source
 
-This script walks both directories, finds every name that appears in
-*either* dir, loads each side as a numpy array, and reports
+This script walks both directories, finds every tensor name that appears
+in *either* dir, loads each side as a numpy array, and reports
 element-wise stats per tensor:
 
     max abs diff
@@ -30,15 +30,14 @@ element-wise stats per tensor:
     first divergent flat index (or "-" if exact)
     shape on each side
 
-A tensor that exists on only one side is reported as MISSING and
-counts as a failure.
+A tensor that exists on only one side is reported as MISSING. It counts
+as a failure only when that tensor has an explicit tolerance entry,
+which marks it as part of the validation contract. Missing debug-only
+tensors are reported for visibility but do not fail the comparison.
 
 Tolerances:
     --max-abs   maximum allowed max absolute element diff (default 1e-3)
     --mean-abs  maximum allowed mean absolute element diff (default 1e-4)
-    --rtol      relative tolerance, applied as `max_abs > rtol * max(|ref|)`
-                in addition to the absolute bound (default 0.0 = disabled)
-
 Per-tensor tolerance overrides can be supplied via --tolerances pointing
 at a tiny JSON file:
 
@@ -46,15 +45,15 @@ at a tiny JSON file:
       "enc.final":          {"max_abs": 5e-3, "mean_abs": 5e-4} }
 
 Exit code:
-    0  every shared tensor was within tolerance and no MISSING tensors
-    1  one or more tensors exceeded tolerance OR were missing
+    0  every contract tensor was within tolerance
+    1  one or more contract tensors exceeded tolerance or were missing
 
 Usage:
     uv run scripts/compare_tensors.py /tmp/cpp /tmp/ref
     uv run scripts/compare_tensors.py /tmp/cpp /tmp/ref --max-abs 5e-4
 
 The "left" side is conventionally the C++ dump and the "right" side
-is the reference (parakeet-mlx, ONNX, etc.) — but the comparison is
+is the reference dump — but the comparison is
 symmetric so the order only affects the diff sign in any future
 verbose output, not pass/fail.
 """
@@ -108,16 +107,27 @@ def load_dump(d: Path, name: str) -> tuple[tuple[int, ...] | None, np.ndarray | 
 
 
 def discover_names(d: Path) -> set[str]:
-    """Find every dump name in a dir (the union of <name>.f32 and
-    <name>.json basenames). A complete pair has both files; we report
-    half-pairs as failures via the loader returning None for the
-    missing half."""
+    """Find tensor dump names in a dir.
+
+    A tensor dump has a <name>.f32 payload and usually a <name>.json
+    sidecar. If the f32 file is missing but the json sidecar looks like
+    tensor metadata, include it so the comparison reports the half-pair.
+    Standalone behavioral artifacts such as transcript.json are ignored.
+    """
     if not d.exists():
         return set()
     names: set[str] = set()
     for p in d.iterdir():
-        if p.suffix in (".f32", ".json"):
+        if p.suffix == ".f32":
             names.add(p.stem)
+            continue
+        if p.suffix == ".json" and not p.with_suffix(".f32").exists():
+            try:
+                meta = json.loads(p.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if {"shape", "dtype", "layout"}.issubset(meta):
+                names.add(p.stem)
     return names
 
 
@@ -208,7 +218,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("left", type=Path, help="First dump directory (e.g. C++ dump)")
-    p.add_argument("right", type=Path, help="Second dump directory (e.g. parakeet-mlx)")
+    p.add_argument("right", type=Path, help="Second dump directory (usually reference)")
     p.add_argument("--max-abs", type=float, default=1e-3,
                    help="Default tolerance for max abs element diff (default 1e-3)")
     p.add_argument("--mean-abs", type=float, default=1e-4,
@@ -246,10 +256,20 @@ def main() -> int:
     for r in results:
         max_tol, mean_tol = tolerance_for(
             r.name, overrides, args.max_abs, args.mean_abs)
-        ok = (r.status == "ok"
-              and r.max_abs  <= max_tol
-              and r.mean_abs <= mean_tol)
-        flag = "ok" if ok else r.status if r.status != "ok" else "FAIL"
+        # A MISSING tensor that isn't in the tolerance file is a debug
+        # dump present on only one side — not a gate failure. Only
+        # count it as a failure if it has an explicit tolerance entry
+        # (meaning it's expected to be present on both sides).
+        is_missing = r.status.startswith("MISSING")
+        in_tolerance_file = r.name in overrides
+        if is_missing and not in_tolerance_file:
+            ok = True
+            flag = r.status  # still show it, but don't fail
+        else:
+            ok = (r.status == "ok"
+                  and r.max_abs  <= max_tol
+                  and r.mean_abs <= mean_tol)
+            flag = "ok" if ok else r.status if r.status != "ok" else "FAIL"
         if not ok:
             fail += 1
         if args.quiet and ok:
