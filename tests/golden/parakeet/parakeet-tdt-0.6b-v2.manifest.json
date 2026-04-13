@@ -1,0 +1,119 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "parakeet-tdt-0.6b-v2",
+  "source_model": {
+    "repo": "nvidia/parakeet-tdt-0.6b-v2",
+    "revision": "TODO: record HuggingFace snapshot revision"
+  },
+  "canonical_reference": {
+    "kind": "nemo",
+    "model": "nvidia/parakeet-tdt-0.6b-v2",
+    "status": "initial"
+  },
+  "instrumented_reference": {
+    "kind": "nemo",
+    "model": "{path:nemo_model}",
+    "status": "current tensor dump reference",
+    "dtype": "f32",
+    "torch_threads": 1
+  },
+  "cross_check_reference": {
+    "kind": "mlx",
+    "script": "scripts/dump_reference.py",
+    "note": "Historical MLX-based dumps; bridge validation needed against NeMo"
+  },
+  "paths": {
+    "nemo_model": {
+      "env": "TRANSCRIBE_PARAKEET_NEMO_MODEL",
+      "default": "nvidia/parakeet-tdt-0.6b-v2"
+    },
+    "gguf_model": {
+      "env": "TRANSCRIBE_REAL_PARAKEET_GGUF",
+      "default": "models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf"
+    }
+  },
+  "checks": [
+    {
+      "path": "samples/jfk.wav",
+      "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"
+    },
+    {
+      "path": "{path:gguf_model}"
+    }
+  ],
+  "cases": [
+    {
+      "name": "jfk",
+      "audio": "samples/jfk.wav",
+      "stages": [
+        {
+          "name": "mel",
+          "out": "build/validate/parakeet/parakeet-tdt-0.6b-v2/jfk/mel/ref",
+          "command": [
+            "uv",
+            "run",
+            "--project",
+            "scripts/envs/parakeet",
+            "scripts/dump_reference_parakeet_nemo.py",
+            "mel",
+            "--model",
+            "{path:nemo_model}",
+            "--audio",
+            "{audio}",
+            "--out",
+            "{out}",
+            "--model-dtype",
+            "f32",
+            "--torch-threads",
+            "1"
+          ]
+        },
+        {
+          "name": "encoder",
+          "out": "build/validate/parakeet/parakeet-tdt-0.6b-v2/jfk/encoder/ref",
+          "command": [
+            "uv",
+            "run",
+            "--project",
+            "scripts/envs/parakeet",
+            "scripts/dump_reference_parakeet_nemo.py",
+            "encoder",
+            "--model",
+            "{path:nemo_model}",
+            "--audio",
+            "{audio}",
+            "--out",
+            "{out}",
+            "--model-dtype",
+            "f32",
+            "--torch-threads",
+            "1"
+          ]
+        },
+        {
+          "name": "decode",
+          "out": "build/validate/parakeet/parakeet-tdt-0.6b-v2/jfk/decode/ref",
+          "command": [
+            "uv",
+            "run",
+            "--project",
+            "scripts/envs/parakeet",
+            "scripts/dump_reference_parakeet_nemo.py",
+            "decode",
+            "--model",
+            "{path:nemo_model}",
+            "--audio",
+            "{audio}",
+            "--out",
+            "{out}",
+            "--model-dtype",
+            "f32",
+            "--torch-threads",
+            "1"
+          ]
+        }
+      ]
+    }
+  ]
+}

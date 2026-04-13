@@ -89,6 +89,10 @@ cmake --build build
 TRANSCRIBE_REAL_PARAKEET_GGUF=path/to/model.gguf ctest --test-dir build
 ```
 
+For the model-family smoke-test, numerical-validation, and benchmark
+pattern expected of new ports, see
+[`docs/model-family-testing.md`](docs/model-family-testing.md).
+
 ## Project layout
 
 ```
@@ -97,6 +101,7 @@ src/                       Library internals (C++17)
 src/arch/parakeet/         Parakeet family implementation
 examples/cli/              CLI binary source
 tools/transcribe-quantize/ Quantization tool source
+docs/                      Porting and validation guidance
 scripts/                   Python converter + test tooling
 ggml/                      Vendored ggml (see ggml/UPSTREAM for pinned SHA)
 samples/                   Test audio files

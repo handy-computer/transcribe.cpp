@@ -131,4 +131,39 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
     ggml_context **                    out_ctx,
     ggml_backend_buffer_t *            out_buffer);
 
+// Read a small F32 tensor from the GGUF file into a std::vector<float>.
+//
+// Validates:
+//   - tensor exists in the GGUF index (returns Absent if not)
+//   - tensor type is GGML_TYPE_F32 (returns BadType if not)
+//   - byte count is divisible by sizeof(float)
+//   - byte count matches expected_elems * sizeof(float) when
+//     expected_elems > 0 (pass 0 to skip the size check)
+//   - ifstream read consumed exactly the right number of bytes
+//
+// On success, `out` is resized and filled. On every other return
+// (including Absent), `out` is cleared so stale data cannot leak.
+// On any failure other than Absent, a diagnostic is printed to
+// stderr using `error_tag` and `tensor_name`.
+//
+// Introduced for the cohere frontend tensor path
+// (frontend.mel_filterbank / frontend.window), which previously used
+// an unchecked inline lambda that silently accepted non-F32 types,
+// didn't verify read counts, and had no expected-size bounds.
+enum class ReadF32Result {
+    Ok,       // tensor found, validated, and read successfully
+    Absent,   // tensor not in the GGUF index (caller should compute)
+    BadType,  // tensor exists but is not F32
+    BadSize,  // tensor exists but byte count is wrong
+    ReadErr,  // I/O error during read
+};
+
+ReadF32Result read_f32_tensor_checked(
+    gguf_context *        gguf_ctx,
+    const std::string &   gguf_path,
+    const char *          tensor_name,
+    size_t                expected_elems,  // 0 = skip size check
+    const char *          error_tag,
+    std::vector<float> &  out);
+
 } // namespace transcribe::load_common

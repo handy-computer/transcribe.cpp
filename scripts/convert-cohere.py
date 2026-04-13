@@ -920,8 +920,16 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
         bytes_in += int(fb_tensor.nbytes)
         bytes_out += int(fb_tensor.nbytes)
 
-        win_src = "preprocessor.featurizer.window"
-        win_tensor = st.get_tensor(win_src).float().numpy()
+        # Compute the Hann window to match the Transformers
+        # CohereAsrFeatureExtractor, which uses
+        # torch.hann_window(win_length, periodic=False).
+        # The NeMo checkpoint's preprocessor.featurizer.window
+        # differs slightly (flat 1.0 region near center), so we
+        # don't bake it — we compute the correct one here.
+        win_src = "preprocessor.featurizer.window"  # consumed below
+        win_tensor = torch.hann_window(
+            hp["fe_win_length"], periodic=False,
+        ).float().numpy()
         writer.add_tensor("frontend.window", win_tensor)
         n_added += 1
         bytes_in += int(win_tensor.nbytes)

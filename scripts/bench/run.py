@@ -373,8 +373,9 @@ def run_bench_binary(bench_bin: Path, cell: Cell, iters: int, warmup: int,
         except (OSError, json.JSONDecodeError) as e:
             print(f"  failed to parse json-out: {e}", file=sys.stderr)
             return None
-        if data.get("schema") != "transcribe-bench-v1":
-            print(f"  bad schema: {data.get('schema')!r}", file=sys.stderr)
+        schema = data.get("schema", "")
+        if schema not in ("transcribe-bench-v1", "transcribe-bench-v2"):
+            print(f"  bad schema: {schema!r}", file=sys.stderr)
             return None
         return data
     finally:
@@ -393,18 +394,19 @@ def print_summary_table(family: str, runs: list[dict], slug: str,
     # from the first run's `backend` field if present, else fall back.
     display_backend = runs[0].get("backend", backend_label) if runs else backend_label
 
-    header = ("quant", "sample", "encode_ms", "decode_ms", "total_ms", "rtf")
+    header = ("quant", "sample", "encode_ms", "decode_ms", "wall_ms", "rtf")
     rows: list[tuple[str, ...]] = []
     for r in runs:
         summary = r.get("summary", {}) or {}
-        rtf = r.get("rtf_mean")
+        # Prefer wall-based RTF (v2); fall back to v1's rtf_mean.
+        rtf = r.get("rtf_wall_mean") or r.get("rtf_mean")
         rtf_s = f"{rtf:.3f}" if isinstance(rtf, (int, float)) else "-"
         quant = parse_quant_from_filename(Path(r.get("model_path", ""))) or "-"
         sample_name = Path(r.get("sample_path", "")).name or "-"
         rows.append((quant, sample_name,
                      _fmt_mean(summary, "encode_ms"),
                      _fmt_mean(summary, "decode_ms"),
-                     _fmt_mean(summary, "total_ms"), rtf_s))
+                     _fmt_mean(summary, "wall_ms"), rtf_s))
 
     widths = [max(len(header[i]), max((len(row[i]) for row in rows), default=0))
               for i in range(len(header))]

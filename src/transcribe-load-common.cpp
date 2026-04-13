@@ -374,4 +374,97 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
     return TRANSCRIBE_OK;
 }
 
+ReadF32Result read_f32_tensor_checked(
+    gguf_context *        gguf_ctx,
+    const std::string &   gguf_path,
+    const char *          tensor_name,
+    size_t                expected_elems,
+    const char *          error_tag,
+    std::vector<float> &  out)
+{
+    // Clear on entry so stale data cannot leak on any return path.
+    out.clear();
+
+    const int64_t idx = gguf_find_tensor(gguf_ctx, tensor_name);
+    if (idx < 0) {
+        return ReadF32Result::Absent;
+    }
+
+    // Validate type is F32.
+    const enum ggml_type ttype = gguf_get_tensor_type(gguf_ctx, idx);
+    if (ttype != GGML_TYPE_F32) {
+        std::fprintf(stderr,
+                     "%s: tensor \"%s\" has type %d, expected F32 (%d)\n",
+                     error_tag, tensor_name,
+                     static_cast<int>(ttype),
+                     static_cast<int>(GGML_TYPE_F32));
+        return ReadF32Result::BadType;
+    }
+
+    const size_t nbytes = static_cast<size_t>(
+        gguf_get_tensor_size(gguf_ctx, idx));
+
+    // Validate alignment: byte count must be a multiple of sizeof(float).
+    if (nbytes == 0 || (nbytes % sizeof(float)) != 0) {
+        std::fprintf(stderr,
+                     "%s: tensor \"%s\" has %zu bytes "
+                     "(not a multiple of %zu)\n",
+                     error_tag, tensor_name, nbytes, sizeof(float));
+        return ReadF32Result::BadSize;
+    }
+
+    const size_t n_elems = nbytes / sizeof(float);
+
+    // Validate expected element count when the caller knows the shape.
+    if (expected_elems > 0 && n_elems != expected_elems) {
+        std::fprintf(stderr,
+                     "%s: tensor \"%s\" has %zu elements, expected %zu\n",
+                     error_tag, tensor_name, n_elems, expected_elems);
+        return ReadF32Result::BadSize;
+    }
+
+    // Read from the GGUF data section. Use the same overflow-safe
+    // offset pattern as stream_tensor_data: cast each addend to
+    // std::streamoff individually rather than adding two size_t values
+    // that could wrap on 32-bit builds (not a real platform today, but
+    // consistent).
+    const size_t data_off = gguf_get_data_offset(gguf_ctx);
+    const size_t t_off    = gguf_get_tensor_offset(gguf_ctx, idx);
+
+    std::ifstream fin(gguf_path, std::ios::binary);
+    if (!fin) {
+        std::fprintf(stderr,
+                     "%s: failed to open %s for tensor \"%s\"\n",
+                     error_tag, gguf_path.c_str(), tensor_name);
+        return ReadF32Result::ReadErr;
+    }
+
+    const std::streamoff abs_offset =
+        static_cast<std::streamoff>(data_off) +
+        static_cast<std::streamoff>(t_off);
+    fin.seekg(abs_offset);
+    if (!fin) {
+        std::fprintf(stderr,
+                     "%s: seek failed for tensor \"%s\"\n",
+                     error_tag, tensor_name);
+        return ReadF32Result::ReadErr;
+    }
+
+    out.resize(n_elems);
+    fin.read(reinterpret_cast<char *>(out.data()),
+             static_cast<std::streamsize>(nbytes));
+
+    if (!fin || static_cast<size_t>(fin.gcount()) != nbytes) {
+        std::fprintf(stderr,
+                     "%s: short read for tensor \"%s\" "
+                     "(got %zu of %zu bytes)\n",
+                     error_tag, tensor_name,
+                     static_cast<size_t>(fin.gcount()), nbytes);
+        out.clear();
+        return ReadF32Result::ReadErr;
+    }
+
+    return ReadF32Result::Ok;
+}
+
 } // namespace transcribe::load_common

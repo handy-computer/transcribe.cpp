@@ -526,9 +526,8 @@ transcribe_get_timings(const struct transcribe_context * ctx);
 
 /*
  * Pretty-print the current timings to the registered log callback at
- * INFO level (or stderr if no callback is installed). Includes a
- * derived "real-time factor" line when the most recent run had any
- * compute. No-op if ctx is NULL.
+ * INFO level (or stderr if no callback is installed). No-op if ctx
+ * is NULL.
  */
 TRANSCRIBE_API void
 transcribe_print_timings(const struct transcribe_context * ctx);

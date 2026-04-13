@@ -164,7 +164,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     # 1. Mel frontend
     input_features, lengths = model.audio_frontend([pcm])
-    dump("mel", input_features, "frontend.mel.norm")
+    dump("enc.mel.in", input_features, "frontend.mel.norm")
 
     # Cast to model dtype if needed
     conv_weight = model.encoder.pre_encode.out.weight
@@ -310,7 +310,7 @@ def cmd_mel(args: argparse.Namespace) -> int:
         "n_samples": int(pcm.size),
         "sample_rate": sr,
     }
-    write_dump(out_dir, "mel", mel_np, source=source, stage="frontend.mel.norm")
+    write_dump(out_dir, "enc.mel.in", mel_np, source=source, stage="frontend.mel.norm")
     return 0
 
 

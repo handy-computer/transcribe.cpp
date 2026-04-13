@@ -32,8 +32,10 @@ struct DecoderDumps {
     ggml_tensor * token_emb       = nullptr;
     ggml_tensor * pos_emb         = nullptr;
     ggml_tensor * embed_norm      = nullptr;
+    ggml_tensor * block_out[64]   = {};       // per-layer outputs (up to 64 layers)
     ggml_tensor * out_before_head = nullptr;
-    ggml_tensor * logits          = nullptr;
+    ggml_tensor * logits_raw      = nullptr;  // pre-log-softmax logits
+    ggml_tensor * logits          = nullptr;  // post-log-softmax logits
 };
 
 struct DecoderBuild {

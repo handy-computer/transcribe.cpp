@@ -157,6 +157,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     if (eb.mel_in == nullptr) return eb;
     ggml_set_name(eb.mel_in, "mel.in");
     ggml_set_input(eb.mel_in);
+    eb.dumps.mel_in = eb.mel_in;
 
     // Pre-encode.
     ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode),
@@ -177,6 +178,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                            hp.enc_d_model, pos_len);
         ggml_set_name(eb.pos_emb_in, "pos_emb.in");
         ggml_set_input(eb.pos_emb_in);
+        eb.dumps.pos_emb = eb.pos_emb_in;
 
         conf::BlockParams bparams {};
         bparams.d_model     = hp.enc_d_model;

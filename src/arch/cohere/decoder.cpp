@@ -617,18 +617,21 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_embed.token_w,
                                           db.token_ids_in);
     tok_emb = named(tok_emb, "dec.token_emb");
+    ggml_set_output(tok_emb);
     db.dumps.token_emb = tok_emb;
 
     // Positional embedding.
     ggml_tensor * pos_emb = ggml_get_rows(ctx, w.dec_embed.pos_enc,
                                           db.pos_ids_in);
     pos_emb = named(pos_emb, "dec.pos_emb");
+    ggml_set_output(pos_emb);
     db.dumps.pos_emb = pos_emb;
 
     // x = LayerNorm(tok_emb + pos_emb)
     ggml_tensor * x = ggml_add(ctx, tok_emb, pos_emb);
     x = layer_norm(ctx, x, w.dec_embed.norm_w, w.dec_embed.norm_b);
     x = named(x, "dec.embed_norm");
+    ggml_set_output(x);
     db.dumps.embed_norm = x;
 
     // Causal mask for self-attention.
@@ -709,6 +712,15 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
             if (blk.ff_out_b != nullptr) ff = ggml_add(ctx, ff, blk.ff_out_b);
             x = ggml_add(ctx, x, ff);
         }
+
+        // Per-layer output dump.
+        {
+            char bname[32];
+            std::snprintf(bname, sizeof(bname), "dec.block.%d.out", i);
+            x = named(x, bname);
+            ggml_set_output(x);
+            db.dumps.block_out[i] = x;
+        }
     }
 
     // Final LayerNorm.
@@ -721,6 +733,11 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     if (w.head.bias != nullptr) {
         logits = ggml_add(ctx, logits, w.head.bias);
     }
+
+    // Pre-softmax logits for numerically stable comparison.
+    logits = named(logits, "dec.logits_raw");
+    ggml_set_output(logits);
+    db.dumps.logits_raw = logits;
 
     if (hp.head_log_softmax && !skip_log_softmax) {
         logits = ggml_log(ctx, ggml_soft_max(ctx, logits));

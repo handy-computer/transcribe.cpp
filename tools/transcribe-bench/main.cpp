@@ -6,8 +6,14 @@
 // models and samples. Progress lines go to stderr; the JSON goes
 // to --json-out (or stdout if omitted).
 //
-// Schema is frozen at "transcribe-bench-v1". Do not change the
-// schema without coordinating with the Python driver.
+// Schema version: "transcribe-bench-v2".
+//
+// v2 changes from v1:
+//   - "rtf_mean" replaced by "rtf_wall_mean" (wall-clock RTF) and
+//     "rtf_compute_mean" (phase-timer sum RTF). Wall is the
+//     user-visible number; compute is for backward compat.
+//
+// The Python driver accepts both v1 and v2 schemas.
 
 #include "transcribe.h"
 #include "wav.h"
@@ -254,7 +260,14 @@ int main(int argc, char ** argv) {
     const stat_summary s_decode = compute_stats(measured, [](const iter_timings & t) { return t.decode_ms; });
     const stat_summary s_total  = compute_stats(measured, [](const iter_timings & t) { return t.total_ms;  });
     const stat_summary s_wall   = compute_stats(measured, [](const iter_timings & t) { return t.wall_ms;   });
-    const double rtf_mean = (s_total.mean_v > 0.0)
+    // RTF based on wall time (the user-visible number — includes
+    // uninstrumented run overhead like scheduler alloc, tensor upload,
+    // thread fan-out). rtf_compute is the phase-timer sum for backward
+    // compat with v1 consumers, but wall is the number to use for
+    // perf decisions.
+    const double rtf_wall_mean = (s_wall.mean_v > 0.0)
+        ? sample_duration_s / (s_wall.mean_v / 1000.0) : 0.0;
+    const double rtf_compute_mean = (s_total.mean_v > 0.0)
         ? sample_duration_s / (s_total.mean_v / 1000.0) : 0.0;
 
     // Hand-rolled JSON. Pretty-printed with 2-space indent; whitespace
@@ -267,7 +280,7 @@ int main(int argc, char ** argv) {
     };
 
     out += "{\n";
-    append_fmt(out, "  \"schema\": \"transcribe-bench-v1\",\n");
+    append_fmt(out, "  \"schema\": \"transcribe-bench-v2\",\n");
     append_fmt(out, "  \"model_path\": \"%s\",\n",  json_escape(args.model_path.c_str()).c_str());
     append_fmt(out, "  \"sample_path\": \"%s\",\n", json_escape(args.sample_path.c_str()).c_str());
     append_fmt(out, "  \"sample_duration_s\": %.3f,\n", sample_duration_s);
@@ -291,7 +304,8 @@ int main(int argc, char ** argv) {
     stat("total_ms",  s_total,  false);
     stat("wall_ms",   s_wall,   true);
     out += "  },\n";
-    append_fmt(out, "  \"rtf_mean\": %.3f,\n", rtf_mean);
+    append_fmt(out, "  \"rtf_wall_mean\": %.3f,\n", rtf_wall_mean);
+    append_fmt(out, "  \"rtf_compute_mean\": %.3f,\n", rtf_compute_mean);
     append_fmt(out, "  \"hyp_text_len\": %zu\n", hyp_text_len);
     out += "}\n";
 

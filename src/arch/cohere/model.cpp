@@ -420,28 +420,31 @@ transcribe_status load(
         // These small tensors are read directly from the file using
         // the gguf index — avoids recomputing from scratch and
         // matches the exact values the model was trained with.
+        //
+        // read_f32_tensor_checked validates type (must be F32), byte
+        // alignment, expected element count, and read completeness.
+        // Absent → compute from hparams (the non-GGUF path).
+        // BadType/BadSize/ReadErr → hard fail with TRANSCRIBE_ERR_GGUF.
         {
-            gguf_context * g = loader.gguf();
-            const size_t data_off = gguf_get_data_offset(g);
-            std::ifstream fin(loader.path(), std::ios::binary);
+            using R = load_common::ReadF32Result;
 
-            auto read_f32_tensor = [&](const char * name,
-                                       std::vector<float> & out) {
-                const int64_t idx = gguf_find_tensor(g, name);
-                if (idx < 0) return;  // not present — will compute
-                const size_t off  = gguf_get_tensor_offset(g, idx);
-                const size_t n    = static_cast<size_t>(
-                    gguf_get_tensor_size(g, idx));
-                if (n == 0) return;
-                out.resize(n / sizeof(float));
-                fin.seekg(static_cast<std::streamoff>(data_off + off));
-                fin.read(reinterpret_cast<char *>(out.data()),
-                         static_cast<std::streamsize>(n));
-            };
+            const size_t fb_elems = static_cast<size_t>(cfg.num_mels)
+                                  * static_cast<size_t>(cfg.n_fft / 2 + 1);
+            const auto fb_rc = load_common::read_f32_tensor_checked(
+                loader.gguf(), loader.path(),
+                "frontend.mel_filterbank", fb_elems,
+                "cohere", cfg.filterbank);
+            if (fb_rc != R::Ok && fb_rc != R::Absent) {
+                return TRANSCRIBE_ERR_GGUF;
+            }
 
-            if (fin) {
-                read_f32_tensor("frontend.mel_filterbank", cfg.filterbank);
-                read_f32_tensor("frontend.window",         cfg.window);
+            const size_t win_elems = static_cast<size_t>(cfg.win_length);
+            const auto win_rc = load_common::read_f32_tensor_checked(
+                loader.gguf(), loader.path(),
+                "frontend.window", win_elems,
+                "cohere", cfg.window);
+            if (win_rc != R::Ok && win_rc != R::Absent) {
+                return TRANSCRIBE_ERR_GGUF;
             }
         }
 
@@ -705,6 +708,9 @@ transcribe_status run(
 
         ggml_backend_tensor_set(eb.pos_emb_in, cc->pos_buf.data(),
                                 0, cc->pos_buf.size() * sizeof(float));
+
+        transcribe::debug::dump_tensor(
+            "enc.pos_emb", eb.pos_emb_in, "encoder.pos_emb");
     }
 
     // Set thread count.
@@ -792,8 +798,8 @@ transcribe_status run(
 
     // Build the prompt tokens from tokenizer vocabulary.
     //
-    // Prompt structure (matches MLX build_prompt_tokens):
-    //   <|startofcontext|> <|startoftranscript|> <|emo:undefined|>
+    // Prompt structure (matches Transformers get_decoder_prompt_ids):
+    //   ▁ <|startofcontext|> <|startoftranscript|> <|emo:undefined|>
     //   <|{lang}|> <|{lang}|>
     //   <|pnc|> <|noitn|> <|notimestamp|> <|nodiarize|>
     //
@@ -811,6 +817,7 @@ transcribe_status run(
 
     const std::string lang_token = std::string("<|") + lang + "|>";
     const std::vector<std::string> prompt_pieces = {
+        "\xe2\x96\x81",  // ▁ (U+2581, sentencepiece space prefix)
         "<|startofcontext|>",
         "<|startoftranscript|>",
         "<|emo:undefined|>",
@@ -1022,7 +1029,14 @@ transcribe_status run(
         try_dump("dec.token_emb",       db.dumps.token_emb,       "decoder.embedding");
         try_dump("dec.pos_emb",         db.dumps.pos_emb,         "decoder.position_embedding");
         try_dump("dec.embed_norm",      db.dumps.embed_norm,      "decoder.embed_norm");
+        for (int i = 0; i < cm->hparams.dec_n_layers; ++i) {
+            char bname[32], stage[48];
+            std::snprintf(bname, sizeof(bname), "dec.block.%d.out", i);
+            std::snprintf(stage, sizeof(stage), "decoder.block%d.out", i);
+            try_dump(bname, db.dumps.block_out[i], stage);
+        }
         try_dump("dec.out_before_head", db.dumps.out_before_head, "decoder.out_before_head");
+        try_dump("dec.logits_raw",      db.dumps.logits_raw,      "decoder.logits_raw");
         try_dump("dec.logits",          db.dumps.logits,          "decoder.logits");
 
         // Update KV cache state: prompt_len tokens are now cached.
