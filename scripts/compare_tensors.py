@@ -140,7 +140,7 @@ class CompareResult:
     max_abs: float
     mean_abs: float
     first_diff_idx: int  # -1 if exact match
-    status: str          # "ok", "FAIL", "MISSING-left", "MISSING-right", "SHAPE"
+    status: str          # "ok", "FAIL", "MISSING-left", "MISSING-right", "SHAPE", "NONFINITE"
 
 
 def compare_pair(
@@ -175,6 +175,13 @@ def compare_pair(
         # crash np.subtract.
         return CompareResult(name, ls, rs, max(ld.size, rd.size),
                              0.0, 0.0, -1, "SHAPE")
+
+    nonfinite = ~np.isfinite(ld) | ~np.isfinite(rd)
+    if np.any(nonfinite):
+        first_bad = int(np.argmax(nonfinite))
+        return CompareResult(name, ls, rs, int(ld.size),
+                             float("nan"), float("nan"),
+                             first_bad, "NONFINITE")
 
     diff = np.abs(ld.astype(np.float64) - rd.astype(np.float64))
     max_abs = float(diff.max()) if diff.size else 0.0

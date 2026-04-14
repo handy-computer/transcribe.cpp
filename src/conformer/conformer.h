@@ -370,10 +370,8 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
 // to every intermediate (pattern: "<prefix>.conv0", "<prefix>.relu0",
 // ...). Pass nullptr to skip naming entirely.
 //
-// `pre_encode_in_expected` is pre_encode.out_w->ne[0] — passed
-// explicitly so this helper can log a useful family-tagged error
-// without a back-reference to the weights struct. Set to -1 to skip
-// the sanity check.
+// Uses pe.out_w->ne[0] as a final d_model sanity check. `error_tag`
+// supplies the family name used in the diagnostic on shape mismatch.
 ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                const PreEncodeView & pe,
                                ggml_tensor *         mel_in,

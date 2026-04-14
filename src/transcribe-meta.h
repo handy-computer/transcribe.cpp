@@ -105,6 +105,47 @@ KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
                              std::vector<int32_t> & out);
 
 // ---------------------------------------------------------------------------
+// Higher-level required / optional KV helpers
+// ---------------------------------------------------------------------------
+//
+// These sit on top of the low-level readers and fold
+// KvResult → transcribe_status, logging diagnostics with a
+// caller-supplied family tag. Every per-family weights.cpp was
+// carrying its own copy of these; the only difference was the log
+// prefix string.
+//
+// "Required" helpers: Absent and BadType both surface as
+// TRANSCRIBE_ERR_GGUF. "Optional" helpers: Absent silently applies
+// the caller's default; BadType is fatal (we control the converter).
+
+transcribe_status read_required_u32_kv(const gguf_context * gguf,
+                                       const char *         key,
+                                       const char *         error_tag,
+                                       int32_t &            out);
+
+transcribe_status read_required_f32_kv(const gguf_context * gguf,
+                                       const char *         key,
+                                       const char *         error_tag,
+                                       float &              out);
+
+transcribe_status read_required_string_kv(const gguf_context * gguf,
+                                          const char *         key,
+                                          const char *         error_tag,
+                                          std::string &        out);
+
+transcribe_status read_optional_bool_kv(const gguf_context * gguf,
+                                        const char *         key,
+                                        const char *         error_tag,
+                                        bool                 default_value,
+                                        bool &               out);
+
+transcribe_status read_optional_string_kv(const gguf_context * gguf,
+                                          const char *         key,
+                                          const char *         error_tag,
+                                          const char *         default_value,
+                                          std::string &        out);
+
+// ---------------------------------------------------------------------------
 // Post-load shared metadata
 // ---------------------------------------------------------------------------
 //

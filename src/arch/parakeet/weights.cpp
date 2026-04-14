@@ -34,89 +34,7 @@ namespace transcribe::parakeet {
 
 namespace {
 
-// Read a uint32 KV into an int32 hparam slot. Required: Absent and
-// BadType both surface as TRANSCRIBE_ERR_GGUF. The signed/unsigned
-// transition is fine because every Parakeet hparam fits comfortably
-// in int32.
-transcribe_status read_required_u32(const gguf_context * gguf,
-                                    const char *         key,
-                                    int32_t &            out)
-{
-    uint32_t v = 0;
-    switch (read_uint32_kv(gguf, key, v)) {
-        case KvResult::Ok:
-            out = static_cast<int32_t>(v);
-            return TRANSCRIBE_OK;
-        case KvResult::Absent:
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "parakeet: required KV \"%s\" missing or wrong type\n",
-                         key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
-}
-
-transcribe_status read_required_f32(const gguf_context * gguf,
-                                    const char *         key,
-                                    float &              out)
-{
-    float v = 0.0f;
-    switch (read_float32_kv(gguf, key, v)) {
-        case KvResult::Ok:
-            out = v;
-            return TRANSCRIBE_OK;
-        case KvResult::Absent:
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "parakeet: required KV \"%s\" missing or wrong type\n",
-                         key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
-}
-
-transcribe_status read_required_string(const gguf_context * gguf,
-                                       const char *         key,
-                                       std::string &        out)
-{
-    std::string v;
-    switch (read_string_kv(gguf, key, v)) {
-        case KvResult::Ok:
-            out = std::move(v);
-            return TRANSCRIBE_OK;
-        case KvResult::Absent:
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "parakeet: required KV \"%s\" missing or wrong type\n",
-                         key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
-}
-
-// Optional bool with a default. Absent leaves out at the supplied
-// default; BadType is fatal because we control the converter.
-transcribe_status read_optional_bool(const gguf_context * gguf,
-                                     const char *         key,
-                                     bool                 default_value,
-                                     bool &               out)
-{
-    bool tmp = default_value;
-    switch (read_bool_kv(gguf, key, tmp)) {
-        case KvResult::Absent:
-            out = default_value;
-            return TRANSCRIBE_OK;
-        case KvResult::Ok:
-            out = tmp;
-            return TRANSCRIBE_OK;
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "parakeet: optional KV \"%s\" has wrong type\n", key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
-}
+constexpr const char * kFamilyTag = "parakeet";
 
 } // namespace
 
@@ -128,28 +46,28 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     }
 
     // Encoder.
-    if (auto st = read_required_u32(gguf, "stt.parakeet.encoder.n_layers",          hp.enc_n_layers);          st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.encoder.d_model",           hp.enc_d_model);           st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.encoder.n_heads",           hp.enc_n_heads);           st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.encoder.d_ff",              hp.enc_d_ff);              st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.encoder.conv_kernel",       hp.enc_conv_kernel);       st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.encoder.subsampling_factor",hp.enc_subsampling_factor);st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.encoder.subsampling_channels", hp.enc_subsampling_channels); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.encoder.pos_emb_max_len",   hp.enc_pos_emb_max_len);   st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.n_layers", kFamilyTag,          hp.enc_n_layers);          st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.d_model", kFamilyTag,           hp.enc_d_model);           st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.n_heads", kFamilyTag,           hp.enc_n_heads);           st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.d_ff", kFamilyTag,              hp.enc_d_ff);              st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.conv_kernel", kFamilyTag,       hp.enc_conv_kernel);       st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.subsampling_factor", kFamilyTag,hp.enc_subsampling_factor);st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.subsampling_channels", kFamilyTag, hp.enc_subsampling_channels); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.pos_emb_max_len", kFamilyTag,   hp.enc_pos_emb_max_len);   st != TRANSCRIBE_OK) return st;
 
     // Optional. NeMo Parakeet has use_bias=false on every published
     // variant we know about, so the default matches reality.
-    if (auto st = read_optional_bool(gguf, "stt.parakeet.encoder.use_bias", false, hp.enc_use_bias); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_optional_bool_kv(gguf, "stt.parakeet.encoder.use_bias", kFamilyTag, false, hp.enc_use_bias); st != TRANSCRIBE_OK) return st;
 
     // Predictor.
-    if (auto st = read_required_u32(gguf, "stt.parakeet.predictor.hidden",   hp.pred_hidden);   st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.predictor.n_layers", hp.pred_n_layers); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.predictor.vocab",    hp.pred_vocab);    st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.hidden", kFamilyTag,   hp.pred_hidden);   st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.n_layers", kFamilyTag, hp.pred_n_layers); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.vocab", kFamilyTag,    hp.pred_vocab);    st != TRANSCRIBE_OK) return st;
 
     // Joint.
-    if (auto st = read_required_u32(gguf, "stt.parakeet.joint.hidden",            hp.joint_hidden);            st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.parakeet.joint.num_extra_outputs", hp.joint_num_extra_outputs); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_string(gguf, "stt.parakeet.joint.activation",     hp.joint_activation);        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.joint.hidden", kFamilyTag,            hp.joint_hidden);            st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.joint.num_extra_outputs", kFamilyTag, hp.joint_num_extra_outputs); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_string_kv(gguf, "stt.parakeet.joint.activation", kFamilyTag, hp.joint_activation);        st != TRANSCRIBE_OK) return st;
 
     // TDT decoding parameters. `durations` is required (the decoder
     // can't run without it); `max_symbols` is optional with a default
@@ -188,18 +106,18 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     // dither, pre_emphasis, f_min, f_max. CMVN/LFR fields are
     // intentionally not read here — Parakeet doesn't use them and
     // the converter doesn't emit them.
-    if (auto st = read_required_string(gguf, "stt.frontend.type",         hp.fe_type);         st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.num_mels",     hp.fe_num_mels);     st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.sample_rate",  hp.fe_sample_rate);  st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.n_fft",        hp.fe_n_fft);        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.win_length",   hp.fe_win_length);   st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.hop_length",   hp.fe_hop_length);   st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_string(gguf, "stt.frontend.window",       hp.fe_window);       st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_string(gguf, "stt.frontend.normalize",    hp.fe_normalize);    st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_f32   (gguf, "stt.frontend.dither",       hp.fe_dither);       st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_f32   (gguf, "stt.frontend.pre_emphasis", hp.fe_pre_emphasis); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_f32   (gguf, "stt.frontend.f_min",        hp.fe_f_min);        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_f32   (gguf, "stt.frontend.f_max",        hp.fe_f_max);        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.type", kFamilyTag, hp.fe_type);         st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels", kFamilyTag, hp.fe_num_mels);     st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate", kFamilyTag, hp.fe_sample_rate);  st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.n_fft", kFamilyTag, hp.fe_n_fft);        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.win_length", kFamilyTag, hp.fe_win_length);   st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.hop_length", kFamilyTag, hp.fe_hop_length);   st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.window", kFamilyTag, hp.fe_window);       st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.normalize", kFamilyTag, hp.fe_normalize);    st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_f32_kv(gguf, "stt.frontend.dither", kFamilyTag, hp.fe_dither);       st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_f32_kv(gguf, "stt.frontend.pre_emphasis", kFamilyTag, hp.fe_pre_emphasis); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_f32_kv(gguf, "stt.frontend.f_min", kFamilyTag, hp.fe_f_min);        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_f32_kv(gguf, "stt.frontend.f_max", kFamilyTag, hp.fe_f_max);        st != TRANSCRIBE_OK) return st;
 
     // Cross-field invariants. These have to hold or the model is
     // unbuildable; we catch them here rather than letting them
@@ -364,23 +282,14 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
 
 namespace {
 
-// Format a per-layer tensor name into a small stack buffer. The
-// caller passes a fmt that contains exactly one %d; the layer index
-// is substituted. Returns a pointer to a thread-local static buffer;
-// the next call within the same thread invalidates the previous
-// pointer.
-const char * lname(const char * fmt, int layer_idx) {
-    thread_local char buf[128];
-    std::snprintf(buf, sizeof(buf), fmt, layer_idx);
-    return buf;
-}
+using transcribe::weights::lname;
 
-// The canonical find_tensor() helper lives in
+// The canonical find_tensor() + lname() helpers live in
 // src/transcribe-weights-util.{h,cpp}; see that header for rationale.
-// It is shared between every per-family weights.cpp. The GET_*
+// They are shared between every per-family weights.cpp. The GET_*
 // macros below still live here because their type allowlists encode
 // a per-family quantization policy, not a shared convention.
-constexpr const char * kTag = "parakeet";
+constexpr const char * kTag = kFamilyTag;
 
 // Sugar for the GET_OR_FAIL pattern. Variadic so the caller can pass
 // the expected dims as a comma-separated list rather than wrapping

@@ -174,7 +174,7 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
                                        /*dst_type=*/kernel->type);
 
     // Reshape im2col to [IC*K, OW*N] and kernel to [IC*K, OC] for
-    // mul_mat. Result ne = [OC, OW*N].
+    // mul_mat. ggml_mul_mat returns ne = [OW*N, OC].
     ggml_tensor * result = ggml_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col,
                         im2col->ne[0],

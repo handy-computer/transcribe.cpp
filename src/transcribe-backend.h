@@ -31,6 +31,8 @@
 
 #include "transcribe.h"
 
+#include "ggml-backend.h"
+
 #include <vector>
 
 struct ggml_backend;
@@ -41,9 +43,7 @@ typedef struct ggml_backend_device * ggml_backend_dev_t;
 namespace transcribe {
 
 // Classified backend kind. This is a library-internal classification
-// based on the ggml backend registry name; it is stable across ggml
-// releases because it keys off ggml_backend_dev_type() plus a small
-// name lookup, not on reg names that may churn.
+// based on the ggml backend device type plus backend registry name.
 //
 // Only the kinds the library actually needs to branch on are listed;
 // anything else is Unknown.
@@ -61,9 +61,14 @@ enum class BackendKind {
 // Human-readable kind label for logs. Never nullptr.
 const char * kind_name(BackendKind kind);
 
+// Unit-testable classification core. Production code normally calls
+// classify_device(), which fetches these two inputs from ggml.
+BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type,
+                                  const char * reg_name);
+
 // Classify a backend device into a BackendKind. Uses
 // ggml_backend_dev_type for the GPU/IGPU/ACCEL/CPU dimension and the
-// reg name ("Metal", "Vulkan", "CUDA", "SYCL", ...) to resolve the
+// reg name ("MTL", "Vulkan", "CUDA", "SYCL", ...) to resolve the
 // vendor. Never returns Unknown for a valid device pointer.
 BackendKind classify_device(ggml_backend_dev_t dev);
 

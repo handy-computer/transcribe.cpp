@@ -55,6 +55,92 @@ target_link_libraries(transcribe_api_smoke PRIVATE transcribe)
 add_test(NAME transcribe_api_smoke COMMAND transcribe_api_smoke)
 
 # -----------------------------------------------------------------------------
+# Backend classification unit test
+# -----------------------------------------------------------------------------
+#
+# Covers the pure backend-kind mapping used by the runtime backend selector.
+# This keeps vendor registry names such as ggml Metal's "MTL" tested without
+# requiring that CI have the corresponding backend hardware available.
+
+add_executable(transcribe_backend_classification_unit
+    backend_classification_unit.cpp)
+
+target_link_libraries(transcribe_backend_classification_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_backend_classification_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_backend_classification_unit)
+
+add_test(NAME transcribe_backend_classification_unit
+    COMMAND transcribe_backend_classification_unit)
+
+# -----------------------------------------------------------------------------
+# Backend init_backends() runtime behavior
+# -----------------------------------------------------------------------------
+#
+# Covers the runtime backend-selection matrix: strict CPU invariants,
+# conditional explicit-backend error paths, AUTO fallback, and invalid
+# enum rejection. Hardware-dependent cases (Metal/Vulkan present or
+# absent) are probed at runtime inside the test binary — the test
+# always runs but exercises different branches depending on what the
+# build configured and what hardware is available.
+
+add_executable(transcribe_backend_init_unit
+    backend_init_unit.cpp)
+
+target_link_libraries(transcribe_backend_init_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_backend_init_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_backend_init_unit)
+
+add_test(NAME transcribe_backend_init_unit
+    COMMAND transcribe_backend_init_unit)
+
+# -----------------------------------------------------------------------------
+# F16 → F32 conv pointwise promotion unit test
+# -----------------------------------------------------------------------------
+#
+# Tests promote_conv_pw_f16_to_f32_on_cpu() directly with
+# programmatically created F16 tensors rather than GGUF fixtures.
+# The synthetic Parakeet fixture emits only F32 tensors, so a
+# fixture-based test would be a false positive. This creates real F16
+# data, verifies the CPU path promotes and round-trips correctly, and
+# confirms the non-CPU path is a clean no-op.
+
+add_executable(transcribe_conv_pw_promote_unit
+    conv_pw_promote_unit.cpp)
+
+target_link_libraries(transcribe_conv_pw_promote_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_conv_pw_promote_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_conv_pw_promote_unit)
+
+add_test(NAME transcribe_conv_pw_promote_unit
+    COMMAND transcribe_conv_pw_promote_unit)
+
+# -----------------------------------------------------------------------------
+# Dispatcher-level transcribe_run behavior
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_run_dispatch_unit
+    run_dispatch_unit.cpp)
+
+target_link_libraries(transcribe_run_dispatch_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_run_dispatch_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_run_dispatch_unit)
+
+add_test(NAME transcribe_run_dispatch_unit
+    COMMAND transcribe_run_dispatch_unit)
+
+# -----------------------------------------------------------------------------
 # Synthetic GGUF fixtures (for the loader smoke test)
 # -----------------------------------------------------------------------------
 
@@ -142,7 +228,7 @@ if(TRANSCRIBE_UV)
     add_executable(transcribe_tokenizer_smoke
         tokenizer_smoke.cpp)
 
-    target_link_libraries(transcribe_tokenizer_smoke PRIVATE transcribe)
+    target_link_libraries(transcribe_tokenizer_smoke PRIVATE transcribe ggml)
 
     # Internal-header access. PRIVATE so it stays scoped to this test
     # target.

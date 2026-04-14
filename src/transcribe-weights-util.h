@@ -32,6 +32,7 @@
 #include "ggml.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <initializer_list>
 
 struct gguf_context;
@@ -55,5 +56,20 @@ ggml_tensor * find_tensor(const gguf_context *              gguf,
                           std::initializer_list<ggml_type>  allowed_types,
                           std::initializer_list<int64_t>    expected_ne,
                           const char *                      error_tag);
+
+// Format a per-layer tensor name. The caller passes a printf fmt
+// containing exactly one %d; the layer index is substituted. Returns
+// a pointer to a thread-local static buffer — the next call within the
+// same thread invalidates the previous pointer.
+//
+// This previously lived duplicated in every per-family weights.cpp.
+// Keeping it as const char * avoids touching every GET_* macro call
+// site (find_tensor takes const char *). The 128-byte buffer is ample
+// for any realistic layer name (longest is ~50 chars + 3-digit index).
+inline const char * lname(const char * fmt, int layer_idx) {
+    thread_local char buf[128];
+    std::snprintf(buf, sizeof(buf), fmt, layer_idx);
+    return buf;
+}
 
 } // namespace transcribe::weights

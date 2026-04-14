@@ -183,6 +183,116 @@ KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
 }
 
 // ---------------------------------------------------------------------------
+// Higher-level required / optional KV helpers
+// ---------------------------------------------------------------------------
+
+transcribe_status read_required_u32_kv(const gguf_context * gguf,
+                                       const char *         key,
+                                       const char *         error_tag,
+                                       int32_t &            out)
+{
+    uint32_t v = 0;
+    switch (read_uint32_kv(gguf, key, v)) {
+        case KvResult::Ok:
+            out = static_cast<int32_t>(v);
+            return TRANSCRIBE_OK;
+        case KvResult::Absent:
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: required KV \"%s\" missing or wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+transcribe_status read_required_f32_kv(const gguf_context * gguf,
+                                       const char *         key,
+                                       const char *         error_tag,
+                                       float &              out)
+{
+    float v = 0.0f;
+    switch (read_float32_kv(gguf, key, v)) {
+        case KvResult::Ok:
+            out = v;
+            return TRANSCRIBE_OK;
+        case KvResult::Absent:
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: required KV \"%s\" missing or wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+transcribe_status read_required_string_kv(const gguf_context * gguf,
+                                          const char *         key,
+                                          const char *         error_tag,
+                                          std::string &        out)
+{
+    std::string v;
+    switch (read_string_kv(gguf, key, v)) {
+        case KvResult::Ok:
+            out = std::move(v);
+            return TRANSCRIBE_OK;
+        case KvResult::Absent:
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: required KV \"%s\" missing or wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+transcribe_status read_optional_bool_kv(const gguf_context * gguf,
+                                        const char *         key,
+                                        const char *         error_tag,
+                                        bool                 default_value,
+                                        bool &               out)
+{
+    bool tmp = default_value;
+    switch (read_bool_kv(gguf, key, tmp)) {
+        case KvResult::Absent:
+            out = default_value;
+            return TRANSCRIBE_OK;
+        case KvResult::Ok:
+            out = tmp;
+            return TRANSCRIBE_OK;
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: optional KV \"%s\" has wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+transcribe_status read_optional_string_kv(const gguf_context * gguf,
+                                          const char *         key,
+                                          const char *         error_tag,
+                                          const char *         default_value,
+                                          std::string &        out)
+{
+    std::string v;
+    switch (read_string_kv(gguf, key, v)) {
+        case KvResult::Absent:
+            out = default_value;
+            return TRANSCRIBE_OK;
+        case KvResult::Ok:
+            out = std::move(v);
+            return TRANSCRIBE_OK;
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: optional KV \"%s\" has wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+// ---------------------------------------------------------------------------
 // Post-load shared metadata
 // ---------------------------------------------------------------------------
 

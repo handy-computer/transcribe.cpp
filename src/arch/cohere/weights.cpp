@@ -27,104 +27,7 @@ namespace transcribe::cohere {
 
 namespace {
 
-transcribe_status read_required_u32(const gguf_context * gguf,
-                                    const char *         key,
-                                    int32_t &            out)
-{
-    uint32_t v = 0;
-    switch (read_uint32_kv(gguf, key, v)) {
-        case KvResult::Ok:
-            out = static_cast<int32_t>(v);
-            return TRANSCRIBE_OK;
-        case KvResult::Absent:
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "cohere: required KV \"%s\" missing or wrong type\n",
-                         key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF;
-}
-
-transcribe_status read_required_f32(const gguf_context * gguf,
-                                    const char *         key,
-                                    float &              out)
-{
-    float v = 0.0f;
-    switch (read_float32_kv(gguf, key, v)) {
-        case KvResult::Ok:
-            out = v;
-            return TRANSCRIBE_OK;
-        case KvResult::Absent:
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "cohere: required KV \"%s\" missing or wrong type\n",
-                         key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF;
-}
-
-transcribe_status read_required_string(const gguf_context * gguf,
-                                       const char *         key,
-                                       std::string &        out)
-{
-    std::string v;
-    switch (read_string_kv(gguf, key, v)) {
-        case KvResult::Ok:
-            out = std::move(v);
-            return TRANSCRIBE_OK;
-        case KvResult::Absent:
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "cohere: required KV \"%s\" missing or wrong type\n",
-                         key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF;
-}
-
-transcribe_status read_optional_bool(const gguf_context * gguf,
-                                     const char *         key,
-                                     bool                 default_value,
-                                     bool &               out)
-{
-    bool tmp = default_value;
-    switch (read_bool_kv(gguf, key, tmp)) {
-        case KvResult::Absent:
-            out = default_value;
-            return TRANSCRIBE_OK;
-        case KvResult::Ok:
-            out = tmp;
-            return TRANSCRIBE_OK;
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "cohere: optional KV \"%s\" has wrong type\n", key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF;
-}
-
-transcribe_status read_optional_string(const gguf_context * gguf,
-                                       const char *         key,
-                                       const char *         default_value,
-                                       std::string &        out)
-{
-    std::string v;
-    switch (read_string_kv(gguf, key, v)) {
-        case KvResult::Absent:
-            out = default_value;
-            return TRANSCRIBE_OK;
-        case KvResult::Ok:
-            out = std::move(v);
-            return TRANSCRIBE_OK;
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "cohere: optional KV \"%s\" has wrong type\n", key);
-            return TRANSCRIBE_ERR_GGUF;
-    }
-    return TRANSCRIBE_ERR_GGUF;
-}
+constexpr const char * kFamilyTag = "cohere";
 
 } // namespace
 
@@ -136,45 +39,45 @@ transcribe_status read_cohere_hparams(const gguf_context * gguf,
     }
 
     // Encoder.
-    if (auto st = read_required_u32(gguf, "stt.cohere.encoder.n_layers",           hp.enc_n_layers);           st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.encoder.d_model",            hp.enc_d_model);            st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.encoder.n_heads",            hp.enc_n_heads);            st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.encoder.d_ff",               hp.enc_d_ff);               st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.encoder.conv_kernel",        hp.enc_conv_kernel);        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.encoder.subsampling_factor", hp.enc_subsampling_factor); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.encoder.subsampling_channels", hp.enc_subsampling_channels); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.encoder.pos_emb_max_len",    hp.enc_pos_emb_max_len);    st != TRANSCRIBE_OK) return st;
-    if (auto st = read_optional_bool(gguf, "stt.cohere.encoder.use_bias", true, hp.enc_use_bias); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.encoder.n_layers", kFamilyTag, hp.enc_n_layers);           st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.encoder.d_model", kFamilyTag, hp.enc_d_model);            st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.encoder.n_heads", kFamilyTag, hp.enc_n_heads);            st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.encoder.d_ff", kFamilyTag, hp.enc_d_ff);               st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.encoder.conv_kernel", kFamilyTag, hp.enc_conv_kernel);        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.encoder.subsampling_factor", kFamilyTag, hp.enc_subsampling_factor); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.encoder.subsampling_channels", kFamilyTag, hp.enc_subsampling_channels); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.encoder.pos_emb_max_len", kFamilyTag, hp.enc_pos_emb_max_len);    st != TRANSCRIBE_OK) return st;
+    if (auto st = read_optional_bool_kv(gguf, "stt.cohere.encoder.use_bias", kFamilyTag, true, hp.enc_use_bias); st != TRANSCRIBE_OK) return st;
 
     // Decoder.
-    if (auto st = read_required_u32(gguf, "stt.cohere.decoder.n_layers",      hp.dec_n_layers); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.decoder.hidden_size",   hp.dec_hidden);   st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.decoder.n_heads",       hp.dec_n_heads);  st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.decoder.inner_size",    hp.dec_inner);    st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32(gguf, "stt.cohere.decoder.max_seq_len",   hp.dec_max_seq);  st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_string(gguf, "stt.cohere.decoder.activation", hp.dec_activation); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.decoder.n_layers", kFamilyTag, hp.dec_n_layers); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.decoder.hidden_size", kFamilyTag, hp.dec_hidden);   st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.decoder.n_heads", kFamilyTag, hp.dec_n_heads);  st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.decoder.inner_size", kFamilyTag, hp.dec_inner);    st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.decoder.max_seq_len", kFamilyTag, hp.dec_max_seq);  st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_string_kv(gguf, "stt.cohere.decoder.activation", kFamilyTag, hp.dec_activation); st != TRANSCRIBE_OK) return st;
 
     // Token IDs. vocab_size comes from the tokenizer; decoder_start_token_id is explicit.
-    if (auto st = read_required_u32(gguf, "stt.cohere.decoder_start_token_id", hp.decoder_start_token_id); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.cohere.decoder_start_token_id", kFamilyTag, hp.decoder_start_token_id); st != TRANSCRIBE_OK) return st;
 
     // Head.
-    if (auto st = read_optional_bool(gguf, "stt.cohere.head.log_softmax", true, hp.head_log_softmax); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_optional_bool(gguf, "stt.cohere.head.tied_weights", true, hp.head_tied_weights); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_optional_bool_kv(gguf, "stt.cohere.head.log_softmax", kFamilyTag, true, hp.head_log_softmax); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_optional_bool_kv(gguf, "stt.cohere.head.tied_weights", kFamilyTag, true, hp.head_tied_weights); st != TRANSCRIBE_OK) return st;
 
     // Frontend.
-    if (auto st = read_required_string(gguf, "stt.frontend.type",         hp.fe_type);         st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.num_mels",     hp.fe_num_mels);     st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.sample_rate",  hp.fe_sample_rate);  st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.n_fft",        hp.fe_n_fft);        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.win_length",   hp.fe_win_length);   st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32   (gguf, "stt.frontend.hop_length",   hp.fe_hop_length);   st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_string(gguf, "stt.frontend.window",       hp.fe_window);       st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_string(gguf, "stt.frontend.normalize",    hp.fe_normalize);    st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_f32   (gguf, "stt.frontend.dither",       hp.fe_dither);       st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_f32   (gguf, "stt.frontend.pre_emphasis", hp.fe_pre_emphasis); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_f32   (gguf, "stt.frontend.f_min",        hp.fe_f_min);        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_f32   (gguf, "stt.frontend.f_max",        hp.fe_f_max);        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_optional_string(gguf, "stt.frontend.pad_mode", "reflect", hp.fe_pad_mode); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.type", kFamilyTag, hp.fe_type);         st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels", kFamilyTag, hp.fe_num_mels);     st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate", kFamilyTag, hp.fe_sample_rate);  st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.n_fft", kFamilyTag, hp.fe_n_fft);        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.win_length", kFamilyTag, hp.fe_win_length);   st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_u32_kv(gguf, "stt.frontend.hop_length", kFamilyTag, hp.fe_hop_length);   st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.window", kFamilyTag, hp.fe_window);       st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_string_kv(gguf, "stt.frontend.normalize", kFamilyTag, hp.fe_normalize);    st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_f32_kv(gguf, "stt.frontend.dither", kFamilyTag, hp.fe_dither);       st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_f32_kv(gguf, "stt.frontend.pre_emphasis", kFamilyTag, hp.fe_pre_emphasis); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_f32_kv(gguf, "stt.frontend.f_min", kFamilyTag, hp.fe_f_min);        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_required_f32_kv(gguf, "stt.frontend.f_max", kFamilyTag, hp.fe_f_max);        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_optional_string_kv(gguf, "stt.frontend.pad_mode", kFamilyTag, "reflect", hp.fe_pad_mode); st != TRANSCRIBE_OK) return st;
 
     // Cross-field invariants.
     if (hp.enc_n_layers <= 0 || hp.enc_d_model <= 0 || hp.enc_n_heads <= 0 ||
@@ -272,18 +175,14 @@ transcribe_status read_cohere_hparams(const gguf_context * gguf,
 
 namespace {
 
-const char * lname(const char * fmt, int layer_idx) {
-    thread_local char buf[128];
-    std::snprintf(buf, sizeof(buf), fmt, layer_idx);
-    return buf;
-}
+using transcribe::weights::lname;
 
-// The canonical find_tensor() helper lives in
+// The canonical find_tensor() + lname() helpers live in
 // src/transcribe-weights-util.{h,cpp}; see that header for rationale.
-// It is shared between every per-family weights.cpp. The GET_*
+// They are shared between every per-family weights.cpp. The GET_*
 // macros below still live here because their type allowlists encode
 // a per-family quantization policy, not a shared convention.
-constexpr const char * kTag = "cohere";
+constexpr const char * kTag = kFamilyTag;
 
 #define GET_F32(slot, name, ...) \
     do { \

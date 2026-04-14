@@ -320,6 +320,9 @@ extern "C" transcribe_status transcribe_run(
     // redundant but idempotent, and removing it is a refactor
     // deferred to a later pass.
     ctx->clear_result();
+    ctx->t_mel_us    = 0;
+    ctx->t_encode_us = 0;
+    ctx->t_decode_us = 0;
 
     if (ctx->model == nullptr || ctx->model->arch == nullptr ||
         ctx->model->arch->run == nullptr)

@@ -39,6 +39,7 @@ import argparse
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -201,7 +202,9 @@ def cmd_ref(args: argparse.Namespace) -> int:
             raise SystemExit(f"error: audio not found: {audio}")
 
         out_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
 
         base_args = [
             "uv", "run", "--project", str(env_dir),
@@ -241,7 +244,9 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             raise SystemExit(f"error: audio not found: {audio}")
 
         out_dir = repo / "build" / "validate" / args.family / variant / case / "cpp"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
