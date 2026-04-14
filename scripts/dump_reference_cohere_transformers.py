@@ -55,18 +55,18 @@ def use_transformers_ref(path: Path | None) -> None:
     sys.path.insert(0, str(src))
 
 
-def torch_dtype(name: str):
+def model_dtype_name(model) -> str:
+    """Return a canonical short dtype string for the loaded model (bf16, f32, f16, ...)."""
     import torch
 
-    if name == "auto":
-        return "auto"
-    if name == "f32":
-        return torch.float32
-    if name == "f16":
-        return torch.float16
-    if name == "bf16":
-        return torch.bfloat16
-    raise ValueError(f"unsupported dtype: {name}")
+    dtype = next(model.parameters()).dtype
+    if dtype == torch.bfloat16:
+        return "bf16"
+    if dtype == torch.float16:
+        return "f16"
+    if dtype == torch.float32:
+        return "f32"
+    return str(dtype).removeprefix("torch.")
 
 
 def configure_torch(args: argparse.Namespace) -> None:
@@ -163,11 +163,10 @@ def load_reference(args: argparse.Namespace):
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
     model_id, local_only = resolve_model(args.model)
-    dtype = torch_dtype(args.model_dtype)
     source = "local path" if local_only else "HuggingFace"
     print(
         f"Loading Cohere ASR model from {model_id} ({source}, "
-        f"Transformers {transformers.__version__}, dtype={args.model_dtype}, device={args.device})..."
+        f"Transformers {transformers.__version__}, device={args.device})..."
     )
     processor = AutoProcessor.from_pretrained(
         model_id,
@@ -178,7 +177,6 @@ def load_reference(args: argparse.Namespace):
         model_id,
         trust_remote_code=False,
         local_files_only=local_only,
-        dtype=dtype,
     ).eval()
     model.to(args.device)
     return processor, model
@@ -192,6 +190,7 @@ def make_source(
     n_samples: int,
     sample_rate: int,
     language: str | None = None,
+    model_dtype: str | None = None,
 ) -> dict[str, Any]:
     import torch
     import transformers
@@ -201,7 +200,7 @@ def make_source(
         "transformers_version": transformers.__version__,
         "transformers_file": transformers.__file__,
         "model": model_id,
-        "model_dtype": args.model_dtype,
+        "model_dtype": model_dtype,
         "device": args.device,
         "torch_threads": args.torch_threads,
         "torch_version": torch.__version__,
@@ -439,6 +438,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
         audio_path=audio_path,
         n_samples=pcm.size,
         sample_rate=sr,
+        model_dtype=model_dtype_name(model),
     )
     dump_encoder(
         model=model,
@@ -475,6 +475,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
         n_samples=pcm.size,
         sample_rate=sr,
         language=language,
+        model_dtype=model_dtype_name(model),
     )
 
     encoder_hidden, encoder_attention_mask, _ = dump_encoder(
@@ -594,12 +595,6 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
         type=int,
         default=1,
         help="Torch intra-op threads for deterministic dumps (default: 1)",
-    )
-    p.add_argument(
-        "--model-dtype",
-        choices=["f32", "f16", "bf16", "auto"],
-        default="f32",
-        help="Torch dtype for model weights and compute (default: f32)",
     )
 
 

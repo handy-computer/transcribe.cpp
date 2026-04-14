@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -269,9 +270,16 @@ def main() -> int:
         # (meaning it's expected to be present on both sides).
         is_missing = r.status.startswith("MISSING")
         in_tolerance_file = r.name in overrides
+        inf_tol = math.isinf(max_tol) and math.isinf(mean_tol)
         if is_missing and not in_tolerance_file:
             ok = True
             flag = r.status  # still show it, but don't fail
+        elif r.status == "NONFINITE" and inf_tol:
+            # Tolerance file explicitly set both bounds to inf for this
+            # tensor (e.g. dec.logits after log-softmax). Nonfinite values
+            # are expected; treat as ok.
+            ok = True
+            flag = "ok"
         else:
             ok = (r.status == "ok"
                   and r.max_abs  <= max_tol

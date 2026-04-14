@@ -49,18 +49,6 @@ def resolve_path(raw: str | os.PathLike[str]) -> Path:
     return Path(raw).expanduser().resolve()
 
 
-def torch_dtype(name: str):
-    import torch
-
-    if name == "f32":
-        return torch.float32
-    if name == "f16":
-        return torch.float16
-    if name == "bf16":
-        return torch.bfloat16
-    raise ValueError(f"unsupported dtype: {name}")
-
-
 def configure_torch(args: argparse.Namespace) -> None:
     import torch
 
@@ -177,8 +165,8 @@ def make_source(
     source: dict[str, Any] = {
         "kind": "parakeet-nemo",
         "model": args.model,
-        "model_dtype": args.model_dtype,
-        "device": args.device,
+        "model_dtype": "f32",
+        "device": "cpu",
         "torch_threads": args.torch_threads,
         "torch_version": torch.__version__,
         "audio": audio_path.name,
@@ -464,18 +452,11 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--audio", required=True, help="16 kHz mono wav file")
     p.add_argument("--out", required=True, help="Output directory")
-    p.add_argument("--device", default="cpu", help="Torch device (default: cpu)")
     p.add_argument(
         "--torch-threads",
         type=int,
         default=1,
         help="Torch intra-op threads for deterministic dumps (default: 1)",
-    )
-    p.add_argument(
-        "--model-dtype",
-        choices=["f32", "f16", "bf16"],
-        default="f32",
-        help="Torch dtype for model weights and compute (default: f32)",
     )
 
 

@@ -214,7 +214,6 @@ def cmd_ref(args: argparse.Namespace) -> int:
             "--model", str(model),
             "--audio", str(audio),
             "--out", str(out_dir),
-            "--model-dtype", args.dtype,
             "--torch-threads", "1",
         ]
 
@@ -407,11 +406,6 @@ def main() -> int:
         "--model",
         help="HF model ID or local path (overrides manifest default)",
     )
-    sp_ref.add_argument(
-        "--dtype", default="f32",
-        choices=["f32", "f16", "bf16"],
-        help="Reference model dtype (default: f32)",
-    )
     sp_ref.set_defaults(func=cmd_ref)
 
     # cpp
@@ -435,7 +429,6 @@ def main() -> int:
     add_common(sp_all)
     sp_all.add_argument("--model", help="HF model ID or local path")
     sp_all.add_argument("--gguf", help="GGUF path")
-    sp_all.add_argument("--dtype", default="f32", choices=["f32", "f16", "bf16"])
     sp_all.add_argument("--backend", default="cpu", choices=["auto", "cpu", "metal", "vulkan"])
     sp_all.set_defaults(func=cmd_all)
 

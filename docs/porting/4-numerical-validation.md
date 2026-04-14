@@ -34,10 +34,11 @@ as they're not in the tolerance file.
 side must exist on the other. A MISSING gate tensor (one that has a
 tolerance entry) is a real failure.
 
-**Dump all per-layer outputs as gate tensors.** They're small (one
-hidden-state tensor per layer) and they're how you bisect divergence
-to a specific layer. Dumping only first/mid/last leaves you blind
-when something breaks in between.
+**Use first/mid/last layer outputs as the default gate.** Dump block 0,
+one middle block, and the last block for each repeated component. This
+catches load/layout bugs, accumulation drift, and final-stage behavior
+without making every layer a permanent tolerance entry. Dump all layers
+temporarily when you need to bisect a divergence to a specific layer.
 
 **Dump pre-softmax logits as the numerical gate.** Post-softmax
 log-probabilities produce `-inf` for near-zero-probability tokens, and
@@ -71,13 +72,13 @@ every row applies to every architecture:
 | Frontend output    | `enc.mel.in`           | Family-specific frontend        |
 | First transform    | `enc.pre_encode.out`   | Conv subsampling, linear proj   |
 | Positional enc     | `enc.pos_emb`          | Sinusoidal, learned, RoPE, etc  |
-| Encoder layers     | `enc.block.<N>.out`    | All layers                      |
+| Encoder layers     | `enc.block.<N>.out`    | First/mid/last by default       |
 | Encoder final      | `enc.final`            | Post-final-norm, key gate point |
 | Enc-dec bridge     | `enc_dec_proj.out`     | If present                      |
 | Decoder embeddings | `dec.token_emb`        | Near-exact gate                 |
 |                    | `dec.pos_emb`          | Near-exact gate                 |
 | Decoder input norm | `dec.embed_norm`       | After embedding + normalization |
-| Decoder layers     | `dec.block.<N>.out`    | All layers                      |
+| Decoder layers     | `dec.block.<N>.out`    | First/mid/last by default       |
 | Decoder final      | `dec.out_before_head`  | Post-final-norm, key gate point |
 | Pre-softmax logits | `dec.logits_raw`       | Numerical gate                  |
 | Post-softmax       | `dec.logits`           | Informational, expect inf diffs |
@@ -270,11 +271,34 @@ against what the reference implementation uses.
 
 ### Dtype matching
 
-Always compare at matched dtypes. A bf16 GGUF compared against an
-f32 reference produces large diffs that look like bugs but are just
-precision. Either generate the reference dumps at the GGUF's native
-dtype (`--model-dtype bf16`) or set dtype-appropriate tolerances and
-document the mismatch.
+**Use the reference's natural dtype.** Let the reference implementation
+load in its default dtype; don't coerce weights to match the GGUF dtype
+unless the production C++ path is intentionally doing that conversion
+and you are validating that specific export precision.
+
+A bf16 GGUF compared against an f32 reference will produce non-zero
+diffs — that is expected, not a bug. Characterise them, set tolerances
+from observed data, and document the cause in the tolerance file's
+`_comment`. If mean_abs is low and output-adjacent gate tensors are
+stable, the drift is just precision noise and the validation is sound.
+
+**Only add precision-matching reference modes after you prove you need
+them.** If the default reference already produces the correct transcript
+and all gate tensors are within tolerance, stop there. A
+precision-simulating path (e.g. round-tripping weights through f16
+before comparing) is an exception that belongs in the dump script with
+a comment explaining why: "GGUF intentionally stores X as f16, so this
+validation target checks exported-model numerics." It should not be the
+default.
+
+**The first accuracy GGUF must use the same dtype as the reference.**
+The reference drives the numerics; the converter follows. If the
+reference loaded bf16 (because that is the model's natural dtype), the
+first GGUF must be bf16. If the reference loaded f32, the first GGUF
+must be f32. A dtype mismatch between the reference and the GGUF
+introduces a precision gap that comparison tolerances end up absorbing
+silently — hiding real bugs behind noise. See the Conversion doc for
+the required dtype ordering.
 
 ### Preprocessing mismatches
 

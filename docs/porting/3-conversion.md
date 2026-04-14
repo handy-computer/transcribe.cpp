@@ -5,12 +5,23 @@ the reference tensor semantics before it optimizes size.
 
 ## Accuracy GGUF First
 
+The reference dump script drives the numerics. The converter follows.
+
 For the first bring-up:
 
-- Use `f32` when source weights are fp32.
-- Use source-preserving dtype when the loader/runtime supports it.
-- If a source dtype must be expanded or rounded, document it in the
-  family note and converter manifest.
+- **Match the reference dtype exactly.** Run the reference dump script
+  first and record what dtype it loaded (it writes `model_dtype` in the
+  sidecar metadata). The first GGUF must use that dtype. If the
+  reference loaded bf16, the first GGUF is bf16. If f32, then f32.
+  A dtype mismatch between the reference and the GGUF means the C++
+  inference path operates at a different precision than the reference,
+  making tolerances absorb a hidden gap instead of genuine numerical
+  drift.
+- Use source-preserving dtype: do not upcast or downcast from the
+  reference dtype. If the source dtype must be rounded (e.g. a bf16
+  model converted to f16 because the loader does not support bf16),
+  document it in the family note and run a second validation pass
+  against that format.
 - Keep tensor names, layouts, shapes, frontend metadata, tokenizer
   metadata, and hparams aligned with the reference dump conventions.
 

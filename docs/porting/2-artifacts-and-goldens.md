@@ -139,7 +139,6 @@ uv run --project scripts/envs/cohere \
   --model ../models/cohere-transcribe-03-2026 \
   --audio samples/jfk.wav \
   --out build/validate/cohere/cohere-transcribe-03-2026/jfk/ref \
-  --model-dtype f32 \
   --torch-threads 1
 ```
 
