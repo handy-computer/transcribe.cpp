@@ -64,5 +64,4 @@ This split mirrors `llama.cpp`'s `convert_hf_to_gguf.py` →
 
 - `scripts/envs/<family>/pyproject.toml` — per-family `uv` env. Each
   converter and reference dumper has its own env because NeMo, MLX,
-  Transformers, and NeMo's ONNX stack have conflicting dependency
-  graphs.
+  and Transformers have conflicting dependency graphs.

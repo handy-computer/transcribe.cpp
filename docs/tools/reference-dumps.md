@@ -1,16 +1,14 @@
 # Reference dumps
 
-Reference dump scripts run the upstream Python / MLX / NeMo reference
-implementation on a sample audio file and write per-stage tensors to
-disk in the shared `*.f32` + `*.json` format. These are compared
-tensor-by-tensor against the C++ implementation's dumps to catch
-numerical drift.
+Reference dump scripts run the upstream Python reference implementation
+on a sample audio file and write per-stage tensors to disk in the
+shared `*.f32` + `*.json` format. These are compared tensor-by-tensor
+against the C++ implementation's dumps to catch numerical drift.
 
 ## Family scripts
 
 | Script                                       | Reference backend              | Platform         |
 |----------------------------------------------|--------------------------------|------------------|
-| `scripts/dump_reference.py`                  | parakeet-mlx + ONNX preprocessor | macOS arm64      |
 | `scripts/dump_reference_parakeet_nemo.py`    | NeMo (PyTorch)                 | Linux / macOS    |
 | `scripts/dump_reference_cohere.py`           | Cohere MLX                     | macOS arm64      |
 | `scripts/dump_reference_cohere_transformers.py` | HuggingFace Transformers    | Linux / macOS    |
@@ -34,9 +32,9 @@ lets `compare_tensors.py` diff the two dirs without translation.
 ## Typical invocation
 
 ```bash
-uv run --directory scripts/envs/parakeet \
-  ../dump_reference.py encoder \
-    --model ~/sandboxes/transcribe/models/parakeet-tdt-0.6b-v2-mlx \
+uv run --project scripts/envs/parakeet \
+  scripts/dump_reference_parakeet_nemo.py encoder \
+    --model nvidia/parakeet-tdt-0.6b-v2 \
     --audio samples/jfk.wav \
     --out build/validate/parakeet/v2/jfk/ref
 ```
@@ -48,8 +46,8 @@ selects the env, script, and paths for you.
 
 Each reference backend has its own `uv` env under
 `scripts/envs/<family>/`. NeMo pins Python <3.13 on macOS (kaldialign
-wheel gap); MLX is arm64-only. The env boundaries exist because
-installing all three reference stacks in one env doesn't resolve.
+wheel gap); the Cohere MLX env is arm64-only. The env boundaries exist
+because installing these reference stacks in one env doesn't resolve.
 
 ## Contract tensors
 

@@ -129,10 +129,12 @@ step and matches at fp32 round-off.
 
 ### Convert
 
+Loads directly from NVIDIA's NeMo checkpoint via `ASRModel.from_pretrained`.
+Output path is derived from the repo id.
+
 ```bash
-uv run scripts/convert-parakeet.py \
-  <path-to-exported-parakeet-safetensors-dir> \
-  models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf
+uv run --project scripts/envs/parakeet \
+  scripts/convert-parakeet.py nvidia/parakeet-tdt-0.6b-v2
 ```
 
 ### Quantize

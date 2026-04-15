@@ -76,5 +76,5 @@ TRANSCRIBE_COHERE_MODEL=models/cohere-transcribe-03-2026/cohere-transcribe-03-20
 - Manifest exists, but the v2 schema does not yet record Hugging Face
   snapshot revision or local artifact hashes.
 - Reference hardware should still be captured for benchmark reports.
-- `dump_reference_cohere.py` duplicates dump-writing logic from
-  `dump_reference.py`.
+- `dump_reference_cohere.py` duplicates dump-writing logic from the
+  Parakeet reference dumper.

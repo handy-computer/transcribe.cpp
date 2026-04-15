@@ -122,8 +122,7 @@ uv run scripts/validate.py all --family cohere
 Inputs:
 
 - C++ dumps come from `TRANSCRIBE_DUMP_DIR`.
-- Reference dumps come from `scripts/dump_reference.py` or the family
-  reference dumper.
+- Reference dumps come from the per-family `scripts/dump_reference_*.py`.
 - Tolerances come from `tests/tolerances/<family>.json`.
 - Transcript artifacts are `transcript.json`; when the reference writes
   one, validation requires exact C++ vs reference text equality.

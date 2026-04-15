@@ -29,8 +29,7 @@ Source format:
     in GGUF.
 
     Weights are already in PyTorch layout (OIHW for conv2d, [out, in/g, k]
-    for conv1d). NO transposition is needed for conv weights (unlike the
-    Parakeet converter which handles MLX layout).
+    for conv1d). NO transposition is needed for conv weights.
 
 Architecture differences from Parakeet:
     - Encoder-decoder (not transducer): NO predictor/LSTM, NO joint network

@@ -18,8 +18,6 @@ NeMo canonical reference. C++ CPU validation passes locally.
   Script: `scripts/dump_reference_parakeet_nemo.py`.
 - Instrumented reference: **NeMo** (same script, using forward hooks to
   capture per-stage intermediates without modifying NeMo internals).
-- Legacy frontend reference: NeMo ONNX (`nemo128.onnx`) via
-  `scripts/dump_reference.py mel-onnx`.
 
 Validation status:
 
@@ -60,9 +58,8 @@ uv run scripts/validate.py compare --family parakeet
 Conversion:
 
 ```bash
-uv run scripts/convert-parakeet.py \
-  <path-to-exported-parakeet-safetensors-dir> \
-  models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf
+uv run --project scripts/envs/parakeet \
+  scripts/convert-parakeet.py nvidia/parakeet-tdt-0.6b-v2
 ```
 
 Real-model smokes:
@@ -81,5 +78,3 @@ TRANSCRIBE_REAL_PARAKEET_GGUF=models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F
   snapshot revision or local artifact hashes.
 - Default CTest no longer has Parakeet source-tree numerical golden
   payloads; use `validate.py` for numerical comparison.
-- Converter still reads the historical exported safetensors layout,
-  while the canonical numerical reference is NeMo.

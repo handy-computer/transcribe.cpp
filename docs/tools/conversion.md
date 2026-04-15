@@ -9,8 +9,8 @@ responsibilities; see [`quantization.md`](quantization.md).
 
 What conversion does:
 
-- Read the upstream format (safetensors / NeMo / MLX).
-- Apply layout transforms (e.g. NeMo MLX conv [out, kh, kw, in] → OIHW).
+- Read the upstream format (NeMo `.nemo` archive / HuggingFace safetensors).
+- Apply any required layout transforms.
 - Rename upstream tensor names to canonical GGUF names.
 - Embed the tokenizer (SentencePiece / BPE) as GGUF KV.
 - Emit architecture metadata (hparams, frontend config, variant string,
@@ -30,7 +30,7 @@ What conversion does **not** do:
 
 | Family   | Script                          | Env                          | Source format                |
 |----------|---------------------------------|------------------------------|------------------------------|
-| parakeet | `scripts/convert-parakeet.py`   | `scripts/envs/parakeet/`     | NeMo MLX safetensors         |
+| parakeet | `scripts/convert-parakeet.py`   | `scripts/envs/parakeet/`     | NeMo `.nemo` archive (via `ASRModel.from_pretrained`) |
 | cohere   | `scripts/convert-cohere.py`     | `scripts/envs/cohere/`       | HuggingFace safetensors (bf16) |
 
 Each converter is a single-file script with inline documentation of its
@@ -41,14 +41,14 @@ single-file is the chosen shape.
 ## CLI
 
 ```bash
-# Accuracy GGUF — explicit output path
-uv run scripts/convert-parakeet.py  <model-dir> <out.gguf>
-uv run scripts/convert-cohere.py    <model-dir> <out.gguf>
+# Parakeet: pass an HF repo id (or a local .nemo path). NeMo resolves
+# and downloads the checkpoint via ASRModel.from_pretrained.
+uv run --project scripts/envs/parakeet \
+  scripts/convert-parakeet.py nvidia/parakeet-tdt-0.6b-v2
 
-# Or pass the HF repo id and let the converter derive the output
-# path as models/<family>/<slug>-<QUANT>.gguf (llama.cpp convention):
-uv run scripts/convert-parakeet.py <model-dir> --repo-id nvidia/parakeet-tdt-0.6b-v2
-uv run scripts/convert-cohere.py   <model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026
+# Cohere: pass the local safetensors directory, with --repo-id for the
+# output slug.
+uv run scripts/convert-cohere.py <model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026
 ```
 
 The output dtype is family-specific and matches the reference/source
@@ -101,7 +101,7 @@ component bucket rules.
 ## Adding a new family
 
 1. Create `scripts/envs/<family>/pyproject.toml` with the upstream
-   loader's dep stack. NeMo, MLX, and Transformers do not co-install
+   loader's dep stack. NeMo and Transformers do not co-install
    cleanly — each family gets its own env.
 2. Copy `convert-parakeet.py` or `convert-cohere.py` as a starting
    point. Both are deliberately readable top-to-bottom.

@@ -10,4 +10,5 @@ dependencies = [
     "soundfile>=0.12",
     "numpy>=1.26",
     "sentencepiece>=0.2",
+    "gguf>=0.10.0",
 ]

@@ -2,9 +2,8 @@
 // converter + ingest pipeline.
 //
 // This test loads a real Parakeet GGUF (the output of
-// scripts/convert-parakeet.py against an actual NeMo MLX model
-// directory) and verifies that the loader produces a fully populated
-// ParakeetModel.
+// scripts/convert-parakeet.py against a NeMo checkpoint) and verifies
+// that the loader produces a fully populated ParakeetModel.
 //
 // Gating:
 //

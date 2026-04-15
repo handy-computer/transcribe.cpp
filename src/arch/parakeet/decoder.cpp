@@ -634,12 +634,12 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         //
         // Dumping every iteration would flood the dump dir on a long
         // clip; the bring-up only needs a few well-chosen sample
-        // points to verify each component matches parakeet-mlx. The
-        // first decode step (start state, encoder frame 0) gives us
-        // four reference points: predictor input (the embed lookup,
+        // points to verify each component matches the NeMo reference.
+        // The first decode step (start state, encoder frame 0) gives
+        // us four reference points: predictor input (the embed lookup,
         // here all zeros), per-layer LSTM h, the joint logits, the
-        // argmax decision. The Python `dump_reference.py decode`
-        // subcommand mirrors these.
+        // argmax decision. The Python `dump_reference_parakeet_nemo.py
+        // decode` subcommand mirrors these.
         if (iter == 1 && transcribe::debug::enabled()) {
             // Predictor scratch_x at start: zeros (vector of length H).
             const long long s_h = H;

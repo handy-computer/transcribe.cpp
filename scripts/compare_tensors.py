@@ -14,7 +14,7 @@ either:
 
   - the C++ debug dumper in src/transcribe-debug.{h,cpp} (gated on
     TRANSCRIBE_DUMP_DIR)
-  - the Python reference dumper in scripts/dump_reference.py
+  - a Python reference dumper under scripts/dump_reference_*.py
 
 Both sides agree on the same on-disk format:
 

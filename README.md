@@ -32,26 +32,20 @@ cmake --build build
 
 ## Models
 
-### Download
-
-Parakeet weights are available as MLX safetensors:
-
-- **v2:** [mlx-community/parakeet-tdt-0.6b-v2](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v2)
-- **v3:** [mlx-community/parakeet-tdt-0.6b-v3](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3)
-
-Clone or download whichever variant you want. Each directory should contain `config.json`, `tokenizer.model`, and `model.safetensors`.
-
 ### Convert to GGUF
 
-Requires [uv](https://docs.astral.sh/uv/) (dependencies are inline in the script).
+The converter loads directly from NVIDIA's NeMo checkpoints via
+`ASRModel.from_pretrained`. Requires [uv](https://docs.astral.sh/uv/);
+the parakeet env ships NeMo and its deps.
 
 ```bash
-uv run scripts/convert-parakeet.py path/to/parakeet-tdt-0.6b-v2 --repo-id nvidia/parakeet-tdt-0.6b-v2
+uv run --project scripts/envs/parakeet \
+  scripts/convert-parakeet.py nvidia/parakeet-tdt-0.6b-v2
 ```
 
 This writes `models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf` following
-the llama.cpp-style `<slug>-<QUANT>.gguf` naming convention. You can
-also pass an explicit output path instead of `--repo-id`.
+the llama.cpp-style `<slug>-<QUANT>.gguf` naming convention. Pass a local
+`.nemo` path or extracted directory for offline conversion.
 
 ### Quantize
 
