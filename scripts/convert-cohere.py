@@ -66,7 +66,14 @@ KV emitted (matches the C++ loader's read_cohere_hparams):
   stt.frontend.*
 
 CLI:
-    uv run scripts/convert-cohere.py <model-dir> <out.gguf>
+    # HF repo id (downloads via huggingface_hub into $TRANSCRIBE_MODELS_DIR
+    # or the HF cache, then converts)
+    uv run --project scripts/envs/cohere \
+      scripts/convert-cohere.py CohereLabs/cohere-transcribe-03-2026
+
+    # Local safetensors directory (offline / custom checkpoint)
+    uv run --project scripts/envs/cohere \
+      scripts/convert-cohere.py <model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026
 
 The script is intentionally one file with no helpers — linear flow for
 easy auditing.
@@ -76,12 +83,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from huggingface_hub import snapshot_download
 from safetensors import safe_open
 import sentencepiece as spm
 
@@ -687,33 +696,67 @@ def convert(model_dir: Path, out_path: Path) -> None:
     print(f"Done. Wrote {out_path} ({out_path.stat().st_size / (1024 * 1024):.1f} MB)")
 
 
+def _looks_like_repo_id(s: str) -> bool:
+    """`org/name` with no filesystem match. Mirrors convert-parakeet.py."""
+    return "/" in s and not Path(s).exists()
+
+
+def _download_snapshot(repo_id: str) -> Path:
+    """Fetch a cohere checkpoint from HF into $TRANSCRIBE_MODELS_DIR/<slug>/.
+
+    Falls back to the default HF cache when $TRANSCRIBE_MODELS_DIR is unset
+    — snapshot_download returns the resolved local path either way.
+    """
+    slug = slug_from_repo_id(repo_id)
+    models_root = os.environ.get("TRANSCRIBE_MODELS_DIR")
+    local_dir = Path(models_root) / slug if models_root else None
+    if local_dir is not None:
+        local_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {repo_id} from Hugging Face...")
+    resolved = snapshot_download(
+        repo_id=repo_id,
+        local_dir=str(local_dir) if local_dir is not None else None,
+    )
+    return Path(resolved)
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
-        description="Convert a Cohere ASR HuggingFace directory to a GGUF.",
+        description="Convert a Cohere ASR checkpoint (HF repo id or local dir) to a GGUF.",
     )
-    p.add_argument("model_dir", type=Path,
-                   help="Path to a cohere-transcribe-* directory")
+    p.add_argument("model", type=str,
+                   help="HF repo id (e.g. CohereLabs/cohere-transcribe-03-2026) "
+                        "or path to a local cohere-transcribe-* directory")
     p.add_argument("out_path", type=Path, nargs="?",
-                   help="Output .gguf path (optional if --repo-id is given)")
+                   help="Output .gguf path (optional; derived from --repo-id "
+                        "or the HF repo id when omitted)")
     p.add_argument("--repo-id", type=str, default=None,
-                   help="HF repo id (e.g. CohereLabs/cohere-transcribe-03-2026). "
-                        f"When set, output is models/<slug>/<slug>-{REFERENCE_DTYPE_LABEL}.gguf.")
+                   help="HF repo id used to derive the output slug when "
+                        "converting from a local path. Ignored if out_path is given.")
     args = p.parse_args(argv[1:])
 
-    if not args.model_dir.is_dir():
-        print(f"error: {args.model_dir} is not a directory", file=sys.stderr)
-        return 2
+    if _looks_like_repo_id(args.model):
+        repo_id = args.repo_id or args.model
+        model_dir = _download_snapshot(args.model)
+    else:
+        model_dir = Path(args.model)
+        if not model_dir.is_dir():
+            print(f"error: {model_dir} is not a directory and not an HF repo id",
+                  file=sys.stderr)
+            return 2
+        repo_id = args.repo_id
 
     out_path = args.out_path
     if out_path is None:
-        if not args.repo_id:
-            print("error: provide either out_path or --repo-id", file=sys.stderr)
+        if not repo_id:
+            print("error: provide out_path, --repo-id, or pass an HF repo id as model",
+                  file=sys.stderr)
             return 2
-        slug = slug_from_repo_id(args.repo_id)
+        slug = slug_from_repo_id(repo_id)
         out_path = REPO_ROOT / "models" / slug / gguf_name(slug, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert(args.model_dir, out_path)
+    convert(model_dir, out_path)
     return 0
 
 

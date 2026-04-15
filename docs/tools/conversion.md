@@ -46,9 +46,20 @@ single-file is the chosen shape.
 uv run --project scripts/envs/parakeet \
   scripts/convert-parakeet.py nvidia/parakeet-tdt-0.6b-v2
 
-# Cohere: pass the local safetensors directory, with --repo-id for the
-# output slug.
-uv run scripts/convert-cohere.py <model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026
+# Cohere: pass an HF repo id. huggingface_hub.snapshot_download pulls
+# the checkpoint into $TRANSCRIBE_MODELS_DIR/<slug>/ (or the HF cache
+# if unset), then the script converts it.
+uv run --project scripts/envs/cohere \
+  scripts/convert-cohere.py CohereLabs/cohere-transcribe-03-2026
+```
+
+Both converters also accept a local checkpoint path for offline /
+custom-checkpoint use. Pass `--repo-id` in that case so the output slug
+can be derived:
+
+```bash
+uv run --project scripts/envs/cohere \
+  scripts/convert-cohere.py <model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026
 ```
 
 The output dtype is family-specific and matches the reference/source

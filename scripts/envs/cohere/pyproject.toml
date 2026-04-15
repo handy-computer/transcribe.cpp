@@ -5,6 +5,7 @@ description = "Python env for Cohere ASR reference dumps"
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.2",
+    "gguf>=0.10",
     "huggingface-hub>=0.30",
     "librosa>=0.10",
     "protobuf>=4.25",

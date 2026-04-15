@@ -55,9 +55,8 @@ uv run scripts/validate.py compare --family cohere
 Conversion:
 
 ```bash
-uv run scripts/convert-cohere.py \
-  <path-to-cohere-transcribe-03-2026> \
-  models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf
+uv run --project scripts/envs/cohere \
+  scripts/convert-cohere.py CohereLabs/cohere-transcribe-03-2026
 ```
 
 Real-model smokes:
