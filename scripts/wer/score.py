@@ -11,7 +11,7 @@ score.py — compute WER + bootstrap CI from a run.py report.
 
 Usage:
     uv run scripts/wer/score.py \\
-        reports/wer/parakeet-tdt-0.6b-v2.f32.test-clean.jsonl
+        reports/wer/parakeet-tdt-0.6b-v2-F32.test-clean.jsonl
 
 Writes a .score.json alongside the input with:
     {wer, wer_ci_lo, wer_ci_hi, n, substitutions, deletions, insertions,
@@ -66,12 +66,17 @@ def main() -> int:
         print(f"error: {args.report} does not exist", file=sys.stderr)
         return 2
 
-    # Load report.
+    # Load report. Skip the optional batch_header record (see
+    # scripts/wer/run.py — first line carries load_ms, not a transcript).
     entries: list[dict] = []
     with open(args.report) as f:
         for line in f:
-            if line.strip():
-                entries.append(json.loads(line))
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("type") == "batch_header":
+                continue
+            entries.append(rec)
 
     if not entries:
         print("error: report is empty", file=sys.stderr)

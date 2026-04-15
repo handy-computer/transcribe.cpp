@@ -46,27 +46,29 @@ Clone or download whichever variant you want. Each directory should contain `con
 Requires [uv](https://docs.astral.sh/uv/) (dependencies are inline in the script).
 
 ```bash
-uv run scripts/convert-parakeet.py path/to/parakeet-tdt-0.6b-v2 parakeet-v2.f32.gguf
+uv run scripts/convert-parakeet.py path/to/parakeet-tdt-0.6b-v2 --repo-id nvidia/parakeet-tdt-0.6b-v2
 ```
 
-For f16 at conversion time:
-
-```bash
-uv run scripts/convert-parakeet.py path/to/parakeet-tdt-0.6b-v2 parakeet-v2.f16.gguf --quant f16
-```
+This writes `models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf` following
+the llama.cpp-style `<slug>-<QUANT>.gguf` naming convention. You can
+also pass an explicit output path instead of `--repo-id`.
 
 ### Quantize
 
-The `transcribe-quantize` tool produces smaller models from an f32 or f16 GGUF. Available presets: `q8_0`, `q5_k_m`, `q4_k_m`.
+The `transcribe-quantize` tool produces smaller models from the
+reference GGUF. Available presets: `F16`, `Q8_0`, `Q5_K_M`, `Q4_K_M`.
 
 ```bash
-build/bin/transcribe-quantize parakeet-v2.f32.gguf parakeet-v2.q4_k_m.gguf --quant q4_k_m
+build/bin/transcribe-quantize \
+  models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \
+  models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q4_K_M.gguf \
+  --quant Q4_K_M
 ```
 
 ## Usage
 
 ```bash
-build/bin/transcribe-cli -m parakeet-v2.f32.gguf samples/jfk.wav
+build/bin/transcribe-cli -m models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf samples/jfk.wav
 ```
 
 Input must be 16 kHz mono WAV. Use `ffmpeg` or `sox` to convert other formats:

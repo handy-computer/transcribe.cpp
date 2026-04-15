@@ -62,7 +62,7 @@ Conversion:
 ```bash
 uv run scripts/convert-parakeet.py \
   <path-to-exported-parakeet-safetensors-dir> \
-  models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf
+  models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf
 ```
 
 Real-model smokes:
@@ -71,7 +71,7 @@ Real-model smokes:
 cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
 cmake --build build
 
-TRANSCRIBE_REAL_PARAKEET_GGUF=models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf \
+TRANSCRIBE_REAL_PARAKEET_GGUF=models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \
   ctest --test-dir build --output-on-failure -R 'parakeet|encoder|decoder'
 ```
 

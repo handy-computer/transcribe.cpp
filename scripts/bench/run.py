@@ -16,7 +16,7 @@ Usage:
     uv run scripts/bench/run.py --samples jfk --iters 20 --warmup 5
     uv run scripts/bench/run.py --backends metal,cpu,vulkan
     uv run scripts/bench/run.py --backends cpu --name pre-refactor
-    uv run scripts/bench/run.py --model models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf --samples jfk
+    uv run scripts/bench/run.py --model models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf --samples jfk
 
   Options:
     --family {parakeet,cohere,all}   model family to bench (default: all)
@@ -168,24 +168,33 @@ def get_git_sha(repo: Path) -> str:
 
 
 def parse_quant_from_filename(path: Path) -> str | None:
-    # "parakeet-tdt-0.6b-v2.q4_k_m.gguf" -> "q4_k_m"
-    # "cohere.f16.gguf"                  -> "f16"
+    # `<slug>-<QUANT>.gguf` (llama.cpp convention), e.g.
+    # "parakeet-tdt-0.6b-v2-Q4_K_M.gguf" -> "q4_k_m"
+    # "cohere-transcribe-03-2026-F16.gguf" -> "f16"
     name = path.name
     if not name.endswith(".gguf"):
         return None
     stem = name[: -len(".gguf")]
-    if "." not in stem:
+    if "-" not in stem:
         return None
-    return stem.rsplit(".", 1)[1]
+    return stem.rsplit("-", 1)[1].lower()
 
 
 def discover_family_models(repo: Path, family: str) -> dict[str, Path]:
-    """Return {quant: path} for a given family, picking newest on collision."""
-    fam_dir = repo / "models" / family
-    if not fam_dir.is_dir():
+    """Return {quant: path} for a given family, picking newest on collision.
+
+    Layout is models/<slug>/<slug>-<QUANT>.gguf; any slug whose filename
+    starts with `family` is treated as belonging to that family. Multiple
+    variants (e.g. parakeet v2 + v3) collapse into the same {quant: path}
+    map; newest-mtime wins per quant.
+    """
+    model_root = repo / "models"
+    if not model_root.is_dir():
         return {}
     by_quant: dict[str, list[Path]] = {}
-    for path in fam_dir.glob("*.gguf"):
+    for path in model_root.glob("*/*.gguf"):
+        if not path.stem.startswith(family):
+            continue
         quant = parse_quant_from_filename(path)
         if quant:
             by_quant.setdefault(quant, []).append(path)
@@ -394,7 +403,7 @@ def print_summary_table(family: str, runs: list[dict], slug: str,
     # from the first run's `backend` field if present, else fall back.
     display_backend = runs[0].get("backend", backend_label) if runs else backend_label
 
-    header = ("quant", "sample", "encode_ms", "decode_ms", "wall_ms", "rtf")
+    header = ("quant", "sample", "load_ms", "encode_ms", "decode_ms", "wall_ms", "rtf")
     rows: list[tuple[str, ...]] = []
     for r in runs:
         summary = r.get("summary", {}) or {}
@@ -403,14 +412,18 @@ def print_summary_table(family: str, runs: list[dict], slug: str,
         rtf_s = f"{rtf:.3f}" if isinstance(rtf, (int, float)) else "-"
         quant = parse_quant_from_filename(Path(r.get("model_path", ""))) or "-"
         sample_name = Path(r.get("sample_path", "")).name or "-"
-        rows.append((quant, sample_name,
+        # load_ms is a one-shot captured before any measured iteration; it
+        # lives at top-level in the cell JSON, not inside summary{}.
+        load_ms = r.get("load_ms")
+        load_ms_s = f"{load_ms:.1f}" if isinstance(load_ms, (int, float)) else "-"
+        rows.append((quant, sample_name, load_ms_s,
                      _fmt_mean(summary, "encode_ms"),
                      _fmt_mean(summary, "decode_ms"),
                      _fmt_mean(summary, "wall_ms"), rtf_s))
 
     widths = [max(len(header[i]), max((len(row[i]) for row in rows), default=0))
               for i in range(len(header))]
-    # Left-align text columns (0,1), right-align numeric (2..5).
+    # Left-align text columns (0,1), right-align numeric (2..6).
     def fmt_row(row: tuple[str, ...]) -> str:
         parts = [row[i].ljust(widths[i]) if i < 2 else row[i].rjust(widths[i])
                  for i in range(len(row))]

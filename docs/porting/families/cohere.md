@@ -33,7 +33,7 @@ Validation status:
 - Native Transformers and C++ both use the 10-token English punctuation
   prompt: `[13764, 7, 4, 16, 62, 62, 5, 9, 11, 13]`.
 - `uv run scripts/validate.py compare --family cohere` passes for CPU
-  dumps generated from `models/cohere/cohere.bf16.gguf`.
+  dumps generated from `models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf`.
 - Backend-specific drift for CPU and accelerators.
 
 ## Current Commands
@@ -57,8 +57,7 @@ Conversion:
 ```bash
 uv run scripts/convert-cohere.py \
   <path-to-cohere-transcribe-03-2026> \
-  models/cohere/cohere.bf16.gguf \
-  --quant bf16
+  models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf
 ```
 
 Real-model smokes:
@@ -67,7 +66,7 @@ Real-model smokes:
 cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
 cmake --build build
 
-TRANSCRIBE_COHERE_MODEL=models/cohere/cohere.bf16.gguf \
+TRANSCRIBE_COHERE_MODEL=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf \
   ctest --test-dir build --output-on-failure -R cohere
 ```
 

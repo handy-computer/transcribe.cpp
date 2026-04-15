@@ -255,6 +255,16 @@ int main(int argc, char ** argv) {
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
 
+        // Emit a batch header line once, before any per-file output. Carries
+        // the one-shot load time so downstream WER tooling can record it
+        // without parsing stderr. Per-file lines follow on subsequent lines.
+        if (args.batch_jsonl) {
+            const struct transcribe_timings load_tm = transcribe_get_timings(ctx);
+            std::printf("{\"type\":\"batch_header\",\"load_ms\":%.1f}\n",
+                        (double)load_tm.load_ms);
+            std::fflush(stdout);
+        }
+
         int n_ok = 0;
         int n_fail = 0;
         for (size_t i = 0; i < wav_paths.size(); ++i) {

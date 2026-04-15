@@ -20,7 +20,7 @@ Usage:
     uv run scripts/validate.py all --family cohere --model /local/path
 
     # Override GGUF path
-    uv run scripts/validate.py cpp --family cohere --gguf models/cohere/cohere.bf16.gguf
+    uv run scripts/validate.py cpp --family cohere --gguf models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf
 
 Conventions:
     Manifest:    tests/golden/{family}/*.manifest.json
@@ -28,7 +28,8 @@ Conventions:
     Python env:  scripts/envs/{family}/
     Tolerances:  tests/tolerances/{family}.json
     Audio:       samples/jfk.wav
-    GGUF:        models/{family}/ (first *.gguf found, or *.bf16.gguf, or *.f32.gguf)
+    GGUF:        models/{slug}/ where slug starts with {family}
+                 (prefers *-BF16.gguf > *-F32.gguf > *-F16.gguf > first match)
     Ref output:  build/validate/{family}/{variant}/{case}/ref/
     C++ output:  build/validate/{family}/{variant}/{case}/cpp/
 """
@@ -100,21 +101,32 @@ def find_dump_script(repo: Path, family: str, reference: str) -> Path:
 
 
 def find_gguf(repo: Path, family: str) -> Path:
-    model_dir = repo / "models" / family
-    if not model_dir.is_dir():
-        raise SystemExit(
-            f"error: model directory not found: {model_dir}\n"
-            f"  Convert a GGUF first or set --gguf"
-        )
-    # Prefer bf16, then f32, then f16, then first match.
-    for suffix in [".bf16.gguf", ".f32.gguf", ".f16.gguf"]:
-        matches = sorted(model_dir.glob(f"*{suffix}"))
+    """Find a GGUF under models/<slug>/ where slug starts with `family`.
+
+    Layout is models/<hf-repo-name>/<hf-repo-name>-<QUANT>.gguf; the family
+    key is the leading token of the slug (e.g. family="parakeet" matches
+    `parakeet-tdt-0.6b-v2/`). If multiple variants exist, the first
+    sort-order match wins; pass --gguf to pick explicitly.
+    """
+    model_root = repo / "models"
+    if not model_root.is_dir():
+        raise SystemExit(f"error: model root not found: {model_root}")
+
+    def for_family(paths: list[Path]) -> list[Path]:
+        return [p for p in paths if p.stem.startswith(family)]
+
+    # Prefer BF16, then F32, then F16, then first match.
+    for quant in ["BF16", "F32", "F16"]:
+        matches = for_family(sorted(model_root.glob(f"*/*-{quant}.gguf")))
         if matches:
             return matches[0]
-    matches = sorted(model_dir.glob("*.gguf"))
+    matches = for_family(sorted(model_root.glob("*/*.gguf")))
     if matches:
         return matches[0]
-    raise SystemExit(f"error: no GGUF files found in {model_dir}")
+    raise SystemExit(
+        f"error: no GGUF files found under {model_root} for family '{family}'.\n"
+        f"  Convert a GGUF first or set --gguf."
+    )
 
 
 def find_cli(repo: Path) -> Path:

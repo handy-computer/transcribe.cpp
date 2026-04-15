@@ -81,14 +81,14 @@ class RunValue:
 
 
 def parse_quant_from_path(model_path: str) -> str:
-    """Extract quant from a model path like 'parakeet-tdt-0.6b-v2.q4_k_m.gguf'."""
+    """Extract quant from a model path like 'parakeet-tdt-0.6b-v2-Q4_K_M.gguf'."""
     name = Path(model_path).name
     if not name.endswith(".gguf"):
         return "unknown"
     stem = name[: -len(".gguf")]
-    if "." not in stem:
+    if "-" not in stem:
         return "unknown"
-    return stem.rsplit(".", 1)[1]
+    return stem.rsplit("-", 1)[1].lower()
 
 
 def extract_mean(summary: dict, field: str) -> float:

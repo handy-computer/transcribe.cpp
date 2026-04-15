@@ -305,20 +305,17 @@ constexpr const char * kTag = kFamilyTag;
 //              fp32 across every quant preset the converter ships.
 //
 //   GET_CONV - conv kernels (pre_encode + per-block conv module).
-//              The local f32-friendly conv wrappers in encoder.cpp
-//              im2col against the kernel's real type, which means
-//              quantized kernels would require a quantized im2col
-//              path that ggml does not provide. Allow F32+F16 only.
-//              Cost is small (~5 MB across all conv kernels) so this
-//              is a deliberate quality choice, not a workaround.
+//              Uses the project-wide TRANSCRIBE_QUANT_CONV_TYPES
+//              allowlist (F32 / F16). Quantized kernels would require a
+//              quantized im2col path that ggml does not provide.
 //
 //   GET_LIN  - linear weights consumed by ggml_mul_mat (encoder FF +
 //              attention projections, predictor LSTM gate matrices,
 //              joint enc/pred/out projections, predictor embed table).
-//              ggml_mul_mat handles a quantized W against an fp32 X
-//              natively, so this list grows as quant types come
-//              online. Today: F32 + F16. As Q8_0 / Q5_K / Q4_K land
-//              they get appended to this allowlist.
+//              Uses the project-wide TRANSCRIBE_QUANT_LINEAR_TYPES
+//              allowlist. Every family must accept the same set so a
+//              tools/transcribe-quantize preset never produces a
+//              tensor the loader refuses.
 #define GET_F32(slot, name, ...) \
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
@@ -332,7 +329,7 @@ constexpr const char * kTag = kFamilyTag;
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
             gguf, ctx_meta, (name), \
-            {GGML_TYPE_F32, GGML_TYPE_F16}, \
+            {TRANSCRIBE_QUANT_CONV_TYPES}, \
             {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \
@@ -342,10 +339,7 @@ constexpr const char * kTag = kFamilyTag;
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
             gguf, ctx_meta, (name), \
-            {GGML_TYPE_F32, GGML_TYPE_F16, \
-             GGML_TYPE_Q8_0, \
-             GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, \
-             GGML_TYPE_Q6_K}, \
+            {TRANSCRIBE_QUANT_LINEAR_TYPES}, \
             {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \

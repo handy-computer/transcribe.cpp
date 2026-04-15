@@ -142,7 +142,7 @@ def main() -> int:
     p.add_argument(
         "--model",
         type=Path,
-        default=repo / "models/cohere/cohere.f16.gguf",
+        default=repo / "models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-F16.gguf",
         help="Cohere GGUF for C++ path",
     )
     p.add_argument(

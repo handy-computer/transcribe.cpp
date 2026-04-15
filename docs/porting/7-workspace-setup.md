@@ -24,7 +24,7 @@ uv run scripts/validate.py ref --family cohere \
   --model /path/to/cohere-transcribe-03-2026
 
 uv run scripts/validate.py cpp --family cohere \
-  --gguf /path/to/cohere.bf16.gguf
+  --gguf /path/to/cohere-transcribe-03-2026-BF16.gguf
 
 export TRANSCRIBE_ARTIFACT_CACHE=~/Library/Caches/transcribe.cpp
 ```

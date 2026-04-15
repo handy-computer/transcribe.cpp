@@ -21,11 +21,12 @@
 //         (slot) = _t; \
 //     } while (0)
 //
-// The GET_* macros themselves stay per-family because the allowed
-// type lists encode a family-specific quantization policy (parakeet
-// ships F32/F16/Q8_0/Q4_K/Q5_K/Q6_K, cohere additionally accepts
-// BF16/Q4_0/Q4_1/Q5_0/Q5_1). Extracting the allowlists into shared
-// code would paper over that policy boundary.
+// The GET_* macros stay per-family so the family's log tag ends up in
+// diagnostics, but the *type allowlists* are shared via the
+// TRANSCRIBE_QUANT_LINEAR_TYPES / TRANSCRIBE_QUANT_CONV_TYPES macros
+// below. Every family must accept the full allowlist: the set of types
+// tools/transcribe-quantize emits is a project-wide policy, not a
+// per-family one. See docs/tools/quantization.md.
 
 #pragma once
 
@@ -34,6 +35,27 @@
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
+
+// Shared quant allowlists. These are the ggml types that
+// tools/transcribe-quantize may place into a released GGUF; every
+// family's GET_LIN / GET_CONV macros must accept exactly this set so
+// adding a preset to transcribe-quantize doesn't silently bypass a
+// family's loader validation.
+//
+// Expanded at macro-use time inside a brace list passed to
+// transcribe::weights::find_tensor(..., allowed_types, ...). Preprocessor
+// expansion (rather than a constexpr array) keeps the existing
+// find_tensor signature (std::initializer_list<ggml_type>) untouched.
+
+#define TRANSCRIBE_QUANT_LINEAR_TYPES                                        \
+    GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16,                          \
+    GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,                                          \
+    GGML_TYPE_Q5_0, GGML_TYPE_Q5_1,                                          \
+    GGML_TYPE_Q8_0,                                                          \
+    GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K
+
+#define TRANSCRIBE_QUANT_CONV_TYPES                                          \
+    GGML_TYPE_F32, GGML_TYPE_F16
 
 struct gguf_context;
 

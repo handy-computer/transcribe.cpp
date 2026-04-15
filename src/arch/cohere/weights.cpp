@@ -180,8 +180,9 @@ using transcribe::weights::lname;
 // The canonical find_tensor() + lname() helpers live in
 // src/transcribe-weights-util.{h,cpp}; see that header for rationale.
 // They are shared between every per-family weights.cpp. The GET_*
-// macros below still live here because their type allowlists encode
-// a per-family quantization policy, not a shared convention.
+// macros still live here so the family log tag lands in diagnostics,
+// but the type allowlists (TRANSCRIBE_QUANT_{LINEAR,CONV}_TYPES)
+// are project-wide — every family accepts the same set.
 constexpr const char * kTag = kFamilyTag;
 
 #define GET_F32(slot, name, ...) \
@@ -197,7 +198,7 @@ constexpr const char * kTag = kFamilyTag;
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
             gguf, ctx_meta, (name), \
-            {GGML_TYPE_F32, GGML_TYPE_F16}, \
+            {TRANSCRIBE_QUANT_CONV_TYPES}, \
             {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \
@@ -207,13 +208,7 @@ constexpr const char * kTag = kFamilyTag;
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
             gguf, ctx_meta, (name), \
-            {GGML_TYPE_F32, GGML_TYPE_F16, \
-             GGML_TYPE_BF16, \
-             GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, \
-             GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, \
-             GGML_TYPE_Q8_0, \
-             GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, \
-             GGML_TYPE_Q6_K}, \
+            {TRANSCRIBE_QUANT_LINEAR_TYPES}, \
             {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \

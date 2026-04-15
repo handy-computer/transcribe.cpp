@@ -8,9 +8,9 @@ compare.py — print a WER delta table from two or more score files.
 
 Usage:
     uv run scripts/wer/compare.py \\
-        reports/wer/parakeet-tdt-0.6b-v2.f32.test-clean.score.json \\
-        reports/wer/parakeet-tdt-0.6b-v2.q8_0.test-clean.score.json \\
-        reports/wer/parakeet-tdt-0.6b-v2.q4_k_m.test-clean.score.json
+        reports/wer/parakeet-tdt-0.6b-v2-F32.test-clean.score.json \\
+        reports/wer/parakeet-tdt-0.6b-v2-Q8_0.test-clean.score.json \\
+        reports/wer/parakeet-tdt-0.6b-v2-Q4_K_M.test-clean.score.json
 
 The first file is treated as the baseline. Output:
 
@@ -30,7 +30,7 @@ from pathlib import Path
 
 
 # Extract quant family from score filename.
-# parakeet-tdt-0.6b-v2.q4_k_m.test-clean.score.json → q4_k_m
+# parakeet-tdt-0.6b-v2-Q4_K_M.test-clean.score.json → q4_k_m
 FAMILY_PAT = re.compile(
     r"\.(?P<family>f32|bf16|f16|q8_0|q6_k|q5_k_m|q5_0|q5_1|q4_k_m|q4_0|q4_1)\."
 )

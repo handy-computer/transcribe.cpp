@@ -11,11 +11,9 @@
 # ///
 """
 convert-cohere.py - convert a Cohere ASR HuggingFace directory to a GGUF
-that transcribe.cpp's loader can ingest end-to-end. Defaults to f16.
-Pass --quant <preset> to pick a canned preset (f32, bf16, f16, q8_0,
-q4_0/q4_1/q5_0/q5_1, q6_k, q4_k_m, q5_k_m), or pass a raw ggml type
-name (e.g. --quant Q3_K) to override the linear bucket with any
-GGMLQuantizationType while conv/norm/embed stay at their defaults.
+that transcribe.cpp's loader can ingest end-to-end. The converter
+preserves the source/reference dtype; use tools/transcribe-quantize for
+deployment quantization.
 
 Source format:
     A directory from HuggingFace, e.g. cohere-transcribe-03-2026/, with:
@@ -27,7 +25,8 @@ Source format:
 
     All weights are bfloat16. The converter reads them via safetensors
     with framework="pt" (torch) since numpy does not support bf16, then
-    converts to fp32 via .float().numpy() before quantization.
+    converts to fp32 via .float().numpy() before encoding them as BF16
+    in GGUF.
 
     Weights are already in PyTorch layout (OIHW for conv2d, [out, in/g, k]
     for conv1d). NO transposition is needed for conv weights (unlike the
@@ -68,7 +67,7 @@ KV emitted (matches the C++ loader's read_cohere_hparams):
   stt.frontend.*
 
 CLI:
-    uv run scripts/convert-cohere.py <model-dir> <out.gguf> [--quant f16]
+    uv run scripts/convert-cohere.py <model-dir> <out.gguf>
 
 The script is intentionally one file with no helpers — linear flow for
 easy auditing.
@@ -83,210 +82,37 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import gguf
 from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
 from safetensors import safe_open
 import sentencepiece as spm
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.gguf_common import (  # noqa: E402
+    TOKEN_TYPE_BYTE,
+    TOKEN_TYPE_CONTROL,
+    TOKEN_TYPE_NORMAL,
+    TOKEN_TYPE_UNKNOWN,
+    TOKEN_TYPE_UNUSED,
+    encode_for_gguf,
+    gguf_name,
+    safe_id,
+    slug_from_repo_id,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 # ---------------------------------------------------------------------------
-# Quantization presets
+# Reference dtype
 # ---------------------------------------------------------------------------
-#
-# Each preset declares a target ggml type per tensor "bucket" and the
-# llama-style file_type tag. Buckets:
-#
-#   linear: ggml_mul_mat operands. Encoder FF + attention projections,
-#           decoder self/cross-attention, FFN, enc-dec proj.
-#
-#   embed:  the token embedding + head bias. Tied weights, so the
-#           embedding matrix is ALSO the output projection — hurts WER
-#           noticeably when pushed below the linear bucket. Mixed
-#           k-quant presets (q4_k_m / q5_k_m) bump this to Q6_K,
-#           matching the llama.cpp convention. Presets that omit
-#           `embed` fall back to their `linear` bucket.
-#
-#   conv:   conv kernels (pre_encode + per-block conv module). Left at
-#           F32 since im2col has no quantized path in ggml.
-#
-#   norm:   biases, LayerNorm scale/bias, BatchNorm stats, positional
-#           biases/encodings. Tiny and precision-sensitive — stays fp32.
-
-QUANT_PRESETS: dict[str, dict] = {
-    "f32": {
-        "linear":    GGMLQuantizationType.F32,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.ALL_F32,
-    },
-    "bf16": {
-        "linear":    GGMLQuantizationType.BF16,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_BF16,
-    },
-    "f16": {
-        "linear":    GGMLQuantizationType.F16,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_F16,
-    },
-    "q8_0": {
-        "linear":    GGMLQuantizationType.Q8_0,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q8_0,
-    },
-    # Legacy linear quants. Conv/norm/embed stay at F32 — the embed
-    # fallback to linear means dec.embed.token.weight also gets this
-    # bucket, matching llama.cpp's "mostly X" behaviour.
-    "q4_0": {
-        "linear":    GGMLQuantizationType.Q4_0,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q4_0,
-    },
-    "q4_1": {
-        "linear":    GGMLQuantizationType.Q4_1,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q4_1,
-    },
-    "q5_0": {
-        "linear":    GGMLQuantizationType.Q5_0,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q5_0,
-    },
-    "q5_1": {
-        "linear":    GGMLQuantizationType.Q5_1,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q5_1,
-    },
-    # Pure k-quant. Q6_K for all linear weights is the highest-quality
-    # k-quant. Embed falls back to linear (Q6_K), which is fine.
-    "q6_k": {
-        "linear":    GGMLQuantizationType.Q6_K,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q6_K,
-    },
-    # Mixed k-quants (llama.cpp convention): Q4_K / Q5_K for most
-    # linear weights, but bump the tied token embedding to Q6_K for
-    # quality. `embed` bucket is explicit for these presets.
-    "q4_k_m": {
-        "linear":    GGMLQuantizationType.Q4_K,
-        "embed":     GGMLQuantizationType.Q6_K,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q4_K_M,
-    },
-    "q5_k_m": {
-        "linear":    GGMLQuantizationType.Q5_K,
-        "embed":     GGMLQuantizationType.Q6_K,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q5_K_M,
-    },
-}
-
-
-# Set of GGMLQuantizationType names we accept as an ad-hoc --quant value
-# (so users can say `--quant Q3_K` without editing the preset table).
-# We only include types that `gguf.quants.quantize` can actually produce
-# AND that the C++ loader has runtime support for via standard ggml
-# dequantization. Tensors outside the `linear` bucket stay at their
-# QUANT_PRESETS["q8_0"] conv/norm defaults (F32).
-_RAW_LINEAR_TYPES: dict[str, GGMLQuantizationType] = {
-    "F32":   GGMLQuantizationType.F32,
-    "F16":   GGMLQuantizationType.F16,
-    "BF16":  GGMLQuantizationType.BF16,
-    "Q4_0":  GGMLQuantizationType.Q4_0,
-    "Q4_1":  GGMLQuantizationType.Q4_1,
-    "Q5_0":  GGMLQuantizationType.Q5_0,
-    "Q5_1":  GGMLQuantizationType.Q5_1,
-    "Q8_0":  GGMLQuantizationType.Q8_0,
-    "Q2_K":  GGMLQuantizationType.Q2_K,
-    "Q3_K":  GGMLQuantizationType.Q3_K,
-    "Q4_K":  GGMLQuantizationType.Q4_K,
-    "Q5_K":  GGMLQuantizationType.Q5_K,
-    "Q6_K":  GGMLQuantizationType.Q6_K,
-    "IQ4_NL": GGMLQuantizationType.IQ4_NL,
-    "IQ4_XS": GGMLQuantizationType.IQ4_XS,
-}
-
-
-def classify_tensor(gguf_name: str) -> str:
-    """Return the bucket name ('linear', 'conv', 'norm', 'embed') for
-    a canonical Cohere GGUF tensor name. Drives QUANT_PRESETS lookup
-    at write time. `embed` covers the tied token-embedding matrix and
-    the head bias row; presets that omit `embed` fall back to `linear`.
-    """
-    # Tied token embedding (also serves as the output projection).
-    # Gets the `embed` bucket so mixed k-quant presets can bump it
-    # to Q6_K. Note head.bias stays in the norm bucket — the C++
-    # loader requires it as F32 since it's a 1D per-logit offset
-    # added after the matmul.
-    if gguf_name == "dec.embed.token.weight":
-        return "embed"
-    # Biases of every kind — short and precision-sensitive.
-    if gguf_name.endswith(".bias"):
-        return "norm"
-    # BatchNorm: bn.{weight,bias,running_mean,running_var}.
-    if ".bn." in gguf_name:
-        return "norm"
-    # LayerNorm scale (norm_ff1.weight, norm_attn.weight, norm_self.weight, etc).
-    if "norm_" in gguf_name and gguf_name.endswith(".weight"):
-        return "norm"
-    # Decoder norms: dec.embed.norm.weight, dec.blocks.{i}.norm_*.weight, dec.final_norm.weight
-    if "norm." in gguf_name and gguf_name.endswith(".weight"):
-        return "norm"
-    if gguf_name.endswith("final_norm.weight"):
-        return "norm"
-    # Per-head positional biases — added directly to fp32 q.
-    if gguf_name.endswith(".pos_bias_u") or gguf_name.endswith(".pos_bias_v"):
-        return "norm"
-    # Positional encoding — precision-sensitive sinusoidal table.
-    if gguf_name.endswith(".pos_enc"):
-        return "norm"
-    # Conv kernels: enc.pre_encode.conv.*.weight and
-    # enc.blocks.{i}.conv.{pointwise1,depthwise,pointwise2}.weight.
-    if ".conv." in gguf_name and gguf_name.endswith(".weight"):
-        return "conv"
-    # Everything else: linear weights (attention, FFN, embeddings, projections).
-    return "linear"
-
-
-def encode_for_gguf(arr: np.ndarray, target: GGMLQuantizationType) -> tuple[np.ndarray, GGMLQuantizationType | None]:
-    """Convert an fp32 numpy array to whatever wire format `target`
-    requires, and return (encoded, raw_dtype) for `add_tensor`.
-    """
-    if arr.dtype != np.float32:
-        raise TypeError(f"encode_for_gguf expects fp32 input, got {arr.dtype}")
-
-    if target == GGMLQuantizationType.F32:
-        return arr, None
-    if target == GGMLQuantizationType.F16:
-        return arr.astype(np.float16), GGMLQuantizationType.F16
-    if target == GGMLQuantizationType.BF16:
-        packed = gguf.quants.quantize(arr, GGMLQuantizationType.BF16)
-        return packed, GGMLQuantizationType.BF16
-
-    packed = gguf.quants.quantize(arr, target)
-    return packed, target
+REFERENCE_DTYPE_LABEL = "BF16"
+REFERENCE_FILE_TYPE = LlamaFileType.MOSTLY_BF16
+REFERENCE_GGML_TYPE = GGMLQuantizationType.BF16
 
 
 # ---------------------------------------------------------------------------
 # Tokenizer extraction
 # ---------------------------------------------------------------------------
-
-TOKEN_TYPE_NORMAL  = 1
-TOKEN_TYPE_UNKNOWN = 2
-TOKEN_TYPE_CONTROL = 3
-TOKEN_TYPE_USER    = 4
-TOKEN_TYPE_UNUSED  = 5
-TOKEN_TYPE_BYTE    = 6
 
 
 def extract_tokenizer(tokenizer_model_path: Path):
@@ -329,10 +155,6 @@ def extract_tokenizer(tokenizer_model_path: Path):
         tokens.append(piece)
         scores.append(score)
         types.append(ttype)
-
-    def safe_id(method) -> int | None:
-        v = method()
-        return v if v >= 0 else None
 
     return {
         "tokens":   tokens,
@@ -583,153 +405,8 @@ def _compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_quant(quant: str) -> tuple[str, dict]:
-    """Resolve --quant into (label, preset_dict).
-
-    `quant` may be either a QUANT_PRESETS name (e.g. "q4_k_m") OR a
-    raw ggml type name from _RAW_LINEAR_TYPES (e.g. "Q3_K"). For raw
-    types we synthesize a preset on the fly with conv/norm=F32 and
-    no explicit `embed` entry (so embed falls back to linear).
-    """
-    if quant in QUANT_PRESETS:
-        return quant, QUANT_PRESETS[quant]
-
-    raw = quant.upper()
-    if raw in _RAW_LINEAR_TYPES:
-        linear_type = _RAW_LINEAR_TYPES[raw]
-        # No matching LlamaFileType for every raw override; just tag
-        # as GUESSED so the loader doesn't complain.
-        return f"custom:{raw}", {
-            "linear":    linear_type,
-            "conv":      GGMLQuantizationType.F32,
-            "norm":      GGMLQuantizationType.F32,
-            "file_type": LlamaFileType.GUESSED,
-        }
-
-    raise ValueError(
-        f"unknown --quant value: {quant!r}; "
-        f"known presets: {sorted(QUANT_PRESETS)}, "
-        f"or a raw ggml type: {sorted(_RAW_LINEAR_TYPES)}"
-    )
-
-
-def _bucket_type(preset: dict, bucket: str) -> GGMLQuantizationType:
-    """Look up the target quant type for a bucket with the embed -> linear
-    fallback rule. Presets that omit `embed` reuse `linear`."""
-    if bucket in preset:
-        return preset[bucket]
-    if bucket == "embed":
-        return preset["linear"]
-    raise KeyError(f"preset missing required bucket: {bucket!r}")
-
-
-# ---------------------------------------------------------------------------
-# Two-step dispatch for types gguf-py can't quantize
-# ---------------------------------------------------------------------------
-#
-# gguf-py 0.18 implements F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0
-# directly. Every K-quant (Q2_K, Q3_K, Q4_K, Q5_K, Q6_K) and every IQ
-# quant raises NotImplementedError from gguf.quants.quantize. For those
-# targets we fall back to a two-step: first write a bf16 GGUF via the
-# pure-Python path, then shell out to the `transcribe-quantize` C tool
-# to re-quantize. The tool lives at build/bin/transcribe-quantize and
-# is gated behind -DTRANSCRIBE_BUILD_TOOLS=ON.
-
-# Presets that the C-tool handles. Names must match transcribe-quantize
-# PRESETS in tools/transcribe-quantize/main.cpp.
-_CTOOL_PRESETS = {"q4_k_m", "q5_k_m", "q6_k"}
-
-# Raw ggml types that require the C-tool path (Python can't produce them).
-_CTOOL_RAW_TYPES = {
-    GGMLQuantizationType.Q2_K,
-    GGMLQuantizationType.Q3_K,
-    GGMLQuantizationType.Q4_K,
-    GGMLQuantizationType.Q5_K,
-    GGMLQuantizationType.Q6_K,
-    GGMLQuantizationType.IQ4_NL,
-    GGMLQuantizationType.IQ4_XS,
-}
-
-
-def _needs_ctool(quant: str) -> bool:
-    """Return True if `quant` requires the transcribe-quantize C tool
-    (i.e. the Python gguf package can't produce it)."""
-    if quant in _CTOOL_PRESETS:
-        return True
-    if quant in QUANT_PRESETS:
-        return False
-    raw = quant.upper()
-    if raw in _RAW_LINEAR_TYPES:
-        return _RAW_LINEAR_TYPES[raw] in _CTOOL_RAW_TYPES
-    return False
-
-
-def _find_transcribe_quantize() -> Path:
-    """Locate the transcribe-quantize binary. Scripts run from anywhere;
-    the tool lives at transcribe.cpp/build/bin/transcribe-quantize
-    relative to this script."""
-    script_dir = Path(__file__).resolve().parent
-    candidate = script_dir.parent / "build" / "bin" / "transcribe-quantize"
-    if candidate.is_file():
-        return candidate
-    raise FileNotFoundError(
-        f"transcribe-quantize binary not found at {candidate}. "
-        "Rebuild with -DTRANSCRIBE_BUILD_TOOLS=ON: "
-        "cmake -B build -DTRANSCRIBE_BUILD_TOOLS=ON && "
-        "cmake --build build --target transcribe-quantize"
-    )
-
-
-def _convert_via_ctool(model_dir: Path, out_path: Path, quant: str) -> None:
-    """Two-step convert: write a bf16 intermediate via the Python path,
-    then run transcribe-quantize to produce `quant`. Deletes the
-    intermediate on success."""
-    import subprocess
-    import tempfile
-
-    tool = _find_transcribe_quantize()
-
-    # Raw ggml types need a preset name the C tool recognizes. For now
-    # the tool only ships q4_k_m / q5_k_m / q6_k / q8_0 / f16; reject
-    # ad-hoc raw-type overrides that don't have a matching preset.
-    if quant not in _CTOOL_PRESETS:
-        raise ValueError(
-            f"--quant {quant!r} needs the C tool but transcribe-quantize "
-            f"has no preset for it. Supported C-tool presets: "
-            f"{sorted(_CTOOL_PRESETS)}"
-        )
-
-    with tempfile.TemporaryDirectory(prefix="cohere-quant-", dir=str(out_path.parent)) as td:
-        intermediate = Path(td) / f"{out_path.stem}.bf16.intermediate.gguf"
-        print(
-            f"Two-step quant: writing bf16 intermediate to {intermediate.name}, "
-            f"then requantizing to {quant} via {tool}"
-        )
-        # Step 1: Python convert → bf16 intermediate.
-        convert(model_dir, intermediate, "bf16")
-
-        # Step 2: C tool re-quantize.
-        cmd = [str(tool), str(intermediate), str(out_path), "--quant", quant]
-        print(f"$ {' '.join(cmd)}")
-        result = subprocess.run(cmd, check=False)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"transcribe-quantize failed with exit code {result.returncode}"
-            )
-
-    print(f"Done. Wrote {out_path} ({out_path.stat().st_size / (1024 * 1024):.1f} MB)")
-
-
-def convert(model_dir: Path, out_path: Path, quant: str) -> None:
-    quant_label, preset = _resolve_quant(quant)
-    embed_type = _bucket_type(preset, "embed")
-    print(
-        f"Quant: {quant_label} "
-        f"(linear={preset['linear'].name}, "
-        f"conv={preset['conv'].name}, "
-        f"norm={preset['norm'].name}, "
-        f"embed={embed_type.name})"
-    )
+def convert(model_dir: Path, out_path: Path) -> None:
+    print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     config_path      = model_dir / "config.json"
     gen_config_path  = model_dir / "generation_config.json"
@@ -785,7 +462,7 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
         # ----- general.* metadata -----
         writer.add_string("general.basename",   "cohere-transcribe")
         writer.add_string("general.size_label", size_label)
-        writer.add_uint32("general.file_type",  int(preset["file_type"]))
+        writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
         writer.add_array("general.languages",   hp["languages"])
 
         # ----- stt.variant -----
@@ -843,7 +520,6 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
 
         # ----- tensors -----
         n_added       = 0
-        bucket_counts = {"linear": 0, "conv": 0, "norm": 0, "embed": 0}
         bytes_in  = 0
         bytes_out = 0
 
@@ -855,17 +531,18 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
                 )
             # Read as torch bf16 tensor, convert to fp32 numpy.
             t = st.get_tensor(src_name)
+            if t.dtype != torch.bfloat16:
+                raise ValueError(
+                    f"{src_name}: expected source dtype torch.bfloat16, got {t.dtype}"
+                )
             arr = t.float().numpy()
             arr = transform(arr)
             if arr.dtype != np.float32:
                 raise ValueError(
                     f"{src_name}: expected float32 after conversion, got {arr.dtype}"
                 )
-            bucket = classify_tensor(gguf_name)
-            target = _bucket_type(preset, bucket)
-            encoded, raw_dtype = encode_for_gguf(arr, target)
+            encoded, raw_dtype = encode_for_gguf(arr, REFERENCE_GGML_TYPE)
             writer.add_tensor(gguf_name, encoded, raw_dtype=raw_dtype)
-            bucket_counts[bucket] += 1
             bytes_in  += int(arr.nbytes)
             bytes_out += int(encoded.nbytes)
             n_added += 1
@@ -950,15 +627,9 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
             raise RuntimeError(
                 f"tensor count mismatch: added {n_added}, expected {expected}"
             )
+        print(f"Added {n_added} tensors")
         print(
-            f"Added {n_added} tensors "
-            f"(linear={bucket_counts['linear']}, "
-            f"embed={bucket_counts['embed']}, "
-            f"conv={bucket_counts['conv']}, "
-            f"norm={bucket_counts['norm']})"
-        )
-        print(
-            f"Tensor data: {bytes_in / (1024 * 1024):.1f} MB in (fp32) -> "
+            f"Tensor data: {bytes_in / (1024 * 1024):.1f} MB in (fp32 staging) -> "
             f"{bytes_out / (1024 * 1024):.1f} MB out "
             f"({100.0 * bytes_out / max(bytes_in, 1):.1f}% of source)"
         )
@@ -1023,35 +694,27 @@ def main(argv: list[str]) -> int:
     )
     p.add_argument("model_dir", type=Path,
                    help="Path to a cohere-transcribe-* directory")
-    p.add_argument("out_path", type=Path,
-                   help="Output .gguf path")
-    p.add_argument(
-        "--quant",
-        default="f16",
-        metavar="PRESET_OR_TYPE",
-        help=(
-            "Quantization preset OR raw ggml type name. "
-            "Presets: " + ", ".join(sorted(QUANT_PRESETS)) + ". "
-            "Raw ggml types (applied to the linear bucket only, "
-            "conv/norm stay F32): "
-            + ", ".join(sorted(_RAW_LINEAR_TYPES))
-            + ". Default: f16 (matches source bf16). "
-            "Mixed presets (q4_k_m, q5_k_m) bump the tied token "
-            "embedding to Q6_K."
-        ),
-    )
+    p.add_argument("out_path", type=Path, nargs="?",
+                   help="Output .gguf path (optional if --repo-id is given)")
+    p.add_argument("--repo-id", type=str, default=None,
+                   help="HF repo id (e.g. CohereLabs/cohere-transcribe-03-2026). "
+                        f"When set, output is models/<slug>/<slug>-{REFERENCE_DTYPE_LABEL}.gguf.")
     args = p.parse_args(argv[1:])
 
     if not args.model_dir.is_dir():
         print(f"error: {args.model_dir} is not a directory", file=sys.stderr)
         return 2
 
-    # Dispatch: pure Python for types gguf-py can quantize directly;
-    # two-step via the transcribe-quantize C tool for k-quants.
-    if _needs_ctool(args.quant):
-        _convert_via_ctool(args.model_dir, args.out_path, args.quant)
-    else:
-        convert(args.model_dir, args.out_path, args.quant)
+    out_path = args.out_path
+    if out_path is None:
+        if not args.repo_id:
+            print("error: provide either out_path or --repo-id", file=sys.stderr)
+            return 2
+        slug = slug_from_repo_id(args.repo_id)
+        out_path = REPO_ROOT / "models" / slug / gguf_name(slug, REFERENCE_DTYPE_LABEL)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    convert(args.model_dir, out_path)
     return 0
 
 

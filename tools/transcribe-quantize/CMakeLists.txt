@@ -6,6 +6,7 @@
 
 add_executable(transcribe-quantize
     main.cpp
+    policy.cpp
 )
 
 target_link_libraries(transcribe-quantize

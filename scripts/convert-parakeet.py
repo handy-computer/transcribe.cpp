@@ -10,8 +10,9 @@
 # ///
 """
 convert-parakeet.py - convert a NeMo Parakeet MLX directory to a GGUF
-that transcribe.cpp's loader can ingest end-to-end. Defaults to fp32;
-pass --quant f16 (or future quant presets) to write a smaller file.
+that transcribe.cpp's loader can ingest end-to-end. The converter
+preserves the source/reference dtype; use tools/transcribe-quantize for
+deployment quantization.
 
 Source format:
     A directory laid out the way nemo->mlx exporters produce, e.g.
@@ -87,133 +88,31 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import gguf
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from gguf import GGUFWriter, LlamaFileType
 from safetensors import safe_open
 import sentencepiece as spm
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.gguf_common import (  # noqa: E402
+    TOKEN_TYPE_BYTE,
+    TOKEN_TYPE_CONTROL,
+    TOKEN_TYPE_NORMAL,
+    TOKEN_TYPE_UNKNOWN,
+    TOKEN_TYPE_UNUSED,
+    gguf_name,
+    safe_id,
+    slug_from_repo_id,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 # ---------------------------------------------------------------------------
-# Quantization presets
+# Reference dtype
 # ---------------------------------------------------------------------------
-#
-# Each preset declares a target ggml type per tensor "bucket" and the
-# llama-style file_type tag that goes into general.file_type. Buckets
-# match the C++ loader's GET_LIN / GET_CONV / GET_F32 macros in
-# src/arch/parakeet/weights.cpp:
-#
-#   linear: ggml_mul_mat operands. Encoder FF + attention projections,
-#           predictor LSTM gate matrices, predictor embedding,
-#           joint enc/pred/out projections. ggml_mul_mat handles a
-#           quantized W against an fp32 X natively, so this is the
-#           bucket that grows as new quant types come online.
-#
-#   conv:   conv kernels (pre_encode + per-block conv module). The
-#           local f32-friendly conv wrappers in encoder.cpp im2col
-#           against the kernel's real type and there's no quantized
-#           im2col path in ggml; cap this bucket at F16. Cost is small
-#           (~5 MB total across all conv kernels) so we just leave it
-#           at F32 today and revisit when we want to fight Metal
-#           kernel coverage.
-#
-#   norm:   biases, LayerNorm scale/bias, BatchNorm stats, attn
-#           pos_bias_u/v. Tiny and precision-sensitive — stays fp32
-#           across every preset.
-#
-# Adding a new preset = add a row here. Adding a new quant type =
-# extend the linear allowlist in weights.cpp::GET_LIN AND make sure
-# gguf.quants.quantize() actually implements that type in the gguf
-# version pinned at the top of this script (gguf 0.18.0 ships F16,
-# BF16, Q8_0, Q4_0, Q5_0 in pure Python; the K-quants raise
-# NotImplementedError and need a ctypes bridge to libggml).
-QUANT_PRESETS: dict[str, dict] = {
-    "f32": {
-        "linear":    GGMLQuantizationType.F32,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.ALL_F32,
-    },
-    "f16": {
-        "linear":    GGMLQuantizationType.F16,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_F16,
-    },
-    # Q8_0 is the largest blockwise quant — 8 bits + per-block fp16
-    # scale, no rounding to a smaller bit-width. Block size is 32, and
-    # every Parakeet 0.6B linear weight has its inner dim (ne[0]) in
-    # {640, 1024, 4096}, all divisible by 32, so no per-tensor
-    # fallback is needed. Q8_0 typically lands within 0.05 WER of fp16
-    # on encoder-heavy ASR models (we'll measure with the WER harness
-    # in a follow-up).
-    "q8_0": {
-        "linear":    GGMLQuantizationType.Q8_0,
-        "conv":      GGMLQuantizationType.F32,
-        "norm":      GGMLQuantizationType.F32,
-        "file_type": LlamaFileType.MOSTLY_Q8_0,
-    },
-}
 
-
-def classify_tensor(gguf_name: str) -> str:
-    """Return the bucket name ('linear', 'conv', 'norm') for a canonical
-    Parakeet GGUF tensor name. Drives QUANT_PRESETS lookup at write
-    time. The classification mirrors the GET_*-macro choice in
-    src/arch/parakeet/weights.cpp tensor by tensor: if you change one,
-    change the other or the loader will reject the file.
-    """
-    # Biases of every kind — short and precision-sensitive.
-    if gguf_name.endswith(".bias"):
-        return "norm"
-    # BatchNorm: bn.{weight,bias,running_mean,running_var}.
-    if ".bn." in gguf_name:
-        return "norm"
-    # LayerNorm scale (norm_ff1.weight, norm_attn.weight, etc).
-    # The .bias case was already caught above. norm_conv.weight does
-    # NOT contain ".conv." as a substring so the conv branch below
-    # won't grab it.
-    if "norm_" in gguf_name and gguf_name.endswith(".weight"):
-        return "norm"
-    # Per-head positional biases — added directly to fp32 q via
-    # ggml_add inside rel_pos_mhsa.
-    if gguf_name.endswith(".pos_bias_u") or gguf_name.endswith(".pos_bias_v"):
-        return "norm"
-    # Conv kernels: enc.pre_encode.conv.{0,2,3,5,6}.weight and
-    # enc.blocks.{i}.conv.{pointwise1,depthwise,pointwise2}.weight.
-    # ".conv." (with dots on both sides) distinguishes these from
-    # norm_conv.weight which we already routed above.
-    if ".conv." in gguf_name and gguf_name.endswith(".weight"):
-        return "conv"
-    # Everything else: linear weights.
-    return "linear"
-
-
-def encode_for_gguf(arr: np.ndarray, target: GGMLQuantizationType) -> tuple[np.ndarray, GGMLQuantizationType | None]:
-    """Convert an fp32 numpy array to whatever wire format `target`
-    requires, and return (encoded, raw_dtype) for `add_tensor`.
-
-    For F32, returns the array unchanged with raw_dtype=None (gguf-py
-    infers F32 from the float32 ndarray).
-    For F16, returns a float16 view that gguf-py also infers natively.
-    For other quant types, returns the packed uint8 byte buffer plus
-    the explicit raw_dtype tag so gguf-py records the correct type
-    rather than inferring uint8.
-    """
-    if arr.dtype != np.float32:
-        raise TypeError(f"encode_for_gguf expects fp32 input, got {arr.dtype}")
-
-    if target == GGMLQuantizationType.F32:
-        return arr, None
-    if target == GGMLQuantizationType.F16:
-        # gguf-py's add_tensor infers F16 from float16 ndarrays. The
-        # explicit tag is harmless and makes intent obvious.
-        return arr.astype(np.float16), GGMLQuantizationType.F16
-
-    # Quantized path. gguf.quants.quantize raises NotImplementedError
-    # for K-quants in this gguf version; that's caught at preset
-    # registration time, not here.
-    packed = gguf.quants.quantize(arr, target)
-    return packed, target
+REFERENCE_DTYPE_LABEL = "F32"
+REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
 
 
 # ---------------------------------------------------------------------------
@@ -256,16 +155,8 @@ VARIANT_PROFILES: dict[int, dict] = {
 # ---------------------------------------------------------------------------
 # Tokenizer extraction
 # ---------------------------------------------------------------------------
-
-# llama.cpp / whisper.cpp tokenizer.ggml.token_type values. We follow
-# the same conventions so an inspector built for either project can
-# read our GGUFs without surprises.
-TOKEN_TYPE_NORMAL  = 1
-TOKEN_TYPE_UNKNOWN = 2
-TOKEN_TYPE_CONTROL = 3
-TOKEN_TYPE_USER    = 4
-TOKEN_TYPE_UNUSED  = 5
-TOKEN_TYPE_BYTE    = 6
+#
+# TOKEN_TYPE_* constants and safe_id() are imported from lib.gguf_common.
 
 
 def extract_tokenizer(tokenizer_model_path: Path, blank_piece: str = "<blank>"):
@@ -320,10 +211,6 @@ def extract_tokenizer(tokenizer_model_path: Path, blank_piece: str = "<blank>"):
     types.append(TOKEN_TYPE_CONTROL)
 
     blank_id = vocab_size
-
-    def safe_id(method) -> int | None:
-        v = method()
-        return v if v >= 0 else None
 
     return {
         "tokens":   tokens,
@@ -600,15 +487,8 @@ JOINT_TABLE: list[tuple[str, str, callable]] = [
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, quant: str) -> None:
-    if quant not in QUANT_PRESETS:
-        raise ValueError(
-            f"unknown --quant preset: {quant!r}; "
-            f"known presets: {sorted(QUANT_PRESETS)}"
-        )
-    preset = QUANT_PRESETS[quant]
-    print(f"Quant preset: {quant} (linear={preset['linear'].name}, "
-          f"conv={preset['conv'].name}, norm={preset['norm'].name})")
+def convert(model_dir: Path, out_path: Path) -> None:
+    print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     config_path     = model_dir / "config.json"
     tokenizer_path  = model_dir / "tokenizer.model"
@@ -659,12 +539,10 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
         writer.add_string("general.basename",   "parakeet-tdt")
         writer.add_string("general.size_label", "0.6B")
         writer.add_string("general.version",    profile["version"])
-        # general.file_type is the llama-style "what quant did this
-        # converter pick" tag. The C++ loader doesn't read it today
-        # (it relies on per-tensor type at the gguf level) but it
-        # belongs in the metadata so `gguf-dump` and similar tools
-        # can identify the variant without inspecting tensors.
-        writer.add_uint32("general.file_type", int(preset["file_type"]))
+        # general.file_type is the llama-style "what dtype is this"
+        # tag. The loader relies on per-tensor types, but the metadata
+        # helps inspectors identify the accuracy GGUF.
+        writer.add_uint32("general.file_type", int(REFERENCE_FILE_TYPE))
         # general.languages is the descriptive language list. The
         # loader's read_languages_kv pulls this and feeds it through
         # transcribe_model::set_languages().
@@ -734,16 +612,12 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
 
         # ----- tensors -----
         # Helper that pulls a tensor by NeMo name, runs the layout
-        # transform, looks up the target dtype from the active preset,
-        # and adds the (possibly cast / quantized) tensor to the
+        # transform, and adds the source/reference dtype tensor to the
         # writer. Errors loud and early on missing keys or unexpected
         # source dtype — the converter prefers to fail with a precise
         # diagnostic over emitting an incomplete GGUF that the loader
         # will then reject anyway.
-        n_added       = 0
-        bucket_counts = {"linear": 0, "conv": 0, "norm": 0}
-        # Track on-disk byte totals so the closing log can show the
-        # quant savings vs the source fp32 size at a glance.
+        n_added = 0
         bytes_in  = 0
         bytes_out = 0
 
@@ -762,21 +636,9 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
                 raise ValueError(
                     f"{nemo_name}: expected float32, got {arr.dtype}"
                 )
-            bucket = classify_tensor(gguf_name)
-            target = preset[bucket]
-            encoded, raw_dtype = encode_for_gguf(arr, target)
-            # Do NOT pass raw_shape: for f32/f16 the encoded ndarray's
-            # shape already matches the source, and for quantized
-            # tensors gguf-py reads the byte-shape off the encoded
-            # buffer and converts it back to the logical shape via
-            # quant_shape_from_byte_shape(). Passing the logical
-            # shape explicitly would make it try to interpret
-            # `(out, in)` as a byte-shape and crash on the divisibility
-            # check.
-            writer.add_tensor(gguf_name, encoded, raw_dtype=raw_dtype)
-            bucket_counts[bucket] += 1
+            writer.add_tensor(gguf_name, arr)
             bytes_in  += int(arr.nbytes)
-            bytes_out += int(encoded.nbytes)
+            bytes_out += int(arr.nbytes)
             n_added += 1
 
         # pre_encode (12 tensors)
@@ -830,14 +692,9 @@ def convert(model_dir: Path, out_path: Path, quant: str) -> None:
             raise RuntimeError(
                 f"tensor count mismatch: added {n_added}, expected {expected}"
             )
+        print(f"Added {n_added} tensors")
         print(
-            f"Added {n_added} tensors "
-            f"(linear={bucket_counts['linear']}, "
-            f"conv={bucket_counts['conv']}, "
-            f"norm={bucket_counts['norm']})"
-        )
-        print(
-            f"Tensor data: {bytes_in / (1024 * 1024):.1f} MB in (fp32) -> "
+            f"Tensor data: {bytes_in / (1024 * 1024):.1f} MB in -> "
             f"{bytes_out / (1024 * 1024):.1f} MB out "
             f"({100.0 * bytes_out / max(bytes_in, 1):.1f}% of source)"
         )
@@ -887,26 +744,27 @@ def main(argv: list[str]) -> int:
     )
     p.add_argument("model_dir", type=Path,
                    help="Path to a parakeet-tdt-*-mlx directory")
-    p.add_argument("out_path", type=Path,
-                   help="Output .gguf path")
-    p.add_argument(
-        "--quant",
-        choices=sorted(QUANT_PRESETS),
-        default="f32",
-        help=(
-            "Quantization preset. f32 (default) is the lossless reference "
-            "build. f16 casts every linear weight to half precision and "
-            "leaves conv kernels and norms / biases at fp32. Additional "
-            "presets land as the C++ loader and quantizer support grow."
-        ),
-    )
+    p.add_argument("out_path", type=Path, nargs="?",
+                   help="Output .gguf path (optional if --repo-id is given)")
+    p.add_argument("--repo-id", type=str, default=None,
+                   help="HF repo id (e.g. nvidia/parakeet-tdt-0.6b-v2). "
+                        f"When set, output is models/<slug>/<slug>-{REFERENCE_DTYPE_LABEL}.gguf.")
     args = p.parse_args(argv[1:])
 
     if not args.model_dir.is_dir():
         print(f"error: {args.model_dir} is not a directory", file=sys.stderr)
         return 2
 
-    convert(args.model_dir, args.out_path, args.quant)
+    out_path = args.out_path
+    if out_path is None:
+        if not args.repo_id:
+            print("error: provide either out_path or --repo-id", file=sys.stderr)
+            return 2
+        slug = slug_from_repo_id(args.repo_id)
+        out_path = REPO_ROOT / "models" / slug / gguf_name(slug, REFERENCE_DTYPE_LABEL)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    convert(args.model_dir, out_path)
     return 0
 
 
