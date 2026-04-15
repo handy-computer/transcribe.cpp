@@ -1,15 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = [
-#     "gguf>=0.10.0",
-#     "huggingface-hub>=0.30",
-#     "numpy>=1.26",
-#     "safetensors>=0.4",
-#     "sentencepiece>=0.2",
-#     "torch>=2.0",
-# ]
-# ///
+#!/usr/bin/env python3
 """
 convert-cohere.py - convert a Cohere ASR HuggingFace directory to a GGUF
 that transcribe.cpp's loader can ingest end-to-end. The converter
