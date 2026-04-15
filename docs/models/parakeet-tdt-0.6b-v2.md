@@ -140,13 +140,13 @@ uv run --project scripts/envs/parakeet \
 ### Quantize
 
 Run `transcribe-quantize` once per target quant. Example for F16; repeat with
-`q8_0`, `q6_k`, `q5_k_m`, `q4_k_m`:
+`Q8_0`, `Q6_K`, `Q5_K_M`, `Q4_K_M`:
 
 ```bash
 build/bin/transcribe-quantize \
-  models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf \
-  models/parakeet/parakeet-tdt-0.6b-v2.f16.gguf \
-  --quant f16
+  models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \
+  models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F16.gguf \
+  --quant F16
 ```
 
 ### Validate
@@ -161,6 +161,6 @@ uv run scripts/validate.py all --family parakeet
 cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
 cmake --build build
 
-TRANSCRIBE_REAL_PARAKEET_GGUF=models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf \
+TRANSCRIBE_REAL_PARAKEET_GGUF=models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \
   ctest --test-dir build --output-on-failure -R 'parakeet|encoder|decoder'
 ```
