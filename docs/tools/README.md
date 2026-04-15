@@ -8,7 +8,7 @@ when), see [`docs/porting/0-porting.md`](../porting/0-porting.md).
 ## Pipeline at a glance
 
 ```text
-  HF / NeMo / MLX checkpoint
+  HF / NeMo checkpoint
             │
             ▼ scripts/convert-<family>.py       (Python — conversion only)
             │   emits source/reference-dtype GGUF
@@ -63,5 +63,5 @@ This split mirrors `llama.cpp`'s `convert_hf_to_gguf.py` →
 ## Other
 
 - `scripts/envs/<family>/pyproject.toml` — per-family `uv` env. Each
-  converter and reference dumper has its own env because NeMo, MLX,
-  and Transformers have conflicting dependency graphs.
+  converter and reference dumper has its own env because NeMo and
+  Transformers have conflicting dependency graphs.

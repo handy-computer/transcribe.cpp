@@ -144,8 +144,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         return TRANSCRIBE_ERR_GGUF;
     }
     // Joint activation allow-list. The C++ joint forward implements
-    // exactly the same three the parakeet-mlx rnnt.py JointNetwork
-    // accepts; anything else is a converter mistake or a future model
+    // the same three the reference JointNetwork accepts; anything
+    // else is a converter mistake or a future model
     // we haven't ported yet, and producing wrong logits silently is
     // worse than failing loudly here.
     if (hp.joint_activation != "relu" &&

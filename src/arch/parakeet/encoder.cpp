@@ -20,10 +20,6 @@
 //     that names intermediates and stashes them in the EncoderDumps
 //     struct so the 3b-3e bring-up harness can diff every sub-step
 //
-// Reference: parakeet-mlx
-//   /tmp/parakeet-mlx/parakeet_mlx/conformer.py:206-328  (DwStridingSubsampling)
-//   /tmp/parakeet-mlx/parakeet_mlx/conformer.py:392-423  (Conformer.__call__)
-//
 // Layout cheat sheet:
 //
 //   MelFrontend output  : row-major [n_mels=128, n_frames=T_mel] f32
@@ -34,9 +30,9 @@
 //                         order which translates to ggml ne
 //                         [KW, KH, IC, OC] where KW is aligned with
 //                         the FREQ axis and KH with the TIME axis
-//                         (MLX NHWC convention: H=T, W=F). The 3x3
-//                         conv kernel is not spatially symmetric so
-//                         the data must be presented with W=F, H=T.
+//                         (NHWC convention: H=T, W=F). The 3x3 conv
+//                         kernel is not spatially symmetric so the
+//                         data must be presented with W=F, H=T.
 //
 // After 3 stride-2 convs (kernel=3, padding=1), W and H shrink by
 // floor((d + 2 - 3)/2) + 1 per layer:
@@ -273,7 +269,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         // The driver fills it via ggml_backend_tensor_set after the
         // compute buffer is allocated. ne = [d_model, pos_len, 1, 1]
         // — slow-to-fast shape (numpy) is (pos_len, d_model),
-        // matching parakeet-mlx's `enc.pos_emb` dump.
+        // matching the reference `enc.pos_emb` dump.
         const int64_t pos_len = 2 * T_enc - 1;
         eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
                                            hp.enc_d_model, pos_len);
@@ -320,8 +316,8 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
 
     // Final encoder output. With all 24 blocks wired, this is now
     // the true encoder exit point (= block 23's norm_out output) and
-    // the comparator's `enc.final` row will compare against
-    // parakeet-mlx's true encoder output.
+    // the comparator's `enc.final` row will compare against the
+    // reference's true encoder output.
     eb.dumps.final_out = x;
     x = conf::named(x, "enc.final");
 

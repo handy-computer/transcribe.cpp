@@ -26,10 +26,10 @@
 //     ne0 of W as the input dim — so PyTorch [out, in] is what we
 //     want.
 //   - Conv2d weight tensors are stored in PyTorch OIHW
-//     [out_channels, in_channels, kH, kW]. The MLX safetensors source
-//     uses HWIO; the converter transposes. Phase 4 figures out
-//     whether to feed this directly to ggml_conv_2d or transpose
-//     again at runtime — that's not 2C's problem.
+//     [out_channels, in_channels, kH, kW], matching NeMo's native
+//     layout. Phase 4 figures out whether to feed this directly to
+//     ggml_conv_2d or transpose again at runtime — that's not 2C's
+//     problem.
 //   - Conv1d weight tensors (the depthwise/pointwise convs inside
 //     the Conformer block) are stored as PyTorch
 //     [out_channels, in_channels, kernel] for the pointwise convs and

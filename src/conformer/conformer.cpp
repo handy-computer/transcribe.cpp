@@ -12,10 +12,6 @@
 // Per-family policy knobs (ConvPolicy, BlockParams) are passed in by
 // the family — no environment variables are read here except by the
 // shared detect_direct_pw, which is identical across families.
-//
-// Reference: parakeet-mlx
-//   /tmp/parakeet-mlx/parakeet_mlx/conformer.py:206-328  (DwStridingSubsampling)
-//   /tmp/parakeet-mlx/parakeet_mlx/conformer.py:392-423  (Conformer.__call__)
 
 #include "conformer/conformer.h"
 
@@ -112,10 +108,10 @@ ggml_tensor * macaron_ff_residual(ggml_context * ctx,
     return ggml_add(ctx, x, y);
 }
 
-// Shaw / Transformer-XL relative-position skew. See attention.py:82-91
-// in parakeet-mlx. Transforms the position scoring matrix from
-// [pos_len, T_q, H, 1] to the same shape but with each row rotated
-// so that column k holds the score for relative offset k.
+// Shaw / Transformer-XL relative-position skew. Transforms the
+// position scoring matrix from [pos_len, T_q, H, 1] to the same shape
+// but with each row rotated so that column k holds the score for
+// relative offset k.
 ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
     const int64_t pos_len = x->ne[0];
     const int64_t T_q     = x->ne[1];
@@ -717,9 +713,9 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     // Transpose the mel input from its natural [T_mel, n_mels, 1, 1]
     // layout (matching the C++ row-major MelFrontend buffer) to
     // [n_mels, T_mel, 1, 1] = [W=F, H=T, IC, N] which is what
-    // ggml_conv_2d expects to match MLX's NHWC `[B, H=T, W=F, C]`
+    // ggml_conv_2d expects under the NHWC `[B, H=T, W=F, C]`
     // convention. The conv kernel is not spatially symmetric, so the
-    // data axes have to be presented in MLX order or the conv math
+    // axis order matters — if F and T are swapped the conv math
     // diverges. ggml_permute returns a non-contiguous view; the
     // ggml_cont materializes it for the conv.
     ggml_tensor * x = ggml_permute(ctx, mel_in,
@@ -794,11 +790,11 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     // We need to flatten (F', C) into a single feature axis matching
     // pre_encode_in = channels * (n_mels / subsampling_factor).
     //
-    // MLX flattens with C as the slower sub-axis and F' as the
-    // faster, giving flat index = c*F' + f'. In ggml fast-to-slow
-    // ne, that's the layout you get by permuting to put F' on
-    // axis 0 (already there) and C on axis 1 (currently axis 2),
-    // then collapsing axes 0 and 1.
+    // The reference flattens with C as the slower sub-axis and F'
+    // as the faster, giving flat index = c*F' + f'. In ggml
+    // fast-to-slow ne, that's the layout you get by permuting to put
+    // F' on axis 0 (already there) and C on axis 1 (currently axis
+    // 2), then collapsing axes 0 and 1.
     //
     //   permute (0, 2, 1, 3): [F', T, C, 1] -> [F', C, T, 1]
     //   ggml_cont:            (reshape requires a contiguous tensor)

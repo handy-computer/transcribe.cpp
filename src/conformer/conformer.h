@@ -63,8 +63,8 @@ namespace transcribe::conformer {
 // Constants
 // ===========================================================================
 
-// LayerNorm + BatchNorm epsilon. Both default to 1e-5 in MLX and in
-// NeMo, NOT stored in the GGUF. Hardcoded here to match. If a future
+// LayerNorm + BatchNorm epsilon. Both default to 1e-5 in NeMo and
+// are NOT stored in the GGUF. Hardcoded here to match. If a future
 // variant changes either value, plumb it through BlockParams rather
 // than bumping this constant.
 constexpr float kLayerNormEps = 1e-5f;

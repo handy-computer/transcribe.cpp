@@ -1,19 +1,16 @@
 // arch/parakeet/encoder.h - Parakeet Conformer encoder graph builder.
 //
 // Phase 4 step 3 of the encoder port. The .cpp file builds a
-// ggml_cgraph that mirrors NeMo's Conformer encoder forward as
-// implemented in parakeet-mlx (see /tmp/parakeet-mlx/parakeet_mlx/
-// conformer.py and attention.py for the reference). The C++ encoder
-// reads dims from ParakeetHParams and tensor pointers from
+// ggml_cgraph that mirrors NeMo's Conformer encoder forward. The C++
+// encoder reads dims from ParakeetHParams and tensor pointers from
 // ParakeetWeights; both are populated by the loader.
 //
 // Sub-stages of step 3:
 //
-//   3a: pre_encode subsampling stack only (this commit). Validates
-//       layout + conv2d wiring + linear projection + the
-//       compute-context lifetime against parakeet-mlx
-//       enc.pre_encode.out on samples/jfk.wav.
-//   3b: macaron FF1 on block 0 (next).
+//   3a: pre_encode subsampling stack only. Validates layout + conv2d
+//       wiring + linear projection + the compute-context lifetime
+//       against the reference enc.pre_encode.out on samples/jfk.wav.
+//   3b: macaron FF1 on block 0.
 //   3c: relative-position MHSA on block 0.
 //   3d: conv module on block 0.
 //   3e: FF2 + final norm on block 0.
@@ -50,7 +47,7 @@ struct ParakeetWeights;
 //      transcribe::debug dumper.
 //
 // Layout convention (see RESUME.md "Where we are" for the long form):
-//   - parakeet-mlx uses [B, T, C] (channels-last). ggml ne is
+//   - The reference uses [B, T, C] (channels-last). ggml ne is
 //     fast-to-slow, so the natural encoder activation lives at
 //     ne=[d_model, T, B=1, 1].
 //   - For pre_encode (Conv2d), we treat T_mel as W (ggml ne[0]) and

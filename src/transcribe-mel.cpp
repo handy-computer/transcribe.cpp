@@ -25,7 +25,7 @@
 //
 //   * Window: symmetric Hann length win_length, zero-padded to n_fft.
 //     The NeMo source explicitly passes periodic=False
-//     (features.py:316). The MLX reference is wrong on this point.
+//     (features.py:316).
 //
 //   * Power spectrum: re^2 + im^2 (matches ONNX ReduceSumSquare).
 //     mag_power=2.0 is collapsed into the squaring; we never compute

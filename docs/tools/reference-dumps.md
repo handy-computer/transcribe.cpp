@@ -10,7 +10,6 @@ against the C++ implementation's dumps to catch numerical drift.
 | Script                                       | Reference backend              | Platform         |
 |----------------------------------------------|--------------------------------|------------------|
 | `scripts/dump_reference_parakeet_nemo.py`    | NeMo (PyTorch)                 | Linux / macOS    |
-| `scripts/dump_reference_cohere.py`           | Cohere MLX                     | macOS arm64      |
 | `scripts/dump_reference_cohere_transformers.py` | HuggingFace Transformers    | Linux / macOS    |
 
 `validate.py` picks the right one via the `_<reference>` suffix in the
@@ -46,8 +45,8 @@ selects the env, script, and paths for you.
 
 Each reference backend has its own `uv` env under
 `scripts/envs/<family>/`. NeMo pins Python <3.13 on macOS (kaldialign
-wheel gap); the Cohere MLX env is arm64-only. The env boundaries exist
-because installing these reference stacks in one env doesn't resolve.
+wheel gap). The env boundaries exist because NeMo and Transformers
+don't co-install cleanly.
 
 ## Contract tensors
 

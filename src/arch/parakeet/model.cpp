@@ -687,8 +687,7 @@ transcribe_status run(
     // allocated `eb.pos_emb_in` with ne=[d_model, pos_len, 1, 1]
     // (after it learned T_enc from pre_encode); we fill it here.
     //
-    // The values match parakeet-mlx's RelPositionalEncoding
-    // (attention.py:551-598):
+    // The values match the reference RelPositionalEncoding:
     //   positions[i] = (T_enc - 1) - i  for i in [0, 2*T_enc-1)
     //   div_term[k]  = exp(2k * -ln(10000) / d_model)
     //   pe[i, 2k]    = sin(positions[i] * div_term[k])
@@ -874,9 +873,8 @@ transcribe_status run(
         te.t0_ms = static_cast<int64_t>(
             std::llround(frame_to_ms * static_cast<double>(rt.step_at_emit)));
         // Per-token duration: clamp the duration_frames=0 case to a
-        // visually-distinct minimum of 0 ms (== t0). This matches
-        // the convention parakeet-mlx uses; the result is a "point
-        // in time" token with no width.
+        // visually-distinct minimum of 0 ms (== t0). The result is a
+        // "point in time" token with no width.
         const double end_frame =
             static_cast<double>(rt.step_at_emit) +
             static_cast<double>(rt.duration_frames);
