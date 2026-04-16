@@ -55,29 +55,34 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are latency in ms (wall-clock mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
+above (2 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Sample       |        Q8_0 |      Q4_K_M |
-| ------- | ------------ | ----------: | ----------: |
-| Metal   | jfk (11.0s)  |  68 (161×)  |  68 (161×)  |
-| Metal   | dots (35.3s) | 190 (186×)  | 191 (185×)  |
-| CPU     | jfk (11.0s)  | 373 (29×)   | 315 (35×)   |
-| CPU     | dots (35.3s) | 1267 (28×)  | 1098 (32×)  |
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  |   68 ms (161×) |   68 ms (161×) |
+| Metal   | dots (35.3s) |  190 ms (186×) |  191 ms (185×) |
+| CPU     | jfk (11.0s)  |  373 ms (29×)  |  315 ms (35×)  |
+| CPU     | dots (35.3s) | 1.27 s (28×)   | 1.10 s (32×)   |
 
 macOS 26.3.1, transcribe.cpp `3912397`. Raw data:
 `reports/perf/apple-m4-max/post-unification_parakeet_{metal,cpu}.json`.
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       | Q8_0 | Q4_K_M |
-| ------- | ------------ | ---: | -----: |
-| Vulkan  | jfk (11.0s)  | TBD  | TBD    |
-| Vulkan  | dots (35.3s) | TBD  | TBD    |
-| CPU     | jfk (11.0s)  | TBD  | TBD    |
-| CPU     | dots (35.3s) | TBD  | TBD    |
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  546 ms (20×)  |  586 ms (19×)  |
+| Vulkan  | dots (35.3s) | 1.75 s (20×)   | 1.76 s (20×)   |
+| CPU     | jfk (11.0s)  | 1.19 s (9×)    | 1.04 s (11×)   |
+| CPU     | dots (35.3s) | 4.22 s (8×)    | 3.66 s (10×)   |
+
+Fedora 43, transcribe.cpp `140ed3a`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`. Raw data:
+`reports/perf/amd-ryzen-7-4750u-pro/parakeet-tdt-0-6b-v2-publication_parakeet_{cpu,vulkan}.json`.
 
 Benchmark reproduction:
 
