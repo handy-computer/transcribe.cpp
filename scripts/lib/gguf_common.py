@@ -60,6 +60,59 @@ def safe_id(method) -> int | None:
     return v if v >= 0 else None
 
 
+def reference_dtype_for(
+    name: str,
+    reference_type: GGMLQuantizationType,
+) -> GGMLQuantizationType:
+    """Pick the per-tensor GGUF dtype for a converter emitting a
+    reference-tier GGUF. Mirrors the bucketing in
+    tools/transcribe-quantize/policy.cpp::classify_tensor so the
+    produced file matches the loader's allowlist in
+    src/transcribe-weights-util.h (TRANSCRIBE_QUANT_{LINEAR,CONV}_TYPES
+    and the F32-only slots used by GET_F32).
+
+    Policy:
+      - Norm / bias / BN stats / pos biases / frontend buffers → F32
+      - Conv kernels (2D, depthwise, 1×1 pointwise)            → F16 if
+        reference is BF16 (loader rejects BF16 conv); otherwise the
+        reference dtype
+      - Linear / Embed (everything else)                       → reference
+
+    Keep this in sync with tools/transcribe-quantize/policy.cpp.
+    """
+    # Norm bucket.
+    if name.endswith(".bias"):
+        return GGMLQuantizationType.F32
+    if ".bn." in name:
+        return GGMLQuantizationType.F32
+    if "norm_" in name and name.endswith(".weight"):
+        return GGMLQuantizationType.F32
+    if name.endswith(".final_norm.weight") or \
+       name.endswith(".embed.norm.weight"):
+        return GGMLQuantizationType.F32
+    if name.endswith(".pos_bias_u") or name.endswith(".pos_bias_v"):
+        return GGMLQuantizationType.F32
+    if name.endswith(".pos_enc"):
+        return GGMLQuantizationType.F32
+    if name in ("frontend.mel_filterbank", "frontend.window"):
+        return GGMLQuantizationType.F32
+
+    # Conv bucket (pointwise + depthwise + 2D).
+    is_convpw = (
+        (name.endswith(".conv.pointwise1.weight") or
+         name.endswith(".conv.pointwise2.weight"))
+        and "enc.blocks." in name
+    )
+    is_conv = ".conv." in name and name.endswith(".weight")
+    if is_convpw or is_conv:
+        if reference_type == GGMLQuantizationType.BF16:
+            return GGMLQuantizationType.F16  # loader has no BF16 conv kernel
+        return reference_type
+
+    # Linear / Embed — use the reference dtype as-is.
+    return reference_type
+
+
 def encode_for_gguf(
     arr: np.ndarray,
     ggml_type: GGMLQuantizationType,

@@ -93,6 +93,7 @@ from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_UNUSED,
     encode_for_gguf,
     gguf_name,
+    reference_dtype_for,
     safe_id,
     slug_from_repo_id,
 )
@@ -539,7 +540,8 @@ def convert(model_dir: Path, out_path: Path) -> None:
                 raise ValueError(
                     f"{src_name}: expected float32 after conversion, got {arr.dtype}"
                 )
-            encoded, raw_dtype = encode_for_gguf(arr, REFERENCE_GGML_TYPE)
+            target_type = reference_dtype_for(gguf_name, REFERENCE_GGML_TYPE)
+            encoded, raw_dtype = encode_for_gguf(arr, target_type)
             writer.add_tensor(gguf_name, encoded, raw_dtype=raw_dtype)
             bytes_in  += int(arr.nbytes)
             bytes_out += int(encoded.nbytes)
