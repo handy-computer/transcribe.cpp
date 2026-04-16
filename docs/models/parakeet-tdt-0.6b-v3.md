@@ -53,29 +53,34 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are latency in ms (wall-clock mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
+above (2 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Sample       |        Q8_0 |      Q4_K_M |
-| ------- | ------------ | ----------: | ----------: |
-| Metal   | jfk (11.0s)  |  75 (147×)  |  77 (144×)  |
-| Metal   | dots (35.3s) | 226 (156×)  | 226 (156×)  |
-| CPU     | jfk (11.0s)  | 386 (28×)   | 345 (32×)   |
-| CPU     | dots (35.3s) | 1311 (27×)  | 1176 (30×)  |
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  |   75 ms (147×) |   77 ms (144×) |
+| Metal   | dots (35.3s) |  226 ms (156×) |  226 ms (156×) |
+| CPU     | jfk (11.0s)  |  386 ms (28×)  |  345 ms (32×)  |
+| CPU     | dots (35.3s) | 1.31 s (27×)   | 1.18 s (30×)   |
 
 macOS 26.3.1, transcribe.cpp `<TBD: git short sha at publication>`. Raw data:
 `reports/perf/apple-m4-max/parakeet-v3-publication_parakeet_{metal,cpu}.json`.
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       | Q8_0 | Q4_K_M |
-| ------- | ------------ | ---: | -----: |
-| Vulkan  | jfk (11.0s)  | TBD  | TBD    |
-| Vulkan  | dots (35.3s) | TBD  | TBD    |
-| CPU     | jfk (11.0s)  | TBD  | TBD    |
-| CPU     | dots (35.3s) | TBD  | TBD    |
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  598 ms (18×)  |  638 ms (17×)  |
+| Vulkan  | dots (35.3s) | 1.95 s (18×)   | 1.96 s (18×)   |
+| CPU     | jfk (11.0s)  | 1.27 s (9×)    | 1.08 s (10×)   |
+| CPU     | dots (35.3s) | 4.51 s (8×)    | 3.90 s (9×)    |
+
+Fedora 43, transcribe.cpp `4f24fb5`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`. Raw data:
+`reports/perf/amd-ryzen-7-4750u-pro/parakeet-tdt-0-6b-v3-publication_parakeet_{cpu,vulkan}.json`.
 
 Benchmark reproduction:
 

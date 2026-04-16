@@ -53,29 +53,34 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are latency in ms (wall-clock mean over 3 iterations after 1 warmup),
-with speedup over realtime in parentheses.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
+above (2 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Sample       |        Q8_0 |      Q4_K_M |
-| ------- | ------------ | ----------: | ----------: |
-| Metal   | jfk (11.0s)  | 160 (69×)   | 161 (68×)   |
-| Metal   | dots (35.3s) | 525 (67×)   | 513 (69×)   |
-| CPU     | jfk (11.0s)  | 1207 (9×)   | 1047 (11×)  |
-| CPU     | dots (35.3s) | 4134 (9×)   | 3489 (10×)  |
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  |  160 ms (69×)  |  161 ms (68×)  |
+| Metal   | dots (35.3s) |  525 ms (67×)  |  513 ms (69×)  |
+| CPU     | jfk (11.0s)  | 1.21 s (9×)    | 1.05 s (11×)   |
+| CPU     | dots (35.3s) | 4.13 s (9×)    | 3.49 s (10×)   |
 
 macOS 26.3.1, transcribe.cpp `3912397`. Raw data:
 `reports/perf/apple-m4-max/post-unification_cohere_{metal,cpu}.json`.
 
 ### AMD Ryzen 7 4750U Pro
 
-| Backend | Sample       | Q8_0 | Q4_K_M |
-| ------- | ------------ | ---: | -----: |
-| Vulkan  | jfk (11.0s)  | TBD  | TBD    |
-| Vulkan  | dots (35.3s) | TBD  | TBD    |
-| CPU     | jfk (11.0s)  | TBD  | TBD    |
-| CPU     | dots (35.3s) | TBD  | TBD    |
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  1.60 s (7×)   |  1.62 s (7×)   |
+| Vulkan  | dots (35.3s) |  4.80 s (7×)   |  4.78 s (7×)   |
+| CPU     | jfk (11.0s)  |  3.57 s (3×)   |  2.90 s (4×)   |
+| CPU     | dots (35.3s) | 12.40 s (3×)   | 10.08 s (4×)   |
+
+Fedora 43, transcribe.cpp `4f24fb5`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`. Raw data:
+`reports/perf/amd-ryzen-7-4750u-pro/cohere-transcribe-03-2026-publication_cohere_{cpu,vulkan}.json`.
 
 Benchmark reproduction:
 
