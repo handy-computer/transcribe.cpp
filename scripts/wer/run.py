@@ -70,6 +70,10 @@ def main() -> int:
                    help="transcribe-cli binary")
     p.add_argument("--out", type=Path, default=None,
                    help="Output report file (default: auto)")
+    p.add_argument("--backend",
+                   choices=("auto", "cpu", "metal", "vulkan"),
+                   default=None,
+                   help="Compute backend (default: transcribe-cli default)")
     args = p.parse_args()
 
     for path in (args.model, args.manifest, args.cli):
@@ -110,6 +114,8 @@ def main() -> int:
         "--batch", batch_path,
         "--batch-jsonl",
     ]
+    if args.backend:
+        cmd += ["--backend", args.backend]
     print(f"  $ {' '.join(cmd[:6])} ...")
 
     t_start = time.monotonic()
