@@ -2,7 +2,7 @@
 
 NVIDIA's [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2)
 ported to transcribe.cpp. A 0.6B-parameter Conformer encoder with a TDT/RNNT
-transducer decoder, converted to GGUF and run through ggml.
+transducer decoder.
 
 ## What it's for
 
@@ -33,8 +33,7 @@ WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy transducer decoding and no external LM. F32 reference baseline:
 1.68%. NVIDIA's self-reported number on the same split is 1.69% (from the
 [HF model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2)), so our
-F32 and Q8_0 ports match the upstream reference within rounding. Text
-normalizer: `<TBD>`.
+F32 and Q8_0 ports match the upstream reference within rounding.
 
 ## Quick Start
 
