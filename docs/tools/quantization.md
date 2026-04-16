@@ -100,8 +100,16 @@ divide the target quant's block size. Always something smaller-block or
 blockless (F16 here). Block mismatches can happen on oddly-shaped
 projections; the fallback keeps the tool from crashing.
 
-**`attn.linear_out`** gets bumped in `_M` presets (to Q8_0), matching
-`llama.cpp`'s mixed-precision recipe for attention output projections.
+**`attn.linear_out`** gets bumped in `_M` presets (to Q8_0), in the
+spirit of `llama.cpp`'s `_M` presets — which also keep a few
+precision-sensitive tensors above the base type. The specific tensor
+choice differs: `llama.cpp`'s `Q4_K_M` / `Q5_K_M` bump `attn_v`,
+`attn_qkv`, and `ffn_down` (to Q6_K, on select layers via
+`use_more_bits`) and leave `attn_output` at the base type. Those
+categories aren't named separately in transcribe's policy, and WER
+across `Q4_K_M` / `Q5_K_M` / `Q6_K` is already at F32 parity within CI
+on LibriSpeech test-clean, so we haven't tried to match `llama.cpp`'s
+per-tensor choices literally.
 
 **Embed slot** is `—` (no override) for uniform presets. Those fall
 back to `linear_main`.
