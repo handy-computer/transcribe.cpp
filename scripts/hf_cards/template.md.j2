@@ -1,0 +1,82 @@
+---
+license: {{ license }}
+base_model: {{ hf_repo }}
+base_model_relation: quantized
+library_name: transcribe.cpp
+pipeline_tag: {{ pipeline_tag }}
+language:
+{%- for lang in languages %}
+  - {{ lang }}
+{%- endfor %}
+tags:
+{%- for tag in tags %}
+  - {{ tag }}
+{%- endfor %}
+---
+
+# {{ hf_repo.split('/')[-1] }} — transcribe.cpp GGUF
+
+GGUF conversions of [`{{ hf_repo }}`](https://huggingface.co/{{ hf_repo }}) for use
+with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp).
+
+Ported from upstream commit
+[`{{ upstream_commit_short }}`](https://huggingface.co/{{ hf_repo }}/commit/{{ upstream_commit }}),
+pinned {{ pin_date }}.
+Validated against the {{ validation.reference }} reference at transcribe.cpp commit
+[`{{ validation.commit_short }}`](https://github.com/handy-computer/transcribe.cpp/tree/{{ validation.commit }})
+on {{ validation.date }}.
+
+{{ summary }}
+
+## Downloads
+
+| Quantization | Download | Size | WER ({{ wer.source }}) |
+| --- | --- | ---: | ---: |
+{%- for q in quants %}
+| {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} | {{ q.wer }} |
+{%- endfor %}
+
+{{ wer.notes }}
+
+## Usage
+
+Build transcribe.cpp from source:
+
+```bash
+git clone git@github.com:handy-computer/transcribe.cpp.git
+cd transcribe.cpp
+cmake -B build && cmake --build build
+```
+
+Run on a 16 kHz mono WAV:
+
+```bash
+build/bin/transcribe-cli \
+  -m {{ quants[default_quant_index].filename }} \
+  input.wav
+```
+
+If your audio isn't already 16 kHz mono WAV, convert it first:
+
+```bash
+ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
+```
+
+See the [transcribe.cpp model page]({{ transcribe_docs_url }}) for performance
+numbers, numerical validation, and reproduction steps.
+
+## License
+
+Inherited from the base model: **{{ license_display }}**. See the
+[upstream model card](https://huggingface.co/{{ hf_repo }}) for full terms.
+
+---
+
+## Original Model Card
+
+> The section below is reproduced from
+> [`{{ hf_repo }}`](https://huggingface.co/{{ hf_repo }}) at commit
+> `{{ upstream_commit_short }}` for offline reference. The upstream card is the
+> authoritative source.
+
+{{ upstream_card }}
