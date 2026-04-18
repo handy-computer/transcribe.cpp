@@ -6,9 +6,11 @@ head (cross-attention, tied token embedding).
 
 ## What it's for
 
-Offline <TBD: monolingual English / multilingual — see Cohere model card>
-speech-to-text. The model takes a 16 kHz mono WAV and produces a transcript.
-Cohere uses an encoder-decoder with cross-attention, decoding is autoregressive.
+Offline multilingual speech-to-text covering 14 languages: English, French,
+German, Spanish, Italian, Portuguese, Dutch, Polish, Greek, Arabic, Japanese,
+Chinese, Vietnamese, Korean. The model takes a 16 kHz mono WAV and produces a
+transcript. Cohere uses an encoder-decoder with cross-attention, decoding is
+autoregressive.
 
 See Cohere's [model card](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026)
 for training data, intended use, and upstream evaluation methodology.
@@ -31,8 +33,9 @@ pinned 2026-04-16.
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. BF16 reference baseline: 1.26%.
 Cohere's self-reported number on the same split is
-<TBD: value from model card or "not reported by upstream">. Text normalizer:
-`<TBD>`.
+<TBD: value from upstream model card, or "not reported by upstream">. Text
+normalizer: <TBD: name of normalizer used during scoring (e.g. Whisper
+EnglishTextNormalizer, NeMo's), or "raw text comparison">.
 
 ## Quick Start
 
@@ -66,8 +69,7 @@ above (2 decimal places).
 | CPU     | jfk (11.0s)  | 1.21 s (9×)    | 1.05 s (11×)   |
 | CPU     | dots (35.3s) | 4.13 s (9×)    | 3.49 s (10×)   |
 
-macOS 26.3.1, transcribe.cpp `3912397`. Raw data:
-`reports/perf/apple-m4-max/post-unification_cohere_{metal,cpu}.json`.
+macOS 26.3.1, transcribe.cpp `3912397`.
 
 ### AMD Ryzen 7 4750U Pro
 
@@ -79,8 +81,7 @@ macOS 26.3.1, transcribe.cpp `3912397`. Raw data:
 | CPU     | dots (35.3s) | 12.40 s (3×)   | 10.08 s (4×)   |
 
 Fedora 43, transcribe.cpp `4f24fb5`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`. Raw data:
-`reports/perf/amd-ryzen-7-4750u-pro/cohere-transcribe-03-2026-publication_cohere_{cpu,vulkan}.json`.
+Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:
 

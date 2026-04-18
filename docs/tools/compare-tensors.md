@@ -43,6 +43,21 @@ fails the run **only** if it has an explicit tolerance entry — which
 marks it as a contract tensor. Debug-only tensors that only one side
 dumps are reported for visibility but don't fail.
 
+The `<name>.json` sidecars also carry per-tensor `min`, `max`, and
+`mean` fields when produced by the current C++ and reference dumpers.
+Those fields are useful for checking activation scale, while
+`compare_tensors.py` remains the element-wise pass/fail gate.
+
+## C++ intermediate lifetime
+
+For ggml graphs using the scheduler, intermediate buffers may be reused
+unless the tensor is marked as a graph output. A family that stores
+intermediate tensor handles and dumps them after `graph_compute` must
+call `transcribe::debug::mark_tensor_for_dump(t)` for every contract
+dump tensor during graph construction. Otherwise the dump can read stale
+or reused storage and produce misleading tolerances. If unrelated
+tensors are byte-exact equal in the C++ dump dir, check this first.
+
 ## Tolerances
 
 Global:

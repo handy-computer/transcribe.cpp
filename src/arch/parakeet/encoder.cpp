@@ -171,14 +171,19 @@ void parakeet_block0_observer_cb(void *        user,
 
     if (std::strcmp(tag, "after_ff1") == 0) {
         sink->dumps->block0_after_ff1 = t;
+        transcribe::debug::mark_tensor_for_dump(t);
     } else if (std::strcmp(tag, "after_attn") == 0) {
         sink->dumps->block0_after_attn = t;
+        transcribe::debug::mark_tensor_for_dump(t);
     } else if (std::strcmp(tag, "after_conv") == 0) {
         sink->dumps->block0_after_conv = t;
+        transcribe::debug::mark_tensor_for_dump(t);
     } else if (std::strcmp(tag, "after_ff2") == 0) {
         sink->dumps->block0_after_ff2 = t;
+        transcribe::debug::mark_tensor_for_dump(t);
     } else if (std::strcmp(tag, "out") == 0) {
         sink->dumps->block0_out = t;
+        transcribe::debug::mark_tensor_for_dump(t);
     }
 }
 
@@ -248,6 +253,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         return eb;
     }
     eb.dumps.pre_encode_out = x;
+    transcribe::debug::mark_tensor_for_dump(x);
 
     // ----- Conformer blocks -----------------------------------------
     //
@@ -306,10 +312,12 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
             if (i == 12) {
                 x = conf::named(x, "enc.block.12.out");
                 eb.dumps.block12_out = x;
+                transcribe::debug::mark_tensor_for_dump(x);
             }
             if (i == 23) {
                 x = conf::named(x, "enc.block.23.out");
                 eb.dumps.block23_out = x;
+                transcribe::debug::mark_tensor_for_dump(x);
             }
         }
     }
@@ -320,6 +328,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     // reference's true encoder output.
     eb.dumps.final_out = x;
     x = conf::named(x, "enc.final");
+    transcribe::debug::mark_tensor_for_dump(x);
 
     eb.out = x;
     ggml_set_output(eb.out);

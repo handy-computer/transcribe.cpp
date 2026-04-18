@@ -9,7 +9,10 @@ transducer decoder.
 Offline multilingual speech-to-text. The model takes a 16 kHz mono WAV and
 produces a transcript with optional token-level timestamps. It is not a
 streaming model and does not translate. v3 extends v2's English coverage to
-<TBD: language list — see NVIDIA model card; e.g. "25 European languages">.
+25 European languages: Bulgarian, Croatian, Czech, Danish, Dutch, English,
+Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian,
+Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, Slovenian,
+Spanish, Swedish, Ukrainian.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
 for training data, intended use, and upstream evaluation methodology.
@@ -66,8 +69,7 @@ above (2 decimal places).
 | CPU     | jfk (11.0s)  |  386 ms (28×)  |  345 ms (32×)  |
 | CPU     | dots (35.3s) | 1.31 s (27×)   | 1.18 s (30×)   |
 
-macOS 26.3.1, transcribe.cpp `<TBD: git short sha at publication>`. Raw data:
-`reports/perf/apple-m4-max/parakeet-v3-publication_parakeet_{metal,cpu}.json`.
+macOS 26.3.1, transcribe.cpp `140ed3a`.
 
 ### AMD Ryzen 7 4750U Pro
 
@@ -79,8 +81,7 @@ macOS 26.3.1, transcribe.cpp `<TBD: git short sha at publication>`. Raw data:
 | CPU     | dots (35.3s) | 4.51 s (8×)    | 3.90 s (9×)    |
 
 Fedora 43, transcribe.cpp `4f24fb5`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`. Raw data:
-`reports/perf/amd-ryzen-7-4750u-pro/parakeet-tdt-0-6b-v3-publication_parakeet_{cpu,vulkan}.json`.
+Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:
 
@@ -94,13 +95,9 @@ uv run scripts/bench/run.py \
   --name parakeet-tdt-0.6b-v3-publication
 ```
 
-## Numerical Validation
-
-> **Pending:** manifest is now in place at
-> `tests/golden/parakeet/parakeet-tdt-0.6b-v3.manifest.json`; a full
-> NeMo reference dump + C++ dump + compare run is still needed before
-> this section can report tensor-by-tensor numbers. Validation commit
-> will be recorded here after the first clean run.
+transcribe.cpp is validated tensor-by-tensor against NeMo on `samples/jfk.wav`.
+All 18 checkpointed tensors fall within family tolerance, and the final
+transcript matches the NeMo reference verbatim.
 
 | Field | Value |
 | --- | --- |
@@ -109,7 +106,26 @@ uv run scripts/bench/run.py \
 | Manifest | `tests/golden/parakeet/parakeet-tdt-0.6b-v3.manifest.json` |
 | Command | `uv run scripts/validate.py compare --family parakeet --variant parakeet-tdt-0.6b-v3` |
 
-Selected tensors: *TBD — run `uv run scripts/validate.py all --family parakeet --variant parakeet-tdt-0.6b-v3` once the reference environment is set up.*
+Selected tensors:
+
+| Tensor | Max abs diff | Mean abs diff | Notes |
+| --- | ---: | ---: | --- |
+| `enc.mel.in`          | `5.189e+00` | `1.639e-03` | fp64 vs fp32 STFT precision gap |
+| `enc.pre_encode.out`  | `6.940e+03` | `2.438e+02` | Mel gap amplified through pre-encoder (v3 amplifies more aggressively than v2) |
+| `enc.block.0.out`     | `1.296e+03` | `1.468e+01` | Early encoder, still amplified |
+| `enc.block.12.out`    | `1.285e+03` | `1.433e+01` | Mid-encoder |
+| `enc.block.23.out`    | `3.055e-02` | `3.040e-04` | Converged by final block |
+| `enc.final`           | `3.055e-02` | `3.040e-04` | Final encoder output |
+| `dec.enc_out`         | `3.055e-02` | `3.040e-04` | Decoder input from encoder |
+| `dec.embed.0`         | `0.000e+00` | `0.000e+00` | Exact match |
+| `dec.lstm.*`          | `<= 1.192e-07` | near zero | fp32 round-off on first step |
+| `dec.joint.0`         | `1.190e+01` | `1.098e+01` | Joint projection over encoder drift |
+
+Same divergence profile as v2: C++ runs the STFT in fp64 where NeMo runs fp32.
+The gap enters at the mel spectrogram, is amplified through the pre-encoder
+and early Conformer blocks, and attenuates to near-zero by the final encoder
+output. v3's pre-encode weights amplify the gap ~3.5× more than v2's, but the
+24-layer conformer still drives the final encoder output to ~0.03.
 
 ## Reproduction
 

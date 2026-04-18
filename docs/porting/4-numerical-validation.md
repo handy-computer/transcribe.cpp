@@ -35,6 +35,17 @@ as they're not in the tolerance file.
 side must exist on the other. A MISSING gate tensor (one that has a
 tolerance entry) is a real failure.
 
+**Preserve C++ intermediates before scheduler allocation.** If a C++
+graph builder stores intermediate tensor pointers for a post-compute
+dump pass, each stored tensor must be marked with
+`transcribe::debug::mark_tensor_for_dump()` while the graph is being
+built. The ggml scheduler can otherwise reuse intermediate buffers, so
+the dumper may read a later tensor's data through an earlier tensor
+handle. This usually shows up as unrelated dump files being byte-exact
+equal or as huge early-stage tolerances that disappear when final
+outputs are checked. Marking is a no-op unless `TRANSCRIBE_DUMP_DIR` is
+enabled, so normal inference keeps live-range packing unchanged.
+
 **Use first/mid/last layer outputs as the default gate.** Dump block 0,
 one middle block, and the last block for each repeated component. This
 catches load/layout bugs, accumulation drift, and final-stage behavior
@@ -167,6 +178,12 @@ uv run scripts/compare_tensors.py \
 Run without tolerances during development to see raw numbers. You're
 looking for tensors that are close (within dtype noise) vs tensors
 that are completely wrong (off by orders of magnitude or wrong shape).
+Also inspect each side's tensor scale via the JSON sidecar `min`, `max`,
+and `mean` fields. Activation scale is a sanity check, not a substitute
+for tolerances: two tensors can have similar ranges while being
+transposed, shifted, or wrong-sign element by element, and a high-gain
+pre-normalization stage can have a large absolute diff that later
+normalization gates attenuate.
 
 ### Step 4: Classify tensors and set tolerances
 

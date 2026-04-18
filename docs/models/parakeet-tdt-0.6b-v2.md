@@ -67,8 +67,7 @@ above (2 decimal places).
 | CPU     | jfk (11.0s)  |  373 ms (29×)  |  315 ms (35×)  |
 | CPU     | dots (35.3s) | 1.27 s (28×)   | 1.10 s (32×)   |
 
-macOS 26.3.1, transcribe.cpp `3912397`. Raw data:
-`reports/perf/apple-m4-max/post-unification_parakeet_{metal,cpu}.json`.
+macOS 26.3.1, transcribe.cpp `3912397`.
 
 ### AMD Ryzen 7 4750U Pro
 
@@ -80,8 +79,7 @@ macOS 26.3.1, transcribe.cpp `3912397`. Raw data:
 | CPU     | dots (35.3s) | 4.22 s (8×)    | 3.66 s (10×)   |
 
 Fedora 43, transcribe.cpp `140ed3a`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`. Raw data:
-`reports/perf/amd-ryzen-7-4750u-pro/parakeet-tdt-0-6b-v2-publication_parakeet_{cpu,vulkan}.json`.
+Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:
 
@@ -108,7 +106,6 @@ transcript matches the NeMo reference verbatim. Last validated at commit
 | Dump script | `scripts/dump_reference_parakeet_nemo.py` |
 | Manifest | `tests/golden/parakeet/parakeet-tdt-0.6b-v2.manifest.json` |
 | Command | `uv run scripts/validate.py compare --family parakeet` |
-| Artifact | `reports/numerics/parakeet-tdt-0.6b-v2.json` |
 
 Selected tensors:
 

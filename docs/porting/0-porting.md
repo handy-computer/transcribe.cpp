@@ -106,8 +106,6 @@ uv run scripts/validate.py all --family cohere
 
 Remaining gaps are narrower:
 
-- Parakeet has synthetic fixtures; Cohere does not yet have a synthetic
-  fixture smoke.
 - Reference dump scripts are split by family.
 - Golden manifests are intentionally minimal v2 manifests and do not yet
   record full snapshot hashes or artifact cache keys.

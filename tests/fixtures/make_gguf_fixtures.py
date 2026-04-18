@@ -13,7 +13,7 @@ surface hermetic and uv-friendly (no dependency resolution at
 configure time). Tensor data emission uses Python struct only — no
 numpy dep — because the toy tensors are tiny (~3000 fp32 elements).
 
-Five fixtures are emitted:
+Six fixtures are emitted:
 
   arch_parakeet.gguf       -- valid header, KV pairs:
                                 general.architecture = "parakeet"
@@ -65,6 +65,24 @@ Five fixtures are emitted:
                               variant string + capability + language
                               KV — proves the v2 / v3 split is fully
                               KV-driven and shares the same code path.
+
+  arch_cohere_minimal.gguf -- a structurally complete minimal Cohere ASR
+                              model: cohere_asr arch, stt.variant
+                              "cohere-asr-toy", full tokenizer payload
+                              (BPE, 16-token toy vocab), full
+                              stt.cohere.* / stt.frontend.* KV block
+                              (toy hparams: 2 encoder layers + 2 decoder
+                              layers, d_model=8, dec_hidden=8, ...), and
+                              all weight tensors with deterministic toy
+                              float32 data including the encoder-decoder
+                              projection, decoder embed/blocks/final-norm,
+                              and the head bias (head weight is tied to
+                              dec.embed.token.weight per the family
+                              default). Exercises the full
+                              build_cohere_weights walk: pre_encode +
+                              N_enc Conformer blocks (with FFN bias) +
+                              enc_dec_proj + N_dec Transformer blocks
+                              with self/cross-attention + tied head.
 
 Run:
 
@@ -554,6 +572,289 @@ def _parakeet_tensors() -> list[Tensor]:
     return tensors
 
 
+# ---------------------------------------------------------------------------
+# Toy cohere hparams + tensor catalog
+# ---------------------------------------------------------------------------
+#
+# Same role as PARAKEET_HP / _parakeet_tensor_descriptors above but for
+# the Cohere ASR family (Conformer encoder + autoregressive Transformer
+# decoder with cross-attention + tied head). Toy values keep the fixture
+# small (~50 KB) but every CohereWeights slot is populated, so
+# build_cohere_weights() walks the full tensor catalog end-to-end.
+#
+# Numeric values are pinned by transcribe_cohere_smoke (the loader's
+# read_cohere_hparams cross-field validation also enforces several
+# invariants here: enc_d_model % enc_n_heads == 0,
+# dec_hidden % dec_n_heads == 0, win_length <= n_fft, n_fft is a power
+# of 2, fe_num_mels divisible by enc_subsampling_factor, etc.).
+
+COHERE_HP = {
+    # Encoder.
+    "enc_n_layers":             2,
+    "enc_d_model":              8,
+    "enc_n_heads":              2,
+    "enc_d_ff":                 16,
+    "enc_conv_kernel":          3,
+    "enc_subsampling_factor":   2,
+    "enc_subsampling_channels": 4,
+    "enc_pos_emb_max_len":      32,
+    "enc_use_bias":             True,
+
+    # Decoder.
+    "dec_n_layers":   2,
+    "dec_hidden":     8,
+    "dec_n_heads":    2,
+    "dec_inner":      16,
+    "dec_max_seq":    32,
+    "dec_activation": "relu",
+
+    # Decoder start token id (separate from BOS in Cohere — explicit).
+    "decoder_start_token_id": 1,
+
+    # Head defaults: log_softmax true, tied_weights true. tied means the
+    # loader does NOT load head.weight; head.bias is the only head
+    # tensor in the catalog. Both KVs are optional but we set them
+    # explicitly so a future default flip in the loader does not
+    # silently change what this fixture exercises.
+    "head_log_softmax":  True,
+    "head_tied_weights": True,
+
+    # Vocab size (matches TOY_VOCAB length below). dec.embed.token.weight
+    # has ne[1] = vocab_size, head.bias has ne[0] = vocab_size.
+    "vocab_size": 16,
+
+    # Frontend. Same toy mel pipeline as the Parakeet fixture; the
+    # loader cross-field invariants are: win_length <= n_fft, n_fft is
+    # a power of 2, fe_num_mels % enc_subsampling_factor == 0,
+    # f_max > f_min >= 0, type=="mel", window=="hann",
+    # normalize=="per_feature", pad_mode in {"reflect","constant"}.
+    "fe_type":         "mel",
+    "fe_num_mels":     4,
+    "fe_sample_rate":  16000,
+    "fe_n_fft":        16,
+    "fe_win_length":   8,
+    "fe_hop_length":   4,
+    "fe_window":       "hann",
+    "fe_normalize":    "per_feature",
+    "fe_dither":       1e-5,
+    "fe_pre_emphasis": 0.97,
+    "fe_f_min":        0.0,
+    "fe_f_max":        8000.0,
+    "fe_pad_mode":     "reflect",
+}
+
+
+def _cohere_hparams_kv() -> list[bytes]:
+    """KV blobs for the stt.cohere.* / stt.frontend.* hparams the
+    loader's read_cohere_hparams() requires (plus the optional ones we
+    set explicitly)."""
+    hp = COHERE_HP
+    return [
+        # Encoder.
+        _pack_kv_uint32("stt.cohere.encoder.n_layers",             hp["enc_n_layers"]),
+        _pack_kv_uint32("stt.cohere.encoder.d_model",              hp["enc_d_model"]),
+        _pack_kv_uint32("stt.cohere.encoder.n_heads",              hp["enc_n_heads"]),
+        _pack_kv_uint32("stt.cohere.encoder.d_ff",                 hp["enc_d_ff"]),
+        _pack_kv_uint32("stt.cohere.encoder.conv_kernel",          hp["enc_conv_kernel"]),
+        _pack_kv_uint32("stt.cohere.encoder.subsampling_factor",   hp["enc_subsampling_factor"]),
+        _pack_kv_uint32("stt.cohere.encoder.subsampling_channels", hp["enc_subsampling_channels"]),
+        _pack_kv_uint32("stt.cohere.encoder.pos_emb_max_len",      hp["enc_pos_emb_max_len"]),
+        _pack_kv_bool  ("stt.cohere.encoder.use_bias",             hp["enc_use_bias"]),
+        # Decoder.
+        _pack_kv_uint32("stt.cohere.decoder.n_layers",   hp["dec_n_layers"]),
+        _pack_kv_uint32("stt.cohere.decoder.hidden_size", hp["dec_hidden"]),
+        _pack_kv_uint32("stt.cohere.decoder.n_heads",    hp["dec_n_heads"]),
+        _pack_kv_uint32("stt.cohere.decoder.inner_size",  hp["dec_inner"]),
+        _pack_kv_uint32("stt.cohere.decoder.max_seq_len", hp["dec_max_seq"]),
+        _pack_kv_string("stt.cohere.decoder.activation", hp["dec_activation"]),
+        _pack_kv_uint32("stt.cohere.decoder_start_token_id", hp["decoder_start_token_id"]),
+        # Head.
+        _pack_kv_bool("stt.cohere.head.log_softmax",  hp["head_log_softmax"]),
+        _pack_kv_bool("stt.cohere.head.tied_weights", hp["head_tied_weights"]),
+        # Frontend.
+        _pack_kv_string ("stt.frontend.type",         hp["fe_type"]),
+        _pack_kv_uint32 ("stt.frontend.num_mels",     hp["fe_num_mels"]),
+        _pack_kv_uint32 ("stt.frontend.sample_rate",  hp["fe_sample_rate"]),
+        _pack_kv_uint32 ("stt.frontend.n_fft",        hp["fe_n_fft"]),
+        _pack_kv_uint32 ("stt.frontend.win_length",   hp["fe_win_length"]),
+        _pack_kv_uint32 ("stt.frontend.hop_length",   hp["fe_hop_length"]),
+        _pack_kv_string ("stt.frontend.window",       hp["fe_window"]),
+        _pack_kv_string ("stt.frontend.normalize",    hp["fe_normalize"]),
+        _pack_kv_float32("stt.frontend.dither",       hp["fe_dither"]),
+        _pack_kv_float32("stt.frontend.pre_emphasis", hp["fe_pre_emphasis"]),
+        _pack_kv_float32("stt.frontend.f_min",        hp["fe_f_min"]),
+        _pack_kv_float32("stt.frontend.f_max",        hp["fe_f_max"]),
+        _pack_kv_string ("stt.frontend.pad_mode",     hp["fe_pad_mode"]),
+    ]
+
+
+def _cohere_tensor_descriptors() -> list[tuple[str, list[int]]]:
+    hp = COHERE_HP
+    d_model       = hp["enc_d_model"]
+    d_ff          = hp["enc_d_ff"]
+    n_heads       = hp["enc_n_heads"]
+    head_dim      = d_model // n_heads
+    k             = hp["enc_conv_kernel"]
+    channels      = hp["enc_subsampling_channels"]
+    n_mels        = hp["fe_num_mels"]
+    subs          = hp["enc_subsampling_factor"]
+    pre_in        = channels * (n_mels // subs)
+    enc_layers    = hp["enc_n_layers"]
+    dec_h         = hp["dec_hidden"]
+    dec_in        = hp["dec_inner"]
+    dec_layers    = hp["dec_n_layers"]
+    dec_max_seq   = hp["dec_max_seq"]
+    vocab         = hp["vocab_size"]
+
+    out: list[tuple[str, list[int]]] = []
+
+    # ----- pre_encode -----
+    out += [
+        ("enc.pre_encode.conv.0.weight", [3, 3, 1, channels]),
+        ("enc.pre_encode.conv.0.bias",   [channels]),
+        ("enc.pre_encode.conv.2.weight", [3, 3, 1, channels]),
+        ("enc.pre_encode.conv.2.bias",   [channels]),
+        ("enc.pre_encode.conv.3.weight", [1, 1, channels, channels]),
+        ("enc.pre_encode.conv.3.bias",   [channels]),
+        ("enc.pre_encode.conv.5.weight", [3, 3, 1, channels]),
+        ("enc.pre_encode.conv.5.bias",   [channels]),
+        ("enc.pre_encode.conv.6.weight", [1, 1, channels, channels]),
+        ("enc.pre_encode.conv.6.bias",   [channels]),
+        ("enc.pre_encode.out.weight",    [pre_in, d_model]),
+        ("enc.pre_encode.out.bias",      [d_model]),
+    ]
+
+    # ----- encoder blocks (Conformer with FFN bias) -----
+    for i in range(enc_layers):
+        out += [
+            (f"enc.blocks.{i}.norm_ff1.weight",       [d_model]),
+            (f"enc.blocks.{i}.norm_ff1.bias",         [d_model]),
+            (f"enc.blocks.{i}.ff1.linear1.weight",    [d_model, d_ff]),
+            (f"enc.blocks.{i}.ff1.linear1.bias",      [d_ff]),
+            (f"enc.blocks.{i}.ff1.linear2.weight",    [d_ff,    d_model]),
+            (f"enc.blocks.{i}.ff1.linear2.bias",      [d_model]),
+
+            (f"enc.blocks.{i}.norm_attn.weight",      [d_model]),
+            (f"enc.blocks.{i}.norm_attn.bias",        [d_model]),
+            (f"enc.blocks.{i}.attn.linear_q.weight",  [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.linear_q.bias",    [d_model]),
+            (f"enc.blocks.{i}.attn.linear_k.weight",  [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.linear_k.bias",    [d_model]),
+            (f"enc.blocks.{i}.attn.linear_v.weight",  [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.linear_v.bias",    [d_model]),
+            (f"enc.blocks.{i}.attn.linear_out.weight",[d_model, d_model]),
+            (f"enc.blocks.{i}.attn.linear_out.bias",  [d_model]),
+            (f"enc.blocks.{i}.attn.linear_pos.weight",[d_model, d_model]),
+            (f"enc.blocks.{i}.attn.pos_bias_u",       [head_dim, n_heads]),
+            (f"enc.blocks.{i}.attn.pos_bias_v",       [head_dim, n_heads]),
+
+            (f"enc.blocks.{i}.norm_conv.weight",      [d_model]),
+            (f"enc.blocks.{i}.norm_conv.bias",        [d_model]),
+            (f"enc.blocks.{i}.conv.pointwise1.weight",[1, d_model, 2 * d_model]),
+            (f"enc.blocks.{i}.conv.pointwise1.bias",  [2 * d_model]),
+            (f"enc.blocks.{i}.conv.depthwise.weight", [k, 1,        d_model]),
+            (f"enc.blocks.{i}.conv.depthwise.bias",   [d_model]),
+            (f"enc.blocks.{i}.conv.pointwise2.weight",[1, d_model,  d_model]),
+            (f"enc.blocks.{i}.conv.pointwise2.bias",  [d_model]),
+            (f"enc.blocks.{i}.conv.bn.weight",        [d_model]),
+            (f"enc.blocks.{i}.conv.bn.bias",          [d_model]),
+            (f"enc.blocks.{i}.conv.bn.running_mean",  [d_model]),
+            (f"enc.blocks.{i}.conv.bn.running_var",   [d_model]),
+
+            (f"enc.blocks.{i}.norm_ff2.weight",       [d_model]),
+            (f"enc.blocks.{i}.norm_ff2.bias",         [d_model]),
+            (f"enc.blocks.{i}.ff2.linear1.weight",    [d_model, d_ff]),
+            (f"enc.blocks.{i}.ff2.linear1.bias",      [d_ff]),
+            (f"enc.blocks.{i}.ff2.linear2.weight",    [d_ff,    d_model]),
+            (f"enc.blocks.{i}.ff2.linear2.bias",      [d_model]),
+
+            (f"enc.blocks.{i}.norm_out.weight",       [d_model]),
+            (f"enc.blocks.{i}.norm_out.bias",         [d_model]),
+        ]
+
+    # ----- encoder-decoder projection -----
+    out += [
+        ("enc_dec_proj.weight", [d_model, dec_h]),
+        ("enc_dec_proj.bias",   [dec_h]),
+    ]
+
+    # ----- decoder embedding -----
+    out += [
+        ("dec.embed.token.weight", [dec_h, vocab]),
+        ("dec.embed.pos_enc",      [dec_h, dec_max_seq]),
+        ("dec.embed.norm.weight",  [dec_h]),
+        ("dec.embed.norm.bias",    [dec_h]),
+    ]
+
+    # ----- decoder blocks (Transformer: self-attn + cross-attn + FFN) -----
+    for i in range(dec_layers):
+        out += [
+            (f"dec.blocks.{i}.norm_self.weight",       [dec_h]),
+            (f"dec.blocks.{i}.norm_self.bias",         [dec_h]),
+            (f"dec.blocks.{i}.self_attn.q.weight",     [dec_h, dec_h]),
+            (f"dec.blocks.{i}.self_attn.q.bias",       [dec_h]),
+            (f"dec.blocks.{i}.self_attn.k.weight",     [dec_h, dec_h]),
+            (f"dec.blocks.{i}.self_attn.k.bias",       [dec_h]),
+            (f"dec.blocks.{i}.self_attn.v.weight",     [dec_h, dec_h]),
+            (f"dec.blocks.{i}.self_attn.v.bias",       [dec_h]),
+            (f"dec.blocks.{i}.self_attn.out.weight",   [dec_h, dec_h]),
+            (f"dec.blocks.{i}.self_attn.out.bias",     [dec_h]),
+
+            (f"dec.blocks.{i}.norm_cross.weight",      [dec_h]),
+            (f"dec.blocks.{i}.norm_cross.bias",        [dec_h]),
+            (f"dec.blocks.{i}.cross_attn.q.weight",    [dec_h, dec_h]),
+            (f"dec.blocks.{i}.cross_attn.q.bias",      [dec_h]),
+            (f"dec.blocks.{i}.cross_attn.k.weight",    [dec_h, dec_h]),
+            (f"dec.blocks.{i}.cross_attn.k.bias",      [dec_h]),
+            (f"dec.blocks.{i}.cross_attn.v.weight",    [dec_h, dec_h]),
+            (f"dec.blocks.{i}.cross_attn.v.bias",      [dec_h]),
+            (f"dec.blocks.{i}.cross_attn.out.weight",  [dec_h, dec_h]),
+            (f"dec.blocks.{i}.cross_attn.out.bias",    [dec_h]),
+
+            (f"dec.blocks.{i}.norm_ff.weight",         [dec_h]),
+            (f"dec.blocks.{i}.norm_ff.bias",           [dec_h]),
+            (f"dec.blocks.{i}.ff.dense_in.weight",     [dec_h,  dec_in]),
+            (f"dec.blocks.{i}.ff.dense_in.bias",       [dec_in]),
+            (f"dec.blocks.{i}.ff.dense_out.weight",    [dec_in, dec_h]),
+            (f"dec.blocks.{i}.ff.dense_out.bias",      [dec_h]),
+        ]
+
+    # ----- decoder final norm -----
+    out += [
+        ("dec.final_norm.weight", [dec_h]),
+        ("dec.final_norm.bias",   [dec_h]),
+    ]
+
+    # ----- head (bias only; weight is tied to dec.embed.token.weight) -----
+    out += [("head.bias", [vocab])]
+
+    return out
+
+
+def _cohere_tensors() -> list[Tensor]:
+    descriptors = _cohere_tensor_descriptors()
+    tensors: list[Tensor] = []
+    for idx, (name, ne) in enumerate(descriptors):
+        n_elem = 1
+        for d in ne:
+            n_elem *= d
+        tensors.append(
+            Tensor(name, ne, GGML_TYPE_F32, _f32_seq(n_elem, idx))
+        )
+    return tensors
+
+
+# Token IDs the cohere fixture pins for transcribe_cohere_smoke. Picked
+# to be valid token ids in TOY_VOCAB (the Parakeet vocab is reused).
+COHERE_TOKEN_IDS = {
+    "decoder_start": 1,  # <s>
+    "bos":           1,  # <s>
+    "eos":           2,  # </s>
+    "pad":           0,  # <unk> (reuse; the fixture only needs a valid id)
+    "unk":           0,  # <unk>
+}
+
+
 def _write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -715,6 +1016,37 @@ def emit_fixtures(out_dir: Path) -> None:
                 *parakeet_hparams_kv,
             ],
             parakeet_tensors,
+        ),
+    )
+
+    # Cohere ASR minimal fixture. Uses the Cohere tokenizer model
+    # name "bpe" (vs Parakeet's "unigram"); same toy vocabulary
+    # otherwise. The tensor catalog is the full Cohere weight set
+    # (encoder + enc_dec_proj + decoder + final norm + head bias)
+    # at toy dims, so build_cohere_weights walks every code path.
+    cohere_tokenizer_kv = [
+        _pack_kv_string("tokenizer.ggml.model", "bpe"),
+        _pack_kv_array_string("tokenizer.ggml.tokens", TOY_VOCAB),
+        _pack_kv_array_float32("tokenizer.ggml.scores", TOY_SCORES),
+        _pack_kv_array_int32("tokenizer.ggml.token_type", TOY_TOKEN_TYPES),
+        _pack_kv_uint32("tokenizer.ggml.unknown_token_id", COHERE_TOKEN_IDS["unk"]),
+        _pack_kv_uint32("tokenizer.ggml.bos_token_id",     COHERE_TOKEN_IDS["bos"]),
+        _pack_kv_uint32("tokenizer.ggml.eos_token_id",     COHERE_TOKEN_IDS["eos"]),
+    ]
+    cohere_hparams_kv = _cohere_hparams_kv()
+    cohere_tensors    = _cohere_tensors()
+
+    _write(
+        out_dir / "arch_cohere_minimal.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "cohere_asr"),
+                _pack_kv_string("stt.variant",          "cohere-asr-toy"),
+                *cohere_tokenizer_kv,
+                *cohere_hparams_kv,
+            ],
+            cohere_tensors,
         ),
     )
 

@@ -61,9 +61,12 @@ struct ParakeetWeights;
 // Named intermediate dump points the encoder graph builder
 // publishes. The driver in Parakeet::run iterates this set after
 // graph_compute and feeds each tensor to transcribe::debug::dump_tensor
-// (gated on TRANSCRIBE_DUMP_DIR; zero-cost when unset). Adding a
-// new sub-stage means appending to this struct + populating it in
-// build_encoder_graph; Parakeet::run doesn't need to know the names.
+// (gated on TRANSCRIBE_DUMP_DIR; zero-cost when unset). Any tensor
+// stored here must also be passed to transcribe::debug::mark_tensor_for_dump()
+// while building the graph; otherwise the scheduler may reuse its
+// buffer before the post-compute dump pass reads it. Adding a new
+// sub-stage means appending to this struct + populating/preserving it
+// in build_encoder_graph; Parakeet::run doesn't need to know the names.
 struct EncoderDumps {
     // Pre-encode (3a). ne=[d_model, T_enc, 1, 1].
     ggml_tensor * pre_encode_out = nullptr;

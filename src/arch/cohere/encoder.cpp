@@ -12,7 +12,7 @@
 //     onto the shared nullable-pointer views (FFN, attention, and
 //     conv biases are all present in Cohere)
 //   - build_encoder_graph orchestration, including the post-encoder
-//     enc_dec_proj projection and the debug mark_for_dump hook
+//     enc_dec_proj projection and debug dump-preservation calls
 
 #include "encoder.h"
 
@@ -32,16 +32,6 @@ namespace transcribe::cohere {
 namespace {
 
 namespace conf = transcribe::conformer;
-
-// Mark a tensor as a graph output so the scheduler preserves its
-// buffer, but only when the debug dumper is active. Cohere uses this
-// to opt tensors into the dump stream without bloating the compute
-// buffer on non-debug runs.
-void mark_for_dump(ggml_tensor * t) {
-    if (t != nullptr && transcribe::debug::enabled()) {
-        ggml_set_output(t);
-    }
-}
 
 // ----- Per-family depthwise dispatch policy -----------------------
 //
@@ -166,7 +156,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                              /*error_tag=*/"cohere");
     if (x == nullptr) return eb;
     eb.dumps.pre_encode_out = x;
-    mark_for_dump(x);
+    transcribe::debug::mark_tensor_for_dump(x);
 
     // Conformer blocks.
     if (!w.blocks.empty()) {
@@ -194,7 +184,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                             to_view(w.blocks[0]), bparams);
             x = conf::named(x, "enc.block.0.out");
             eb.dumps.block0_out = x;
-            mark_for_dump(x);
+            transcribe::debug::mark_tensor_for_dump(x);
         }
 
         // Blocks 1..N-1.
@@ -208,7 +198,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                 std::snprintf(bname, sizeof(bname), "enc.block.%zu.out", i);
                 x = conf::named(x, bname);
                 eb.dumps.block_mid_out = x;
-                mark_for_dump(x);
+                transcribe::debug::mark_tensor_for_dump(x);
             }
             // Spot-check last block.
             if (i == w.blocks.size() - 1) {
@@ -216,14 +206,14 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                 std::snprintf(bname, sizeof(bname), "enc.block.%zu.out", i);
                 x = conf::named(x, bname);
                 eb.dumps.block_last_out = x;
-                mark_for_dump(x);
+                transcribe::debug::mark_tensor_for_dump(x);
             }
         }
     }
 
     eb.dumps.final_out = x;
     x = conf::named(x, "enc.final");
-    mark_for_dump(x);
+    transcribe::debug::mark_tensor_for_dump(x);
 
     // Encoder-decoder projection. Cohere-specific — not part of the
     // shared Conformer block, so it stays here.
@@ -232,7 +222,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
         proj = ggml_add(ctx, proj, w.enc_dec_proj.bias);
         proj = conf::named(proj, "enc_dec_proj.out");
         eb.dumps.enc_dec_proj_out = proj;
-        mark_for_dump(proj);
+        transcribe::debug::mark_tensor_for_dump(proj);
         x = proj;
     }
 

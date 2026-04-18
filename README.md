@@ -2,7 +2,7 @@
 
 C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, targeting Metal and Vulkan for fast GPU inference everywhere.
 
-**Supported models:** Parakeet TDT (v2, v3). More families planned (Cohere, Moonshine, Canary, SenseVoice, GigaAM, Whisper).
+**Supported models:** Parakeet TDT (v2, v3), Cohere Transcribe (03-2026). More families planned (Moonshine, Canary, SenseVoice, GigaAM, Whisper).
 
 ## Build
 

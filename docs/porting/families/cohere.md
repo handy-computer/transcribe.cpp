@@ -1,8 +1,7 @@
 # Cohere ASR
 
 Status: supported with manifest-driven numerical validation against
-native Transformers. C++ CPU validation passes locally; Cohere still
-needs a synthetic fixture smoke.
+native Transformers. C++ CPU validation passes locally.
 
 ## Identity
 
@@ -71,7 +70,5 @@ TRANSCRIBE_COHERE_MODEL=models/cohere-transcribe-03-2026/cohere-transcribe-03-20
 
 ## Gaps
 
-- No synthetic fixture smoke for Cohere.
-- Manifest exists, but the v2 schema does not yet record Hugging Face
-  snapshot revision or local artifact hashes.
+- Manifest records `hf_revision` but not local artifact hashes.
 - Reference hardware should still be captured for benchmark reports.

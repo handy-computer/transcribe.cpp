@@ -64,6 +64,18 @@ bool enabled();
 // as the dumper is enabled. Useful for tests.
 const char * dump_dir();
 
+// Preserve a ggml tensor for a later dump_tensor() call.
+//
+// The ggml scheduler is allowed to reuse intermediate buffers unless a
+// tensor is marked as a graph output. Family graph builders that stash
+// intermediate tensor pointers in an EncoderDumps-style struct must call
+// this helper while building the graph, before scheduler allocation.
+// Otherwise dump_tensor() may read a reused buffer after graph_compute.
+//
+// No-op unless debug dumping is enabled, so normal inference keeps the
+// scheduler's live-range packing unchanged.
+void mark_tensor_for_dump(struct ggml_tensor * tensor);
+
 // Dump a tensor to <dump_dir>/<name>.{f32,json}.
 //
 // `tensor` may live on any backend; the dumper copies the bytes via

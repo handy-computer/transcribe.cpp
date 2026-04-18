@@ -152,7 +152,8 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_unknown.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/corrupt_magic.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
@@ -354,6 +355,44 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 # -----------------------------------------------------------------------------
+# Cohere ASR synthetic fixture smoke (default-built)
+# -----------------------------------------------------------------------------
+#
+# Same role as transcribe_parakeet_smoke for the Parakeet family:
+# loads arch_cohere_minimal.gguf (a structurally complete minimal
+# Cohere ASR model with the full encoder + enc_dec_proj + decoder +
+# head tensor catalog at toy dims), then reaches into internal headers
+# to assert hparams round-trip, every CohereWeights slot is populated,
+# the post-load BN fuse + Q-bias fuse + conv-pw promote steps ran, and
+# the streamed tensor data is non-zero at known indices. Catches
+# converter/loader drift in default CI without needing a real model.
+#
+# Only registered when uv is available (the fixture generator is a uv
+# script). The transcribe_cohere_e2e_smoke and transcribe_cohere_real_smoke
+# tests below cover the real-model paths.
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_cohere_smoke
+        cohere_smoke.cpp)
+
+    target_link_libraries(transcribe_cohere_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_cohere_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    target_compile_definitions(transcribe_cohere_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_cohere_smoke)
+
+    add_dependencies(transcribe_cohere_smoke fixtures)
+
+    add_test(NAME transcribe_cohere_smoke COMMAND transcribe_cohere_smoke)
+    set_tests_properties(transcribe_cohere_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Cohere ASR end-to-end smoke test (real-model gated)
 # -----------------------------------------------------------------------------
 #
@@ -369,19 +408,19 @@ endif()
 # (CTest "skipped") when the env var is unset or the file is missing.
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
-    add_executable(transcribe_cohere_smoke
-        cohere_smoke.cpp)
+    add_executable(transcribe_cohere_e2e_smoke
+        cohere_e2e_smoke.cpp)
 
-    target_link_libraries(transcribe_cohere_smoke
+    target_link_libraries(transcribe_cohere_e2e_smoke
         PRIVATE transcribe transcribe-common-example)
 
-    target_compile_definitions(transcribe_cohere_smoke PRIVATE
+    target_compile_definitions(transcribe_cohere_e2e_smoke PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
 
-    transcribe_apply_warnings(transcribe_cohere_smoke)
+    transcribe_apply_warnings(transcribe_cohere_e2e_smoke)
 
-    add_test(NAME transcribe_cohere_smoke COMMAND transcribe_cohere_smoke)
-    set_tests_properties(transcribe_cohere_smoke PROPERTIES
+    add_test(NAME transcribe_cohere_e2e_smoke COMMAND transcribe_cohere_e2e_smoke)
+    set_tests_properties(transcribe_cohere_e2e_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 endif()
 
@@ -399,7 +438,7 @@ endif()
 #
 # Gated two ways: by TRANSCRIBE_BUILD_REAL_MODEL_TESTS (so the binary
 # is not built unless the developer opts in) AND by the runtime
-# TRANSCRIBE_COHERE_MODEL env var (same var that cohere_smoke.cpp
+# TRANSCRIBE_COHERE_MODEL env var (same var that cohere_e2e_smoke.cpp
 # uses, so a single export drives both tests). Skipped via
 # SKIP_RETURN_CODE 77 when the env var is unset or the file is
 # missing.

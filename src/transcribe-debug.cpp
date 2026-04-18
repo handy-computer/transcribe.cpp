@@ -126,6 +126,12 @@ const char * dump_dir() {
     return enabled() ? g_dump_dir.c_str() : nullptr;
 }
 
+void mark_tensor_for_dump(ggml_tensor * tensor) {
+    if (enabled() && tensor != nullptr) {
+        ggml_set_output(tensor);
+    }
+}
+
 void dump_tensor(const char *        name,
                  const ggml_tensor * tensor,
                  const char *        stage)

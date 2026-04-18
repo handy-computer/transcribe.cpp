@@ -105,6 +105,9 @@ def write_dump(
         "shape": list(data.shape),
         "dtype": "f32",
         "layout": "row-major",
+        "min": float(data.min()) if data.size else 0.0,
+        "max": float(data.max()) if data.size else 0.0,
+        "mean": float(data.mean(dtype=np.float64)) if data.size else 0.0,
         "source": source,
     }
     json_path.write_text(json.dumps(meta, indent=2) + "\n")

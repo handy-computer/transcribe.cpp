@@ -12,9 +12,10 @@ NeMo canonical reference. C++ CPU validation passes locally.
 
 ## References
 
-- Canonical reference: **NeMo** (`nvidia/parakeet-tdt-0.6b-v2` via
-  `ASRModel.from_pretrained`). NeMo is NVIDIA's own implementation and the
-  authoritative source for Parakeet TDT weights and inference behavior.
+- Canonical reference: **NeMo** (`nvidia/parakeet-tdt-0.6b-v2` and
+  `nvidia/parakeet-tdt-0.6b-v3` via `ASRModel.from_pretrained`). NeMo is
+  NVIDIA's own implementation and the authoritative source for Parakeet TDT
+  weights and inference behavior.
   Script: `scripts/dump_reference_parakeet_nemo.py`.
 - Instrumented reference: **NeMo** (same script, using forward hooks to
   capture per-stage intermediates without modifying NeMo internals).
@@ -22,8 +23,10 @@ NeMo canonical reference. C++ CPU validation passes locally.
 Validation status:
 
 - NeMo reference dumps and C++ CPU dumps pass via
-  `uv run scripts/validate.py compare --family parakeet`.
-- C++ and NeMo transcripts match exactly on `samples/jfk.wav`.
+  `uv run scripts/validate.py compare --family parakeet --variant <variant>`
+  for both `parakeet-tdt-0.6b-v2` and `parakeet-tdt-0.6b-v3`.
+- C++ and NeMo transcripts match exactly on `samples/jfk.wav` for both
+  variants.
 
 ## Environment
 
@@ -74,7 +77,6 @@ TRANSCRIBE_REAL_PARAKEET_GGUF=models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F
 
 ## Gaps
 
-- Manifest exists, but the v2 schema does not yet record Hugging Face
-  snapshot revision or local artifact hashes.
+- Manifests record `hf_revision` but not local artifact hashes.
 - Default CTest no longer has Parakeet source-tree numerical golden
   payloads; use `validate.py` for numerical comparison.

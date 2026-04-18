@@ -99,6 +99,23 @@ noise. Match constants, formulas, and intermediate dtypes exactly.
 
 ## Layout And Shape
 
+### Reused scheduler buffers in C++ dumps
+
+**Symptoms:** multiple unrelated C++ dump tensors are byte-exact equal,
+early/middle layer tolerances are enormous while final output gates look
+tight, or an intermediate's activation range looks like a later tensor.
+
+**Common cause:** the family graph builder saved intermediate tensor
+pointers for dumping after `graph_compute`, but did not mark those
+tensors as graph outputs. The ggml scheduler reused their buffers for
+later operations.
+
+**Fix:** call `transcribe::debug::mark_tensor_for_dump()` on every
+contract dump tensor while building the graph, before scheduler graph
+allocation. Keep this gated through the helper rather than calling
+`ggml_set_output()` unconditionally, so normal inference does not carry
+extra live tensors.
+
 ### Layout mismatch
 
 **Symptoms:** large errors with structure. Expected values may appear in
