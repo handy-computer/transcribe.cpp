@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://transcribe.cpp/schemas/intake-v1.json",
+  "title": "Transcribe.cpp Family Intake",
+  "description": "Machine-readable research packet produced before converter or C++ work begins. See docs/porting/1a-intake.md for field semantics.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "family",
+    "hf_repo",
+    "hf_revision",
+    "sources",
+    "variants",
+    "config",
+    "dtype",
+    "frontend",
+    "tokenizer",
+    "capabilities",
+    "reference_framework",
+    "architecture_pattern"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "transcribe-intake-v1"
+    },
+    "family": {
+      "type": "string",
+      "description": "Stable family key used across docs, envs, manifests, tolerances. Examples: parakeet, cohere, qwen3_asr."
+    },
+    "hf_repo": {
+      "type": "string",
+      "description": "Full HuggingFace repo id (org/name)."
+    },
+    "hf_revision": {
+      "type": ["string", "null"],
+      "description": "Commit SHA at the moment of intake. Null only if the source is not on HF; otherwise pin to an exact SHA, not a branch name."
+    },
+    "sources": {
+      "type": "object",
+      "description": "Where the draft intake's mechanical facts came from. Manual intakes should still name the files, APIs, or reference code used.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["kind", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "Source type, for example hf_file, hf_api, reference_code, manual."
+          },
+          "path": {
+            "type": ["string", "null"],
+            "description": "File path, API name, or source label."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["found", "missing", "manual", "accepted_gap"]
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "variants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "memory_gb": {"type": ["number", "null"]},
+          "files": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "required": ["architecture_candidates", "key_fields"],
+      "additionalProperties": false,
+      "properties": {
+        "architecture_candidates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc"]
+          },
+          "description": "Heuristic matches against known patterns. Human selects one in architecture_pattern."
+        },
+        "key_fields": {
+          "type": "object",
+          "description": "Selected config.json values driving sizing and shape. Free-form key/value map."
+        },
+        "varying_across_variants": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Config keys whose values differ across variants in the same family."
+        }
+      }
+    },
+    "dtype": {
+      "type": "object",
+      "required": ["expected", "source", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "expected": {
+          "type": ["string", "null"],
+          "description": "Reviewed expected compute/storage dtype for the first accuracy GGUF, e.g. bfloat16, float16, or float32. Null when unresolved."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["config", "weights_header", "manual", "unresolved"],
+          "description": "Where dtype.expected came from. 'weights_header' means the script inferred it from safetensors header metadata. 'manual' is normal for NeMo/author-repo models. 'unresolved' requires intake signoff to fill or explicitly accept the gap."
+        },
+        "evidence": {
+          "type": "string",
+          "description": "Human-readable basis for dtype.expected, for example config.torch_dtype=bfloat16, safetensors header counts, or a reference-code note."
+        },
+        "details": {
+          "type": "object",
+          "description": "Optional machine-readable evidence used by the script. Preflight consumes dtype.expected, not these details.",
+          "additionalProperties": true,
+          "properties": {
+            "config_declared": {"type": ["string", "null"]},
+            "header_distribution": {
+              "type": "object",
+              "additionalProperties": {"type": "integer"}
+            }
+          }
+        },
+        "expected_f32_tensors": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Tensor names or glob patterns expected to remain F32 in a non-F32 model (e.g. norms, biases). Filled by human."
+        }
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sample_rate": {"type": ["integer", "null"]},
+        "n_mels": {"type": ["integer", "null"]},
+        "hop_length": {"type": ["integer", "null"]},
+        "fft_size": {"type": ["integer", "null"]},
+        "window": {
+          "type": ["string", "null"],
+          "enum": ["hann_periodic", "hann_symmetric", "hamming", "blackman", null],
+          "description": "Window type. 'hann_periodic' and 'hann_symmetric' are a classic mismatch source."
+        },
+        "normalization": {
+          "type": ["string", "null"],
+          "enum": ["per_feature", "global", "per_utterance", "none", null]
+        },
+        "preemphasis": {
+          "type": ["number", "null"],
+          "description": "Coefficient; null if not applied."
+        },
+        "dither": {
+          "type": ["number", "null"],
+          "description": "Epsilon at inference; typically 0.0 or null."
+        },
+        "center": {
+          "type": ["boolean", "null"],
+          "description": "STFT center=True pads signal, center=False does not. Affects frame count."
+        },
+        "padding_mode": {
+          "type": ["string", "null"],
+          "enum": ["reflect", "zero", "constant", null]
+        },
+        "mel_filterbank_norm": {
+          "type": ["string", "null"],
+          "enum": ["slaney", "htk", null]
+        }
+      }
+    },
+    "tokenizer": {
+      "type": "object",
+      "required": ["type", "vocab_size"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["sentencepiece", "bpe", "wordpiece", "other"]
+        },
+        "vocab_size": {"type": "integer"},
+        "special_tokens": {
+          "type": "object",
+          "description": "Mapping of token role to ID. Omit roles the model doesn't use.",
+          "additionalProperties": {"type": "integer"}
+        },
+        "has_language_tokens": {"type": "boolean"},
+        "vocab_sha256": {
+          "type": ["string", "null"],
+          "description": "SHA-256 of the canonical token list. Detects silent vocab drift."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["languages"],
+      "additionalProperties": false,
+      "description": "What the publisher says the model can do. Mirrored into the golden manifest; cross-checked by preflight against GGUF stt.capability.* KVs.",
+      "properties": {
+        "languages": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "BCP-47 language codes the model transcribes. Single element for monolingual. Order should match the upstream model card."
+        },
+        "language_detection": {
+          "type": ["boolean", "null"],
+          "description": "Model auto-detects input language without a hint."
+        },
+        "translation": {
+          "type": ["boolean", "null"],
+          "description": "Model produces output in a different language than the input audio."
+        },
+        "timestamps": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["none", "segment", "word", "token"]},
+          "description": "Granularity of timestamps the model can emit. Empty or [\"none\"] means transcript-only."
+        },
+        "streaming": {
+          "type": ["boolean", "null"],
+          "description": "Model supports streaming / chunked real-time inference."
+        },
+        "voice_activity_detection": {"type": ["boolean", "null"]},
+        "speaker_diarization": {"type": ["boolean", "null"]}
+      }
+    },
+    "upstream_benchmarks": {
+      "type": "array",
+      "description": "Publisher-claimed benchmarks from the model card or upstream paper. Informational; not a port contract. Our own measured numbers live in docs/models/<family>.md. Empty array is fine when the publisher doesn't report scores.",
+      "items": {
+        "type": "object",
+        "required": ["dataset", "metric", "score"],
+        "additionalProperties": false,
+        "properties": {
+          "dataset": {
+            "type": "string",
+            "description": "Dataset name as the publisher reports it. E.g. 'LibriSpeech test-clean', 'Common Voice 17 en', 'FLEURS fr'."
+          },
+          "language": {
+            "type": ["string", "null"],
+            "description": "BCP-47 code of the evaluation language. Null when multilingual aggregate or language doesn't apply."
+          },
+          "metric": {
+            "type": "string",
+            "enum": ["wer", "cer", "bleu", "other"]
+          },
+          "score": {
+            "type": ["number", "null"],
+            "description": "Publisher-reported value. Null means 'not reported / not applicable' (e.g. monolingual model has no entry for a foreign-language dataset). Record the number as reported; don't normalize units."
+          },
+          "score_unit": {
+            "type": ["string", "null"],
+            "description": "Unit as reported (e.g. 'ratio' for 0.0168, 'percent' for 1.68). Omit or set null if the metric's natural unit is unambiguous."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the number came from — 'model card', paper URL, blog post URL, etc."
+          },
+          "notes": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "reference_framework": {
+      "type": ["string", "null"],
+      "description": "One of: nemo, transformers, author_repo_<name>. See 1-reference-research.md decision table.",
+      "pattern": "^(nemo|transformers|author_repo_[a-z0-9_]+)$"
+    },
+    "reference_rationale": {
+      "type": ["string", "null"],
+      "description": "Why this framework over the alternatives. Human-written."
+    },
+    "architecture_pattern": {
+      "type": ["string", "null"],
+      "enum": ["encoder-transducer", "encoder-decoder", "audio-llm", "encoder-ctc", null]
+    },
+    "known_risks": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Free-form list of risks surfaced by reading the reference code: novel ops, custom attention, multimodal fusion, streaming, long-sequence degradation."
+    },
+    "intake_gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "field": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      },
+      "description": "Fields that could not be mechanically determined, with an explanation."
+    }
+  }
+}

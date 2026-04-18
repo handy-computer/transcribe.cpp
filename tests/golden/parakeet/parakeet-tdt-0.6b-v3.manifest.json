@@ -1,10 +1,10 @@
 {
   "schema": "transcribe-golden-manifest-v1",
   "family": "parakeet",
-  "variant": "parakeet-tdt-0.6b-v2",
+  "variant": "parakeet-tdt-0.6b-v3",
   "source_model": {
-    "hf_repo": "nvidia/parakeet-tdt-0.6b-v2",
-    "hf_revision": "1b149a3589351c96ddb101709fe7dd9c7069572f"
+    "hf_repo": "nvidia/parakeet-tdt-0.6b-v3",
+    "hf_revision": "6d590f77001d318fb17a0b5bf7ee329a91b52598"
   },
   "reference": {
     "kind": "nemo",
@@ -27,12 +27,18 @@
   },
   "tokenizer_summary": {
     "type": "bpe",
-    "vocab_size": null,
+    "vocab_size": 8193,
     "special_tokens": {}
   },
   "capabilities": {
-    "languages": ["en"],
-    "language_detection": false,
+    "languages": [
+      "bg", "hr", "cs", "da", "nl",
+      "en", "et", "fi", "fr", "de",
+      "el", "hu", "it", "lv", "lt",
+      "mt", "pl", "pt", "ro", "ru",
+      "sk", "sl", "es", "sv", "uk"
+    ],
+    "language_detection": true,
     "translation": false,
     "timestamps": ["word", "token"],
     "streaming": false,

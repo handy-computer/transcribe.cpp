@@ -75,6 +75,11 @@ Recommended local workspace setup is described in
 model ids by default; local model and GGUF paths remain overridable with
 `--model` and `--gguf`.
 
+Numerical validation workflow is described in
+[`4-numerical-validation.md`](4-numerical-validation.md). Common
+numerical failure patterns and fixes are collected in
+[`4a-numerical-troubleshooting.md`](4a-numerical-troubleshooting.md).
+
 ## Naming
 
 Use a stable family key everywhere:

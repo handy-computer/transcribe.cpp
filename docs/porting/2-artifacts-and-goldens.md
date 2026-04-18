@@ -34,7 +34,13 @@ Reports:
 reports/validate/<family>/<case>.json
 reports/reference/<family>/<case>.json
 reports/bench/<machine>/<family>.<backend>.json
+reports/porting/<family>/<variant>/intake.json
+reports/porting/<family>/<variant>/_porting-log.md
 ```
+
+Release references live as a sentence in `docs/models/<family>.md` and
+in the HF README rendered by `scripts/hf_cards/generate.py` — no
+separate release artifact is written.
 
 Optional local cache:
 
@@ -49,34 +55,128 @@ The source tree should not rely on ignored `.f32`, `.bin`, `.npy`,
 
 ## Manifest
 
-Each model variant should have a manifest like:
+Two committed artifacts carry port-level state:
+
+1. **Golden manifest** — immutable validation provenance.
+   `tests/golden/<family>/<variant>.manifest.json`. Never mutated by upload
+   events.
+2. **Intake** — pinned research packet.
+   `reports/porting/<family>/<variant>/intake.json`. Captured once before
+   converter work.
+
+Validation runs (`validate.py --report` bundles) are ephemeral and
+gitignored — see `CONTRIBUTING.md`. Release references are a sentence in
+the model card, not a separate artifact.
+
+### Golden manifest
 
 ```json
 {
-  "schema": "transcribe-golden-manifest-v2",
+  "schema": "transcribe-golden-manifest-v1",
   "family": "cohere",
   "variant": "cohere-transcribe-03-2026",
-  "model": "CohereLabs/cohere-transcribe-03-2026",
-  "reference": "transformers",
+  "source_model": {
+    "hf_repo": "CohereLabs/cohere-transcribe-03-2026",
+    "hf_revision": "76b8b23e8607f35f0265a23d481b338fb0e26aea"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://github.com/huggingface/transformers",
+    "revision": "v5.5.3",
+    "entrypoint": "scripts/dump_reference_cohere_transformers.py"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "weights_header",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_symmetric",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": null,
+    "special_tokens": {}
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "it", "pt", "nl", "pl", "el", "ar", "ja", "zh", "vi", "ko"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/cohere.json",
   "cases": ["jfk"]
 }
 ```
 
-`validate.py` currently interprets the manifest by convention:
+`validate.py` interprets the manifest by convention:
 
-- `schema`: current value is `transcribe-golden-manifest-v2`
+- `schema`: current value is `transcribe-golden-manifest-v1`.
 - `family`: maps to `scripts/envs/<family>/`,
-  `tests/tolerances/<family>.json`, and `models/<family>/`
-- `variant`: selects `build/validate/<family>/<variant>/...`
-- `model`: default reference model id or local path; override with
-  `--model`
-- `reference`: selects `scripts/dump_reference_<family>_<reference>.py`
-- `cases`: sample basenames under `samples/`, such as `jfk`
+  `tests/tolerances/<family>.json`, and `models/<family>/`.
+- `variant`: selects `build/validate/<family>/<variant>/...`.
+- `source_model.hf_repo` / `source_model.hf_revision`: HF model repo id +
+  commit SHA pinned at intake. The revision is the single most important
+  model-weight reproducibility field; do not leave it `null` for new ports.
+- `reference.kind`: one of `nemo`, `transformers`, `author_repo_<name>`, or
+  another short implementation key chosen during reference research.
+- `reference.source`: canonical source for the reference implementation. Use
+  a repo URL when possible; for non-repo implementations, use the most stable
+  source identifier available and document the rationale in the family note.
+- `reference.revision`: commit SHA, release tag, or other immutable revision
+  for `reference.source`. If the current reference runs from a PyPI package
+  and no commit was captured during historical backfill, use the corresponding
+  package release tag and tighten to a commit on the next validation refresh.
+- `reference.entrypoint`: relative path to the local dump script that
+  instruments this reference. `validate.py ref` uses this field directly.
+- `expected_dtype` + `dtype_source`: from intake. `expected_dtype` maps from
+  `dtype.expected`. `dtype_source` is one of `config`, `weights_header`,
+  `manual`, or `unresolved`.
+- `frontend`: sample_rate, n_mels, hop_length, fft_size, window,
+  preemphasis, dither, and any other fields the family's preprocessor
+  exposes. Mirrors intake.
+- `tokenizer_summary`: tokenizer type, vocab size, special token IDs. Not
+  the full tokenizer — that lives in the GGUF.
+- `capabilities`: what the family claims to support (languages,
+  translation, timestamps, streaming, VAD, diarization). Mirrors intake.
+  Preflight cross-checks `capabilities.languages` against the GGUF's
+  `general.languages` array and `capabilities.language_detection` against
+  `stt.capability.lang_detect`.
+- `tolerance_file`: relative path to the family's tolerance file.
+- `cases`: sample basenames under `samples/`, such as `jfk`.
 
-The v2 manifest is intentionally small. Snapshot revisions, model file
-hashes, artifact cache keys, and reference implementation revisions
-should still be recorded in family notes or generated reports until the
-manifest schema grows those fields.
+Null values are acceptable for provenance fields when backfilling a
+historical manifest, but every new intake should populate
+`source_model.hf_revision` and `reference.revision` at capture time.
+
+### Release references
+
+No separate release-record artifact is written. The release pin is a
+single sentence in the family's model card — see `docs/models/<family>.md`
+and the rendered HF README at `handy-computer/<slug>-gguf` — pointing at
+the transcribe.cpp commit that was validated before upload:
+
+> Validated against the {reference} reference at transcribe.cpp commit
+> `<short>` on `<date>`.
+
+The rendered HF README carries the same sentence via
+`scripts/hf_cards/<variant>.yaml`'s `validation` block, so each HF
+revision preserves the validation pin that was current at its upload.
+
+This replaces a heavier release-record design — per-upload JSON bundles
+with validation/wer/bench snapshots — that duplicated git history and
+HF revision state. The single-sentence pin plus HF's own revision log is
+enough: a user or reviewer clicks the commit link and can run
+`uv run scripts/validate.py all --family <f>` at that commit to
+regenerate the full evidence.
 
 Generated payload directories contain tensor pairs plus any behavioral
 artifacts such as `transcript.json`. A future index/report can list every

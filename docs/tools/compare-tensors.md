@@ -92,6 +92,9 @@ uv run scripts/validate.py compare --family parakeet
 ## When it fails
 
 If the comparator reports a FAIL, use the `numerical-debugger` agent or
-walk the output from the first failing tensor — earlier stages
-cascade into later ones, so the first divergence is usually the root
-cause.
+walk the output from the first failing tensor. Earlier stages cascade into
+later ones, so the first divergence is usually the root cause. See
+[`docs/porting/4a-numerical-troubleshooting.md`](../porting/4a-numerical-troubleshooting.md)
+for common failure modes such as mel/STFT off-by-one errors, dtype drift,
+layout bugs, op mismatches, attention mask or position errors, KV-cache
+issues, tokenization problems, and log-softmax infinities.

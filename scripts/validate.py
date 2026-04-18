@@ -24,7 +24,7 @@ Usage:
 
 Conventions:
     Manifest:    tests/golden/{family}/*.manifest.json
-    Dump script: scripts/dump_reference_{family}_{reference}.py
+    Dump script: manifest reference.entrypoint
     Python env:  scripts/envs/{family}/
     Tolerances:  tests/tolerances/{family}.json
     Audio:       samples/jfk.wav
@@ -37,6 +37,7 @@ Conventions:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import glob
 import json
 import os
@@ -86,18 +87,35 @@ def load_manifest(
     return json.loads(Path(matches[0]).read_text())
 
 
-def find_dump_script(repo: Path, family: str, reference: str) -> Path:
-    script = repo / "scripts" / f"dump_reference_{family}_{reference}.py"
-    if script.exists():
-        return script
-    # Try without reference suffix as fallback.
-    fallback = repo / "scripts" / f"dump_reference_{family}.py"
-    if fallback.exists():
-        return fallback
-    raise SystemExit(
-        f"error: dump script not found: {script}\n"
-        f"  (also tried {fallback})"
-    )
+def manifest_source_model(manifest: dict[str, Any]) -> str:
+    source_model = manifest.get("source_model")
+    if not isinstance(source_model, dict):
+        raise SystemExit("error: manifest missing source_model object")
+    hf_repo = source_model.get("hf_repo")
+    if not hf_repo:
+        raise SystemExit("error: manifest missing source_model.hf_repo")
+    return str(hf_repo)
+
+
+def manifest_reference(manifest: dict[str, Any]) -> dict[str, Any]:
+    reference = manifest.get("reference")
+    if not isinstance(reference, dict):
+        raise SystemExit("error: manifest missing reference object")
+    if not reference.get("kind"):
+        raise SystemExit("error: manifest missing reference.kind")
+    if not reference.get("source"):
+        raise SystemExit("error: manifest missing reference.source")
+    if not reference.get("entrypoint"):
+        raise SystemExit("error: manifest missing reference.entrypoint")
+    return reference
+
+
+def manifest_dump_script(repo: Path, manifest: dict[str, Any]) -> Path:
+    reference = manifest_reference(manifest)
+    script = repo / str(reference["entrypoint"])
+    if not script.exists():
+        raise SystemExit(f"error: reference entrypoint not found: {script}")
+    return script
 
 
 def find_gguf(repo: Path, family: str) -> Path:
@@ -199,12 +217,12 @@ def cmd_ref(args: argparse.Namespace) -> int:
     repo = find_repo_root(Path(__file__).parent)
     manifest = load_manifest(repo, args.family, getattr(args, "variant", None))
     variant = manifest["variant"]
-    reference = manifest.get("reference", args.family)
-    model = args.model or manifest.get("model", "")
+    reference = manifest_reference(manifest)
+    model = args.model or manifest_source_model(manifest)
     if not model:
         raise SystemExit("error: no model specified and none in manifest")
 
-    dump_script = find_dump_script(repo, args.family, reference)
+    dump_script = manifest_dump_script(repo, manifest)
     env_dir = repo / "scripts" / "envs" / args.family
 
     cases = manifest.get("cases", ["jfk"])
@@ -236,7 +254,11 @@ def cmd_ref(args: argparse.Namespace) -> int:
         # pass overwrites the encoder pass (same values).
         for stage in ["encoder", "decode"]:
             cmd = base_args + [stage] + common_args
-            run_cmd(cmd, repo, f"ref {stage} [{args.family}/{variant}/{case}]")
+            run_cmd(
+                cmd,
+                repo,
+                f"ref {stage} [{args.family}/{variant}/{case}/{reference['kind']}]",
+            )
 
     return 0
 
@@ -323,9 +345,14 @@ def cmd_compare(args: argparse.Namespace) -> int:
         tolerances = None
 
     compare_script = repo / "scripts" / "compare_tensors.py"
+    report_mode = getattr(args, "report", False)
 
     cases = manifest.get("cases", ["jfk"])
     all_passed = True
+    compare_outputs: list[dict[str, Any]] = []
+    transcript_results: list[dict[str, Any]] = []
+    cmd_log: list[dict[str, Any]] = []
+
     for case in cases:
         cpp_dir = repo / "build" / "validate" / args.family / variant / case / "cpp"
         ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
@@ -350,7 +377,21 @@ def cmd_compare(args: argparse.Namespace) -> int:
         print(f"  compare [{args.family}/{case}]", file=sys.stderr)
         print(f"{'=' * 60}", file=sys.stderr)
 
-        result = subprocess.run(cmd, cwd=repo)
+        if report_mode:
+            result = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+            if result.stdout:
+                print(result.stdout)
+            if result.stderr:
+                print(result.stderr, file=sys.stderr)
+            compare_outputs.append({
+                "case": case,
+                "returncode": result.returncode,
+                "stdout": result.stdout or "",
+                "stderr": result.stderr or "",
+            })
+        else:
+            result = subprocess.run(cmd, cwd=repo)
+        cmd_log.append({"case": case, "cmd": cmd, "returncode": result.returncode})
         if result.returncode != 0:
             all_passed = False
 
@@ -367,11 +408,20 @@ def cmd_compare(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 all_passed = False
+                transcript_results.append({
+                    "case": case, "match": False,
+                    "reason": "missing C++ transcript artifact",
+                })
                 continue
 
             cpp_data = json.loads(cpp_transcript.read_text())
             cpp_text = str(cpp_data.get("text", ""))
-            if cpp_text != ref_text:
+            match = cpp_text == ref_text
+            transcript_results.append({
+                "case": case, "match": match,
+                "reference": ref_text, "cpp": cpp_text,
+            })
+            if not match:
                 print("\nFAIL transcript mismatch")
                 print(f"  reference: {ref_text!r}")
                 print(f"  c++:       {cpp_text!r}")
@@ -379,7 +429,128 @@ def cmd_compare(args: argparse.Namespace) -> int:
             else:
                 print(f"\n  Transcript: ok {cpp_text!r}")
 
+    if report_mode:
+        write_report_bundle(
+            repo=repo,
+            family=args.family,
+            variant=variant,
+            compare_outputs=compare_outputs,
+            transcript_results=transcript_results,
+            cmd_log=cmd_log,
+            overall_passed=all_passed,
+        )
+
     return 0 if all_passed else 1
+
+
+def git_head_sha(repo: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo, capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def write_report_bundle(
+    *,
+    repo: Path,
+    family: str,
+    variant: str,
+    compare_outputs: list[dict[str, Any]],
+    transcript_results: list[dict[str, Any]],
+    cmd_log: list[dict[str, Any]],
+    overall_passed: bool,
+) -> Path:
+    """Write an ephemeral validation report bundle.
+
+    The bundle captures what's not reproducible from git alone: the compare
+    stdout, exact command invocations, and transcript comparison at this
+    moment. The manifest, tolerance file, and compare_tensors.py live in the
+    repo — pin them via `validated_at_sha` (the git HEAD at bundle time)
+    rather than duplicating them here.
+    """
+    now = dt.datetime.now(dt.UTC)
+    ts = now.strftime("%Y%m%dT%H%M%SZ")
+    sha = git_head_sha(repo)
+    bundle_id = f"{ts}-{sha[:7]}" if sha != "unknown" else ts
+
+    bundle_dir = repo / "reports" / "porting" / family / variant / bundle_id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    (bundle_dir / "commands.json").write_text(
+        json.dumps({"validated_at_sha": sha, "commands": cmd_log}, indent=2) + "\n"
+    )
+
+    summary = [
+        f"# Validation Report — {family}/{variant}",
+        "",
+        f"- Generated: {now.isoformat().replace('+00:00', 'Z')}",
+        f"- Repo SHA: `{sha}`",
+        f"- Overall: **{'PASS' if overall_passed else 'FAIL'}**",
+        "",
+    ]
+    for co in compare_outputs:
+        summary += [
+            f"## compare_tensors — {co['case']}",
+            "",
+            f"Exit code: `{co['returncode']}`",
+            "",
+            "```",
+            co["stdout"].rstrip() or "(no stdout)",
+            "```",
+            "",
+        ]
+    if transcript_results:
+        summary += ["## Transcript comparison", ""]
+        for tr in transcript_results:
+            summary.append(f"### {tr['case']}")
+            summary.append("")
+            if tr["match"]:
+                summary.append(f"- Match: **yes**")
+                summary.append(f"- text: `{tr.get('cpp', '')!r}`")
+            else:
+                summary.append(f"- Match: **no**")
+                if "reason" in tr:
+                    summary.append(f"- Reason: {tr['reason']}")
+                else:
+                    summary.append(f"- reference: `{tr.get('reference', '')!r}`")
+                    summary.append(f"- c++:       `{tr.get('cpp', '')!r}`")
+            summary.append("")
+    (bundle_dir / "summary.md").write_text("\n".join(summary))
+
+    repro = f"""# Reproducing this validation run
+
+Check out repo at SHA `{sha}`, then run:
+
+```bash
+uv run scripts/validate.py all --family {family} --variant {variant}
+```
+
+Or step by step:
+
+```bash
+uv run scripts/validate.py ref     --family {family} --variant {variant}
+uv run scripts/validate.py cpp     --family {family} --variant {variant}
+uv run scripts/validate.py compare --family {family} --variant {variant}
+```
+
+Inputs (all version-controlled; pinned by `validated_at_sha` in commands.json):
+
+- Golden manifest: `tests/golden/{family}/{variant}.manifest.json`
+- Tolerance file: `tests/tolerances/{family}.json`
+- Comparator: `scripts/compare_tensors.py`
+
+Bundle contents are ephemeral evidence — the compare stdout and transcript
+check at validation time. The validated commit SHA is authoritative;
+snapshots of repo-tracked files are intentionally omitted.
+"""
+    (bundle_dir / "reproduce.md").write_text(repro)
+
+    print(f"\nReport bundle: {bundle_dir.relative_to(repo)}", file=sys.stderr)
+    return bundle_dir
 
 
 def cmd_all(args: argparse.Namespace) -> int:
@@ -434,6 +605,10 @@ def main() -> int:
     # compare
     sp_cmp = sub.add_parser("compare", help="Compare C++ vs reference dumps")
     add_common(sp_cmp)
+    sp_cmp.add_argument(
+        "--report", action="store_true",
+        help="Emit a report bundle under reports/porting/<family>/<variant>/<ts>-<sha>/",
+    )
     sp_cmp.set_defaults(func=cmd_compare)
 
     # all
@@ -442,6 +617,10 @@ def main() -> int:
     sp_all.add_argument("--model", help="HF model ID or local path")
     sp_all.add_argument("--gguf", help="GGUF path")
     sp_all.add_argument("--backend", default="cpu", choices=["auto", "cpu", "metal", "vulkan"])
+    sp_all.add_argument(
+        "--report", action="store_true",
+        help="Emit a report bundle after compare completes.",
+    )
     sp_all.set_defaults(func=cmd_all)
 
     args = p.parse_args()

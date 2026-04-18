@@ -67,6 +67,41 @@ python:
 reference_package_versions:
 ```
 
+## Choosing Your Reference Framework
+
+**The model card is the decision.** Read it first. The publisher names the
+canonical implementation; that's the reference. Don't reason
+from "STT usually ships via X" or from what previous ports used — the
+canonical framework for this family might be one you haven't seen before.
+
+The intake produces one unambiguous answer: what the publisher says is
+authoritative, at what revision. Lock it in the golden manifest's
+`reference.kind` / `reference.source` / `reference.revision` fields and
+explain the choice in the family note. The publisher may not specify a
+revision, in this case use the latest release of the library.
+
+Rules:
+
+- Pick exactly one reference per family. Locking it in the manifest makes
+  "what was validated against what" unambiguous for future reviewers.
+- Use what the publisher points at, even if unfamiliar. A new framework on
+  a new port is normal; defaulting to a familiar one without reading the
+  card is a smell.
+- Prefer publisher-supported code over reverse-engineered. A third-party
+  implementation becomes the canonical reference only when no
+  publisher-supported path can be instrumented.
+- Don't switch frameworks mid-port. If the chosen framework lags on a
+  specific variant, document the limitation in the family note.
+
+Examples (illustrative, not prescriptive — your family's card may point
+somewhere else entirely):
+
+- Parakeet: the NVIDIA card points at NeMo, so the reference is NeMo
+  (`nvidia/parakeet-tdt-0.6b-v2` via `ASRModel.from_pretrained`).
+- Cohere: the Cohere card points at native Transformers with
+  `trust_remote_code=False`. The remote-code path produces garbage outputs
+  and is explicitly not the reference.
+
 ## Reference Roles
 
 Use three labels, even if two labels point at the same implementation.

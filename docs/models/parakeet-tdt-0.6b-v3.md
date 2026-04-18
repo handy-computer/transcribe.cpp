@@ -96,19 +96,20 @@ uv run scripts/bench/run.py \
 
 ## Numerical Validation
 
-> **Pending:** `tests/golden/parakeet/parakeet-tdt-0.6b-v3.manifest.json`
-> does not yet exist. v3 shares v2's architecture (0.6B Conformer + TDT),
-> so the dump script and methodology transfer, but a v3-specific manifest
-> and reference dump set are needed before this table can be filled in.
+> **Pending:** manifest is now in place at
+> `tests/golden/parakeet/parakeet-tdt-0.6b-v3.manifest.json`; a full
+> NeMo reference dump + C++ dump + compare run is still needed before
+> this section can report tensor-by-tensor numbers. Validation commit
+> will be recorded here after the first clean run.
 
 | Field | Value |
 | --- | --- |
 | Reference | NeMo, `nvidia/parakeet-tdt-0.6b-v3` |
 | Dump script | `scripts/dump_reference_parakeet_nemo.py` |
-| Manifest | `tests/golden/parakeet/parakeet-tdt-0.6b-v3.manifest.json` *(to be added)* |
+| Manifest | `tests/golden/parakeet/parakeet-tdt-0.6b-v3.manifest.json` |
 | Command | `uv run scripts/validate.py compare --family parakeet --variant parakeet-tdt-0.6b-v3` |
 
-Selected tensors: *TBD — run `uv run scripts/validate.py all --family parakeet --variant parakeet-tdt-0.6b-v3` after the manifest is in place.*
+Selected tensors: *TBD — run `uv run scripts/validate.py all --family parakeet --variant parakeet-tdt-0.6b-v3` once the reference environment is set up.*
 
 ## Reproduction
 

@@ -99,7 +99,8 @@ uv run scripts/bench/run.py \
 transcribe.cpp is validated tensor-by-tensor against the Transformers
 reference implementation on `samples/jfk.wav`. All 22 checkpointed tensors
 fall within family tolerance, and the final transcript matches the reference
-verbatim.
+verbatim. Last validated at commit
+[`3912397`](https://github.com/handy-computer/transcribe.cpp/tree/3912397).
 
 | Field | Value |
 | --- | --- |
