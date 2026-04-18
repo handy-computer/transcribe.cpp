@@ -1,0 +1,174 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/parakeet-tdt-0.6b-v3",
+  "hf_revision": "593ce355afbff63a6412af0a395e635065cc0fc0",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "v3 ships config.json + safetensors but no separate preprocessor_config.json; preprocessor block lives inside the .nemo archive (model.cfg.preprocessor). Frontend values cross-checked against scripts/convert-parakeet.py and parakeet-mlx."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; F32=699, I64=24"
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
+      "status": "found",
+      "detail": "language list (25 European langs), capability flags, and benchmark scores"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "refs/mlx/mlx-audio/mlx_audio/stt/models/parakeet/, refs/models/parakeet/parakeet-mlx/parakeet_mlx/parakeet.py, transcribe.cpp/scripts/convert-parakeet.py, transcribe.cpp/src/arch/parakeet/",
+      "status": "found",
+      "detail": "C++ reference port and converter are the authoritative source for shape/frontend facts"
+    }
+  },
+  "variants": [
+    {
+      "name": "parakeet-tdt-0.6b-v3",
+      "memory_gb": 2.5,
+      "files": ["model.safetensors", "config.json", "tokenizer.json"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-transducer"],
+    "key_fields": {
+      "architectures": ["ParakeetForTDT"],
+      "model_type": "parakeet_tdt",
+      "hidden_act": "relu",
+      "vocab_size": 8193,
+      "encoder.type": "ConformerEncoder (FastConformer)",
+      "encoder.n_layers": 24,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 8,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.conv_kernel_size": 9,
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.self_attention_model": "rel_pos",
+      "encoder.feat_in": 128,
+      "decoder.type": "RNNTDecoder (predictor)",
+      "decoder.pred_rnn_layers": 2,
+      "decoder.pred_hidden": 640,
+      "decoder.vocab_size": 8192,
+      "joint.type": "TDTJoint",
+      "joint.durations": [0, 1, 2, 3, 4],
+      "joint.num_extra_outputs": 5
+    },
+    "varying_across_variants": [
+      "decoder.vocab_size",
+      "joint.vocabulary_size",
+      "tokenizer.vocab_size"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "config",
+    "evidence": "config dtype=float32; safetensors header confirms F32=699 (all floating tensors), I64=24 (integer buffers ignored). Converted GGUF is parakeet-tdt-0.6b-v3-F32.gguf.",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "I64": 24,
+        "F32": 699
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 8192,
+    "special_tokens": {
+      "pad": 2,
+      "blank": 8192,
+      "decoder_start": 8192
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "7c21c04ff6ff2f806ca43a8420479091479c805d2b7952825ae2acc4fec9424d"
+  },
+  "capabilities": {
+    "languages": [
+      "bg", "hr", "cs", "da", "nl",
+      "en", "et", "fi", "fr", "de",
+      "el", "hu", "it", "lv", "lt",
+      "mt", "pl", "pt", "ro", "ru",
+      "sk", "sl", "es", "sv", "uk"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": ["token", "word", "segment"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "MLS test (average across the 25 supported European languages)",
+      "language": null,
+      "metric": "wer",
+      "score": null,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
+      "notes": "v3 model card publishes per-language WER on MLS-style evaluations rather than a single aggregate; transcribe a representative subset here once we run our own bench."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "Same as v2: NVIDIA NeMo is the first-party framework. v3 additionally publishes safetensors + config.json so the model can also be loaded via NeMo's own loaders for safetensors checkpoints, but the canonical inference path remains `nemo.collections.asr.models.ASRModel.from_pretrained`. mlx-audio is a cross-check, not a numerical authority.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Same TDT joint and duration-head pitfalls as v2; the architecture is identical.",
+    "Multilingual SentencePiece vocab (8192 + blank). Some scripts (Cyrillic, Greek) have higher byte-fallback rates; tokenizer round-trip tests should cover non-Latin samples, not just English.",
+    "v3 advertises language detection (`lang_detect=true`). The detection signal lives in the encoder embeddings, not in a separate head; the converter copies general.languages and sets `stt.capability.lang_detect=true` but the actual detection logic is dispatcher-side. Confirm that the language-detection hook reads encoder output the same way NeMo does.",
+    "FastConformer rel-pos attention, depth-wise striding subsampling, preemph=0.97, per-feature normalization — all identical to v2 and inherit v2's risk list.",
+    "Long-form audio: v3 model card recommends chunking >35 s clips; the C++ port handles long audio via internal chunking. Boundary handling differs from NeMo's chunked decoder; transcripts can drift at chunk edges if overlap is wrong."
+  ],
+  "intake_gaps": [
+    {
+      "field": "upstream_benchmarks[0].score",
+      "reason": "v3 model card publishes per-language WER (not a single aggregate). Add explicit per-language entries once we capture them; current row is a placeholder so preflight does not flag missing benchmarks."
+    },
+    {
+      "field": "variants[].memory_gb",
+      "reason": "Estimated from F32 GGUF size; not measured against actual peak inference memory."
+    }
+  ]
+}

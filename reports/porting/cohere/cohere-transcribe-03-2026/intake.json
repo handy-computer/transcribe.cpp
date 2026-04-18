@@ -1,0 +1,170 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "cohere",
+  "hf_repo": "CohereLabs/cohere-transcribe-03-2026",
+  "hf_revision": "76b8b23e8607f35f0265a23d481b338fb0e26aea",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "BF16=2104 (all floating tensors), I64=48 (integer buffers)"
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/CohereLabs/cohere-transcribe-03-2026",
+      "status": "found",
+      "detail": "language list, capability flags, and the discussion #28 note that drove the trust_remote_code=False decision"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "models/cohere-transcribe-03-2026/{modeling_cohere_asr.py,processing_cohere_asr.py,tokenization_cohere_asr.py}, transcribe.cpp/scripts/convert-cohere.py, transcribe.cpp/src/arch/cohere/",
+      "status": "found",
+      "detail": "Local HF checkout includes the trust_remote_code modeling files; we do NOT use the remote code path for goldens (per family note + HF discussion #28), but it is the source of truth for shapes and frontend constants. Native Transformers (CohereAsrForConditionalGeneration in mainline transformers) is what the reference dumper actually runs."
+    }
+  },
+  "variants": [
+    {
+      "name": "cohere-transcribe-03-2026",
+      "memory_gb": 5.0,
+      "files": ["model.safetensors", "config.json", "preprocessor_config.json", "tokenizer.json", "tokenizer.model"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-decoder"],
+    "key_fields": {
+      "architectures": ["CohereAsrForConditionalGeneration"],
+      "model_type": "cohere_asr",
+      "vocab_size": 16384,
+      "is_encoder_decoder": true,
+      "max_seq_len": 1024,
+      "max_audio_clip_s": 35,
+      "encoder.type": "ConformerEncoder (FastConformer, NeMo-derived)",
+      "encoder.n_layers": 48,
+      "encoder.d_model": 1280,
+      "encoder.n_heads": 8,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.conv_kernel_size": 9,
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.self_attention_model": "rel_pos",
+      "encoder.feat_in": 128,
+      "encoder.untie_biases": true,
+      "transf_decoder.hidden_size": 1024,
+      "transf_decoder.inner_size": 4096,
+      "transf_decoder.num_attention_heads": 8,
+      "transf_decoder.num_layers": 8,
+      "transf_decoder.hidden_act": "relu",
+      "transf_decoder.pre_ln": true,
+      "transf_decoder.max_sequence_length": 1024,
+      "transf_decoder.learn_positional_encodings": false,
+      "head.hidden_size": 1024,
+      "head.num_classes": 16384,
+      "head.activation": "relu",
+      "decoding.strategy": "beam",
+      "decoding.beam_size": 1,
+      "prompt_format": "cohere_asr"
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "weights_header",
+    "evidence": "safetensors header BF16=2104 (all floating tensors), I64=48 (integer buffers); BF16 selected as dominant floating dtype. Cross-checked: converted GGUF is cohere-transcribe-03-2026-BF16.gguf and validate.py compare passes against native Transformers BF16 reference dumps.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {
+        "I64": 48,
+        "BF16": 2104
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 16384,
+    "special_tokens": {
+      "bos": 4,
+      "eos": 3,
+      "pad": 2,
+      "decoder_start": 13764
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": "c6e708e8cd5c72afb475a2268fcbae2cf86651d0439aeff395734e3c3cc85de5"
+  },
+  "capabilities": {
+    "languages": [
+      "en", "fr", "de", "es", "it", "pt", "nl", "pl",
+      "el", "ar", "ja", "zh", "vi", "ko"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["none"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [],
+  "reference_framework": "transformers",
+  "reference_rationale": "Native Hugging Face Transformers (`CohereAsrForConditionalGeneration` in mainline transformers, `trust_remote_code=False`) is the canonical reference. The HF repo also ships a `trust_remote_code=True` modeling path, but Cohere has explicitly recommended the native path going forward and HF discussion #28 documents garbage generations on the remote-code path (https://huggingface.co/CohereLabs/cohere-transcribe-03-2026/discussions/28). Our reference dumper enforces `trust_remote_code=False`. NeMo is not a candidate: although the encoder is FastConformer-derived, the model is not packaged as a NeMo checkpoint.",
+  "architecture_pattern": "encoder-decoder",
+  "known_risks": [
+    "FastConformer encoder with depth-wise striding subsampling factor 8 — same family as Parakeet's encoder. preemph=0.97 applied before STFT; per-feature normalization; mismatches here silently degrade WER without changing tensor shapes.",
+    "Encoder is large (48 layers, d_model=1280) — about 4x the Parakeet encoder by parameter count. Memory budgeting and Metal/Vulkan parity work need to account for this, not assume Parakeet sizing.",
+    "Transformer decoder uses sinusoidal (`learn_positional_encodings=false`) absolute position encodings, pre-LN with a final extra LN (`pre_ln_final_layer_norm=true`). Off-by-one or post-LN variants are a common bring-up bug.",
+    "Decoder is conditioned on a 10-token English-punctuation prompt: `[13764, 7, 4, 16, 62, 62, 5, 9, 11, 13]`. The `<|notimestamp|>` slot is hard-wired in `prompt_defaults`, which is why the family advertises max_timestamp_kind=NONE — there is no timestamp signal to recover.",
+    "Multilingual prompt slots (`source_lang`, `target_lang`, `pnc`, `itn`, `diarize`, `emotion`, `timestamp`) live in the prompt template, not in separate task heads. Changing language requires substituting prompt slot tokens; the converter must round-trip the full prompt-format spec into GGUF so the C++ loader can rebuild it.",
+    "Tokenizer is SentencePiece with custom Cohere-ASR added tokens (special slot tokens such as `<|en|>`, `<|notimestamp|>`, `<|pnc|>`). vocab_size=16384 includes these. Tokenizer round-trip must preserve the slot-token IDs exactly.",
+    "Beam search size 1 (= greedy with a length-penalty hook); the converter records this but the C++ runner must not assume true beam>1 capacity is exercised.",
+    "Cohere's published `trust_remote_code=True` path is known-broken (discussion #28). Do not import or compare against the remote-code generation path; only use it to read shapes."
+  ],
+  "intake_gaps": [
+    {
+      "field": "upstream_benchmarks",
+      "reason": "Cohere's model card does not publish a numerical WER/CER table at the time of intake; record entries from any subsequent technical report or blog post when available."
+    },
+    {
+      "field": "variants[].memory_gb",
+      "reason": "Estimated from BF16 GGUF size; not measured against actual peak inference memory."
+    }
+  ]
+}

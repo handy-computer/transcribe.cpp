@@ -1,0 +1,172 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/parakeet-tdt-0.6b-v2",
+  "hf_revision": "1b149a3589351c96ddb101709fe7dd9c7069572f",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo ships the model as a single .nemo tar archive containing model_config.yaml. config.json is not on the HF repo root; values below come from the .nemo archive consumed by NeMo's ASRModel.from_pretrained and from scripts/convert-parakeet.py:281+ which reads model.cfg.preprocessor / model.cfg.encoder / model.cfg.decoder."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "preprocessor lives inside the .nemo archive as model_config.yaml -> preprocessor (NeMo AudioToMelSpectrogramPreprocessor / FilterbankFeatures). Values below cross-checked against scripts/convert-parakeet.py and refs/mlx/mlx-audio/mlx_audio/stt/models/parakeet/audio.py."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "tokenizer is a SentencePiece BPE model embedded in the .nemo archive (tokenizer.model, tokenizer.vocab). Read by NeMo's tokenizer factory; surfaced via scripts/convert-parakeet.py:167+."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "no fast-tokenizer JSON; SentencePiece proto only"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "TDT decoding config (durations, max_symbols_per_step, etc.) lives in the .nemo archive under model.cfg.decoding"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "weights are PyTorch state_dict inside the .nemo tarball, not safetensors; dtype filled manually from NeMo defaults and convert-parakeet.py output"
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2",
+      "status": "found",
+      "detail": "languages, capability flags, and Open ASR Leaderboard score read from the model card"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "refs/mlx/mlx-audio/mlx_audio/stt/models/parakeet/, refs/models/parakeet/parakeet-mlx/parakeet_mlx/parakeet.py, transcribe.cpp/scripts/convert-parakeet.py, transcribe.cpp/src/arch/parakeet/",
+      "status": "found",
+      "detail": "C++ reference port and converter are the authoritative source for shape/frontend facts; MLX implementations are cross-checks"
+    }
+  },
+  "variants": [
+    {
+      "name": "parakeet-tdt-0.6b-v2",
+      "memory_gb": 2.5,
+      "files": ["parakeet-tdt-0.6b-v2.nemo"]
+    },
+    {
+      "name": "parakeet-tdt-0.6b-v3",
+      "memory_gb": 2.5,
+      "files": ["model.safetensors", "config.json", "tokenizer.json"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-transducer"],
+    "key_fields": {
+      "architectures": ["EncDecRNNTBPEModel"],
+      "model_type": "parakeet_tdt",
+      "encoder.type": "ConformerEncoder (FastConformer)",
+      "encoder.n_layers": 24,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 8,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.conv_kernel_size": 9,
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.self_attention_model": "rel_pos",
+      "encoder.feat_in": 128,
+      "decoder.type": "RNNTDecoder (predictor)",
+      "decoder.pred_rnn_layers": 2,
+      "decoder.pred_hidden": 640,
+      "decoder.vocab_size": 1024,
+      "joint.type": "TDTJoint",
+      "joint.durations": [0, 1, 2, 3, 4],
+      "joint.num_extra_outputs": 5
+    },
+    "varying_across_variants": [
+      "decoder.vocab_size",
+      "joint.vocabulary_size",
+      "tokenizer.vocab_size"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo archive ships the TDT model as float32 PyTorch state_dict (no safetensors). scripts/convert-parakeet.py preserves storage dtype per project policy 2; converted GGUF is parakeet-tdt-0.6b-v2-F32.gguf. Cross-checked: refs/mlx/mlx-audio's parakeet weights are float32.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["token", "word", "segment"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Open ASR Leaderboard (average across 8 English test sets)",
+      "language": "en",
+      "metric": "wer",
+      "score": 6.05,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2",
+      "notes": "Publisher-claimed average WER across LibriSpeech test-clean/other, AMI, Earnings22, GigaSpeech, SPGISpeech, TEDLIUM, VoxPopuli at the time the v2 model was released."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NeMo (`nvidia/NeMo`) is NVIDIA's first-party training and inference framework for the Parakeet family. The HF repo ships only a `.nemo` tar archive consumable by `nemo.collections.asr.models.ASRModel.from_pretrained`; there is no Transformers modeling class. NeMo is also the only framework that exposes the TDT joint / duration head numerics consistently. mlx-audio and parakeet-mlx are independent re-implementations and are useful only as cross-checks.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "TDT (Token-and-Duration Transducer) joint network. Standard RNN-T joint emits one token per frame; TDT additionally emits a duration symbol that advances the encoder pointer by 0..N frames. Decoding loop must consume both heads per step; off-by-one in duration handling produces silent transcript drift, not a crash.",
+    "FastConformer encoder uses depth-wise striding subsampling (factor 8) — three conv stacks with stride-2 in time. Frame count must round consistently with NeMo's `get_seq_len` for the encoder mask to match; mismatches surface as edge-of-utterance hallucinations.",
+    "Relative-position attention (`rel_pos`) with untied biases. The pos-bias is a learned vector added to attention scores after a relative-shift trick. ggml has no first-class op; the existing port materialises the shift host-side per layer.",
+    "NeMo FilterbankFeatures applies preemph=0.97 BEFORE windowing/STFT. Skipping this silently shifts the spectral tilt and degrades WER without changing shape. Cross-check via tensor dump comparison after the mel stage.",
+    "Per-feature normalization (mean/std across time, per mel band). Distinct from per-utterance global-mean-var; mismatch with reference is a common bring-up bug.",
+    "SentencePiece BPE tokenizer with `<blank>` appended at vocab_size (id 1024 for v2, 8192 for v3). The blank id is OUTSIDE the SentencePiece vocab — the joint emits vocab+1 logits and id==vocab_size means blank.",
+    "Streaming/chunked inference is supported by the architecture (att_context_size) but not by the first port; out of scope for v2 bring-up."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "SentencePiece proto extracted from .nemo at convert time; SHA can be computed during conversion but not yet recorded here."
+    },
+    {
+      "field": "variants[].memory_gb",
+      "reason": "Estimated from F32 GGUF size; not measured against actual peak inference memory."
+    }
+  ]
+}
