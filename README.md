@@ -2,7 +2,15 @@
 
 C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, targeting Metal and Vulkan for fast GPU inference everywhere.
 
-**Supported models:** Parakeet TDT (v2, v3), Cohere Transcribe (03-2026). More families planned (Moonshine, Canary, SenseVoice, GigaAM, Whisper).
+**Supported models:**
+
+| Family | Variant | Docs |
+| --- | --- | --- |
+| Parakeet TDT | `parakeet-tdt-0.6b-v2` | [docs/models/parakeet-tdt-0.6b-v2.md](docs/models/parakeet-tdt-0.6b-v2.md) |
+| Parakeet TDT | `parakeet-tdt-0.6b-v3` | [docs/models/parakeet-tdt-0.6b-v3.md](docs/models/parakeet-tdt-0.6b-v3.md) |
+| Cohere Transcribe | `cohere-transcribe-03-2026` | [docs/models/cohere-transcribe-03-2026.md](docs/models/cohere-transcribe-03-2026.md) |
+
+More families planned (Moonshine, Canary, SenseVoice, GigaAM, Whisper).
 
 ## Build
 
@@ -31,6 +39,12 @@ cmake --build build
 ```
 
 ## Models
+
+Pre-built GGUFs for all supported models are hosted on Hugging Face under
+[`handy-computer`](https://huggingface.co/handy-computer). Each per-model doc
+(linked in the table above) includes direct download links for every quant.
+Convert from source only if you need a different dtype or a checkpoint that
+isn't pre-built.
 
 ### Convert to GGUF
 
@@ -95,6 +109,7 @@ pattern expected of new ports, see
 include/transcribe.h       Public C API (single header)
 src/                       Library internals (C++17)
 src/arch/parakeet/         Parakeet family implementation
+src/arch/cohere/           Cohere Transcribe family implementation
 examples/cli/              CLI binary source
 tools/transcribe-quantize/ Quantization tool source
 docs/                      Porting and validation guidance
