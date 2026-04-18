@@ -12,9 +12,13 @@
 Reads a YAML spec (see parakeet-tdt-0.6b-v2.yaml for an example), fetches the
 upstream model card at the pinned commit, and renders template.md.j2.
 
+Default output is models/<spec-stem>/README.md alongside the GGUFs, so
+`hf upload <repo> models/<spec-stem> .` picks it up in the same call.
+
 Usage:
     uv run scripts/hf_cards/generate.py scripts/hf_cards/parakeet-tdt-0.6b-v2.yaml
-    uv run scripts/hf_cards/generate.py scripts/hf_cards/parakeet-tdt-0.6b-v2.yaml -o dist/README.md
+    uv run scripts/hf_cards/generate.py scripts/hf_cards/parakeet-tdt-0.6b-v2.yaml -o other/README.md
+    uv run scripts/hf_cards/generate.py scripts/hf_cards/parakeet-tdt-0.6b-v2.yaml --stdout
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from huggingface_hub import hf_hub_download
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 HERE = Path(__file__).parent
+REPO_ROOT = HERE.parent.parent
 
 
 def load_spec(path: Path) -> dict:
@@ -63,7 +68,17 @@ def render(spec: dict, upstream_card: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("spec", type=Path, help="Path to the YAML spec file")
-    ap.add_argument("-o", "--output", type=Path, help="Write to this path instead of stdout")
+    ap.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Write to this path. Defaults to models/<spec-stem>/README.md.",
+    )
+    ap.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Write to stdout instead of a file (overrides -o).",
+    )
     ap.add_argument(
         "--skip-upstream",
         action="store_true",
@@ -79,12 +94,14 @@ def main() -> int:
     )
     out = render(spec, upstream)
 
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(out)
-        print(f"wrote {args.output}", file=sys.stderr)
-    else:
+    if args.stdout:
         sys.stdout.write(out)
+        return 0
+
+    output = args.output or (REPO_ROOT / "models" / args.spec.stem / "README.md")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(out)
+    print(f"wrote {output}", file=sys.stderr)
     return 0
 
 

@@ -32,10 +32,9 @@ pinned 2026-04-16.
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. BF16 reference baseline: 1.26%.
-Cohere's self-reported number on the same split is
-<TBD: value from upstream model card, or "not reported by upstream">. Text
-normalizer: <TBD: name of normalizer used during scoring (e.g. Whisper
-EnglishTextNormalizer, NeMo's), or "raw text comparison">.
+Cohere's self-reported number on the same split is 1.25% (Open ASR Leaderboard,
+as of 2026-03-26). Text normalizer: Whisper `EnglishTextNormalizer` — the same
+normalizer the Open ASR Leaderboard uses, so the comparison is apples-to-apples.
 
 ## Quick Start
 

@@ -5,17 +5,15 @@ hf_repo: nvidia/parakeet-tdt-0.6b-v2
 target_repo: handy-computer/parakeet-tdt-0.6b-v2-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-tdt-0.6b-v2.md
 
-upstream_commit: 1b149a3589351c96ddb101709fe7dd9c7069572f
-upstream_commit_short: 1b149a3
+upstream_commit: 1b149a3
 pin_date: 2026-04-15
 
 # Validation pin for the most recent upload. Updated on each release —
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: NeMo
-  commit: 3912397                    # TODO: replace with full SHA of the
-  commit_short: 3912397              # transcribe.cpp commit validated for the
-  date: 2026-04-15                   # currently-uploaded GGUFs
+  commit: 929d922
+  date: 2026-04-18
 
 license: cc-by-4.0
 license_display: CC-BY-4.0
