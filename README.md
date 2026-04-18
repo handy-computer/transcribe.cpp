@@ -2,7 +2,15 @@
 
 C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, targeting Metal and Vulkan for fast GPU inference everywhere.
 
-**Supported models:** Parakeet TDT (v2, v3). More families planned (Cohere, Moonshine, Canary, SenseVoice, GigaAM, Whisper).
+**Supported models:**
+
+| Family | Variant | Docs |
+| --- | --- | --- |
+| Parakeet TDT | `parakeet-tdt-0.6b-v2` | [docs/models/parakeet-tdt-0.6b-v2.md](docs/models/parakeet-tdt-0.6b-v2.md) |
+| Parakeet TDT | `parakeet-tdt-0.6b-v3` | [docs/models/parakeet-tdt-0.6b-v3.md](docs/models/parakeet-tdt-0.6b-v3.md) |
+| Cohere Transcribe | `cohere-transcribe-03-2026` | [docs/models/cohere-transcribe-03-2026.md](docs/models/cohere-transcribe-03-2026.md) |
+
+More families planned (Moonshine, Canary, SenseVoice, GigaAM, Whisper).
 
 ## Build
 
@@ -32,41 +40,43 @@ cmake --build build
 
 ## Models
 
-### Download
-
-Parakeet weights are available as MLX safetensors:
-
-- **v2:** [mlx-community/parakeet-tdt-0.6b-v2](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v2)
-- **v3:** [mlx-community/parakeet-tdt-0.6b-v3](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3)
-
-Clone or download whichever variant you want. Each directory should contain `config.json`, `tokenizer.model`, and `model.safetensors`.
+Pre-built GGUFs for all supported models are hosted on Hugging Face under
+[`handy-computer`](https://huggingface.co/handy-computer). Each per-model doc
+(linked in the table above) includes direct download links for every quant.
+Convert from source only if you need a different dtype or a checkpoint that
+isn't pre-built.
 
 ### Convert to GGUF
 
-Requires [uv](https://docs.astral.sh/uv/) (dependencies are inline in the script).
+The converter loads directly from NVIDIA's NeMo checkpoints via
+`ASRModel.from_pretrained`. Requires [uv](https://docs.astral.sh/uv/);
+the parakeet env ships NeMo and its deps.
 
 ```bash
-uv run scripts/convert-parakeet.py path/to/parakeet-tdt-0.6b-v2 parakeet-v2.f32.gguf
+uv run --project scripts/envs/parakeet \
+  scripts/convert-parakeet.py nvidia/parakeet-tdt-0.6b-v2
 ```
 
-For f16 at conversion time:
-
-```bash
-uv run scripts/convert-parakeet.py path/to/parakeet-tdt-0.6b-v2 parakeet-v2.f16.gguf --quant f16
-```
+This writes `models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf` following
+the llama.cpp-style `<slug>-<QUANT>.gguf` naming convention. Pass a local
+`.nemo` path or extracted directory for offline conversion.
 
 ### Quantize
 
-The `transcribe-quantize` tool produces smaller models from an f32 or f16 GGUF. Available presets: `q8_0`, `q5_k_m`, `q4_k_m`.
+The `transcribe-quantize` tool produces smaller models from the
+reference GGUF. Available presets: `F16`, `Q8_0`, `Q5_K_M`, `Q4_K_M`.
 
 ```bash
-build/bin/transcribe-quantize parakeet-v2.f32.gguf parakeet-v2.q4_k_m.gguf --quant q4_k_m
+build/bin/transcribe-quantize \
+  models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \
+  models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q4_K_M.gguf \
+  --quant Q4_K_M
 ```
 
 ## Usage
 
 ```bash
-build/bin/transcribe-cli -m parakeet-v2.f32.gguf samples/jfk.wav
+build/bin/transcribe-cli -m models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf samples/jfk.wav
 ```
 
 Input must be 16 kHz mono WAV. Use `ffmpeg` or `sox` to convert other formats:
@@ -89,14 +99,20 @@ cmake --build build
 TRANSCRIBE_REAL_PARAKEET_GGUF=path/to/model.gguf ctest --test-dir build
 ```
 
+For the model-family smoke-test, numerical-validation, and benchmark
+pattern expected of new ports, see
+[`docs/model-family-testing.md`](docs/model-family-testing.md).
+
 ## Project layout
 
 ```
 include/transcribe.h       Public C API (single header)
 src/                       Library internals (C++17)
 src/arch/parakeet/         Parakeet family implementation
+src/arch/cohere/           Cohere Transcribe family implementation
 examples/cli/              CLI binary source
 tools/transcribe-quantize/ Quantization tool source
+docs/                      Porting and validation guidance
 scripts/                   Python converter + test tooling
 ggml/                      Vendored ggml (see ggml/UPSTREAM for pinned SHA)
 samples/                   Test audio files
@@ -105,4 +121,4 @@ tests/                     Unit and smoke tests
 
 ## License
 
-TODO
+transcribe.cpp is MIT-licensed. See [LICENSE](LICENSE) for details.

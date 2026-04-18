@@ -16,15 +16,15 @@ a per-variant pass/fail summary keyed off per-quant tolerance bands.
 Usage:
 
     uv run scripts/quant_accuracy.py \\
-        --baseline models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf \\
-        models/parakeet/parakeet-tdt-0.6b-v2.f16.gguf \\
-        models/parakeet/parakeet-tdt-0.6b-v2.q8_0.gguf \\
-        models/parakeet/parakeet-tdt-0.6b-v2.q5_k_m.gguf \\
-        models/parakeet/parakeet-tdt-0.6b-v2.q4_k_m.gguf
+        --baseline models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \\
+        models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F16.gguf \\
+        models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q8_0.gguf \\
+        models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q5_K_M.gguf \\
+        models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q4_K_M.gguf
 
     # Or against a different audio file:
     uv run scripts/quant_accuracy.py --audio samples/dots.wav \\
-        models/parakeet/parakeet-tdt-0.6b-v2.q5_k_m.gguf
+        models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q5_K_M.gguf
 
 Tolerance bands per quant family (initial guesses, refine with WER):
 
@@ -50,7 +50,7 @@ measurement. WER is the user-facing acceptance gate; this is the dev
 gate that runs in seconds.
 
 Quant family is detected from the filename: a GGUF named
-*.q4_k_m.gguf gets the q4_k_m bands, *.f16.gguf gets the f16 bands,
+*-Q4_K_M.gguf gets the q4_k_m bands, *-F16.gguf gets the f16 bands,
 etc. Override with --quant FAMILY=PATH if your filenames don't match.
 """
 
@@ -87,9 +87,9 @@ QUANT_BANDS: dict[str, tuple[float, float]] = {
 
 
 # Filename → quant family. The match is on the suffix of the model
-# basename, so models/parakeet/parakeet-tdt-0.6b-v2.q5_k_m.gguf is
+# basename, so models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q5_K_M.gguf is
 # detected as q5_k_m.
-QUANT_PAT = re.compile(r"\.(?P<family>f32|f16|q8_0|q5_k_m|q4_k_m)\.gguf$")
+QUANT_PAT = re.compile(r"-(?P<family>F32|F16|Q8_0|Q5_K_M|Q4_K_M)\.gguf$", re.IGNORECASE)
 
 
 def detect_family(path: Path) -> str:
@@ -99,7 +99,7 @@ def detect_family(path: Path) -> str:
             f"cannot detect quant family from {path.name}; "
             f"expected suffix in {sorted(QUANT_BANDS)}"
         )
-    return m.group("family")
+    return m.group("family").lower()
 
 
 def find_repo_root(start: Path) -> Path:
@@ -283,7 +283,7 @@ def main() -> int:
     p.add_argument("variants", nargs="+", type=Path,
                    help="GGUF files to compare against the baseline")
     p.add_argument("--baseline", type=Path, default=None,
-                   help="Baseline GGUF (default: <repo>/models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf)")
+                   help="Baseline GGUF (default: <repo>/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf)")
     p.add_argument("--audio", type=Path, default=None,
                    help="Audio sample (default: <repo>/samples/jfk.wav)")
     p.add_argument("--cli", type=Path, default=None,
@@ -297,7 +297,7 @@ def main() -> int:
     args = p.parse_args()
 
     repo = find_repo_root(Path(__file__).parent)
-    baseline = args.baseline or repo / "models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf"
+    baseline = args.baseline or repo / "models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf"
     audio    = args.audio    or repo / "samples/jfk.wav"
     cli      = args.cli      or repo / "build/bin/transcribe-cli"
     dump_root = args.dump_root or Path("/tmp/parakeet_quant_dumps")

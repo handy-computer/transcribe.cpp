@@ -1,32 +1,33 @@
 // transcribe-quantize - re-quantize a transcribe.cpp GGUF.
 //
-// Reads an input GGUF (typically the f32 or f16 conversion of a Parakeet
-// model), walks every tensor, and writes a new GGUF where each tensor's
-// dtype is chosen by a per-preset table. The dequantize → fp32 → requantize
-// path uses ggml's reference quantizers (the same ones llama.cpp's
+// Reads an input GGUF (typically the source/reference-dtype conversion),
+// walks every tensor, and writes a new GGUF where each tensor's dtype is
+// chosen by a per-preset table. The dequantize → fp32 → requantize path
+// uses ggml's reference quantizers (the same ones llama.cpp's
 // llama-quantize uses), so the output is bit-compatible with anything
 // that consumes standard GGUF blocks.
 //
-// Why a separate C++ tool instead of doing this in convert-parakeet.py:
+// Why a separate C++ tool instead of doing this in convert-<family>.py:
 //
 //   gguf-py 0.18 ships pure-Python implementations of F32, F16, BF16,
 //   Q8_0, Q4_0, Q4_1, Q5_0, Q5_1 — but every K-quant (Q4_K, Q5_K, Q6_K,
 //   Q8_K) and every IQ-quant raises NotImplementedError. Bridging
 //   ggml's C quantizers from Python via ctypes works but is fragile.
 //   Following whisper.cpp / llama.cpp's pattern, the conversion path
-//   is Python (one-shot from MLX → fp32 / f16 / Q8_0) and the K-quant
-//   path is a small C++ binary that links libggml directly.
+//   is Python (one-shot checkpoint → source/reference-dtype GGUF), and
+//   every derived quant is produced by a small C++ binary that links
+//   libggml directly.
 //
-// The tool is intentionally Parakeet-aware in exactly one place:
-// classify_tensor() — which mirrors the same function in
-// scripts/convert-parakeet.py. If you change the bucket assignment in
-// one place, change the other or the loader's GET_LIN allowlist will
-// reject the result.
+// The tool is intentionally family-aware in exactly one place:
+// classify_tensor(). If you change a family tensor catalog, keep this
+// policy and the loader's dtype allowlists in sync.
 //
 // Output writes use gguf_write_to_file() with only_meta=false: the
 // gguf_context's tensor list owns its own ggml_context, and tensor data
 // is held inside that context, so the writer streams everything in one
 // pass without any external file handling.
+
+#include "policy.h"
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -43,237 +44,12 @@
 #include <unordered_map>
 #include <vector>
 
+using transcribe::quantize::Preset;
+using transcribe::quantize::find_preset;
+using transcribe::quantize::preset_table;
+using transcribe::quantize::resolve_target_type;
+
 namespace {
-
-// ---------------------------------------------------------------------------
-// Tensor classification
-// ---------------------------------------------------------------------------
-//
-// Mirrors classify_tensor() in scripts/convert-parakeet.py AND
-// scripts/convert-cohere.py. The two implementations MUST agree on the
-// bucket for every canonical Parakeet / Cohere tensor name; the C++
-// side is the gate at re-quant time and the Python side is the gate at
-// first conversion.
-
-enum class Bucket {
-    Linear, // ggml_mul_mat operands. Eligible for Q8_0 / Q4_K / Q5_K / etc.
-    Embed,  // tied token embedding + head bias. Like Linear but mixed
-            // k-quant presets bump this to Q6_K, matching llama.cpp's
-            // _M convention. Falls back to Linear when a preset has
-            // no explicit embed override.
-    ConvPw, // 1×1 pointwise conv kernels in conformer blocks
-            // (enc.blocks.{i}.conv.pointwise{1,2}.weight). These go
-            // through the im2col + mul_mat path on Vulkan / CPU and
-            // the direct mul_mat path on Metal, both of which can
-            // accept F16 kernels and dispatch to f16 matmul shaders.
-            // F16 roughly halves their compute cost on Vulkan relative
-            // to F32 with no measurable accuracy impact.
-    Conv,   // non-pointwise conv kernels: pre-encode 2D convs and
-            // depthwise convs. Kept at F32 / F16 because the im2col
-            // and ggml_conv_2d paths don't support quantized kernels.
-    Norm,   // biases, LayerNorm/BN weight+bias, pos_bias, pos_enc,
-            // frontend buffers. F32.
-};
-
-// Substring helpers — std::string::find returns npos if not found.
-inline bool contains(const std::string & s, const char * needle) {
-    return s.find(needle) != std::string::npos;
-}
-inline bool ends_with(const std::string & s, const char * suffix) {
-    const size_t n = std::strlen(suffix);
-    return s.size() >= n && std::memcmp(s.data() + s.size() - n, suffix, n) == 0;
-}
-
-Bucket classify_tensor(const std::string & name) {
-    // Cohere: tied token embedding → Embed bucket so mixed k-quant
-    // presets can bump it to Q6_K. head.bias stays in the Norm
-    // bucket (the loader requires it as F32 since it's a 1D
-    // per-logit offset added after the matmul).
-    if (name == "dec.embed.token.weight") {
-        return Bucket::Embed;
-    }
-    // Biases of every kind — short and precision-sensitive.
-    if (ends_with(name, ".bias")) {
-        return Bucket::Norm;
-    }
-    // BatchNorm: bn.{weight, bias, running_mean, running_var}.
-    if (contains(name, ".bn.")) {
-        return Bucket::Norm;
-    }
-    // LayerNorm scale (norm_ff1.weight, norm_attn.weight, norm_conv.weight,
-    // norm_out.weight, norm_self.weight, norm_cross.weight, norm_ff.weight,
-    // etc). The .bias case was already caught above.
-    if (contains(name, "norm_") && ends_with(name, ".weight")) {
-        return Bucket::Norm;
-    }
-    // Cohere: dec.embed.norm.weight and dec.final_norm.weight — layer
-    // norm scale tensors that use a "." separator instead of "_".
-    if (ends_with(name, ".final_norm.weight") ||
-        ends_with(name, ".embed.norm.weight")) {
-        return Bucket::Norm;
-    }
-    // Per-head positional biases — added directly to fp32 q via ggml_add
-    // inside rel_pos_mhsa.
-    if (ends_with(name, ".pos_bias_u") || ends_with(name, ".pos_bias_v")) {
-        return Bucket::Norm;
-    }
-    // Cohere: sinusoidal positional encoding table, precision-sensitive.
-    if (ends_with(name, ".pos_enc")) {
-        return Bucket::Norm;
-    }
-    // Cohere: mel frontend buffers (filterbank + window) — stored as
-    // F32 by the converter and consumed as-is by the mel stage.
-    if (name == "frontend.mel_filterbank" || name == "frontend.window") {
-        return Bucket::Norm;
-    }
-    // Conformer-block 1×1 pointwise convs — split out from the Conv
-    // bucket so they can run at F16 on the im2col+matmul path. Matches
-    // "enc.blocks.<N>.conv.pointwise1.weight" and ".pointwise2.weight"
-    // but intentionally NOT any pre-encode convs (which use different
-    // names like enc.pre_encode.conv.0.weight).
-    if ((ends_with(name, ".conv.pointwise1.weight") ||
-         ends_with(name, ".conv.pointwise2.weight")) &&
-        contains(name, "enc.blocks."))
-    {
-        return Bucket::ConvPw;
-    }
-    // Conv kernels: enc.pre_encode.conv.{0,2,3,5,6}.weight and
-    // enc.blocks.{i}.conv.depthwise.weight.
-    // ".conv." (with dots on both sides) distinguishes these from
-    // norm_conv.weight which we already routed above.
-    if (contains(name, ".conv.") && ends_with(name, ".weight")) {
-        return Bucket::Conv;
-    }
-    return Bucket::Linear;
-}
-
-// ---------------------------------------------------------------------------
-// Presets
-// ---------------------------------------------------------------------------
-//
-// Each preset is a function from (bucket, tensor name, source ne[0])
-// to a target ggml_type. The "source ne[0]" hook lets a preset fall
-// back from a K-quant (block size 256) to a smaller blockwise quant
-// (block size 32) when the inner dim doesn't divide 256. This is the
-// failsafe for the Parakeet 0.6B predictor + joint dimension 640.
-//
-// We special-case attn.out_w in the K-quant presets: standard
-// llama.cpp _M recipe bumps the attention output projection to a
-// higher-precision quant (Q8_0 here) because it's the most
-// quality-sensitive matmul in the encoder block.
-
-struct Preset {
-    const char * name;
-    // Linear-bucket type returned for the "common" case (inner dim
-    // divides the K-quant block size 256, and the tensor is not the
-    // attention output projection).
-    ggml_type linear_main;
-    // Linear-bucket type returned when the inner dim doesn't divide
-    // 256 (predictor + joint linears at ne0=640). We'd rather drop to
-    // F16 here than risk a per-block scale on a misaligned tail.
-    ggml_type linear_fallback;
-    // Linear-bucket type returned for the attention output projection
-    // (attn.linear_out.weight). Parakeet-specific bump; cohere's
-    // equivalent uses a different name so this is a no-op there.
-    ggml_type linear_attn_out;
-    // Embed-bucket type for the tied token embedding + head bias
-    // (cohere). Mixed k-quant presets bump this to Q6_K; other
-    // presets use GGML_TYPE_COUNT as "no explicit override" and fall
-    // back to linear_main.
-    ggml_type linear_embed;
-    // Conv-bucket type (pre-encode + depthwise). F32 because im2col
-    // and ggml_conv_2d paths on Vulkan/CPU don't cleanly accept
-    // quantized or F16 kernels across all shapes today.
-    ggml_type conv;
-    // ConvPw-bucket type (conformer 1×1 pointwise convs). These run
-    // through ggml_mul_mat inside the conv module and benefit from
-    // F16 on Vulkan's f16 matmul shader (~2× throughput vs F32 on
-    // Renoir). Numerical impact is negligible (1×1 conv = linear).
-    ggml_type conv_pw;
-    // Norm-bucket type. Always F32; the field exists for symmetry.
-    ggml_type norm;
-    // llama-style file_type tag for general.file_type. Mirrors the
-    // GGUFWriter add_uint32 the Python converter writes for f32/f16/q8_0.
-    uint32_t file_type;
-};
-
-// Names mirror the Python QUANT_PRESETS keys plus the K-quant ones.
-//
-// f16, q8_0 are listed for completeness — re-quantizing through this
-// tool is not the canonical path for those (the converter does it
-// directly from MLX). They exist as cheap test cases for the round-trip
-// machinery.
-// GGML_TYPE_COUNT in the linear_embed slot means "no explicit override";
-// resolve_target_type() falls back to linear_main for Embed tensors in
-// that case. This keeps f16 / q8_0 / q6_k presets uniform across
-// Linear and Embed while letting _M presets bump embeddings to Q6_K.
-const Preset PRESETS[] = {
-    // Columns: name, linear_main, linear_fallback, linear_attn_out,
-    //          linear_embed, conv, conv_pw, norm, file_type
-    {"f16",    GGML_TYPE_F16,  GGML_TYPE_F16, GGML_TYPE_F16,  GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_F16*/    1 },
-    {"q8_0",   GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q8_0*/   7 },
-    {"q6_k",   GGML_TYPE_Q6_K, GGML_TYPE_F16, GGML_TYPE_Q6_K, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q6_K*/  18 },
-    {"q5_k_m", GGML_TYPE_Q5_K, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q5_K_M*/ 17 },
-    {"q4_k_m", GGML_TYPE_Q4_K, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q4_K_M*/ 15 },
-};
-
-const Preset * find_preset(const char * name) {
-    for (const auto & p : PRESETS) {
-        if (std::strcmp(p.name, name) == 0) {
-            return &p;
-        }
-    }
-    return nullptr;
-}
-
-// Block size for a given quant type, from ggml's type traits. Used to
-// gate the K-quant fallback decision: if ne0 % blck_size != 0, the
-// quantizer would crash, so we bail to the preset's fallback type.
-int64_t blck_size_of(ggml_type t) {
-    return ggml_blck_size(t);
-}
-
-// Resolve the per-tensor target type for a single tensor. Buckets and
-// special cases live here so the main loop is just a dispatch table.
-ggml_type resolve_target_type(const Preset & preset,
-                              const std::string & name,
-                              int64_t ne0)
-{
-    const Bucket b = classify_tensor(name);
-    switch (b) {
-        case Bucket::Norm:   return preset.norm;
-        case Bucket::Conv:   return preset.conv;
-        case Bucket::ConvPw: return preset.conv_pw;
-        case Bucket::Embed: {
-            // If the preset has no explicit embed override, fall back
-            // to the linear_main bucket (including its ne0 fallback).
-            ggml_type target = (preset.linear_embed != GGML_TYPE_COUNT)
-                ? preset.linear_embed
-                : preset.linear_main;
-            const int64_t blk = blck_size_of(target);
-            if (blk > 1 && (ne0 % blk) != 0) {
-                return preset.linear_fallback;
-            }
-            return target;
-        }
-        case Bucket::Linear: {
-            // attn.linear_out.weight bumped per _M recipe.
-            if (ends_with(name, "attn.linear_out.weight")) {
-                return preset.linear_attn_out;
-            }
-            // Fall back when inner dim doesn't divide the chosen
-            // quant's block size. The fallback is preset-defined and
-            // is always something with a smaller block size (or no
-            // block constraint at all, like F16).
-            const int64_t blk = blck_size_of(preset.linear_main);
-            if (blk > 1 && (ne0 % blk) != 0) {
-                return preset.linear_fallback;
-            }
-            return preset.linear_main;
-        }
-    }
-    return preset.norm; // unreachable
-}
 
 // ---------------------------------------------------------------------------
 // Per-tensor requant
@@ -348,8 +124,10 @@ void print_usage(const char * argv0) {
         "usage: %s INPUT.gguf OUTPUT.gguf --quant PRESET\n"
         "\n"
         "  --quant PRESET   one of:", argv0);
-    for (const auto & p : PRESETS) {
-        std::fprintf(stderr, " %s", p.name);
+    size_t n = 0;
+    const Preset * presets = preset_table(n);
+    for (size_t i = 0; i < n; ++i) {
+        std::fprintf(stderr, " %s", presets[i].name);
     }
     std::fprintf(stderr, "\n");
 }

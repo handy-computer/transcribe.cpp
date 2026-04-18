@@ -1,0 +1,89 @@
+# Spec for the HF README of handy-computer/cohere-transcribe-03-2026-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: CohereLabs/cohere-transcribe-03-2026
+target_repo: handy-computer/cohere-transcribe-03-2026-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/cohere-transcribe-03-2026.md
+
+upstream_commit: 76b8b23
+pin_date: 2026-04-16
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: Transformers
+  commit: bf0d0b7
+  date: 2026-04-18
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+  - fr
+  - de
+  - es
+  - it
+  - pt
+  - nl
+  - pl
+  - el
+  - ar
+  - ja
+  - zh
+  - vi
+  - ko
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - cohere
+  - conformer
+  - encoder-decoder
+  - multilingual
+
+summary: |
+  Offline multilingual speech-to-text covering 14 languages (English, French,
+  German, Spanish, Italian, Portuguese, Dutch, Polish, Greek, Arabic, Japanese,
+  Chinese, Vietnamese, Korean). A Conformer encoder with a Transformer
+  encoder-decoder head (cross-attention, tied token embedding). Takes a 16 kHz
+  mono WAV and produces a transcript. Decoding is autoregressive.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with
+    greedy decoding and no external LM. BF16 reference baseline: 1.26%.
+    Cohere's self-reported number on the same split is 1.25%
+    (Open ASR Leaderboard, as of 2026-03-26). Both ours and Cohere's numbers
+    use the Whisper EnglishTextNormalizer, so the comparison is apples-to-apples
+    and our port matches the upstream reference within rounding.
+
+quants:
+  - name: BF16
+    filename: cohere-transcribe-03-2026-BF16.gguf
+    size: 4.10 GB
+    wer: 1.26%
+  - name: F16
+    filename: cohere-transcribe-03-2026-F16.gguf
+    size: 4.11 GB
+    wer: 1.26%
+  - name: Q8_0
+    filename: cohere-transcribe-03-2026-Q8_0.gguf
+    size: 2.41 GB
+    wer: 1.27%
+  - name: Q6_K
+    filename: cohere-transcribe-03-2026-Q6_K.gguf
+    size: 1.97 GB
+    wer: 1.27%
+  - name: Q5_K_M
+    filename: cohere-transcribe-03-2026-Q5_K_M.gguf
+    size: 1.76 GB
+    wer: 1.25%
+  - name: Q4_K_M
+    filename: cohere-transcribe-03-2026-Q4_K_M.gguf
+    size: 1.55 GB
+    wer: 1.25%

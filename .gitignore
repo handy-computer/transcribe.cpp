@@ -39,9 +39,21 @@ __pycache__/
 # Symlinked references stash for editor grepping
 /references/
 
-# WER evaluation data + reports (large audio datasets, generated reports).
+# WER evaluation data + generated working reports.
 /samples/wer/
-/reports/
+/reports/*
+
+# Reviewable porting evidence (intake, porting log) is intentionally committed.
+!/reports/porting/
+!/reports/porting/**
+
+# ...but per-run preflight outputs and validate report bundles are ephemeral:
+# they regenerate in seconds from committed inputs (manifest, tolerance, code).
+# Committing them without CI adds clutter without verification. Paste their
+# stdout into the PR description instead; the reviewer re-runs to verify.
+/reports/porting/*/*/preflight-gate-*.json
+/reports/porting/*/*/preflight-gate-*.md
+/reports/porting/*/*/[0-9]*T[0-9]*Z-*/
 
 # Internal planning docs (not committed)
 PORTING.md

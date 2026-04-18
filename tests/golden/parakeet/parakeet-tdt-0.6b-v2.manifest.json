@@ -1,0 +1,44 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "parakeet-tdt-0.6b-v2",
+  "source_model": {
+    "hf_repo": "nvidia/parakeet-tdt-0.6b-v2",
+    "hf_revision": "1b149a3589351c96ddb101709fe7dd9c7069572f"
+  },
+  "reference": {
+    "kind": "nemo",
+    "source": "https://github.com/NVIDIA-NeMo/NeMo",
+    "revision": "v2.7.2",
+    "entrypoint": "scripts/dump_reference_parakeet_nemo.py"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-5
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": null,
+    "special_tokens": {}
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["word", "token"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/parakeet.json",
+  "cases": ["jfk"]
+}

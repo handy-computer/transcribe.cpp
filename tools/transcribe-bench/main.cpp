@@ -6,8 +6,14 @@
 // models and samples. Progress lines go to stderr; the JSON goes
 // to --json-out (or stdout if omitted).
 //
-// Schema is frozen at "transcribe-bench-v1". Do not change the
-// schema without coordinating with the Python driver.
+// Schema version: "transcribe-bench-v2".
+//
+// v2 changes from v1:
+//   - "rtf_mean" replaced by "rtf_wall_mean" (wall-clock RTF) and
+//     "rtf_compute_mean" (phase-timer sum RTF). Wall is the
+//     user-visible number; compute is for backward compat.
+//
+// The Python driver accepts both v1 and v2 schemas.
 
 #include "transcribe.h"
 #include "wav.h"
@@ -23,14 +29,14 @@
 namespace {
 
 struct bench_args {
-    std::string model_path;
-    std::string sample_path;
-    std::string json_out;
-    int         iters     = 2;
-    int         warmup    = 1;
-    int         n_threads = 0;
-    bool        quiet     = false;
-    bool        cpu_only  = false;
+    std::string                model_path;
+    std::string                sample_path;
+    std::string                json_out;
+    int                        iters     = 2;
+    int                        warmup    = 1;
+    int                        n_threads = 0;
+    bool                       quiet     = false;
+    transcribe_backend_request backend   = TRANSCRIBE_BACKEND_AUTO;
 };
 
 void print_usage(const char * argv0) {
@@ -44,9 +50,27 @@ void print_usage(const char * argv0) {
         "  --json-out PATH    write result JSON here (default: stdout)\n"
         "  --quiet            suppress progress lines on stderr\n"
         "  --threads N        CPU threads (default 0 = all cores)\n"
-        "  --cpu-only         force CPU backend (disable GPU)\n"
+        "  --backend KIND     request a specific backend: auto|cpu|metal|vulkan\n"
+        "                     (default auto). cpu is strict CPU — no GPU,\n"
+        "                     no BLAS/AMX.\n"
         "  -h, --help         show this help\n",
         argv0);
+}
+
+// Parse --backend KIND into the public enum. Returns false and logs a
+// diagnostic on an unknown value.
+bool parse_backend_kind(const char *                   s,
+                        transcribe_backend_request &   out)
+{
+    if (s == nullptr) return false;
+    if (std::strcmp(s, "auto")   == 0) { out = TRANSCRIBE_BACKEND_AUTO;   return true; }
+    if (std::strcmp(s, "cpu")    == 0) { out = TRANSCRIBE_BACKEND_CPU;    return true; }
+    if (std::strcmp(s, "metal")  == 0) { out = TRANSCRIBE_BACKEND_METAL;  return true; }
+    if (std::strcmp(s, "vulkan") == 0) { out = TRANSCRIBE_BACKEND_VULKAN; return true; }
+    std::fprintf(stderr,
+        "error: --backend value '%s' not recognized "
+        "(expected one of: auto, cpu, metal, vulkan)\n", s);
+    return false;
 }
 
 bool parse_args(int argc, char ** argv, bench_args & out) {
@@ -68,7 +92,10 @@ bool parse_args(int argc, char ** argv, bench_args & out) {
         else if (a == "--warmup")   { auto v = need_val(i, "--warmup");   if (!v) return false; out.warmup    = std::atoi(v); if (out.warmup < 0) out.warmup = 0; }
         else if (a == "--threads")  { auto v = need_val(i, "--threads");  if (!v) return false; out.n_threads = std::atoi(v); if (out.n_threads < 0) out.n_threads = 0; }
         else if (a == "--quiet")    { out.quiet = true; }
-        else if (a == "--cpu-only") { out.cpu_only = true; }
+        else if (a == "--backend")  {
+            auto v = need_val(i, "--backend"); if (!v) return false;
+            if (!parse_backend_kind(v, out.backend)) return false;
+        }
         else {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -147,20 +174,12 @@ int main(int argc, char ** argv) {
     }
     const double sample_duration_s = static_cast<double>(pcm.size()) / 16000.0;
 
-    // Load model.
-    // --cpu-only sets TRANSCRIBE_FORCE_CPU=1 before load; the per-family
-    // loader checks this env var to skip GPU/ACCEL backend init. Note the
-    // public transcribe_model_params::use_gpu flag is declared but not yet
-    // consumed by the loader, so the env var is the only reliable knob.
-    if (args.cpu_only) {
-#if defined(_WIN32)
-        _putenv("TRANSCRIBE_FORCE_CPU=1");
-#else
-        setenv("TRANSCRIBE_FORCE_CPU", "1", 1);
-#endif
-    }
+    // Load model. --backend propagates directly to
+    // transcribe_model_params::backend, which the per-family loader
+    // consumes via transcribe::load_common::init_backends.
     if (!quiet) std::fprintf(stderr, "loading model %s\n", args.model_path.c_str());
     struct transcribe_model_params mp = transcribe_model_default_params();
+    mp.backend = args.backend;
     struct transcribe_model *      model = nullptr;
     if (const transcribe_status st =
             transcribe_model_load_file(args.model_path.c_str(), &mp, &model);
@@ -241,7 +260,14 @@ int main(int argc, char ** argv) {
     const stat_summary s_decode = compute_stats(measured, [](const iter_timings & t) { return t.decode_ms; });
     const stat_summary s_total  = compute_stats(measured, [](const iter_timings & t) { return t.total_ms;  });
     const stat_summary s_wall   = compute_stats(measured, [](const iter_timings & t) { return t.wall_ms;   });
-    const double rtf_mean = (s_total.mean_v > 0.0)
+    // RTF based on wall time (the user-visible number — includes
+    // uninstrumented run overhead like scheduler alloc, tensor upload,
+    // thread fan-out). rtf_compute is the phase-timer sum for backward
+    // compat with v1 consumers, but wall is the number to use for
+    // perf decisions.
+    const double rtf_wall_mean = (s_wall.mean_v > 0.0)
+        ? sample_duration_s / (s_wall.mean_v / 1000.0) : 0.0;
+    const double rtf_compute_mean = (s_total.mean_v > 0.0)
         ? sample_duration_s / (s_total.mean_v / 1000.0) : 0.0;
 
     // Hand-rolled JSON. Pretty-printed with 2-space indent; whitespace
@@ -254,7 +280,7 @@ int main(int argc, char ** argv) {
     };
 
     out += "{\n";
-    append_fmt(out, "  \"schema\": \"transcribe-bench-v1\",\n");
+    append_fmt(out, "  \"schema\": \"transcribe-bench-v2\",\n");
     append_fmt(out, "  \"model_path\": \"%s\",\n",  json_escape(args.model_path.c_str()).c_str());
     append_fmt(out, "  \"sample_path\": \"%s\",\n", json_escape(args.sample_path.c_str()).c_str());
     append_fmt(out, "  \"sample_duration_s\": %.3f,\n", sample_duration_s);
@@ -278,7 +304,8 @@ int main(int argc, char ** argv) {
     stat("total_ms",  s_total,  false);
     stat("wall_ms",   s_wall,   true);
     out += "  },\n";
-    append_fmt(out, "  \"rtf_mean\": %.3f,\n", rtf_mean);
+    append_fmt(out, "  \"rtf_wall_mean\": %.3f,\n", rtf_wall_mean);
+    append_fmt(out, "  \"rtf_compute_mean\": %.3f,\n", rtf_compute_mean);
     append_fmt(out, "  \"hyp_text_len\": %zu\n", hyp_text_len);
     out += "}\n";
 

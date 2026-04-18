@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "transcribe-backend.h"
 #include "transcribe-context.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
@@ -114,8 +115,13 @@ struct CohereModel final : public transcribe_model {
     CohereWeights   weights;
     ggml_context *  ctx_meta = nullptr;
 
-    std::vector<ggml_backend_t> backends;
-    ggml_backend_buffer_t       backend_buffer = nullptr;
+    // Runtime backend plan — see transcribe-backend.h. Replaces the
+    // old `std::vector<backends>` field: the plan's scheduler_list
+    // holds the same handles, plus a classified primary kind so
+    // helpers don't have to re-derive it via ggml_backend_name
+    // string matching.
+    transcribe::BackendPlan plan;
+    ggml_backend_buffer_t   backend_buffer = nullptr;
 
     // Fused BN parameters (same as Parakeet).
     ggml_context *          bn_fused_ctx    = nullptr;
@@ -151,7 +157,24 @@ struct CohereContext final : public transcribe_context {
     std::vector<float> enc_host;
 
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
-    bool               use_flash = true;
+
+    // Flash-attention is controlled per-stage because the encoder and
+    // decoder have different head dimensions and therefore different
+    // backend support profiles:
+    //
+    //   - encoder head_dim = 160 -> upstream ggml's Metal backend has
+    //     no flash_attn_ext kernel for this dk, so we default it OFF
+    //     on Metal. Manual mul_mat + softmax + mul_mat ties or beats
+    //     flash at encoder sequence lengths anyway.
+    //   - decoder head_dim = 128 -> works with flash_attn_ext on
+    //     every backend we ship today, so we default it ON.
+    //
+    // The TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH env vars apply
+    // to both stages at once (the user's intent is "no flash kernels
+    // anywhere" or "flash kernels everywhere"). Backend-specific auto
+    // disable is per-stage.
+    bool               encoder_use_flash = true;
+    bool               decoder_use_flash = true;
 
     CohereContext() = default;
     ~CohereContext() override;

@@ -183,6 +183,116 @@ KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
 }
 
 // ---------------------------------------------------------------------------
+// Higher-level required / optional KV helpers
+// ---------------------------------------------------------------------------
+
+transcribe_status read_required_u32_kv(const gguf_context * gguf,
+                                       const char *         key,
+                                       const char *         error_tag,
+                                       int32_t &            out)
+{
+    uint32_t v = 0;
+    switch (read_uint32_kv(gguf, key, v)) {
+        case KvResult::Ok:
+            out = static_cast<int32_t>(v);
+            return TRANSCRIBE_OK;
+        case KvResult::Absent:
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: required KV \"%s\" missing or wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+transcribe_status read_required_f32_kv(const gguf_context * gguf,
+                                       const char *         key,
+                                       const char *         error_tag,
+                                       float &              out)
+{
+    float v = 0.0f;
+    switch (read_float32_kv(gguf, key, v)) {
+        case KvResult::Ok:
+            out = v;
+            return TRANSCRIBE_OK;
+        case KvResult::Absent:
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: required KV \"%s\" missing or wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+transcribe_status read_required_string_kv(const gguf_context * gguf,
+                                          const char *         key,
+                                          const char *         error_tag,
+                                          std::string &        out)
+{
+    std::string v;
+    switch (read_string_kv(gguf, key, v)) {
+        case KvResult::Ok:
+            out = std::move(v);
+            return TRANSCRIBE_OK;
+        case KvResult::Absent:
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: required KV \"%s\" missing or wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+transcribe_status read_optional_bool_kv(const gguf_context * gguf,
+                                        const char *         key,
+                                        const char *         error_tag,
+                                        bool                 default_value,
+                                        bool &               out)
+{
+    bool tmp = default_value;
+    switch (read_bool_kv(gguf, key, tmp)) {
+        case KvResult::Absent:
+            out = default_value;
+            return TRANSCRIBE_OK;
+        case KvResult::Ok:
+            out = tmp;
+            return TRANSCRIBE_OK;
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: optional KV \"%s\" has wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+transcribe_status read_optional_string_kv(const gguf_context * gguf,
+                                          const char *         key,
+                                          const char *         error_tag,
+                                          const char *         default_value,
+                                          std::string &        out)
+{
+    std::string v;
+    switch (read_string_kv(gguf, key, v)) {
+        case KvResult::Absent:
+            out = default_value;
+            return TRANSCRIBE_OK;
+        case KvResult::Ok:
+            out = std::move(v);
+            return TRANSCRIBE_OK;
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: optional KV \"%s\" has wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
+// ---------------------------------------------------------------------------
 // Post-load shared metadata
 // ---------------------------------------------------------------------------
 
@@ -214,9 +324,19 @@ transcribe_status read_capability_kv(const gguf_context *      gguf,
     }
 
     // 2B-recognized capability keys. The schema is in PLAN.md
-    // "Speech-specific metadata" / `stt.capability.*`. Timestamp
-    // granularity keys are deliberately NOT read here — see
-    // RESUME.md open question 4 (max_timestamp_kind semantics).
+    // "Speech-specific metadata" / `stt.capability.*`.
+    //
+    // Timestamp granularity (`max_timestamp_kind`) is deliberately
+    // NOT read here. Both shipped families have a fixed, code-set
+    // ceiling (Parakeet=TOKEN, Cohere=NONE) and no converter emits
+    // `stt.capability.timestamps`. A KV-driven override is a
+    // future change — the loader would need rules for how the KV
+    // interacts with what the family code can actually produce
+    // (the KV should only lower the ceiling, never raise it, since
+    // code is the floor of what can physically be emitted). When a
+    // second checkpoint of an existing family ships with a
+    // different ceiling, resolve that interaction before wiring
+    // the reader.
     if (auto st = read_capability_bool(gguf, "stt.capability.translate",
                                        caps.supports_translate);
         st != TRANSCRIBE_OK)

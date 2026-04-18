@@ -7,6 +7,15 @@ namespace transcribe::cohere {
 void apply_family_invariants(transcribe_capabilities & caps) {
     caps.native_sample_rate = 16000;
     caps.supports_translate = false;
+
+    // Cohere ASR uses an autoregressive decoder with the
+    // <|notimestamp|> prompt token hard-wired on every run, so the
+    // generated token stream carries no alignment information. The
+    // family emits a full-text transcript inside a single segment
+    // with zeroed t0/t1 — there is no honest token, word, or
+    // segment timing to return. Advertise NONE and let the
+    // dispatcher reject any request for finer granularity.
+    caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 }
 
 } // namespace transcribe::cohere

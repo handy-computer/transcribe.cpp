@@ -16,7 +16,7 @@ Usage:
     uv run scripts/bench/run.py --samples jfk --iters 20 --warmup 5
     uv run scripts/bench/run.py --backends metal,cpu,vulkan
     uv run scripts/bench/run.py --backends cpu --name pre-refactor
-    uv run scripts/bench/run.py --model models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf --samples jfk
+    uv run scripts/bench/run.py --model models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf --samples jfk
 
   Options:
     --family {parakeet,cohere,all}   model family to bench (default: all)
@@ -36,10 +36,11 @@ Usage:
     --out-dir PATH                   override reports output root
     --dry-run                        print the selected backends + matrix
 
-Backend resolution:
-    metal  -> repo/build/bin/transcribe-bench         (no extra flags)
-    cpu    -> repo/build/bin/transcribe-bench         (+ --cpu-only)
-    vulkan -> repo/build-vulkan/bin/transcribe-bench  (no extra flags)
+Backend resolution (each run also passes --backend <name> to the
+bench binary so the library selector is exercised end-to-end):
+    metal  -> repo/build/bin/transcribe-bench         --backend metal
+    cpu    -> repo/build/bin/transcribe-bench         --backend cpu
+    vulkan -> repo/build-vulkan/bin/transcribe-bench  --backend vulkan
 
 Auto-detection (when --backends is unset or 'all'):
     metal  available if build/bin/transcribe-bench exists AND sys.platform=='darwin'
@@ -84,7 +85,12 @@ class Cell:
 class BackendSpec:
     name: str          # canonical id: "metal" | "cpu" | "vulkan"
     binary: Path       # resolved bench binary path
-    cpu_only: bool     # whether to pass --cpu-only
+    backend_arg: str   # value passed as `--backend <arg>` to the bench
+                       # binary. "metal"|"cpu"|"vulkan"|"auto". We always
+                       # pass --backend explicitly so the library's
+                       # backend selector is exercised end-to-end, even
+                       # for cpu runs (strict-CPU on a BLAS/AMX host is
+                       # a real regression target).
 
 
 def find_repo_root(start: Path) -> Path:
@@ -162,24 +168,33 @@ def get_git_sha(repo: Path) -> str:
 
 
 def parse_quant_from_filename(path: Path) -> str | None:
-    # "parakeet-tdt-0.6b-v2.q4_k_m.gguf" -> "q4_k_m"
-    # "cohere.f16.gguf"                  -> "f16"
+    # `<slug>-<QUANT>.gguf` (llama.cpp convention), e.g.
+    # "parakeet-tdt-0.6b-v2-Q4_K_M.gguf" -> "q4_k_m"
+    # "cohere-transcribe-03-2026-F16.gguf" -> "f16"
     name = path.name
     if not name.endswith(".gguf"):
         return None
     stem = name[: -len(".gguf")]
-    if "." not in stem:
+    if "-" not in stem:
         return None
-    return stem.rsplit(".", 1)[1]
+    return stem.rsplit("-", 1)[1].lower()
 
 
 def discover_family_models(repo: Path, family: str) -> dict[str, Path]:
-    """Return {quant: path} for a given family, picking newest on collision."""
-    fam_dir = repo / "models" / family
-    if not fam_dir.is_dir():
+    """Return {quant: path} for a given family, picking newest on collision.
+
+    Layout is models/<slug>/<slug>-<QUANT>.gguf; any slug whose filename
+    starts with `family` is treated as belonging to that family. Multiple
+    variants (e.g. parakeet v2 + v3) collapse into the same {quant: path}
+    map; newest-mtime wins per quant.
+    """
+    model_root = repo / "models"
+    if not model_root.is_dir():
         return {}
     by_quant: dict[str, list[Path]] = {}
-    for path in fam_dir.glob("*.gguf"):
+    for path in model_root.glob("*/*.gguf"):
+        if not path.stem.startswith(family):
+            continue
         quant = parse_quant_from_filename(path)
         if quant:
             by_quant.setdefault(quant, []).append(path)
@@ -302,7 +317,7 @@ def resolve_backends(repo: Path, requested: str | None,
     for name in names:
         if name == "metal":
             binary = bench_bin_override or _metal_binary(repo)
-            cpu_only = False
+            backend_arg = "metal"
             if not binary.exists():
                 missing.append(f"metal: {binary}")
             elif sys.platform != "darwin" and bench_bin_override is None:
@@ -310,18 +325,21 @@ def resolve_backends(repo: Path, requested: str | None,
                 missing.append(f"metal: requires darwin host (got {sys.platform})")
                 continue
         elif name == "cpu":
+            # We reuse the darwin bench binary for cpu runs — the
+            # --backend cpu flag makes it a strict-CPU run regardless
+            # of what's compiled in.
             binary = bench_bin_override or _metal_binary(repo)
-            cpu_only = True
+            backend_arg = "cpu"
             if not binary.exists():
                 missing.append(f"cpu: {binary}")
         elif name == "vulkan":
             binary = bench_bin_override or _vulkan_binary(repo)
-            cpu_only = False
+            backend_arg = "vulkan"
             if not binary.exists():
                 missing.append(f"vulkan: {binary}")
         else:  # pragma: no cover
             continue
-        specs.append(BackendSpec(name=name, binary=binary, cpu_only=cpu_only))
+        specs.append(BackendSpec(name=name, binary=binary, backend_arg=backend_arg))
 
     if missing:
         print("error: requested backend(s) unavailable:", file=sys.stderr)
@@ -336,10 +354,13 @@ def resolve_backends(repo: Path, requested: str | None,
 
 
 def run_bench_binary(bench_bin: Path, cell: Cell, iters: int, warmup: int,
-                     cpu_only: bool) -> dict | None:
+                     backend_arg: str) -> dict | None:
     with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
+        # Always pass --backend explicitly so the library's backend
+        # selector is exercised end-to-end on every run (including
+        # metal/vulkan, which used to be implicit via binary choice).
         cmd = [
             str(bench_bin),
             "--model", str(cell.model_path),
@@ -348,9 +369,8 @@ def run_bench_binary(bench_bin: Path, cell: Cell, iters: int, warmup: int,
             "--warmup", str(warmup),
             "--json-out", str(tmp_path),
             "--quiet",
+            "--backend", backend_arg,
         ]
-        if cpu_only:
-            cmd.append("--cpu-only")
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             print(f"  binary failed (exit {proc.returncode}):", file=sys.stderr)
@@ -362,8 +382,9 @@ def run_bench_binary(bench_bin: Path, cell: Cell, iters: int, warmup: int,
         except (OSError, json.JSONDecodeError) as e:
             print(f"  failed to parse json-out: {e}", file=sys.stderr)
             return None
-        if data.get("schema") != "transcribe-bench-v1":
-            print(f"  bad schema: {data.get('schema')!r}", file=sys.stderr)
+        schema = data.get("schema", "")
+        if schema not in ("transcribe-bench-v1", "transcribe-bench-v2"):
+            print(f"  bad schema: {schema!r}", file=sys.stderr)
             return None
         return data
     finally:
@@ -382,22 +403,27 @@ def print_summary_table(family: str, runs: list[dict], slug: str,
     # from the first run's `backend` field if present, else fall back.
     display_backend = runs[0].get("backend", backend_label) if runs else backend_label
 
-    header = ("quant", "sample", "encode_ms", "decode_ms", "total_ms", "rtf")
+    header = ("quant", "sample", "load_ms", "encode_ms", "decode_ms", "wall_ms", "rtf")
     rows: list[tuple[str, ...]] = []
     for r in runs:
         summary = r.get("summary", {}) or {}
-        rtf = r.get("rtf_mean")
+        # Prefer wall-based RTF (v2); fall back to v1's rtf_mean.
+        rtf = r.get("rtf_wall_mean") or r.get("rtf_mean")
         rtf_s = f"{rtf:.3f}" if isinstance(rtf, (int, float)) else "-"
         quant = parse_quant_from_filename(Path(r.get("model_path", ""))) or "-"
         sample_name = Path(r.get("sample_path", "")).name or "-"
-        rows.append((quant, sample_name,
+        # load_ms is a one-shot captured before any measured iteration; it
+        # lives at top-level in the cell JSON, not inside summary{}.
+        load_ms = r.get("load_ms")
+        load_ms_s = f"{load_ms:.1f}" if isinstance(load_ms, (int, float)) else "-"
+        rows.append((quant, sample_name, load_ms_s,
                      _fmt_mean(summary, "encode_ms"),
                      _fmt_mean(summary, "decode_ms"),
-                     _fmt_mean(summary, "total_ms"), rtf_s))
+                     _fmt_mean(summary, "wall_ms"), rtf_s))
 
     widths = [max(len(header[i]), max((len(row[i]) for row in rows), default=0))
               for i in range(len(header))]
-    # Left-align text columns (0,1), right-align numeric (2..5).
+    # Left-align text columns (0,1), right-align numeric (2..6).
     def fmt_row(row: tuple[str, ...]) -> str:
         parts = [row[i].ljust(widths[i]) if i < 2 else row[i].rjust(widths[i])
                  for i in range(len(row))]
@@ -457,7 +483,7 @@ def _run_one_backend(backend: BackendSpec, by_family: dict[str, list[Cell]],
             print(f"[{backend.name}][{family}] {cell.quant} \u00d7 {cell.sample} ...",
                   file=sys.stderr, flush=True)
             result = run_bench_binary(backend.binary, cell, args.iters,
-                                      args.warmup, backend.cpu_only)
+                                      args.warmup, backend.backend_arg)
             if result is None:
                 print("  FAILED, skipping", file=sys.stderr)
                 exit_code = 1
@@ -529,8 +555,7 @@ def main() -> int:
               + (f" name={args.name}" if args.name else ""))
         print(f"backends ({len(backends)}):")
         for b in backends:
-            extras = " --cpu-only" if b.cpu_only else ""
-            print(f"  {b.name:<7} {b.binary}{extras}")
+            print(f"  {b.name:<7} {b.binary} --backend {b.backend_arg}")
         if not by_family:
             print("(no cells resolved)")
             return 0

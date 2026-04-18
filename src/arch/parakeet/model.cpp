@@ -44,6 +44,7 @@
 
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
+#include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
@@ -87,8 +88,8 @@ static_assert(std::is_base_of_v<transcribe_context, ParakeetContext>);
 ParakeetContext::~ParakeetContext() {
     // Tear down per-call compute state. Order matters: the scheduler
     // owns the compute buffers, the context owns the tensor metadata,
-    // both must be freed before the model's backends (which outlive
-    // the context, owned by ParakeetModel).
+    // both must be freed before the model's backend plan (which
+    // outlives the context, owned by ParakeetModel).
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -101,12 +102,13 @@ ParakeetContext::~ParakeetContext() {
 }
 
 ParakeetModel::~ParakeetModel() {
-    // Teardown order: ctx_meta → backend_buffer → backends (reverse).
+    // Teardown order: ctx_meta → backend_buffer → plan backends
+    // (reverse init order).
     //
     // ctx_meta owns the tensor metadata (ggml_tensor structs); the
     // tensors' data pointers reference backend_buffer's interior.
     // Freeing ctx_meta drops the metadata only — the buffer is
-    // independent. backend_buffer must be freed before backends
+    // independent. backend_buffer must be freed before the backends
     // because the buffer was allocated against a backend and may
     // hold a reference to it. Backends freed in reverse init order.
     if (bn_fused_ctx != nullptr) {
@@ -117,6 +119,16 @@ ParakeetModel::~ParakeetModel() {
         ggml_backend_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
+    // The CPU conv_pw F32 promotion ctx + buffer (no-op on GPU primary
+    // backends; non-null only when promote_conv_pw_to_f32_on_cpu ran).
+    if (conv_pw_f32_ctx != nullptr) {
+        ggml_free(conv_pw_f32_ctx);
+        conv_pw_f32_ctx = nullptr;
+    }
+    if (conv_pw_f32_buffer != nullptr) {
+        ggml_backend_buffer_free(conv_pw_f32_buffer);
+        conv_pw_f32_buffer = nullptr;
+    }
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
@@ -125,10 +137,14 @@ ParakeetModel::~ParakeetModel() {
         ggml_backend_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
-    for (auto it = backends.rbegin(); it != backends.rend(); ++it) {
+    for (auto it = plan.scheduler_list.rbegin();
+         it != plan.scheduler_list.rend(); ++it)
+    {
         ggml_backend_free(*it);
     }
-    backends.clear();
+    plan.scheduler_list.clear();
+    plan.primary      = nullptr;
+    plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
 namespace {
@@ -164,9 +180,11 @@ transcribe_status fuse_batch_norm(ParakeetModel & m) {
         b.conv_bn_fused_bias  = ggml_new_tensor_1d(m.bn_fused_ctx, GGML_TYPE_F32, d);
     }
 
-    // Allocate on the CPU backend (last in the list).
+    // Allocate on the CPU backend. The plan's scheduler list always
+    // has CPU last as the fallback; for strict-CPU loads it is the
+    // only entry.
     m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(
-        m.bn_fused_ctx, m.backends.back());
+        m.bn_fused_ctx, m.plan.scheduler_list.back());
     if (m.bn_fused_buffer == nullptr) return TRANSCRIBE_ERR_BACKEND;
 
     // Compute fused values from the raw BN tensors.
@@ -193,6 +211,42 @@ transcribe_status fuse_batch_norm(ParakeetModel & m) {
     return TRANSCRIBE_OK;
 }
 
+// On a CPU primary backend, dequantize the conformer 1×1 pointwise
+// conv weights (pw1, pw2) from F16 back to F32. The shared quantizer
+// (post commit 6fee9b9) routes Conformer ConvPw to F16 across all
+// presets so GPU backends with native F16 compute (Metal, Vulkan,
+// CUDA) get the bandwidth halving for free; on CPUs without native
+// F16 arithmetic (Zen 2 and earlier) the per-element F16→F32
+// upconvert per matmul erases the bandwidth win and outweighs the
+// original cost.
+//
+// Today's parakeet GGUFs predate the universal F16 conv_pw policy
+// and ship F32 conv_pw weights, so this function is a no-op against
+// the current on-disk artifacts. The wiring is in place so the next
+// regen does the right thing automatically. See the same comment
+// block on the cohere side for the cost trade and the ~235 MB of
+// "wasted" originals that stay resident in the main weight buffer
+// (ggml's backend buffer model does not support freeing individual
+// tensors).
+//
+// The machinery itself lives in transcribe::load_common — this
+// function is just the parakeet-specific weight walk.
+transcribe_status promote_conv_pw_to_f32_on_cpu(ParakeetModel & m) {
+    std::vector<load_common::ConvPwF32Slot> slots;
+    slots.reserve(m.weights.blocks.size() * 2);
+    for (auto & b : m.weights.blocks) {
+        if (b.conv_pw1_w != nullptr && b.conv_pw1_w->type == GGML_TYPE_F16) {
+            slots.push_back({&b.conv_pw1_w, b.conv_pw1_w});
+        }
+        if (b.conv_pw2_w != nullptr && b.conv_pw2_w->type == GGML_TYPE_F16) {
+            slots.push_back({&b.conv_pw2_w, b.conv_pw2_w});
+        }
+    }
+    return load_common::promote_conv_pw_f16_to_f32_on_cpu(
+        m.plan, slots, "parakeet",
+        &m.conv_pw_f32_ctx, &m.conv_pw_f32_buffer);
+}
+
 // Default variant string when the GGUF did not carry stt.variant.
 // Defaulting belongs in the family handler, not the loader: each
 // family knows its own canonical default and the loader does not.
@@ -214,9 +268,10 @@ transcribe_status load(
     // The dispatcher has already verified out_model is non-null and
     // the loader has a valid gguf_context with general.architecture
     // set. *out_model is currently null (the dispatcher cleared it).
-    (void)params; // GPU fallback / device selection lands when there
-                  // is actually a backend to fall back from. 2C runs
-                  // entirely in CPU memory with no ggml_backend_t.
+    // params->backend is consumed below in the backend init block;
+    // params->gpu_device is reserved per the public header contract
+    // and is not yet honored (multi-device selection is a future
+    // release).
 
     const int64_t t_load_start = ggml_time_us();
 
@@ -362,76 +417,34 @@ transcribe_status load(
         return st;
     }
 
-    // Initialize runtime backends via ggml's device registry.
-    // Discovery order: GPU/iGPU → ACCEL (BLAS, etc.) → CPU.
-    // This is runtime-dynamic: the library code has no compile-time
-    // #if TRANSCRIBE_METAL / #if TRANSCRIBE_VULKAN guards. Whatever
-    // backends ggml was compiled with are discovered here.
-    //
-    // TRANSCRIBE_FORCE_CPU=1 skips GPU/ACCEL backends for debugging
-    // and strict numerical reference.
-    const char * force_cpu_env = std::getenv("TRANSCRIBE_FORCE_CPU");
-    const bool   force_cpu     = force_cpu_env != nullptr && force_cpu_env[0] != '\0' &&
-                                 force_cpu_env[0] != '0';
+    // Resolve the backend plan via ggml's device registry. The
+    // caller's requested backend (AUTO, CPU, METAL, VULKAN) is
+    // honored here; see transcribe-backend.h + transcribe-load-common.h
+    // for the full semantic. This is runtime-dynamic: the library
+    // code has no compile-time #if TRANSCRIBE_METAL / #if
+    // TRANSCRIBE_VULKAN guards. Whatever backends ggml was compiled
+    // with are discovered here.
+    const transcribe_backend_request backend_req =
+        (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
 
+    if (const transcribe_status st = transcribe::load_common::init_backends(
+            backend_req, "parakeet", m->plan);
+        st != TRANSCRIBE_OK)
     {
-        // GPU backend (Metal, Vulkan, CUDA — whichever ggml found).
-        if (!force_cpu) {
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                const auto dev_type = ggml_backend_dev_type(dev);
-                if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU ||
-                    dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                    ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
-                    if (be != nullptr) {
-                        std::fprintf(stderr, "parakeet: using GPU backend: %s\n",
-                                     ggml_backend_dev_name(dev));
-                        m->backends.push_back(be);
-                        break; // use first available GPU
-                    }
-                }
-            }
-        }
-
-        // ACCEL backends (BLAS on CPU, etc.) — these accelerate
-        // specific ops (matmul) while the CPU backend handles the rest.
-        // ACCEL backends are always included, even with FORCE_CPU,
-        // because they run on host memory (e.g. Accelerate sgemm).
-        {
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
-                    ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
-                    if (be != nullptr) {
-                        std::fprintf(stderr, "parakeet: using ACCEL backend: %s\n",
-                                     ggml_backend_dev_name(dev));
-                        m->backends.push_back(be);
-                    }
-                }
-            }
-        }
-
-        // CPU backend (always present, always last).
-        ggml_backend_t cpu_be =
-            ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
-        if (cpu_be == nullptr) {
-            gguf_free(gguf_data);
-            std::fprintf(stderr, "parakeet: failed to initialize CPU backend\n");
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        m->backends.push_back(cpu_be);
+        gguf_free(gguf_data);
+        return st;
     }
 
-    // Label for the public API: report the first (highest-priority) backend.
-    m->backend = ggml_backend_name(m->backends.front());
+    // Label for the public API: report the primary backend.
+    m->backend = ggml_backend_name(m->plan.primary);
 
     // Allocate a backend buffer for every tensor in ctx_meta on the
-    // preferred backend (first in the list). After this returns, each
-    // ggml_tensor in ctx_meta has its `buffer` and `data` slot bound
-    // to the backend allocation. We still need to upload the actual
-    // weight bytes from the GGUF data section.
+    // primary backend. After this returns, each ggml_tensor in
+    // ctx_meta has its `buffer` and `data` slot bound to the backend
+    // allocation. We still need to upload the actual weight bytes
+    // from the GGUF data section.
     ggml_backend_buffer_t weights_buffer =
-        ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->backends.front());
+        ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
         std::fprintf(stderr,
@@ -442,71 +455,17 @@ transcribe_status load(
     ggml_backend_buffer_set_usage(weights_buffer,
                                   GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    // Stream tensor data into the backend buffer. We use a plain
-    // std::ifstream rather than going through gguf's loader a third
-    // time: ifstream::seekg takes a streamoff (signed 64-bit on
-    // every platform we target), so multi-GB tensor offsets work
-    // without #ifdef'ing fseeko vs _fseeki64.
-    //
-    // ggml_backend_tensor_set is the right call regardless of
-    // backend: on host buffers (CPU + Metal unified memory on Apple
-    // Silicon) it's a memcpy; on discrete GPUs it does the upload.
+    // Stream tensor data from the GGUF file into the backend buffer
+    // slots. See transcribe-load-common.h for the shared loop; it
+    // uses ggml_backend_tensor_set so this works for both host-
+    // memory backends (CPU, Metal on Apple Silicon) and discrete
+    // GPUs.
+    if (const transcribe_status st = transcribe::load_common::stream_tensor_data(
+            loader.path(), gguf_data, m->ctx_meta, "parakeet");
+        st != TRANSCRIBE_OK)
     {
-        std::ifstream fin(loader.path(), std::ios::binary);
-        if (!fin) {
-            gguf_free(gguf_data);
-            std::fprintf(stderr,
-                         "parakeet: failed to reopen %s for tensor data\n",
-                         loader.path().c_str());
-            return TRANSCRIBE_ERR_GGUF;
-        }
-
-        const size_t data_offset = gguf_get_data_offset(gguf_data);
-        std::vector<uint8_t> staging;
-
-        for (ggml_tensor * t = ggml_get_first_tensor(m->ctx_meta);
-             t != nullptr;
-             t = ggml_get_next_tensor(m->ctx_meta, t))
-        {
-            const int64_t idx = gguf_find_tensor(gguf_data, t->name);
-            if (idx < 0) {
-                std::fprintf(stderr,
-                             "parakeet: tensor \"%s\" not in gguf data\n",
-                             t->name);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-            const size_t toffset = gguf_get_tensor_offset(gguf_data, idx);
-            const size_t nbytes  = ggml_nbytes(t);
-
-            const std::streamoff abs_offset =
-                static_cast<std::streamoff>(data_offset) +
-                static_cast<std::streamoff>(toffset);
-            fin.seekg(abs_offset);
-            if (!fin) {
-                std::fprintf(stderr,
-                             "parakeet: seek failed for tensor \"%s\"\n",
-                             t->name);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-
-            if (staging.size() < nbytes) {
-                staging.resize(nbytes);
-            }
-            fin.read(reinterpret_cast<char *>(staging.data()),
-                     static_cast<std::streamsize>(nbytes));
-            if (!fin) {
-                std::fprintf(stderr,
-                             "parakeet: short read for tensor \"%s\" "
-                             "(%zu bytes)\n",
-                             t->name, nbytes);
-                gguf_free(gguf_data);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-
-            ggml_backend_tensor_set(t, staging.data(), 0, nbytes);
-        }
+        gguf_free(gguf_data);
+        return st;
     }
 
     // gguf_data only carried tensor offsets + names; both have been
@@ -518,6 +477,18 @@ transcribe_status load(
     // Fuse BatchNorm parameters into scale + bias for the encoder
     // graph. This replaces 4 elementwise ops per block with 2.
     if (const transcribe_status st = fuse_batch_norm(*m);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+
+    // On CPU primary backend, dequantize conv pointwise weights back
+    // to F32 — Zen 2 class CPUs don't have native F16 compute and the
+    // upconvert cost per matmul outweighs the bandwidth savings from
+    // the smaller weight. No-op on GPU backends and on parakeet GGUFs
+    // that predate the universal F16 conv_pw quantizer policy (today,
+    // all of them).
+    if (const transcribe_status st = promote_conv_pw_to_f32_on_cpu(*m);
         st != TRANSCRIBE_OK)
     {
         return st;
@@ -576,22 +547,20 @@ transcribe_status run(
     int                       n_samples,
     const transcribe_params * params)
 {
-    // Phase 4 step 3a: this runs the encoder pre_encode subgraph
-    // end-to-end. The conformer blocks (3b-3f) and the predictor +
-    // joint + TDT decode driver (phase 5) are still TODO. We return
-    // OK so the smoke harness can call this and observe the dump
-    // outputs (gated on TRANSCRIBE_DUMP_DIR), but no result text is
-    // populated yet — every transcribe_full_text() / segment / word
-    // / token accessor still returns its safe sentinel.
-    (void)params;
-
+    // The dispatcher (transcribe.cpp) has already enum-range
+    // validated params->task / params->timestamps, rejected
+    // TRANSLATE against this family's supports_translate=false, and
+    // rejected any timestamp request finer than our advertised
+    // max_timestamp_kind=TOKEN. What arrives here is guaranteed
+    // sane — we only need to resolve AUTO and downcast finer-grained
+    // output to the requested ceiling when the result is built.
     if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
     auto * pc = static_cast<ParakeetContext *>(ctx);
     auto * pm = static_cast<ParakeetModel *>(pc->model);
-    if (pm == nullptr || pm->backends.empty()) {
+    if (pm == nullptr || pm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -682,8 +651,8 @@ transcribe_status run(
     // live-range packing. Created lazily, persists across calls.
     if (pc->sched == nullptr) {
         pc->sched = ggml_backend_sched_new(
-            pm->backends.data(), nullptr,
-            static_cast<int>(pm->backends.size()),
+            pm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(pm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
         if (pc->sched == nullptr) {
             std::fprintf(stderr,
@@ -718,8 +687,7 @@ transcribe_status run(
     // allocated `eb.pos_emb_in` with ne=[d_model, pos_len, 1, 1]
     // (after it learned T_enc from pre_encode); we fill it here.
     //
-    // The values match parakeet-mlx's RelPositionalEncoding
-    // (attention.py:551-598):
+    // The values match the reference RelPositionalEncoding:
     //   positions[i] = (T_enc - 1) - i  for i in [0, 2*T_enc-1)
     //   div_term[k]  = exp(2k * -ln(10000) / d_model)
     //   pe[i, 2k]    = sin(positions[i] * div_term[k])
@@ -905,9 +873,8 @@ transcribe_status run(
         te.t0_ms = static_cast<int64_t>(
             std::llround(frame_to_ms * static_cast<double>(rt.step_at_emit)));
         // Per-token duration: clamp the duration_frames=0 case to a
-        // visually-distinct minimum of 0 ms (== t0). This matches
-        // the convention parakeet-mlx uses; the result is a "point
-        // in time" token with no width.
+        // visually-distinct minimum of 0 ms (== t0). The result is a
+        // "point in time" token with no width.
         const double end_frame =
             static_cast<double>(rt.step_at_emit) +
             static_cast<double>(rt.duration_frames);
@@ -1015,13 +982,71 @@ transcribe_status run(
         seg.text       = full;
         pc->full_text  = std::move(full);
         pc->segments.push_back(std::move(seg));
+
         // Parakeet TDT produces token-level timestamps from the
         // encoder frame indices (each emitted token's
         // step_at_emit). Word and segment timestamps are derived
-        // by aggregating contained tokens. The public
-        // transcribe_returned_timestamp_kind reflects the finest
-        // granularity actually produced.
-        pc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
+        // by aggregating contained tokens. TOKEN is therefore the
+        // family's max_timestamp_kind, and everything above has
+        // already been populated at TOKEN granularity.
+        //
+        // Clamp to the caller's requested ceiling. AUTO resolves to
+        // the family max (TOKEN). A coarser request elides the
+        // finer levels: WORD drops the token list, SEGMENT drops
+        // tokens+words, NONE drops tokens+words and zeros the
+        // segment's t0/t1 so nothing dresses up as alignment data
+        // the caller did not ask for.
+        //
+        // The dispatcher has already rejected any request finer
+        // than TOKEN, so after the AUTO resolution below, eff is in
+        // {NONE, SEGMENT, WORD, TOKEN}.
+        transcribe_timestamp_kind eff = params->timestamps;
+        if (eff == TRANSCRIBE_TIMESTAMPS_AUTO) {
+            eff = pm->caps.max_timestamp_kind; // = TOKEN for parakeet
+        }
+        if (eff == TRANSCRIBE_TIMESTAMPS_NONE) {
+            // Keep the segment and its text, but drop alignment
+            // data. Tokens + words are a finer granularity than
+            // the caller asked for; segment timings are alignment
+            // too, so zero them.
+            pc->tokens.clear();
+            pc->words.clear();
+            auto & s = pc->segments.back();
+            s.t0_ms      = 0;
+            s.t1_ms      = 0;
+            s.first_word = 0;
+            s.n_words    = 0;
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        } else if (eff == TRANSCRIBE_TIMESTAMPS_SEGMENT) {
+            // Keep segment timings, drop token + word tables.
+            pc->tokens.clear();
+            pc->words.clear();
+            auto & s = pc->segments.back();
+            s.first_word  = 0;
+            s.n_words     = 0;
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        } else if (eff == TRANSCRIBE_TIMESTAMPS_WORD) {
+            // Keep segment + word timings, drop the token table.
+            // Every back-reference into the cleared token table
+            // must also be zeroed so a caller iterating words or
+            // the segment can never index into a now-empty
+            // pc->tokens. The word_* / segment_* accessors return
+            // safe sentinels when n_tokens == 0, which is the
+            // documented behavior for "coarser than requested."
+            pc->tokens.clear();
+            for (auto & w : pc->words) {
+                w.first_token = 0;
+                w.n_tokens    = 0;
+            }
+            auto & s = pc->segments.back();
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        }
+        // TRANSCRIBE_TIMESTAMPS_TOKEN: nothing to elide.
+
+        pc->result_kind = eff;
         pc->has_result  = true;
     }
 

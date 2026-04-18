@@ -1,0 +1,41 @@
+{
+  "_comment": [
+    "Parakeet TDT per-tensor tolerances for compare_tensors.py.",
+    "",
+    "Reference: NeMo (nvidia/parakeet-tdt-0.6b-v2) running f32 inference.",
+    "C++: ggml CPU f32 compute, weights stored as f32 in GGUF.",
+    "",
+    "Dominant divergence source: STFT precision. C++ uses fp64 STFT,",
+    "NeMo uses fp32. This produces ~5 max_abs in the mel, which the",
+    "subsampling conv amplifies. With dump tensors preserved as graph",
+    "outputs, observed CPU/F32 drift is v2: pre_encode ~127 max_abs /",
+    "~0.28 mean_abs, block0 ~22 / ~0.03, block12 ~15 / ~0.06;",
+    "v3: pre_encode ~699 / ~1.35, block0 ~27 / ~0.04, block12",
+    "~24 / ~0.08. The 24-layer conformer attenuates the drift:",
+    "block 23/final are ~0.04 (v2) / ~0.03 (v3).",
+    "",
+    "LSTM decoder states are encoder-independent (zero input, zero",
+    "state at step 0) and match to fp32 round-off (~1e-7).",
+    "",
+    "dec.joint.0 amplifies the encoder drift through the joint",
+    "projection (~70 max_abs on values ~1e3)."
+  ],
+
+  "enc.mel.in":            {"max_abs": 10.0,   "mean_abs": 0.01},
+  "enc.pos_emb":           {"max_abs": 5e-4,   "mean_abs": 1e-5},
+  "enc.pre_encode.out":    {"max_abs": 1000.0,  "mean_abs": 5.0},
+
+  "enc.block.0.out":       {"max_abs": 50.0,    "mean_abs": 0.1},
+  "enc.block.12.out":      {"max_abs": 50.0,    "mean_abs": 0.2},
+  "enc.block.23.out":      {"max_abs": 0.1,     "mean_abs": 0.005},
+
+  "enc.final":             {"max_abs": 0.1,     "mean_abs": 0.005},
+
+  "dec.enc_out":           {"max_abs": 0.1,     "mean_abs": 0.005},
+  "dec.embed.0":           {"max_abs": 1e-6,    "mean_abs": 1e-7},
+  "dec.lstm.0.h.0":        {"max_abs": 1e-6,    "mean_abs": 1e-7},
+  "dec.lstm.0.c.0":        {"max_abs": 1e-6,    "mean_abs": 1e-7},
+  "dec.lstm.1.h.0":        {"max_abs": 1e-6,    "mean_abs": 1e-7},
+  "dec.lstm.1.c.0":        {"max_abs": 1e-6,    "mean_abs": 1e-7},
+  "dec.joint.0":           {"max_abs": 100.0,   "mean_abs": 100.0}
+}

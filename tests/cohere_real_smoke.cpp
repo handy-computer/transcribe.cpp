@@ -126,8 +126,8 @@ int main() {
                      "cohere_real_smoke: TRANSCRIBE_COHERE_MODEL not "
                      "set; skipping. Convert a real model with:\n"
                      "  uv run scripts/convert-cohere.py "
-                     "<model-dir> /tmp/cohere.gguf\n"
-                     "and re-run with TRANSCRIBE_COHERE_MODEL=/tmp/cohere.gguf\n");
+                     "<model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026\n"
+                     "and re-run with TRANSCRIBE_COHERE_MODEL=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf\n");
         return 77;
     }
     const std::string fixture = env;

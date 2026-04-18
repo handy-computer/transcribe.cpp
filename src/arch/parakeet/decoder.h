@@ -2,10 +2,7 @@
 //
 // Phase 5 of the encoder/decoder bring-up. Implements the host-side
 // predictor (2-layer LSTM) + joint network forward + TDT greedy
-// decode driver. Reference: parakeet-mlx
-//
-//   /tmp/parakeet-mlx/parakeet_mlx/rnnt.py        (PredictNetwork, JointNetwork)
-//   /tmp/parakeet-mlx/parakeet_mlx/parakeet.py    (ParakeetTDT.decode_greedy)
+// decode driver.
 //
 // Why this is on host (not a ggml backend graph): the per-step compute
 // is small (a 640-wide LSTM step is ~6.5 MFLOPs; the joint pass is
@@ -52,11 +49,10 @@ struct ParakeetHParams;
 // read with the row-major convention. See decoder.cpp for the matmul
 // helper that operationalizes this.
 //
-// LSTM gate ordering: [i, f, g, o] (PyTorch / MLX standard) packed
-// into a single [4*hidden, in] matrix. Wx (input-to-hidden) and Wh
-// (hidden-to-hidden) are both stored this way; bias is a single
-// concatenated [4*hidden] vector (NeMo's prednet uses one bias, not
-// PyTorch's redundant W_ih + W_hh pair).
+// LSTM gate ordering: [i, f, g, o] (PyTorch standard) packed into a
+// single [4*hidden, in] matrix. Wx (input-to-hidden) and Wh
+// (hidden-to-hidden) are both stored this way; bias is the combined
+// W_ih + W_hh bias pre-summed at conversion time.
 
 struct HostLstmLayer {
     std::vector<float> Wx;  // [4*pred_hidden, pred_hidden]

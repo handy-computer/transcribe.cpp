@@ -12,16 +12,21 @@ hypotheses + per-utterance timings to a report JSONL file.
 
 Usage:
     uv run scripts/wer/run.py \\
-        --model models/parakeet/parakeet-tdt-0.6b-v2.f32.gguf \\
+        --model models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \\
         --manifest samples/wer/test-clean.manifest.jsonl
 
   Options:
     --out PATH      output report file (default: auto-derived from model name)
     --cli PATH      transcribe-cli binary (default: build/bin/transcribe-cli)
 
-Each output line is:
-    {"id": "...", "ref_text": "...", "hyp_text": "...", "mel_ms": ...,
-     "encode_ms": ..., "decode_ms": ...}
+Output JSONL:
+    - First line (batch header):
+        {"type": "batch_header", "load_ms": ...}
+      Captured once from transcribe-cli's --batch-jsonl header line. score.py
+      and compare.py ignore this line.
+    - Remaining lines (one per utterance):
+        {"id": "...", "ref_text": "...", "hyp_text": "...", "mel_ms": ...,
+         "encode_ms": ..., "decode_ms": ...}
 """
 
 from __future__ import annotations
@@ -65,6 +70,10 @@ def main() -> int:
                    help="transcribe-cli binary")
     p.add_argument("--out", type=Path, default=None,
                    help="Output report file (default: auto)")
+    p.add_argument("--backend",
+                   choices=("auto", "cpu", "metal", "vulkan"),
+                   default=None,
+                   help="Compute backend (default: transcribe-cli default)")
     args = p.parse_args()
 
     for path in (args.model, args.manifest, args.cli):
@@ -105,6 +114,8 @@ def main() -> int:
         "--batch", batch_path,
         "--batch-jsonl",
     ]
+    if args.backend:
+        cmd += ["--backend", args.backend]
     print(f"  $ {' '.join(cmd[:6])} ...")
 
     t_start = time.monotonic()
@@ -131,6 +142,13 @@ def main() -> int:
             try:
                 result = json.loads(line)
             except json.JSONDecodeError:
+                continue
+
+            # CLI emits a one-shot batch_header before any per-file line.
+            # Persist it verbatim as the first record in the output JSONL.
+            if result.get("type") == "batch_header":
+                fout.write(json.dumps(result) + "\n")
+                fout.flush()
                 continue
 
             audio_path = result.get("file", "")

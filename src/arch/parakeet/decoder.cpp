@@ -8,7 +8,7 @@
 //
 // Numerical-accuracy strategy: every step is a small enough operation
 // (a few hundred dot products of length 640) that compounding error
-// stays within ~1e-4 of the parakeet-mlx reference on CPU. The
+// stays within ~1e-4 of the reference on CPU. The
 // per-step dump points wired below feed scripts/compare_tensors.py
 // for the bring-up loop and are gated on TRANSCRIBE_DUMP_DIR.
 
@@ -283,7 +283,7 @@ inline float sigmoidf(float x) {
 // buffer of size 4*H on the stack via std::vector with a single
 // reusable scratch passed in by the caller.
 //
-// Gate ordering: [i, f, g, o] (PyTorch / MLX standard, matches NeMo
+// Gate ordering: [i, f, g, o] (PyTorch standard, matches NeMo
 // safetensors layout).
 //
 // Math (one bias term — NeMo's prednet stores a single concatenated
@@ -343,8 +343,8 @@ void lstm_step(const HostLstmLayer & layer,
 //
 // `last_token` is the token id from the previous decode step, or -1
 // for the start state. The embed lookup goes through the [pred_vocab,
-// pred_hidden] table; the start state matches parakeet-mlx's
-// `embedded_y = mx.zeros(...)` branch in PredictNetwork.__call__.
+// pred_hidden] table; the start state is an all-zeros embedding
+// (matching PredictNetwork's "no previous token" branch).
 //
 // Reads from `prev_state`, writes new state into `new_state`. The
 // caller arranges `new_state` to be the only state mutated, so blank
@@ -450,9 +450,9 @@ void joint_step(const HostJoint &     j,
 }
 
 // Argmax over a contiguous fp32 range. Returns the index of the
-// largest value; ties go to the first occurrence (matches numpy /
-// MLX argmax convention). The decoder uses this for both the token
-// and duration argmaxes.
+// largest value; ties go to the first occurrence (matches the numpy
+// argmax convention). The decoder uses this for both the token and
+// duration argmaxes.
 int argmax_range(const float * data, int n) {
     int   best_i = 0;
     float best_v = data[0];
@@ -465,8 +465,8 @@ int argmax_range(const float * data, int n) {
     return best_i;
 }
 
-// Entropy-based confidence over a token-logit slice. Mirrors
-// parakeet-mlx's ParakeetTDT.decode_greedy:
+// Entropy-based confidence over a token-logit slice. Mirrors the
+// reference ParakeetTDT.decode_greedy path:
 //
 //     token_probs = softmax(token_logits)
 //     entropy     = -sum(p * log(p + 1e-10))
@@ -475,7 +475,7 @@ int argmax_range(const float * data, int n) {
 //
 // In our terms `vocab_size + 1 == pred_vocab == n_token_classes`.
 // The result lives in [0, 1] modulo the +1e-10 epsilon (which
-// matches parakeet-mlx's reference verbatim, including its slight
+// matches the reference verbatim, including its slight
 // negative-bias for nearly-uniform distributions).
 float token_confidence(const float * token_logits,
                        int           n_token_classes,
@@ -498,7 +498,7 @@ float token_confidence(const float * token_logits,
     double entropy = 0.0;
     for (int i = 0; i < n_token_classes; ++i) {
         const float p = scratch_probs[static_cast<size_t>(i)] * inv_sum;
-        // +1e-10 mirrors parakeet-mlx exactly.
+        // +1e-10 matches the reference.
         entropy -= static_cast<double>(p) *
                    std::log(static_cast<double>(p) + 1e-10);
     }
@@ -634,12 +634,12 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         //
         // Dumping every iteration would flood the dump dir on a long
         // clip; the bring-up only needs a few well-chosen sample
-        // points to verify each component matches parakeet-mlx. The
-        // first decode step (start state, encoder frame 0) gives us
-        // four reference points: predictor input (the embed lookup,
+        // points to verify each component matches the NeMo reference.
+        // The first decode step (start state, encoder frame 0) gives
+        // us four reference points: predictor input (the embed lookup,
         // here all zeros), per-layer LSTM h, the joint logits, the
-        // argmax decision. The Python `dump_reference.py decode`
-        // subcommand mirrors these.
+        // argmax decision. The Python `dump_reference_parakeet_nemo.py
+        // decode` subcommand mirrors these.
         if (iter == 1 && transcribe::debug::enabled()) {
             // Predictor scratch_x at start: zeros (vector of length H).
             const long long s_h = H;
@@ -684,7 +684,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
             std::swap(state, next_state); // commit
         }
 
-        // Step / stuck advance. Mirrors parakeet-mlx exactly:
+        // Step / stuck advance. Matches the reference:
         //   step += duration
         //   new_symbols += 1
         //   if duration != 0: new_symbols = 0

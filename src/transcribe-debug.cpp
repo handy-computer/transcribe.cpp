@@ -57,7 +57,7 @@ bool name_is_safe(const char * name) {
 
 // Compute the numpy/row-major shape of a ggml tensor by reversing
 // ne[] and dropping trailing 1s. The result is the slow-to-fast
-// shape that matches scripts/dump_reference.py's `data.shape` from
+// shape that matches the Python reference dumpers' `data.shape` from
 // numpy.
 //
 // Examples:
@@ -124,6 +124,12 @@ bool enabled() {
 
 const char * dump_dir() {
     return enabled() ? g_dump_dir.c_str() : nullptr;
+}
+
+void mark_tensor_for_dump(ggml_tensor * tensor) {
+    if (enabled() && tensor != nullptr) {
+        ggml_set_output(tensor);
+    }
 }
 
 void dump_tensor(const char *        name,

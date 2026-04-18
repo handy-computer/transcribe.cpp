@@ -15,6 +15,7 @@
 #pragma once
 
 #include "decoder.h"
+#include "transcribe-backend.h"
 #include "transcribe-context.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
@@ -66,18 +67,45 @@ struct ParakeetModel final : public transcribe_model {
     ParakeetWeights weights;
     ggml_context *  ctx_meta = nullptr;
 
-    // Runtime backends. Discovered at load() time via ggml's device
-    // registry (GPU → ACCEL/BLAS → CPU). The first entry is the
-    // preferred backend for weights; the scheduler dispatches ops
-    // to the best backend per-op. All are freed in ~ParakeetModel
-    // in reverse order.
-    std::vector<ggml_backend_t> backends;
-    ggml_backend_buffer_t       backend_buffer = nullptr;
+    // Runtime backend plan. Resolved at load() time from
+    // transcribe_model_params::backend via
+    // transcribe::load_common::init_backends. See
+    // transcribe-backend.h for the plan semantics. The plan's
+    // `scheduler_list` owns the backends; the destructor frees
+    // them in reverse order. Helpers that key off "is this CPU?"
+    // check `plan.primary_kind == BackendKind::Cpu` directly.
+    transcribe::BackendPlan plan;
+    ggml_backend_buffer_t   backend_buffer = nullptr;
 
     // Fused BN parameters live in a separate ggml context + buffer,
     // computed at load time from the raw BN tensors. Freed in dtor.
     ggml_context *          bn_fused_ctx    = nullptr;
     ggml_backend_buffer_t   bn_fused_buffer = nullptr;
+
+    // On a CPU primary backend the conformer 1×1 pointwise conv weights
+    // are dequantized from their on-disk F16 form to F32 at load time.
+    // The current quantizer (transcribe-quantize, post commit 6fee9b9)
+    // routes every Conformer ConvPw to F16 across all presets so that
+    // GPU backends with native F16 compute (Metal, Vulkan, CUDA) get
+    // the bandwidth halving for free; on CPUs without native F16
+    // arithmetic (Zen 2 and earlier) the per-matmul F16→F32 upconvert
+    // erases the bandwidth win and dwarfs the original cost. Promoting
+    // back to F32 at load time pays the conversion exactly once.
+    //
+    // Today's parakeet GGUFs predate the universal F16 conv_pw policy
+    // and ship F32 conv_pw, so the promotion is a no-op for them. The
+    // wiring is in place so the next regen does the right thing
+    // automatically. The promotion is also a no-op on every non-CPU
+    // primary backend.
+    //
+    // The CohereBlock comment about ~235 MB of "wasted" originals
+    // applies symmetrically: ggml backend buffers don't support
+    // freeing individual tensor slots, so the F16 source tensors stay
+    // resident in the main weight buffer after promotion. The wired
+    // weight slot is repointed at the F32 copy and the encoder graph
+    // never touches the originals again.
+    ggml_context *          conv_pw_f32_ctx    = nullptr;
+    ggml_backend_buffer_t   conv_pw_f32_buffer = nullptr;
 
     // Mel front-end. Constructed once at load() time from the
     // hparams (precomputes the periodic Hann window + Slaney mel

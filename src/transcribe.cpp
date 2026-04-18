@@ -30,6 +30,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <cstring>
 
 // ---------------------------------------------------------------------------
 // Status
@@ -52,9 +54,38 @@ extern "C" const char * transcribe_status_string(int status) {
         case TRANSCRIBE_ERR_SAMPLE_RATE:          return "sample rate mismatch";
         case TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE: return "unsupported language";
         case TRANSCRIBE_ERR_UNSUPPORTED_TASK:     return "unsupported task";
+        case TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS:
+                                                  return "unsupported timestamp granularity";
         default:                                  return "unknown status";
     }
 }
+
+namespace {
+
+// Ordered rank for timestamp granularities, used by the dispatcher to
+// compare a request against a family's advertised maximum.
+//
+//   NONE    < SEGMENT  < WORD     < TOKEN
+//     0          1          2          3
+//
+// AUTO is a sentinel at the call site and is handled by the caller
+// (resolved to the model's max before ranking). A value that isn't a
+// known enumerator gets rank -1 so an out-of-range request compares
+// strictly less than every valid max (the dispatcher's earlier
+// enum-range switch has already rejected those anyway; this keeps
+// the helper total).
+int timestamp_rank(transcribe_timestamp_kind k) {
+    switch (k) {
+        case TRANSCRIBE_TIMESTAMPS_NONE:    return 0;
+        case TRANSCRIBE_TIMESTAMPS_SEGMENT: return 1;
+        case TRANSCRIBE_TIMESTAMPS_WORD:    return 2;
+        case TRANSCRIBE_TIMESTAMPS_TOKEN:   return 3;
+        case TRANSCRIBE_TIMESTAMPS_AUTO:    return -1;
+    }
+    return -1;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -120,7 +151,7 @@ extern "C" void transcribe_log_set(transcribe_log_callback cb, void * userdata) 
 
 extern "C" struct transcribe_model_params transcribe_model_default_params(void) {
     struct transcribe_model_params p = {};
-    p.use_gpu    = true;
+    p.backend    = TRANSCRIBE_BACKEND_AUTO;
     p.gpu_device = -1;
     return p;
 }
@@ -156,6 +187,23 @@ extern "C" transcribe_status transcribe_model_load_file(
     }
     *out_model = nullptr;
     if (path == nullptr || params == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Reserved-field validation. gpu_device is documented in the
+    // public header as MUST-be-(-1) in 0.x, reserved for future
+    // multi-device selection. Reject anything else now so that
+    // callers who pass a stale "device 0" (or garbage) get a clean
+    // error today rather than a silent success followed by surprise
+    // behavior when we actually wire device selection up. A stderr
+    // line is included because "invalid argument" alone doesn't tell
+    // the caller which field tripped. When multi-device support
+    // lands this check relaxes to `< -1 || >= n_devices`.
+    if (params->gpu_device != -1) {
+        std::fprintf(stderr,
+            "transcribe_model_load_file: gpu_device must be -1 in 0.x "
+            "(got %d); multi-device selection is reserved for a "
+            "future release\n", params->gpu_device);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -242,17 +290,133 @@ extern "C" transcribe_status transcribe_run(
     int                              n_samples,
     const struct transcribe_params * params)
 {
+    // Parameter-shape validation runs first and does not touch ctx
+    // state. A caller that passes NULL pointers or a negative sample
+    // count gets ERR_INVALID_ARG back without any visible side effect
+    // — including the context's result fields, which are preserved
+    // across a malformed call. This is the narrower half of the
+    // "transcribe_run replaces the previous result" contract: the
+    // replacement happens when the call is well-formed enough that
+    // the dispatcher is willing to dereference ctx. A call that
+    // isn't well-formed isn't considered to have "run".
     if (ctx == nullptr || pcm == nullptr || params == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (n_samples < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+
+    // Result-replacement contract: everything past this point either
+    // succeeds and writes a fresh result, or fails and leaves the
+    // context in the documented "no result" sentinel state. Clear
+    // eagerly so every downstream rejection path — NOT_IMPLEMENTED
+    // on an incomplete arch, INVALID_ARG on an out-of-range enum,
+    // UNSUPPORTED_TASK / _TIMESTAMPS / _LANGUAGE on a capability
+    // mismatch — inherits the sentinel without each branch having
+    // to remember to call clear_result() itself.
+    //
+    // Per-family run() handlers call clear_result() again after
+    // their own front-matter checks succeed; that call is now
+    // redundant but idempotent, and removing it is a refactor
+    // deferred to a later pass.
+    ctx->clear_result();
+    ctx->t_mel_us    = 0;
+    ctx->t_encode_us = 0;
+    ctx->t_decode_us = 0;
+
     if (ctx->model == nullptr || ctx->model->arch == nullptr ||
         ctx->model->arch->run == nullptr)
     {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
+
+    // Centralized run-param validation. The per-family run() handlers
+    // can assume the params struct has been sanity-checked here, so
+    // they don't need to repeat the enum-range, capability, or
+    // language-list checks. Anything still family-local — tokenizer-
+    // vocabulary constraints, prompt-template quirks, target_language
+    // handling for TRANSLATE — continues to live inside the family's
+    // run() handler.
+    //
+    // Out-of-range enum values are handled separately from
+    // capability-mediated rejections so the caller can distinguish
+    // "you passed garbage" (ERR_INVALID_ARG) from "this model doesn't
+    // support that legitimate request" (ERR_UNSUPPORTED_TASK).
+    switch (params->task) {
+        case TRANSCRIBE_TASK_TRANSCRIBE:
+        case TRANSCRIBE_TASK_TRANSLATE:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    switch (params->timestamps) {
+        case TRANSCRIBE_TIMESTAMPS_NONE:
+        case TRANSCRIBE_TIMESTAMPS_AUTO:
+        case TRANSCRIBE_TIMESTAMPS_SEGMENT:
+        case TRANSCRIBE_TIMESTAMPS_WORD:
+        case TRANSCRIBE_TIMESTAMPS_TOKEN:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Reject TRANSLATE for models that don't declare support. The
+    // capability is set per-arch in apply_family_invariants and may
+    // be overridden by stt.capability.* KV. Models that DO support
+    // translate may still validate target_language inside their own
+    // run() handler against the model-specific language list.
+    if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
+        !ctx->model->caps.supports_translate)
+    {
+        return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
+    }
+
+    // Reject a timestamp granularity finer than the model can
+    // produce. AUTO passes through unconditionally — the per-family
+    // run() handler resolves AUTO to its own max_timestamp_kind when
+    // it assembles the result. A non-AUTO request is treated as a
+    // ceiling: the handler may emit the requested granularity or
+    // coarser, never finer.
+    //
+    // Advertising NONE and then fabricating a zero-timed WordEntry
+    // was the bug that motivated the ceiling check — if a family
+    // says it can't produce word alignments, the dispatcher holds
+    // it to that contract.
+    if (params->timestamps != TRANSCRIBE_TIMESTAMPS_AUTO) {
+        const int req_rank = timestamp_rank(params->timestamps);
+        const int max_rank = timestamp_rank(ctx->model->caps.max_timestamp_kind);
+        if (req_rank > max_rank) {
+            return TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS;
+        }
+    }
+
+    // Reject a caller-supplied source language that the model does
+    // not declare. A NULL language means "use family default or
+    // auto-detect"; that's always accepted at dispatch level. When
+    // n_languages == 0 the model's language list is "information
+    // gap, not a claim" (see transcribe-meta.cpp read_languages_kv)
+    // and we cannot validate, so we defer to the family handler.
+    //
+    // Per-family run() handlers may still reject a language for
+    // tokenizer-vocabulary reasons, but they no longer need to
+    // replicate this metadata walk.
+    if (params->language != nullptr &&
+        ctx->model->caps.n_languages > 0 &&
+        ctx->model->caps.languages != nullptr)
+    {
+        bool found = false;
+        for (int i = 0; i < ctx->model->caps.n_languages; ++i) {
+            const char * entry = ctx->model->caps.languages[i];
+            if (entry != nullptr && std::strcmp(entry, params->language) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+        }
+    }
+
     return ctx->model->arch->run(ctx, pcm, n_samples, params);
 }
 

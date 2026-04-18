@@ -4,11 +4,11 @@
 // Phase 4 step 2 of the encoder port. Provides a single internal API
 // the encoder graph builder can call to write a named tensor's
 // contents to disk in the same on-disk format that
-// scripts/dump_reference.py emits, so scripts/compare_tensors.py can
-// diff a C++ dump dir against a parakeet-mlx dump dir without
+// scripts/dump_reference_*.py emits, so scripts/compare_tensors.py can
+// diff a C++ dump dir against a Python reference dump dir without
 // translation.
 //
-// On-disk format (matches scripts/dump_reference.py::write_dump):
+// On-disk format (matches scripts/dump_reference_*.py::write_dump):
 //
 //   <dump_dir>/<name>.f32   raw little-endian fp32, row-major (C order)
 //   <dump_dir>/<name>.json  sidecar metadata
@@ -24,11 +24,11 @@
 //     "source": { "kind": "cpp" } }
 //
 // Critical layout note: ggml ne[] is fast-to-slow (ne[0] = innermost,
-// most-contiguous dim). Numpy / dump_reference.py uses slow-to-fast
+// most-contiguous dim). Numpy / the Python dumpers use slow-to-fast
 // (last axis varies fastest). The dumper converts by reversing ne[]
 // and dropping trailing 1s, so a ggml tensor with ne=[1024, 275, 1, 1]
 // (typical encoder activation [d_model, T, B=1]) lands on disk as
-// shape=[275, 1024] — same as the parakeet-mlx [T, d_model] reference
+// shape=[275, 1024] — same as the reference's [T, d_model] tensor
 // after squeezing the batch dim.
 //
 // Activation: dumping is gated on the TRANSCRIBE_DUMP_DIR environment
@@ -63,6 +63,18 @@ bool enabled();
 // Lifetime is the process; the returned pointer stays valid as long
 // as the dumper is enabled. Useful for tests.
 const char * dump_dir();
+
+// Preserve a ggml tensor for a later dump_tensor() call.
+//
+// The ggml scheduler is allowed to reuse intermediate buffers unless a
+// tensor is marked as a graph output. Family graph builders that stash
+// intermediate tensor pointers in an EncoderDumps-style struct must call
+// this helper while building the graph, before scheduler allocation.
+// Otherwise dump_tensor() may read a reused buffer after graph_compute.
+//
+// No-op unless debug dumping is enabled, so normal inference keeps the
+// scheduler's live-range packing unchanged.
+void mark_tensor_for_dump(struct ggml_tensor * tensor);
 
 // Dump a tensor to <dump_dir>/<name>.{f32,json}.
 //

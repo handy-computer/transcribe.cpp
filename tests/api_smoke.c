@@ -63,6 +63,7 @@ static void test_status_string(void) {
         TRANSCRIBE_ERR_SAMPLE_RATE,
         TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE,
         TRANSCRIBE_ERR_UNSUPPORTED_TASK,
+        TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS,
     };
     for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
         const char * s = transcribe_status_string(all[i]);
@@ -102,7 +103,7 @@ static void test_log_set_null(void) {
 
 static void test_factories(void) {
     struct transcribe_model_params mp = transcribe_model_default_params();
-    CHECK(mp.use_gpu    == true);
+    CHECK(mp.backend    == TRANSCRIBE_BACKEND_AUTO);
     CHECK(mp.gpu_device == -1);
 
     struct transcribe_context_params cp = transcribe_context_default_params();

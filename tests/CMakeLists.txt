@@ -55,6 +55,92 @@ target_link_libraries(transcribe_api_smoke PRIVATE transcribe)
 add_test(NAME transcribe_api_smoke COMMAND transcribe_api_smoke)
 
 # -----------------------------------------------------------------------------
+# Backend classification unit test
+# -----------------------------------------------------------------------------
+#
+# Covers the pure backend-kind mapping used by the runtime backend selector.
+# This keeps vendor registry names such as ggml Metal's "MTL" tested without
+# requiring that CI have the corresponding backend hardware available.
+
+add_executable(transcribe_backend_classification_unit
+    backend_classification_unit.cpp)
+
+target_link_libraries(transcribe_backend_classification_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_backend_classification_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_backend_classification_unit)
+
+add_test(NAME transcribe_backend_classification_unit
+    COMMAND transcribe_backend_classification_unit)
+
+# -----------------------------------------------------------------------------
+# Backend init_backends() runtime behavior
+# -----------------------------------------------------------------------------
+#
+# Covers the runtime backend-selection matrix: strict CPU invariants,
+# conditional explicit-backend error paths, AUTO fallback, and invalid
+# enum rejection. Hardware-dependent cases (Metal/Vulkan present or
+# absent) are probed at runtime inside the test binary — the test
+# always runs but exercises different branches depending on what the
+# build configured and what hardware is available.
+
+add_executable(transcribe_backend_init_unit
+    backend_init_unit.cpp)
+
+target_link_libraries(transcribe_backend_init_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_backend_init_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_backend_init_unit)
+
+add_test(NAME transcribe_backend_init_unit
+    COMMAND transcribe_backend_init_unit)
+
+# -----------------------------------------------------------------------------
+# F16 → F32 conv pointwise promotion unit test
+# -----------------------------------------------------------------------------
+#
+# Tests promote_conv_pw_f16_to_f32_on_cpu() directly with
+# programmatically created F16 tensors rather than GGUF fixtures.
+# The synthetic Parakeet fixture emits only F32 tensors, so a
+# fixture-based test would be a false positive. This creates real F16
+# data, verifies the CPU path promotes and round-trips correctly, and
+# confirms the non-CPU path is a clean no-op.
+
+add_executable(transcribe_conv_pw_promote_unit
+    conv_pw_promote_unit.cpp)
+
+target_link_libraries(transcribe_conv_pw_promote_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_conv_pw_promote_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_conv_pw_promote_unit)
+
+add_test(NAME transcribe_conv_pw_promote_unit
+    COMMAND transcribe_conv_pw_promote_unit)
+
+# -----------------------------------------------------------------------------
+# Dispatcher-level transcribe_run behavior
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_run_dispatch_unit
+    run_dispatch_unit.cpp)
+
+target_link_libraries(transcribe_run_dispatch_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_run_dispatch_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_run_dispatch_unit)
+
+add_test(NAME transcribe_run_dispatch_unit
+    COMMAND transcribe_run_dispatch_unit)
+
+# -----------------------------------------------------------------------------
 # Synthetic GGUF fixtures (for the loader smoke test)
 # -----------------------------------------------------------------------------
 
@@ -66,7 +152,8 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_unknown.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/corrupt_magic.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
@@ -142,7 +229,7 @@ if(TRANSCRIBE_UV)
     add_executable(transcribe_tokenizer_smoke
         tokenizer_smoke.cpp)
 
-    target_link_libraries(transcribe_tokenizer_smoke PRIVATE transcribe)
+    target_link_libraries(transcribe_tokenizer_smoke PRIVATE transcribe ggml)
 
     # Internal-header access. PRIVATE so it stays scoped to this test
     # target.
@@ -205,7 +292,7 @@ endif()
 # -----------------------------------------------------------------------------
 #
 # Loads a real Parakeet GGUF (the output of scripts/convert-parakeet.py
-# against a real NeMo MLX model directory) and asserts that the
+# against a real exported model directory) and asserts that the
 # loader produces a fully populated ParakeetModel with the right
 # 0.6B-variant hparams and a populated 697-tensor catalog.
 #
@@ -233,53 +320,14 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 # -----------------------------------------------------------------------------
-# Encoder accuracy test (real-model gated)
-# -----------------------------------------------------------------------------
-#
-# Phase 4 step 4. Loads a real Parakeet v2 GGUF, runs the C++
-# encoder forward on samples/jfk.wav, and compares the result
-# element-wise to tests/golden/parakeet/enc.final.f32 (the
-# parakeet-mlx-derived golden, fp32, generated against the C++
-# mel via scripts/dump_reference.py encoder --mel-from-cpp).
-#
-# Same gating as parakeet_real_smoke: built only when
-# TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON, and skipped at run time
-# (return 77) when TRANSCRIBE_REAL_PARAKEET_GGUF is unset.
-#
-# Reaches into internal headers (arch/parakeet/parakeet.h) to
-# pull `encoder_out` off the ParakeetContext via the test target's
-# PRIVATE include path — same pattern as the loader / weight smoke
-# tests. The public C ABI does not expose ggml_tensor pointers.
-
-if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
-    add_executable(transcribe_encoder_smoke
-        encoder_smoke.cpp)
-
-    target_link_libraries(transcribe_encoder_smoke
-        PRIVATE transcribe transcribe-common-example ggml)
-
-    target_include_directories(transcribe_encoder_smoke PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-
-    target_compile_definitions(transcribe_encoder_smoke PRIVATE
-        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
-        "TRANSCRIBE_TEST_GOLDEN_DIR=\"${CMAKE_SOURCE_DIR}/tests/golden/parakeet\"")
-
-    transcribe_apply_warnings(transcribe_encoder_smoke)
-
-    add_test(NAME transcribe_encoder_smoke COMMAND transcribe_encoder_smoke)
-    set_tests_properties(transcribe_encoder_smoke PROPERTIES
-        SKIP_RETURN_CODE 77)
-endif()
-
-# -----------------------------------------------------------------------------
 # Decoder + result accessor accuracy test (real-model gated)
 # -----------------------------------------------------------------------------
 #
 # Phase 5 acceptance gate: end-to-end transcription on jfk.wav. Loads
-# the same v2 GGUF as the encoder smoke, runs transcribe_run, and
-# asserts the full text matches the parakeet-mlx greedy reference
-# within Levenshtein edit distance 3 (PLAN.md's WER acceptance budget).
+# a real Parakeet v2 GGUF, runs transcribe_run, and asserts the full
+# text is within Levenshtein edit distance 3 of the canonical JFK
+# reference text. Tensor-level numerical validation lives in
+# scripts/validate.py.
 # Also exercises every public result accessor (segment / word / token
 # levels) including the safe-sentinel out-of-bounds path.
 #
@@ -307,34 +355,72 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 # -----------------------------------------------------------------------------
+# Cohere ASR synthetic fixture smoke (default-built)
+# -----------------------------------------------------------------------------
+#
+# Same role as transcribe_parakeet_smoke for the Parakeet family:
+# loads arch_cohere_minimal.gguf (a structurally complete minimal
+# Cohere ASR model with the full encoder + enc_dec_proj + decoder +
+# head tensor catalog at toy dims), then reaches into internal headers
+# to assert hparams round-trip, every CohereWeights slot is populated,
+# the post-load BN fuse + Q-bias fuse + conv-pw promote steps ran, and
+# the streamed tensor data is non-zero at known indices. Catches
+# converter/loader drift in default CI without needing a real model.
+#
+# Only registered when uv is available (the fixture generator is a uv
+# script). The transcribe_cohere_e2e_smoke and transcribe_cohere_real_smoke
+# tests below cover the real-model paths.
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_cohere_smoke
+        cohere_smoke.cpp)
+
+    target_link_libraries(transcribe_cohere_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_cohere_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    target_compile_definitions(transcribe_cohere_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_cohere_smoke)
+
+    add_dependencies(transcribe_cohere_smoke fixtures)
+
+    add_test(NAME transcribe_cohere_smoke COMMAND transcribe_cohere_smoke)
+    set_tests_properties(transcribe_cohere_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Cohere ASR end-to-end smoke test (real-model gated)
 # -----------------------------------------------------------------------------
 #
 # Loads a real Cohere ASR GGUF, runs transcription on a WAV file, and
 # verifies the output text contains expected content words, timing info
-# is present and reasonable, and no crashes or leaks occur.
+# is present and reasonable, and no crashes or leaks occur. This is an
+# API and structural behavior test, not a numerical accuracy gate;
+# tensor-level validation lives in scripts/validate.py.
 #
 # Same gating as the Parakeet real-model tests: built only when
 # TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON. At run time,
-# TRANSCRIBE_COHERE_MODEL must point at a Cohere ASR GGUF; the test
-# falls back to models/cohere/cohere.f16.gguf if unset. Exits 77
-# (CTest "skipped") when no model file is found.
+# TRANSCRIBE_COHERE_MODEL must point at a Cohere ASR GGUF. Exits 77
+# (CTest "skipped") when the env var is unset or the file is missing.
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
-    add_executable(transcribe_cohere_smoke
-        cohere_smoke.cpp)
+    add_executable(transcribe_cohere_e2e_smoke
+        cohere_e2e_smoke.cpp)
 
-    target_link_libraries(transcribe_cohere_smoke
+    target_link_libraries(transcribe_cohere_e2e_smoke
         PRIVATE transcribe transcribe-common-example)
 
-    target_compile_definitions(transcribe_cohere_smoke PRIVATE
-        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
-        "TRANSCRIBE_TEST_MODELS_DIR=\"${CMAKE_SOURCE_DIR}/models\"")
+    target_compile_definitions(transcribe_cohere_e2e_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
 
-    transcribe_apply_warnings(transcribe_cohere_smoke)
+    transcribe_apply_warnings(transcribe_cohere_e2e_smoke)
 
-    add_test(NAME transcribe_cohere_smoke COMMAND transcribe_cohere_smoke)
-    set_tests_properties(transcribe_cohere_smoke PROPERTIES
+    add_test(NAME transcribe_cohere_e2e_smoke COMMAND transcribe_cohere_e2e_smoke)
+    set_tests_properties(transcribe_cohere_e2e_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 endif()
 
@@ -352,7 +438,7 @@ endif()
 #
 # Gated two ways: by TRANSCRIBE_BUILD_REAL_MODEL_TESTS (so the binary
 # is not built unless the developer opts in) AND by the runtime
-# TRANSCRIBE_COHERE_MODEL env var (same var that cohere_smoke.cpp
+# TRANSCRIBE_COHERE_MODEL env var (same var that cohere_e2e_smoke.cpp
 # uses, so a single export drives both tests). Skipped via
 # SKIP_RETURN_CODE 77 when the env var is unset or the file is
 # missing.
@@ -424,37 +510,6 @@ target_include_directories(transcribe_mel_unit PRIVATE
 transcribe_apply_warnings(transcribe_mel_unit)
 
 add_test(NAME transcribe_mel_unit COMMAND transcribe_mel_unit)
-
-# -----------------------------------------------------------------------------
-# Frontend smoke (full pipeline against the ONNX golden)
-# -----------------------------------------------------------------------------
-#
-# Loads samples/jfk.wav via the example WAV loader, runs the C++
-# log-mel pipeline, and compares element-wise against
-# tests/golden/parakeet/jfk-mel.f32 (raw f32 produced by
-# scripts/dump_reference.py from nemo128.onnx). Tolerances are
-# tighter than PLAN.md's open-question 1 (5e-3 max / 1e-3 mean) by
-# an order of magnitude because the C++ pipeline runs STFT in fp64,
-# matching the ONNX precision.
-
-if(TRANSCRIBE_BUILD_EXAMPLES)
-    add_executable(transcribe_frontend_smoke
-        frontend_smoke.cpp)
-
-    target_link_libraries(transcribe_frontend_smoke
-        PRIVATE transcribe transcribe-common-example)
-
-    target_include_directories(transcribe_frontend_smoke PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-
-    target_compile_definitions(transcribe_frontend_smoke PRIVATE
-        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\""
-        "TRANSCRIBE_TEST_GOLDEN_DIR=\"${CMAKE_SOURCE_DIR}/tests/golden/parakeet\"")
-
-    transcribe_apply_warnings(transcribe_frontend_smoke)
-
-    add_test(NAME transcribe_frontend_smoke COMMAND transcribe_frontend_smoke)
-endif()
 
 # -----------------------------------------------------------------------------
 # WAV loader unit smoke (example helper)

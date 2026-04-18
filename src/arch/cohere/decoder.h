@@ -32,8 +32,10 @@ struct DecoderDumps {
     ggml_tensor * token_emb       = nullptr;
     ggml_tensor * pos_emb         = nullptr;
     ggml_tensor * embed_norm      = nullptr;
+    ggml_tensor * block_out[64]   = {};       // per-layer outputs (up to 64 layers)
     ggml_tensor * out_before_head = nullptr;
-    ggml_tensor * logits          = nullptr;
+    ggml_tensor * logits_raw      = nullptr;  // pre-log-softmax logits
+    ggml_tensor * logits          = nullptr;  // post-log-softmax logits
 };
 
 struct DecoderBuild {
@@ -53,13 +55,18 @@ struct DecoderBuild {
 // Build a decoder prompt-pass graph. No KV cache -- processes the full
 // prompt sequence at once with a causal self-attention mask.
 //
-// seq_len: number of prompt tokens.
-// T_enc:   number of encoder frames (after enc-dec projection).
+// seq_len:   number of prompt tokens.
+// T_enc:     number of encoder frames (after enc-dec projection).
+// use_flash: true -> fused ggml_flash_attn_ext path;
+//            false -> manual mul_mat + soft_max_ext + mul_mat path.
+//            Defaults true because dk=128 has flash kernels on every
+//            backend we ship.
 DecoderBuild build_decoder_graph(ggml_context *         compute_ctx,
                                  const CohereWeights &  weights,
                                  const CohereHParams &  hp,
                                  int                    seq_len,
-                                 int                    T_enc);
+                                 int                    T_enc,
+                                 bool                   use_flash = true);
 
 // Build a graph that computes cross-attention K/V for all decoder
 // layers from the encoder output, writing them into the cross-attn
@@ -99,6 +106,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         compute_ctx,
                                     int                    n_tokens,
                                     int                    n_past,
                                     int                    T_enc,
-                                    bool                   skip_log_softmax = false);
+                                    bool                   skip_log_softmax = false,
+                                    bool                   use_flash        = true);
 
 } // namespace transcribe::cohere

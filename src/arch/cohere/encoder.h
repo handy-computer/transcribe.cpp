@@ -18,7 +18,9 @@ struct CohereHParams;
 struct CohereWeights;
 
 struct EncoderDumps {
-    ggml_tensor * pre_encode_out = nullptr;
+    ggml_tensor * mel_in            = nullptr;
+    ggml_tensor * pre_encode_out    = nullptr;
+    ggml_tensor * pos_emb           = nullptr;
     ggml_tensor * block0_out        = nullptr;
     ggml_tensor * block_mid_out     = nullptr; // block 23 (middle of 48)
     ggml_tensor * block_last_out    = nullptr; // block 47 (last)
