@@ -16,14 +16,14 @@ tags:
 
 # {{ hf_repo.split('/')[-1] }} — transcribe.cpp GGUF
 
-GGUF conversions of [`{{ hf_repo }}`](https://huggingface.co/{{ hf_repo }}) for use
+GGUF conversions of [{{ hf_repo }}](https://huggingface.co/{{ hf_repo }}) for use
 with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp).
 
 Ported from upstream commit
-[`{{ upstream_commit }}`](https://huggingface.co/{{ hf_repo }}/commit/{{ upstream_commit }}),
+[{{ upstream_commit }}](https://huggingface.co/{{ hf_repo }}/commit/{{ upstream_commit }}),
 pinned {{ pin_date }}.
 Validated against the {{ validation.reference }} reference at transcribe.cpp commit
-[`{{ validation.commit }}`](https://github.com/handy-computer/transcribe.cpp/tree/{{ validation.commit }})
+[{{ validation.commit }}](https://github.com/handy-computer/transcribe.cpp/tree/{{ validation.commit }})
 on {{ validation.date }}.
 
 {{ summary }}
@@ -75,7 +75,7 @@ Inherited from the base model: **{{ license_display }}**. See the
 ## Original Model Card
 
 > The section below is reproduced from
-> [`{{ hf_repo }}`](https://huggingface.co/{{ hf_repo }}) at commit
+> [{{ hf_repo }}](https://huggingface.co/{{ hf_repo }}) at commit
 > `{{ upstream_commit }}` for offline reference. The upstream card is the
 > authoritative source.
 
