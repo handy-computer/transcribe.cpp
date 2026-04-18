@@ -12,7 +12,7 @@ pin_date: 2026-04-16
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: Transformers
-  commit: 929d922
+  commit: bf0d0b7
   date: 2026-04-18
 
 license: apache-2.0

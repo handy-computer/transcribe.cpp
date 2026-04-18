@@ -100,7 +100,7 @@ transcribe.cpp is validated tensor-by-tensor against the Transformers
 reference implementation on `samples/jfk.wav`. All 22 checkpointed tensors
 fall within family tolerance, and the final transcript matches the reference
 verbatim. Last validated at commit
-[`3912397`](https://github.com/handy-computer/transcribe.cpp/tree/3912397).
+[`bf0d0b7`](https://github.com/handy-computer/transcribe.cpp/tree/bf0d0b7).
 
 | Field | Value |
 | --- | --- |

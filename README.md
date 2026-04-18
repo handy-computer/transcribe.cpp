@@ -106,4 +106,4 @@ tests/                     Unit and smoke tests
 
 ## License
 
-TODO
+transcribe.cpp is MIT-licensed. See [LICENSE](LICENSE) for details.
