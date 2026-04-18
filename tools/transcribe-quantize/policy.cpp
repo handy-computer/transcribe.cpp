@@ -80,6 +80,17 @@ Bucket classify_tensor(const std::string & name) {
     {
         return Bucket::Norm;
     }
+    // Qwen3-style norm weights that don't match the "norm_" prefix rule
+    // (per-head q_norm/k_norm on attention, output RMSNorm before the
+    // tied head, pre/post encoder layer norms).
+    if (ends_with(name, ".q_norm.weight") ||
+        ends_with(name, ".k_norm.weight") ||
+        ends_with(name, ".output_norm.weight") ||
+        ends_with(name, ".ln_post.weight") ||
+        ends_with(name, ".ln_pre.weight"))
+    {
+        return Bucket::Norm;
+    }
     // Per-head positional biases — added directly to fp32 q via ggml_add
     // inside rel_pos_mhsa.
     if (ends_with(name, ".pos_bias_u") || ends_with(name, ".pos_bias_v")) {

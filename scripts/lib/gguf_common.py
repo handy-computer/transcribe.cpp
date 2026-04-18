@@ -90,6 +90,15 @@ def reference_dtype_for(
     if name.endswith(".final_norm.weight") or \
        name.endswith(".embed.norm.weight"):
         return GGMLQuantizationType.F32
+    # Qwen3-style norm weights that don't match the "norm_" prefix rule
+    # (per-head q_norm/k_norm on attention, output RMSNorm before the
+    # tied head, pre/post encoder layer norms).
+    if name.endswith(".q_norm.weight") or name.endswith(".k_norm.weight"):
+        return GGMLQuantizationType.F32
+    if name.endswith(".output_norm.weight"):
+        return GGMLQuantizationType.F32
+    if name.endswith(".ln_post.weight") or name.endswith(".ln_pre.weight"):
+        return GGMLQuantizationType.F32
     if name.endswith(".pos_bias_u") or name.endswith(".pos_bias_v"):
         return GGMLQuantizationType.F32
     if name.endswith(".pos_enc"):

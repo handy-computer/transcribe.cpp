@@ -34,6 +34,11 @@ add_library(transcribe
     arch/cohere/weights.cpp
     arch/cohere/encoder.cpp
     arch/cohere/decoder.cpp
+    arch/qwen3_asr/model.cpp
+    arch/qwen3_asr/capabilities.cpp
+    arch/qwen3_asr/weights.cpp
+    arch/qwen3_asr/encoder.cpp
+    arch/qwen3_asr/decoder.cpp
 )
 
 target_include_directories(transcribe

@@ -147,15 +147,16 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
             break;
     }
 
-    // We accept "unigram" and "bpe" (the two SentencePiece flavors NeMo
-    // Parakeet ships in practice). Both share the same decode-side
-    // semantics — the visible vocabulary already encodes the
-    // SentencePiece word-boundary marker — so a single decode path is
-    // correct for both. Recognized-but-unsupported tokenizer model
-    // strings (e.g. "wordpiece") surface as NOT_IMPLEMENTED so the
-    // caller can tell "the file is fine, the library is just not
-    // ready for this tokenizer" from "the file is broken."
-    if (model_ != "unigram" && model_ != "bpe") {
+    // We accept "unigram" and "bpe" (SentencePiece flavors used by NeMo
+    // Parakeet) and "gpt2" (llama.cpp's tag for byte-level BPE, used by
+    // Qwen3-ASR). Load-time only records the model tag plus the tokens
+    // array; per-family encode/decode paths are responsible for the
+    // tokenizer-specific pre/post-processing. Recognized-but-unsupported
+    // tokenizer model strings (e.g. "wordpiece") surface as
+    // NOT_IMPLEMENTED so the caller can tell "the file is fine, the
+    // library is just not ready for this tokenizer" from "the file is
+    // broken."
+    if (model_ != "unigram" && model_ != "bpe" && model_ != "gpt2") {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
 

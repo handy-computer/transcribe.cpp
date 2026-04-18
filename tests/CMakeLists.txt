@@ -461,6 +461,48 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 # -----------------------------------------------------------------------------
+# Qwen3-ASR structural + end-to-end tests (real-model gated)
+# -----------------------------------------------------------------------------
+#
+# Same gating shape as the Cohere tests. TRANSCRIBE_QWEN3_ASR_GGUF
+# picks the GGUF at runtime; unset → SKIP_RETURN_CODE 77. Built only
+# when TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON.
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_qwen3_asr_real_smoke
+        qwen3_asr_real_smoke.cpp)
+
+    target_link_libraries(transcribe_qwen3_asr_real_smoke
+        PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_qwen3_asr_real_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    transcribe_apply_warnings(transcribe_qwen3_asr_real_smoke)
+
+    add_test(NAME transcribe_qwen3_asr_real_smoke
+        COMMAND transcribe_qwen3_asr_real_smoke)
+    set_tests_properties(transcribe_qwen3_asr_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    add_executable(transcribe_qwen3_asr_e2e_smoke
+        qwen3_asr_e2e_smoke.cpp)
+
+    target_link_libraries(transcribe_qwen3_asr_e2e_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_qwen3_asr_e2e_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_qwen3_asr_e2e_smoke)
+
+    add_test(NAME transcribe_qwen3_asr_e2e_smoke
+        COMMAND transcribe_qwen3_asr_e2e_smoke)
+    set_tests_properties(transcribe_qwen3_asr_e2e_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Debug tensor dumper round-trip unit
 # -----------------------------------------------------------------------------
 #

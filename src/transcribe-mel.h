@@ -54,6 +54,24 @@ struct MelConfig {
     float f_max          = 8000.0f;
     std::string pad_mode = "reflect"; // "reflect" or "constant"
 
+    // STFT window shape:
+    //   "hann_symmetric" — torch.hann_window(N, periodic=False):
+    //                      cos(2*pi*k / (N-1)). Default; used by NeMo
+    //                      and Cohere.
+    //   "hann_periodic"  — torch.hann_window(N, periodic=True):
+    //                      cos(2*pi*k / N). Used by Whisper (and
+    //                      Qwen3-ASR's Whisper frontend).
+    std::string window_type = "hann_symmetric";
+
+    // Normalization mode:
+    //   "per_feature"   — NeMo: per-mel-bin zero-mean / unit-variance
+    //                     (unbiased); default.
+    //   "per_utterance" — Whisper: log10 base, global clamp to
+    //                     max - 8.0, then (x + 4) / 4. Also drops the
+    //                     trailing center-pad STFT frame so the output
+    //                     has exactly `n_samples / hop_length` frames.
+    std::string normalize = "per_feature";
+
     // Optional checkpoint-provided mel filterbank [num_mels * (n_fft/2+1)]
     // row-major, Slaney-normalised. When non-empty, used instead of
     // computing from scratch. Set by the loader when the GGUF contains
@@ -77,6 +95,12 @@ public:
     // mel buffer is resized to num_mels * n_frames in row-major
     // [num_mels, n_frames] layout.
     //
+    // n_threads controls STFT parallelism. 0 (default) auto-detects
+    // via std::thread::hardware_concurrency() capped at 8. The STFT
+    // loop is the dominant cost of compute(); the filterbank matmul
+    // is handed to cblas_sgemm and is already multi-threaded on
+    // Accelerate / OpenBLAS.
+    //
     // Returns:
     //   TRANSCRIBE_OK              normal success.
     //   TRANSCRIBE_ERR_INVALID_ARG pcm is null, or n_samples is too
@@ -88,7 +112,8 @@ public:
         size_t n_samples,
         std::vector<float> & out_mel,
         int & out_n_mels,
-        int & out_n_frames) const;
+        int & out_n_frames,
+        int n_threads = 0) const;
 
     // Number of mel bins (matches MelConfig::num_mels).
     int num_mels() const { return cfg_.num_mels; }
