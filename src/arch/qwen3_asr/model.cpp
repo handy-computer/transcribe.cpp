@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -300,8 +301,7 @@ transcribe_status load(
     gguf_free(gguf_data);
 
     // Pack gate+up into a separate ctx + backend buffer so the FFN
-    // can run a single mul_mat instead of two. QKV packing was tried
-    // here too but consistently regressed on Metal. ctx_meta is sized
+    // can run a single mul_mat instead of two. ctx_meta is sized
     // exactly for GGUF file tensors with no headroom, so packed
     // tensors live in their own context.
     {
@@ -362,6 +362,7 @@ transcribe_status load(
             ggml_backend_tensor_set(b.ffn_gate_up_w, buf.data(),
                                     gate_bytes, up_bytes);
         }
+
     }
 
     m->t_load_us = ggml_time_us() - t_load_start;
@@ -383,11 +384,27 @@ transcribe_status init_context(
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
+    cc->encoder_use_flash = false;
     cc->decoder_use_flash = true;
-    // No encoder-side flash to toggle (bidirectional encoder is
-    // graph-built without a flash_attn_ext call in the first pass).
-    bool encoder_noop = false;
-    transcribe::flash::apply_env_overrides(encoder_noop, cc->decoder_use_flash);
+    transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
+
+    // Pre-allocate KV cache at context creation so the first run
+    // doesn't pay the allocation cost inside the decode phase.
+    auto * cm = static_cast<QwenAsrModel *>(model);
+    {
+        ggml_type kv_type = GGML_TYPE_F16;
+        if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
+        if (!kv_cache_init(cc->kv_cache, cm->plan.primary,
+                           /*n_ctx=*/2048,
+                           cm->hparams.dec_n_kv_heads,
+                           cm->hparams.dec_head_dim,
+                           cm->hparams.dec_n_layers,
+                           kv_type))
+        {
+            std::fprintf(stderr, "qwen3_asr init_context: kv_cache_init failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
 
     *out_ctx = cc.release();
     return TRANSCRIBE_OK;
@@ -691,7 +708,8 @@ transcribe_status run(
 
     // ----- Build encoder graph -------------------------------------
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights,
-                                          cm->hparams, timing);
+                                          cm->hparams, timing,
+                                          cc->encoder_use_flash);
     if (eb.graph == nullptr || eb.out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -733,8 +751,16 @@ transcribe_status run(
     // Attention mask (block-diagonal from cu_seqlens).
     {
         std::vector<float> mask = build_cu_seqlens_mask(timing, cm->hparams);
-        ggml_backend_tensor_set(eb.mask_in, mask.data(),
-                                0, mask.size() * sizeof(float));
+        if (cc->encoder_use_flash) {
+            std::vector<ggml_fp16_t> mask_f16(mask.size());
+            for (size_t i = 0; i < mask.size(); ++i)
+                mask_f16[i] = ggml_fp32_to_fp16(mask[i]);
+            ggml_backend_tensor_set(eb.mask_in, mask_f16.data(),
+                                    0, mask_f16.size() * sizeof(ggml_fp16_t));
+        } else {
+            ggml_backend_tensor_set(eb.mask_in, mask.data(),
+                                    0, mask.size() * sizeof(float));
+        }
     }
 
     // Thread count.

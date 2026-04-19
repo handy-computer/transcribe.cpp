@@ -152,9 +152,7 @@ struct QwenAsrContext final : public transcribe_context {
 
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
-    // Qwen3-ASR ships no cross-attention, so there is no encoder-side
-    // flash policy to reason about. The LM uses standard GQA attention;
-    // we default flash on and let the env-var overrides flip it.
+    bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
     QwenAsrContext() = default;

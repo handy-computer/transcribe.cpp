@@ -176,7 +176,8 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
                               ggml_tensor *          mask,
                               const QwenAsrEncBlock & w,
                               int                    d_model,
-                              int                    n_heads)
+                              int                    n_heads,
+                              bool                   use_flash)
 {
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
@@ -189,43 +190,31 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
     ggml_tensor * k = linear(ctx, x_norm, w.attn_k_w, w.attn_k_b);
     ggml_tensor * v = linear(ctx, x_norm, w.attn_v_w, w.attn_v_b);
 
-    // Split heads: [d_model, T] -> [head_dim, n_heads, T, 1] -> permute
-    // to [head_dim, T, n_heads, 1] for (manual) attention.
+    // Split heads: [d_model, T] -> [head_dim, n_heads, T, 1]
     q = ggml_reshape_4d(ctx, q, head_dim, n_heads, T, 1);
     k = ggml_reshape_4d(ctx, k, head_dim, n_heads, T, 1);
     v = ggml_reshape_4d(ctx, v, head_dim, n_heads, T, 1);
 
+    // Permute to [head_dim, T, n_heads, 1] for attention.
     q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
     k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
     v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
 
-    // KQ = K^T @ Q over head_dim. mul_mat(K, Q) with K [head_dim, T, n_heads]
-    // and Q [head_dim, T, n_heads] computes (q_row . k_row) for every
-    // pair, yielding ne=[T_k, T_q, n_heads, 1].
-    //
-    // Note: we tried swapping this for ggml_flash_attn_ext (with
-    // PREC_F32 + K/V cast to F16). It saved ~3 ms on encode but
-    // tipped a handful of argmaxes in the 28-layer LM, flipping 1
-    // punctuation token on jfk.wav and 3 characters on dots.wav. Not
-    // worth the transcript drift.
-    ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-
-    // soft_max_ext fuses the scale and additive mask. mask ne=[T, T, 1, 1]
-    // broadcasts across the n_heads axis.
-    ggml_tensor * kq_soft =
-        ggml_soft_max_ext(ctx, kq, mask, scale, /*max_bias=*/0.0f);
-
-    // V needs transpose for the second matmul: [head_dim, T, n_heads]
-    // -> [T, head_dim, n_heads].
-    ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
-
-    // o = attn_weights @ V: [head_dim, T, n_heads, 1]
-    ggml_tensor * o = ggml_mul_mat(ctx, v_t, kq_soft);
-
-    // Merge heads: [head_dim, T, n_heads] -> [head_dim, n_heads, T] ->
-    // [d_model, T].
-    o = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
-    o = ggml_reshape_2d(ctx, o, d_model, T);
+    ggml_tensor * o;
+    if (use_flash) {
+        o = ggml_flash_attn_ext(ctx, q, k, v, mask,
+                                scale, /*max_bias=*/0.0f,
+                                /*logit_softcap=*/0.0f);
+        o = ggml_reshape_2d(ctx, o, d_model, T);
+    } else {
+        ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+        ggml_tensor * kq_soft =
+            ggml_soft_max_ext(ctx, kq, mask, scale, /*max_bias=*/0.0f);
+        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
+        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        o = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
+        o = ggml_reshape_2d(ctx, o, d_model, T);
+    }
 
     o = linear(ctx, o, w.attn_out_w, w.attn_out_b);
 
@@ -246,7 +235,8 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
 EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  const QwenAsrWeights & weights,
                                  const QwenAsrHParams & hp,
-                                 const EncoderTiming &  timing)
+                                 const EncoderTiming &  timing,
+                                 bool                   use_flash)
 {
     EncoderBuild eb {};
     eb.timing = timing;
@@ -301,7 +291,8 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     named(eb.pos_emb_in, "enc.pos_emb.in");
     ggml_set_input(eb.pos_emb_in);
 
-    eb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+    eb.mask_in = ggml_new_tensor_2d(ctx,
+                                    use_flash ? GGML_TYPE_F16 : GGML_TYPE_F32,
                                     T_enc_padded, T_enc_padded);
     named(eb.mask_in, "enc.attn_mask.in");
     ggml_set_input(eb.mask_in);
@@ -399,7 +390,8 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     for (int i = 0; i < n_layers; ++i) {
         x = build_enc_block(ctx, x, eb.mask_in, weights.enc_blocks[i],
                             static_cast<int>(d_model),
-                            static_cast<int>(n_heads));
+                            static_cast<int>(n_heads),
+                            use_flash);
         if (i == 0) {
             named(x, "enc.block.0.out");
             eb.dumps.block_0_out = x;

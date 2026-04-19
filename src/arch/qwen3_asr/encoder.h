@@ -101,6 +101,7 @@ struct EncoderBuild {
 EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  const QwenAsrWeights & weights,
                                  const QwenAsrHParams & hp,
-                                 const EncoderTiming &  timing);
+                                 const EncoderTiming &  timing,
+                                 bool                   use_flash = false);
 
 } // namespace transcribe::qwen3_asr

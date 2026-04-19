@@ -49,7 +49,7 @@ void print_usage(const char * argv0) {
         "  --warmup N         untimed warmup iterations (default 1)\n"
         "  --json-out PATH    write result JSON here (default: stdout)\n"
         "  --quiet            suppress progress lines on stderr\n"
-        "  --threads N        CPU threads (default 0 = all cores)\n"
+        "  --threads N        CPU threads (default 0 = library default)\n"
         "  --backend KIND     request a specific backend: auto|cpu|metal|vulkan\n"
         "                     (default auto). cpu is strict CPU — no GPU,\n"
         "                     no BLAS/AMX.\n"
