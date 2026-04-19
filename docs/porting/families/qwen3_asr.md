@@ -292,7 +292,10 @@ Benchmarks:
 
 ```bash
 # See docs/tools/benchmarking.md for the benchmarking harness.
-uv run scripts/bench/run.py --family qwen3_asr
+# Qwen3-ASR ships BF16 (no F16), so pass bf16 explicitly in --quants.
+uv run scripts/bench/run.py \
+  --models Qwen3-ASR-0.6B,Qwen3-ASR-1.7B \
+  --quants bf16,q8_0,q4_k_m
 ```
 
 ## Upstream Benchmarks

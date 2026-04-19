@@ -23,7 +23,7 @@ Benchmark reports should include:
 
 - schema version
 - git SHA and dirty flag
-- family, variant, quant, backend, sample
+- variant, quant, backend, sample
 - model path or model id
 - audio path and sha256
 - host OS, CPU, RAM, GPU, backend runtime
@@ -49,17 +49,22 @@ Current C++ benchmark shape:
 
 ```bash
 uv run scripts/bench/run.py \
-  --family <family> \
-  --samples jfk \
-  --out reports/bench/<machine>/<family>.json
+  --models <variant> \
+  --samples jfk
 ```
+
+`<variant>` is the directory slug under `models/` (e.g.
+`parakeet-tdt-0.6b-v3`, `Qwen3-ASR-0.6B`) or the HF-style
+`<org>/<variant>` slug; see [benchmarking.md](../tools/benchmarking.md)
+for the full CLI. Output lands at
+`reports/perf/<machine-slug>/<prefix>_<variant>_<backend>.json`.
 
 Candidate comparison shape:
 
 ```bash
 uv run scripts/bench/compare.py \
-  --baseline reports/bench/<machine>/<family>.baseline.json \
-  --candidate reports/bench/<machine>/<family>.candidate.json
+  --baseline reports/perf/<machine-slug>/<baseline>_<variant>_<backend>.json \
+  --candidate reports/perf/<machine-slug>/<candidate>_<variant>_<backend>.json
 ```
 
 Reference implementation benchmarks may need a family-specific runner

@@ -93,8 +93,14 @@ filename for you via `slug_from_repo_id()` + `gguf_name()` in
 `scripts/lib/gguf_common.py`. Quantized siblings live next to the
 accuracy GGUF under the same `<slug>/` directory.
 
-Tools that discover a GGUF by `--family` (`scripts/validate.py`,
-`scripts/bench/run.py`) scan `models/*/` and filter by `stem.startswith(family)`.
+Downstream tools locate GGUFs through this layout:
+
+- `scripts/validate.py` takes `--family` (and optional `--variant`) and
+  scans `models/*/` for dirs whose slug starts with the family name.
+- `scripts/bench/run.py` takes `--models <slug>` (short form like
+  `Qwen3-ASR-0.6B` or HF form like `Qwen/Qwen3-ASR-0.6B`) and resolves
+  directly to `models/<slug>/`; if `--models` is omitted, every dir
+  under `models/*/` is benched.
 
 ## First-GGUF rule
 

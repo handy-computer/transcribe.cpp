@@ -7,14 +7,14 @@
 compare.py - compare bench reports and show a timing delta table.
 
 Takes two explicit sets of report files: baseline(s) and candidate(s).
-Each set is merged by (family, backend, quant, sample) key; if the
+Each set is merged by (variant, backend, quant, sample) key; if the
 same cell appears in multiple files within a set, the last one wins.
 The merged baseline is diffed against the merged candidate.
 
 Usage:
     uv run scripts/bench/compare.py \\
-        --baseline reports/perf/apple-m4-max/pre-refactor_parakeet_metal.json \\
-        --candidate reports/perf/apple-m4-max/post-refactor_parakeet_metal.json
+        --baseline reports/perf/apple-m4-max/pre-refactor_parakeet-tdt-0.6b-v3_metal.json \\
+        --candidate reports/perf/apple-m4-max/post-refactor_parakeet-tdt-0.6b-v3_metal.json
 
     # Multiple files per side (e.g. shell glob):
     uv run scripts/bench/compare.py \\
@@ -30,10 +30,10 @@ Output:
 
     baseline: pre-refactor (abc1234)  vs  post-refactor (def5678)
 
-    family     backend  quant     sample   wall_ms(A)  wall_ms(B)   delta%  status
-    parakeet   metal    f16       jfk         120.3       115.1      -4.3%  ok
-    parakeet   metal    q8_0     jfk         105.2       108.7      +3.3%  ok
-    cohere     metal    f16       jfk         340.1       289.4     -14.9%  ok
+    variant                backend  quant    sample   wall_ms(A)  wall_ms(B)   delta%  status
+    parakeet-tdt-0.6b-v3   metal    f16      jfk         120.3       115.1      -4.3%  ok
+    parakeet-tdt-0.6b-v3   metal    q8_0     jfk         105.2       108.7      +3.3%  ok
+    Qwen3-ASR-0.6B         metal    q8_0     dots        340.1       289.4     -14.9%  ok
 
 Options:
     --threshold PCT     fail (exit 1) if any cell regresses by more than PCT%
@@ -55,18 +55,18 @@ from pathlib import Path
 
 @dataclass(slots=True)
 class RunKey:
-    family: str
+    variant: str
     backend: str
     quant: str
     sample: str
 
     def __hash__(self) -> int:
-        return hash((self.family, self.backend, self.quant, self.sample))
+        return hash((self.variant, self.backend, self.quant, self.sample))
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, RunKey):
             return NotImplemented
-        return (self.family == other.family and self.backend == other.backend
+        return (self.variant == other.variant and self.backend == other.backend
                 and self.quant == other.quant and self.sample == other.sample)
 
 
@@ -117,7 +117,10 @@ def load_report(path: Path) -> tuple[str, str, dict[RunKey, RunValue]]:
     if schema == "transcribe-bench-driver-v1":
         label = data.get("name") or path.stem
         git_sha = data.get("git_sha", "unknown")
-        family = data.get("family", "unknown")
+        # New reports store `variant` (e.g. "Qwen3-ASR-0.6B"); legacy
+        # reports stored `family` (e.g. "parakeet"). Accept either so
+        # compare works across the schema change.
+        variant = data.get("variant") or data.get("family") or "unknown"
         backend = data.get("backend", "unknown")
 
         for r in data.get("runs", []):
@@ -125,7 +128,7 @@ def load_report(path: Path) -> tuple[str, str, dict[RunKey, RunValue]]:
             quant = parse_quant_from_path(r.get("model_path", ""))
             sample = sample_stem(r.get("sample_path", ""))
             rtf = r.get("rtf_wall_mean") or r.get("rtf_mean") or 0.0
-            key = RunKey(family=family, backend=backend, quant=quant,
+            key = RunKey(variant=variant, backend=backend, quant=quant,
                          sample=sample)
             runs[key] = RunValue(
                 wall_ms=extract_mean(summary, "wall_ms"),
@@ -143,9 +146,11 @@ def load_report(path: Path) -> tuple[str, str, dict[RunKey, RunValue]]:
         backend = data.get("backend", "unknown")
         quant = parse_quant_from_path(data.get("model_path", ""))
         sample = sample_stem(data.get("sample_path", ""))
-        family = Path(data.get("model_path", "")).parent.name or "unknown"
+        # Raw bench cells don't carry a variant field; the model path's
+        # parent dir is the canonical variant slug (e.g. "Qwen3-ASR-0.6B").
+        variant = Path(data.get("model_path", "")).parent.name or "unknown"
         rtf = data.get("rtf_wall_mean") or data.get("rtf_mean") or 0.0
-        key = RunKey(family=family, backend=backend, quant=quant,
+        key = RunKey(variant=variant, backend=backend, quant=quant,
                      sample=sample)
         runs[key] = RunValue(
             wall_ms=extract_mean(summary, "wall_ms"),
@@ -235,10 +240,10 @@ def main() -> int:
     # Collect all keys from both sides.
     all_keys = sorted(
         base_runs.keys() | cand_runs.keys(),
-        key=lambda k: (k.family, k.backend, k.quant, k.sample),
+        key=lambda k: (k.variant, k.backend, k.quant, k.sample),
     )
 
-    header = ("family", "backend", "quant", "sample",
+    header = ("variant", "backend", "quant", "sample",
               f"{field}(A)", f"{field}(B)", "delta%", "status")
     rows: list[tuple[str, ...]] = []
     regressions: list[tuple[RunKey, float]] = []
@@ -249,12 +254,12 @@ def main() -> int:
         cv = cand_runs.get(key)
 
         if bv is None:
-            rows.append((key.family, key.backend, key.quant, key.sample,
+            rows.append((key.variant, key.backend, key.quant, key.sample,
                          "-", f"{get_field(cv, field):.1f}", "new", "new"))
             missing_cells.append((key, "new"))
             continue
         if cv is None:
-            rows.append((key.family, key.backend, key.quant, key.sample,
+            rows.append((key.variant, key.backend, key.quant, key.sample,
                          f"{get_field(bv, field):.1f}", "-", "gone", "gone"))
             missing_cells.append((key, "gone"))
             continue
@@ -273,7 +278,7 @@ def main() -> int:
             regressions.append((key, delta_pct))
 
         delta_str = f"{delta_pct:+.1f}%"
-        rows.append((key.family, key.backend, key.quant, key.sample,
+        rows.append((key.variant, key.backend, key.quant, key.sample,
                      f"{a:.1f}", f"{b:.1f}", delta_str, status))
 
     if not rows:
@@ -310,7 +315,7 @@ def main() -> int:
         print(f"\n{len(regressions)} regression(s) exceed "
               f"threshold {args.threshold:.1f}%:")
         for key, pct in regressions:
-            print(f"  {key.family}/{key.backend}/{key.quant}/{key.sample}"
+            print(f"  {key.variant}/{key.backend}/{key.quant}/{key.sample}"
                   f": {pct:+.1f}%")
         exit_code = 1
 

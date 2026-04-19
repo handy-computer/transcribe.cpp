@@ -86,7 +86,7 @@ Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
-  --family cohere \
+  --models cohere-transcribe-03-2026 \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
   --backends metal,cpu,vulkan \
