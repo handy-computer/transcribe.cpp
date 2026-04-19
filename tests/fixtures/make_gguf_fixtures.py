@@ -855,6 +855,314 @@ COHERE_TOKEN_IDS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Toy qwen3_asr hparams + tensor catalog
+# ---------------------------------------------------------------------------
+#
+# Audio-LLM pattern: audio encoder (3x Conv2d subsampler + N transformer
+# blocks + LN/proj1/proj2 head) and a Qwen3 causal LM decoder with
+# GQA + per-head Q/K-RMSNorm + SwiGLU + tied lm_head. All cross-field
+# invariants the loader enforces are honored here:
+#
+#   enc_d_model % enc_n_heads == 0
+#   dec_n_heads % dec_n_kv_heads == 0
+#   dec_hidden_act in {silu, swish}
+#   enc_activation == "gelu"
+#   fe_type == "mel"
+#   dec_tie_word_embeddings == true  (Phase 1.2 load-time assertion)
+#   mrope_section_{t,h,w} sum to dec_head_dim / 2
+#   enc_output_dim == dec_hidden     (Phase 4.1 load-time assertion)
+#
+# Tokenizer carries the chat-template pieces the Phase 1.6 resolver
+# requires (<|im_start|>, <|im_end|>, Ċ, system, user, assistant) and
+# valid in-range ids for audio_{start,end,pad}_token_id.
+
+QWEN3_ASR_HP = {
+    # Audio encoder.
+    "enc_n_layers":              2,
+    "enc_d_model":               16,
+    "enc_n_heads":               2,   # head_dim = 8
+    "enc_ffn_dim":               32,
+    "enc_num_mel_bins":          8,
+    "enc_downsample_hidden":     16,
+    "enc_output_dim":            16,  # must equal dec_hidden
+    "enc_max_source_positions":  64,
+    "enc_n_window":              2,
+    "enc_n_window_infer":        4,
+    "enc_conv_chunksize":        8,
+    "enc_activation":            "gelu",
+
+    # Text LM.
+    "dec_n_layers":                2,
+    "dec_hidden":                  16,
+    "dec_intermediate":            32,
+    "dec_n_heads":                 2,   # GQA: 2 / 1
+    "dec_n_kv_heads":              1,
+    "dec_head_dim":                8,
+    "dec_hidden_act":              "silu",
+    "dec_rms_norm_eps":            1e-6,
+    "dec_rope_theta":              10000.0,
+    "dec_rope_mrope_section_t":    2,   # 2 + 1 + 1 == 4 == head_dim/2
+    "dec_rope_mrope_section_h":    1,
+    "dec_rope_mrope_section_w":    1,
+    "dec_rope_mrope_interleaved":  True,
+    "dec_max_position_embeddings": 128,
+    "dec_tie_word_embeddings":     True,
+    "dec_vocab_size":              32,
+
+    # Audio-injection ids (indices into the toy vocab).
+    "audio_start_token_id": 16,
+    "audio_end_token_id":   17,
+    "audio_token_id":       18,
+
+    # Frontend (Whisper-style toy mel; same shape as Qwen3-ASR 0.6B in
+    # structure, not in numeric size).
+    "fe_type":         "mel",
+    "fe_num_mels":     8,
+    "fe_sample_rate":  16000,
+    "fe_n_fft":        16,
+    "fe_win_length":   8,
+    "fe_hop_length":   4,
+    "fe_window":       "hann_periodic",
+    "fe_normalize":    "per_utterance",
+    "fe_dither":       0.0,
+    "fe_pre_emphasis": 0.0,
+    "fe_f_min":        0.0,
+    "fe_f_max":        8000.0,
+    "fe_pad_mode":     "reflect",
+    "fe_mel_norm":     "slaney",
+    "fe_center":       True,
+    "fe_chunk_length": 30,
+    "fe_n_samples":    480000,
+    "fe_nb_max_frames": 3000,
+}
+
+
+# 32-token toy vocab. IDs chosen so:
+#   id  3 -> "<|im_end|>"     (also used as eos_token_id)
+#   id  4 -> "\xc4\x8a"       (Ċ: byte-level encoded newline)
+#   id 16 -> "<|audio_start|>"
+#   id 17 -> "<|audio_end|>"
+#   id 18 -> "<|audio_pad|>"
+# These pins line up with QWEN3_ASR_HP["audio_*_token_id"] and the
+# chat-template pieces resolve_chat_tokens() looks up at load.
+QWEN3_ASR_VOCAB: list[str] = [
+    "<|unk|>",         # 0
+    "<|pad|>",         # 1
+    "<|im_start|>",    # 2
+    "<|im_end|>",      # 3  (eos)
+    "\u010a",          # 4  (Ċ -- byte-level \n; UTF-8: c4 8a)
+    "system",          # 5
+    "user",            # 6
+    "assistant",       # 7
+    "\u2581hello",     # 8
+    "\u2581world",     # 9
+    "\u2581foo",       # 10
+    "\u2581bar",       # 11
+    "\u2581baz",       # 12
+    "\u2581the",       # 13
+    "\u2581a",         # 14
+    ".",               # 15
+    "<|audio_start|>", # 16
+    "<|audio_end|>",   # 17
+    "<|audio_pad|>",   # 18
+    "<|unused_19|>",   # 19
+    "<|unused_20|>",   # 20
+    "<|unused_21|>",   # 21
+    "<|unused_22|>",   # 22
+    "<|unused_23|>",   # 23
+    "<|unused_24|>",   # 24
+    "<|unused_25|>",   # 25
+    "<|unused_26|>",   # 26
+    "<|unused_27|>",   # 27
+    "<|unused_28|>",   # 28
+    "<|unused_29|>",   # 29
+    "<|unused_30|>",   # 30
+    "<|unused_31|>",   # 31
+]
+
+# llama.cpp token_type codes: 1=NORMAL, 3=CONTROL, 4=USER_DEFINED,
+# 5=UNUSED. Keep it simple here — the loader only checks that the
+# lengths match n_tokens; the smoke test does not introspect types.
+QWEN3_ASR_TOKEN_TYPES = [3 if QWEN3_ASR_VOCAB[i].startswith("<|") else 1
+                         for i in range(len(QWEN3_ASR_VOCAB))]
+
+
+def _qwen3_asr_hparams_kv() -> list[bytes]:
+    hp = QWEN3_ASR_HP
+    return [
+        # Audio encoder.
+        _pack_kv_uint32("stt.qwen3_asr.encoder.n_layers",             hp["enc_n_layers"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.d_model",              hp["enc_d_model"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.n_heads",              hp["enc_n_heads"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.ffn_dim",              hp["enc_ffn_dim"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.num_mel_bins",         hp["enc_num_mel_bins"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.downsample_hidden",    hp["enc_downsample_hidden"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.output_dim",           hp["enc_output_dim"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.max_source_positions", hp["enc_max_source_positions"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.n_window",             hp["enc_n_window"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.n_window_infer",       hp["enc_n_window_infer"]),
+        _pack_kv_uint32("stt.qwen3_asr.encoder.conv_chunksize",       hp["enc_conv_chunksize"]),
+        _pack_kv_string("stt.qwen3_asr.encoder.activation",           hp["enc_activation"]),
+        # Text LM.
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.n_layers",                hp["dec_n_layers"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.hidden_size",             hp["dec_hidden"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.intermediate_size",       hp["dec_intermediate"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.n_heads",                 hp["dec_n_heads"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.n_kv_heads",              hp["dec_n_kv_heads"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.head_dim",                hp["dec_head_dim"]),
+        _pack_kv_string ("stt.qwen3_asr.decoder.hidden_act",              hp["dec_hidden_act"]),
+        _pack_kv_float32("stt.qwen3_asr.decoder.rms_norm_eps",            hp["dec_rms_norm_eps"]),
+        _pack_kv_float32("stt.qwen3_asr.decoder.rope_theta",              hp["dec_rope_theta"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.rope_mrope_section_t",    hp["dec_rope_mrope_section_t"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.rope_mrope_section_h",    hp["dec_rope_mrope_section_h"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.rope_mrope_section_w",    hp["dec_rope_mrope_section_w"]),
+        _pack_kv_bool   ("stt.qwen3_asr.decoder.rope_mrope_interleaved",  hp["dec_rope_mrope_interleaved"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.max_position_embeddings", hp["dec_max_position_embeddings"]),
+        _pack_kv_bool   ("stt.qwen3_asr.decoder.tie_word_embeddings",     hp["dec_tie_word_embeddings"]),
+        _pack_kv_uint32 ("stt.qwen3_asr.decoder.vocab_size",              hp["dec_vocab_size"]),
+        # Audio-injection ids.
+        _pack_kv_uint32("stt.qwen3_asr.audio_token_id",       hp["audio_token_id"]),
+        _pack_kv_uint32("stt.qwen3_asr.audio_start_token_id", hp["audio_start_token_id"]),
+        _pack_kv_uint32("stt.qwen3_asr.audio_end_token_id",   hp["audio_end_token_id"]),
+        # Frontend.
+        _pack_kv_string ("stt.frontend.type",          hp["fe_type"]),
+        _pack_kv_uint32 ("stt.frontend.num_mels",      hp["fe_num_mels"]),
+        _pack_kv_uint32 ("stt.frontend.sample_rate",   hp["fe_sample_rate"]),
+        _pack_kv_uint32 ("stt.frontend.n_fft",         hp["fe_n_fft"]),
+        _pack_kv_uint32 ("stt.frontend.win_length",    hp["fe_win_length"]),
+        _pack_kv_uint32 ("stt.frontend.hop_length",    hp["fe_hop_length"]),
+        _pack_kv_string ("stt.frontend.window",        hp["fe_window"]),
+        _pack_kv_string ("stt.frontend.normalize",     hp["fe_normalize"]),
+        _pack_kv_float32("stt.frontend.dither",        hp["fe_dither"]),
+        _pack_kv_float32("stt.frontend.pre_emphasis",  hp["fe_pre_emphasis"]),
+        _pack_kv_float32("stt.frontend.f_min",         hp["fe_f_min"]),
+        _pack_kv_float32("stt.frontend.f_max",         hp["fe_f_max"]),
+        _pack_kv_string ("stt.frontend.pad_mode",      hp["fe_pad_mode"]),
+        _pack_kv_string ("stt.frontend.mel_norm",      hp["fe_mel_norm"]),
+        _pack_kv_bool   ("stt.frontend.center",        hp["fe_center"]),
+        _pack_kv_uint32 ("stt.frontend.chunk_length",  hp["fe_chunk_length"]),
+        _pack_kv_uint32 ("stt.frontend.n_samples",     hp["fe_n_samples"]),
+        _pack_kv_uint32 ("stt.frontend.nb_max_frames", hp["fe_nb_max_frames"]),
+    ]
+
+
+def _qwen3_asr_tensor_descriptors() -> list[tuple[str, list[int]]]:
+    hp        = QWEN3_ASR_HP
+    d_model   = hp["enc_d_model"]
+    ffn_dim   = hp["enc_ffn_dim"]
+    ds_h      = hp["enc_downsample_hidden"]
+    n_mels    = hp["enc_num_mel_bins"]
+    out_dim   = hp["enc_output_dim"]
+    mel_ds1   = (n_mels + 1) // 2
+    mel_ds2   = (mel_ds1 + 1) // 2
+    mel_ds3   = (mel_ds2 + 1) // 2
+    conv_out_in = ds_h * mel_ds3
+    enc_layers = hp["enc_n_layers"]
+
+    dec_h   = hp["dec_hidden"]
+    dec_nh  = hp["dec_n_heads"]
+    dec_nkv = hp["dec_n_kv_heads"]
+    dec_hd  = hp["dec_head_dim"]
+    dec_im  = hp["dec_intermediate"]
+    q_out   = dec_nh  * dec_hd
+    kv_out  = dec_nkv * dec_hd
+    dec_layers = hp["dec_n_layers"]
+    vocab      = hp["dec_vocab_size"]
+
+    out: list[tuple[str, list[int]]] = []
+
+    # Encoder subsample.
+    out += [
+        ("enc.conv.0.weight", [3, 3, 1,    ds_h]),
+        ("enc.conv.0.bias",   [ds_h]),
+        ("enc.conv.1.weight", [3, 3, ds_h, ds_h]),
+        ("enc.conv.1.bias",   [ds_h]),
+        ("enc.conv.2.weight", [3, 3, ds_h, ds_h]),
+        ("enc.conv.2.bias",   [ds_h]),
+        ("enc.conv_out.weight", [conv_out_in, d_model]),
+    ]
+
+    # Encoder blocks.
+    for i in range(enc_layers):
+        out += [
+            (f"enc.blocks.{i}.norm_attn.weight",    [d_model]),
+            (f"enc.blocks.{i}.norm_attn.bias",      [d_model]),
+            (f"enc.blocks.{i}.attn.q.weight",       [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.q.bias",         [d_model]),
+            (f"enc.blocks.{i}.attn.k.weight",       [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.k.bias",         [d_model]),
+            (f"enc.blocks.{i}.attn.v.weight",       [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.v.bias",         [d_model]),
+            (f"enc.blocks.{i}.attn.out.weight",     [d_model, d_model]),
+            (f"enc.blocks.{i}.attn.out.bias",       [d_model]),
+            (f"enc.blocks.{i}.norm_ffn.weight",     [d_model]),
+            (f"enc.blocks.{i}.norm_ffn.bias",       [d_model]),
+            (f"enc.blocks.{i}.ffn.fc1.weight",      [d_model, ffn_dim]),
+            (f"enc.blocks.{i}.ffn.fc1.bias",        [ffn_dim]),
+            (f"enc.blocks.{i}.ffn.fc2.weight",      [ffn_dim, d_model]),
+            (f"enc.blocks.{i}.ffn.fc2.bias",        [d_model]),
+        ]
+
+    # Encoder head.
+    out += [
+        ("enc.ln_post.weight", [d_model]),
+        ("enc.ln_post.bias",   [d_model]),
+        ("enc.proj1.weight",   [d_model, d_model]),
+        ("enc.proj1.bias",     [d_model]),
+        ("enc.proj2.weight",   [d_model, out_dim]),
+        ("enc.proj2.bias",     [out_dim]),
+    ]
+
+    # Decoder embed (tied to lm_head).
+    out += [("dec.token_embd.weight", [dec_h, vocab])]
+
+    # Decoder blocks.
+    for i in range(dec_layers):
+        out += [
+            (f"dec.blocks.{i}.norm_attn.weight",    [dec_h]),
+            (f"dec.blocks.{i}.norm_ffn.weight",     [dec_h]),
+            (f"dec.blocks.{i}.attn.q.weight",       [dec_h, q_out]),
+            (f"dec.blocks.{i}.attn.k.weight",       [dec_h, kv_out]),
+            (f"dec.blocks.{i}.attn.v.weight",       [dec_h, kv_out]),
+            (f"dec.blocks.{i}.attn.o.weight",       [q_out, dec_h]),
+            (f"dec.blocks.{i}.attn.q_norm.weight",  [dec_hd]),
+            (f"dec.blocks.{i}.attn.k_norm.weight",  [dec_hd]),
+            (f"dec.blocks.{i}.ffn.gate.weight",     [dec_h, dec_im]),
+            (f"dec.blocks.{i}.ffn.up.weight",       [dec_h, dec_im]),
+            (f"dec.blocks.{i}.ffn.down.weight",     [dec_im, dec_h]),
+        ]
+
+    # Decoder final norm (no tied lm_head tensor; the graph reuses
+    # dec.token_embd.weight).
+    out += [("dec.output_norm.weight", [dec_h])]
+
+    return out
+
+
+def _qwen3_asr_tensors() -> list[Tensor]:
+    descriptors = _qwen3_asr_tensor_descriptors()
+    tensors: list[Tensor] = []
+    for idx, (name, ne) in enumerate(descriptors):
+        n_elem = 1
+        for d in ne:
+            n_elem *= d
+        tensors.append(
+            Tensor(name, ne, GGML_TYPE_F32, _f32_seq(n_elem, idx))
+        )
+    return tensors
+
+
+# Minimal non-empty Qwen3-ASR chat-template string. The real template
+# is ~80 lines of Jinja; the fixture just needs a non-empty string so
+# the optional read succeeds. The smoke test does not render it.
+QWEN3_ASR_CHAT_TEMPLATE = (
+    "{% for m in messages %}<|im_start|>{{ m.role }}\n"
+    "{{ m.content }}<|im_end|>\n{% endfor %}"
+    "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
+)
+
+
 def _write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -1047,6 +1355,51 @@ def emit_fixtures(out_dir: Path) -> None:
                 *cohere_hparams_kv,
             ],
             cohere_tensors,
+        ),
+    )
+
+    # Qwen3-ASR minimal fixture. Byte-level BPE tokenizer ("gpt2" model
+    # tag), 32-token toy vocab with the chat-template pieces the Phase
+    # 1.6 resolver requires, 2 encoder blocks + 2 decoder blocks at toy
+    # dims, all cross-field invariants honored. Exercises the full
+    # load pipeline: tokenizer, chat_template KV, chat-token resolution,
+    # hparams (including the tie_word_embeddings + mrope_section
+    # invariants), build_qwen3_asr_weights, backend alloc, ffn_gate_up
+    # packing, final capabilities.
+    qwen3_asr_tokenizer_kv = [
+        _pack_kv_string("tokenizer.ggml.model", "gpt2"),
+        _pack_kv_array_string("tokenizer.ggml.tokens", QWEN3_ASR_VOCAB),
+        _pack_kv_array_int32("tokenizer.ggml.token_type", QWEN3_ASR_TOKEN_TYPES),
+        _pack_kv_uint32("tokenizer.ggml.unknown_token_id", 0),
+        # eos = <|im_end|>. No bos for Qwen3 (chat template provides it).
+        _pack_kv_uint32("tokenizer.ggml.eos_token_id", 3),
+    ]
+    qwen3_asr_hparams_kv = _qwen3_asr_hparams_kv()
+    qwen3_asr_tensors    = _qwen3_asr_tensors()
+
+    _write(
+        out_dir / "arch_qwen3_asr_minimal.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "qwen3_asr"),
+                _pack_kv_string("stt.variant",          "qwen3-asr-toy"),
+                _pack_kv_string("tokenizer.chat_template",
+                                QWEN3_ASR_CHAT_TEMPLATE),
+                # Capabilities: match the family note. The loader reads
+                # general.languages as factual detection coverage; the
+                # run() handler rejects any explicit language hint with
+                # TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE until the prompt
+                # renderer honors them (Phase 1.1 Option A).
+                _pack_kv_bool("stt.capability.lang_detect", True),
+                _pack_kv_array_string(
+                    "general.languages",
+                    ["en", "zh", "ja", "de"],
+                ),
+                *qwen3_asr_tokenizer_kv,
+                *qwen3_asr_hparams_kv,
+            ],
+            qwen3_asr_tensors,
         ),
     )
 

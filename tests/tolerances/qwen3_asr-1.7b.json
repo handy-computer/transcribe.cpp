@@ -1,20 +1,18 @@
 {
   "_comment": [
-    "Qwen3-ASR per-tensor tolerances for compare_tensors.py.",
+    "Qwen3-ASR 1.7B per-tensor tolerances for compare_tensors.py.",
     "",
     "Reference: Alibaba qwen_asr v0.0.6 (author repo, transformers host)",
     "running BF16 inference on CPU.",
     "C++: ggml CPU compute, weights stored as BF16 in the accuracy GGUF.",
     "",
-    "Starting budgets were set from observed reference min/max/mean and",
-    "mirror Cohere's scale for the same dump-point shapes (see",
-    "docs/porting/0-porting.md stage 7). They will be tightened as real",
-    "C++ dumps land. Dump points follow the audio-llm pattern:",
+    "Dump points follow the audio-llm pattern (final encoder block is",
+    "enc.block.23.out for the 1.7B variant, not .17):",
     "  enc.mel.in            - input log-mel after frontend normalization",
     "  enc.subsample.out     - after 3x Conv2d downsampler + flatten + linear",
     "  enc.pos_add.out       - after sinusoidal position add",
     "  enc.block.0.out       - first encoder block output",
-    "  enc.block.17.out      - final encoder block output",
+    "  enc.block.23.out      - final encoder block output (1.7B has 24 layers)",
     "  enc.ln_post.out       - after final LayerNorm",
     "  enc.proj.out          - after proj1 + GELU + proj2 (d=output_dim)",
     "  dec.token_emb         - LM input embedding pre-injection",
@@ -25,14 +23,19 @@
     "  dec.logits_raw        - pre-softmax next-token logits",
     "  dec.logits            - post-log-softmax (use inf tolerance)",
     "",
-    "",
-    "This variant (1.7B) is 2x wider than 0.6B so BF16-accumulation drift",
-    "scales with it. Tolerances here are ~4x the 0.6B values, which covers",
-    "observed first-pass diffs with margin."
+    "Sizing rationale:",
+    "  - enc.mel.in is pre-model and bit-identical to the 0.6B path;",
+    "    budget matches the 0.6B file exactly.",
+    "  - Post-conv / post-accumulation tensors can grow with model",
+    "    width. Budgets below start from the 0.6B values scaled up",
+    "    where the wider hidden / FFN meaningfully accumulates more",
+    "    BF16 drift, and stay tight where the op-graph is shape-",
+    "    invariant to model width. Tighten further against observed",
+    "    max_abs × ~1.5 once 1.7B CPP dumps land."
   ],
   "enc.mel.in": {
-    "max_abs": 0.08,
-    "mean_abs": 0.008
+    "max_abs": 0.02,
+    "mean_abs": 0.002
   },
   "enc.subsample.out": {
     "max_abs": 0.6,
@@ -46,7 +49,7 @@
     "max_abs": 4.0,
     "mean_abs": 0.2
   },
-  "enc.block.17.out": {
+  "enc.block.23.out": {
     "max_abs": 100.0,
     "mean_abs": 0.8
   },
@@ -85,9 +88,5 @@
   "dec.logits": {
     "max_abs": "inf",
     "mean_abs": "inf"
-  },
-  "enc.block.23.out": {
-    "max_abs": 100.0,
-    "mean_abs": 0.8
   }
 }

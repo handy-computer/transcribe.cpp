@@ -89,17 +89,25 @@ transcribe_status read_qwen3_asr_hparams(const gguf_context * gguf,
     // Whisper-style windowing: chunk_length / n_samples / nb_max_frames
     // describe the reference preprocessor's fixed 30s chunking. Treated
     // as optional because not every future Qwen3-ASR variant will carry
-    // them; the runtime may compute from sample_rate + hop_length.
+    // them; the runtime may compute from sample_rate + hop_length. Use
+    // the low-level KvResult path so a wrong-type KV (a converter bug)
+    // still fails loudly — Absent is fine, BadType is not.
     {
-        int32_t tmp = 0;
-        (void)read_required_u32_kv(gguf, "stt.frontend.chunk_length", kFamilyTag, tmp);
-        hp.fe_chunk_length = tmp;
-        tmp = 0;
-        (void)read_required_u32_kv(gguf, "stt.frontend.n_samples", kFamilyTag, tmp);
-        hp.fe_n_samples = tmp;
-        tmp = 0;
-        (void)read_required_u32_kv(gguf, "stt.frontend.nb_max_frames", kFamilyTag, tmp);
-        hp.fe_nb_max_frames = tmp;
+        const auto read_optional = [&](const char * key, int32_t & dst) -> transcribe_status {
+            uint32_t tmp = 0;
+            switch (read_uint32_kv(gguf, key, tmp)) {
+                case KvResult::Ok:      dst = static_cast<int32_t>(tmp); return TRANSCRIBE_OK;
+                case KvResult::Absent:                                    return TRANSCRIBE_OK;
+                case KvResult::BadType:
+                    std::fprintf(stderr,
+                                 "qwen3_asr: \"%s\" has wrong type\n", key);
+                    return TRANSCRIBE_ERR_GGUF;
+            }
+            return TRANSCRIBE_ERR_GGUF;  // unreachable
+        };
+        if (auto st = read_optional("stt.frontend.chunk_length",  hp.fe_chunk_length ); st != TRANSCRIBE_OK) return st;
+        if (auto st = read_optional("stt.frontend.n_samples",     hp.fe_n_samples    ); st != TRANSCRIBE_OK) return st;
+        if (auto st = read_optional("stt.frontend.nb_max_frames", hp.fe_nb_max_frames); st != TRANSCRIBE_OK) return st;
     }
 
     // Cross-field invariants.
@@ -143,6 +151,60 @@ transcribe_status read_qwen3_asr_hparams(const gguf_context * gguf,
     if (hp.fe_type != "mel") {
         std::fprintf(stderr, "qwen3_asr: unsupported frontend type \"%s\"\n",
                      hp.fe_type.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    // The graph reuses dec.token_embd.weight as the output projection.
+    // A GGUF that declares tie_word_embeddings=false would need an
+    // untied lm_head tensor that this port does not ship or consume;
+    // fail at load rather than silently run an undefined graph.
+    if (!hp.dec_tie_word_embeddings) {
+        std::fprintf(stderr,
+                     "qwen3_asr: decoder.tie_word_embeddings=false is not "
+                     "supported in this port (graph assumes tied lm_head)\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    // Single-modality audio-LLM: the LM at inference processes one
+    // position-id stream (temporal), so the 3D MRoPE reduces to plain
+    // RoPE. The section sizes must still add up to head_dim/2 because
+    // the converter writes them as the canonical MRoPE split. We
+    // validate the reduction shape explicitly so a future checkpoint
+    // that breaks the single-modality assumption fails at load rather
+    // than silently mis-rotating Q/K.
+    {
+        const int32_t section_sum = hp.dec_rope_mrope_section_t +
+                                    hp.dec_rope_mrope_section_h +
+                                    hp.dec_rope_mrope_section_w;
+        const int32_t half = hp.dec_head_dim / 2;
+        if (section_sum != half) {
+            std::fprintf(stderr,
+                         "qwen3_asr: mrope_section t+h+w (%d) != head_dim/2 (%d); "
+                         "single-modality RoPE reduction no longer valid\n",
+                         section_sum, half);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        // The decoder graph assumes the interleaved MRoPE layout (pairs
+        // alternate t/h/w within each head), which is how Qwen3-ASR's
+        // published checkpoints ship. The graph would mis-rotate Q/K
+        // if a future checkpoint used the concatenated layout, so fail
+        // at load rather than silently produce wrong logits.
+        if (!hp.dec_rope_mrope_interleaved) {
+            std::fprintf(stderr,
+                         "qwen3_asr: dec_rope_mrope_interleaved=false is not "
+                         "supported; the decoder graph assumes the interleaved "
+                         "MRoPE layout\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+    // Audio injection precondition: the encoder's output_dim must
+    // equal the LM's hidden_size, since audio rows are scattered
+    // directly into the LM input embedding. A mismatch here would
+    // surface at graph-build time anyway; catching it at load gives
+    // a clearer error and avoids paying encoder cost on every run().
+    if (hp.enc_output_dim != hp.dec_hidden) {
+        std::fprintf(stderr,
+                     "qwen3_asr: enc_output_dim (%d) != dec_hidden (%d); "
+                     "audio injection requires matching dims\n",
+                     hp.enc_output_dim, hp.dec_hidden);
         return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_OK;

@@ -252,7 +252,9 @@ def extract_tokenizer(model_dir: Path, vocab_size: int) -> dict:
             tok = tok.get("content")
         if not tok:
             return None
-        return base_vocab.get(tok) or next(
+        if tok in base_vocab:
+            return base_vocab[tok]
+        return next(
             (int(tid) for tid, info in added.items() if info["content"] == tok),
             None,
         )
@@ -534,6 +536,15 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         # ---- stt.variant ----
         writer.add_string("stt.variant", variant)
 
+        # ---- stt.capability.* ----
+        # Qwen3-ASR auto-detects the audio's language (the LM prefixes
+        # its output with "language X"); advertise that in caps so
+        # transcribe_model_capabilities().supports_language_detect is
+        # true. Translation is out of scope for this family; no
+        # capability KV needed (apply_family_invariants defaults it
+        # false). Streaming is a future port — not yet wired end-to-end.
+        writer.add_bool("stt.capability.lang_detect", True)
+
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----
         writer.add_string("tokenizer.ggml.model", "gpt2")
         writer.add_string("tokenizer.ggml.pre",   "qwen2")
@@ -745,15 +756,20 @@ def _looks_like_repo_id(s: str) -> bool:
     return "/" in s and not Path(s).exists()
 
 
-def _download_snapshot(repo_id: str) -> Path:
+def _download_snapshot(repo_id: str, revision: str | None) -> Path:
     slug = slug_from_repo_id(repo_id)
     models_root = os.environ.get("TRANSCRIBE_MODELS_DIR")
     local_dir = Path(models_root) / slug if models_root else None
     if local_dir is not None:
         local_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading {repo_id} from Hugging Face...")
+    if revision:
+        print(f"Downloading {repo_id}@{revision} from Hugging Face...")
+    else:
+        print(f"Downloading {repo_id} from Hugging Face "
+              f"(no revision pin; reproducibility depends on upstream)...")
     resolved = snapshot_download(
         repo_id=repo_id,
+        revision=revision,
         local_dir=str(local_dir) if local_dir is not None else None,
     )
     return Path(resolved)
@@ -770,13 +786,19 @@ def main(argv: list[str]) -> int:
     p.add_argument("--repo-id", type=str, default=None,
                    help="HF repo id used to derive the output slug "
                         "when converting from a local path")
+    p.add_argument("--revision", type=str, default=None,
+                   help="HF revision (branch / tag / commit SHA) to pin the "
+                        "download to. Recommended for reproducibility — the "
+                        "golden manifest records the canonical pinned "
+                        "revision for each variant. Ignored when `model` is "
+                        "a local directory.")
     p.add_argument("--variant", type=str, default=None,
                    help="stt.variant string (default: derived from slug)")
     args = p.parse_args(argv[1:])
 
     if _looks_like_repo_id(args.model):
         repo_id = args.repo_id or args.model
-        model_dir = _download_snapshot(args.model)
+        model_dir = _download_snapshot(args.model, args.revision)
     else:
         model_dir = Path(args.model)
         if not model_dir.is_dir():
@@ -800,7 +822,24 @@ def main(argv: list[str]) -> int:
         if repo_id:
             variant = slug_from_repo_id(repo_id).lower()
         else:
-            variant = out_path.stem.lower()
+            # Fallback when the converter was invoked with only a local
+            # path + out_path. out_path.stem follows the
+            # `<slug>-<QUANT>.gguf` convention (e.g. `Qwen3-ASR-0.6B-BF16`),
+            # so strip the trailing `-<QUANT>` so stt.variant carries
+            # just the architectural slug (`qwen3-asr-0.6b`), not the
+            # quant tag of this particular file. Without this the
+            # derived variant stutters into `qwen3-asr-0.6b-bf16`.
+            stem = out_path.stem
+            known_quants = {"bf16", "f32", "f16", "q8_0", "q5_k_m",
+                            "q4_k_m", "q6_k", "q3_k_m", "q2_k"}
+            lowered = stem.lower()
+            stripped = lowered
+            for q in known_quants:
+                suffix = "-" + q
+                if lowered.endswith(suffix):
+                    stripped = lowered[: -len(suffix)]
+                    break
+            variant = stripped
 
     convert(model_dir, out_path, variant)
     return 0

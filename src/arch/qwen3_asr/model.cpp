@@ -139,6 +139,10 @@ namespace {
 
 constexpr const char k_default_variant[] = "qwen3-asr";
 
+// Forward declarations for helpers defined further down in this file.
+transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
+                                      ChatTokens &                  out);
+
 transcribe_status load(
     Loader &                         loader,
     const transcribe_model_params *  params,
@@ -170,6 +174,13 @@ transcribe_status load(
     (void)read_optional_string_kv(
         loader.gguf(), "tokenizer.chat_template", "qwen3_asr",
         "", m->chat_template);
+
+    // Resolve the chat-template special-token ids at load so a vocab
+    // drift (e.g. a future fine-tune that renames or reorders the
+    // role tokens) surfaces here instead of silently producing a
+    // wrong prompt at decode time.
+    if (const transcribe_status st = resolve_chat_tokens(m->tok, m->chat_tokens);
+        st != TRANSCRIBE_OK) return st;
 
     // Hparams.
     if (const transcribe_status st = read_qwen3_asr_hparams(loader.gguf(), m->hparams);
@@ -382,18 +393,42 @@ transcribe_status init_context(
     return TRANSCRIBE_OK;
 }
 
-// Qwen3 tokenizer special-token ids that aren't covered by the
-// standard GGUF bos/eos slots. Hardcoded because we don't yet ship a
-// BPE encoder in C++; the chat template is short and fixed across the
-// 0.6B and 1.7B variants.
-struct ChatTokens {
-    int32_t im_start       = 151644;
-    int32_t im_end         = 151645;
-    int32_t newline        = 198;
-    int32_t role_system    = 8948;
-    int32_t role_user      = 872;
-    int32_t role_assistant = 77091;
-};
+// Resolve the narrow set of chat-template piece strings against the
+// loaded tokenizer, filling `out`. Hard-fails with TRANSCRIBE_ERR_GGUF
+// if any piece is missing — a future checkpoint that reorders the
+// vocab will surface here at load time, before any prompt is built.
+//
+// The newline piece is stored under its GPT-2 byte-level-encoded form
+// (\n = 0x0A → Unicode codepoint U+010A "Ċ", UTF-8 \xC4\x8A), same as
+// every other non-printable byte in the Qwen3 vocab. The role names
+// and the two <|im_*|> special tokens are stored verbatim.
+transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
+                                      ChatTokens &                  out)
+{
+    struct PieceSlot {
+        const char * piece;
+        int32_t *    slot;
+    };
+    const PieceSlot pieces[] = {
+        { "<|im_start|>",  &out.im_start       },
+        { "<|im_end|>",    &out.im_end         },
+        { "\xC4\x8A",      &out.newline        },   // "Ċ" = byte-level \n
+        { "system",        &out.role_system    },
+        { "user",          &out.role_user      },
+        { "assistant",     &out.role_assistant },
+    };
+    for (const auto & p : pieces) {
+        const int id = tok.find(p.piece);
+        if (id < 0) {
+            std::fprintf(stderr,
+                         "qwen3_asr: chat-template piece \"%s\" not in tokenizer\n",
+                         p.piece);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        *p.slot = id;
+    }
+    return TRANSCRIBE_OK;
+}
 
 // Build the prompt token sequence + audio-position list for a single
 // utterance. Mirrors the Qwen3-ASR chat template at the token level:
@@ -403,13 +438,15 @@ struct ChatTokens {
 //   <|im_start|>assistant\n
 //
 // (with empty system content; language/context hinting is not yet
-// implemented in the first port.) Returns total prompt length.
+// implemented in the first port — callers passing a non-null language
+// hint are rejected at the run() entry with
+// TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE.) Returns total prompt length.
 void build_prompt_tokens(const QwenAsrHParams &  hp,
+                         const ChatTokens &      ct,
                          int                     T_enc,
                          std::vector<int32_t> &  out_ids,
                          std::vector<int64_t> &  out_audio_positions)
 {
-    const ChatTokens ct {};
     out_ids.clear();
     out_audio_positions.clear();
 
@@ -481,26 +518,34 @@ static std::string gpt2_token_to_bytes(const std::string & tok) {
     out.reserve(tok.size());
     size_t i = 0;
     while (i < tok.size()) {
-        // Decode one UTF-8 codepoint from tok[i..].
+        // Decode one UTF-8 codepoint from tok[i..]. Bail out of any
+        // sequence whose continuation bytes would run past end-of-
+        // string — that'd be either corruption or an adversarial
+        // input; either way, stop decoding rather than read past the
+        // buffer.
         const unsigned char c = static_cast<unsigned char>(tok[i]);
         int cp = 0; int w = 1;
         if (c < 0x80) { cp = c; w = 1; }
-        else if ((c & 0xE0) == 0xC0) {
+        else if ((c & 0xE0) == 0xC0) { w = 2; }
+        else if ((c & 0xF0) == 0xE0) { w = 3; }
+        else if ((c & 0xF8) == 0xF0) { w = 4; }
+        else { ++i; continue; }  // malformed lead byte; skip
+
+        if (i + static_cast<size_t>(w) > tok.size()) break;
+
+        if (w == 2) {
             cp = ((c & 0x1F) << 6) |
                  (static_cast<unsigned char>(tok[i + 1]) & 0x3F);
-            w = 2;
-        } else if ((c & 0xF0) == 0xE0) {
+        } else if (w == 3) {
             cp = ((c & 0x0F) << 12) |
                  ((static_cast<unsigned char>(tok[i + 1]) & 0x3F) << 6) |
                  (static_cast<unsigned char>(tok[i + 2]) & 0x3F);
-            w = 3;
-        } else if ((c & 0xF8) == 0xF0) {
+        } else if (w == 4) {
             cp = ((c & 0x07) << 18) |
                  ((static_cast<unsigned char>(tok[i + 1]) & 0x3F) << 12) |
                  ((static_cast<unsigned char>(tok[i + 2]) & 0x3F) <<  6) |
                  (static_cast<unsigned char>(tok[i + 3]) & 0x3F);
-            w = 4;
-        } else { ++i; continue; }  // malformed; skip
+        }
 
         std::string b = byte_from_unicode_index(cp);
         if (!b.empty()) out.append(b);
@@ -541,7 +586,7 @@ transcribe_status run(
     transcribe_context *      ctx,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * /*params*/)
+    const transcribe_params * params)
 {
     if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -551,6 +596,19 @@ transcribe_status run(
     auto * cm = static_cast<QwenAsrModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Language hinting is not yet implemented. The reference
+    // implementation auto-detects when no language is supplied (the LM
+    // emits a "language X" prefix it later strips from the transcript).
+    // This port honors that auto-detect path (params == nullptr or
+    // params->language == nullptr) but does not render caller-supplied
+    // hints into the chat template; accepting one silently would be a
+    // public-API contract violation. Reject explicit hints until the
+    // template renderer lands — the capabilities' language list
+    // documents what the model *can detect*, not what callers may hint.
+    if (params != nullptr && params->language != nullptr) {
+        return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
     }
 
     transcribe::debug::init();
@@ -729,19 +787,33 @@ transcribe_status run(
     try_dump("enc.proj.out",       eb.dumps.proj_out,       "enc.proj");
 
     // Read encoder output to host for use by the LM prefill.
-    // NOTE: ne[1] is T_enc_padded (n_chunks * per_chunk_aftercnn); for
-    // multi-chunk audio with a ragged tail this slightly overshoots
-    // the reference's ragged T_enc. The padded rows carry near-zero
-    // activations (from zero-padded mel tails) and the LM tolerates
-    // the extra audio_pad tokens without derailing the transcript.
-    const int d_enc = static_cast<int>(eb.out->ne[0]);
-    const int T_enc = static_cast<int>(eb.out->ne[1]);
+    //
+    // ne[1] is T_enc_padded = n_chunks * per_chunk_aftercnn: every chunk
+    // contributes the full per_chunk_aftercnn row count, even when the
+    // last chunk's real mel input was shorter. The reference ragged-
+    // selects only the real-aftercnn rows from the last chunk, giving
+    // T_enc_real <= T_enc_padded. We mirror that trim here so the LM
+    // sees the same audio_pad row count the reference does — matching
+    // shapes up through `dec.audio_injected` and onward, which in turn
+    // makes validate.py compare work on multi-chunk audio.
+    //
+    // Tensor layout is [d_model, T_enc_padded] contiguous (d is the
+    // fastest-varying dim), so the first T_enc_real * d_model floats
+    // are exactly the rows we want. Read the full padded blob into
+    // enc_host, then shrink to the trimmed size; the tail data is just
+    // zero-pad derived and never read again.
+    const int d_enc        = static_cast<int>(eb.out->ne[0]);
+    const int T_enc_padded = static_cast<int>(eb.out->ne[1]);
+    const int T_enc        = (timing.n_chunks - 1) * timing.per_chunk_aftercnn
+                           + timing.last_chunk_aftercnn;
     cc->enc_host.resize(static_cast<size_t>(d_enc) *
-                        static_cast<size_t>(T_enc));
+                        static_cast<size_t>(T_enc_padded));
     const int64_t t_d2h_start = ggml_time_us();
     ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0,
                             cc->enc_host.size() * sizeof(float));
     t_enc_d2h_us = ggml_time_us() - t_d2h_start;
+    cc->enc_host.resize(static_cast<size_t>(d_enc) *
+                        static_cast<size_t>(T_enc));
 
     // ----- KV cache init -----
     // Size for a generous default context; the step loop caps
@@ -780,7 +852,8 @@ transcribe_status run(
     // ----- Prompt construction -----
     std::vector<int32_t> prompt_ids;
     std::vector<int64_t> audio_positions;
-    build_prompt_tokens(cm->hparams, T_enc, prompt_ids, audio_positions);
+    build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc,
+                        prompt_ids, audio_positions);
     const int T_prompt   = static_cast<int>(prompt_ids.size());
     const int prefix_len = audio_positions.empty()
                          ? 0 : static_cast<int>(audio_positions.front());

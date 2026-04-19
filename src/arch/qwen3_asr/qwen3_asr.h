@@ -93,6 +93,25 @@ bool kv_cache_init(QwenAsrKvCache & cache,
 // Model / Context
 // ---------------------------------------------------------------------------
 
+// Qwen3 chat-template special-token ids resolved through the loaded
+// tokenizer at load time. The prompt renderer is narrow (no Jinja)
+// but it still tokenizes to exact ids; resolving at load lets a
+// future checkpoint that reorders the vocab fail loudly instead of
+// silently corrupting the prompt.
+//
+// All fields are the *resolved* ids; the reference ids on the 0.6B
+// and 1.7B vocab are stable (im_start=151644, im_end=151645,
+// newline=198, system=8948, user=872, assistant=77091) but we do
+// not hardcode them at runtime.
+struct ChatTokens {
+    int32_t im_start       = -1;
+    int32_t im_end         = -1;
+    int32_t newline        = -1;
+    int32_t role_system    = -1;
+    int32_t role_user      = -1;
+    int32_t role_assistant = -1;
+};
+
 struct QwenAsrModel final : public transcribe_model {
     Tokenizer       tok;
     QwenAsrHParams  hparams;
@@ -111,6 +130,10 @@ struct QwenAsrModel final : public transcribe_model {
     // from the GGUF KV. Empty string means "no template" (the first
     // port will refuse to run without one).
     std::string chat_template;
+
+    // Resolved chat-template token ids (filled at load time, see
+    // resolve_chat_tokens in model.cpp). Used by build_prompt_tokens.
+    ChatTokens chat_tokens;
 
     QwenAsrModel() = default;
     ~QwenAsrModel() override;

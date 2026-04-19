@@ -80,7 +80,6 @@ std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t,
 
 struct EncoderDumps {
     ggml_tensor * mel_in         = nullptr;  // graph input
-    ggml_tensor * conv0_pre_gelu = nullptr;  // debug: after conv0 + bias
     ggml_tensor * subsample_out  = nullptr;  // post conv_out linear, pre-PE
     ggml_tensor * pos_add_out    = nullptr;  // post-PE, flattened to [d_model, T_enc_padded]
     ggml_tensor * block_0_out    = nullptr;

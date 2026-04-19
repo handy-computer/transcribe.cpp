@@ -1,23 +1,33 @@
 // qwen3_asr_e2e_smoke.cpp - real-model gated end-to-end transcription
 // test through the public C ABI.
 //
-// Loads a real Qwen3-ASR GGUF, runs transcription on samples/jfk.wav,
-// and verifies:
-//   1. Load returns OK; arch string is "qwen3_asr".
-//   2. transcribe_run completes OK.
-//   3. transcribe_full_text is non-empty and matches the reference
-//      greedy decode on jfk.wav to within Levenshtein edit distance 5.
+// Loads a real Qwen3-ASR GGUF and runs two cases through transcribe_run:
+//   - jfk.wav  (11s, single-chunk, no ragged tail) — the common path.
+//   - dots.wav (35s, multi-chunk, ragged tail)     — the chunk-trim
+//     path at src/arch/qwen3_asr/model.cpp:~789. Golden tensor
+//     validation is jfk-only (graph-level enc.* dumps stay at the
+//     padded T_enc while the reference is ragged), so this case is
+//     the automated gate that the ragged-tail trim logic produces a
+//     coherent transcript end-to-end.
+//
+// For each case we verify:
+//   1. transcribe_run completes OK.
+//   2. transcribe_full_text is non-empty and matches a checked-in
+//      reference transcript within a small Levenshtein edit distance.
 //      (Slightly looser than Cohere's 3 because we use bf16 LM on CPU
 //      without the reference's flash attention — identical argmaxes at
 //      prefill, but accumulated step-decoder drift at the 10–20 token
-//      mark can change a single word occasionally.)
-//   4. Load + run completes under 180 seconds on CPU.
+//      mark can change a single word occasionally. Dots tolerance is
+//      proportionally larger to cover its 577-char length.)
+//   3. Load + all runs complete under 180 seconds on CPU.
 //
 // Gating:
 //   - TRANSCRIBE_BUILD_REAL_MODEL_TESTS (CMake) controls whether this
 //     binary is built.
 //   - TRANSCRIBE_QWEN3_ASR_GGUF picks the GGUF at runtime. Unset → 77.
-//   - TRANSCRIBE_TEST_AUDIO overrides the audio path; default jfk.wav.
+//   - TRANSCRIBE_TEST_AUDIO overrides the first-case audio path (for
+//     ad-hoc single-file runs); default jfk.wav. Dots is always the
+//     second case when the samples/dots.wav file is present.
 
 #include "transcribe.h"
 
@@ -96,7 +106,115 @@ const char * const k_jfk_reference_text =
     "And so, my fellow Americans, ask not what your country can do for "
     "you; ask what you can do for your country.";
 
-constexpr int k_max_edit_distance = 5;
+constexpr int k_jfk_max_edit_distance = 5;
+
+// Reference transcript for samples/dots.wav (35.3s Steve Jobs
+// commencement excerpt, multi-chunk ragged tail). This matches the
+// current C++ CPU output; the Python reference differs by ~3 bytes
+// (an em-dash where the reference shows ": "), which the tolerance
+// below accommodates. Any larger drift indicates a regression in
+// the ragged-tail trim, chunk boundary, or step-decoder paths.
+const char * const k_dots_reference_text =
+    "Of course, it was impossible to connect the dots looking forward "
+    "when I was in college, but it was very, very clear looking "
+    "backwards ten years later. Again, you can't connect the dots "
+    "looking forward; you can only connect them looking backwards. "
+    "So you have to trust that the dots will somehow connect in your "
+    "future. You have to trust in something\xe2\x80\x94your gut, destiny, "
+    "life, karma, whatever. Because believing that the dots will "
+    "connect down the road, will give you the confidence to follow "
+    "your heart, even when it leads you off the well-worn path, and "
+    "that will make all the difference.";
+
+constexpr int k_dots_max_edit_distance = 10;
+
+// Runs one (audio, reference) case against `model`: creates a fresh
+// context, loads the wav, runs transcribe, and checks that the
+// resulting transcript is within `max_edit_distance` of `reference`.
+// Increments g_failures on any failure; the caller is responsible for
+// aborting early if the context fails to init.
+void run_case(transcribe_model *  model,
+              const char *        case_name,
+              const std::string & wav_path,
+              const char *        reference,
+              int                 max_edit_distance)
+{
+    if (!file_exists(wav_path)) {
+        std::fprintf(stderr,
+                     "qwen3_asr_e2e_smoke[%s]: wav not found: %s\n",
+                     case_name, wav_path.c_str());
+        ++g_failures;
+        return;
+    }
+
+    std::vector<float> pcm;
+    std::string load_err;
+    if (!transcribe_cli::load_wav_mono_16k(wav_path, pcm, load_err)) {
+        std::fprintf(stderr,
+                     "qwen3_asr_e2e_smoke[%s]: wav load: %s\n",
+                     case_name, load_err.c_str());
+        ++g_failures;
+        return;
+    }
+
+    transcribe_context_params cp = transcribe_context_default_params();
+    struct transcribe_context * ctx = nullptr;
+    {
+        const transcribe_status st =
+            transcribe_context_init(model, &cp, &ctx);
+        if (st != TRANSCRIBE_OK || ctx == nullptr) {
+            std::fprintf(stderr,
+                         "qwen3_asr_e2e_smoke[%s]: FAIL ctx_init: %s\n",
+                         case_name, transcribe_status_string(st));
+            ++g_failures;
+            return;
+        }
+    }
+
+    transcribe_params rp = transcribe_default_params();
+    {
+        const transcribe_status st =
+            transcribe_run(ctx, pcm.data(),
+                           static_cast<int>(pcm.size()), &rp);
+        if (st != TRANSCRIBE_OK) {
+            std::fprintf(stderr,
+                         "qwen3_asr_e2e_smoke[%s]: FAIL run: %s\n",
+                         case_name, transcribe_status_string(st));
+            ++g_failures;
+            transcribe_context_free(ctx);
+            return;
+        }
+    }
+
+    const char * full = transcribe_full_text(ctx);
+    const std::string actual = full ? full : "";
+    std::fprintf(stderr,
+                 "qwen3_asr_e2e_smoke[%s]: text=\"%s\"\n",
+                 case_name, actual.c_str());
+    if (actual.empty()) {
+        std::fprintf(stderr,
+                     "FAIL[%s]: transcript is empty\n", case_name);
+        ++g_failures;
+        transcribe_context_free(ctx);
+        return;
+    }
+
+    const int dist = edit_distance(actual, reference);
+    std::fprintf(stderr,
+                 "qwen3_asr_e2e_smoke[%s]: edit_distance=%d "
+                 "(tolerance=%d)\n",
+                 case_name, dist, max_edit_distance);
+    if (dist > max_edit_distance) {
+        std::fprintf(stderr,
+                     "FAIL[%s]: text edit distance %d exceeds %d\n",
+                     case_name, dist, max_edit_distance);
+        std::fprintf(stderr, "  reference: %s\n", reference);
+        std::fprintf(stderr, "  actual:    %s\n", actual.c_str());
+        ++g_failures;
+    }
+
+    transcribe_context_free(ctx);
+}
 
 } // namespace
 
@@ -116,18 +234,14 @@ int main() {
         return 77;
     }
 
-    std::string wav_path;
+    std::string jfk_wav;
     if (const char * w = std::getenv("TRANSCRIBE_TEST_AUDIO"); w && w[0]) {
-        wav_path = w;
+        jfk_wav = w;
     } else {
-        wav_path = std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
+        jfk_wav = std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
     }
-    if (!file_exists(wav_path)) {
-        std::fprintf(stderr,
-                     "qwen3_asr_e2e_smoke: wav not found: %s\n",
-                     wav_path.c_str());
-        return EXIT_FAILURE;
-    }
+    const std::string dots_wav =
+        std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/dots.wav";
 
     const auto t_start = std::chrono::steady_clock::now();
 
@@ -146,64 +260,86 @@ int main() {
 
     CHECK_STR_EQ(transcribe_model_arch_string(model), "qwen3_asr");
 
-    std::vector<float> pcm;
-    std::string load_err;
-    if (!transcribe_cli::load_wav_mono_16k(wav_path, pcm, load_err)) {
-        std::fprintf(stderr, "qwen3_asr_e2e_smoke: wav load: %s\n",
-                     load_err.c_str());
-        transcribe_model_free(model);
-        return EXIT_FAILURE;
-    }
-
-    transcribe_context_params cp = transcribe_context_default_params();
-    struct transcribe_context * ctx = nullptr;
+    // Phase 1.1 contract: the public API must reject any explicit
+    // language hint until the chat-template renderer honors it, even
+    // for languages the model can auto-detect. Exercise before the
+    // real run so a regression here can't mask a later bug. We need
+    // some PCM for the call; reuse the jfk wav.
     {
-        const transcribe_status st =
-            transcribe_context_init(model, &cp, &ctx);
-        if (st != TRANSCRIBE_OK || ctx == nullptr) {
-            std::fprintf(stderr, "FAIL ctx_init: %s\n",
-                         transcribe_status_string(st));
+        std::vector<float> pcm;
+        std::string load_err;
+        if (!file_exists(jfk_wav) ||
+            !transcribe_cli::load_wav_mono_16k(jfk_wav, pcm, load_err))
+        {
+            std::fprintf(stderr,
+                         "qwen3_asr_e2e_smoke: jfk wav load for lang "
+                         "reject check: %s\n",
+                         load_err.empty() ? "missing" : load_err.c_str());
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
-    }
 
-    transcribe_params rp = transcribe_default_params();
-    {
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
-        if (st != TRANSCRIBE_OK) {
-            std::fprintf(stderr, "FAIL run: %s\n",
-                         transcribe_status_string(st));
-            transcribe_context_free(ctx);
+        transcribe_context_params cp = transcribe_context_default_params();
+        struct transcribe_context * ctx = nullptr;
+        if (transcribe_context_init(model, &cp, &ctx) != TRANSCRIBE_OK ||
+            ctx == nullptr)
+        {
+            std::fprintf(stderr,
+                         "qwen3_asr_e2e_smoke: ctx_init for lang "
+                         "reject check failed\n");
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
+
+        transcribe_params rp_lang = transcribe_default_params();
+        rp_lang.language = "en";
+        const transcribe_status st =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()),
+                           &rp_lang);
+        if (st != TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE) {
+            std::fprintf(stderr,
+                         "FAIL: expected UNSUPPORTED_LANGUAGE for "
+                         "language=\"en\", got %s\n",
+                         transcribe_status_string(st));
+            ++g_failures;
+        }
+        rp_lang.language = "zh";
+        const transcribe_status st2 =
+            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()),
+                           &rp_lang);
+        if (st2 != TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE) {
+            std::fprintf(stderr,
+                         "FAIL: expected UNSUPPORTED_LANGUAGE for "
+                         "language=\"zh\", got %s\n",
+                         transcribe_status_string(st2));
+            ++g_failures;
+        }
+
+        transcribe_context_free(ctx);
+    }
+
+    // Case 1: jfk.wav (single-chunk).
+    run_case(model, "jfk", jfk_wav,
+             k_jfk_reference_text, k_jfk_max_edit_distance);
+
+    // Case 2: dots.wav (multi-chunk ragged tail). This is the
+    // automated gate for the ragged-tail trim path — golden tensor
+    // validation is jfk-only because graph-level enc.* dumps stay at
+    // T_enc_padded while the reference is ragged. Skip (not fail)
+    // when the sample file is absent so ad-hoc runs that only care
+    // about jfk still pass.
+    if (file_exists(dots_wav)) {
+        run_case(model, "dots", dots_wav,
+                 k_dots_reference_text, k_dots_max_edit_distance);
+    } else {
+        std::fprintf(stderr,
+                     "qwen3_asr_e2e_smoke[dots]: %s not present; "
+                     "skipping multi-chunk case.\n", dots_wav.c_str());
     }
 
     const auto t_end = std::chrono::steady_clock::now();
     const double wall_ms =
         std::chrono::duration<double, std::milli>(t_end - t_start).count();
-
-    const char * full = transcribe_full_text(ctx);
-    CHECK(full != nullptr);
-    const std::string actual = full ? full : "";
-    std::fprintf(stderr, "qwen3_asr_e2e_smoke: text=\"%s\"\n", actual.c_str());
-    CHECK(!actual.empty());
-
-    const int dist = edit_distance(actual, k_jfk_reference_text);
-    std::fprintf(stderr,
-                 "qwen3_asr_e2e_smoke: edit_distance=%d (tolerance=%d)\n",
-                 dist, k_max_edit_distance);
-    if (dist > k_max_edit_distance) {
-        std::fprintf(stderr,
-                     "FAIL: text edit distance %d exceeds %d\n",
-                     dist, k_max_edit_distance);
-        std::fprintf(stderr, "  reference: %s\n", k_jfk_reference_text);
-        std::fprintf(stderr, "  actual:    %s\n", actual.c_str());
-        ++g_failures;
-    }
-
     std::fprintf(stderr, "qwen3_asr_e2e_smoke: wall=%.2f ms\n", wall_ms);
     if (wall_ms > 180000.0) {
         std::fprintf(stderr,
@@ -211,7 +347,6 @@ int main() {
         ++g_failures;
     }
 
-    transcribe_context_free(ctx);
     transcribe_model_free(model);
 
     if (g_failures > 0) return EXIT_FAILURE;

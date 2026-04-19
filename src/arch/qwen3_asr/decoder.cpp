@@ -128,13 +128,12 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
     const float   scale_attn  = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int     enc_out_dim = hp.enc_output_dim;
 
-    if (enc_out_dim != hidden) {
-        std::fprintf(stderr,
-                     "qwen3_asr decoder: enc_output_dim (%d) != dec_hidden (%lld) — "
-                     "audio injection requires matching dims\n",
-                     enc_out_dim, static_cast<long long>(hidden));
-        return pb;
-    }
+    // Note: `enc_output_dim == dec_hidden` is an audio-injection
+    // precondition; it's now validated in read_qwen3_asr_hparams so a
+    // malformed GGUF fails at load, not per-run. We still read
+    // enc_out_dim locally because the graph uses it to shape the
+    // encoder-output input tensor — keeping them symbolically distinct
+    // here makes the invariant reading obvious.
 
     const size_t k_elem = ggml_element_size(kv_cache.self_k);
     const size_t v_elem = ggml_element_size(kv_cache.self_v);

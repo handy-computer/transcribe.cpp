@@ -118,31 +118,59 @@ def manifest_dump_script(repo: Path, manifest: dict[str, Any]) -> Path:
     return script
 
 
-def find_gguf(repo: Path, family: str) -> Path:
-    """Find a GGUF under models/<slug>/ where slug starts with `family`.
+def find_gguf(repo: Path, family: str, slug: str | None = None) -> Path:
+    """Find a GGUF under models/.
 
-    Layout is models/<hf-repo-name>/<hf-repo-name>-<QUANT>.gguf; the family
-    key is the leading token of the slug (e.g. family="parakeet" matches
-    `parakeet-tdt-0.6b-v2/`). If multiple variants exist, the first
-    sort-order match wins; pass --gguf to pick explicitly.
+    Discovery order:
+      1. If `slug` is provided (derived from the manifest's
+         source_model.hf_repo, e.g. "Qwen3-ASR-0.6B" from
+         "Qwen/Qwen3-ASR-0.6B"), look for
+         models/<slug>/<slug>-<QUANT>.gguf directly. This is the
+         converter's output convention and is case-accurate — which
+         matters for families whose HF slug does not case-fold to the
+         family key (e.g. family="qwen3_asr", slug="Qwen3-ASR-0.6B").
+      2. Legacy fallback: scan models/*/ for any GGUF whose stem
+         starts with `family`. Kept so older manifests (or manual
+         layouts) still work.
+
+    Preferred quant order: BF16 > F32 > F16 > first match. If multiple
+    variants match the fallback, the first sort-order wins; use
+    --gguf to pick explicitly.
     """
     model_root = repo / "models"
     if not model_root.is_dir():
         raise SystemExit(f"error: model root not found: {model_root}")
 
+    preferred_quants = ["BF16", "F32", "F16"]
+
+    # 1. Manifest-slug-driven lookup.
+    if slug:
+        variant_dir = model_root / slug
+        if variant_dir.is_dir():
+            for quant in preferred_quants:
+                candidate = variant_dir / f"{slug}-{quant}.gguf"
+                if candidate.exists():
+                    return candidate
+            matches = sorted(variant_dir.glob(f"{slug}-*.gguf"))
+            if matches:
+                return matches[0]
+
+    # 2. Legacy family-prefix fallback.
     def for_family(paths: list[Path]) -> list[Path]:
         return [p for p in paths if p.stem.startswith(family)]
 
-    # Prefer BF16, then F32, then F16, then first match.
-    for quant in ["BF16", "F32", "F16"]:
+    for quant in preferred_quants:
         matches = for_family(sorted(model_root.glob(f"*/*-{quant}.gguf")))
         if matches:
             return matches[0]
     matches = for_family(sorted(model_root.glob("*/*.gguf")))
     if matches:
         return matches[0]
+
+    hint = f" (manifest slug '{slug}' also matched nothing)" if slug else ""
     raise SystemExit(
-        f"error: no GGUF files found under {model_root} for family '{family}'.\n"
+        f"error: no GGUF files found under {model_root} for family "
+        f"'{family}'{hint}.\n"
         f"  Convert a GGUF first or set --gguf."
     )
 
@@ -247,6 +275,15 @@ def cmd_ref(args: argparse.Namespace) -> int:
             "--torch-threads", "1",
         ]
 
+        # Pin the HF revision when the manifest declares one and the
+        # family's dumper accepts --revision. Currently only the
+        # qwen3_asr dumper has been wired; Parakeet and Cohere will
+        # follow in a separate commit. The dumper itself ignores
+        # --revision when --model resolves to a local directory.
+        hf_revision = (manifest.get("source_model") or {}).get("hf_revision")
+        if hf_revision and args.family == "qwen3_asr":
+            common_args += ["--revision", str(hf_revision)]
+
         # Run both encoder and decode subcommands. Some families dump
         # everything from decode (cohere); others split encoder and
         # decoder intermediates across subcommands (parakeet). Running
@@ -268,7 +305,8 @@ def cmd_cpp(args: argparse.Namespace) -> int:
     manifest = load_manifest(repo, args.family, getattr(args, "variant", None))
     variant = manifest["variant"]
     cli = find_cli(repo)
-    gguf = Path(args.gguf) if args.gguf else find_gguf(repo, args.family)
+    slug = manifest_source_model(manifest).split("/", 1)[-1]
+    gguf = Path(args.gguf) if args.gguf else find_gguf(repo, args.family, slug)
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:

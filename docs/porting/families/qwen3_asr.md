@@ -21,9 +21,11 @@ Current progress:
   identical to the reference on CPU, Metal, and Vulkan.
 - `scripts/validate.py all --family qwen3_asr --variant qwen3-asr-0.6b`
   passes 13/13 tolerances on all three backends.
-- Real-model smoke tests (`tests/qwen3_asr_real_smoke.cpp`,
+- Real-model smoke tests (`tests/qwen3_asr_real_smoke_0_6b.cpp`,
+  `tests/qwen3_asr_real_smoke_1_7b.cpp`,
   `tests/qwen3_asr_e2e_smoke.cpp`) pass behind
   `TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON` +
+  `TRANSCRIBE_QWEN3_ASR_0_6B_GGUF` / `TRANSCRIBE_QWEN3_ASR_1_7B_GGUF` /
   `TRANSCRIBE_QWEN3_ASR_GGUF`.
 
 Performance (M4 Max, jfk.wav = 11 s of audio):
@@ -132,15 +134,66 @@ Bridge validation:
 
 - Family note: `docs/porting/families/qwen3_asr.md` (this file)
 - Intake: `reports/porting/qwen3_asr/qwen3-asr-0.6b/intake.json`
-- Golden manifest: `tests/golden/qwen3_asr/qwen3-asr-0.6b.manifest.json`
-- Tolerances: `tests/tolerances/qwen3_asr.json` (stub)
+- Golden manifests:
+  `tests/golden/qwen3_asr/qwen3-asr-0.6b.manifest.json`,
+  `tests/golden/qwen3_asr/qwen3-asr-1.7b.manifest.json`
+- Tolerances: `tests/tolerances/qwen3_asr.json` (0.6B),
+  `tests/tolerances/qwen3_asr-1.7b.json` (1.7B)
 - Python env: `scripts/envs/qwen3_asr/pyproject.toml`
-- Converter: `scripts/convert-qwen3_asr.py` (TODO)
-- Reference dumper: `scripts/dump_reference_qwen3_asr_author.py` (TODO)
-- C++ arch dir: `src/arch/qwen3_asr/` (TODO)
-- Smokes: `tests/qwen3_asr_smoke.cpp`,
-  `tests/qwen3_asr_real_smoke.cpp`, `tests/qwen3_asr_e2e_smoke.cpp`
-  (TODO)
+- Converter: `scripts/convert-qwen3_asr.py`
+- Reference dumper: `scripts/dump_reference_qwen3_asr_author.py`
+- C++ arch dir: `src/arch/qwen3_asr/`
+- Fixture generator hook: `tests/fixtures/make_gguf_fixtures.py` emits
+  `arch_qwen3_asr_minimal.gguf`
+- Smokes: `tests/qwen3_asr_smoke.cpp` (default ctest, fixture-backed),
+  `tests/qwen3_asr_real_smoke_0_6b.cpp` and
+  `tests/qwen3_asr_real_smoke_1_7b.cpp` (env-gated structural tests —
+  `TRANSCRIBE_QWEN3_ASR_0_6B_GGUF` / `_1_7B_GGUF`),
+  `tests/qwen3_asr_e2e_smoke.cpp` (env-gated public-ABI end-to-end,
+  `TRANSCRIBE_QWEN3_ASR_GGUF`)
+
+## Known limitations
+
+Things the first port intentionally does not do; tracked as follow-
+up work rather than shipped-and-broken.
+
+- **Language hinting is rejected.** `transcribe_params.language == NULL`
+  is the supported mode and triggers the model's built-in auto-detect
+  (it prefixes the transcript with `language X`, which we strip before
+  returning). Any non-null hint, including a language in the
+  capability list, returns `TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE`. The
+  `caps.languages` list documents the model's auto-detect coverage,
+  not what callers may hint — rendering caller-supplied hints into the
+  chat template is a future change.
+- **Streaming** (`stream_transcribe` / chunk rollback) is out of scope
+  for this port. Upstream Qwen3-ASR may be architecturally usable in a
+  streaming mode, but the transcribe.cpp library does not expose or
+  implement a streaming path for this family yet. The golden manifests
+  therefore advertise `streaming: false`, and the converter does not
+  emit `stt.capability.streaming`, so `transcribe_model_capabilities()
+  .supports_streaming` is `false` at runtime until the streaming API
+  is wired up and validated.
+- **Timestamps** are `TIMESTAMPS_NONE`. The sibling
+  `qwen3_forced_aligner` variant produces word-level alignments but
+  has its own head contract and ships as a separate family.
+- **Ragged-tail audio.** The encoder graph runs all chunks at
+  `T_enc_padded = n_chunks * per_chunk_aftercnn` rows, then the host-
+  side copy at `src/arch/qwen3_asr/model.cpp` trims the padded rows
+  off the last chunk down to `T_enc_real = (n_chunks-1) *
+  per_chunk_aftercnn + last_chunk_aftercnn`, matching the reference's
+  ragged selection. Everything downstream (LM prefill, dec.* dumps)
+  sees the trimmed T_enc. The graph-level `enc.*` dumps still carry
+  the padded shape — numerical validation in the golden manifest
+  runs on `jfk.wav` (single-chunk, no ragged tail) only. Multi-chunk
+  audio is validated transcript-level: `tests/qwen3_asr_e2e_smoke.cpp`
+  runs both `jfk.wav` and `dots.wav` (35.3s Steve-Jobs-commencement
+  excerpt, multi-chunk ragged tail) through the public ABI and
+  asserts edit-distance-zero against checked-in reference transcripts,
+  so a regression in the ragged-tail trim path fails the e2e smoke.
+- **Chat-template token ids** are resolved at load time by name against
+  the tokenizer (Phase 1.6 hard-fails if any piece is missing); a
+  future variant that renames roles would fail load rather than
+  silently produce a wrong prompt.
 
 ## Decisions For Implementation
 
@@ -183,43 +236,63 @@ Recorded here during research; resolved during bring-up.
 
 ## Commands
 
-Reference run:
+Conversion (HF → BF16 accuracy GGUF). Pin the `--revision` so
+output hashes are reproducible across machines; the golden manifest
+records the canonical commit for each variant.
 
 ```bash
-# TODO once scripts/envs/qwen3_asr/ is populated and reference dumper exists
-uv run scripts/validate.py ref --family qwen3_asr --variant qwen3-asr-0.6b
+uv run --project scripts/envs/qwen3_asr \
+  scripts/convert-qwen3_asr.py Qwen/Qwen3-ASR-0.6B \
+  --revision 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+
+uv run --project scripts/envs/qwen3_asr \
+  scripts/convert-qwen3_asr.py Qwen/Qwen3-ASR-1.7B \
+  --revision 7278e1e70fe206f11671096ffdd38061171dd6e5
 ```
 
-Reference dumps:
+Reference dumps (drives the author `qwen_asr` package with forward
+hooks; pins the same revision as the manifest):
 
 ```bash
-# TODO
 uv run --project scripts/envs/qwen3_asr \
   scripts/dump_reference_qwen3_asr_author.py decode \
-  --model ../models/Qwen3-ASR-0.6B \
+  --model Qwen/Qwen3-ASR-0.6B \
+  --revision 5eb144179a02acc5e5ba31e748d22b0cf3e303b0 \
   --audio samples/jfk.wav \
   --out build/validate/qwen3_asr/qwen3-asr-0.6b/jfk/ref
 ```
 
-Conversion:
+Validation (ref + cpp + compare, all backed by the golden manifest —
+no `--gguf` override needed; the manifest slug drives discovery):
 
 ```bash
-# TODO
-uv run --project scripts/envs/qwen3_asr \
-  scripts/convert-qwen3_asr.py --repo-id Qwen/Qwen3-ASR-0.6B
+uv run scripts/validate.py all --family qwen3_asr --variant qwen3-asr-0.6b
+uv run scripts/validate.py all --family qwen3_asr --variant qwen3-asr-1.7b
 ```
 
-Validation:
+Transcribe:
 
 ```bash
-# TODO
-uv run scripts/validate.py all --family qwen3_asr --variant qwen3-asr-0.6b
+./build/bin/transcribe-cli -m models/Qwen3-ASR-0.6B/Qwen3-ASR-0.6B-BF16.gguf \
+    samples/jfk.wav
+```
+
+Real-model structural + e2e tests (opt-in via CMake flag + env var):
+
+```bash
+cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
+cmake --build build -j
+TRANSCRIBE_QWEN3_ASR_0_6B_GGUF=$PWD/models/Qwen3-ASR-0.6B/Qwen3-ASR-0.6B-BF16.gguf \
+TRANSCRIBE_QWEN3_ASR_1_7B_GGUF=$PWD/models/Qwen3-ASR-1.7B/Qwen3-ASR-1.7B-BF16.gguf \
+TRANSCRIBE_QWEN3_ASR_GGUF=$PWD/models/Qwen3-ASR-0.6B/Qwen3-ASR-0.6B-BF16.gguf \
+  ctest --test-dir build --output-on-failure
 ```
 
 Benchmarks:
 
 ```bash
-# TODO after accuracy GGUF is validated
+# See docs/tools/benchmarking.md for the benchmarking harness.
+uv run scripts/bench/run.py --family qwen3_asr
 ```
 
 ## Upstream Benchmarks

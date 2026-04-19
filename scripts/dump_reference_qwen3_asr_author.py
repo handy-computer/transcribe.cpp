@@ -149,23 +149,30 @@ def load_reference(args: argparse.Namespace):
 
     model_id, local_only = resolve_model(args.model)
     source = "local path" if local_only else "HuggingFace"
+    # revision only applies when pulling from HF; for a resolved local
+    # path the caller is already pointing at a specific checkout.
+    revision = getattr(args, "revision", None) if not local_only else None
+    pin_note = f"@{revision}" if revision else ""
     print(
-        f"Loading Qwen3-ASR from {model_id} ({source}, "
+        f"Loading Qwen3-ASR from {model_id}{pin_note} ({source}, "
         f"transformers {transformers.__version__}, device={args.device})"
     )
 
     config = AutoConfig.from_pretrained(
-        model_id, trust_remote_code=False, local_files_only=local_only,
+        model_id, revision=revision,
+        trust_remote_code=False, local_files_only=local_only,
     )
     # fix_mistral_regex=True matches the author-repo call in Qwen3ASRModel.from_pretrained
     # and suppresses the upstream tokenizer regex warning.
     processor = AutoProcessor.from_pretrained(
-        model_id, trust_remote_code=False, local_files_only=local_only,
+        model_id, revision=revision,
+        trust_remote_code=False, local_files_only=local_only,
         fix_mistral_regex=True,
     )
     model = AutoModel.from_pretrained(
         model_id,
         config=config,
+        revision=revision,
         trust_remote_code=False,
         local_files_only=local_only,
         torch_dtype=torch.bfloat16,
@@ -469,10 +476,23 @@ def cmd_decode(args: argparse.Namespace) -> int:
     if gen.scores:
         flush("dec.logits_raw", gen.scores[0], stage="dec.logits_raw")
 
+    # Mirror the C++ post-processing at src/arch/qwen3_asr/model.cpp:
+    # Qwen3-ASR emits its transcript as "language X<asr_text>actual text".
+    # The public transcribe API returns the suffix after "<asr_text>".
+    # Store both so downstream comparisons can pick the right one; the
+    # `text` field matches the user-facing C++ transcript.
+    raw_text = text
+    sep = "<asr_text>"
+    if sep in raw_text:
+        user_text = raw_text.split(sep, 1)[1]
+    else:
+        user_text = raw_text
+
     transcript = {
         "schema": "transcribe-reference-transcript-v1",
-        "text": text,
-        "normalized_text": normalize_text(text),
+        "text": user_text,
+        "raw_text": raw_text,
+        "normalized_text": normalize_text(user_text),
         "token_ids": token_ids,
         "prompt_ids": prompt_ids[0].detach().cpu().tolist() if prompt_ids is not None else [],
         "language": args.language,
@@ -499,6 +519,11 @@ def cmd_decode(args: argparse.Namespace) -> int:
 def _add_common(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--model", required=True,
                     help="HF repo id (Qwen/Qwen3-ASR-0.6B) or local directory")
+    sp.add_argument("--revision", default=None,
+                    help="HF revision (branch/tag/commit SHA) to pin the "
+                         "download to. Ignored for local-directory models. "
+                         "The golden manifest records the canonical pinned "
+                         "revision for each variant.")
     sp.add_argument("--audio", required=True, help="16 kHz mono WAV path")
     sp.add_argument("--out", required=True, help="Output directory for dumps")
     sp.add_argument("--device", default="cpu", help="torch device (default: cpu)")

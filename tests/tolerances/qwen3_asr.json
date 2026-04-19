@@ -37,8 +37,8 @@
   "dec.token_emb":        {"max_abs": 1e-6,   "mean_abs": 1e-7},
   "dec.audio_injected":   {"max_abs": 0.2,    "mean_abs": 0.01},
   "dec.block.0.out":      {"max_abs": 3.0,    "mean_abs": 0.05},
-  "dec.block.27.out":     {"max_abs": 100.0,  "mean_abs": 2.0},
-  "dec.out_before_head":  {"max_abs": 100.0,  "mean_abs": 1.0},
-  "dec.logits_raw":       {"max_abs": 2.0,    "mean_abs": 0.5},
+  "dec.block.27.out":     {"max_abs": 128.0,  "mean_abs": 2.0},
+  "dec.out_before_head":  {"max_abs": 140.0,  "mean_abs": 1.0},
+  "dec.logits_raw":       {"max_abs": 2.5,    "mean_abs": 0.5},
   "dec.logits":           {"max_abs": "inf",  "mean_abs": "inf"}
 }

@@ -19,7 +19,8 @@ Usage:
     uv run scripts/bench/run.py --model models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf --samples jfk
 
   Options:
-    --family {parakeet,cohere,all}   model family to bench (default: all)
+    --family {parakeet,cohere,qwen3_asr,all}
+                                     model family to bench (default: all)
     --quants Q[,Q...]                quants to bench (default: f16,q8_0,q4_k_m)
     --samples S[,S...]               sample stems (default: jfk,dots)
     --iters N                        measured iterations per cell (default: 2)
@@ -68,7 +69,17 @@ from pathlib import Path
 
 DEFAULT_QUANTS = ["f16", "q8_0", "q4_k_m"]
 DEFAULT_SAMPLES = ["jfk", "dots"]
-KNOWN_FAMILIES = ["parakeet", "cohere"]
+KNOWN_FAMILIES = ["parakeet", "cohere", "qwen3_asr"]
+
+# Case-insensitive prefixes accepted as belonging to a family when
+# discovering GGUFs under models/. Family keys are snake_case, but
+# some upstream HF slugs are not (e.g. Qwen3-ASR-0.6B). Discovery
+# matches stem.lower().startswith(alias) for each alias listed here.
+FAMILY_SLUG_ALIASES: dict[str, list[str]] = {
+    "parakeet":  ["parakeet"],
+    "cohere":    ["cohere"],
+    "qwen3_asr": ["qwen3_asr", "qwen3-asr"],
+}
 KNOWN_BACKENDS = ["metal", "cpu", "vulkan"]
 
 
@@ -183,17 +194,20 @@ def parse_quant_from_filename(path: Path) -> str | None:
 def discover_family_models(repo: Path, family: str) -> dict[str, Path]:
     """Return {quant: path} for a given family, picking newest on collision.
 
-    Layout is models/<slug>/<slug>-<QUANT>.gguf; any slug whose filename
-    starts with `family` is treated as belonging to that family. Multiple
-    variants (e.g. parakeet v2 + v3) collapse into the same {quant: path}
-    map; newest-mtime wins per quant.
+    Layout is models/<slug>/<slug>-<QUANT>.gguf; a slug is considered
+    part of `family` if its lowercased stem starts with any alias from
+    FAMILY_SLUG_ALIASES. Multiple variants (e.g. parakeet v2 + v3, or
+    qwen3-asr-0.6b + qwen3-asr-1.7b) collapse into the same {quant:
+    path} map; newest-mtime wins per quant.
     """
     model_root = repo / "models"
     if not model_root.is_dir():
         return {}
+    aliases = [a.lower() for a in FAMILY_SLUG_ALIASES.get(family, [family])]
     by_quant: dict[str, list[Path]] = {}
     for path in model_root.glob("*/*.gguf"):
-        if not path.stem.startswith(family):
+        stem_lower = path.stem.lower()
+        if not any(stem_lower.startswith(a) for a in aliases):
             continue
         quant = parse_quant_from_filename(path)
         if quant:
@@ -446,7 +460,9 @@ def print_summary_table(family: str, runs: list[dict], slug: str,
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--family", choices=["parakeet", "cohere", "all"], default="all")
+    p.add_argument("--family",
+                   choices=["parakeet", "cohere", "qwen3_asr", "all"],
+                   default="all")
     p.add_argument("--quants", type=str, default=",".join(DEFAULT_QUANTS))
     p.add_argument("--samples", type=str, default=",".join(DEFAULT_SAMPLES))
     p.add_argument("--iters", type=int, default=2)

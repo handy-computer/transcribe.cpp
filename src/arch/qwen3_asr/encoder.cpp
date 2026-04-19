@@ -263,11 +263,17 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // than mel_per_chunk, the batched conv still emits per_chunk_aftercnn
     // frames for it (the tail is zero-padded in the mel-input packer).
     // The reference ragged-selects only the real aftercnn frames using
-    // padded_mask_after_cnn, giving T_enc < T_enc_padded. We instead
-    // keep all T_enc_padded frames and let the LM consume the extra
-    // silence-derived audio_pad positions — they carry near-zero
-    // encoder activations and do not perturb the transcript in practice.
-    // TODO: trim to T_enc for strict reference parity on short tails.
+    // padded_mask_after_cnn, giving T_enc_real < T_enc_padded.
+    //
+    // The graph-level output (`eb.out`) keeps the padded T_enc_padded
+    // frames — trimming here would require a dynamic-shape op mid-
+    // graph and complicate every subsequent view. We instead match the
+    // reference's ragged selection on the host-read boundary in
+    // model.cpp: the backend-to-host copy pulls all padded rows, then
+    // we shrink enc_host to T_enc_real = (n_chunks-1)*per_chunk_aftercnn
+    // + last_chunk_aftercnn before the LM prefill. Everything
+    // downstream (audio-position list, prefill graph, dump shapes)
+    // sees the trimmed T_enc — same as the reference.
 
     const int64_t d_model        = hp.enc_d_model;
     const int64_t n_heads        = hp.enc_n_heads;
@@ -435,7 +441,6 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
 
     // Force evaluation of non-output debug tensors so they survive the
     // scheduler's live-range packing and are readable after compute.
-    if (eb.dumps.conv0_pre_gelu) ggml_build_forward_expand(eb.graph, eb.dumps.conv0_pre_gelu);
     if (eb.dumps.subsample_out)  ggml_build_forward_expand(eb.graph, eb.dumps.subsample_out);
     if (eb.dumps.pos_add_out)    ggml_build_forward_expand(eb.graph, eb.dumps.pos_add_out);
     if (eb.dumps.block_0_out)    ggml_build_forward_expand(eb.graph, eb.dumps.block_0_out);

@@ -153,7 +153,8 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/corrupt_magic.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf)
 
 find_program(TRANSCRIBE_UV uv)
 
@@ -393,6 +394,37 @@ if(TRANSCRIBE_UV)
 endif()
 
 # -----------------------------------------------------------------------------
+# Qwen3-ASR loader smoke test (fixture-backed, always on)
+# -----------------------------------------------------------------------------
+#
+# Loads arch_qwen3_asr_minimal.gguf and asserts the hparams, tokenizer,
+# capabilities, chat-template token resolution, and the full Qwen3-ASR
+# weight catalog all come through the loader cleanly. Does not call
+# transcribe_run — toy weights produce nonsense. Run-path coverage is
+# in qwen3_asr_real_smoke_{0_6b,1_7b}.cpp.
+
+if(TRANSCRIBE_UV)
+    add_executable(transcribe_qwen3_asr_smoke
+        qwen3_asr_smoke.cpp)
+
+    target_link_libraries(transcribe_qwen3_asr_smoke PRIVATE transcribe ggml)
+
+    target_include_directories(transcribe_qwen3_asr_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+
+    target_compile_definitions(transcribe_qwen3_asr_smoke PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_qwen3_asr_smoke)
+
+    add_dependencies(transcribe_qwen3_asr_smoke fixtures)
+
+    add_test(NAME transcribe_qwen3_asr_smoke COMMAND transcribe_qwen3_asr_smoke)
+    set_tests_properties(transcribe_qwen3_asr_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Cohere ASR end-to-end smoke test (real-model gated)
 # -----------------------------------------------------------------------------
 #
@@ -464,26 +496,29 @@ endif()
 # Qwen3-ASR structural + end-to-end tests (real-model gated)
 # -----------------------------------------------------------------------------
 #
-# Same gating shape as the Cohere tests. TRANSCRIBE_QWEN3_ASR_GGUF
-# picks the GGUF at runtime; unset → SKIP_RETURN_CODE 77. Built only
-# when TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON.
+# Structural loader tests are now split by variant so the 0.6B and
+# 1.7B GGUFs can each be validated against their own hparam roster.
+# Each structural test looks for its variant-specific env var and
+# skips (RC 77) when unset:
+#
+#   TRANSCRIBE_QWEN3_ASR_0_6B_GGUF  -> transcribe_qwen3_asr_real_smoke_0_6b
+#   TRANSCRIBE_QWEN3_ASR_1_7B_GGUF  -> transcribe_qwen3_asr_real_smoke_1_7b
+#
+# The e2e smoke still uses TRANSCRIBE_QWEN3_ASR_GGUF (variant-agnostic
+# — either variant is a valid e2e target). Built only when
+# TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON.
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
-    add_executable(transcribe_qwen3_asr_real_smoke
-        qwen3_asr_real_smoke.cpp)
-
-    target_link_libraries(transcribe_qwen3_asr_real_smoke
-        PRIVATE transcribe ggml)
-
-    target_include_directories(transcribe_qwen3_asr_real_smoke PRIVATE
-        ${CMAKE_SOURCE_DIR}/src)
-
-    transcribe_apply_warnings(transcribe_qwen3_asr_real_smoke)
-
-    add_test(NAME transcribe_qwen3_asr_real_smoke
-        COMMAND transcribe_qwen3_asr_real_smoke)
-    set_tests_properties(transcribe_qwen3_asr_real_smoke PROPERTIES
-        SKIP_RETURN_CODE 77)
+    foreach(_variant 0_6b 1_7b)
+        set(_target transcribe_qwen3_asr_real_smoke_${_variant})
+        add_executable(${_target} qwen3_asr_real_smoke_${_variant}.cpp)
+        target_link_libraries(${_target} PRIVATE transcribe ggml)
+        target_include_directories(${_target} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src)
+        transcribe_apply_warnings(${_target})
+        add_test(NAME ${_target} COMMAND ${_target})
+        set_tests_properties(${_target} PROPERTIES SKIP_RETURN_CODE 77)
+    endforeach()
 
     add_executable(transcribe_qwen3_asr_e2e_smoke
         qwen3_asr_e2e_smoke.cpp)

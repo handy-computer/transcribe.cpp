@@ -1,17 +1,21 @@
-// qwen3_asr_real_smoke.cpp - real-model gated loader structural test.
+// qwen3_asr_real_smoke_0_6b.cpp - real-model gated loader structural
+// test for the Qwen3-ASR 0.6B variant.
 //
-// Loads a real Qwen3-ASR GGUF (output of scripts/convert-qwen3_asr.py)
-// and asserts that the loader produces a fully populated QwenAsrModel
-// matching the published 0.6B architecture.
+// Loads a real Qwen3-ASR-0.6B GGUF (output of
+// scripts/convert-qwen3_asr.py) and asserts the loader produces a
+// fully populated QwenAsrModel matching the published 0.6B
+// architecture. The 1.7B variant has its own paired test in
+// qwen3_asr_real_smoke_1_7b.cpp with variant-specific dims.
 //
 // Gating:
 //   - TRANSCRIBE_BUILD_REAL_MODEL_TESTS (CMake, default OFF) controls
 //     whether this binary is built.
-//   - At runtime, TRANSCRIBE_QWEN3_ASR_GGUF points at the GGUF. If
-//     unset, exits 77 (CTest "skipped").
+//   - At runtime, TRANSCRIBE_QWEN3_ASR_0_6B_GGUF points at the GGUF.
+//     If unset, exits 77 (CTest "skipped").
 //
 // What we assert:
-//   1. Load returns OK; arch string is "qwen3_asr"; backend non-empty.
+//   1. Load returns OK; arch string is "qwen3_asr"; variant string is
+//      "qwen3-asr-0.6b"; backend non-empty.
 //   2. QwenAsrHParams match the 0.6B variant: 18-layer encoder at
 //      d_model=896 / n_heads=14 / ffn=3584, 28-layer LM at hidden=1024
 //      with GQA 16/8 heads and head_dim=128, SwiGLU (silu),
@@ -24,7 +28,8 @@
 //      match GQA 16/8 with head_dim=128.
 //   5. No lm_head tensor slot (tied to dec.token_embd.weight).
 //   6. Capabilities: native_sample_rate=16000, timestamps=NONE,
-//      streaming=true (family note), n_languages matches converter.
+//      n_languages matches the 30-language roster the converter
+//      writes, supports_language_detect true, supports_translate false.
 
 #include "transcribe.h"
 
@@ -92,17 +97,17 @@ qwen_view(const struct transcribe_model * m) {
 } // namespace
 
 int main() {
-    const char * env = std::getenv("TRANSCRIBE_QWEN3_ASR_GGUF");
+    const char * env = std::getenv("TRANSCRIBE_QWEN3_ASR_0_6B_GGUF");
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
-                     "qwen3_asr_real_smoke: TRANSCRIBE_QWEN3_ASR_GGUF not set; "
-                     "skipping.\n");
+                     "qwen3_asr_real_smoke_0_6b: TRANSCRIBE_QWEN3_ASR_0_6B_GGUF "
+                     "not set; skipping.\n");
         return 77;
     }
     const std::string fixture = env;
     if (!file_exists(fixture)) {
         std::fprintf(stderr,
-                     "qwen3_asr_real_smoke: file not found: %s\n",
+                     "qwen3_asr_real_smoke_0_6b: file not found: %s\n",
                      fixture.c_str());
         return 77;
     }
@@ -118,11 +123,13 @@ int main() {
     }
 
     CHECK_STR_EQ(transcribe_model_arch_string(model), "qwen3_asr");
+    CHECK_STR_EQ(transcribe_model_variant_string(model), "qwen3-asr-0.6b");
     {
         const char * backend = transcribe_model_backend(model);
         CHECK(backend != nullptr && backend[0] != '\0');
         if (backend) {
-            std::fprintf(stderr, "qwen3_asr_real_smoke: backend=%s\n", backend);
+            std::fprintf(stderr,
+                         "qwen3_asr_real_smoke_0_6b: backend=%s\n", backend);
         }
     }
 
@@ -131,6 +138,13 @@ int main() {
     if (caps != nullptr) {
         CHECK_EQ_INT(caps->native_sample_rate, 16000);
         CHECK(caps->supports_translate == false);
+        CHECK(caps->supports_language_detect == true);
+        // 30-language roster the Qwen3-ASR converter writes (see
+        // scripts/convert-qwen3_asr.py / intake.json). Matches the
+        // manifest.
+        CHECK_EQ_INT(caps->n_languages, 30);
+        CHECK(caps->languages != nullptr);
+        CHECK_EQ_INT(caps->max_timestamp_kind, TRANSCRIBE_TIMESTAMPS_NONE);
     }
 
     const auto * qm = qwen_view(model);
@@ -247,9 +261,10 @@ int main() {
     transcribe_model_free(model);
 
     if (g_failures > 0) {
-        std::fprintf(stderr, "qwen3_asr_real_smoke: %d failures\n", g_failures);
+        std::fprintf(stderr,
+                     "qwen3_asr_real_smoke_0_6b: %d failures\n", g_failures);
         return EXIT_FAILURE;
     }
-    std::fprintf(stdout, "qwen3_asr_real_smoke: ok\n");
+    std::fprintf(stdout, "qwen3_asr_real_smoke_0_6b: ok\n");
     return EXIT_SUCCESS;
 }
