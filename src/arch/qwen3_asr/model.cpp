@@ -63,9 +63,17 @@ QwenAsrModel::~QwenAsrModel() {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
     }
+    if (ctx_packed != nullptr) {
+        ggml_free(ctx_packed);
+        ctx_packed = nullptr;
+    }
     if (backend_buffer != nullptr) {
         ggml_backend_buffer_free(backend_buffer);
         backend_buffer = nullptr;
+    }
+    if (packed_buffer != nullptr) {
+        ggml_backend_buffer_free(packed_buffer);
+        packed_buffer = nullptr;
     }
     for (auto it = plan.scheduler_list.rbegin();
          it != plan.scheduler_list.rend(); ++it)
@@ -279,6 +287,71 @@ transcribe_status load(
         return st;
     }
     gguf_free(gguf_data);
+
+    // Pack gate+up into a separate ctx + backend buffer so the FFN
+    // can run a single mul_mat instead of two. QKV packing was tried
+    // here too but consistently regressed on Metal. ctx_meta is sized
+    // exactly for GGUF file tensors with no headroom, so packed
+    // tensors live in their own context.
+    {
+        const size_t packed_ctx_size =
+            static_cast<size_t>(m->hparams.dec_n_layers) *
+            ggml_tensor_overhead() + 1024;
+        ggml_init_params packed_params {};
+        packed_params.mem_size   = packed_ctx_size;
+        packed_params.mem_buffer = nullptr;
+        packed_params.no_alloc   = true;
+        m->ctx_packed = ggml_init(packed_params);
+        if (m->ctx_packed == nullptr) {
+            std::fprintf(stderr,
+                         "qwen3_asr: ggml_init for ctx_packed failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        const int64_t dec_h  = m->hparams.dec_hidden;
+        const int64_t dec_im = m->hparams.dec_intermediate;
+        for (auto & b : m->weights.dec_blocks) {
+            b.ffn_gate_up_w = ggml_new_tensor_2d(
+                m->ctx_packed, b.ffn_gate_w->type, dec_h, 2 * dec_im);
+            if (b.ffn_gate_up_w == nullptr) {
+                return TRANSCRIBE_ERR_GGUF;
+            }
+        }
+
+        m->packed_buffer = ggml_backend_alloc_ctx_tensors(
+            m->ctx_packed, m->plan.primary);
+        if (m->packed_buffer == nullptr) {
+            std::fprintf(stderr,
+                         "qwen3_asr: packed_buffer alloc failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_buffer_set_usage(m->packed_buffer,
+                                      GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+        // Fill: for Q8_0 (and other row-wise quants) concat along dim 1
+        // is just gate's bytes followed by up's bytes. One CPU round-
+        // trip per layer at load time; zero cost at inference.
+        std::vector<uint8_t> buf;
+        for (auto & b : m->weights.dec_blocks) {
+            const size_t gate_bytes = ggml_nbytes(b.ffn_gate_w);
+            const size_t up_bytes   = ggml_nbytes(b.ffn_up_w);
+            if (ggml_nbytes(b.ffn_gate_up_w) != gate_bytes + up_bytes) {
+                std::fprintf(stderr,
+                             "qwen3_asr: gate_up size mismatch "
+                             "(%zu vs %zu + %zu)\n",
+                             ggml_nbytes(b.ffn_gate_up_w),
+                             gate_bytes, up_bytes);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            buf.resize(std::max(gate_bytes, up_bytes));
+            ggml_backend_tensor_get(b.ffn_gate_w, buf.data(), 0, gate_bytes);
+            ggml_backend_tensor_set(b.ffn_gate_up_w, buf.data(),
+                                    0, gate_bytes);
+            ggml_backend_tensor_get(b.ffn_up_w, buf.data(), 0, up_bytes);
+            ggml_backend_tensor_set(b.ffn_gate_up_w, buf.data(),
+                                    gate_bytes, up_bytes);
+        }
+    }
 
     m->t_load_us = ggml_time_us() - t_load_start;
     *out_model = m.release();
@@ -525,6 +598,21 @@ transcribe_status run(
     }
 
     // ----- Reset per-call compute state ----------------------------
+    // Phase timers. Internal diagnostic: the public
+    // transcribe_timings only exposes mel/encode/decode, but a lot of
+    // per-run cost sits in graph build, scheduler alloc, host uploads,
+    // and prefill compute. These locals break that out so we can print
+    // a full breakdown under TRANSCRIBE_PERF_DEBUG without touching
+    // the public API.
+    const int64_t t_enc_build_start = ggml_time_us();
+    int64_t t_enc_build_us       = 0;
+    int64_t t_enc_d2h_us         = 0;
+    int64_t t_prefill_build_us   = 0;
+    int64_t t_prefill_compute_us = 0;
+    int64_t t_prefill_logits_us  = 0;
+    int64_t t_step_loop_us       = 0;
+    int     n_steps              = 0;
+
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
@@ -610,6 +698,7 @@ transcribe_status run(
     }
 
     const int64_t t_enc_start = ggml_time_us();
+    t_enc_build_us = t_enc_start - t_enc_build_start;
     if (const ggml_status gs =
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
@@ -649,13 +738,22 @@ transcribe_status run(
     const int T_enc = static_cast<int>(eb.out->ne[1]);
     cc->enc_host.resize(static_cast<size_t>(d_enc) *
                         static_cast<size_t>(T_enc));
+    const int64_t t_d2h_start = ggml_time_us();
     ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0,
                             cc->enc_host.size() * sizeof(float));
+    t_enc_d2h_us = ggml_time_us() - t_d2h_start;
 
     // ----- KV cache init -----
     // Size for a generous default context; the step loop caps
     // max_new_tokens so the cache is never touched past T_prompt +
     // max_new_tokens. 2048 * 28 * 8 * 128 * 2 bytes (f16) = ~117 MiB.
+    //
+    // t_dec_start covers the whole decode phase (KV init + prompt +
+    // prefill build/compute + step loop). Earlier versions started it
+    // after prefill compute, which bucketed prefill into the wall/phase
+    // gap. Prefill is part of "decode" as users understand it.
+    const int64_t t_dec_start = ggml_time_us();
+    const int64_t t_prefill_build_start = t_dec_start;
     const int kv_n_ctx = 2048;
     if (cc->kv_cache.ctx == nullptr) {
         ggml_type kv_type = GGML_TYPE_F16;
@@ -696,9 +794,16 @@ transcribe_status run(
     }
 
     // ----- Prefill graph -----
+    // slice_last: when false, the last block's FFN + final norm run
+    // on every position (needed for debug dump parity). When true, we
+    // slice to just the final position before the last FFN — same
+    // optimization llama.cpp's inp_out_ids gives, worth ~25 ms here.
+    const bool dumps_on  = transcribe::debug::enabled();
+    const bool slice_last = !dumps_on;
     PrefillBuild pb = build_prefill_graph(
         cc->compute_ctx, cm->weights, cm->hparams,
-        cc->kv_cache, T_prompt, T_enc, prefix_len, suffix_len);
+        cc->kv_cache, T_prompt, T_enc, prefix_len, suffix_len,
+        /*use_flash=*/cc->decoder_use_flash, slice_last);
     if (pb.graph == nullptr || pb.out == nullptr) {
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -725,19 +830,24 @@ transcribe_status run(
     }
 
     {
-        // Causal mask: [T_prompt, T_prompt]; row r, col c: 0 if c <= r,
-        // else finfo.min. Row-major buffer (ne[0]=T_prompt fastest).
-        std::vector<float> mask(static_cast<size_t>(T_prompt) * T_prompt,
-                                std::numeric_limits<float>::lowest());
+        // Causal mask in F16 (matches pb.mask_in's type). Row r, col c:
+        // +0 if c <= r, else -inf. Row-major (ne[0]=T_prompt fastest).
+        // F16 direct upload avoids a per-layer ggml_cast in the graph.
+        const ggml_fp16_t mask_zero    = ggml_fp32_to_fp16(0.0f);
+        const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
+        std::vector<ggml_fp16_t> mask(
+            static_cast<size_t>(T_prompt) * T_prompt, mask_neg_inf);
         for (int r = 0; r < T_prompt; ++r) {
             for (int c = 0; c <= r; ++c) {
-                mask[static_cast<size_t>(r) * T_prompt + c] = 0.0f;
+                mask[static_cast<size_t>(r) * T_prompt + c] = mask_zero;
             }
         }
         ggml_backend_tensor_set(pb.mask_in, mask.data(),
-                                0, mask.size() * sizeof(float));
+                                0, mask.size() * sizeof(ggml_fp16_t));
     }
 
+    const int64_t t_prefill_compute_start = ggml_time_us();
+    t_prefill_build_us = t_prefill_compute_start - t_prefill_build_start;
     if (const ggml_status gs =
             ggml_backend_sched_graph_compute(cc->sched, pb.graph);
         gs != GGML_STATUS_SUCCESS)
@@ -747,6 +857,7 @@ transcribe_status run(
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
+    t_prefill_compute_us = ggml_time_us() - t_prefill_compute_start;
 
     cc->kv_cache.n    = T_prompt;
     cc->kv_cache.head = T_prompt;
@@ -764,10 +875,8 @@ transcribe_status run(
     try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
     try_dump("dec.logits_raw",      pb.dumps.logits_raw,      "dec.logits_raw");
 
-    // ----- Decode phase (prefill logits + step loop) -----
-    const int64_t t_dec_start = ggml_time_us();
-
     // ----- Read prefill logits + first argmax -----
+    const int64_t t_prefill_logits_start = ggml_time_us();
     const int vocab = cm->hparams.dec_vocab_size;
     std::vector<float> logits(vocab);
     ggml_backend_tensor_get(pb.out, logits.data(), 0,
@@ -785,86 +894,96 @@ transcribe_status run(
     std::vector<int32_t> generated_ids;
     int32_t next_tok = argmax(logits);
     generated_ids.push_back(next_tok);
+    t_prefill_logits_us = ggml_time_us() - t_prefill_logits_start;
 
     // ----- Step loop -----
     const int32_t eos_id = cm->hparams.eos_token_id;
     const int32_t max_new = 256;  // matches reference dumper default
     int cur_past = T_prompt;
 
-    // Reserve the scheduler once against a worst-case single-token
-    // step graph at n_past = kv_n_ctx - 1. Subsequent sched_alloc_graph
-    // calls in the loop reuse the already-reserved allocation rather
-    // than growing internal buffers for each new step size.
+    // ---------- Build step graph ONCE and reuse every step ----------
+    // Static shape sized for the actual workload: T_prompt audio/prompt
+    // tokens already written + up to max_new generated tokens.
+    // Metal's flash-attn kernels dispatch much faster (~30% on M4 Max)
+    // when the K/V ne[1] is a power of 2. Round up accordingly, with a
+    // floor of 1024 since smaller values just move us into the "slow
+    // misaligned" branch without saving meaningful bandwidth.
+    int max_n_kv = 1024;
+    while (max_n_kv < T_prompt + max_new) max_n_kv *= 2;
+    if (max_n_kv > kv_n_ctx) max_n_kv = kv_n_ctx;
+    const int64_t t_step_build_start = ggml_time_us();
+    if (cc->compute_ctx != nullptr) {
+        ggml_free(cc->compute_ctx);
+        cc->compute_ctx = nullptr;
+    }
     {
-        if (cc->compute_ctx != nullptr) {
-            ggml_free(cc->compute_ctx);
-            cc->compute_ctx = nullptr;
-        }
         ggml_init_params ip {};
         ip.mem_size   = 8 * 1024 * 1024;
         ip.mem_buffer = nullptr;
         ip.no_alloc   = true;
         cc->compute_ctx = ggml_init(ip);
-        if (cc->compute_ctx != nullptr) {
-            StepBuild sb_reserve = build_step_graph(
-                cc->compute_ctx, cm->weights, cm->hparams,
-                cc->kv_cache, /*n_past=*/kv_n_ctx - 1);
-            if (sb_reserve.graph != nullptr) {
-                ggml_backend_sched_reserve(cc->sched, sb_reserve.graph);
-            }
+        if (cc->compute_ctx == nullptr) {
+            std::fprintf(stderr,
+                         "qwen3_asr step: ggml_init failed\n");
+            return TRANSCRIBE_ERR_GGUF;
         }
     }
+    StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights,
+                                    cm->hparams, cc->kv_cache, max_n_kv,
+                                    /*use_flash=*/cc->decoder_use_flash);
+    if (sb.graph == nullptr || sb.out == nullptr) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        std::fprintf(stderr,
+                     "qwen3_asr step: sched_alloc_graph failed (build-once)\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    const int64_t t_step_build_once_us = ggml_time_us() - t_step_build_start;
 
+    // Mask buffer: reused host-side across steps. Starts all -inf;
+    // per step we zero positions [0, cur_past] (attend) and leave
+    // [cur_past+1, max_n_kv) as -inf (ignore).
+    const ggml_fp16_t mask_zero    = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
+    std::vector<ggml_fp16_t> step_mask(max_n_kv, mask_neg_inf);
+
+    // Per-step timers. Now much smaller — no per-step graph work.
+    int64_t t_step_set_us  = 0;
+    int64_t t_step_comp_us = 0;
+    int64_t t_step_get_us  = 0;
+    const int64_t t_step_loop_start = ggml_time_us();
     while (next_tok != eos_id &&
            static_cast<int32_t>(generated_ids.size()) < max_new &&
-           cur_past + 1 <= kv_n_ctx)
+           cur_past + 1 <= max_n_kv)
     {
-        // Fresh compute_ctx per step: step graphs are small, freeing
-        // and re-initing keeps memory low without scheduler plumbing.
-        if (cc->compute_ctx != nullptr) {
-            ggml_free(cc->compute_ctx);
-            cc->compute_ctx = nullptr;
-        }
-        {
-            ggml_init_params ip {};
-            ip.mem_size   = 8 * 1024 * 1024;
-            ip.mem_buffer = nullptr;
-            ip.no_alloc   = true;
-            cc->compute_ctx = ggml_init(ip);
-            if (cc->compute_ctx == nullptr) {
-                std::fprintf(stderr,
-                             "qwen3_asr step: ggml_init failed\n");
-                return TRANSCRIBE_ERR_GGUF;
-            }
-        }
-
-        StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights,
-                                        cm->hparams, cc->kv_cache, cur_past);
-        if (sb.graph == nullptr || sb.out == nullptr) {
-            return TRANSCRIBE_ERR_GGUF;
-        }
-
-        ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-            std::fprintf(stderr,
-                         "qwen3_asr step: sched_alloc_graph failed\n");
-            return TRANSCRIBE_ERR_GGUF;
-        }
+        const int64_t t_set0 = ggml_time_us();
 
         ggml_backend_tensor_set(sb.input_id_in, &next_tok,
                                 0, sizeof(int32_t));
         const int32_t pos_val = cur_past;
         ggml_backend_tensor_set(sb.position_in, &pos_val,
                                 0, sizeof(int32_t));
+        const int64_t kv_idx_val = cur_past;
+        ggml_backend_tensor_set(sb.kv_idx_in, &kv_idx_val,
+                                0, sizeof(int64_t));
 
-        // Causal mask for the step: a single query row attending to
-        // all n_past + 1 keys (all zeros — no masking needed since
-        // this is the newest token).
-        {
-            std::vector<float> sm(cur_past + 1, 0.0f);
-            ggml_backend_tensor_set(sb.mask_in, sm.data(),
-                                    0, sm.size() * sizeof(float));
+        // Mask: mark the newly-added position as attendable. Positions
+        // [0, cur_past) were zeroed in prior iterations; just set the
+        // new one. (On iter 0, zero everything in [0, cur_past].)
+        if (cur_past == T_prompt) {
+            std::fill(step_mask.begin(),
+                      step_mask.begin() + cur_past + 1, mask_zero);
+        } else {
+            step_mask[cur_past] = mask_zero;
         }
+        ggml_backend_tensor_set(sb.mask_in, step_mask.data(), 0,
+                                static_cast<size_t>(max_n_kv) *
+                                sizeof(ggml_fp16_t));
+
+        const int64_t t_set1 = ggml_time_us();
+        t_step_set_us += t_set1 - t_set0;
 
         if (const ggml_status gs =
                 ggml_backend_sched_graph_compute(cc->sched, sb.graph);
@@ -875,8 +994,9 @@ transcribe_status run(
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
+        const int64_t t_comp1 = ggml_time_us();
+        t_step_comp_us += t_comp1 - t_set1;
 
-        // GPU argmax: 4-byte readback instead of vocab_size*4.
         int32_t argmax_tok = 0;
         ggml_backend_tensor_get(sb.out, &argmax_tok, 0, sizeof(int32_t));
         next_tok = argmax_tok;
@@ -884,7 +1004,18 @@ transcribe_status run(
         cur_past += 1;
         cc->kv_cache.n    = cur_past + 1;
         cc->kv_cache.head = cur_past + 1;
+        t_step_get_us += ggml_time_us() - t_comp1;
     }
+    t_step_loop_us = ggml_time_us() - t_step_loop_start;
+    n_steps = static_cast<int>(generated_ids.size()) - 1;
+
+    // Map the granular diagnostic counters to the shape the debug
+    // print expects. With graph reuse all per-step overhead collapses
+    // to tensor_set; build/alloc/ctx_reset are amortized in the
+    // t_step_build_once_us bucket printed separately.
+    int64_t t_step_ctx_us   = 0;
+    int64_t t_step_build_us = t_step_build_once_us;
+    int64_t t_step_alloc_us = 0;
 
     // Strip trailing EOS if present (match the reference transcript).
     if (!generated_ids.empty() && generated_ids.back() == eos_id) {
@@ -910,6 +1041,56 @@ transcribe_status run(
     // Write full_text + a single segment (no timestamps; Qwen3-ASR's
     // ASR head emits TIMESTAMPS_NONE per the family capability).
     cc->t_decode_us = ggml_time_us() - t_dec_start;
+
+    // Optional perf breakdown. Public transcribe_timings only has
+    // mel/encode/decode — this dumps the finer split we need to
+    // reason about bench wall-vs-phase gaps without changing the
+    // public API or the bench JSON schema. Gated on env var so it
+    // doesn't spam normal runs.
+    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG");
+        e != nullptr && *e != '\0' && *e != '0')
+    {
+        const double ms = 1.0 / 1000.0;
+        const double sum_ms = (cc->t_mel_us + t_enc_build_us +
+                               cc->t_encode_us + t_enc_d2h_us +
+                               t_prefill_build_us + t_prefill_compute_us +
+                               t_prefill_logits_us + t_step_loop_us) * ms;
+        const double per_step_ms = (n_steps > 0)
+            ? (t_step_loop_us * ms / n_steps) : 0.0;
+        std::fprintf(stderr,
+            "qwen3_asr perf breakdown:\n"
+            "  mel              %8.2f ms\n"
+            "  enc_build        %8.2f ms  (graph + sched + uploads)\n"
+            "  enc_compute      %8.2f ms\n"
+            "  enc_d2h          %8.2f ms  (%d floats)\n"
+            "  prefill_build    %8.2f ms  (kv_init + prompt + graph + sched + uploads)\n"
+            "  prefill_compute  %8.2f ms  (T_prompt=%d)\n"
+            "  prefill_logits   %8.2f ms  (readback + argmax, vocab=%d)\n"
+            "  step_loop        %8.2f ms  (%d steps, %.2f ms/step)\n"
+            "    ctx_reset    %8.2f ms  (%.3f ms/step)\n"
+            "    graph_build  %8.2f ms  (%.3f ms/step)\n"
+            "    sched_alloc  %8.2f ms  (%.3f ms/step)\n"
+            "    tensor_set   %8.2f ms  (%.3f ms/step)\n"
+            "    compute      %8.2f ms  (%.3f ms/step)\n"
+            "    tensor_get   %8.2f ms  (%.3f ms/step)\n"
+            "  ---\n"
+            "  sum              %8.2f ms\n",
+            cc->t_mel_us         * ms,
+            t_enc_build_us       * ms,
+            cc->t_encode_us      * ms,
+            t_enc_d2h_us         * ms, static_cast<int>(cc->enc_host.size()),
+            t_prefill_build_us   * ms,
+            t_prefill_compute_us * ms, T_prompt,
+            t_prefill_logits_us  * ms, vocab,
+            t_step_loop_us       * ms, n_steps, per_step_ms,
+            t_step_ctx_us   * ms, (n_steps > 0) ? (t_step_ctx_us   * ms / n_steps) : 0.0,
+            t_step_build_us * ms, (n_steps > 0) ? (t_step_build_us * ms / n_steps) : 0.0,
+            t_step_alloc_us * ms, (n_steps > 0) ? (t_step_alloc_us * ms / n_steps) : 0.0,
+            t_step_set_us   * ms, (n_steps > 0) ? (t_step_set_us   * ms / n_steps) : 0.0,
+            t_step_comp_us  * ms, (n_steps > 0) ? (t_step_comp_us  * ms / n_steps) : 0.0,
+            t_step_get_us   * ms, (n_steps > 0) ? (t_step_get_us   * ms / n_steps) : 0.0,
+            sum_ms);
+    }
 
     cc->full_text = transcript_text;
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;

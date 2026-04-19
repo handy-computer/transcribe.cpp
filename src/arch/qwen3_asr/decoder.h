@@ -81,27 +81,40 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
                                  int                    T_prompt,
                                  int                    T_enc,
                                  int                    prefix_len,
-                                 int                    suffix_len);
+                                 int                    suffix_len,
+                                 bool                   use_flash,
+                                 bool                   slice_last);
 
 // ---------- Step graph (one token) ----------
 
 struct StepBuild {
     ggml_tensor * input_id_in  = nullptr;  // [1] i32
     ggml_tensor * position_in  = nullptr;  // [1] i32, value = n_past
-    ggml_tensor * mask_in      = nullptr;  // [n_past + 1] f32
+    ggml_tensor * kv_idx_in    = nullptr;  // [1] i64, KV write position
+    ggml_tensor * mask_in      = nullptr;  // [max_n_kv, 1] f16
     ggml_tensor * out          = nullptr;  // [1] i32 — argmax token id
     ggml_cgraph * graph        = nullptr;
 
-    int           n_past       = 0;
+    int           max_n_kv     = 0;  // static shape sized for whole run
 };
 
-// Build a single-token step graph. Reads KV cache positions [0, n_past),
-// writes the new K/V at position n_past, and emits logits for that
-// position.
+// Build a static-shape single-token step graph suitable for reuse
+// across every autoregressive step in a run. Topology depends only on
+// max_n_kv (the max KV window the LM will see), not on n_past. The
+// graph has four input tensors the caller updates per step:
+//   input_id_in [1]      — the token to embed
+//   position_in [1]      — RoPE position
+//   kv_idx_in   [1]      — where to write K/V (via ggml_set_rows)
+//   mask_in     [max_n_kv, 1] — attention mask; positions > n_past hold -inf
+//
+// Reusing the same graph every step eliminates the ggml_free/init +
+// rebuild + sched_reset + sched_alloc_graph overhead that per-step
+// construction incurs (measured ~0.4 ms/step before this change).
 StepBuild build_step_graph(ggml_context *         ctx,
                            const QwenAsrWeights & weights,
                            const QwenAsrHParams & hp,
                            QwenAsrKvCache &       kv_cache,
-                           int                    n_past);
+                           int                    max_n_kv,
+                           bool                   use_flash);
 
 } // namespace transcribe::qwen3_asr

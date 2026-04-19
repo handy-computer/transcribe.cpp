@@ -97,10 +97,12 @@ struct QwenAsrModel final : public transcribe_model {
     Tokenizer       tok;
     QwenAsrHParams  hparams;
     QwenAsrWeights  weights;
-    ggml_context *  ctx_meta = nullptr;
+    ggml_context *  ctx_meta   = nullptr;
+    ggml_context *  ctx_packed = nullptr;  // packed gate_up / qkv tensors
 
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
+    ggml_backend_buffer_t   packed_buffer  = nullptr;
 
     std::optional<transcribe::MelFrontend> mel;
 

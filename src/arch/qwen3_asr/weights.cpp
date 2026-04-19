@@ -303,6 +303,18 @@ transcribe_status build_qwen3_asr_weights(const gguf_context *    gguf,
         GET_LIN(b.ffn_gate_w,  lname("dec.blocks.%d.ffn.gate.weight", i), dec_h, dec_im);
         GET_LIN(b.ffn_up_w,    lname("dec.blocks.%d.ffn.up.weight",   i), dec_h, dec_im);
         GET_LIN(b.ffn_down_w,  lname("dec.blocks.%d.ffn.down.weight", i), dec_im, dec_h);
+
+        if (b.ffn_gate_w->type != b.ffn_up_w->type) {
+            std::fprintf(stderr,
+                         "qwen3_asr: ffn gate/up dtype mismatch at layer %d "
+                         "(%d vs %d)\n", i,
+                         static_cast<int>(b.ffn_gate_w->type),
+                         static_cast<int>(b.ffn_up_w->type));
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        // ffn_gate_up_w is allocated in ctx_packed (see model.cpp)
+        // rather than ctx_meta, because gguf_init sizes ctx_meta
+        // exactly for the file tensors with no headroom.
     }
 
     // ----- text LM: final norm -----

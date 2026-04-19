@@ -174,18 +174,25 @@ struct QwenAsrDecEmbed {
 struct QwenAsrDecBlock {
     ggml_tensor * norm_attn_w = nullptr;  // input_layernorm (RMSNorm, no bias)
     ggml_tensor * norm_ffn_w  = nullptr;  // post_attention_layernorm
-    // GQA projections; no biases on Qwen3.
-    ggml_tensor * attn_q_w    = nullptr;  // [n_heads * head_dim, hidden]
-    ggml_tensor * attn_k_w    = nullptr;  // [n_kv_heads * head_dim, hidden]
-    ggml_tensor * attn_v_w    = nullptr;  // [n_kv_heads * head_dim, hidden]
-    ggml_tensor * attn_o_w    = nullptr;  // [hidden, n_heads * head_dim]
+    // GQA projections; no biases on Qwen3. We experimented with packing
+    // Q/K/V into one mul_mat but it consistently regressed on Metal —
+    // the 3 small matvecs already run concurrently there and a combined
+    // output's strided views trip downstream kernels. Left separate.
+    ggml_tensor * attn_q_w    = nullptr;  // [hidden, n_heads * head_dim]
+    ggml_tensor * attn_k_w    = nullptr;  // [hidden, n_kv_heads * head_dim]
+    ggml_tensor * attn_v_w    = nullptr;  // [hidden, n_kv_heads * head_dim]
+    ggml_tensor * attn_o_w    = nullptr;  // [n_heads * head_dim, hidden]
     // Per-head Q/K RMSNorm applied on head_dim (Qwen3 innovation).
     ggml_tensor * attn_q_norm = nullptr;  // [head_dim]
     ggml_tensor * attn_k_norm = nullptr;  // [head_dim]
     // SwiGLU MLP.
-    ggml_tensor * ffn_gate_w  = nullptr;  // [intermediate, hidden]
-    ggml_tensor * ffn_up_w    = nullptr;  // [intermediate, hidden]
-    ggml_tensor * ffn_down_w  = nullptr;  // [hidden, intermediate]
+    ggml_tensor * ffn_gate_w    = nullptr;  // [hidden, intermediate]
+    ggml_tensor * ffn_up_w      = nullptr;  // [hidden, intermediate]
+    ggml_tensor * ffn_down_w    = nullptr;  // [intermediate, hidden]
+    // Packed gate+up projection: [hidden, 2*intermediate]. Filled at
+    // load time from ffn_gate_w + ffn_up_w by pack_combined_weights();
+    // the graph uses this for one mul_mat instead of two.
+    ggml_tensor * ffn_gate_up_w = nullptr;  // [hidden, 2*intermediate]
 };
 
 struct QwenAsrDecFinal {

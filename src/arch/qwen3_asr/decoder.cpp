@@ -47,12 +47,12 @@
 
 namespace transcribe::qwen3_asr {
 
-// Whether to use flash attention in the LM graphs. head_dim=128 is
-// supported on every backend we ship (CPU/Metal/Vulkan), and flash
-// handles GQA natively (n_kv_heads on K/V, n_heads on Q), which lets
-// us skip the repeat-interleave step entirely. The kv_type cast to
-// F16 follows the same pattern as the Cohere decoder.
-static constexpr bool kUseFlashAttn = true;
+// Flash attention vs manual GQA attention. Runtime flag: callers
+// thread cc->decoder_use_flash through build_prefill_graph /
+// build_step_graph. Default on — FA saves ~2.4× decode on the Qwen3
+// LM vs the manual repeat-interleave path on Metal. The env-var
+// override (`apply_env_overrides` → `decoder_use_flash`) finally
+// reaches the graph with this wiring.
 
 namespace {
 
@@ -77,7 +77,9 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
                                  int                    T_prompt,
                                  int                    T_enc,
                                  int                    prefix_len,
-                                 int                    suffix_len)
+                                 int                    suffix_len,
+                                 bool                   use_flash,
+                                 bool                   slice_last)
 {
     PrefillBuild pb {};
     pb.T_prompt   = T_prompt;
@@ -150,7 +152,9 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
     named(pb.positions_in, "dec.positions");
     ggml_set_input(pb.positions_in);
 
-    pb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, T_prompt, T_prompt);
+    // Mask is F16 because flash_attn_ext requires F16; uploading F16
+    // from the host avoids 28 redundant per-layer ggml_cast dispatches.
+    pb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, T_prompt, T_prompt);
     named(pb.mask_in, "dec.attn_mask");
     ggml_set_input(pb.mask_in);
 
@@ -218,7 +222,11 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
         // ---- Attention sub-layer ----
         ggml_tensor * x_norm = rms_norm(ctx, x, w.norm_attn_w, rms_eps);
 
-        // Q/K/V projections (bias-free on Qwen3).
+        // Q/K/V projections (bias-free on Qwen3). We tried packing
+        // these into one mul_mat but it consistently regressed on
+        // Metal — the backend already runs the 3 matvecs
+        // concurrently, and strided/cont'd output views trip
+        // downstream kernels into slower paths.
         ggml_tensor * Q = ggml_mul_mat(ctx, w.attn_q_w, x_norm);
         ggml_tensor * K = ggml_mul_mat(ctx, w.attn_k_w, x_norm);
         ggml_tensor * V = ggml_mul_mat(ctx, w.attn_v_w, x_norm);
@@ -291,12 +299,12 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
         ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 1, 3));
 
         ggml_tensor * o;
-        if (kUseFlashAttn) {
+        if (use_flash) {
             // ggml_flash_attn_ext handles GQA natively when K/V have
             // n_kv_heads along axis 2 and Q has n_heads — so we skip
-            // the repeat_interleave step. Mask must be F16.
-            ggml_tensor * mask_f16 = ggml_cast(ctx, pb.mask_in, GGML_TYPE_F16);
-            o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, mask_f16,
+            // the repeat_interleave step. Mask is already F16 (uploaded
+            // that way by the host — no per-layer cast).
+            o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, pb.mask_in,
                                     scale_attn, /*max_bias=*/0.0f,
                                     /*logit_softcap=*/0.0f);
             // Output is [D, H, T_q, 1] — already permuted.
@@ -306,10 +314,14 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
             // reshape-into-(1,Hkv) → repeat along the new size-1 axis
             // → collapse back. Keeps the numerics identical to the
             // reference's explicit repeat_kv.
+            // K_att/V_att are strided views of the KV cache; reshape_4d
+            // requires contiguous input.
+            ggml_tensor * K_att_c = ggml_cont(ctx, K_att);
+            ggml_tensor * V_att_c = ggml_cont(ctx, V_att);
             ggml_tensor * K_4d = ggml_reshape_4d(
-                ctx, K_att, head_dim, T_prompt, 1, n_kv_heads);
+                ctx, K_att_c, head_dim, T_prompt, 1, n_kv_heads);
             ggml_tensor * V_4d = ggml_reshape_4d(
-                ctx, V_att, head_dim, T_prompt, 1, n_kv_heads);
+                ctx, V_att_c, head_dim, T_prompt, 1, n_kv_heads);
             ggml_tensor * K_rep_template = ggml_new_tensor_4d(
                 ctx, K_att->type, head_dim, T_prompt, n_groups, n_kv_heads);
             ggml_tensor * V_rep_template = ggml_new_tensor_4d(
@@ -334,12 +346,27 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
 
         x = ggml_add(ctx, x, o);
 
+        // Before the LAST block's FFN: only the final position feeds
+        // the lm_head. Slicing x here cuts the last FFN (3 mul_mats +
+        // swiglu) from T_prompt positions to 1. llama.cpp's
+        // inp_out_ids does the same thing; we just do it for the
+        // single last-position case.
+        if (slice_last && il == n_layer - 1) {
+            const size_t elem = ggml_element_size(x);
+            x = ggml_view_2d(ctx, x, hidden, 1,
+                             elem * hidden,
+                             elem * hidden *
+                                 static_cast<size_t>(T_prompt - 1));
+            x = ggml_cont(ctx, x);
+        }
+
         // ---- MLP sub-layer (SwiGLU) ----
-        ggml_tensor * ff_norm = rms_norm(ctx, x, w.norm_ffn_w, rms_eps);
-        ggml_tensor * gate    = ggml_mul_mat(ctx, w.ffn_gate_w, ff_norm);
-        ggml_tensor * up      = ggml_mul_mat(ctx, w.ffn_up_w,   ff_norm);
-        gate = ggml_silu(ctx, gate);
-        ggml_tensor * ff = ggml_mul(ctx, gate, up);
+        // Packed gate_up projection: one mul_mat produces a [2*inter, T]
+        // tensor whose first half is gate and second half is up. ggml_swiglu
+        // then computes silu(first_half) * second_half in a single op.
+        ggml_tensor * ff_norm  = rms_norm(ctx, x, w.norm_ffn_w, rms_eps);
+        ggml_tensor * gate_up  = ggml_mul_mat(ctx, w.ffn_gate_up_w, ff_norm);
+        ggml_tensor * ff       = ggml_swiglu(ctx, gate_up);
         ff = ggml_mul_mat(ctx, w.ffn_down_w, ff);
 
         x = ggml_add(ctx, x, ff);
@@ -364,12 +391,19 @@ PrefillBuild build_prefill_graph(ggml_context *         ctx,
     transcribe::debug::mark_tensor_for_dump(x);
 
     // Slice the last position and multiply by the tied embedding.
-    ggml_tensor * last_x = ggml_view_2d(
-        ctx, x,
-        hidden, 1,
-        ggml_element_size(x) * hidden,
-        ggml_element_size(x) * hidden * static_cast<size_t>(T_prompt - 1));
-    last_x = ggml_cont(ctx, last_x);
+    // If slice_last already trimmed x to [hidden, 1] inside the loop,
+    // this view is a no-op pass-through.
+    ggml_tensor * last_x;
+    if (slice_last) {
+        last_x = x;
+    } else {
+        last_x = ggml_view_2d(
+            ctx, x,
+            hidden, 1,
+            ggml_element_size(x) * hidden,
+            ggml_element_size(x) * hidden * static_cast<size_t>(T_prompt - 1));
+        last_x = ggml_cont(ctx, last_x);
+    }
 
     ggml_tensor * logits = ggml_mul_mat(ctx, weights.dec_embed.token_w, last_x);
     logits = ggml_reshape_1d(ctx, logits, vocab);
@@ -400,29 +434,28 @@ StepBuild build_step_graph(ggml_context *         ctx,
                            const QwenAsrWeights & weights,
                            const QwenAsrHParams & hp,
                            QwenAsrKvCache &       kv_cache,
-                           int                    n_past)
+                           int                    max_n_kv,
+                           bool                   use_flash)
 {
     StepBuild sb {};
-    sb.n_past = n_past;
+    sb.max_n_kv = max_n_kv;
 
-    if (ctx == nullptr || n_past < 0) {
+    if (ctx == nullptr || max_n_kv <= 0) {
         std::fprintf(stderr,
-                     "qwen3_asr step: invalid arg (n_past=%d)\n", n_past);
+                     "qwen3_asr step: invalid arg (max_n_kv=%d)\n", max_n_kv);
         return sb;
     }
     if (kv_cache.self_k == nullptr) {
         std::fprintf(stderr, "qwen3_asr step: kv_cache not initialized\n");
         return sb;
     }
-    const int n_kv = n_past + 1;
-    if (n_kv > kv_cache.n_ctx) {
+    if (max_n_kv > kv_cache.n_ctx) {
         std::fprintf(stderr,
-                     "qwen3_asr step: n_kv=%d exceeds kv_cache.n_ctx=%d\n",
-                     n_kv, kv_cache.n_ctx);
+                     "qwen3_asr step: max_n_kv=%d exceeds kv_cache.n_ctx=%d\n",
+                     max_n_kv, kv_cache.n_ctx);
         return sb;
     }
 
-    const int64_t hidden      = hp.dec_hidden;
     const int64_t n_heads     = hp.dec_n_heads;
     const int64_t n_kv_heads  = hp.dec_n_kv_heads;
     const int64_t n_groups    = n_heads / n_kv_heads;
@@ -439,7 +472,7 @@ StepBuild build_step_graph(ggml_context *         ctx,
     const size_t k_elem = ggml_element_size(kv_cache.self_k);
     const size_t v_elem = ggml_element_size(kv_cache.self_v);
 
-    // ---------- Graph inputs ----------
+    // ---------- Graph inputs (all persist across steps) ----------
     sb.input_id_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
     ggml_set_name(sb.input_id_in, "step.input_id");
     ggml_set_input(sb.input_id_in);
@@ -448,7 +481,16 @@ StepBuild build_step_graph(ggml_context *         ctx,
     ggml_set_name(sb.position_in, "step.position");
     ggml_set_input(sb.position_in);
 
-    sb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_kv, 1);
+    // KV write position. Separate from position_in because ggml_set_rows
+    // wants i64 indices and RoPE wants i32 positions. Values are equal
+    // at runtime (both = cur_past).
+    sb.kv_idx_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+    ggml_set_name(sb.kv_idx_in, "step.kv_idx");
+    ggml_set_input(sb.kv_idx_in);
+
+    // Mask covers max_n_kv positions; host fills zeros up to n_past
+    // (inclusive) and -inf beyond. Fixed shape → same graph every step.
+    sb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, max_n_kv, 1);
     ggml_set_name(sb.mask_in, "step.mask");
     ggml_set_input(sb.mask_in);
 
@@ -494,36 +536,52 @@ StepBuild build_step_graph(ggml_context *         ctx,
                           rope_theta,
                           1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
 
-        // Cache write: a single token at position n_past.
+        // KV write via ggml_set_rows with a dynamic index. The layer's
+        // K slice is viewed as [kv_dim, n_ctx]; K (currently [hd, hkv,
+        // 1, 1]) is reshaped to a single [kv_dim, 1] row and scattered
+        // at index sb.kv_idx_in. Topology is static; only the input
+        // value changes per step.
         {
-            const size_t layer_off = static_cast<size_t>(il) * n_ctx * kv_dim;
-            const size_t pos_off   = static_cast<size_t>(n_past) * kv_dim;
+            const size_t layer_off_k =
+                k_elem * static_cast<size_t>(il) * n_ctx * kv_dim;
+            const size_t layer_off_v =
+                v_elem * static_cast<size_t>(il) * n_ctx * kv_dim;
 
-            ggml_tensor * k_dst = ggml_view_1d(
-                ctx, kv_cache.self_k, kv_dim,
-                k_elem * (layer_off + pos_off));
-            ggml_tensor * v_dst = ggml_view_1d(
-                ctx, kv_cache.self_v, kv_dim,
-                v_elem * (layer_off + pos_off));
+            ggml_tensor * k_layer = ggml_view_2d(
+                ctx, kv_cache.self_k,
+                kv_dim, n_ctx,
+                k_elem * kv_dim,   // row stride
+                layer_off_k);
+            ggml_tensor * v_layer = ggml_view_2d(
+                ctx, kv_cache.self_v,
+                kv_dim, n_ctx,
+                v_elem * kv_dim,
+                layer_off_v);
 
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, K, k_dst));
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, V, v_dst));
+            ggml_tensor * K_row = ggml_reshape_2d(ctx, K, kv_dim, 1);
+            ggml_tensor * V_row = ggml_reshape_2d(ctx, V, kv_dim, 1);
+
+            ggml_build_forward_expand(
+                gf, ggml_set_rows(ctx, k_layer, K_row, sb.kv_idx_in));
+            ggml_build_forward_expand(
+                gf, ggml_set_rows(ctx, v_layer, V_row, sb.kv_idx_in));
         }
 
-        // Read the full cache window [0, n_kv) for this layer.
-        // Direct strided view of the KV cache as [D, T, Hkv] — no
-        // permute + cont. Same pattern as the prefill path.
+        // Attention reads the FULL [0, max_n_kv) window. Mask zeros
+        // positions ≤ n_past and -inf's the rest, so softmax ignores
+        // empty slots. Full-window read costs extra bandwidth (~1.6x
+        // avg here) but the graph is static → zero per-step overhead.
         const size_t layer_off_bytes =
             k_elem * static_cast<size_t>(il) * n_ctx * kv_dim;
         ggml_tensor * K_att = ggml_view_3d(
             ctx, kv_cache.self_k,
-            head_dim, n_kv, n_kv_heads,
+            head_dim, max_n_kv, n_kv_heads,
             k_elem * kv_dim,
             k_elem * head_dim,
             layer_off_bytes);
         ggml_tensor * V_att = ggml_view_3d(
             ctx, kv_cache.self_v,
-            head_dim, n_kv, n_kv_heads,
+            head_dim, max_n_kv, n_kv_heads,
             v_elem * kv_dim,
             v_elem * head_dim,
             v_elem * static_cast<size_t>(il) * n_ctx * kv_dim);
@@ -531,23 +589,24 @@ StepBuild build_step_graph(ggml_context *         ctx,
         ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 1, 3));
 
         ggml_tensor * o;
-        if (kUseFlashAttn) {
-            ggml_tensor * mask_f16 = ggml_cast(ctx, sb.mask_in, GGML_TYPE_F16);
-            o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, mask_f16,
+        if (use_flash) {
+            o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, sb.mask_in,
                                     scale_attn, /*max_bias=*/0.0f,
                                     /*logit_softcap=*/0.0f);
             o = ggml_reshape_2d(ctx, o, q_dim, 1);
         } else {
-            ggml_tensor * K_4d = ggml_reshape_4d(ctx, K_att, head_dim, n_kv, 1, n_kv_heads);
-            ggml_tensor * V_4d = ggml_reshape_4d(ctx, V_att, head_dim, n_kv, 1, n_kv_heads);
+            ggml_tensor * K_att_c = ggml_cont(ctx, K_att);
+            ggml_tensor * V_att_c = ggml_cont(ctx, V_att);
+            ggml_tensor * K_4d = ggml_reshape_4d(ctx, K_att_c, head_dim, max_n_kv, 1, n_kv_heads);
+            ggml_tensor * V_4d = ggml_reshape_4d(ctx, V_att_c, head_dim, max_n_kv, 1, n_kv_heads);
             ggml_tensor * K_rep_template = ggml_new_tensor_4d(
-                ctx, K_att->type, head_dim, n_kv, n_groups, n_kv_heads);
+                ctx, K_att->type, head_dim, max_n_kv, n_groups, n_kv_heads);
             ggml_tensor * V_rep_template = ggml_new_tensor_4d(
-                ctx, V_att->type, head_dim, n_kv, n_groups, n_kv_heads);
+                ctx, V_att->type, head_dim, max_n_kv, n_groups, n_kv_heads);
             ggml_tensor * K_rep = ggml_repeat(ctx, K_4d, K_rep_template);
             ggml_tensor * V_rep = ggml_repeat(ctx, V_4d, V_rep_template);
-            ggml_tensor * K_full = ggml_reshape_3d(ctx, K_rep, head_dim, n_kv, n_heads);
-            ggml_tensor * V_full = ggml_reshape_3d(ctx, V_rep, head_dim, n_kv, n_heads);
+            ggml_tensor * K_full = ggml_reshape_3d(ctx, K_rep, head_dim, max_n_kv, n_heads);
+            ggml_tensor * V_full = ggml_reshape_3d(ctx, V_rep, head_dim, max_n_kv, n_heads);
 
             ggml_tensor * kq = ggml_mul_mat(ctx, K_full, Q_att);
             ggml_tensor * kq_soft = ggml_soft_max_ext(
@@ -561,12 +620,10 @@ StepBuild build_step_graph(ggml_context *         ctx,
 
         x = ggml_add(ctx, x, o);
 
-        // MLP sub-layer.
+        // MLP sub-layer (SwiGLU, packed gate_up + fused swiglu).
         ggml_tensor * ff_norm = rms_norm(ctx, x, w.norm_ffn_w, rms_eps);
-        ggml_tensor * gate = ggml_mul_mat(ctx, w.ffn_gate_w, ff_norm);
-        ggml_tensor * up   = ggml_mul_mat(ctx, w.ffn_up_w,   ff_norm);
-        gate = ggml_silu(ctx, gate);
-        ggml_tensor * ff = ggml_mul(ctx, gate, up);
+        ggml_tensor * gate_up = ggml_mul_mat(ctx, w.ffn_gate_up_w, ff_norm);
+        ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
         ff = ggml_mul_mat(ctx, w.ffn_down_w, ff);
 
         x = ggml_add(ctx, x, ff);
