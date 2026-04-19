@@ -82,7 +82,53 @@ import numpy as np
 import torch
 from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
 from huggingface_hub import snapshot_download
+from contextlib import ExitStack
+
 from safetensors import safe_open
+
+
+class _ShardedSafetensors:
+    """Multi-file safe_open shim.
+
+    Reads model.safetensors.index.json, opens each shard lazily, and
+    exposes the same keys()/get_tensor() surface as safe_open so the
+    converter doesn't care whether weights are single-file or sharded.
+    """
+
+    def __init__(self, model_dir: Path) -> None:
+        self._stack = ExitStack()
+        single = model_dir / "model.safetensors"
+        if single.is_file():
+            self._shard_for: dict[str, str] = {}
+            sf = self._stack.enter_context(safe_open(str(single), framework="pt"))
+            self._handles: dict[str, "safe_open"] = {"__single__": sf}
+            for k in sf.keys():
+                self._shard_for[k] = "__single__"
+            return
+
+        index_path = model_dir / "model.safetensors.index.json"
+        with index_path.open() as f:
+            index = json.load(f)
+        weight_map: dict[str, str] = index["weight_map"]
+        shards = sorted(set(weight_map.values()))
+        self._handles = {
+            name: self._stack.enter_context(
+                safe_open(str(model_dir / name), framework="pt"))
+            for name in shards
+        }
+        self._shard_for = weight_map
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._stack.close()
+
+    def keys(self):
+        return list(self._shard_for.keys())
+
+    def get_tensor(self, name: str):
+        return self._handles[self._shard_for[name]].get_tensor(name)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
@@ -422,12 +468,17 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
 
     config_path     = model_dir / "config.json"
     preproc_path    = model_dir / "preprocessor_config.json"
-    safetensors_path = model_dir / "model.safetensors"
+    single_st       = model_dir / "model.safetensors"
+    sharded_index   = model_dir / "model.safetensors.index.json"
     chat_template_path = model_dir / "chat_template.json"
 
-    for p in (config_path, preproc_path, safetensors_path):
+    for p in (config_path, preproc_path):
         if not p.is_file():
             raise FileNotFoundError(f"missing required file: {p}")
+    if not single_st.is_file() and not sharded_index.is_file():
+        raise FileNotFoundError(
+            f"missing weights: neither {single_st.name} nor "
+            f"{sharded_index.name} present in {model_dir}")
 
     with config_path.open() as f:
         config = json.load(f)
@@ -458,8 +509,8 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
                 f"{role} token id mismatch: config={cfg_id} tokenizer={tok_id}"
             )
 
-    print(f"Opening safetensors at {safetensors_path}")
-    with safe_open(str(safetensors_path), framework="pt") as st:
+    print(f"Opening safetensors (single or sharded) under {model_dir}")
+    with _ShardedSafetensors(model_dir) as st:
         st_keys = set(st.keys())
 
         # Count params for the size label (exclude tied head).

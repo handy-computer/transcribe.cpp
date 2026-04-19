@@ -1,0 +1,93 @@
+{
+  "_comment": [
+    "Qwen3-ASR per-tensor tolerances for compare_tensors.py.",
+    "",
+    "Reference: Alibaba qwen_asr v0.0.6 (author repo, transformers host)",
+    "running BF16 inference on CPU.",
+    "C++: ggml CPU compute, weights stored as BF16 in the accuracy GGUF.",
+    "",
+    "Starting budgets were set from observed reference min/max/mean and",
+    "mirror Cohere's scale for the same dump-point shapes (see",
+    "docs/porting/0-porting.md stage 7). They will be tightened as real",
+    "C++ dumps land. Dump points follow the audio-llm pattern:",
+    "  enc.mel.in            - input log-mel after frontend normalization",
+    "  enc.subsample.out     - after 3x Conv2d downsampler + flatten + linear",
+    "  enc.pos_add.out       - after sinusoidal position add",
+    "  enc.block.0.out       - first encoder block output",
+    "  enc.block.17.out      - final encoder block output",
+    "  enc.ln_post.out       - after final LayerNorm",
+    "  enc.proj.out          - after proj1 + GELU + proj2 (d=output_dim)",
+    "  dec.token_emb         - LM input embedding pre-injection",
+    "  dec.audio_injected    - embedding after audio feature scatter",
+    "  dec.block.0.out       - first LM block output",
+    "  dec.block.27.out      - final LM block output",
+    "  dec.out_before_head   - after final LM RMSNorm, before lm_head",
+    "  dec.logits_raw        - pre-softmax next-token logits",
+    "  dec.logits            - post-log-softmax (use inf tolerance)",
+    "",
+    "",
+    "This variant (1.7B) is 2x wider than 0.6B so BF16-accumulation drift",
+    "scales with it. Tolerances here are ~4x the 0.6B values, which covers",
+    "observed first-pass diffs with margin."
+  ],
+  "enc.mel.in": {
+    "max_abs": 0.08,
+    "mean_abs": 0.008
+  },
+  "enc.subsample.out": {
+    "max_abs": 0.6,
+    "mean_abs": 0.04
+  },
+  "enc.pos_add.out": {
+    "max_abs": 0.6,
+    "mean_abs": 0.04
+  },
+  "enc.block.0.out": {
+    "max_abs": 4.0,
+    "mean_abs": 0.2
+  },
+  "enc.block.17.out": {
+    "max_abs": 100.0,
+    "mean_abs": 0.8
+  },
+  "enc.ln_post.out": {
+    "max_abs": 12.0,
+    "mean_abs": 0.4
+  },
+  "enc.proj.out": {
+    "max_abs": 0.8,
+    "mean_abs": 0.04
+  },
+  "dec.token_emb": {
+    "max_abs": 4e-06,
+    "mean_abs": 4e-07
+  },
+  "dec.audio_injected": {
+    "max_abs": 0.8,
+    "mean_abs": 0.04
+  },
+  "dec.block.0.out": {
+    "max_abs": 12.0,
+    "mean_abs": 0.2
+  },
+  "dec.block.27.out": {
+    "max_abs": 400.0,
+    "mean_abs": 8.0
+  },
+  "dec.out_before_head": {
+    "max_abs": 400.0,
+    "mean_abs": 4.0
+  },
+  "dec.logits_raw": {
+    "max_abs": 8.0,
+    "mean_abs": 2.0
+  },
+  "dec.logits": {
+    "max_abs": "inf",
+    "mean_abs": "inf"
+  },
+  "enc.block.23.out": {
+    "max_abs": 100.0,
+    "mean_abs": 0.8
+  }
+}

@@ -336,7 +336,15 @@ def cmd_compare(args: argparse.Namespace) -> int:
     manifest = load_manifest(repo, args.family, getattr(args, "variant", None))
     variant = manifest["variant"]
 
-    tolerances = repo / "tests" / "tolerances" / f"{args.family}.json"
+    # Prefer per-variant tolerances declared in the manifest; fall
+    # back to the family default. This lets larger variants (e.g.
+    # Qwen3-ASR-1.7B vs 0.6B) carry scaled limits without stomping on
+    # the family file.
+    manifest_tol = manifest.get("tolerance_file")
+    if manifest_tol:
+        tolerances = repo / manifest_tol
+    else:
+        tolerances = repo / "tests" / "tolerances" / f"{args.family}.json"
     if not tolerances.exists():
         print(
             f"warning: no tolerance file at {tolerances}, using defaults",
