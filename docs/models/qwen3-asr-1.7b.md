@@ -113,8 +113,11 @@ uv run scripts/bench/run.py \
 
 transcribe.cpp is validated tensor-by-tensor against the author
 reference implementation (`qwen_asr` 0.0.6 / transformers 4.57.6) on
-`samples/jfk.wav`. Tolerances are set in
-`tests/tolerances/qwen3_asr-1.7b.json`.
+`samples/jfk.wav`. All 13 checkpointed tensors fall within family
+tolerance, and the transcript matches the reference verbatim.
+Tolerances are set in `tests/tolerances/qwen3_asr-1.7b.json`. Last
+validated at commit
+[`3f61df7`](https://github.com/handy-computer/transcribe.cpp/tree/3f61df7).
 
 | Field | Value |
 | --- | --- |
@@ -122,6 +125,22 @@ reference implementation (`qwen_asr` 0.0.6 / transformers 4.57.6) on
 | Dump script | `scripts/dump_reference_qwen3_asr_author.py` |
 | Manifest | `tests/golden/qwen3_asr/qwen3-asr-1.7b.manifest.json` |
 | Command | `uv run scripts/validate.py all --family qwen3_asr --variant qwen3-asr-1.7b` |
+
+Selected tensors (observed on CPU; see tolerance file for budgets):
+
+| Tensor | Max abs diff | Mean abs diff | Notes |
+| --- | ---: | ---: | --- |
+| `enc.mel.in`         | `3.906e-03` | `6.608e-04` | fp64 vs fp32 STFT precision gap |
+| `enc.subsample.out`  | `2.574e-02` | `2.473e-03` | After the 4× conv subsampler |
+| `enc.block.0.out`    | `4.970e-02` | `3.068e-03` | Early encoder |
+| `enc.block.23.out`   | `6.846e-01` | `1.125e-02` | Final encoder block |
+| `enc.proj.out`       | `2.351e-03` | `1.595e-04` | Audio→LM width projection |
+| `dec.audio_injected` | `2.351e-03` | `1.443e-04` | Fused audio+text sequence |
+| `dec.token_emb`      | `0.000e+00` | `0.000e+00` | Exact match |
+| `dec.block.0.out`    | `1.439e-01` | `3.223e-03` | Early LM |
+| `dec.block.27.out`   | `2.052e+02` | `9.783e-01` | Final LM block (accumulated) |
+| `dec.out_before_head`| `1.828e+01` | `7.569e-02` | Pre-head hidden state |
+| `dec.logits_raw`     | `1.266e+00` | `2.131e-01` | Raw logits |
 
 ## Reproduction
 
