@@ -111,8 +111,9 @@ uv run scripts/bench/run.py \
 transcribe.cpp is validated tensor-by-tensor against the author
 reference implementation (`qwen_asr` 0.0.6 / transformers 4.57.6) on
 `samples/jfk.wav`. All 13 checkpointed tensors fall within family
-tolerance on CPU / Metal / Vulkan, and the post-prefix transcript
-text matches the reference exactly.
+tolerance on CPU / Metal / Vulkan, and the transcript matches the
+reference verbatim. Last validated at commit
+[`3f61df7`](https://github.com/handy-computer/transcribe.cpp/tree/3f61df7).
 
 | Field | Value |
 | --- | --- |
@@ -123,16 +124,19 @@ text matches the reference exactly.
 
 Selected tensors (observed on CPU; see tolerance file for budgets):
 
-| Tensor | Max abs diff | Mean abs diff |
-| --- | ---: | ---: |
-| `enc.mel.in`         | `3.906e-03` | `6.608e-04` |
-| `enc.block.0.out`    | `5.758e-01` | `1.378e-02` |
-| `enc.block.17.out`   | `1.634e+01` | `1.294e-01` |
-| `enc.proj.out`       | `1.161e-01` | `2.577e-03` |
-| `dec.audio_injected` | `1.161e-01` | `2.332e-03` |
-| `dec.block.0.out`    | `1.967e+00` | `2.970e-02` |
-| `dec.block.27.out`   | `8.556e+01` | `1.256e+00` |
-| `dec.logits_raw`     | `1.677e+00` | `3.364e-01` |
+| Tensor | Max abs diff | Mean abs diff | Notes |
+| --- | ---: | ---: | --- |
+| `enc.mel.in`         | `3.906e-03` | `6.608e-04` | fp64 vs fp32 STFT precision gap |
+| `enc.subsample.out`  | `1.814e-02` | `1.891e-03` | After the 4× conv subsampler |
+| `enc.block.0.out`    | `5.645e-02` | `2.768e-03` | Early encoder |
+| `enc.block.17.out`   | `8.221e-01` | `9.720e-03` | Final encoder block |
+| `enc.proj.out`       | `1.484e-02` | `2.324e-04` | Audio→LM width projection |
+| `dec.audio_injected` | `1.484e-02` | `2.103e-04` | Fused audio+text sequence |
+| `dec.token_emb`      | `0.000e+00` | `0.000e+00` | Exact match |
+| `dec.block.0.out`    | `1.719e-01` | `3.127e-03` | Early LM |
+| `dec.block.27.out`   | `2.912e+01` | `3.824e-01` | Final LM block (accumulated) |
+| `dec.out_before_head`| `2.844e+01` | `1.786e-01` | Pre-head hidden state |
+| `dec.logits_raw`     | `1.054e+00` | `1.749e-01` | Raw logits |
 
 ## Reproduction
 
