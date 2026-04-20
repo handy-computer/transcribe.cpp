@@ -22,11 +22,18 @@ Ported from upstream commit
 
 ## Download
 
-| Quantization | Size | Notes |
-| --- | ---: | --- |
-| BF16   | ~3.9 GB | accuracy reference (converter output) |
-| Q8_0   | ~2.0 GB | weight-only quant for embed + linear |
-| Q4_K_M | ~1.2 GB | smallest shipped preset; Q6_K for the tied embed |
+| Quantization | Size | WER (LibriSpeech test-clean) | Notes |
+| --- | ---: | ---: | --- |
+| BF16   | 3894 MB | 1.62% | accuracy reference (converter output) |
+| F16    | 3902 MB | 1.62% | direct cast from BF16 |
+| Q8_0   | 2084 MB | 1.61% | weight-only quant for embed + linear |
+| Q6_K   | 1614 MB | 1.65% | 6-bit K-quant |
+| Q5_K_M | 1396 MB | 1.67% | 5-bit K-quant, mixed |
+| Q4_K_M | 1191 MB | 1.84% | smallest shipped preset; Q6_K for the tied embed |
+
+WER measured on LibriSpeech `test-clean` (2620 utterances), Whisper-style
+English text normalizer, jiwer 3.x, metal backend on Apple M4. Reproduce
+with `scripts/wer/run.py` + `scripts/wer/score.py`.
 
 Published GGUF URLs will land alongside the Cohere checkpoints in a
 follow-up release. Until then, convert locally:
