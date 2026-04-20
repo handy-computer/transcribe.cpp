@@ -67,6 +67,17 @@ Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
 with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
 above (2 decimal places).
 
+### Apple M4 Max
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  |  256 ms (43×)  |  213 ms (52×)  |
+| Metal   | dots (35.3s) |  978 ms (36×)  |  803 ms (44×)  |
+| CPU     | jfk (11.0s)  | 1.40 s (8×)    | 1.10 s (10×)   |
+| CPU     | dots (35.3s) | 4.46 s (8×)    | 4.04 s (9×)    |
+
+macOS 26.3.1, transcribe.cpp `0c88a71`.
+
 ### AMD Ryzen 7 4750U Pro
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
@@ -86,7 +97,7 @@ uv run scripts/bench/run.py \
   --models qwen3-asr-1.7b \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
-  --backends cpu,vulkan \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name qwen3-asr-1.7b-publication
 ```

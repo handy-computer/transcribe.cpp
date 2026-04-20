@@ -73,11 +73,14 @@ above (2 decimal places).
 
 ### Apple M4 Max
 
-| Backend | Mel    | Encode  | Decode  | Realtime |
-| ------- | -----: | ------: | ------: | -------: |
-| Metal   |  66 ms |   36 ms |  202 ms |     33×  |
-| Vulkan  |  43 ms |  150 ms |  370 ms |     20×  |
-| CPU     |  63 ms | 3576 ms | 2256 ms |      2×  |
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  |  155 ms (71×)  |  142 ms (77×)  |
+| Metal   | dots (35.3s) |  597 ms (59×)  |  527 ms (67×)  |
+| CPU     | jfk (11.0s)  |  660 ms (17×)  |  588 ms (19×)  |
+| CPU     | dots (35.3s) | 2.26 s (16×)   | 2.10 s (17×)   |
+
+macOS 26.3.1, transcribe.cpp `0c88a71`.
 
 ### AMD Ryzen 7 4750U Pro
 
@@ -98,7 +101,7 @@ uv run scripts/bench/run.py \
   --models qwen3-asr-0.6b \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
-  --backends cpu,vulkan \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name qwen3-asr-0.6b-publication
 ```
