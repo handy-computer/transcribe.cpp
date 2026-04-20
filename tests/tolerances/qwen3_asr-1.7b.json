@@ -4,7 +4,8 @@
     "",
     "Reference: Alibaba qwen_asr v0.0.6 (author repo, transformers host)",
     "running BF16 inference on CPU.",
-    "C++: ggml CPU compute, weights stored as BF16 in the accuracy GGUF.",
+    "C++: ggml compute (CPU/Metal/Vulkan), weights stored as BF16 in the",
+    "accuracy GGUF.",
     "",
     "Dump points follow the audio-llm pattern (final encoder block is",
     "enc.block.23.out for the 1.7B variant, not .17):",
@@ -23,67 +24,62 @@
     "  dec.logits_raw        - pre-softmax next-token logits",
     "  dec.logits            - post-log-softmax (use inf tolerance)",
     "",
-    "Sizing rationale:",
-    "  - enc.mel.in is pre-model and bit-identical to the 0.6B path;",
-    "    budget matches the 0.6B file exactly.",
-    "  - Post-conv / post-accumulation tensors can grow with model",
-    "    width. Budgets below start from the 0.6B values scaled up",
-    "    where the wider hidden / FFN meaningfully accumulates more",
-    "    BF16 drift, and stay tight where the op-graph is shape-",
-    "    invariant to model width. Tighten further against observed",
-    "    max_abs × ~1.5 once 1.7B CPP dumps land."
+    "Budgets are calibrated to ~2x the max observed across CPU, Metal,",
+    "and Vulkan on JFK. Vulkan dominates most encoder tensors due to",
+    "F16 intermediate precision in its matmul path; bounds honor that",
+    "without over-loosening for CPU/Metal regressions."
   ],
   "enc.mel.in": {
-    "max_abs": 0.02,
-    "mean_abs": 0.002
+    "max_abs": 0.01,
+    "mean_abs": 0.001
   },
   "enc.subsample.out": {
-    "max_abs": 0.6,
-    "mean_abs": 0.04
+    "max_abs": 0.15,
+    "mean_abs": 0.01
   },
   "enc.pos_add.out": {
-    "max_abs": 0.6,
-    "mean_abs": 0.04
+    "max_abs": 0.15,
+    "mean_abs": 0.01
   },
   "enc.block.0.out": {
     "max_abs": 4.0,
-    "mean_abs": 0.2
+    "mean_abs": 0.04
   },
   "enc.block.23.out": {
-    "max_abs": 100.0,
-    "mean_abs": 0.8
+    "max_abs": 65.0,
+    "mean_abs": 0.5
   },
   "enc.ln_post.out": {
-    "max_abs": 12.0,
-    "mean_abs": 0.4
+    "max_abs": 6.0,
+    "mean_abs": 0.15
   },
   "enc.proj.out": {
-    "max_abs": 0.8,
-    "mean_abs": 0.04
+    "max_abs": 0.25,
+    "mean_abs": 0.006
   },
   "dec.token_emb": {
     "max_abs": 4e-06,
     "mean_abs": 4e-07
   },
   "dec.audio_injected": {
-    "max_abs": 0.8,
-    "mean_abs": 0.04
+    "max_abs": 0.25,
+    "mean_abs": 0.006
   },
   "dec.block.0.out": {
-    "max_abs": 12.0,
-    "mean_abs": 0.2
+    "max_abs": 7.0,
+    "mean_abs": 0.1
   },
   "dec.block.27.out": {
     "max_abs": 400.0,
     "mean_abs": 8.0
   },
   "dec.out_before_head": {
-    "max_abs": 400.0,
-    "mean_abs": 4.0
+    "max_abs": 180.0,
+    "mean_abs": 0.8
   },
   "dec.logits_raw": {
-    "max_abs": 8.0,
-    "mean_abs": 2.0
+    "max_abs": 6.0,
+    "mean_abs": 1.0
   },
   "dec.logits": {
     "max_abs": "inf",

@@ -1,15 +1,17 @@
 {
   "_comment": [
-    "Qwen3-ASR per-tensor tolerances for compare_tensors.py.",
+    "Qwen3-ASR 0.6B per-tensor tolerances for compare_tensors.py.",
     "",
     "Reference: Alibaba qwen_asr v0.0.6 (author repo, transformers host)",
     "running BF16 inference on CPU.",
-    "C++: ggml CPU compute, weights stored as BF16 in the accuracy GGUF.",
+    "C++: ggml compute (CPU/Metal/Vulkan), weights stored as BF16 in the",
+    "accuracy GGUF.",
     "",
-    "Starting budgets were set from observed reference min/max/mean and",
-    "mirror Cohere's scale for the same dump-point shapes (see",
-    "docs/porting/0-porting.md stage 7). They will be tightened as real",
-    "C++ dumps land. Dump points follow the audio-llm pattern:",
+    "Budgets are calibrated to ~1.5-2x the max observed across CPU,",
+    "Metal, and Vulkan on JFK. Vulkan dominates most encoder tensors",
+    "due to F16 intermediate precision in its matmul path; tightening",
+    "further would regress Vulkan runs. Dump points follow the audio-",
+    "llm pattern:",
     "  enc.mel.in            - input log-mel after frontend normalization",
     "  enc.subsample.out     - after 3x Conv2d downsampler + flatten + linear",
     "  enc.pos_add.out       - after sinusoidal position add",
@@ -26,7 +28,7 @@
     "  dec.logits            - post-log-softmax (use inf tolerance)"
   ],
 
-  "enc.mel.in":           {"max_abs": 0.02,   "mean_abs": 0.002},
+  "enc.mel.in":           {"max_abs": 0.01,   "mean_abs": 0.001},
   "enc.subsample.out":    {"max_abs": 0.15,   "mean_abs": 0.01},
   "enc.pos_add.out":      {"max_abs": 0.15,   "mean_abs": 0.01},
   "enc.block.0.out":      {"max_abs": 1.0,    "mean_abs": 0.05},
