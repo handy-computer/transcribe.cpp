@@ -63,10 +63,33 @@ the rationale and the planned follow-up.
 
 ## Performance
 
-Detailed per-backend numbers land after the 1.7B benchmark matrix
-publishes. The runtime shape matches the 0.6B (same mel frontend, same
-encoder/decoder step shape, same KV cache policy); scale the 0.6B
-numbers by roughly the parameter ratio as a first approximation.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
+above (2 decimal places).
+
+### AMD Ryzen 7 4750U Pro
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  | 2.66 s (4.1×)  | 2.29 s (4.8×)  |
+| Vulkan  | dots (35.3s) | 9.87 s (3.6×)  | 8.37 s (4.2×)  |
+| CPU     | jfk (11.0s)  | 5.19 s (2.1×)  | 3.58 s (3.1×)  |
+| CPU     | dots (35.3s) | 18.53 s (1.9×) | 12.93 s (2.7×) |
+
+Fedora 43, transcribe.cpp `3d16f74`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models qwen3-asr-1.7b \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name qwen3-asr-1.7b-publication
+```
 
 ## Numerical Validation
 

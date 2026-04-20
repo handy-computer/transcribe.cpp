@@ -67,8 +67,9 @@ chat template is tracked as follow-up work; see the family note at
 
 ## Performance
 
-Cells are wall-clock latency (single run on the JFK 11s sample),
-with speedup over realtime in parentheses.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
+above (2 decimal places).
 
 ### Apple M4 Max
 
@@ -77,6 +78,30 @@ with speedup over realtime in parentheses.
 | Metal   |  66 ms |   36 ms |  202 ms |     33×  |
 | Vulkan  |  43 ms |  150 ms |  370 ms |     20×  |
 | CPU     |  63 ms | 3576 ms | 2256 ms |      2×  |
+
+### AMD Ryzen 7 4750U Pro
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  | 1.27 s (8.7×)  | 1.08 s (10.1×) |
+| Vulkan  | dots (35.3s) | 4.87 s (7.3×)  | 3.99 s (8.9×)  |
+| CPU     | jfk (11.0s)  | 2.37 s (4.6×)  | 1.92 s (5.7×)  |
+| CPU     | dots (35.3s) | 8.61 s (4.1×)  | 7.34 s (4.8×)  |
+
+Fedora 43, transcribe.cpp `3d16f74`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models qwen3-asr-0.6b \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name qwen3-asr-0.6b-publication
+```
 
 ## Numerical Validation
 
