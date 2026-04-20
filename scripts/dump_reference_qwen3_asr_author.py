@@ -175,7 +175,7 @@ def load_reference(args: argparse.Namespace):
         revision=revision,
         trust_remote_code=False,
         local_files_only=local_only,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         attn_implementation="eager",  # for hookability + deterministic refs
     ).eval()
     model.to(args.device)

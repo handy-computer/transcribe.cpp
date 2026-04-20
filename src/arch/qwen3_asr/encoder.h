@@ -91,8 +91,8 @@ struct EncoderDumps {
 struct EncoderBuild {
     ggml_tensor * mel_in     = nullptr;  // [mel_per_chunk, n_mels, 1, n_chunks]
     ggml_tensor * pos_emb_in = nullptr;  // [d_model, per_chunk_aftercnn]
-    ggml_tensor * mask_in    = nullptr;  // [T_enc_padded, T_enc_padded]
-    ggml_tensor * out        = nullptr;  // [output_dim, T_enc_padded]
+    ggml_tensor * mask_in    = nullptr;  // [T_enc, T_enc]
+    ggml_tensor * out        = nullptr;  // [output_dim, T_enc]
     EncoderDumps  dumps {};
     ggml_cgraph * graph      = nullptr;
     EncoderTiming timing {};

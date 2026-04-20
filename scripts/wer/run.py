@@ -74,6 +74,10 @@ def main() -> int:
                    choices=("auto", "cpu", "metal", "vulkan"),
                    default=None,
                    help="Compute backend (default: transcribe-cli default)")
+    p.add_argument("--kv-type",
+                   choices=("auto", "f32", "f16"),
+                   default=None,
+                   help="Flash-attn KV cache type passthrough")
     args = p.parse_args()
 
     for path in (args.model, args.manifest, args.cli):
@@ -116,6 +120,8 @@ def main() -> int:
     ]
     if args.backend:
         cmd += ["--backend", args.backend]
+    if args.kv_type:
+        cmd += ["--kv-type", args.kv_type]
     print(f"  $ {' '.join(cmd[:6])} ...")
 
     t_start = time.monotonic()

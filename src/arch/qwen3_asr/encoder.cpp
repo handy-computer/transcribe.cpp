@@ -73,55 +73,21 @@ std::vector<float> build_sinusoid_pe(int32_t d_model, int32_t length,
 std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t,
                                          const QwenAsrHParams & hp)
 {
-    const int32_t T = t.T_enc_padded;
-    // Use finfo.min rather than -inf: the reference materializes the
-    // mask with `torch.finfo(inputs_tensor.dtype).min` (≈-3.4e38 for
-    // fp32/bf16), which yields a uniform softmax distribution on rows
-    // outside any cu_seqlens block. Passing -inf here would produce
-    // NaNs through softmax and poison every subsequent layer.
-    std::vector<float> mask(static_cast<size_t>(T) * T,
-                            std::numeric_limits<float>::lowest());
-
-    if (T <= 0 || hp.enc_n_window <= 0 || hp.enc_n_window_infer <= 0) {
-        return mask;
-    }
-
-    // window_aftercnn = per_chunk_aftercnn * (n_window_infer // (n_window*2)).
-    // Reference: modeling_qwen3_asr.py line ~720.
-    const int32_t group = hp.enc_n_window_infer / (hp.enc_n_window * 2);
-    const int32_t window_aftercnn = t.per_chunk_aftercnn * group;
-    if (window_aftercnn <= 0) return mask;
-
-    // Build per-block lengths from the *pre-chunk* aftercnn length. For
-    // a single-utterance batch, aftercnn_lens == [aftercnn_lens_total],
-    // matching the reference's `for cnn_len in aftercnn_lens` loop.
-    std::vector<int32_t> cu_seqlens; cu_seqlens.reserve(8);
-    cu_seqlens.push_back(0);
-    int32_t cnn_len = t.aftercnn_lens_total;
-    const int32_t full_blocks = cnn_len / window_aftercnn;
-    const int32_t remainder   = cnn_len % window_aftercnn;
-    int32_t running = 0;
-    for (int32_t i = 0; i < full_blocks; ++i) {
-        running += window_aftercnn;
-        cu_seqlens.push_back(running);
-    }
-    if (remainder != 0) {
-        running += remainder;
-        cu_seqlens.push_back(running);
-    }
-
-    for (size_t i = 1; i < cu_seqlens.size(); ++i) {
-        const int32_t s = cu_seqlens[i - 1];
-        const int32_t e = cu_seqlens[i];
-        for (int32_t r = s; r < e; ++r) {
-            float * row = mask.data() + static_cast<size_t>(r) * T;
-            for (int32_t c = s; c < e; ++c) {
-                row[c] = 0.0f;
-            }
-        }
-    }
-
-    return mask;
+    (void)hp;
+    const int32_t T = t.T_enc;
+    // Full attention over the valid aftercnn rows. The measured
+    // upstream reference (qwen_asr 0.0.6 + transformers eager / sdpa)
+    // ignores cu_seqlens and runs unmasked bidirectional attention over
+    // the post-pad-select tensor. vLLM's flash-attn-2 path honors
+    // cu_seqlens and chunks at window_aftercnn, but its LibriSpeech WER
+    // is worse than the eager path in our measurements; we follow the
+    // eager reference so that transcribe.cpp's greedy decode matches
+    // the per-tensor dumps byte-for-byte after the pad-row trim in
+    // build_enc_graph.
+    //
+    // Zero-filled mask = softmax(scale * QK) with no bias, which is
+    // identical to soft_max_ext(nullptr) and matches eager semantics.
+    return std::vector<float>(static_cast<size_t>(T) * T, 0.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -262,18 +228,14 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // Ragged-tail note: when the last chunk has fewer real mel frames
     // than mel_per_chunk, the batched conv still emits per_chunk_aftercnn
     // frames for it (the tail is zero-padded in the mel-input packer).
-    // The reference ragged-selects only the real aftercnn frames using
-    // padded_mask_after_cnn, giving T_enc_real < T_enc_padded.
-    //
-    // The graph-level output (`eb.out`) keeps the padded T_enc_padded
-    // frames — trimming here would require a dynamic-shape op mid-
-    // graph and complicate every subsequent view. We instead match the
-    // reference's ragged selection on the host-read boundary in
-    // model.cpp: the backend-to-host copy pulls all padded rows, then
-    // we shrink enc_host to T_enc_real = (n_chunks-1)*per_chunk_aftercnn
-    // + last_chunk_aftercnn before the LM prefill. Everything
-    // downstream (audio-position list, prefill graph, dump shapes)
-    // sees the trimmed T_enc — same as the reference.
+    // The reference ragged-selects only the real aftercnn frames via
+    //   `hidden_states = padded_embed[padded_mask_after_cnn]`
+    // before the 18 encoder blocks. We mirror that: reshape the per-
+    // chunk conv output to [d_model, T_enc_padded], then VIEW the first
+    // T_enc rows — dropping the trailing padded rows of the last chunk
+    // — so the encoder blocks, the attention mask, and every downstream
+    // shape see T_enc (not T_enc_padded). This matches the reference
+    // byte-for-byte at the pos_add.out boundary and upward.
 
     const int64_t d_model        = hp.enc_d_model;
     const int64_t n_heads        = hp.enc_n_heads;
@@ -283,6 +245,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     const int64_t n_chunks       = timing.n_chunks;
     const int64_t T_per_chunk    = timing.per_chunk_aftercnn;
     const int64_t T_enc_padded   = timing.T_enc_padded;
+    const int64_t T_enc          = timing.T_enc;
 
     // ----- Graph inputs -----
     // mel layout: ggml fast-to-slow ne=[mel_per_chunk, n_mels, 1, n_chunks]
@@ -302,7 +265,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     ggml_set_input(eb.pos_emb_in);
 
     eb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
-                                    T_enc_padded, T_enc_padded);
+                                    T_enc, T_enc);
     named(eb.mask_in, "enc.attn_mask.in");
     ggml_set_input(eb.mask_in);
 
@@ -390,6 +353,17 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // data.
     transcribe::debug::mark_tensor_for_dump(x);
     x = ggml_reshape_2d(ctx, x, d_model, T_enc_padded);
+
+    // Drop padded aftercnn rows before encoder blocks. Matches
+    // reference's `padded_embed[padded_mask_after_cnn]` step — without
+    // this, the 18 blocks see the full T_enc_padded and the attention
+    // pattern diverges from ref on any utterance whose mel length is
+    // not a multiple of `n_window*2` (nearly all LibriSpeech).
+    if (T_enc < T_enc_padded) {
+        x = ggml_view_2d(ctx, x, d_model, T_enc, x->nb[1], 0);
+        x = ggml_cont(ctx, x);
+    }
+
     named(x, "enc.pos_add.out");
     eb.dumps.pos_add_out = x;
     transcribe::debug::mark_tensor_for_dump(x);

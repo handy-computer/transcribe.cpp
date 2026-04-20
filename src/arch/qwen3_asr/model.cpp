@@ -786,34 +786,19 @@ transcribe_status run(
     try_dump("enc.ln_post.out",    eb.dumps.ln_post_out,    "enc.ln_post");
     try_dump("enc.proj.out",       eb.dumps.proj_out,       "enc.proj");
 
-    // Read encoder output to host for use by the LM prefill.
-    //
-    // ne[1] is T_enc_padded = n_chunks * per_chunk_aftercnn: every chunk
-    // contributes the full per_chunk_aftercnn row count, even when the
-    // last chunk's real mel input was shorter. The reference ragged-
-    // selects only the real-aftercnn rows from the last chunk, giving
-    // T_enc_real <= T_enc_padded. We mirror that trim here so the LM
-    // sees the same audio_pad row count the reference does — matching
-    // shapes up through `dec.audio_injected` and onward, which in turn
-    // makes validate.py compare work on multi-chunk audio.
-    //
-    // Tensor layout is [d_model, T_enc_padded] contiguous (d is the
-    // fastest-varying dim), so the first T_enc_real * d_model floats
-    // are exactly the rows we want. Read the full padded blob into
-    // enc_host, then shrink to the trimmed size; the tail data is just
-    // zero-pad derived and never read again.
-    const int d_enc        = static_cast<int>(eb.out->ne[0]);
-    const int T_enc_padded = static_cast<int>(eb.out->ne[1]);
-    const int T_enc        = (timing.n_chunks - 1) * timing.per_chunk_aftercnn
-                           + timing.last_chunk_aftercnn;
+    // Read encoder output to host for use by the LM prefill. The graph
+    // already dropped the aftercnn pad rows before the encoder blocks
+    // (see encoder.cpp), so eb.out is exactly [d_enc, T_enc] — matching
+    // the reference's `padded_embed[padded_mask_after_cnn]`-selected
+    // shape.
+    const int d_enc = static_cast<int>(eb.out->ne[0]);
+    const int T_enc = static_cast<int>(eb.out->ne[1]);
     cc->enc_host.resize(static_cast<size_t>(d_enc) *
-                        static_cast<size_t>(T_enc_padded));
+                        static_cast<size_t>(T_enc));
     const int64_t t_d2h_start = ggml_time_us();
     ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0,
                             cc->enc_host.size() * sizeof(float));
     t_enc_d2h_us = ggml_time_us() - t_d2h_start;
-    cc->enc_host.resize(static_cast<size_t>(d_enc) *
-                        static_cast<size_t>(T_enc));
 
     // ----- KV cache init -----
     // Size for a generous default context; the step loop caps
