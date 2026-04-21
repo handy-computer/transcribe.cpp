@@ -96,7 +96,7 @@ Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
-  --models qwen3-asr-0.6b \
+  --models Qwen3-ASR-0.6B \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
   --backends metal,cpu,vulkan \

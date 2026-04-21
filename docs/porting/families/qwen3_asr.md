@@ -1,32 +1,7 @@
 # Qwen3-ASR
 
 Status: accuracy (CPU / Metal / Vulkan all pass 13/13 dumps; e2e
-transcription matches reference)
-
-Current progress:
-
-- Intake, family note, converter, reference dumper committed.
-- `scripts/convert-qwen3_asr.py` emits a 1.5 GB BF16 accuracy GGUF
-  (`Qwen3-ASR-0.6B-BF16.gguf`, 613 tensors including the baked
-  librosa mel filterbank + Whisper Hann window, 782M dedup params).
-- `scripts/dump_reference_qwen3_asr_author.py decode` drives the
-  author `qwen_asr` package via forward hooks; all enc.* + dec.*
-  dump points land.
-- `src/arch/qwen3_asr/` full inference pipeline: hparam reader,
-  weight catalog, encoder graph (3× Conv2d + chunked bidirectional
-  attention), LM prefill graph (audio injection via concat,
-  Qwen3 28-layer GQA LM with flash attention), step graph, byte-
-  level BPE decode, transcript assembly.
-- `transcribe-cli` transcribes `samples/jfk.wav` with output
-  identical to the reference on CPU, Metal, and Vulkan.
-- `scripts/validate.py all --family qwen3_asr --variant qwen3-asr-0.6b`
-  passes 13/13 tolerances on all three backends.
-- Real-model smoke tests (`tests/qwen3_asr_real_smoke_0_6b.cpp`,
-  `tests/qwen3_asr_real_smoke_1_7b.cpp`,
-  `tests/qwen3_asr_e2e_smoke.cpp`) pass behind
-  `TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON` +
-  `TRANSCRIBE_QWEN3_ASR_0_6B_GGUF` / `TRANSCRIBE_QWEN3_ASR_1_7B_GGUF` /
-  `TRANSCRIBE_QWEN3_ASR_GGUF`.
+transcription matches reference).
 
 Performance (M4 Max, jfk.wav = 11 s of audio):
 
@@ -197,42 +172,25 @@ up work rather than shipped-and-broken.
 
 ## Decisions For Implementation
 
-Recorded here during research; resolved during bring-up.
+Cross-cutting decisions that would not be obvious from reading the
+code alone.
 
-- **MRoPE vs standard RoPE.** The reference materializes a 3D `cos/sin`
-  grid, applies an interleaving permutation per `mrope_section`, and
-  then applies a standard rotate-half RoPE. For audio + text with only
-  one modality active per position (text generation after the audio
-  block), the effective rotation reduces to per-section interleaving on
-  a 1D position id. Plan: precompute the interleaved cos/sin table
-  host-side and feed it to ggml as a position-indexed rope table;
-  fall back to per-step cos/sin lookup if the single-modality reduction
-  does not hold for the audio region.
-- **Audio encoder attention mask.** Block-diagonal from `cu_seqlens`.
-  Plan: build a dense `(T, T)` mask host-side and pass to ggml as an
-  additive attention bias, the same pattern Cohere uses for its
-  padding-aware encoder mask.
-- **Per-head Q/K RMSNorm.** Apply RMSNorm on the last dim (`head_dim`)
-  of the reshaped `(B, H, T, D)` tensor. In ggml: reshape → rms_norm →
-  mul by per-head weight. No new ops required.
 - **Tied embeddings.** Converter omits `output.weight`; loader falls
   back to `token_embd.weight` with `TENSOR_DUPLICATED` (same as
   llama.cpp and the existing Cohere decoder path).
 - **Prompt template.** The Qwen3 chat template (in
   `chat_template.json`) carries language and hotword context fields.
-  Embed the rendered prompt into the GGUF as a string KV, and at
-  inference splice the caller-provided language/context into it. The
-  tokenizer merge table and special-token ids are the durable part;
+  The rendered prompt is embedded into the GGUF as a string KV; at
+  inference the caller-provided language/context is spliced into it.
+  The tokenizer merge table and special-token ids are the durable part;
   the template is a separate KV.
-- **Streaming.** Out of scope for first port. `stream_transcribe`
-  (chunk-id based prefix rollback) is a later follow-up.
-- **Reuse Cohere's mel frontend?** Yes — same underlying Whisper
-  feature-extractor contract. Add a Qwen3-ASR profile; do not duplicate
-  the STFT code.
+- **Reuse Cohere's mel frontend.** Same underlying Whisper
+  feature-extractor contract — we added a Qwen3-ASR profile rather than
+  duplicating the STFT code.
 - **llama.cpp decoder reuse.** The LM side is architecturally a
-  standard Qwen3 causal LM. Cross-reference `refs/ggml-org/llama.cpp`
-  GQA + RoPE + SwiGLU patterns for graph construction; do not import
-  llama.cpp code.
+  standard Qwen3 causal LM. `refs/ggml-org/llama.cpp` GQA + RoPE +
+  SwiGLU patterns were cross-referenced for graph construction, but no
+  llama.cpp code is imported.
 
 ## Commands
 
@@ -297,17 +255,6 @@ uv run scripts/bench/run.py \
   --models Qwen3-ASR-0.6B,Qwen3-ASR-1.7B \
   --quants bf16,q8_0,q4_k_m
 ```
-
-## Upstream Benchmarks
-
-Publisher-reported; informational only.
-
-| Dataset | Language | Metric | Score | Source |
-|---|---|---|---|---|
-| LibriSpeech test-clean (Open ASR Leaderboard) | en | WER | 2.13% | HF model-card evaluation_results → `hf-audio/open-asr-leaderboard` |
-
-Broader multilingual WER/CER figures from the Qwen team's blog or paper
-should be added when we encounter them during validation.
 
 ## Notes
 

@@ -215,8 +215,14 @@ ggml_type resolve_target_type(const Preset & preset,
             return target;
         }
         case Bucket::Linear: {
-            // attn.linear_out.weight bumped per _M recipe.
-            if (ends_with(name, "attn.linear_out.weight")) {
+            // Attention output projection bumped per _M recipe. Cohere
+            // and Parakeet name it "attn.linear_out.weight"; Qwen3-ASR
+            // names it "attn.out.weight" (encoder) or "attn.o.weight"
+            // (decoder). All three land in the same bump.
+            if (ends_with(name, "attn.linear_out.weight") ||
+                ends_with(name, "attn.out.weight") ||
+                ends_with(name, "attn.o.weight"))
+            {
                 return preset.linear_attn_out;
             }
             // Fall back when inner dim doesn't divide the chosen

@@ -92,7 +92,7 @@ Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
-  --models qwen3-asr-1.7b \
+  --models Qwen3-ASR-1.7B \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
   --backends metal,cpu,vulkan \

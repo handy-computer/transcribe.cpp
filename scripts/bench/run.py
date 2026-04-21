@@ -247,11 +247,21 @@ def resolve_model_tokens(repo: Path, tokens: list[str] | None,
         if not slug:
             print(f"error: empty model token: {tok!r}", file=sys.stderr)
             sys.exit(2)
-        dir_path = repo / "models" / slug
-        if not dir_path.is_dir():
-            print(f"error: variant dir not found: {dir_path}",
-                  file=sys.stderr)
+        # Match case-insensitively against on-disk dirs and canonicalize
+        # to the actual dir name. This makes typing / doc examples
+        # tolerant on case-sensitive filesystems AND keeps report
+        # filenames and variant tags in the canonical casing (e.g.
+        # `Qwen3-ASR-0.6B`) regardless of how the token was entered.
+        model_root = repo / "models"
+        matches = ([d for d in model_root.iterdir()
+                    if d.is_dir() and d.name.lower() == slug.lower()]
+                   if model_root.is_dir() else [])
+        if not matches:
+            print(f"error: variant dir not found: "
+                  f"{model_root / slug}", file=sys.stderr)
             sys.exit(2)
+        dir_path = matches[0]
+        slug = dir_path.name
 
         matched_any = False
         skipped: list[str] = []

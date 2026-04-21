@@ -6,7 +6,9 @@ F32, F16, or BF16 conversion output), walks every tensor, and writes a
 new GGUF where each tensor's dtype is chosen by a per-preset, per-bucket
 policy.
 
-Source: `tools/transcribe-quantize/main.cpp`. Built as `build/bin/transcribe-quantize`.
+Source: `tools/transcribe-quantize/`. CLI lives in `main.cpp`, the
+classification / preset policy in `policy.cpp`. Built as
+`build/bin/transcribe-quantize`.
 
 This is the only place lossy quantization happens in the project.
 Python's `convert-<family>.py` never emits Q8_0, Q4_K_M, or any other
@@ -24,8 +26,8 @@ reachable without a Python gap.
 build/bin/transcribe-quantize INPUT.gguf OUTPUT.gguf --quant PRESET
 ```
 
-Presets: `F16`, `Q8_0`, `Q6_K`, `Q5_K_M`, `Q4_K_M`. Names match
-`llama.cpp`'s `llama-quantize` exactly.
+Presets: `F16`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q6_K`,
+`Q5_K_M`, `Q4_K_M`. Names match `llama.cpp`'s `llama-quantize` exactly.
 
 Example:
 
@@ -73,63 +75,70 @@ per-preset bucket policy for every canonical tensor name.
 | Bucket   | What's in it                                                          | Quant behavior                                 |
 |----------|-----------------------------------------------------------------------|------------------------------------------------|
 | `Linear` | `ggml_mul_mat` operands: encoder FF, attention projections, predictor LSTM gates, joint projections, head | Block-quantized (Q4_K / Q5_K / Q6_K / Q8_0)    |
-| `Embed`  | Tied token embedding (Cohere only; doubles as output projection)      | Bumped to Q6_K in `_M` presets                 |
+| `Embed`  | Tied token embedding (Cohere + Qwen3-ASR; doubles as output projection) | Bumped to Q6_K in `_M` presets                 |
 | `ConvPw` | 1×1 pointwise conv kernels in conformer blocks                        | F16 (im2col+matmul supports F16 matmul)        |
 | `Conv`   | Non-pointwise conv kernels: 2D pre-encode, depthwise                  | F32 or F16 (no quantized im2col in ggml)       |
-| `Norm`   | Biases, LayerNorm/BatchNorm weight+bias, positional bias/encoding, frontend buffers | F32 (precision-sensitive, tiny)        |
+| `Norm`   | Biases, LayerNorm/BatchNorm/RMSNorm weights, per-head q_norm/k_norm, positional bias/encoding, frontend buffers | F32 (precision-sensitive, tiny) |
 
 Classification rules live in `classify_tensor()` in
-`tools/transcribe-quantize/main.cpp`. They are substring-based on the
+`tools/transcribe-quantize/policy.cpp`. They are substring-based on the
 canonical tensor name (e.g. `norm_*`, `*.bias`, `*pointwise*.weight`,
-`pred.embed.weight`).
+`*.q_norm.weight`, `*.ln_pre.weight`).
 
 ## Preset table
 
-From `tools/transcribe-quantize/main.cpp`:
+From `tools/transcribe-quantize/policy.cpp`:
 
-| Preset    | Linear main | Linear fallback | attn.linear_out | Embed | Conv | ConvPw | Norm |
-|-----------|-------------|-----------------|-----------------|-------|------|--------|------|
-| `F16`     | F16         | F16             | F16             | —     | F32  | F16    | F32  |
-| `Q8_0`    | Q8_0        | F16             | Q8_0            | —     | F32  | F16    | F32  |
-| `Q6_K`    | Q6_K        | F16             | Q6_K            | —     | F32  | F16    | F32  |
-| `Q5_K_M`  | Q5_K        | F16             | Q8_0            | Q6_K  | F32  | F16    | F32  |
-| `Q4_K_M`  | Q4_K        | F16             | Q8_0            | Q6_K  | F32  | F16    | F32  |
+| Preset    | Linear main | Linear fallback | attn output | Embed | Conv | ConvPw | Norm |
+|-----------|-------------|-----------------|-------------|-------|------|--------|------|
+| `F16`     | F16         | F16             | F16         | —     | F32  | F16    | F32  |
+| `Q4_0`    | Q4_0        | F16             | Q4_0        | —     | F32  | F16    | F32  |
+| `Q4_1`    | Q4_1        | F16             | Q4_1        | —     | F32  | F16    | F32  |
+| `Q5_0`    | Q5_0        | F16             | Q5_0        | —     | F32  | F16    | F32  |
+| `Q5_1`    | Q5_1        | F16             | Q5_1        | —     | F32  | F16    | F32  |
+| `Q8_0`    | Q8_0        | F16             | Q8_0        | —     | F32  | F16    | F32  |
+| `Q6_K`    | Q6_K        | F16             | Q6_K        | —     | F32  | F16    | F32  |
+| `Q5_K_M`  | Q5_K        | F16             | Q8_0        | Q6_K  | F32  | F16    | F32  |
+| `Q4_K_M`  | Q4_K        | F16             | Q8_0        | Q6_K  | F32  | F16    | F32  |
 
 **`linear_fallback`** is the type used when a tensor's inner dim doesn't
 divide the target quant's block size. Always something smaller-block or
 blockless (F16 here). Block mismatches can happen on oddly-shaped
 projections; the fallback keeps the tool from crashing.
 
-**`attn.linear_out`** gets bumped in `_M` presets (to Q8_0), in the
+**attn output** gets bumped in `_M` presets (to Q8_0), in the
 spirit of `llama.cpp`'s `_M` presets — which also keep a few
 precision-sensitive tensors above the base type. The specific tensor
 choice differs: `llama.cpp`'s `Q4_K_M` / `Q5_K_M` bump `attn_v`,
 `attn_qkv`, and `ffn_down` (to Q6_K, on select layers via
 `use_more_bits`) and leave `attn_output` at the base type. Those
-categories aren't named separately in transcribe's policy, and WER
-across `Q4_K_M` / `Q5_K_M` / `Q6_K` is already at F32 parity within CI
-on LibriSpeech test-clean, so we haven't tried to match `llama.cpp`'s
-per-tensor choices literally.
+categories aren't named separately in transcribe's policy. The bump
+matches three tensor suffixes — `attn.linear_out.weight` (Cohere,
+Parakeet), `attn.out.weight` (Qwen3-ASR encoder), and `attn.o.weight`
+(Qwen3-ASR decoder) — so all three families land in the same rule.
 
 **Embed slot** is `—` (no override) for uniform presets. Those fall
-back to `linear_main`.
+back to `linear_main`. Legacy block quants (Q4_0/1, Q5_0/1) deliberately
+leave both attn output and Embed at `linear_main` — they are uniform
+accuracy/size tradeoffs, not mixed recipes.
 
 ## Per-family policy overrides
 
-Cohere has a tied token embedding (`dec.embed.token.weight` doubles as
-the output projection). Under `Q4_K_M` / `Q5_K_M`, it is bumped to
-Q6_K — without this, WER regresses measurably. This lives as a
-family-scoped entry in the C++ policy table.
+Two families tie the input embedding to the LM head and route it into
+the `Embed` bucket so it bumps to Q6_K under the `_M` presets — without
+the bump, WER regresses measurably:
+
+- Cohere: `dec.embed.token.weight`
+- Qwen3-ASR: `dec.token_embd.weight` (llama.cpp-style name)
 
 Parakeet does not have a tied embedding. `pred.embed.weight` is a
 small predictor-only embedding and rides the `Linear` bucket.
 
-Per-family overrides are deliberately kept in a Cohere section of the
-policy table, **not** generalized into a `"*embed*" → bump` rule.
-Generalizing from one family invites false-positive bumps on Parakeet's
-predictor embedding and any future family's small auxiliary
-embeddings. Revisit when we have 3+ families where the same tensor
-pattern genuinely needs the same policy.
+Each family override lives as an explicit name check in
+`classify_tensor()`, **not** generalized into a `"*embed*" → bump`
+rule. Generalizing invites false-positive bumps on Parakeet's predictor
+embedding and any future family's small auxiliary embeddings. Revisit
+when 3+ families share the same tensor pattern and the same policy.
 
 ## Loader allowlist
 
@@ -147,12 +156,9 @@ difference.
 
 ## Presets roadmap
 
-Today's preset table covers F16, Q8_0, Q6_K, Q5_K_M, Q4_K_M. Legacy
-quants (Q4_0/1, Q5_0/1) are accepted by the loader but not yet wired
-into the preset table — Python used to emit them directly. Planned
-additions:
+Today's preset table covers F16, the legacy block quants (Q4_0, Q4_1,
+Q5_0, Q5_1), Q8_0, Q6_K, Q5_K_M, and Q4_K_M. Planned additions:
 
-- Q4_0, Q4_1, Q5_0, Q5_1 — declarative preset entries, no new code.
 - Q3_K_S, IQ2_XXS, IQ4_XS — require imatrix support (not yet wired).
 
 ## Running in bulk
