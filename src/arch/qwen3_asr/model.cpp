@@ -33,7 +33,6 @@
 #include <cmath>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -452,17 +451,22 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
 //
 //   <|im_start|>system\n<|im_end|>\n
 //   <|im_start|>user\n<|audio_start|><|audio_pad|>*T_enc<|audio_end|><|im_end|>\n
-//   <|im_start|>assistant\n
+//   <|im_start|>assistant\n[language {Name}<asr_text>]?
 //
-// (with empty system content; language/context hinting is not yet
-// implemented in the first port — callers passing a non-null language
-// hint are rejected at the run() entry with
-// TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE.) Returns total prompt length.
-void build_prompt_tokens(const QwenAsrHParams &  hp,
-                         const ChatTokens &      ct,
-                         int                     T_enc,
-                         std::vector<int32_t> &  out_ids,
-                         std::vector<int64_t> &  out_audio_positions)
+// The system prompt is empty (we do not yet thread a caller-supplied
+// context through). When `lang_prefix_ids` is non-null its contents
+// are appended verbatim after the trailing newline, which is how the
+// reference forces a specific output language: the LM continues from
+// "<asr_text>" with pure transcript text rather than emitting its own
+// "language X<asr_text>" prefix. Callers resolve the prefix via
+// encode_language_prefix() below; it stays out of this function so
+// build_prompt_tokens can remain a pure token-id assembler.
+void build_prompt_tokens(const QwenAsrHParams &           hp,
+                         const ChatTokens &               ct,
+                         int                              T_enc,
+                         const std::vector<int32_t> *     lang_prefix_ids,
+                         std::vector<int32_t> &           out_ids,
+                         std::vector<int64_t> &           out_audio_positions)
 {
     out_ids.clear();
     out_audio_positions.clear();
@@ -491,85 +495,130 @@ void build_prompt_tokens(const QwenAsrHParams &  hp,
     out_ids.push_back(ct.im_start);
     out_ids.push_back(ct.role_assistant);
     out_ids.push_back(ct.newline);
-}
 
-// GPT2/Qwen2 byte-level BPE "bytes_to_unicode" map (Python reference
-// at transformers.models.gpt2.tokenization_gpt2.bytes_to_unicode).
-// Built once at first call; thread-safe via std::call_once.
-static std::string byte_from_unicode_index(int cp) {
-    // Inverse of bytes_to_unicode: return single-byte string or empty.
-    static std::unordered_map<int, uint8_t> * g_map = nullptr;
-    static std::once_flag once;
-    std::call_once(once, [] {
-        auto * m = new std::unordered_map<int, uint8_t>();
-        std::vector<int> bs;
-        for (int i = '!'; i <= '~'; ++i) bs.push_back(i);
-        for (int i = 0xA1; i <= 0xAC; ++i) bs.push_back(i);
-        for (int i = 0xAE; i <= 0xFF; ++i) bs.push_back(i);
-        std::vector<int> cs = bs;
-        int n = 0;
-        for (int b = 0; b < 256; ++b) {
-            bool found = false;
-            for (int v : bs) if (v == b) { found = true; break; }
-            if (!found) {
-                bs.push_back(b);
-                cs.push_back(256 + n);
-                ++n;
-            }
-        }
-        for (size_t i = 0; i < bs.size(); ++i) {
-            (*m)[cs[i]] = static_cast<uint8_t>(bs[i]);
-        }
-        g_map = m;
-    });
-    auto it = g_map->find(cp);
-    if (it == g_map->end()) return {};
-    return std::string(1, static_cast<char>(it->second));
-}
-
-// Decode a UTF-8 token string (GPT2 byte-level encoded) back to the
-// raw UTF-8 bytes the tokenizer represents. Iterates codepoints and
-// looks up each in the byte-to-unicode inverse.
-static std::string gpt2_token_to_bytes(const std::string & tok) {
-    std::string out;
-    out.reserve(tok.size());
-    size_t i = 0;
-    while (i < tok.size()) {
-        // Decode one UTF-8 codepoint from tok[i..]. Bail out of any
-        // sequence whose continuation bytes would run past end-of-
-        // string — that'd be either corruption or an adversarial
-        // input; either way, stop decoding rather than read past the
-        // buffer.
-        const unsigned char c = static_cast<unsigned char>(tok[i]);
-        int cp = 0; int w = 1;
-        if (c < 0x80) { cp = c; w = 1; }
-        else if ((c & 0xE0) == 0xC0) { w = 2; }
-        else if ((c & 0xF0) == 0xE0) { w = 3; }
-        else if ((c & 0xF8) == 0xF0) { w = 4; }
-        else { ++i; continue; }  // malformed lead byte; skip
-
-        if (i + static_cast<size_t>(w) > tok.size()) break;
-
-        if (w == 2) {
-            cp = ((c & 0x1F) << 6) |
-                 (static_cast<unsigned char>(tok[i + 1]) & 0x3F);
-        } else if (w == 3) {
-            cp = ((c & 0x0F) << 12) |
-                 ((static_cast<unsigned char>(tok[i + 1]) & 0x3F) << 6) |
-                 (static_cast<unsigned char>(tok[i + 2]) & 0x3F);
-        } else if (w == 4) {
-            cp = ((c & 0x07) << 18) |
-                 ((static_cast<unsigned char>(tok[i + 1]) & 0x3F) << 12) |
-                 ((static_cast<unsigned char>(tok[i + 2]) & 0x3F) <<  6) |
-                 (static_cast<unsigned char>(tok[i + 3]) & 0x3F);
-        }
-
-        std::string b = byte_from_unicode_index(cp);
-        if (!b.empty()) out.append(b);
-        i += w;
+    if (lang_prefix_ids != nullptr && !lang_prefix_ids->empty()) {
+        out_ids.insert(out_ids.end(),
+                       lang_prefix_ids->begin(),
+                       lang_prefix_ids->end());
     }
-    return out;
 }
+
+} // namespace  (close anon temporarily; the two helpers below have
+  // external linkage — one because the public-header declaration in
+  // qwen3_asr.h needs a matching definition, the other because the
+  // function lives just above and wants to name the data table.)
+
+// BCP-47 → publisher canonical name. The Qwen3-ASR prompt renders the
+// publisher's canonical string ("English", "Chinese", ...) rather
+// than the BCP-47 code, and the list is frozen per Qwen3-ASR release
+// (qwen_asr.inference.utils.SUPPORTED_LANGUAGES in the publisher's
+// Python package). Keeping the map here tracks the publisher's list
+// directly; if a future Qwen3-ASR variant changes it, this table is
+// the update point and the model will error cleanly for languages
+// that haven't been added yet.
+struct LangNameEntry {
+    const char * bcp47;
+    const char * pub_name;
+};
+constexpr LangNameEntry k_qwen3_asr_language_names[] = {
+    {"zh",  "Chinese"},
+    {"en",  "English"},
+    {"yue", "Cantonese"},
+    {"ar",  "Arabic"},
+    {"de",  "German"},
+    {"fr",  "French"},
+    {"es",  "Spanish"},
+    {"pt",  "Portuguese"},
+    {"id",  "Indonesian"},
+    {"it",  "Italian"},
+    {"ko",  "Korean"},
+    {"ru",  "Russian"},
+    {"th",  "Thai"},
+    {"vi",  "Vietnamese"},
+    {"ja",  "Japanese"},
+    {"tr",  "Turkish"},
+    {"hi",  "Hindi"},
+    {"ms",  "Malay"},
+    {"nl",  "Dutch"},
+    {"sv",  "Swedish"},
+    {"da",  "Danish"},
+    {"fi",  "Finnish"},
+    {"pl",  "Polish"},
+    {"cs",  "Czech"},
+    {"fil", "Filipino"},
+    {"fa",  "Persian"},
+    {"el",  "Greek"},
+    {"ro",  "Romanian"},
+    {"hu",  "Hungarian"},
+    {"mk",  "Macedonian"},
+};
+
+// Resolve a caller-supplied BCP-47 language code to the token-id
+// sequence the chat template expects: the BPE-encoded bytes of
+// "language {Name}" followed by the `<asr_text>` special-token id.
+//
+// We split the prefix around the special token because
+// Tokenizer::encode() does not partition special tokens out before
+// BPE — it would run a byte-level merge loop over the literal
+// "<asr_text>" string and produce wrong ids. The Hugging Face
+// tokenizer's "added_tokens" path is what recognizes the tag and
+// emits its single id; we replicate that by looking up the id
+// directly from the vocab and appending it by hand. The id is
+// checkpoint-specific (151704 on Qwen3-ASR 0.6B / 1.7B) but we never
+// hardcode it — `tok.find("<asr_text>")` reads the actual vocab.
+//
+// The dispatcher validates `bcp47` against caps.languages before we
+// get here, so an unknown code at this layer is either a converter
+// drift (language written into caps that our static map doesn't
+// know about) or a future Qwen3-ASR variant we haven't caught up to.
+// Either way, surface as UNSUPPORTED_LANGUAGE so the caller sees the
+// right error.
+transcribe_status encode_language_prefix(const transcribe::Tokenizer & tok,
+                                         const char *                  bcp47,
+                                         std::vector<int32_t> &        out_ids)
+{
+    out_ids.clear();
+    if (bcp47 == nullptr || bcp47[0] == '\0') {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    const char * pub_name = nullptr;
+    for (const auto & e : k_qwen3_asr_language_names) {
+        if (std::strcmp(e.bcp47, bcp47) == 0) {
+            pub_name = e.pub_name;
+            break;
+        }
+    }
+    if (pub_name == nullptr) {
+        std::fprintf(stderr,
+                     "qwen3_asr: no canonical publisher name for "
+                     "language=\"%s\"\n", bcp47);
+        return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    }
+    if (!tok.has_encoder()) {
+        std::fprintf(stderr,
+                     "qwen3_asr: tokenizer missing encoder (merges "
+                     "unavailable); cannot render language hint\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    const int asr_text_id = tok.find("<asr_text>");
+    if (asr_text_id < 0) {
+        std::fprintf(stderr,
+                     "qwen3_asr: tokenizer vocab missing <asr_text> "
+                     "special token\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    std::string text = "language ";
+    text += pub_name;
+    if (const transcribe_status st = tok.encode(text, out_ids);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    out_ids.push_back(asr_text_id);
+    return TRANSCRIBE_OK;
+}
+
+namespace {  // reopen anon for the rest of the file's helpers.
 
 // Host-side pack [n_mels, T_mel] mel into batched chunks
 // [mel_per_chunk, n_mels, 1, n_chunks]. Chunks shorter than
@@ -615,17 +664,29 @@ transcribe_status run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Language hinting is not yet implemented. The reference
-    // implementation auto-detects when no language is supplied (the LM
-    // emits a "language X" prefix it later strips from the transcript).
-    // This port honors that auto-detect path (params == nullptr or
-    // params->language == nullptr) but does not render caller-supplied
-    // hints into the chat template; accepting one silently would be a
-    // public-API contract violation. Reject explicit hints until the
-    // template renderer lands — the capabilities' language list
-    // documents what the model *can detect*, not what callers may hint.
-    if (params != nullptr && params->language != nullptr) {
-        return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    // Language hint handling. Null / empty == auto-detect (the LM
+    // emits its own "language X<asr_text>" prefix which the output
+    // parser below strips). A non-null code is resolved to the
+    // token-id sequence for "language {Name}<asr_text>" via the
+    // tokenizer; we seed the assistant turn with those tokens so the
+    // LM continues straight into pure transcript text. Dispatcher
+    // already validated `params->language` against caps.languages,
+    // so if encode_language_prefix reports "no canonical name" the
+    // static publisher map and the converter's BCP-47 list have
+    // drifted — surface that as UNSUPPORTED_LANGUAGE instead of
+    // silently falling back to auto-detect.
+    std::vector<int32_t> lang_prefix_ids;
+    const std::vector<int32_t> * lang_prefix_ptr = nullptr;
+    if (params != nullptr && params->language != nullptr &&
+        params->language[0] != '\0')
+    {
+        if (const transcribe_status st = encode_language_prefix(
+                cm->tok, params->language, lang_prefix_ids);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+        lang_prefix_ptr = &lang_prefix_ids;
     }
 
     transcribe::debug::init();
@@ -864,7 +925,7 @@ transcribe_status run(
     std::vector<int32_t> prompt_ids;
     std::vector<int64_t> audio_positions;
     build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc,
-                        prompt_ids, audio_positions);
+                        lang_prefix_ptr, prompt_ids, audio_positions);
     const int T_prompt   = static_cast<int>(prompt_ids.size());
     const int prefix_len = audio_positions.empty()
                          ? 0 : static_cast<int>(audio_positions.front());
@@ -1106,17 +1167,22 @@ transcribe_status run(
         generated_ids.pop_back();
     }
 
-    // Decode generated ids to text via GPT2 byte-level BPE inverse.
-    std::string raw_text;
-    for (int32_t id : generated_ids) {
-        const std::string & s = cm->tok.token(id);
-        if (s.empty()) continue;
-        raw_text += gpt2_token_to_bytes(s);
-    }
+    // Decode generated ids to text. Tokenizer::decode handles the
+    // "gpt2" byte-level inversion natively — no more per-family
+    // byte-to-unicode walker.
+    std::string raw_text = cm->tok.decode(
+        generated_ids.data(), static_cast<int>(generated_ids.size()));
 
-    // Parse Qwen3-ASR output format: "language X<asr_text>actual_text"
-    // The <asr_text> separator marks the transcript; everything before
-    // it is the language tag.
+    // Parse Qwen3-ASR output format:
+    //   auto-detect: "language X<asr_text>actual_text"  (strip prefix)
+    //   forced:      "actual_text"                      (no prefix -
+    //                we seeded the assistant turn with "language
+    //                X<asr_text>" already, so the LM's generated
+    //                continuation is pure transcript.)
+    //
+    // We unconditionally try the split — if the prefix is absent (the
+    // forced case, or a model that just didn't emit it this run), the
+    // find() returns npos and transcript_text stays as raw_text.
     std::string transcript_text = raw_text;
     if (auto sep = raw_text.find("<asr_text>"); sep != std::string::npos) {
         transcript_text = raw_text.substr(sep + std::strlen("<asr_text>"));

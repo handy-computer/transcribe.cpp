@@ -18,6 +18,8 @@ add_library(transcribe
     transcribe-mel.cpp
     transcribe-model.cpp
     transcribe-tokenizer.cpp
+    transcribe-unicode.cpp
+    transcribe-unicode-data.cpp
     transcribe-debug.cpp
     transcribe-flash-policy.cpp
     transcribe-backend.cpp

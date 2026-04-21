@@ -260,11 +260,19 @@ int main() {
 
     CHECK_STR_EQ(transcribe_model_arch_string(model), "qwen3_asr");
 
-    // Phase 1.1 contract: the public API must reject any explicit
-    // language hint until the chat-template renderer honors it, even
-    // for languages the model can auto-detect. Exercise before the
-    // real run so a regression here can't mask a later bug. We need
-    // some PCM for the call; reuse the jfk wav.
+    // Language hinting contract:
+    //   - A BCP-47 code advertised in caps.languages must be accepted
+    //     and produce a transcript. For English audio we expect the
+    //     forced-"en" transcript to be within edit-distance tolerance
+    //     of the auto-detect transcript (same tolerance as the main
+    //     jfk case below).
+    //   - A code not in caps.languages must be rejected by the
+    //     dispatcher with UNSUPPORTED_LANGUAGE before we ever reach
+    //     the family handler. We use a made-up code ("xx-fake") to
+    //     exercise that path.
+    //
+    // Exercised before the full test cases so a regression here
+    // can't mask a later bug.
     {
         std::vector<float> pcm;
         std::string load_err;
@@ -272,8 +280,8 @@ int main() {
             !transcribe_cli::load_wav_mono_16k(jfk_wav, pcm, load_err))
         {
             std::fprintf(stderr,
-                         "qwen3_asr_e2e_smoke: jfk wav load for lang "
-                         "reject check: %s\n",
+                         "qwen3_asr_e2e_smoke: jfk wav load for language "
+                         "hint check: %s\n",
                          load_err.empty() ? "missing" : load_err.c_str());
             transcribe_model_free(model);
             return EXIT_FAILURE;
@@ -285,33 +293,53 @@ int main() {
             ctx == nullptr)
         {
             std::fprintf(stderr,
-                         "qwen3_asr_e2e_smoke: ctx_init for lang "
-                         "reject check failed\n");
+                         "qwen3_asr_e2e_smoke: ctx_init for language "
+                         "hint check failed\n");
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
 
+        // Accept path: force "en" on English audio and expect a
+        // transcript within the same edit-distance tolerance as the
+        // auto-detect jfk case.
         transcribe_params rp_lang = transcribe_default_params();
         rp_lang.language = "en";
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()),
                            &rp_lang);
-        if (st != TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE) {
+        if (st != TRANSCRIBE_OK) {
             std::fprintf(stderr,
-                         "FAIL: expected UNSUPPORTED_LANGUAGE for "
-                         "language=\"en\", got %s\n",
+                         "FAIL: language=\"en\" returned %s (expected OK)\n",
                          transcribe_status_string(st));
             ++g_failures;
+        } else {
+            const char * forced = transcribe_full_text(ctx);
+            const std::string forced_text = forced ? forced : "";
+            const int dist = edit_distance(forced_text, k_jfk_reference_text);
+            std::fprintf(stderr,
+                         "qwen3_asr_e2e_smoke[lang=en]: text=\"%s\" "
+                         "edit_distance=%d\n",
+                         forced_text.c_str(), dist);
+            if (dist > k_jfk_max_edit_distance) {
+                std::fprintf(stderr,
+                             "FAIL: forced-en edit distance %d > %d\n",
+                             dist, k_jfk_max_edit_distance);
+                ++g_failures;
+            }
         }
-        rp_lang.language = "zh";
-        const transcribe_status st2 =
+
+        // Reject path: a BCP-47 code that is NOT in caps.languages
+        // must be rejected with UNSUPPORTED_LANGUAGE by the
+        // dispatcher. Use an unambiguously bogus code.
+        rp_lang.language = "xx-fake";
+        const transcribe_status st_bad =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()),
                            &rp_lang);
-        if (st2 != TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE) {
+        if (st_bad != TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE) {
             std::fprintf(stderr,
                          "FAIL: expected UNSUPPORTED_LANGUAGE for "
-                         "language=\"zh\", got %s\n",
-                         transcribe_status_string(st2));
+                         "language=\"xx-fake\", got %s\n",
+                         transcribe_status_string(st_bad));
             ++g_failures;
         }
 

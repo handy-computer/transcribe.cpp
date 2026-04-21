@@ -39,6 +39,28 @@ namespace transcribe::qwen3_asr {
 
 void apply_family_invariants(transcribe_capabilities & caps);
 
+// Encode "language {Name}<asr_text>" for the given BCP-47 code. The
+// output is the token-id sequence the Qwen3-ASR chat template seeds
+// the assistant turn with when a caller forces a language hint.
+// Declared here (rather than hiding in the model.cpp anonymous
+// namespace) so the BPE parity test can verify the full prefix
+// matches the HF reference including the <asr_text> special token.
+//
+// Returns:
+//   TRANSCRIBE_OK                     on success, out_ids populated.
+//   TRANSCRIBE_ERR_INVALID_ARG        bcp47 null or empty.
+//   TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE  bcp47 not in the publisher's
+//                                     support list (the static map
+//                                     in model.cpp is the source of
+//                                     truth; drift vs. caps.languages
+//                                     surfaces here).
+//   TRANSCRIBE_ERR_GGUF               tokenizer has no encoder
+//                                     (missing merges) or vocab
+//                                     missing <asr_text> special.
+transcribe_status encode_language_prefix(const transcribe::Tokenizer & tok,
+                                         const char *                  bcp47,
+                                         std::vector<int32_t> &        out_ids);
+
 // ---------------------------------------------------------------------------
 // KV cache for the autoregressive LM.
 //

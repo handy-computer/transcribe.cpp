@@ -520,6 +520,24 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         set_tests_properties(${_target} PROPERTIES SKIP_RETURN_CODE 77)
     endforeach()
 
+    # BPE encoder parity test (TRANSCRIBE_QWEN3_ASR_0_6B_GGUF gated).
+    # Loads the real 0.6B tokenizer and compares Tokenizer::encode and
+    # encode_language_prefix output against HF-generated expected ids
+    # from tests/fixtures/qwen3_asr_bpe_parity.inc. That fixture is
+    # hand-regenerated via scripts/tokenizer-parity-fixture.py when
+    # the vocab or publisher language list moves.
+    add_executable(transcribe_qwen3_asr_bpe_parity
+        qwen3_asr_bpe_parity.cpp)
+    target_link_libraries(transcribe_qwen3_asr_bpe_parity PRIVATE transcribe ggml)
+    target_include_directories(transcribe_qwen3_asr_bpe_parity PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    transcribe_apply_warnings(transcribe_qwen3_asr_bpe_parity)
+    add_test(NAME transcribe_qwen3_asr_bpe_parity
+        COMMAND transcribe_qwen3_asr_bpe_parity)
+    set_tests_properties(transcribe_qwen3_asr_bpe_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
+
     add_executable(transcribe_qwen3_asr_e2e_smoke
         qwen3_asr_e2e_smoke.cpp)
 
