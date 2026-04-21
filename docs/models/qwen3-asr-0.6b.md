@@ -23,27 +23,18 @@ Ported from upstream commit
 
 ## Download
 
-| Quantization | Size | WER (LibriSpeech test-clean) | Notes |
-| --- | ---: | ---: | --- |
-| BF16   | 1499 MB | 2.11% | accuracy reference (converter output) |
-| F16    | 1507 MB | 2.12% | direct cast from BF16 |
-| Q8_0   |  811 MB | 2.11% | weight-only quant for embed + linear |
-| Q6_K   |  763 MB | 2.10% | 6-bit K-quant |
-| Q5_K_M |  699 MB | 2.20% | 5-bit K-quant, mixed |
-| Q4_K_M |  639 MB | 2.32% | smallest shipped preset; Q6_K for the tied embed |
+| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+| --- | --- | ---: | ---: |
+| BF16   | [Qwen3-ASR-0.6B-BF16.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-BF16.gguf)     | 1499 MB | 2.11% |
+| F16    | [Qwen3-ASR-0.6B-F16.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-F16.gguf)       | 1507 MB | 2.12% |
+| Q8_0   | [Qwen3-ASR-0.6B-Q8_0.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q8_0.gguf)     |  811 MB | 2.11% |
+| Q6_K   | [Qwen3-ASR-0.6B-Q6_K.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q6_K.gguf)     |  763 MB | 2.10% |
+| Q5_K_M | [Qwen3-ASR-0.6B-Q5_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q5_K_M.gguf) |  699 MB | 2.20% |
+| Q4_K_M | [Qwen3-ASR-0.6B-Q4_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q4_K_M.gguf) |  639 MB | 2.32% |
 
 WER measured on LibriSpeech `test-clean` (2620 utterances), Whisper-style
 English text normalizer, jiwer 3.x, metal backend on Apple M4. Reproduce
 with `scripts/wer/run.py` + `scripts/wer/score.py`.
-
-Published GGUF URLs will land alongside the Cohere checkpoints in a
-follow-up release. Until then, convert locally:
-
-```bash
-uv run --project scripts/envs/qwen3_asr \
-  scripts/convert-qwen3_asr.py Qwen/Qwen3-ASR-0.6B \
-  --revision 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
-```
 
 ## Quick Start
 
