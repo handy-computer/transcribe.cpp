@@ -1,0 +1,197 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "qwen3_asr",
+  "hf_repo": "Qwen/Qwen3-ASR-0.6B",
+  "hf_revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Qwen3 ships vocab.json + merges.txt only; no fast-tokenizer JSON"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "refs/models/qwen3_asr/Qwen3-ASR/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py",
+      "status": "found",
+      "detail": "Alibaba first-party qwen_asr package (v0.0.6), modeling + processor code"
+    }
+  },
+  "variants": [
+    {
+      "name": "qwen3-asr-0.6b",
+      "memory_gb": null,
+      "files": []
+    },
+    {
+      "name": "qwen3-asr-1.7b",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "audio-llm"
+    ],
+    "key_fields": {
+      "architectures": [
+        "Qwen3ASRForConditionalGeneration"
+      ],
+      "model_type": "qwen3_asr",
+      "audio_encoder.d_model": 896,
+      "audio_encoder.encoder_layers": 18,
+      "audio_encoder.encoder_attention_heads": 14,
+      "audio_encoder.encoder_ffn_dim": 3584,
+      "audio_encoder.num_mel_bins": 128,
+      "audio_encoder.downsample_hidden_size": 480,
+      "audio_encoder.output_dim": 1024,
+      "audio_encoder.max_source_positions": 1500,
+      "audio_encoder.n_window": 50,
+      "audio_encoder.n_window_infer": 800,
+      "audio_encoder.conv_chunksize": 500,
+      "audio_encoder.activation_function": "gelu",
+      "text.hidden_size": 1024,
+      "text.intermediate_size": 3072,
+      "text.num_hidden_layers": 28,
+      "text.num_attention_heads": 16,
+      "text.num_key_value_heads": 8,
+      "text.head_dim": 128,
+      "text.hidden_act": "silu",
+      "text.rms_norm_eps": 1e-06,
+      "text.rope_theta": 1000000,
+      "text.rope_scaling.mrope_section": [24, 20, 20],
+      "text.rope_scaling.mrope_interleaved": true,
+      "text.max_position_embeddings": 65536,
+      "text.tie_word_embeddings": true,
+      "text.vocab_size": 151936,
+      "audio_token_id": 151676,
+      "audio_start_token_id": 151669,
+      "audio_end_token_id": 151670
+    },
+    "varying_across_variants": [
+      "audio_encoder.d_model",
+      "audio_encoder.encoder_layers",
+      "audio_encoder.encoder_attention_heads",
+      "audio_encoder.encoder_ffn_dim",
+      "text.hidden_size",
+      "text.intermediate_size",
+      "text.num_hidden_layers"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "weights_header",
+    "evidence": "safetensors header BF16=612 (all floating tensors); config.thinker_config.dtype=\"bfloat16\" confirms the header distribution",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 612
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hann_periodic",
+    "normalization": "per_utterance",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 151936,
+    "special_tokens": {
+      "eos": 151645,
+      "pad": 151643,
+      "audio_start": 151669,
+      "audio_end": 151670,
+      "audio": 151676,
+      "im_start": 151644,
+      "im_end": 151645
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": [
+      "zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko",
+      "ru", "th", "vi", "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi",
+      "pl", "cs", "fil", "fa", "el", "ro", "hu", "mk"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": ["none"],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.13,
+      "score_unit": "percent",
+      "source": "Hugging Face model card evaluation results (hf-audio/open-asr-leaderboard)",
+      "notes": "Publisher-linked leaderboard score for Qwen3-ASR-0.6B; aggregate English clean-speech WER only, not a full multilingual table."
+    }
+  ],
+  "reference_framework": "author_repo_qwen_asr",
+  "reference_rationale": "The Qwen/Qwen3-ASR HF card points at Alibaba's first-party qwen_asr Python package (v0.0.6 on PyPI, source at refs/models/qwen3_asr/Qwen3-ASR). That package provides Qwen3ASRConfig + Qwen3ASRForConditionalGeneration and registers them with transformers AutoModel; mainline transformers (as of 4.57.x) does not yet carry these classes. We treat the author repo as the canonical reference (the HF-hosted modeling code imports from qwen_asr). Transformers is the runtime host, not the canonical implementation.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "Interleaved multimodal RoPE (mrope_section=[24,20,20], mrope_interleaved=true). The text LM uses 3D position ids; at inference for pure-text generation they collapse to 1D but the rope kernel still materializes a [3,B,T,head_dim/2] frequency grid with an interleaving permutation. ggml does not have a direct equivalent; we will need a custom cos/sin precompute plus a standard RoPE apply.",
+    "Q/K RMSNorm per-head inside attention (norm applied on the head_dim vector, not hidden_size). Follows Qwen3 LM convention; requires a per-head norm op during attention graph construction.",
+    "Audio encoder uses chunked bidirectional self-attention with per-chunk cu_seqlens (window_aftercnn = 800/(50*2) * frames_per_chunk_after_cnn). Not a single causal mask; not standard full-sequence attention either. The mask is block-diagonal over cu_seqlens.",
+    "Audio encoder downsampler is 3x 2D conv with stride 2 (factor 8 in time), then flattens (C*F) and linear-projects to d_model. mlx-audio and qwen3-asr.cpp both implement conv2d via im2col+matmul; we should match that pattern.",
+    "Sinusoidal positional embedding on the encoder side is precomputed to max_source_positions=1500; need to check interaction with n_window_infer=800 and cu_seqlens.",
+    "Audio token injection: the audio encoder output (after ln_post -> proj1 -> GELU -> proj2 to output_dim=1024) is scattered into LM embeddings at positions where input_ids == audio_token_id (151676). Matches qwen2_audio / audio-llm pattern (see docs/porting/0-porting.md).",
+    "Tied word embeddings (tie_word_embeddings=true): converter should omit lm_head tensor; loader needs llama.cpp-style TENSOR_DUPLICATED fallback to token_embd.",
+    "Long context: max_position_embeddings=65536. KV cache memory budget for the LM matters even at 0.6B.",
+    "Prompt template includes language and context hotword fields (see chat_template.json). Tokenizer metadata in GGUF must round-trip the Qwen3 chat template so the C++ loader can rebuild the prompt.",
+    "Qwen3 tokenizer ships vocab.json + merges.txt, not tokenizer.json. Converter needs to rebuild the BPE ranks from merges.txt and the added_tokens list from tokenizer_config.json.",
+    "Streaming path (stream_transcribe) and forced-aligner variant share the audio encoder but drive the LM differently. First port targets non-streaming ASR only; forced aligner is a sibling variant tracked separately."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "not computed yet; compute at converter time from the canonical vocab.json + merges.txt"
+    },
+    {
+      "field": "upstream_benchmarks",
+      "reason": "Only the Open ASR Leaderboard English clean-WER datapoint (2.13) is captured from the HF card. Broader multilingual numbers from the Qwen blog/paper should be added during the validation phase."
+    }
+  ]
+}

@@ -85,7 +85,7 @@ Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
-  --family parakeet \
+  --models parakeet-tdt-0.6b-v2 \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
   --backends metal,cpu,vulkan \

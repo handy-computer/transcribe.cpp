@@ -48,12 +48,16 @@ bool iequals(const char * a, const char * b) {
 // override pattern.
 
 Bucket classify_tensor(const std::string & name) {
-    // --- Cohere: tied token embedding ---
-    // dec.embed.token.weight doubles as the output projection (tied
-    // embedding). Under _M presets it bumps to Q6_K — without this,
-    // WER regresses measurably. head.bias stays in Norm (it's a 1D
-    // per-logit offset after the matmul; loader requires F32).
-    if (name == "dec.embed.token.weight") {
+    // --- Cohere & Qwen3-ASR: tied token embedding ---
+    // Both families tie the input embedding to the LM head. Under _M
+    // presets it bumps to Q6_K — without this, WER regresses
+    // measurably. Cohere uses dec.embed.token.weight; Qwen3-ASR uses
+    // the llama.cpp-style dec.token_embd.weight. head.bias stays in
+    // Norm (it's a 1D per-logit offset after the matmul; loader
+    // requires F32).
+    if (name == "dec.embed.token.weight" ||
+        name == "dec.token_embd.weight")
+    {
         return Bucket::Embed;
     }
 
@@ -77,6 +81,17 @@ Bucket classify_tensor(const std::string & name) {
     // norm scale tensors that use "." instead of "_" as separator.
     if (ends_with(name, ".final_norm.weight") ||
         ends_with(name, ".embed.norm.weight"))
+    {
+        return Bucket::Norm;
+    }
+    // Qwen3-style norm weights that don't match the "norm_" prefix rule
+    // (per-head q_norm/k_norm on attention, output RMSNorm before the
+    // tied head, pre/post encoder layer norms).
+    if (ends_with(name, ".q_norm.weight") ||
+        ends_with(name, ".k_norm.weight") ||
+        ends_with(name, ".output_norm.weight") ||
+        ends_with(name, ".ln_post.weight") ||
+        ends_with(name, ".ln_pre.weight"))
     {
         return Bucket::Norm;
     }
@@ -200,8 +215,14 @@ ggml_type resolve_target_type(const Preset & preset,
             return target;
         }
         case Bucket::Linear: {
-            // attn.linear_out.weight bumped per _M recipe.
-            if (ends_with(name, "attn.linear_out.weight")) {
+            // Attention output projection bumped per _M recipe. Cohere
+            // and Parakeet name it "attn.linear_out.weight"; Qwen3-ASR
+            // names it "attn.out.weight" (encoder) or "attn.o.weight"
+            // (decoder). All three land in the same bump.
+            if (ends_with(name, "attn.linear_out.weight") ||
+                ends_with(name, "attn.out.weight") ||
+                ends_with(name, "attn.o.weight"))
+            {
                 return preset.linear_attn_out;
             }
             // Fall back when inner dim doesn't divide the chosen

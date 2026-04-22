@@ -1,0 +1,54 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "qwen3_asr",
+  "variant": "qwen3-asr-0.6b",
+  "source_model": {
+    "hf_repo": "Qwen/Qwen3-ASR-0.6B",
+    "hf_revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0"
+  },
+  "reference": {
+    "kind": "author_repo_qwen_asr",
+    "source": "https://github.com/Qwen/Qwen3-ASR",
+    "revision": "0.0.6",
+    "entrypoint": "scripts/dump_reference_qwen3_asr_author.py"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "weights_header",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 400,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_utterance",
+    "preemphasis": null,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 151936,
+    "special_tokens": {
+      "eos": 151645,
+      "pad": 151643,
+      "audio_start": 151669,
+      "audio_end": 151670,
+      "audio": 151676
+    }
+  },
+  "capabilities": {
+    "languages": [
+      "zh", "en", "yue", "ar", "de", "fr", "es", "pt", "id", "it", "ko",
+      "ru", "th", "vi", "ja", "tr", "hi", "ms", "nl", "sv", "da", "fi",
+      "pl", "cs", "fil", "fa", "el", "ro", "hu", "mk"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/qwen3_asr.json",
+  "cases": ["jfk"]
+}

@@ -3,6 +3,9 @@
 /build-*/
 /cmake-build-*/
 
+# Scratch space for benchmarks, staging, etc.
+/tmp/
+
 # Editor / OS
 .DS_Store
 *.swp

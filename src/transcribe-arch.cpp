@@ -18,8 +18,9 @@
 namespace transcribe {
 
 // Per-family Arch instances. Defined in src/arch/<family>/model.cpp.
-namespace parakeet { extern const Arch arch; }
-namespace cohere   { extern const Arch arch; }
+namespace parakeet  { extern const Arch arch; }
+namespace cohere    { extern const Arch arch; }
+namespace qwen3_asr { extern const Arch arch; }
 
 const Arch * find_arch(const char * name) {
     if (name == nullptr) {
@@ -29,6 +30,7 @@ const Arch * find_arch(const char * name) {
     static const Arch * const k_archs[] = {
         &parakeet::arch,
         &cohere::arch,
+        &qwen3_asr::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
 

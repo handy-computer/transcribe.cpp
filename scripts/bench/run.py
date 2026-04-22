@@ -6,20 +6,41 @@
 """
 run.py — transcribe-bench driver for perf matrices.
 
-Invokes transcribe-bench across a matrix of (backend, family, quant, sample)
-cells, detects the host machine, and aggregates each (backend, family) pair
-into a single JSON file under reports/perf/<machine-slug>/.
+Invokes transcribe-bench across a matrix of (backend, variant, quant,
+sample) cells, detects the host machine, and aggregates each (variant,
+backend) pair into a single JSON file under reports/perf/<machine-slug>/.
+
+A "variant" is the per-checkpoint slug used as the directory name under
+models/, e.g. `Qwen3-ASR-0.6B`, `Qwen3-ASR-1.7B`, `parakeet-tdt-0.6b-v3`.
+Each variant is benched independently; different sizes of the same model
+family (0.6B vs 1.7B) are never collapsed.
 
 Usage:
-    uv run scripts/bench/run.py
-    uv run scripts/bench/run.py --family parakeet --quants f16
+    uv run scripts/bench/run.py                                      # all variants
+    uv run scripts/bench/run.py --models Qwen3-ASR-0.6B
+    uv run scripts/bench/run.py --models Qwen/Qwen3-ASR-0.6B         # HF slug form
+    uv run scripts/bench/run.py --models Qwen3-ASR-0.6B,Qwen3-ASR-1.7B
+    uv run scripts/bench/run.py --models parakeet-tdt-0.6b-v3 --quants f16
     uv run scripts/bench/run.py --samples jfk --iters 20 --warmup 5
     uv run scripts/bench/run.py --backends metal,cpu,vulkan
     uv run scripts/bench/run.py --backends cpu --name pre-refactor
-    uv run scripts/bench/run.py --model models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf --samples jfk
+    uv run scripts/bench/run.py --models models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf --samples jfk
+
+Each --models token resolves one of three ways:
+    - `<dir-slug>`            (e.g. Qwen3-ASR-0.6B) — all GGUFs under
+                              models/<dir-slug>/, filtered by --quants
+    - `<org>/<dir-slug>`      (e.g. Qwen/Qwen3-ASR-0.6B) — HF-style slug;
+                              everything before the last `/` is stripped,
+                              the remainder is treated as a dir-slug
+    - `<path-to-file.gguf>`   — that exact file only; --quants is ignored
+                              for this token
+
+When --models is omitted, every variant dir under models/*/ with at least
+one matching GGUF is benched.
 
   Options:
-    --family {parakeet,cohere,all}   model family to bench (default: all)
+    --models M[,M...]                variant slugs (short or HF-style) or
+                                     .gguf paths (default: all variants)
     --quants Q[,Q...]                quants to bench (default: f16,q8_0,q4_k_m)
     --samples S[,S...]               sample stems (default: jfk,dots)
     --iters N                        measured iterations per cell (default: 2)
@@ -29,7 +50,6 @@ Usage:
     --name LABEL                     stable label for named baselines; when set,
                                      output filenames use <name> instead of <ts>
                                      and are overwritten on re-run
-    --model PATH                     escape hatch: bypass discovery
     --bench-bin PATH                 legacy override: only valid when exactly one
                                      backend is selected; supplies that backend's
                                      binary path
@@ -47,8 +67,8 @@ Auto-detection (when --backends is unset or 'all'):
     cpu    available if build/bin/transcribe-bench exists
     vulkan available if build-vulkan/bin/transcribe-bench exists
 
-Output: one aggregated JSON per (family, backend) at
-    reports/perf/<machine-slug>/<timestamp-or-name>_<family>_<backend>.json
+Output: one aggregated JSON per (variant, backend) at
+    reports/perf/<machine-slug>/<timestamp-or-name>_<variant>_<backend>.json
 """
 
 from __future__ import annotations
@@ -68,16 +88,15 @@ from pathlib import Path
 
 DEFAULT_QUANTS = ["f16", "q8_0", "q4_k_m"]
 DEFAULT_SAMPLES = ["jfk", "dots"]
-KNOWN_FAMILIES = ["parakeet", "cohere"]
 KNOWN_BACKENDS = ["metal", "cpu", "vulkan"]
 
 
 @dataclass(slots=True)
 class Cell:
-    family: str
+    variant: str          # parent dir slug, e.g. "Qwen3-ASR-0.6B"
     quant: str
     model_path: Path
-    sample: str  # stem (e.g. "jfk")
+    sample: str           # stem (e.g. "jfk")
     sample_path: Path
 
 
@@ -180,32 +199,87 @@ def parse_quant_from_filename(path: Path) -> str | None:
     return stem.rsplit("-", 1)[1].lower()
 
 
-def discover_family_models(repo: Path, family: str) -> dict[str, Path]:
-    """Return {quant: path} for a given family, picking newest on collision.
-
-    Layout is models/<slug>/<slug>-<QUANT>.gguf; any slug whose filename
-    starts with `family` is treated as belonging to that family. Multiple
-    variants (e.g. parakeet v2 + v3) collapse into the same {quant: path}
-    map; newest-mtime wins per quant.
-    """
+def discover_all_variants(repo: Path) -> list[tuple[str, str, Path]]:
+    """Every (variant, quant, path) under models/*/*.gguf."""
     model_root = repo / "models"
     if not model_root.is_dir():
-        return {}
-    by_quant: dict[str, list[Path]] = {}
-    for path in model_root.glob("*/*.gguf"):
-        if not path.stem.startswith(family):
-            continue
+        return []
+    out: list[tuple[str, str, Path]] = []
+    for path in sorted(model_root.glob("*/*.gguf")):
+        variant = path.parent.name
         quant = parse_quant_from_filename(path)
         if quant:
-            by_quant.setdefault(quant, []).append(path)
-    resolved: dict[str, Path] = {}
-    for quant, paths in by_quant.items():
-        if len(paths) > 1:
-            paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            print(f"warning: multiple files for {family}/{quant}, "
-                  f"picking newest: {paths[0].name}", file=sys.stderr)
-        resolved[quant] = paths[0]
-    return resolved
+            out.append((variant, quant, path))
+    return out
+
+
+def resolve_model_tokens(repo: Path, tokens: list[str] | None,
+                         quants_lower: set[str]
+                         ) -> list[tuple[str, str, Path]]:
+    """Expand --models tokens to (variant, quant, path) triples.
+
+    Semantics:
+      - None/empty → all variants under models/, filtered by quants_lower
+      - `*.gguf` token → that exact file (quants_lower is ignored for it)
+      - anything else → dir slug; HF-style `org/slug` is stripped to `slug`,
+        result is looked up at models/<slug>/ and fanned out filtered by
+        quants_lower
+    """
+    if not tokens:
+        return [(v, q, p) for v, q, p in discover_all_variants(repo)
+                if q in quants_lower]
+
+    out: list[tuple[str, str, Path]] = []
+    for tok in tokens:
+        if tok.endswith(".gguf"):
+            p = Path(tok)
+            p = p if p.is_absolute() else (repo / p).resolve()
+            if not p.exists():
+                print(f"error: model not found: {p}", file=sys.stderr)
+                sys.exit(2)
+            variant = p.parent.name
+            quant = parse_quant_from_filename(p) or "unknown"
+            out.append((variant, quant, p))
+            continue
+
+        # dir slug; strip any HF-style org prefix (`org/slug` -> `slug`)
+        slug = tok.rsplit("/", 1)[-1]
+        if not slug:
+            print(f"error: empty model token: {tok!r}", file=sys.stderr)
+            sys.exit(2)
+        # Match case-insensitively against on-disk dirs and canonicalize
+        # to the actual dir name. This makes typing / doc examples
+        # tolerant on case-sensitive filesystems AND keeps report
+        # filenames and variant tags in the canonical casing (e.g.
+        # `Qwen3-ASR-0.6B`) regardless of how the token was entered.
+        model_root = repo / "models"
+        matches = ([d for d in model_root.iterdir()
+                    if d.is_dir() and d.name.lower() == slug.lower()]
+                   if model_root.is_dir() else [])
+        if not matches:
+            print(f"error: variant dir not found: "
+                  f"{model_root / slug}", file=sys.stderr)
+            sys.exit(2)
+        dir_path = matches[0]
+        slug = dir_path.name
+
+        matched_any = False
+        skipped: list[str] = []
+        for path in sorted(dir_path.glob("*.gguf")):
+            quant = parse_quant_from_filename(path)
+            if not quant:
+                continue
+            if quant not in quants_lower:
+                skipped.append(quant)
+                continue
+            out.append((slug, quant, path))
+            matched_any = True
+        if not matched_any:
+            qs = ",".join(sorted(quants_lower))
+            print(f"warning: no [{qs}] GGUFs in {dir_path} "
+                  f"(found: {','.join(sorted(set(skipped))) or 'none'})",
+                  file=sys.stderr)
+    return out
 
 
 def resolve_samples(repo: Path, stems: list[str]) -> list[tuple[str, Path]]:
@@ -219,43 +293,25 @@ def resolve_samples(repo: Path, stems: list[str]) -> list[tuple[str, Path]]:
     return out
 
 
-def discover_matrix(repo: Path, family_filter: str, quants: list[str],
+def discover_matrix(repo: Path, model_tokens: list[str] | None,
+                    quants: list[str],
                     sample_stems: list[str]) -> list[Cell]:
-    families = KNOWN_FAMILIES if family_filter == "all" else [family_filter]
+    quants_lower = {q.lower() for q in quants}
+    entries = resolve_model_tokens(repo, model_tokens, quants_lower)
     samples = resolve_samples(repo, sample_stems)
     cells: list[Cell] = []
-    for family in families:
-        available = discover_family_models(repo, family)
-        for quant in quants:
-            if quant not in available:
-                print(f"skipping {family}/{quant}: no file", file=sys.stderr)
-                continue
-            for stem, sample_path in samples:
-                cells.append(Cell(family=family, quant=quant,
-                                  model_path=available[quant],
-                                  sample=stem, sample_path=sample_path))
+    for variant, quant, path in entries:
+        for stem, sample_path in samples:
+            cells.append(Cell(variant=variant, quant=quant,
+                              model_path=path, sample=stem,
+                              sample_path=sample_path))
     return cells
 
 
-def resolve_single_model(repo: Path, model_arg: Path,
-                         sample_stems: list[str]) -> list[Cell]:
-    model_path = model_arg if model_arg.is_absolute() else (repo / model_arg)
-    model_path = model_path.resolve()
-    if not model_path.exists():
-        print(f"error: model not found: {model_path}", file=sys.stderr)
-        sys.exit(2)
-    family = model_path.parent.name
-    quant = parse_quant_from_filename(model_path) or "unknown"
-    samples = resolve_samples(repo, sample_stems)
-    return [Cell(family=family, quant=quant, model_path=model_path,
-                 sample=stem, sample_path=sample_path)
-            for stem, sample_path in samples]
-
-
-def group_by_family(cells: list[Cell]) -> dict[str, list[Cell]]:
+def group_by_variant(cells: list[Cell]) -> dict[str, list[Cell]]:
     groups: dict[str, list[Cell]] = {}
     for cell in cells:
-        groups.setdefault(cell.family, []).append(cell)
+        groups.setdefault(cell.variant, []).append(cell)
     return groups
 
 
@@ -396,7 +452,7 @@ def _fmt_mean(summary: dict, field: str) -> str:
     return f"{val:.1f}" if isinstance(val, (int, float)) else "-"
 
 
-def print_summary_table(family: str, runs: list[dict], slug: str,
+def print_summary_table(variant: str, runs: list[dict], slug: str,
                         iters: int, warmup: int, backend_label: str,
                         name: str | None = None) -> None:
     # All runs in a group share one backend now; still derive a display label
@@ -429,7 +485,7 @@ def print_summary_table(family: str, runs: list[dict], slug: str,
                  for i in range(len(row))]
         return "  " + "   ".join(parts)
 
-    title = (f"{slug} \u2022 {family} \u2022 {display_backend} \u2022 "
+    title = (f"{slug} \u2022 {variant} \u2022 {display_backend} \u2022 "
              f"iters={iters} warmup={warmup}")
     if name:
         title += f" \u2022 name={name}"
@@ -446,7 +502,11 @@ def print_summary_table(family: str, runs: list[dict], slug: str,
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--family", choices=["parakeet", "cohere", "all"], default="all")
+    p.add_argument("--models", type=str, default=None,
+                   help="comma-separated variant slugs (short form like "
+                        "'Qwen3-ASR-0.6B', HF form like 'Qwen/Qwen3-ASR-0.6B', "
+                        "or paths to .gguf files); default: all variants "
+                        "under models/")
     p.add_argument("--quants", type=str, default=",".join(DEFAULT_QUANTS))
     p.add_argument("--samples", type=str, default=",".join(DEFAULT_SAMPLES))
     p.add_argument("--iters", type=int, default=2)
@@ -457,8 +517,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--name", type=str, default=None,
                    help="stable label for named baselines "
                         "(replaces timestamp in output filename)")
-    p.add_argument("--model", type=Path, default=None,
-                   help="run this specific model file (bypass discovery)")
     p.add_argument("--bench-bin", type=Path, default=None,
                    help="legacy override for the bench binary "
                         "(only valid when exactly one backend is selected)")
@@ -469,18 +527,19 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _run_one_backend(backend: BackendSpec, by_family: dict[str, list[Cell]],
+def _run_one_backend(backend: BackendSpec,
+                     by_variant: dict[str, list[Cell]],
                      args: argparse.Namespace, repo: Path, machine: dict,
                      out_root: Path, timestamp: str, slug_ts: str,
                      git_sha: str) -> int:
-    """Run the full family matrix against a single backend. Returns exit code."""
+    """Run the full variant matrix against a single backend. Returns exit code."""
     exit_code = 0
     name_slug = slugify(args.name) if args.name else None
 
-    for family, group in by_family.items():
+    for variant, group in by_variant.items():
         runs: list[dict] = []
         for cell in group:
-            print(f"[{backend.name}][{family}] {cell.quant} \u00d7 {cell.sample} ...",
+            print(f"[{backend.name}][{variant}] {cell.quant} \u00d7 {cell.sample} ...",
                   file=sys.stderr, flush=True)
             result = run_bench_binary(backend.binary, cell, args.iters,
                                       args.warmup, backend.backend_arg)
@@ -491,14 +550,14 @@ def _run_one_backend(backend: BackendSpec, by_family: dict[str, list[Cell]],
             runs.append(result)
 
         if not runs:
-            print(f"[{backend.name}][{family}] no successful runs, skipping output",
-                  file=sys.stderr)
+            print(f"[{backend.name}][{variant}] no successful runs, "
+                  "skipping output", file=sys.stderr)
             continue
 
         out_dir = out_root / machine["slug"]
         out_dir.mkdir(parents=True, exist_ok=True)
         prefix = name_slug if name_slug else slug_ts
-        out_path = out_dir / f"{prefix}_{family}_{backend.name}.json"
+        out_path = out_dir / f"{prefix}_{variant}_{backend.name}.json"
 
         aggregate = {
             "schema": "transcribe-bench-driver-v1",
@@ -506,7 +565,7 @@ def _run_one_backend(backend: BackendSpec, by_family: dict[str, list[Cell]],
             "name": args.name or "",
             "machine": machine,
             "git_sha": git_sha,
-            "family": family,
+            "variant": variant,
             "backend": backend.name,
             "iters": args.iters,
             "warmup": args.warmup,
@@ -519,7 +578,7 @@ def _run_one_backend(backend: BackendSpec, by_family: dict[str, list[Cell]],
             rel = out_path
         print(f"saved: {rel}", file=sys.stderr)
 
-        print_summary_table(family, runs, machine["slug"], args.iters,
+        print_summary_table(variant, runs, machine["slug"], args.iters,
                             args.warmup, backend.name, name=args.name)
 
     return exit_code
@@ -535,18 +594,14 @@ def main() -> int:
 
     quants = [q.strip() for q in args.quants.split(",") if q.strip()]
     sample_stems = [s.strip() for s in args.samples.split(",") if s.strip()]
+    model_tokens: list[str] | None = None
+    if args.models:
+        model_tokens = [t.strip() for t in args.models.split(",") if t.strip()]
 
     backends = resolve_backends(repo, args.backends, args.bench_bin)
 
-    if args.model:
-        if args.family != "all" or args.quants != ",".join(DEFAULT_QUANTS):
-            print("warning: --family/--quants ignored when --model is set",
-                  file=sys.stderr)
-        cells = resolve_single_model(repo, args.model, sample_stems)
-    else:
-        cells = discover_matrix(repo, args.family, quants, sample_stems)
-
-    by_family = group_by_family(cells)
+    cells = discover_matrix(repo, model_tokens, quants, sample_stems)
+    by_variant = group_by_variant(cells)
 
     if args.dry_run:
         print(f"machine: {machine['slug']} ({machine['cpu_model']})")
@@ -556,19 +611,19 @@ def main() -> int:
         print(f"backends ({len(backends)}):")
         for b in backends:
             print(f"  {b.name:<7} {b.binary} --backend {b.backend_arg}")
-        if not by_family:
+        if not by_variant:
             print("(no cells resolved)")
             return 0
-        total = sum(len(g) for g in by_family.values())
+        total = sum(len(g) for g in by_variant.values())
         print(f"cells: {total} per backend ({total * len(backends)} total runs)")
-        for family, group in by_family.items():
-            print(f"{family}: {len(group)} cells")
+        for variant, group in by_variant.items():
+            print(f"{variant}: {len(group)} cells")
             for cell in group:
                 print(f"  {cell.quant:<8} {cell.sample:<8} "
                       f"{cell.model_path.name}")
         return 0
 
-    if not by_family:
+    if not by_variant:
         print("error: no cells to run", file=sys.stderr)
         return 1
 
@@ -576,7 +631,7 @@ def main() -> int:
 
     exit_code = 0
     for backend in backends:
-        rc = _run_one_backend(backend, by_family, args, repo, machine,
+        rc = _run_one_backend(backend, by_variant, args, repo, machine,
                               out_root, timestamp, slug_ts, git_sha)
         if rc != 0:
             exit_code = rc
