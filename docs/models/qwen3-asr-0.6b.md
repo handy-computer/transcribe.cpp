@@ -29,8 +29,8 @@ Ported from upstream commit
 | F16    | [Qwen3-ASR-0.6B-F16.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-F16.gguf)       | 1507 MB | 2.12% |
 | Q8_0   | [Qwen3-ASR-0.6B-Q8_0.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q8_0.gguf)     |  811 MB | 2.11% |
 | Q6_K   | [Qwen3-ASR-0.6B-Q6_K.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q6_K.gguf)     |  763 MB | 2.10% |
-| Q5_K_M | [Qwen3-ASR-0.6B-Q5_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q5_K_M.gguf) |  699 MB | 2.20% |
-| Q4_K_M | [Qwen3-ASR-0.6B-Q4_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q4_K_M.gguf) |  639 MB | 2.32% |
+| Q5_K_M | [Qwen3-ASR-0.6B-Q5_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q5_K_M.gguf) |  707 MB | 2.21% |
+| Q4_K_M | [Qwen3-ASR-0.6B-Q4_K_M.gguf](https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/main/Qwen3-ASR-0.6B-Q4_K_M.gguf) |  654 MB | 2.26% |
 
 WER measured on LibriSpeech `test-clean` (2620 utterances), Whisper-style
 English text normalizer, jiwer 3.x, metal backend on Apple M4. Reproduce

@@ -1,0 +1,105 @@
+# Spec for the HF README of handy-computer/qwen3-asr-0.6b-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: Qwen/Qwen3-ASR-0.6B
+target_repo: handy-computer/qwen3-asr-0.6b-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/qwen3-asr-0.6b.md
+
+upstream_commit: 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+pin_date: 2026-04-19
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: qwen_asr 0.0.6
+  commit: 3f61df7
+  date: 2026-04-20
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - zh
+  - en
+  - yue
+  - ar
+  - de
+  - fr
+  - es
+  - pt
+  - id
+  - it
+  - ko
+  - ru
+  - th
+  - vi
+  - ja
+  - tr
+  - hi
+  - ms
+  - nl
+  - sv
+  - da
+  - fi
+  - pl
+  - cs
+  - fil
+  - fa
+  - el
+  - ro
+  - hu
+  - mk
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - qwen3
+  - qwen3-asr
+  - multilingual
+
+summary: |
+  Offline multilingual speech-to-text. An 18-layer bidirectional audio encoder
+  feeds a 28-layer Qwen3 causal LM with audio-token injection (fused
+  audio+text sequence, no cross-attention). Auto-detects the audio's language
+  across 30 languages and emits the transcript in that language. Takes a
+  16 kHz mono WAV; explicit language hints are not supported at this time.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech `test-clean` split (2620 English
+    utterances) with the Whisper-style English text normalizer and jiwer 3.x,
+    on the metal backend of an Apple M4. Qwen3-ASR is a multilingual model —
+    this number characterizes the English case only. BF16 / F16 / Q8_0 / Q6_K
+    are all within bootstrap CI of each other; Q5_K_M and Q4_K_M show a small
+    but real regression driven by the tied token-embedding / head. Reproduce
+    with `scripts/wer/run.py` + `scripts/wer/score.py`.
+
+quants:
+  - name: BF16
+    filename: Qwen3-ASR-0.6B-BF16.gguf
+    size: 1.46 GB
+    wer: 2.11%
+  - name: F16
+    filename: Qwen3-ASR-0.6B-F16.gguf
+    size: 1.47 GB
+    wer: 2.12%
+  - name: Q8_0
+    filename: Qwen3-ASR-0.6B-Q8_0.gguf
+    size: 811 MB
+    wer: 2.11%
+  - name: Q6_K
+    filename: Qwen3-ASR-0.6B-Q6_K.gguf
+    size: 763 MB
+    wer: 2.10%
+  - name: Q5_K_M
+    filename: Qwen3-ASR-0.6B-Q5_K_M.gguf
+    size: 707 MB
+    wer: 2.21%
+  - name: Q4_K_M
+    filename: Qwen3-ASR-0.6B-Q4_K_M.gguf
+    size: 654 MB
+    wer: 2.26%
