@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "whisper",
+  "variant": "whisper-tiny",
+  "source_model": {
+    "hf_repo": "openai/whisper-tiny",
+    "hf_revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "config",
+  "_skeleton": true
+}
