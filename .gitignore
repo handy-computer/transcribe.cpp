@@ -14,8 +14,10 @@
 .vscode/
 *.iml
 
-# Claude Code
-.claude/
+# Claude Code — local state ignored, but project-versioned skills are carved back in.
+# Use .claude/* (not .claude/) so git can descend and honor the negations below.
+.claude/*
+!.claude/skills/
 
 # Python (for converters under scripts/)
 __pycache__/

@@ -252,6 +252,20 @@ int main(int argc, char ** argv) {
 
     const char * hyp_text = transcribe_full_text(ctx);
     const size_t hyp_text_len = hyp_text ? std::strlen(hyp_text) : 0;
+
+    // Collect token IDs for the driver to hash. Emitting them here
+    // (rather than hashing in C++) keeps this binary free of a SHA256
+    // dependency; the driver is already Python, where hashlib is stdlib.
+    const int n_tokens = transcribe_n_tokens(ctx);
+    std::string token_ids_csv;
+    token_ids_csv.reserve(static_cast<size_t>(n_tokens) * 6);
+    for (int i = 0; i < n_tokens; ++i) {
+        if (i > 0) token_ids_csv.push_back(',');
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%d", transcribe_token_id(ctx, i));
+        token_ids_csv.append(buf);
+    }
+
     if (!quiet) std::fprintf(stderr, "done\n");
 
     // Summary.
@@ -306,7 +320,11 @@ int main(int argc, char ** argv) {
     out += "  },\n";
     append_fmt(out, "  \"rtf_wall_mean\": %.3f,\n", rtf_wall_mean);
     append_fmt(out, "  \"rtf_compute_mean\": %.3f,\n", rtf_compute_mean);
-    append_fmt(out, "  \"hyp_text_len\": %zu\n", hyp_text_len);
+    append_fmt(out, "  \"hyp_text_len\": %zu,\n", hyp_text_len);
+    append_fmt(out, "  \"hyp_text\": \"%s\",\n",
+               hyp_text ? json_escape(hyp_text).c_str() : "");
+    append_fmt(out, "  \"n_tokens\": %d,\n", n_tokens);
+    append_fmt(out, "  \"token_ids_csv\": \"%s\"\n", token_ids_csv.c_str());
     out += "}\n";
 
     int exit_code = EXIT_SUCCESS;

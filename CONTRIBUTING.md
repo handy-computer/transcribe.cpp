@@ -4,17 +4,21 @@ This repo ports speech-to-text model families to a C/C++ ggml runtime. Most
 substantial contributions add a new model family; smaller contributions fix
 bugs, improve tooling, or add backend coverage.
 
-The porting workflow lives in `docs/porting/`. It is agent-agnostic:
-contributors using Claude Code, Codex, or another coding-agent harness follow
-the same stages and produce the same artifacts.
+The porting workflow lives in `docs/porting/`. The docs define the canonical
+stages, artifacts, and gates. When project-local porting skills exist (for
+example under `.claude/skills/porting-*`), they are the preferred UX for
+agents working in this repo. Contributors using Codex or another harness can
+follow the docs directly and still produce the same artifacts.
 
 ## Proposing a new model port
 
 1. **Open an issue first.** Include the upstream model repo, proposed family
    key, variant name, and architecture pattern: encoder-transducer,
    encoder-decoder, audio-LLM/token-injection, or encoder-CTC.
-2. **Start with `docs/porting/0-porting.md`.** That file is the canonical
-   workflow. The stage docs under `docs/porting/` explain the details.
+2. **Use the project-local stage skills if they exist; otherwise start with
+   `docs/porting/0-porting.md` and `docs/porting/agent-automation-plan.md`.**
+   The docs remain the canonical workflow; the skills are the preferred UX
+   when present.
 3. **Follow the stage order.** Each stage produces inputs consumed by the next
    one. In particular, do not start the C++ implementation before the intake,
    reference choice, golden manifest, reference dumper, and first accuracy
@@ -52,6 +56,8 @@ For a new family PR, commit the source-controlled contract and implementation:
   public ABI / transcript smoke, following `docs/model-family-testing.md`
 - benchmark/validation wiring needed for `scripts/validate.py` and
   `scripts/bench/run.py`
+- when automation changes are part of the PR: project-local skill updates
+  under `.claude/skills/porting-*`
 
 Paste review evidence into the PR description, not into generated report files:
 
@@ -75,8 +81,9 @@ Do not commit:
 - heavyweight tensor dumps under `build/validate/`
 - per-run preflight outputs or validate report bundles
 - HF credentials or upload logs
-- personal agent-harness config such as `.claude/`, local Codex skills, or
-  sandbox-only prompt files
+- personal/global agent-harness config outside the project-local automation
+  shipped with the repo, such as private Codex skills, local sandbox-only
+  prompt files, or untracked harness state
 
 `--variant <v>` is required whenever a family has multiple manifests.
 

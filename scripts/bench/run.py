@@ -186,6 +186,14 @@ def get_git_sha(repo: Path) -> str:
     return out or "unknown"
 
 
+def _hash_hex(s: str) -> str:
+    """SHA256 hex digest of a utf-8 string. Used to add transcript_sha256
+    and token_ids_sha256 to each bench run, so a perf change that secretly
+    perturbed the decoder output is visible in the diff."""
+    import hashlib
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
 def parse_quant_from_filename(path: Path) -> str | None:
     # `<slug>-<QUANT>.gguf` (llama.cpp convention), e.g.
     # "parakeet-tdt-0.6b-v2-Q4_K_M.gguf" -> "q4_k_m"
@@ -442,6 +450,21 @@ def run_bench_binary(bench_bin: Path, cell: Cell, iters: int, warmup: int,
         if schema not in ("transcribe-bench-v1", "transcribe-bench-v2"):
             print(f"  bad schema: {schema!r}", file=sys.stderr)
             return None
+        # Explicit cell identifiers — required by the Stage 5 standardized
+        # schema. Derivable from model_path/sample_path but the review skill
+        # wants them as top-level keys so a reader does not have to parse
+        # paths.
+        data["quant"] = cell.quant
+        data["sample"] = cell.sample
+        # Structural-regression fingerprints. The bench binary emits the
+        # raw transcript and token IDs; we hash here so perf changes that
+        # secretly perturbed decoding are visible in a report diff.
+        hyp_text = data.get("hyp_text")
+        if isinstance(hyp_text, str):
+            data["transcript_sha256"] = _hash_hex(hyp_text)
+        token_ids_csv = data.get("token_ids_csv")
+        if isinstance(token_ids_csv, str):
+            data["token_ids_sha256"] = _hash_hex(token_ids_csv)
         return data
     finally:
         tmp_path.unlink(missing_ok=True)

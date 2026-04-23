@@ -1,0 +1,141 @@
+{# Jinja2 template for a user-facing model card under docs/models/<variant>.md.
+   Rendered by porting-ship from the family's artifacts (intake, tolerances,
+   WER reports, bench reports). Authored prose sections stay in the variant's
+   rendered file after first authoring; this template is the initial
+   scaffold, not a live re-renderer.
+
+   Required context:
+     display_name            e.g. "Parakeet TDT 0.6B v2"
+     hf_repo                 upstream HF repo id (org/name)
+     one_liner               one-sentence architecture summary
+     capabilities_prose      one or two sentences on scope (English-only?
+                             streaming? translation? timestamps?)
+     license_display         human-facing license label
+     upstream_commit_short   7-char upstream SHA
+     upstream_commit_url     HF commit link
+     pin_date                ISO date when upstream_commit was pinned
+
+     target_hf_repo          our HF repo (e.g. handy-computer/<variant>-gguf)
+     presets                 list of {name, filename, size, wer_pct} dicts,
+                             in order F32/BF16/F16/Q8_0/Q6_K/Q5_K_M/Q4_K_M
+                             where each exists
+     dataset_display         e.g. "LibriSpeech test-clean"
+     dataset_n               number of utterances scored
+     upstream_wer_pct        publisher's reported WER, percent (or null)
+
+     validation_reference    e.g. "NeMo"
+     validation_commit       short sha of this repo when last validated
+     validation_tensor_rows  list of {name, max_abs, mean_abs, note}
+     drift_source_prose      one or two sentences paraphrasing the
+                             tolerances _comment drift story
+
+     reproduce_convert_cmd   the exact uv run convert-* invocation
+     reproduce_validate_cmd  uv run scripts/validate.py all --family <f> --variant <v>
+
+     perf_machines           optional list of {slug, os, transcribe_sha,
+                             rows: [{backend, sample, quants: {q: latency_str}}]}
+#}
+# {{ display_name }}
+
+{{ hf_repo | replace("'", "\"") }}'s [`{{ hf_repo }}`](https://huggingface.co/{{ hf_repo }})
+ported to transcribe.cpp. {{ one_liner }}
+
+## What it's for
+
+{{ capabilities_prose }}
+
+See the upstream [model card](https://huggingface.co/{{ hf_repo }}) for training
+data, intended use, and upstream evaluation methodology.
+
+Licensed {{ license_display }}. Ported from upstream commit
+[`{{ upstream_commit_short }}`]({{ upstream_commit_url }}), pinned {{ pin_date }}.
+
+## Download
+
+| Quantization | Download | Size | WER ({{ dataset_display }}) |
+| --- | --- | ---: | ---: |
+{% for p in presets -%}
+| {{ p.name }} | [{{ p.filename }}](https://huggingface.co/{{ target_hf_repo }}/resolve/main/{{ p.filename }}) | {{ p.size }} | {{ "%.2f"|format(p.wer_pct) }}% |
+{% endfor %}
+
+WER measured on the full {{ dataset_display }} split ({{ dataset_n }} utterances).
+{%- if upstream_wer_pct is not none %}
+Publisher's self-reported number on the same split is {{ "%.2f"|format(upstream_wer_pct) }}%.
+{%- endif %}
+
+## Quick Start
+
+```bash
+cmake -B build
+cmake --build build --target transcribe-cli
+
+build/bin/transcribe-cli \
+  models/{{ presets[0].filename.rsplit('-', 1)[0] }}/{{ presets[0].filename }} \
+  samples/jfk.wav
+```
+
+If your audio is not already 16 kHz mono WAV, convert it first:
+
+```bash
+ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
+```
+
+## Numerical Validation
+
+transcribe.cpp is validated tensor-by-tensor against {{ validation_reference }}
+on `samples/jfk.wav`. All contract tensors fall within family tolerance. Last
+validated at commit [`{{ validation_commit }}`](https://github.com/handy-computer/transcribe.cpp/tree/{{ validation_commit }}).
+
+| Tensor | Max abs diff | Mean abs diff | Notes |
+| --- | ---: | ---: | --- |
+{% for t in validation_tensor_rows -%}
+| `{{ t.name }}` | `{{ t.max_abs }}` | `{{ t.mean_abs }}` | {{ t.note }} |
+{% endfor %}
+
+{{ drift_source_prose }}
+
+## Performance
+
+{% if perf_machines %}
+Wall-clock latency, mean over iterations after warmup. Speedup over realtime in parentheses.
+
+{% for m in perf_machines -%}
+### {{ m.slug }}
+
+| Backend | Sample | {% for q in m.quants %}{{ q }}{% if not loop.last %} | {% endif %}{% endfor %} |
+| --- | --- | {% for q in m.quants %}---:{% if not loop.last %} | {% endif %}{% endfor %} |
+{% for row in m.rows -%}
+| {{ row.backend }} | {{ row.sample }} | {% for q in m.quants %}{{ row.latency[q] }}{% if not loop.last %} | {% endif %}{% endfor %} |
+{% endfor %}
+
+{{ m.os }}, transcribe.cpp `{{ m.transcribe_sha }}`.
+
+{% endfor -%}
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models {{ variant }} \
+  --quants q8_0,q4_k_m \
+  --samples jfk \
+  --iters 3 --warmup 1 \
+  --name {{ variant }}-publication
+```
+{% else %}
+Performance numbers are pending. Run `uv run scripts/bench/run.py --models {{ variant }}` to generate them.
+{% endif %}
+
+## Reproduction
+
+### Convert
+
+```bash
+{{ reproduce_convert_cmd }}
+```
+
+### Validate
+
+```bash
+{{ reproduce_validate_cmd }}
+```
