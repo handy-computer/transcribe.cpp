@@ -490,7 +490,13 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer.add_bool("stt.capability.timestamps",  True)
 
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----
+        # tokenizer.ggml.pre="gpt2" selects the original GPT-2
+        # pretokenizer regex (digit runs merged, lowercase-only
+        # contractions). Whisper's HF tokenizer is a ByteLevel
+        # use_regex=true pretokenizer, which the tokenizers crate
+        # implements with the GPT-2 regex verbatim.
         writer.add_string("tokenizer.ggml.model", "gpt2")
+        writer.add_string("tokenizer.ggml.pre",   "gpt2")
         writer.add_array("tokenizer.ggml.tokens",     tok["tokens"])
         writer.add_array("tokenizer.ggml.token_type", tok["types"])
         writer.add_array("tokenizer.ggml.merges",     tok["merges"])

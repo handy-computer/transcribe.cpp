@@ -11,5 +11,10 @@ dependencies = [
     "safetensors>=0.4",
     "soundfile>=0.12",
     "numpy>=1.26",
-    "transformers>=5.6",
+    # Exact pin: HF stitching + long-form semantics (PRs #34537, #35750)
+    # are version-specific, and the per-tensor tolerances baked into
+    # tests/tolerances/whisper.json were captured against 5.6.1. A
+    # silent bump to 5.7+ could shift no_speech_prob capture row or
+    # seek/stride semantics without tripping any mechanical test.
+    "transformers==5.6.1",
 ]

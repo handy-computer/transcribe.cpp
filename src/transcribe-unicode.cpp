@@ -497,4 +497,219 @@ std::vector<std::string> pretokenize_qwen2(const std::string & text) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// GPT-2 pretokenizer.
+// ---------------------------------------------------------------------------
+//
+// Matches the regex HuggingFace's tokenizers crate uses for ByteLevel
+// pretokenizers (see tokenizers/src/pre_tokenizers/byte_level.rs and
+// the equivalent split in OpenAI's tiktoken gpt2 pattern). The
+// alternatives are tried in order; the first that matches at the
+// current position wins.
+
+namespace {
+
+std::vector<size_t> gpt2_split_offsets(const std::vector<uint32_t> & cpts,
+                                      size_t begin,
+                                      size_t end)
+{
+    std::vector<size_t> out;
+
+    auto get_cpt = [&](size_t p) -> uint32_t {
+        return (begin <= p && p < end) ? cpts[p] : OOR;
+    };
+    auto get_flags = [&](size_t p) -> CptFlags {
+        return (begin <= p && p < end) ? flags_from_cpt(cpts[p]) : CptFlags{};
+    };
+
+    size_t prev = begin;
+    auto push_upto = [&](size_t p) {
+        assert(prev <= p && p <= end);
+        if (p > prev) {
+            out.push_back(p);
+            prev = p;
+        }
+    };
+
+    size_t pos = begin;
+    while (pos < end) {
+        const uint32_t cpt = get_cpt(pos);
+
+        // 1. Lowercase contractions (case-SENSITIVE, unlike Qwen2).
+        //    's | 't | 're | 've | 'm | 'll | 'd
+        if (cpt == '\'' && pos + 1 < end) {
+            const uint32_t c1 = get_cpt(pos + 1);
+            if (c1 == 's' || c1 == 't' || c1 == 'm' || c1 == 'd') {
+                pos += 2;
+                push_upto(pos);
+                continue;
+            }
+            if (pos + 2 < end) {
+                const uint32_t c2 = get_cpt(pos + 2);
+                if ((c1 == 'r' && c2 == 'e') ||
+                    (c1 == 'v' && c2 == 'e') ||
+                    (c1 == 'l' && c2 == 'l'))
+                {
+                    pos += 3;
+                    push_upto(pos);
+                    continue;
+                }
+            }
+        }
+
+        // 2. Optional leading space + letter run:   ?\p{L}+
+        {
+            const bool leading_space = (cpt == ' ');
+            const size_t body = pos + (leading_space ? 1 : 0);
+            if (get_flags(body).is_letter()) {
+                size_t q = body;
+                while (get_flags(q).is_letter()) ++q;
+                pos = q;
+                push_upto(pos);
+                continue;
+            }
+        }
+
+        // 3. Optional leading space + digit run:    ?\p{N}+
+        //    This is the bit that matters for Whisper parity with HF
+        //    — Qwen2 emits one pretoken per digit, GPT-2 merges the run.
+        {
+            const bool leading_space = (cpt == ' ');
+            const size_t body = pos + (leading_space ? 1 : 0);
+            if (get_flags(body).is_number()) {
+                size_t q = body;
+                while (get_flags(q).is_number()) ++q;
+                pos = q;
+                push_upto(pos);
+                continue;
+            }
+        }
+
+        // 4. Optional leading space + non-\s\L\N run:   ?[^\s\p{L}\p{N}]+
+        //    "Symbols and punctuation", roughly. Stops as soon as a
+        //    whitespace / letter / digit / OOR codepoint appears.
+        {
+            const bool leading_space = (cpt == ' ');
+            const size_t body = pos + (leading_space ? 1 : 0);
+            const CptFlags fb = get_flags(body);
+            const bool body_ok =
+                body < end &&
+                !fb.is_whitespace() && !fb.is_letter() && !fb.is_number() &&
+                fb.has_category();
+            if (body_ok) {
+                size_t q = body;
+                while (q < end) {
+                    const CptFlags fx = get_flags(q);
+                    if (fx.is_whitespace() || fx.is_letter() || fx.is_number() ||
+                        !fx.has_category())
+                    {
+                        break;
+                    }
+                    ++q;
+                }
+                pos = q;
+                push_upto(pos);
+                continue;
+            }
+        }
+
+        // 5. Whitespace handling: \s+(?!\S) | \s+
+        //    The first alternative matches a whitespace run that is
+        //    NOT followed by a non-whitespace codepoint. Combined with
+        //    the greedy `\s+` fallback, the effective behavior:
+        //      - A whitespace run followed by a non-whitespace cpt
+        //        emits one-pretoken-per-leading-space plus a final
+        //        trailing space (the last space in the run gets
+        //        attached to the next letter/number/symbol run via
+        //        its optional-leading-space handling above).
+        //      - A whitespace run that runs to end-of-input (or that
+        //        is followed only by more whitespace) is emitted as a
+        //        single pretoken covering the whole run.
+        //
+        //    Per regex-engine semantics, \s+(?!\S) is tried first and
+        //    the engine finds the LONGEST prefix of the run that
+        //    satisfies the lookahead. If the run is followed by \S,
+        //    the lookahead can only be satisfied by stopping one
+        //    codepoint before the end of the run — so \s+(?!\S)
+        //    consumes one less codepoint than \s+ would, and the
+        //    remaining single whitespace matches the fallback \s+
+        //    on the next iteration (becoming the optional leading
+        //    space of the following letter/number/symbol pretoken).
+        if (get_flags(pos).is_whitespace()) {
+            size_t q = pos;
+            while (q < end && get_flags(q).is_whitespace()) ++q;
+            // q is the end of the full whitespace run.
+            const bool followed_by_nonspace =
+                (q < end) && !get_flags(q).is_whitespace();
+            if (followed_by_nonspace) {
+                // Emit one pretoken per whitespace codepoint up to the
+                // second-to-last. The final whitespace is left for
+                // the next iteration to consume as leading-space-of-
+                // following-pretoken. If the run is a single
+                // whitespace, the fallback \s+ takes it as a
+                // one-cpt pretoken.
+                if (q - pos >= 2) {
+                    size_t tail_start = q - 1;
+                    while (pos < tail_start) {
+                        pos += 1;
+                        push_upto(pos);
+                    }
+                    // Now pos == tail_start; the remaining single
+                    // whitespace will be picked up on the next
+                    // iteration by either the optional-leading-space
+                    // branch of the next alternative or the \s+ fallback.
+                } else {
+                    // Single whitespace run followed by non-whitespace:
+                    // fallback \s+ matches 1 cpt. It becomes its own
+                    // pretoken.
+                    pos += 1;
+                    push_upto(pos);
+                }
+            } else {
+                // Whitespace run to EOF or followed by more whitespace
+                // (which cannot happen since we walked until the first
+                // non-whitespace anyway) → emit as a single pretoken
+                // covering the whole run.
+                pos = q;
+                push_upto(pos);
+            }
+            continue;
+        }
+
+        // No match: drop one codepoint on the floor as its own
+        // pretoken. Mirrors the defensive branch in pretokenize_qwen2.
+        pos++;
+        push_upto(pos);
+    }
+
+    return out;
+}
+
+} // namespace
+
+std::vector<std::string> pretokenize_gpt2(const std::string & text) {
+    std::vector<std::string> out;
+    if (text.empty()) {
+        return out;
+    }
+    const auto cpts = cpts_from_utf8(text);
+    const auto ends = gpt2_split_offsets(cpts, 0, cpts.size());
+
+    out.reserve(ends.size());
+    size_t prev = 0;
+    for (size_t e : ends) {
+        std::string encoded;
+        encoded.reserve((e - prev) * 2);
+        for (size_t i = prev; i < e; ++i) {
+            const std::string u = cpt_to_utf8(cpts[i]);
+            for (char c : u) {
+                encoded += byte_to_unicode(static_cast<uint8_t>(c));
+            }
+        }
+        out.emplace_back(std::move(encoded));
+        prev = e;
+    }
+    return out;
+}
+
 } // namespace transcribe::unicode

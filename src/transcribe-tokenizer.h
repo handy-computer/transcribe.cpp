@@ -62,6 +62,18 @@ public:
     //                           Must be non-empty.
     //
     // Optional keys (parsed if present, ignored otherwise):
+    //   tokenizer.ggml.pre            (string) - pretokenizer flavor used
+    //                                 by encode() when model == "gpt2".
+    //                                 Recognized values: "qwen2" (default
+    //                                 when absent, for historical
+    //                                 compatibility with Qwen3-ASR
+    //                                 GGUFs) and "gpt2" (required for
+    //                                 Whisper parity — the two split
+    //                                 digit / contraction / whitespace
+    //                                 runs differently). Per-family
+    //                                 loaders MAY override the absent
+    //                                 default after load() via
+    //                                 set_pretokenizer().
     //   tokenizer.ggml.scores         (array of float32)
     //   tokenizer.ggml.token_type     (array of int32)
     //   tokenizer.ggml.merges         (array of string) - "left right"
@@ -130,6 +142,7 @@ public:
     // Identification + special token ids. -1 if the corresponding key
     // was absent from the GGUF.
     const std::string & model_type() const { return model_; }
+    const std::string & pretokenizer() const { return pre_; }
     int                 unk_id   () const { return unk_id_; }
     int                 bos_id   () const { return bos_id_; }
     int                 eos_id   () const { return eos_id_; }
@@ -140,8 +153,17 @@ public:
     // without inspecting model_type().
     bool has_encoder() const;
 
+    // Override the pretokenizer flavor after load(). Per-family loaders
+    // call this when the source GGUF did not emit tokenizer.ggml.pre
+    // but the family has a fixed pretokenizer by construction (Whisper
+    // → "gpt2"). Values other than "qwen2" / "gpt2" are stored but
+    // encode() will fall back to the default ("qwen2") for unknown
+    // strings with a warning.
+    void set_pretokenizer(const std::string & pre) { pre_ = pre; }
+
 private:
     std::string              model_;
+    std::string              pre_;        // "qwen2" (default) or "gpt2"
     std::vector<std::string> tokens_;
     std::vector<float>       scores_;     // optional, may be empty
     std::vector<int32_t>     token_type_; // optional, may be empty

@@ -598,6 +598,12 @@ transcribe_status run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    // Pre-run abort check. Cohere ASR is single-chunk today; this is
+    // the single observation point.
+    if (cc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+
     transcribe::debug::init();
 
     // ----- Mel front-end -------------------------------------------

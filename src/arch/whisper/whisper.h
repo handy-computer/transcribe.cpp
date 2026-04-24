@@ -180,6 +180,12 @@ struct WhisperContext final : public transcribe_context {
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
+    // Per-chunk decoding trace for the most recent successful run —
+    // populated by whisper_run as the chunk loop executes and exposed
+    // via transcribe_get_whisper_chunk_count / _get_whisper_chunk_trace.
+    // Cleared at the top of each run alongside cc->clear_result().
+    std::vector<transcribe_whisper_chunk_trace> chunk_traces;
+
     WhisperContext() = default;
     ~WhisperContext() override;
 };

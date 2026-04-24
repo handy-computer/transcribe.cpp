@@ -80,6 +80,7 @@
 #define TRANSCRIBE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifndef TRANSCRIBE_API
@@ -131,6 +132,14 @@ typedef enum {
      * maximum when it assembles the result.
      */
     TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS = 12,
+    /*
+     * Returned by transcribe_run when the caller's abort callback
+     * returns true during the run. Partial results from chunks that
+     * completed before the abort are preserved on the context and
+     * readable via the normal result accessors; transcribe_was_aborted
+     * distinguishes partial-from-abort from complete.
+     */
+    TRANSCRIBE_ERR_ABORTED              = 13,
 } transcribe_status;
 
 /*
@@ -335,15 +344,189 @@ TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_param
  *                     the returned text fields. Token-level accessors
  *                     still expose the raw token text.
  */
+struct transcribe_whisper_params;
+
 struct transcribe_params {
     transcribe_task           task;
     transcribe_timestamp_kind timestamps;
     const char *              language;
     const char *              target_language;
     bool                      strip_special_tags;
+
+    /*
+     * Family-specific extension pointer. NULL selects family defaults.
+     * Only consulted when the loaded model's architecture matches the
+     * pointed-to struct's family; other families ignore it.
+     *
+     * Placed at the end of the struct so new fields appended after it
+     * in future minor versions do not shift the layout of any earlier
+     * field. This is source-compatible (callers rebuild against the
+     * new header and pick up the expanded struct cleanly) but NOT
+     * forward-ABI-safe: a pre-Stage-1 caller linked against an older
+     * binary whose struct ended before `whisper` would have the new
+     * library read past the end of its stack-allocated params object.
+     * See "Params and ABI stability" above — 0.x is vendored/rebuilt,
+     * not system-installed-independent, and callers MUST rebuild when
+     * they upgrade transcribe.cpp.
+     */
+    const struct transcribe_whisper_params * whisper;
 };
 
 TRANSCRIBE_API struct transcribe_params transcribe_default_params(void);
+
+/* ----------------------------------------------------------------------- */
+/* Whisper-specific params                                                 */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Sentinels for "disabled" on threshold fields. Never rely on 0.0 as a
+ * sentinel — it is a legitimate value for logprob_thold and lies in
+ * the normal range of the other thresholds.
+ *
+ *   Check shape "X > thold"  →  disable with +INF (_THOLD_DISABLED).
+ *   Check shape "X < thold"  →  disable with -INF (_LOGPROB_DISABLED).
+ */
+#define TRANSCRIBE_WHISPER_THOLD_DISABLED   ((float) (1.0 / 0.0))  /* +INF */
+#define TRANSCRIBE_WHISPER_LOGPROB_DISABLED ((float) (-1.0 / 0.0)) /* -INF */
+
+/*
+ * How an initial prompt composes with condition_on_prev_tokens on
+ * long-form runs. Matches HF's prompt_condition_type string knob.
+ *
+ *   FIRST_SEGMENT (default): the initial prompt sits at the head of
+ *     the first chunk's prefix. If condition_on_prev_tokens is true,
+ *     subsequent chunks carry the decoded prior-chunk tokens under
+ *     <|startofprev|> and the initial prompt is visible only while
+ *     it still fits in the sliding 223-token window.
+ *
+ *   ALL_SEGMENTS: the initial prompt replaces <|startofprev|> as the
+ *     persistent BOS of the prev-context window on EVERY chunk.
+ *     Requires condition_on_prev_tokens=true; passing this mode
+ *     without condition_on_prev_tokens returns
+ *     TRANSCRIBE_ERR_INVALID_ARG (mirrors HF's ValueError).
+ */
+enum transcribe_whisper_prompt_condition {
+    TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT = 0,
+    TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS  = 1,
+};
+
+/*
+ * Whisper-family run knobs. Reached via transcribe_params::whisper.
+ * A NULL pointer uses transcribe_whisper_default_params() values.
+ *
+ * The defaults intentionally enable temperature fallback and the
+ * compression-ratio / avg-logprob / no-speech safety nets. This
+ * matches Whisper's own recipe (OpenAI whisper shipping default;
+ * HF's own docstring advisory). Callers that want HF library-wide
+ * generate() behavior ("all thresholds disabled") set each _thold
+ * field to its _DISABLED sentinel.
+ */
+struct transcribe_whisper_params {
+    /*
+     * Initial prompt / prior context.
+     *
+     *   If prompt_tokens != NULL:
+     *       Use prompt_tokens verbatim (caller owns the bytes; they must
+     *       NOT include the <|startofprev|> marker — the library prepends
+     *       it). initial_prompt is IGNORED.
+     *
+     *   Else if initial_prompt != NULL:
+     *       Tokenize as HF's get_prompt_ids does:
+     *           "<|startofprev|>" + " " + initial_prompt.strip()
+     *       The leading space is mandatory (matches
+     *       transformers tokenization_whisper.py:710-722). Any special
+     *       token (<|...|>) found in the tokenized prompt text is
+     *       rejected with TRANSCRIBE_ERR_INVALID_ARG, mirroring HF's
+     *       own check.
+     *
+     *   Else: no initial prompt.
+     */
+    const char *    initial_prompt;
+    const int32_t * prompt_tokens;
+    size_t          n_prompt_tokens;
+
+    /* See transcribe_whisper_prompt_condition above. Default FIRST_SEGMENT. */
+    enum transcribe_whisper_prompt_condition prompt_condition;
+
+    /*
+     * Per HF generation_whisper.py:1853-1918. When true and any prior
+     * chunk decoded successfully at temperature < 0.5, the tail of the
+     * prior chunk's tokens is prepended (under <|startofprev|>) to the
+     * next chunk's prefix, capped at max_prev_context_tokens. Auto-
+     * disables for the next chunk when the prior chunk was accepted at
+     * temperature >= 0.5 (matches HF ":1090-1093").
+     */
+    bool            condition_on_prev_tokens;
+
+    /* Cap for carried prev tokens; default 223 = max_target_positions/2 - 1. */
+    int32_t         max_prev_context_tokens;
+
+    /*
+     * Sampling + temperature fallback. Default behavior matches
+     * Whisper's own recipe, not HF generate()'s library-default.
+     * Use the _DISABLED sentinels to turn off individual thresholds.
+     */
+    float           temperature;             /* first-tier; default 0.0 */
+    float           temperature_inc;         /* default 0.2             */
+    float           compression_ratio_thold; /* default 2.4             */
+    float           logprob_thold;           /* default -1.0            */
+    float           no_speech_thold;         /* default 0.6             */
+
+    /*
+     * Seed for the sampler at temperature > 0. 0 = nondeterministic
+     * (matches the whisper.cpp convention). A nonzero seed produces
+     * reproducible output across runs at matching temperatures.
+     * Ignored when temperature == 0.0 (greedy decode is deterministic
+     * by construction).
+     */
+    uint32_t        seed;
+
+    /* Seconds. Caps the first emitted timestamp; default 1.0. */
+    float           max_initial_timestamp;
+};
+
+TRANSCRIBE_API struct transcribe_whisper_params transcribe_whisper_default_params(void);
+
+/* ----------------------------------------------------------------------- */
+/* Whisper decoding trace                                                  */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Per-chunk observability: the temperature tier that the fallback loop
+ * accepted, the metric values that drove acceptance, and whether the
+ * no-speech gate fired. Populated on every successful transcribe_run()
+ * call for a Whisper context; one entry per 30-second encoder window
+ * that actually decoded (no-speech-skipped chunks still emit an entry).
+ *
+ * The chunk window `t0_ms .. t1_ms` is the global encoder slice, not a
+ * segment boundary. Segments carried in transcribe_n_segments() / -
+ * transcribe_segment_*() live inside these windows.
+ *
+ * Without the trace, every fallback bug is unresolvable — the exact
+ * knob the caller twisted may not match the threshold that fired. Keep
+ * this surface stable.
+ */
+struct transcribe_whisper_chunk_trace {
+    int64_t  t0_ms;
+    int64_t  t1_ms;
+    float    temperature_used;    /* the tier that was accepted */
+    float    compression_ratio;
+    float    avg_logprob;
+    float    no_speech_prob;
+    bool     no_speech_triggered; /* chunk output was discarded */
+    int32_t  n_fallbacks;         /* tiers tried before accept (0 = tier 0 accepted) */
+};
+
+/* Number of chunk traces captured on the most recent successful run.
+ * Returns 0 before any run or on non-Whisper contexts. */
+TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
+    const struct transcribe_context * ctx);
+
+/* Trace at index [0, count). Out-of-range indices return a zeroed
+ * struct. Non-Whisper contexts return a zeroed struct. */
+TRANSCRIBE_API struct transcribe_whisper_chunk_trace
+    transcribe_get_whisper_chunk_trace(
+        const struct transcribe_context * ctx, int i);
 
 /* ----------------------------------------------------------------------- */
 /* Capabilities                                                            */
@@ -375,6 +558,16 @@ struct transcribe_capabilities {
     bool                      supports_translate;
     bool                      supports_streaming;
     transcribe_timestamp_kind max_timestamp_kind;
+
+    /*
+     * Family-level feature advertisements, set by apply_family_invariants
+     * and immutable after load. Added at the end of the struct; old
+     * callers that only read the fields above keep working unchanged.
+     */
+    bool                      supports_initial_prompt;
+    bool                      supports_temperature_fallback;
+    bool                      supports_long_form;
+    bool                      supports_cancellation;
 };
 
 TRANSCRIBE_API const struct transcribe_capabilities *
@@ -477,6 +670,90 @@ TRANSCRIBE_API transcribe_status transcribe_run(
     const float *                    pcm,
     int                              n_samples,
     const struct transcribe_params * params);
+
+/* ----------------------------------------------------------------------- */
+/* Cancellation                                                            */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Abort callback. Polled between chunks AND between decode steps (after
+ * each token). Abort latency is therefore one decode step — typically
+ * 10-50 ms on CPU, sub-ms on Metal. Mid-encoder abort is not supported
+ * today (would require ggml hooks that do not exist).
+ *
+ * Returning true aborts the in-flight run: transcribe_run returns
+ * TRANSCRIBE_ERR_ABORTED and result accessors (transcribe_full_text,
+ * transcribe_n_segments, etc.) expose the partial content from chunks
+ * that completed before abort. Use transcribe_was_aborted(ctx) to
+ * distinguish partial-from-abort from complete.
+ *
+ * The next successful transcribe_run() replaces the result atomically,
+ * as today.
+ *
+ * The callback fires on the run thread. If the caller wants to trigger
+ * abort from another thread, the common pattern is to store an
+ * std::atomic<bool> inside user_data and have the callback load it.
+ */
+typedef bool (*transcribe_abort_callback)(void * user_data);
+
+/*
+ * Install or clear the abort callback for a context. Passing cb=NULL
+ * clears any previously installed callback. Safe to call before the
+ * first transcribe_run. No-op if ctx is NULL.
+ *
+ * Not thread-safe with respect to an in-flight transcribe_run on the
+ * same context — the context is single-threaded-at-a-time per the
+ * threading contract above. Callers that need to trigger abort from
+ * another thread should do so by flipping state inside the callback's
+ * user_data, not by swapping the callback itself.
+ */
+TRANSCRIBE_API void transcribe_set_abort_callback(
+    struct transcribe_context *  ctx,
+    transcribe_abort_callback    cb,
+    void *                       user_data);
+
+/*
+ * True if the most recent transcribe_run was aborted by the installed
+ * callback returning true. Reset to false at the top of each
+ * transcribe_run. Returns false if ctx is NULL.
+ */
+TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_context * ctx);
+
+/* ----------------------------------------------------------------------- */
+/* Tokenization                                                            */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Tokenize plain UTF-8 text into the model's vocabulary, with
+ * add_special_tokens=False semantics (no BOS/EOS, no <|...|> markers).
+ * Special tokens present in the input are not recognized and will be
+ * BPE-encoded piece-by-piece, which is almost never what the caller
+ * wants — render special tokens via direct id paths and pass only the
+ * plain-text fragments through this function.
+ *
+ * Buffer contract (mirrors whisper.cpp's n_max convention):
+ *
+ *   >= 0             Number of tokens written to `tokens[0..return-1]`.
+ *   negative of N    Buffer too small; N tokens were needed. Caller
+ *                    reallocates and retries. `tokens` content is
+ *                    unspecified in this case (may be partially
+ *                    written).
+ *   INT_MIN          Hard error: model or text is NULL, the model's
+ *                    tokenizer does not support encode for this
+ *                    vocabulary (e.g. a SentencePiece family without
+ *                    encode wired), or the vocab file is malformed.
+ *
+ * Plumbed per family:
+ *   - Whisper      (GPT-2 byte-level BPE)
+ *   - Qwen3-ASR    (Qwen2 byte-level BPE)
+ *   - Parakeet     (SentencePiece; currently returns INT_MIN)
+ *   - Cohere ASR   (SentencePiece; currently returns INT_MIN)
+ */
+TRANSCRIBE_API int transcribe_tokenize(
+    const struct transcribe_model * model,
+    const char *                    text,
+    int32_t *                       tokens,
+    size_t                          n_max);
 
 /* ----------------------------------------------------------------------- */
 /* Timings                                                                 */

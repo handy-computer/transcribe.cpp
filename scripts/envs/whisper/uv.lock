@@ -1616,7 +1616,7 @@ requires-dist = [
     { name = "safetensors", specifier = ">=0.4" },
     { name = "soundfile", specifier = ">=0.12" },
     { name = "torch", specifier = ">=2.2" },
-    { name = "transformers", specifier = ">=5.6" },
+    { name = "transformers", specifier = "==5.6.1" },
 ]
 
 [[package]]

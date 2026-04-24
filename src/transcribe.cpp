@@ -26,12 +26,18 @@
 #include "transcribe-context.h"
 #include "transcribe-loader.h"
 #include "transcribe-model.h"
+#include "transcribe-tokenizer.h"
+
+#include "arch/whisper/whisper.h"
 
 #include <atomic>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Status
@@ -56,6 +62,7 @@ extern "C" const char * transcribe_status_string(int status) {
         case TRANSCRIBE_ERR_UNSUPPORTED_TASK:     return "unsupported task";
         case TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS:
                                                   return "unsupported timestamp granularity";
+        case TRANSCRIBE_ERR_ABORTED:              return "aborted by callback";
         default:                                  return "unknown status";
     }
 }
@@ -170,6 +177,25 @@ extern "C" struct transcribe_params transcribe_default_params(void) {
     p.language           = nullptr;
     p.target_language    = nullptr;
     p.strip_special_tags = true;
+    p.whisper            = nullptr;
+    return p;
+}
+
+extern "C" struct transcribe_whisper_params transcribe_whisper_default_params(void) {
+    struct transcribe_whisper_params p = {};
+    p.initial_prompt           = nullptr;
+    p.prompt_tokens            = nullptr;
+    p.n_prompt_tokens          = 0;
+    p.prompt_condition         = TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;
+    p.condition_on_prev_tokens = false;
+    p.max_prev_context_tokens  = 223; // max_target_positions / 2 - 1
+    p.temperature              = 0.0f;
+    p.temperature_inc          = 0.2f;
+    p.compression_ratio_thold  = 2.4f;
+    p.logprob_thold            = -1.0f;
+    p.no_speech_thold          = 0.6f;
+    p.seed                     = 0; // 0 = nondeterministic (whisper.cpp convention)
+    p.max_initial_timestamp    = 1.0f;
     return p;
 }
 
@@ -284,6 +310,63 @@ extern "C" void transcribe_context_free(struct transcribe_context * ctx) {
     delete ctx;
 }
 
+extern "C" void transcribe_set_abort_callback(
+    struct transcribe_context * ctx,
+    transcribe_abort_callback   cb,
+    void *                      user_data)
+{
+    if (ctx == nullptr) {
+        return;
+    }
+    ctx->abort_cb       = cb;
+    ctx->abort_userdata = user_data;
+}
+
+extern "C" bool transcribe_was_aborted(const struct transcribe_context * ctx) {
+    if (ctx == nullptr) {
+        return false;
+    }
+    return ctx->was_aborted;
+}
+
+// Whisper-specific decoding trace accessors. The storage lives on
+// WhisperContext; we downcast via the model's arch name rather than
+// RTTI so non-RTTI builds keep working. Non-Whisper contexts and
+// out-of-range indices are defined as zeroed/empty returns.
+static const transcribe::whisper::WhisperContext *
+maybe_whisper_context(const struct transcribe_context * ctx)
+{
+    if (ctx == nullptr) return nullptr;
+    if (ctx->model == nullptr) return nullptr;
+    if (ctx->model->arch == nullptr) return nullptr;
+    const char * name = ctx->model->arch->name;
+    if (name == nullptr || std::strcmp(name, "whisper") != 0) {
+        return nullptr;
+    }
+    return static_cast<const transcribe::whisper::WhisperContext *>(ctx);
+}
+
+extern "C" int transcribe_get_whisper_chunk_count(
+    const struct transcribe_context * ctx)
+{
+    const auto * wc = maybe_whisper_context(ctx);
+    if (wc == nullptr) return 0;
+    return static_cast<int>(wc->chunk_traces.size());
+}
+
+extern "C" struct transcribe_whisper_chunk_trace
+transcribe_get_whisper_chunk_trace(
+    const struct transcribe_context * ctx, int i)
+{
+    struct transcribe_whisper_chunk_trace zero = {};
+    const auto * wc = maybe_whisper_context(ctx);
+    if (wc == nullptr) return zero;
+    if (i < 0 || static_cast<size_t>(i) >= wc->chunk_traces.size()) {
+        return zero;
+    }
+    return wc->chunk_traces[static_cast<size_t>(i)];
+}
+
 extern "C" transcribe_status transcribe_run(
     struct transcribe_context *      ctx,
     const float *                    pcm,
@@ -323,6 +406,7 @@ extern "C" transcribe_status transcribe_run(
     ctx->t_mel_us    = 0;
     ctx->t_encode_us = 0;
     ctx->t_decode_us = 0;
+    ctx->was_aborted = false;
 
     if (ctx->model == nullptr || ctx->model->arch == nullptr ||
         ctx->model->arch->run == nullptr)
@@ -450,6 +534,48 @@ extern "C" const char * transcribe_model_variant_string(const struct transcribe_
         return "";
     }
     return model->variant.c_str();
+}
+
+extern "C" int transcribe_tokenize(
+    const struct transcribe_model * model,
+    const char *                    text,
+    int32_t *                       tokens,
+    size_t                          n_max)
+{
+    if (model == nullptr || text == nullptr) {
+        return INT_MIN;
+    }
+    const transcribe::Tokenizer * tok = model->tokenizer();
+    if (tok == nullptr) {
+        return INT_MIN;
+    }
+
+    std::vector<int32_t> ids;
+    if (tok->encode(std::string(text), ids) != TRANSCRIBE_OK) {
+        return INT_MIN;
+    }
+
+    const size_t n = ids.size();
+    if (n > static_cast<size_t>(INT_MAX)) {
+        return INT_MIN;
+    }
+    if (n > n_max) {
+        // Negative-of-N retry contract (mirrors whisper.cpp). Guard
+        // against -n overflowing int range for pathologically large
+        // vocabularies; fall back to INT_MIN + 1 so the caller still
+        // gets a hard-failure code rather than a stale pointer.
+        if (n > static_cast<size_t>(INT_MAX)) {
+            return INT_MIN;
+        }
+        return -static_cast<int>(n);
+    }
+    if (tokens == nullptr && n > 0) {
+        return INT_MIN;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        tokens[i] = ids[i];
+    }
+    return static_cast<int>(n);
 }
 
 extern "C" const char * transcribe_model_backend(const struct transcribe_model * model) {

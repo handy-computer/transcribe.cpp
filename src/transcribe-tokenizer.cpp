@@ -253,8 +253,22 @@ transcribe_status Tokenizer::encode(const std::string &    text,
         return TRANSCRIBE_OK;
     }
 
-    // Stage 1: pretokenize into byte-encoded "words".
-    const auto words = unicode::pretokenize_qwen2(text);
+    // Stage 1: pretokenize into byte-encoded "words". Dispatch on the
+    // pretokenizer flavor (set at load time from tokenizer.ggml.pre,
+    // or overridden by a per-family loader via set_pretokenizer).
+    // Unknown flavors fall back to qwen2 with a warning — keeps old
+    // GGUFs that lack the key working.
+    std::vector<std::string> words;
+    if (pre_ == "gpt2") {
+        words = unicode::pretokenize_gpt2(text);
+    } else {
+        if (pre_ != "qwen2" && !pre_.empty()) {
+            std::fprintf(stderr,
+                         "tokenizer.encode: unknown tokenizer.ggml.pre "
+                         "\"%s\"; falling back to qwen2\n", pre_.c_str());
+        }
+        words = unicode::pretokenize_qwen2(text);
+    }
 
     // Stage 2: run the BPE merge loop per word and collect ids.
     out_ids.reserve(words.size() * 2);
@@ -402,13 +416,28 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
 
     // Accepted: "unigram"/"bpe" (SentencePiece flavors used by NeMo
     // Parakeet and Cohere ASR) and "gpt2" (llama.cpp's tag for
-    // byte-level BPE, used by Qwen3-ASR). Per-family encode/decode
-    // paths branch on model_. Recognized-but-unsupported strings
-    // surface as NOT_IMPLEMENTED so the caller can tell "the file is
-    // fine, the library is just not ready for this tokenizer" from
-    // "the file is broken."
+    // byte-level BPE, used by Qwen3-ASR and Whisper). Per-family
+    // encode/decode paths branch on model_. Recognized-but-unsupported
+    // strings surface as NOT_IMPLEMENTED so the caller can tell "the
+    // file is fine, the library is just not ready for this tokenizer"
+    // from "the file is broken."
     if (model_ != "unigram" && model_ != "bpe" && model_ != "gpt2") {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+
+    // Optional: pretokenizer flavor. Absent means "qwen2" (historical
+    // default for the "gpt2" model tag on Qwen3-ASR GGUFs). Per-family
+    // loaders override after load() when the source file did not emit
+    // the key but the family's pretokenizer is fixed (Whisper → "gpt2").
+    pre_.clear();
+    switch (read_string_kv(gguf, "tokenizer.ggml.pre", pre_)) {
+        case KvResult::Absent:
+            pre_ = "qwen2";
+            break;
+        case KvResult::BadType:
+            return TRANSCRIBE_ERR_GGUF;
+        case KvResult::Ok:
+            break;
     }
 
     // Required: tokens array. Same Absent/BadType semantics.

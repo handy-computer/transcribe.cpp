@@ -117,4 +117,28 @@ int         unicode_to_byte(const std::string & utf8);
 // unicode_regex_split_custom_qwen2() in llama.cpp's unicode.cpp.
 std::vector<std::string> pretokenize_qwen2(const std::string & text);
 
+// Split `text` into GPT-2 pretokens, then byte-encode each one. Same
+// output shape as pretokenize_qwen2; the split rule is the original
+// GPT-2 regex used by HuggingFace's tokenizers crate for ByteLevel
+// pretokenizers (Whisper, GPT-2, RoBERTa, CLIP, ...):
+//
+//   's | 't | 're | 've | 'm | 'll | 'd
+//   |  ?\p{L}+
+//   |  ?\p{N}+
+//   |  ?[^\s\p{L}\p{N}]+
+//   | \s+(?!\S)
+//   | \s+
+//
+// Differences from the Qwen2 variant:
+//   1. Contractions are CASE-SENSITIVE (lowercase only), not (?i:).
+//   2. Letter / number / symbol runs are greedy (`+`) and take an
+//      optional leading space; Qwen2 limits numbers to one codepoint
+//      and lets symbol runs swallow trailing `[\r\n]*`.
+//   3. No `\s*[\r\n]+` special case.
+//
+// These differences are load-bearing for any digit-containing text:
+// HF tokenizes " 123" as one pretoken → one BPE piece; Qwen2 would
+// split into three single-digit pretokens and block the merge.
+std::vector<std::string> pretokenize_gpt2(const std::string & text);
+
 } // namespace transcribe::unicode

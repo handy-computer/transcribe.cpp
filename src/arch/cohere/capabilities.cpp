@@ -16,6 +16,14 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // segment timing to return. Advertise NONE and let the
     // dispatcher reject any request for finer granularity.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+
+    // Cancellation is wired at the per-run level. The other three
+    // features are Whisper-specific in this release; Cohere ASR does
+    // not participate.
+    caps.supports_initial_prompt       = false;
+    caps.supports_temperature_fallback = false;
+    caps.supports_long_form            = false;
+    caps.supports_cancellation         = true;
 }
 
 } // namespace transcribe::cohere

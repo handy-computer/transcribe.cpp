@@ -664,6 +664,15 @@ transcribe_status run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    // Pre-run abort check. Qwen3-ASR is single-shot today; this is
+    // the single observation point. Stage 2's long-form loop will add
+    // per-chunk polling for Whisper; the other autoregressive families
+    // can wire per-step polling when they grow their own long-form
+    // paths.
+    if (cc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+
     // Language hint handling. Null / empty == auto-detect (the LM
     // emits its own "language X<asr_text>" prefix which the output
     // parser below strips). A non-null code is resolved to the

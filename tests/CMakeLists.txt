@@ -481,6 +481,22 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         COMMAND transcribe_whisper_e2e_smoke)
     set_tests_properties(transcribe_whisper_e2e_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # Stage 1 parity: HF-byte-identical tokenization for Whisper,
+    # including digit and contraction edge cases that the GPT-2
+    # pretokenizer regex handles differently from Qwen2.
+    add_executable(transcribe_whisper_tokenize_parity
+        whisper_tokenize_parity.cpp)
+
+    target_link_libraries(transcribe_whisper_tokenize_parity
+        PRIVATE transcribe)
+
+    transcribe_apply_warnings(transcribe_whisper_tokenize_parity)
+
+    add_test(NAME transcribe_whisper_tokenize_parity
+        COMMAND transcribe_whisper_tokenize_parity)
+    set_tests_properties(transcribe_whisper_tokenize_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------
