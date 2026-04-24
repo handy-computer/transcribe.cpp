@@ -146,7 +146,7 @@ ggml_tensor * ffn(ggml_context * ctx,
                   ggml_tensor *  fc2_w, ggml_tensor * fc2_b) {
     ggml_tensor * h = ggml_mul_mat(ctx, fc1_w, x);
     if (fc1_b != nullptr) h = ggml_add(ctx, h, fc1_b);
-    h = ggml_gelu(ctx, h);
+    h = ggml_gelu_erf(ctx, h);
     ggml_tensor * o = ggml_mul_mat(ctx, fc2_w, h);
     if (fc2_b != nullptr) o = ggml_add(ctx, o, fc2_b);
     return o;
@@ -248,7 +248,9 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     // src0->type == F16, crashing at run time.
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv0_w, x, 1, 1, 1);
     x = add_conv1d_bias(ctx, x, w.enc_stem.conv0_b);
-    x = ggml_gelu(ctx, x);
+    // HF Whisper uses nn.functional.gelu (exact erf form) for both conv
+    // stems and the FFN; ggml_gelu is the tanh approximation.
+    x = ggml_gelu_erf(ctx, x);
     // Transpose to [d_model, T] so the dump matches reference layout.
     x = ggml_cont(ctx, ggml_transpose(ctx, x));
     named(x, "enc.conv1.out");
@@ -260,7 +262,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     // conv2: k=3, stride=2, padding=1 -> [T_enc, d_model]
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv1_w, x, 2, 1, 1);
     x = add_conv1d_bias(ctx, x, w.enc_stem.conv1_b);
-    x = ggml_gelu(ctx, x);
+    x = ggml_gelu_erf(ctx, x);
     // Back to [d_model, T_enc] for the rest of the encoder.
     x = ggml_cont(ctx, ggml_transpose(ctx, x));
     named(x, "enc.conv2.out");

@@ -58,11 +58,13 @@ Each stage has a fixed checklist. The skill applies the one for the requested st
 - [ ] No quantized GGUFs (F16/Q8_0/...) exist yet unless the source was already F16 or BF16 — quants are Stage 4.
 
 **Stage 4 — porting-4-cpp**
-- [ ] `src/arch/<family>/` exists with `weights.{h,cpp}`, `encoder.{h,cpp}`, `decoder.{h,cpp}`, `model.{h,cpp}`, `capabilities.{h,cpp}`.
+- [ ] `src/arch/<family>/` follows the in-tree shape: `weights.{h,cpp}`, `encoder.{h,cpp}`, `decoder.{h,cpp}` as paired `.h`/`.cpp`, plus `model.cpp` and `capabilities.cpp` backed by a single family-level header `<family>.h` (see `parakeet/parakeet.h`, `cohere/cohere.h`, `qwen3_asr/qwen3_asr.h`). No separate `model.h` or `capabilities.h`.
 - [ ] `tests/tolerances/<family>.json` exists and has a `_comment` block (JSON array of strings, multi-line) explaining drift sources.
 - [ ] `uv run scripts/validate.py all --family <family> --variant <variant>` exits 0 at reference dtype.
+- [ ] If the family has an inference-time frontend, production frontend parity is validated. For Whisper, `uv run scripts/validate.py mel --family <family> --variant <variant>` exits 0 and proves C++ `enc.mel.in` matches the reference frontend; injected reference frontend tensors alone do not satisfy Stage 4.
+- [ ] Public `transcribe_capabilities` match implemented runtime behavior without downgrading upstream-required features to avoid work. If intake/GGUF advertises language detection, translation, or segment timestamps, the C++ decode path implements them and a smoke/API test exercises them.
 - [ ] All five derived presets (F16, Q8_0, Q6_K, Q5_K_M, Q4_K_M) exist under `models/<variant>/`, with the source tier suffix skipped where it duplicates one of them.
-- [ ] Every produced GGUF loads via `build/bin/transcribe-cli -m <gguf> samples/jfk.wav` without error.
+- [ ] Every produced GGUF loads via `build/bin/transcribe-cli -m <gguf> samples/jfk.wav` and emits a non-empty `text:` line. Do not require tensor/numeric comparisons for quantized GGUFs; Stage 4 quant validation is CLI output-validity, while Stage 6 WER is the user-facing quant quality gate.
 
 **Stage 5 — porting-5-bench**
 - [ ] At least one baseline report under `reports/perf/<machine>/*_<variant>_<backend>.json`.

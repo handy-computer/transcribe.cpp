@@ -44,6 +44,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -322,11 +323,12 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
 
-        # Whisper Stage 4 bringup: the C++ mel frontend is not yet
-        # implemented. The runner reads the reference mel from disk
-        # when TRANSCRIBE_WHISPER_MEL_FROM_REF is set, so the encoder
-        # path can be exercised end-to-end with bit-identical mel
-        # input. Drop this hook once the C++ frontend lands.
+        # Whisper: inject the reference mel via TRANSCRIBE_WHISPER_MEL_FROM_REF
+        # so enc.mel.in is bit-identical to HF's WhisperFeatureExtractor
+        # output. This isolates encoder/decoder numerical drift from mel-
+        # frontend drift so each can be tolerance-managed separately.
+        # The C++ mel frontend is validated by `validate.py mel` against
+        # its own tolerance (see mel_parity below).
         if args.family == "whisper":
             ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
             env["TRANSCRIBE_WHISPER_MEL_FROM_REF"] = str(ref_dir)
@@ -336,8 +338,10 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             "--backend", args.backend,
             "--threads", "1",
             "-m", str(gguf),
-            str(audio),
         ]
+        if args.family == "whisper":
+            cmd += ["--timestamps", "none", "--language", "en"]
+        cmd.append(str(audio))
 
         print(f"\n{'=' * 60}", file=sys.stderr)
         print(f"  cpp dump [{args.family}/{case}]", file=sys.stderr)
@@ -498,6 +502,85 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0 if all_passed else 1
 
 
+def cmd_mel(args: argparse.Namespace) -> int:
+    repo = find_repo_root(Path(__file__).parent)
+    manifest = load_manifest(repo, args.family, getattr(args, "variant", None))
+    variant = manifest["variant"]
+    if args.family != "whisper":
+        print("mel parity is currently only defined for whisper", file=sys.stderr)
+        return 0
+
+    cli = find_cli(repo)
+    slug = manifest_source_model(manifest).split("/", 1)[-1]
+    gguf = Path(args.gguf) if getattr(args, "gguf", None) else find_gguf(repo, args.family, slug)
+    compare_script = repo / "scripts" / "compare_tensors.py"
+    cases = manifest.get("cases", ["jfk"])
+    all_passed = True
+
+    for case in cases:
+        audio = repo / "samples" / f"{case}.wav"
+        if not audio.exists():
+            raise SystemExit(f"error: audio not found: {audio}")
+
+        out_dir = repo / "build" / "validate" / args.family / variant / case / "mel_cpp"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
+
+        env = os.environ.copy()
+        env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        env.pop("TRANSCRIBE_WHISPER_MEL_FROM_REF", None)
+
+        cmd = [
+            str(cli),
+            "--backend", getattr(args, "backend", "cpu"),
+            "--threads", "1",
+            "-m", str(gguf),
+            "--timestamps", "none",
+            "--language", "en",
+            str(audio),
+        ]
+
+        print(f"\n{'=' * 60}", file=sys.stderr)
+        print(f"  mel parity cpp dump [{args.family}/{case}]", file=sys.stderr)
+        print(f"  TRANSCRIBE_DUMP_DIR={out_dir}", file=sys.stderr)
+        print(f"  {' '.join(cmd)}", file=sys.stderr)
+        print(f"{'=' * 60}", file=sys.stderr)
+
+        result = subprocess.run(
+            cmd, cwd=repo, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.returncode != 0:
+            all_passed = False
+            continue
+
+        ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
+        with tempfile.TemporaryDirectory() as td:
+            tol = Path(td) / "mel-tolerances.json"
+            tol.write_text(json.dumps({
+                "enc.mel.in": {"max_abs": 1e-4, "mean_abs": 1e-5},
+            }) + "\n")
+            cmp_cmd = [
+                "uv", "run", str(compare_script),
+                str(out_dir), str(ref_dir),
+                "--max-abs", "1e9",
+                "--mean-abs", "1e9",
+                "--tolerances", str(tol),
+                "--quiet",
+            ]
+            print(f"\n{'=' * 60}", file=sys.stderr)
+            print(f"  mel parity compare [{args.family}/{case}]", file=sys.stderr)
+            print(f"{'=' * 60}", file=sys.stderr)
+            cmp = subprocess.run(cmp_cmd, cwd=repo)
+            if cmp.returncode != 0:
+                all_passed = False
+
+    return 0 if all_passed else 1
+
+
 def git_head_sha(repo: Path) -> str:
     try:
         result = subprocess.run(
@@ -612,6 +695,10 @@ def cmd_all(args: argparse.Namespace) -> int:
     rc = cmd_ref(args)
     if rc != 0:
         return rc
+    if args.family == "whisper":
+        rc = cmd_mel(args)
+        if rc != 0:
+            return rc
     rc = cmd_cpp(args)
     if rc != 0:
         return rc
@@ -656,6 +743,17 @@ def main() -> int:
         help="Compute backend (default: cpu)",
     )
     sp_cpp.set_defaults(func=cmd_cpp)
+
+    # mel
+    sp_mel = sub.add_parser("mel", help="Compare production C++ mel vs reference mel")
+    add_common(sp_mel)
+    sp_mel.add_argument("--gguf", help="GGUF path (overrides auto-detection)")
+    sp_mel.add_argument(
+        "--backend", default="cpu",
+        choices=["auto", "cpu", "metal", "vulkan"],
+        help="Compute backend (default: cpu)",
+    )
+    sp_mel.set_defaults(func=cmd_mel)
 
     # compare
     sp_cmp = sub.add_parser("compare", help="Compare C++ vs reference dumps")

@@ -25,9 +25,11 @@ CPP progress:
 - [ ] Step 4: LLM-finalize tolerances (recipe below, replaces provisional)
 - [ ] Step 5: Human review of finalized tolerances
 - [ ] Step 6: validate.py all green at ref dtype
-- [ ] Step 7: Generate full quant matrix
-- [ ] Step 8: Structural loader check on every quant
-- [ ] Step 9: Sign-off review
+- [ ] Step 7: Verify frontend parity for production inference
+- [ ] Step 8: Verify advertised capabilities are implemented
+- [ ] Step 9: Generate full quant matrix
+- [ ] Step 10: CLI output-validity check on every quant
+- [ ] Step 11: Sign-off review
 ```
 
 ### Step 1: Sibling-variant shortcut (execute)
@@ -44,7 +46,11 @@ uv run scripts/validate.py all --family <family> --variant <variant>
 
 ### Step 2: Implement src/arch/<family>/ (open-ended)
 
-For a new family, create `src/arch/<family>/{weights,encoder,decoder,model,capabilities}.{h,cpp}` following the shape of the closest existing family:
+For a new family, create `src/arch/<family>/` with these files, following the shape of the closest existing family:
+- `weights.{h,cpp}`, `encoder.{h,cpp}`, `decoder.{h,cpp}` — one `.h`/`.cpp` pair each.
+- `model.cpp` and `capabilities.cpp` — implementation only. The corresponding types and declarations live in a single family-level header `<family>.h` (see `parakeet/parakeet.h`, `cohere/cohere.h`, `qwen3_asr/qwen3_asr.h`), which declares the concrete `*Model` / `*Context` subclasses and the `apply_family_invariants` entry point. No separate `model.h` or `capabilities.h`.
+
+Pick the closest existing family by architecture pattern:
 - `encoder-transducer` → `src/arch/parakeet/`
 - `encoder-decoder` → `src/arch/cohere/`
 - `audio-llm` → `src/arch/qwen3_asr/`
@@ -100,7 +106,25 @@ uv run scripts/validate.py all --family <family> --variant <variant>
 
 Must exit 0. If it fails after tolerances were accepted, either the tolerances are genuinely too tight (rare if Step 4's recipe was applied correctly) or C++ drift is flaky across runs (investigate — it shouldn't be).
 
-### Step 7: Full quant matrix (execute)
+### Step 7: Frontend parity (execute)
+
+If validation injects reference frontend tensors to isolate later graph drift (for example `TRANSCRIBE_WHISPER_MEL_FROM_REF`), that is only an isolation tool. It does **not** validate inference-time preprocessing.
+
+Run the family frontend on real PCM in C++ and compare the produced frontend input tensor against the reference framework's tensor. For Whisper this is:
+
+```bash
+uv run scripts/validate.py mel --family <family> --variant <variant>
+```
+
+The check must fail if production C++ mel (`enc.mel.in`) does not match the reference frontend within an explicit, measured tolerance. Do not mark Stage 4 complete if the encoder/decoder only pass by bypassing the C++ frontend with injected tensors.
+
+### Step 8: Capability implementation (execute)
+
+Public `transcribe_capabilities` must describe implemented runtime behavior, not just upstream model potential and not a reduced subset to dodge work. If intake/GGUF says the model supports language detection, translation, or segment timestamps, the decode path must implement those features or the port is not Stage-4 complete. The only acceptable exception is a documented upstream capability that is deliberately out of project scope for the family and has been removed from the converter/intake contract before Stage 4.
+
+For each advertised capability, add or run a real-model smoke/API test that exercises the public ABI. Examples: no-language-hint run exercises language detection; `TRANSCRIBE_TASK_TRANSLATE` exercises translation; `TRANSCRIBE_TIMESTAMPS_AUTO`/`SEGMENT` must return segment timestamps if `max_timestamp_kind` is `SEGMENT`.
+
+### Step 9: Full quant matrix (execute)
 
 ```bash
 cmake --build build --target transcribe-quantize
@@ -109,33 +133,38 @@ uv run scripts/quantize-all.py models/<variant>/<variant>-<REFDTYPE>.gguf
 
 This produces `<variant>-F16.gguf`, `<variant>-Q8_0.gguf`, `<variant>-Q6_K.gguf`, `<variant>-Q5_K_M.gguf`, `<variant>-Q4_K_M.gguf` alongside the reference-dtype GGUF.
 
-### Step 8: Structural loader check (execute)
+### Step 10: Quant CLI output-validity check (execute)
 
-For each produced GGUF, confirm it loads via the C++ loader without error. Minimally, the existing `transcribe_loader_smoke` CTest covers synthetic error paths; for the real GGUFs run a tiny transcribe-cli invocation:
+For each produced GGUF, confirm the C++ runtime can load it and produce a valid transcript through `transcribe-cli`. Do **not** run tensor/numeric comparisons on quantized GGUFs for Stage 4 acceptance; quantization is intentionally lossy and activation-level drift is not a stable acceptance signal. Use ref-dtype `validate.py` for numerical parity, CLI smoke for quant runtime validity, and Stage 6 WER for user-facing quant quality.
 
 ```bash
 for gguf in models/<variant>/<variant>-*.gguf; do
-  build/bin/transcribe-cli -m "$gguf" samples/jfk.wav >/dev/null && echo "OK $gguf" || echo "FAIL $gguf"
+  out="$(build/bin/transcribe-cli -m "$gguf" samples/jfk.wav)" && \
+    printf '%s\n' "$out" | grep -q '^text: .\+' && echo "OK $gguf" || echo "FAIL $gguf"
 done
 ```
 
-### Step 9: Sign-off
+### Step 11: Sign-off
 
 Report:
 - Path to the tolerances file + confirmation the user reviewed it.
 - `validate.py all` exit code at ref dtype.
+- Frontend parity command + exit code (or an explicit reason no separate frontend exists).
+- Capability smoke/API test command + exit code.
 - Full quant matrix listing with file sizes.
-- Any quant that failed structural load.
+- Any quant that failed CLI output-validity.
 
 **Do not commit.**
 
 ## Postconditions
 
-- `src/arch/<family>/` exists with the five-file shape (`weights`, `encoder`, `decoder`, `model`, `capabilities` — each as a `.h` / `.cpp` pair).
+- `src/arch/<family>/` exists with the in-tree shape: `weights.{h,cpp}`, `encoder.{h,cpp}`, `decoder.{h,cpp}` as `.h`/`.cpp` pairs, plus `model.cpp` and `capabilities.cpp` backed by a single family-level header `<family>.h`.
 - `tests/tolerances/<family>.json` exists, has a `_comment` block, no `_provisional` flags remain, and was reviewed by the user.
 - `validate.py all --family <family> --variant <variant>` exits 0 at reference dtype.
+- Production frontend output is validated against the reference frontend when the family has an inference-time frontend.
+- Every public capability advertised by the GGUF/intake is implemented by the C++ runtime and covered by a smoke/API test.
 - All five derived presets present under `models/<variant>/`.
-- Every produced GGUF loads structurally.
+- Every produced GGUF loads and produces valid CLI output.
 
 ## Pointers (read, not execute)
 

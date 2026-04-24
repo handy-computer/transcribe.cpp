@@ -119,7 +119,9 @@ ggml_tensor * ffn(ggml_context * ctx,
                   ggml_tensor *  fc2_w, ggml_tensor * fc2_b) {
     ggml_tensor * h = ggml_mul_mat(ctx, fc1_w, x);
     if (fc1_b != nullptr) h = ggml_add(ctx, h, fc1_b);
-    h = ggml_gelu(ctx, h);
+    // HF Whisper uses nn.functional.gelu (exact erf form); ggml_gelu
+    // is the tanh approximation and drifts ~1e-4 per element.
+    h = ggml_gelu_erf(ctx, h);
     ggml_tensor * o = ggml_mul_mat(ctx, fc2_w, h);
     if (fc2_b != nullptr) o = ggml_add(ctx, o, fc2_b);
     return o;
@@ -611,6 +613,12 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     // Causal mask only needed when n_tokens > 1 (prompt pass). For
     // step pass, the current token can attend to everything in the
     // cache, so mask is all zeros and we skip it.
+    //
+    // The mask-null branch is only sound when exactly one new token is
+    // being added to the cache — otherwise later tokens in the batch
+    // would see each other and leak future context. Enforce the
+    // invariant explicitly: if a beam-search caller ever passes
+    // n_tokens > 1 with n_past > 0 it must also build a mask.
     ggml_tensor * causal_mask = nullptr;
     if (n_tokens > 1) {
         db.causal_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
@@ -618,6 +626,9 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         named(db.causal_mask_in, "dec.causal_mask");
         ggml_set_input(db.causal_mask_in);
         causal_mask = ggml_cast(ctx, db.causal_mask_in, GGML_TYPE_F16);
+    } else {
+        GGML_ASSERT(n_tokens == 1 &&
+                    "decoder_kv mask-null branch requires single-token step");
     }
 
     // ---- Token embedding -------------------------------------------

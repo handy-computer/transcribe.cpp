@@ -75,7 +75,7 @@ per-preset bucket policy for every canonical tensor name.
 | Bucket   | What's in it                                                          | Quant behavior                                 |
 |----------|-----------------------------------------------------------------------|------------------------------------------------|
 | `Linear` | `ggml_mul_mat` operands: encoder FF, attention projections, predictor LSTM gates, joint projections, head | Block-quantized (Q4_K / Q5_K / Q6_K / Q8_0)    |
-| `Embed`  | Tied token embedding (Cohere + Qwen3-ASR; doubles as output projection) | Bumped to Q6_K in `_M` presets                 |
+| `Embed`  | Decoder token embedding (`dec.embed.token.weight`, `dec.token_embd.weight`) | Bumped to Q6_K in `_M` presets where shape-compatible, else `linear_fallback` |
 | `ConvPw` | 1×1 pointwise conv kernels in conformer blocks                        | F16 (im2col+matmul supports F16 matmul)        |
 | `Conv`   | Non-pointwise conv kernels: 2D pre-encode, depthwise                  | F32 or F16 (no quantized im2col in ggml)       |
 | `Norm`   | Biases, LayerNorm/BatchNorm/RMSNorm weights, per-head q_norm/k_norm, positional bias/encoding, frontend buffers | F32 (precision-sensitive, tiny) |
@@ -97,14 +97,37 @@ From `tools/transcribe-quantize/policy.cpp`:
 | `Q5_0`    | Q5_0        | F16             | Q5_0        | —     | F32  | F16    | F32  |
 | `Q5_1`    | Q5_1        | F16             | Q5_1        | —     | F32  | F16    | F32  |
 | `Q8_0`    | Q8_0        | F16             | Q8_0        | —     | F32  | F16    | F32  |
-| `Q6_K`    | Q6_K        | F16             | Q6_K        | —     | F32  | F16    | F32  |
-| `Q5_K_M`  | Q5_K        | F16             | Q8_0        | Q6_K  | F32  | F16    | F32  |
-| `Q4_K_M`  | Q4_K        | F16             | Q8_0        | Q6_K  | F32  | F16    | F32  |
+| `Q6_K`    | Q6_K        | Q8_0            | Q6_K        | —     | F32  | F16    | F32  |
+| `Q5_K_M`  | Q5_K        | Q8_0            | Q8_0        | Q6_K  | F32  | F16    | F32  |
+| `Q4_K_M`  | Q4_K        | Q8_0            | Q8_0        | Q6_K  | F32  | F16    | F32  |
 
 **`linear_fallback`** is the type used when a tensor's inner dim doesn't
-divide the target quant's block size. Always something smaller-block or
-blockless (F16 here). Block mismatches can happen on oddly-shaped
-projections; the fallback keeps the tool from crashing.
+divide the target quant's block size. Every K preset (`Q6_K`, `Q5_K_M`,
+`Q4_K_M`) falls back to `Q8_0`. Legacy block quants (block size 32) set
+it to `F16` as a tripwire — it should never fire in practice, since every
+sensible `ne0` divides 32.
+
+Q8_0 is the universal K-preset fallback for two reasons:
+
+1. **Size.** Falling back to `F16` makes K presets larger than `Q8_0` on
+   families with 384/640/896-wide matrices (Whisper-tiny's `d_model=384`,
+   Parakeet's predictor/joint at `ne0=640`, Qwen3-ASR's encoder at
+   `ne0=896`). That inverts the size ordering between presets and
+   defeats the point of offering a K preset at all.
+2. **Quality.** The tensors that trip the fallback are the same
+   shape-awkward ones the model author chose — predictor outputs, small
+   attention blocks, tied vocab heads. Falling back to a scaled-down
+   legacy quant (`Q4_K` → `Q4_1`) would penalize them twice. `Q8_0` is
+   effectively lossless vs `F16` and keeps the fallback strictly higher
+   quality than `linear_main`.
+
+The cost vs a tighter `Q4_1` / `Q5_1` fallback is a few percent on file
+size, paid only on tensors that couldn't be K-quantized anyway. This
+deviates from `llama.cpp`'s `llama_tensor_get_type` (`Q4_K` → `Q4_1`,
+`Q5_K` → `Q5_1`, `Q6_K` → `Q8_0`), which is tuned for LLMs where
+fallback rarely triggers. For our ASR models the fallback path is the
+dominant case on several families, so a uniform conservative floor beats
+a size-matched legacy scale.
 
 **attn output** gets bumped in `_M` presets (to Q8_0), in the
 spirit of `llama.cpp`'s `_M` presets — which also keep a few
@@ -118,18 +141,20 @@ Parakeet), `attn.out.weight` (Qwen3-ASR encoder), and `attn.o.weight`
 (Qwen3-ASR decoder) — so all three families land in the same rule.
 
 **Embed slot** is `—` (no override) for uniform presets. Those fall
-back to `linear_main`. Legacy block quants (Q4_0/1, Q5_0/1) deliberately
-leave both attn output and Embed at `linear_main` — they are uniform
-accuracy/size tradeoffs, not mixed recipes.
+back to `linear_main`. `_M` presets try to use `Q6_K` for decoder token
+embeddings; if the embedding inner dim does not divide 256, the embed
+tensor routes through the same `linear_fallback` as everything else
+(`Q8_0`). Legacy block quants (Q4_0/1, Q5_0/1) deliberately leave both
+attn output and Embed at `linear_main` — they are uniform accuracy/size
+tradeoffs, not mixed recipes.
 
 ## Per-family policy overrides
 
-Two families tie the input embedding to the LM head and route it into
-the `Embed` bucket so it bumps to Q6_K under the `_M` presets — without
-the bump, WER regresses measurably:
+Decoder token embeddings route into the `Embed` bucket so `_M` presets
+can keep them above the base type:
 
 - Cohere: `dec.embed.token.weight`
-- Qwen3-ASR: `dec.token_embd.weight` (llama.cpp-style name)
+- Qwen3-ASR and Whisper: `dec.token_embd.weight` (llama.cpp-style name)
 
 Parakeet does not have a tied embedding. `pred.embed.weight` is a
 small predictor-only embedding and rides the `Linear` bucket.
@@ -163,7 +188,8 @@ Q5_0, Q5_1), Q8_0, Q6_K, Q5_K_M, and Q4_K_M. Planned additions:
 
 ## Running in bulk
 
-`scripts/quant_accuracy.py` drives a multi-preset comparison against
-an F32 baseline. See [`validate.md`](validate.md) and
-[`compare-tensors.md`](compare-tensors.md) for the underlying diff
-harness.
+Quantized GGUF acceptance is not tensor/numeric comparison. For shipped
+presets, first verify each file loads and emits valid `transcribe-cli`
+output, then use WER for user-facing quality. `scripts/quant_accuracy.py`
+is only an optional diagnostic for inspecting activation drift against an
+F32 baseline.

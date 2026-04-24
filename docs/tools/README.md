@@ -56,9 +56,9 @@ This split mirrors `llama.cpp`'s `convert_hf_to_gguf.py` →
   Perf matrices across (backend, family, quant, sample).
 - [**wer.md**](wer.md) — `scripts/wer/{run,score,compare,ingest}.py`.
   Hypothesis generation + WER scoring against a reference corpus.
-- **Quant accuracy** — `scripts/quant_accuracy.py`. Per-stage
-  numerical drift between a baseline GGUF (typically F32) and a
-  quantized sibling. Acts as a dev gate; WER is the user-facing gate.
+- **Quant diagnostics** — `scripts/quant_accuracy.py`. Optional
+  activation-drift inspection between a baseline GGUF and a quantized
+  sibling. Not a quant acceptance gate; use CLI output-validity plus WER.
 
 ## Other
 

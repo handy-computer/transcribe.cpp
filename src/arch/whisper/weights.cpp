@@ -134,6 +134,7 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
     if (auto st = read_required_u32_kv(gguf, "stt.whisper.decoder.vocab_size",           kFamilyTag, hp.dec_vocab_size);           st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_string_kv(gguf, "stt.whisper.decoder.activation",        kFamilyTag, hp.dec_activation);           st != TRANSCRIBE_OK) return st;
     if (auto st = read_optional_bool_kv(gguf, "stt.whisper.decoder.tie_word_embeddings", kFamilyTag, true, hp.dec_tie_word_embeddings); st != TRANSCRIBE_OK) return st;
+    if (auto st = read_optional_bool_kv(gguf, "stt.whisper.decoder.scale_embedding",     kFamilyTag, false, hp.dec_scale_embedding);   st != TRANSCRIBE_OK) return st;
 
     // Whisper generation contract.
     if (auto st = read_required_u32_kv(gguf, "stt.whisper.decoder_start_token_id", kFamilyTag, hp.decoder_start_token_id); st != TRANSCRIBE_OK) return st;
@@ -234,6 +235,17 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
                      "catalog)\n");
         return TRANSCRIBE_ERR_GGUF;
     }
+    if (hp.dec_scale_embedding) {
+        // HF WhisperDecoder multiplies inputs_embeds by sqrt(d_model) when
+        // config.scale_embedding=True. Upstream Whisper always ships False;
+        // if this ever flips we need to add the scale to the decoder graph
+        // (both prefill and KV paths, after get_rows(token_embd, ...)).
+        std::fprintf(stderr,
+                     "whisper: stt.whisper.decoder.scale_embedding=true is "
+                     "not supported (decoder graph does not apply the "
+                     "sqrt(d_model) embed scale)\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
     if (hp.decoder_start_token_id < 0 || hp.no_timestamps_token_id < 0) {
         std::fprintf(stderr,
                      "whisper: decoder_start_token_id / no_timestamps_token_id "
@@ -299,6 +311,18 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
     if (!hp.fe_center) {
         std::fprintf(stderr,
                      "whisper: non-centered STFT is not supported\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (hp.fe_dither != 0.0f) {
+        // HF WhisperFeatureExtractor defaults dither=0.0 and the C++ mel
+        // frontend never applies dither (transcribe-mel.cpp's contract).
+        // A non-zero value in the GGUF would be silently dropped, so
+        // reject it at load time rather than producing a silently-wrong
+        // spectrogram.
+        std::fprintf(stderr,
+                     "whisper: stt.frontend.dither=%g is not supported "
+                     "(frontend is deterministic; expected 0.0)\n",
+                     hp.fe_dither);
         return TRANSCRIBE_ERR_GGUF;
     }
 

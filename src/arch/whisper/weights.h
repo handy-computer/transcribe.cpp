@@ -71,6 +71,7 @@ struct WhisperHParams {
     int32_t dec_vocab_size           = 0;
     std::string dec_activation;
     bool    dec_tie_word_embeddings  = true;
+    bool    dec_scale_embedding      = false;  // HF config.scale_embedding; always false for upstream Whisper
 
     // Whisper generation contract.
     int32_t decoder_start_token_id = -1;   // <|startoftranscript|>, 50258 for multilingual

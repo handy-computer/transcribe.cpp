@@ -457,6 +457,33 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 # -----------------------------------------------------------------------------
+# Whisper end-to-end / capability smoke test (real-model gated)
+# -----------------------------------------------------------------------------
+#
+# Loads a real Whisper GGUF and verifies the public capabilities match the
+# runtime behavior: language detection runs when no language hint is supplied,
+# AUTO returns segment timestamps, explicit NONE keeps no-timestamp decode
+# available, and WORD timestamps are rejected until the DTW alignment path lands.
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_whisper_e2e_smoke
+        whisper_e2e_smoke.cpp)
+
+    target_link_libraries(transcribe_whisper_e2e_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_whisper_e2e_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_whisper_e2e_smoke)
+
+    add_test(NAME transcribe_whisper_e2e_smoke
+        COMMAND transcribe_whisper_e2e_smoke)
+    set_tests_properties(transcribe_whisper_e2e_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# -----------------------------------------------------------------------------
 # Cohere ASR structural / loader test (real-model gated)
 # -----------------------------------------------------------------------------
 #

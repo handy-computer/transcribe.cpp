@@ -102,6 +102,7 @@ KV emitted:
     stt.whisper.transcribe_token_id
     stt.whisper.translate_token_id
     stt.whisper.tie_word_embeddings = True
+    stt.whisper.decoder.scale_embedding = False   (HF config.scale_embedding)
     stt.whisper.suppress_tokens / begin_suppress_tokens
 
     stt.frontend.type / num_mels / sample_rate / n_fft / win_length /
@@ -257,6 +258,7 @@ def read_hparams(config: dict, gen_config: dict, preproc: dict) -> dict:
     max_target_positions = int(config["max_target_positions"])
     vocab_size          = int(config["vocab_size"])
     activation          = str(config["activation_function"]).lower()
+    scale_embedding     = bool(config.get("scale_embedding", False))
 
     # generation_config carries special-token ids and suppression lists.
     decoder_start_id = int(gen_config["decoder_start_token_id"])
@@ -295,6 +297,7 @@ def read_hparams(config: dict, gen_config: dict, preproc: dict) -> dict:
         "max_target_positions": max_target_positions,
         "vocab_size":           vocab_size,
         "activation":           activation,
+        "scale_embedding":      scale_embedding,
 
         "decoder_start_token_id":  decoder_start_id,
         "no_timestamps_token_id":  no_ts_id,
@@ -517,6 +520,7 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer.add_uint32("stt.whisper.decoder.vocab_size",           hp["vocab_size"])
         writer.add_string("stt.whisper.decoder.activation",           hp["activation"])
         writer.add_bool  ("stt.whisper.decoder.tie_word_embeddings",  True)
+        writer.add_bool  ("stt.whisper.decoder.scale_embedding",      hp["scale_embedding"])
 
         # ---- whisper decoder prompt / suppression ----
         writer.add_uint32("stt.whisper.decoder_start_token_id", hp["decoder_start_token_id"])

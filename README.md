@@ -66,7 +66,8 @@ the llama.cpp-style `<slug>-<QUANT>.gguf` naming convention. Pass a local
 ### Quantize
 
 The `transcribe-quantize` tool produces smaller models from the
-reference GGUF. Available presets: `F16`, `Q8_0`, `Q5_K_M`, `Q4_K_M`.
+reference GGUF. Available presets: `F16`, `Q8_0`, `Q6_K`, `Q5_K_M`,
+`Q4_K_M`.
 
 ```bash
 build/bin/transcribe-quantize \

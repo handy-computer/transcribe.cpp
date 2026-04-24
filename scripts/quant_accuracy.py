@@ -6,12 +6,16 @@
 # ]
 # ///
 """
-quant_accuracy.py - per-quant numerical accuracy gate.
+quant_accuracy.py - optional per-quant activation-drift diagnostic.
 
 Runs transcribe-cli once per GGUF variant with TRANSCRIBE_DUMP_DIR set,
 collects per-stage encoder + decoder activation dumps, and compares each
 variant against an F32 baseline using scripts/compare_tensors.py. Prints
 a per-variant pass/fail summary keyed off per-quant tolerance bands.
+
+This is not a quant acceptance gate. Quantized GGUFs are intentionally
+lossy, so Stage 4 accepts them by `transcribe-cli` output validity and
+Stage 6 accepts shipped quality by WER.
 
 Usage:
 
@@ -31,6 +35,7 @@ Tolerance bands per quant family (initial guesses, refine with WER):
     family   rel_max  rel_mean
     f16      1e-3     1e-3
     q8_0     2e-2     2e-2
+    q6_k     5e-2     5e-2
     q5_k_m   1e-1     1e-1
     q4_k_m   2e-1     2e-1
 
@@ -43,11 +48,10 @@ would false-positive on the pre-LN intermediates. Reporting relative
 makes a single set of bands cover both. Per-tensor absolute values
 are still printed for human debugging.
 
-The bands are deliberately loose. The point is to catch a layer-level
-numerical *regression* (a failed loader change, a wrong dtype routing,
-a kernel that silently fell back to a stub), not to substitute for WER
-measurement. WER is the user-facing acceptance gate; this is the dev
-gate that runs in seconds.
+The bands are deliberately loose. The point is diagnostic inspection for
+layer-level changes (a failed loader change, a wrong dtype routing, a
+kernel that silently fell back to a stub), not quant acceptance. WER is
+the user-facing acceptance gate.
 
 Quant family is detected from the filename: a GGUF named
 *-Q4_K_M.gguf gets the q4_k_m bands, *-F16.gguf gets the f16 bands,
@@ -81,6 +85,7 @@ QUANT_BANDS: dict[str, tuple[float, float]] = {
     "f32":    (1e-6, 1e-6),
     "f16":    (1e-3, 1e-3),
     "q8_0":   (2e-2, 2e-2),
+    "q6_k":   (5e-2, 5e-2),
     "q5_k_m": (1e-1, 1e-1),
     "q4_k_m": (2e-1, 2e-1),
 }
@@ -89,7 +94,7 @@ QUANT_BANDS: dict[str, tuple[float, float]] = {
 # Filename → quant family. The match is on the suffix of the model
 # basename, so models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q5_K_M.gguf is
 # detected as q5_k_m.
-QUANT_PAT = re.compile(r"-(?P<family>F32|F16|Q8_0|Q5_K_M|Q4_K_M)\.gguf$", re.IGNORECASE)
+QUANT_PAT = re.compile(r"-(?P<family>F32|F16|Q8_0|Q6_K|Q5_K_M|Q4_K_M)\.gguf$", re.IGNORECASE)
 
 
 def detect_family(path: Path) -> str:

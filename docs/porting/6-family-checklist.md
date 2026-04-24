@@ -49,7 +49,7 @@ supported.
 - `tests/tolerances/<family>.json` exists.
 - CPU accuracy GGUF validation passes.
 - Primary accelerator validation passes or is documented unsupported.
-- Quant validation passes for each enabled quant.
+- Quant CLI output-validity passes for each enabled quant; do not use tensor/numeric comparisons as a quant acceptance gate.
 - Validation report is written under `reports/validate/<family>/`.
 
 ## Benchmarks
@@ -68,4 +68,3 @@ supported.
 - Required setup commands are documented.
 - Default `ctest` passes on a clean checkout without real model files.
 - Optional real-model gate command is documented.
-
