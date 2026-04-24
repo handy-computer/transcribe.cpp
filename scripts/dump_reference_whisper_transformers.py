@@ -376,6 +376,94 @@ def dump_decoder(
     return int(torch.argmax(last_logits).item())
 
 
+def dump_mid_generation(
+    *,
+    model,
+    encoder_hidden,
+    prompt_ids: list[int],
+    out_dir: Path,
+    source: dict[str, Any],
+    device: str,
+    gen_step_n: int = 20,
+):
+    """Greedy-decode `gen_step_n` tokens and dump the logits that would
+    predict token `gen_step_n` (i.e. the step graph's output at the
+    `gen_step_n`-th autoregressive step, matching the C++ runner's
+    step-loop iteration at `step == gen_step_n - 1`).
+
+    Exercises the n_past > 0 path — the prompt-pass dumps only cover
+    n_past == 0, so without this the KV cache update code has zero
+    tensor-level coverage.
+
+    Greedy logic mirrors the C++ driver exactly: apply suppress_tokens
+    every step, apply begin_suppress_tokens at the first generated
+    token, argmax.
+    """
+    import torch
+
+    gc = model.generation_config
+    suppress = list(gc.suppress_tokens or [])
+    begin_suppress = list(gc.begin_suppress_tokens or [])
+    vocab = int(model.config.vocab_size)
+
+    decoder = model.model.decoder
+    current = list(prompt_ids)
+
+    def forward_last_logits(ids: list[int]):
+        inp = torch.tensor([ids], device=device, dtype=torch.long)
+        out = decoder(
+            input_ids=inp,
+            encoder_hidden_states=encoder_hidden,
+            use_cache=False,
+        )
+        return model.proj_out(out.last_hidden_state[0, -1, :])
+
+    with torch.inference_mode():
+        # Step 0: the prompt-pass already ran; redo its last-row logits
+        # here so we can apply the same suppress rules the C++ path
+        # applies before the argmax.
+        step_logits = forward_last_logits(current).clone()
+        for idx in suppress:
+            if 0 <= idx < vocab:
+                step_logits[idx] = float("-inf")
+        for idx in begin_suppress:
+            if 0 <= idx < vocab:
+                step_logits[idx] = float("-inf")
+        next_id = int(torch.argmax(step_logits).item())
+
+        # Steps 1..gen_step_n-1: append prev next_id, forward, suppress
+        # (no begin-suppress after the first generated token), argmax.
+        for _ in range(1, gen_step_n):
+            current.append(next_id)
+            step_logits = forward_last_logits(current).clone()
+            for idx in suppress:
+                if 0 <= idx < vocab:
+                    step_logits[idx] = float("-inf")
+            next_id = int(torch.argmax(step_logits).item())
+
+        # One more forward with [prompt + generated[0..gen_step_n-1]]
+        # so we capture the pre-argmax logits that would pick
+        # generated[gen_step_n]. This matches the C++ runner's
+        # step_db.out at step == gen_step_n - 1 after compute.
+        current.append(next_id)
+        inp = torch.tensor([current], device=device, dtype=torch.long)
+        out = decoder(
+            input_ids=inp,
+            encoder_hidden_states=encoder_hidden,
+            use_cache=False,
+        )
+        logits_final = model.proj_out(out.last_hidden_state[0, -1:, :])
+
+    name = f"dec.logits_raw.gen{gen_step_n}"
+    stage = f"decoder.logits_raw.gen{gen_step_n}"
+    a = to_np(logits_final)
+    print(
+        f"  {name}: shape={a.shape} "
+        f"min={a.min():.4e} max={a.max():.4e} mean={a.mean():.6e}"
+    )
+    write_dump(out_dir, name, a, source=source, stage=stage)
+
+
 def generate_transcript(
     *,
     model,
@@ -546,6 +634,16 @@ def cmd_decode(args: argparse.Namespace) -> int:
     )
     pred_token = processor.tokenizer.decode([pred_id])
     print(f"  first predicted token: id={pred_id} text={pred_token!r}")
+
+    dump_mid_generation(
+        model=model,
+        encoder_hidden=encoder_hidden,
+        prompt_ids=prompt_ids,
+        out_dir=out_dir,
+        source=source,
+        device=args.device,
+        gen_step_n=20,
+    )
 
     if not args.skip_transcript:
         transcript = generate_transcript(

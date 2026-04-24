@@ -104,6 +104,13 @@ Bucket classify_tensor(const std::string & name) {
     if (ends_with(name, ".pos_enc")) {
         return Bucket::Norm;
     }
+    // Whisper: encoder sinusoidal pos_emb (1500 x d_model) and decoder
+    // learned pos_emb (448 x d_model). Both are small and added directly
+    // to the residual stream every layer; quantizing them costs accuracy
+    // for negligible file-size savings. Keep at F32 across all presets.
+    if (name == "enc.pos_emb.weight" || name == "dec.pos_emb.weight") {
+        return Bucket::Norm;
+    }
     // Cohere: mel frontend buffers (filterbank + window) — stored as
     // F32 by the converter and consumed as-is by the mel stage.
     if (name == "frontend.mel_filterbank" || name == "frontend.window") {
@@ -217,21 +224,27 @@ ggml_type resolve_target_type(const Preset & preset,
         case Bucket::Linear: {
             // Attention output projection bumped per _M recipe. Cohere
             // and Parakeet name it "attn.linear_out.weight"; Qwen3-ASR
-            // names it "attn.out.weight" (encoder) or "attn.o.weight"
-            // (decoder). All three land in the same bump.
-            if (ends_with(name, "attn.linear_out.weight") ||
+            // and Whisper name it "attn.out.weight" (encoder); Qwen3-ASR
+            // also uses "attn.o.weight" (decoder). All land in the same
+            // bump. Whisper additionally has self_attn / cross_attn
+            // out projections in the decoder under those exact names.
+            const bool is_attn_out =
+                ends_with(name, "attn.linear_out.weight") ||
                 ends_with(name, "attn.out.weight") ||
-                ends_with(name, "attn.o.weight"))
-            {
-                return preset.linear_attn_out;
-            }
+                ends_with(name, "attn.o.weight");
+            ggml_type target = is_attn_out
+                ? preset.linear_attn_out
+                : preset.linear_main;
             // Fall back when inner dim doesn't divide the chosen
-            // quant's block size.
-            const int64_t blk = ggml_blck_size(preset.linear_main);
+            // quant's block size. Same rule for both linear_main and
+            // linear_attn_out — without it, e.g. whisper-tiny's
+            // d_model=384 attn.out.weight under Q6_K would land at
+            // Q6_K (block size 256) and the GGUF would refuse to load.
+            const int64_t blk = ggml_blck_size(target);
             if (blk > 1 && (ne0 % blk) != 0) {
                 return preset.linear_fallback;
             }
-            return preset.linear_main;
+            return target;
         }
     }
     return preset.norm; // unreachable

@@ -322,6 +322,15 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
 
+        # Whisper Stage 4 bringup: the C++ mel frontend is not yet
+        # implemented. The runner reads the reference mel from disk
+        # when TRANSCRIBE_WHISPER_MEL_FROM_REF is set, so the encoder
+        # path can be exercised end-to-end with bit-identical mel
+        # input. Drop this hook once the C++ frontend lands.
+        if args.family == "whisper":
+            ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
+            env["TRANSCRIBE_WHISPER_MEL_FROM_REF"] = str(ref_dir)
+
         cmd = [
             str(cli),
             "--backend", args.backend,
