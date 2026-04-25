@@ -56,15 +56,18 @@ Bridge validation (to be completed in Stage 2):
 Reference run:
 
 ```bash
-uv run --project scripts/envs/whisper scripts/validate.py ref \
-  --family whisper --variant whisper-tiny
+uv run scripts/validate.py ref --family whisper --variant whisper-tiny
 ```
 
 Reference dumps:
 
 ```bash
-uv run --project scripts/envs/whisper scripts/dump_reference_whisper.py \
-  --variant whisper-tiny
+uv run --project scripts/envs/whisper \
+  scripts/dump_reference_whisper_transformers.py decode \
+  --model openai/whisper-tiny \
+  --audio samples/jfk.wav \
+  --out build/validate/whisper/whisper-tiny/jfk/ref \
+  --torch-threads 1
 ```
 
 Conversion:
@@ -77,6 +80,59 @@ Validation:
 
 ```bash
 uv run scripts/validate.py all --family whisper --variant whisper-tiny
+```
+
+Manual long-form / no-speech parity check:
+
+```bash
+cmake --build build --target transcribe-cli
+
+printf '%s\n' \
+  samples/noise.wav \
+  samples/jobs-silence.wav \
+  samples/whole-earth.wav \
+  samples/love-loss.wav \
+  samples/death.wav \
+  samples/dots-full.wav \
+| build/bin/transcribe-cli -q \
+    --backend cpu \
+    --threads 1 \
+    -m models/whisper-tiny/whisper-tiny-F32.gguf \
+    --language en \
+    --timestamps segment \
+    --batch /dev/stdin \
+    --batch-jsonl
+```
+
+Expected first-order behavior for the manual check:
+
+- `samples/noise.wav` and `samples/jobs-silence.wav` produce empty text and no segments.
+- The longer Jobs speech excerpts produce segment-timestamp JSONL with coverage close to the input duration.
+- With `whisper-tiny-F32`, decoded text for these samples should match the pinned Transformers reference exactly when the reference is run with the same generation knobs.
+
+For Hugging Face long-form comparisons, build processor inputs with `truncation=False`. Without that flag, `WhisperProcessor` pads/trims to the normal 30-second window and the reference only evaluates the first chunk. The reference invocation used for this manual check is:
+
+```python
+inputs = processor(
+    pcm,
+    sampling_rate=16000,
+    return_tensors="pt",
+    return_attention_mask=True,
+    truncation=False,
+)
+generated = model.generate(
+    **inputs,
+    language="en",
+    task="transcribe",
+    return_timestamps=True,
+    compression_ratio_threshold=2.4,
+    logprob_threshold=-1.0,
+    no_speech_threshold=0.6,
+    temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    do_sample=False,
+    num_beams=1,
+)
+text = processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
 ```
 
 Benchmarks:
