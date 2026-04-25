@@ -71,7 +71,7 @@ def main() -> int:
     p.add_argument("--out", type=Path, default=None,
                    help="Output report file (default: auto)")
     p.add_argument("--backend",
-                   choices=("auto", "cpu", "metal", "vulkan"),
+                   choices=("auto", "cpu", "cpu_accel", "metal", "vulkan"),
                    default=None,
                    help="Compute backend (default: transcribe-cli default)")
     p.add_argument("--kv-type",

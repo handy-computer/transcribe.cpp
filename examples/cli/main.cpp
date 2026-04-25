@@ -118,7 +118,7 @@ void print_usage(const char * argv0) {
         "  -r, --repeat N        run N times per file (benchmark)\n"
         "  --threads N           CPU threads (default: all cores)\n"
         "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
-        "  --backend TYPE        compute backend: auto, cpu, metal, vulkan (default: auto)\n"
+        "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan (default: auto)\n"
         "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: auto)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
@@ -180,12 +180,13 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             const char * v = take_value(a.c_str());
             if (!v) return false;
             const std::string vs = v;
-            if      (vs == "auto")   out.backend = TRANSCRIBE_BACKEND_AUTO;
-            else if (vs == "cpu")    out.backend = TRANSCRIBE_BACKEND_CPU;
-            else if (vs == "metal")  out.backend = TRANSCRIBE_BACKEND_METAL;
-            else if (vs == "vulkan") out.backend = TRANSCRIBE_BACKEND_VULKAN;
+            if      (vs == "auto")      out.backend = TRANSCRIBE_BACKEND_AUTO;
+            else if (vs == "cpu")       out.backend = TRANSCRIBE_BACKEND_CPU;
+            else if (vs == "cpu_accel") out.backend = TRANSCRIBE_BACKEND_CPU_ACCEL;
+            else if (vs == "metal")     out.backend = TRANSCRIBE_BACKEND_METAL;
+            else if (vs == "vulkan")    out.backend = TRANSCRIBE_BACKEND_VULKAN;
             else {
-                std::fprintf(stderr, "error: --backend must be auto, cpu, metal, or vulkan\n");
+                std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, or vulkan\n");
                 return false;
             }
         } else if (a == "--timestamps") {

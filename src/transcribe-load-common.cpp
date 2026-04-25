@@ -120,17 +120,30 @@ transcribe_status init_backends(transcribe_backend_request requested,
     // values are a programming error on the caller's side, not a
     // fallback we want to tolerate.
     switch (requested) {
-    case TRANSCRIBE_BACKEND_CPU: {
-        // Strict CPU: primary is CPU, no ACCEL, no GPU. This is the
-        // only caller-visible way to guarantee primary_kind == Cpu
-        // even on machines where ggml has ACCEL (BLAS/AMX) available
-        // — which matters for the F16→F32 conv pointwise promotion
-        // and for any other CPU-keyed policy decision.
+    case TRANSCRIBE_BACKEND_CPU:
+    case TRANSCRIBE_BACKEND_CPU_ACCEL: {
+        // CPU primary. The CPU_ACCEL variant additionally layers the
+        // host-memory accelerators (BLAS/AMX/…) registered by ggml as
+        // GGML_BACKEND_DEVICE_TYPE_ACCEL onto the scheduler. Both
+        // variants set primary_kind == Cpu so CPU-keyed policy
+        // decisions (e.g. F16→F32 conv pointwise promotion) trigger
+        // identically. Strict CPU is the right choice for numerical
+        // reference runs and cross-platform determinism; CPU_ACCEL is
+        // for production CPU throughput on machines where the build
+        // included an accel backend (e.g. GGML_BLAS=ON).
+        //
+        // ggml requires the CPU backend to sit last in the scheduler
+        // list, so accel backends (when included) go in first.
+        const bool with_accel = (requested == TRANSCRIBE_BACKEND_CPU_ACCEL);
         ggml_backend_t cpu_be = init_cpu_backend(error_tag);
         if (cpu_be == nullptr) return TRANSCRIBE_ERR_BACKEND;
-        std::fprintf(stderr, "%s: using cpu backend (strict)\n", error_tag);
+        std::fprintf(stderr, "%s: using cpu backend (%s)\n",
+                     error_tag, with_accel ? "with accel" : "strict");
         out.primary      = cpu_be;
         out.primary_kind = BackendKind::Cpu;
+        if (with_accel) {
+            append_accel_backends(out.scheduler_list, error_tag);
+        }
         out.scheduler_list.push_back(cpu_be);
         return TRANSCRIBE_OK;
     }

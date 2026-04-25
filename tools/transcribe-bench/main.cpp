@@ -50,9 +50,11 @@ void print_usage(const char * argv0) {
         "  --json-out PATH    write result JSON here (default: stdout)\n"
         "  --quiet            suppress progress lines on stderr\n"
         "  --threads N        CPU threads (default 0 = library default)\n"
-        "  --backend KIND     request a specific backend: auto|cpu|metal|vulkan\n"
-        "                     (default auto). cpu is strict CPU — no GPU,\n"
-        "                     no BLAS/AMX.\n"
+        "  --backend KIND     request a specific backend:\n"
+        "                       auto|cpu|cpu_accel|metal|vulkan (default auto)\n"
+        "                     cpu is strict CPU (no GPU, no BLAS/AMX).\n"
+        "                     cpu_accel is CPU + host-memory accelerators\n"
+        "                       (BLAS/AMX) when the build includes them.\n"
         "  -h, --help         show this help\n",
         argv0);
 }
@@ -63,13 +65,14 @@ bool parse_backend_kind(const char *                   s,
                         transcribe_backend_request &   out)
 {
     if (s == nullptr) return false;
-    if (std::strcmp(s, "auto")   == 0) { out = TRANSCRIBE_BACKEND_AUTO;   return true; }
-    if (std::strcmp(s, "cpu")    == 0) { out = TRANSCRIBE_BACKEND_CPU;    return true; }
-    if (std::strcmp(s, "metal")  == 0) { out = TRANSCRIBE_BACKEND_METAL;  return true; }
-    if (std::strcmp(s, "vulkan") == 0) { out = TRANSCRIBE_BACKEND_VULKAN; return true; }
+    if (std::strcmp(s, "auto")      == 0) { out = TRANSCRIBE_BACKEND_AUTO;      return true; }
+    if (std::strcmp(s, "cpu")       == 0) { out = TRANSCRIBE_BACKEND_CPU;       return true; }
+    if (std::strcmp(s, "cpu_accel") == 0) { out = TRANSCRIBE_BACKEND_CPU_ACCEL; return true; }
+    if (std::strcmp(s, "metal")     == 0) { out = TRANSCRIBE_BACKEND_METAL;     return true; }
+    if (std::strcmp(s, "vulkan")    == 0) { out = TRANSCRIBE_BACKEND_VULKAN;    return true; }
     std::fprintf(stderr,
         "error: --backend value '%s' not recognized "
-        "(expected one of: auto, cpu, metal, vulkan)\n", s);
+        "(expected one of: auto, cpu, cpu_accel, metal, vulkan)\n", s);
     return false;
 }
 

@@ -19,9 +19,12 @@
 //     reflect path; reflect is what produces working transcriptions.
 //     Trust the ONNX, ignore the source on this one point.
 //
-//   * STFT in fp64. Matches the ONNX which casts the input to f64
-//     before STFT and back to f32 after. Eliminates precision drift
-//     against the golden tensor.
+//   * STFT in fp32 for the mixed-radix path (whisper, n_fft=400) and
+//     fp64 for the radix-2 vDSP path (parakeet/cohere, n_fft=512).
+//     The fp32 mixed-radix matches whisper.cpp's choice and was
+//     verified WER-neutral on test-clean-300 (5.83% vs 5.84% fp64).
+//     vDSP's fp64 stays because it's already fast (Accelerate SIMD)
+//     and the precision is free.
 //
 //   * Window: symmetric Hann length win_length, zero-padded to n_fft.
 //     The NeMo source explicitly passes periodic=False
@@ -221,35 +224,33 @@ const SinCosLut & sin_cos_lut() {
 
 // Naive O(N^2) DFT leaf for the mixed-radix path. Used when N hits an
 // odd factor during recursive halving (e.g. N=400 → 200 → 100 → 50 → 25
-// odd → leaf). Uses the shared sin_cos_lut() so trig calls collapse to
-// table lookups.
-void dft_naive(const double * in, int N, double * out) {
+// odd → leaf). Uses the shared fp64 sin_cos_lut() so trig calls collapse
+// to table lookups; downcasts to fp32 on read.
+void dft_naive_f32(const float * in, int N, float * out) {
     const auto & lut = sin_cos_lut();
-    const int    stride = kSinCosLut / N;  // assumes N divides kSinCosLut
+    const int    stride = kSinCosLut / N;
 
     if (stride * N == kSinCosLut) {
         for (int k = 0; k < N; ++k) {
-            double re = 0.0;
-            double im = 0.0;
+            float re = 0.0f;
+            float im = 0.0f;
             for (int n = 0; n < N; ++n) {
                 const int idx = (k * n * stride) % kSinCosLut;
-                re += in[n] * lut.cos_vals[idx];
-                im -= in[n] * lut.sin_vals[idx];
+                re += in[n] * static_cast<float>(lut.cos_vals[idx]);
+                im -= in[n] * static_cast<float>(lut.sin_vals[idx]);
             }
             out[2 * k    ] = re;
             out[2 * k + 1] = im;
         }
         return;
     }
-
-    // Fallback for N that doesn't evenly divide kSinCosLut.
     for (int k = 0; k < N; ++k) {
-        double re = 0.0;
-        double im = 0.0;
+        float re = 0.0f;
+        float im = 0.0f;
         for (int n = 0; n < N; ++n) {
-            const double ang = -2.0 * M_PI *
-                static_cast<double>(k) * static_cast<double>(n) /
-                static_cast<double>(N);
+            const float ang = static_cast<float>(-2.0 * M_PI) *
+                static_cast<float>(k) * static_cast<float>(n) /
+                static_cast<float>(N);
             re += in[n] * std::cos(ang);
             im += in[n] * std::sin(ang);
         }
@@ -259,65 +260,57 @@ void dft_naive(const double * in, int N, double * out) {
 }
 
 // Cooley-Tukey mixed-radix FFT. Recursively halves while N is even and
-// falls back to naive DFT on odd leaves. Lifted directly from
+// falls back to naive DFT on odd leaves. Algorithm lifted from
 // whisper.cpp (src/whisper.cpp::fft); lines up with our need to STFT
 // Whisper's n_fft=400 = 2^4 * 5^2 efficiently (25-point DFT leaves,
 // four levels of radix-2 butterflies above).
 //
-// Buffer contract (lifted from whisper.cpp):
-//   in    : 2*N doubles. First N hold the real input; second N are
+// Buffer contract:
+//   in    : 2*N floats. First N hold the real input; second N are
 //           used as scratch for the even/odd split at this level.
-//   out   : 8*N doubles. The top-level result lands in the first 2*N;
+//   out   : 8*N floats. The top-level result lands in the first 2*N;
 //           recursion uses the remainder as intermediate output.
-void mixed_radix_fft(double * in, int N, double * out) {
+void mixed_radix_fft_f32(float * in, int N, float * out) {
     if (N == 1) {
         out[0] = in[0];
-        out[1] = 0.0;
+        out[1] = 0.0f;
         return;
     }
     if (N & 1) {
-        dft_naive(in, N, out);
+        dft_naive_f32(in, N, out);
         return;
     }
-
     const int half_N = N / 2;
+    float * even = in + N;
+    for (int i = 0; i < half_N; ++i) even[i] = in[2 * i];
+    float * even_fft = out + 2 * N;
+    mixed_radix_fft_f32(even, half_N, even_fft);
 
-    // Even/odd split into the scratch half of `in`.
-    double * even = in + N;
-    for (int i = 0; i < half_N; ++i) {
-        even[i] = in[2 * i];
-    }
-    double * even_fft = out + 2 * N;
-    mixed_radix_fft(even, half_N, even_fft);
-
-    double * odd = even;  // safe to reuse — `even` is no longer needed
-    for (int i = 0; i < half_N; ++i) {
-        odd[i] = in[2 * i + 1];
-    }
-    double * odd_fft = even_fft + N;
-    mixed_radix_fft(odd, half_N, odd_fft);
+    float * odd = even;
+    for (int i = 0; i < half_N; ++i) odd[i] = in[2 * i + 1];
+    float * odd_fft = even_fft + N;
+    mixed_radix_fft_f32(odd, half_N, odd_fft);
 
     const auto & lut = sin_cos_lut();
     const int    step = kSinCosLut / N;
     const bool   use_lut = (step * N == kSinCosLut);
-
     for (int k = 0; k < half_N; ++k) {
-        double w_re, w_im;
+        float w_re, w_im;
         if (use_lut) {
             const int idx = k * step;
-            w_re =  lut.cos_vals[idx];
-            w_im = -lut.sin_vals[idx];
+            w_re =  static_cast<float>(lut.cos_vals[idx]);
+            w_im = -static_cast<float>(lut.sin_vals[idx]);
         } else {
-            const double ang = -2.0 * M_PI * k / static_cast<double>(N);
+            const float ang = static_cast<float>(-2.0 * M_PI * k / N);
             w_re = std::cos(ang);
             w_im = std::sin(ang);
         }
-        const double re_odd = odd_fft[2 * k    ];
-        const double im_odd = odd_fft[2 * k + 1];
-        out[2 * k    ]                 = even_fft[2 * k    ] + w_re * re_odd - w_im * im_odd;
-        out[2 * k + 1]                 = even_fft[2 * k + 1] + w_re * im_odd + w_im * re_odd;
-        out[2 * (k + half_N)    ]      = even_fft[2 * k    ] - w_re * re_odd + w_im * im_odd;
-        out[2 * (k + half_N) + 1]      = even_fft[2 * k + 1] - w_re * im_odd - w_im * re_odd;
+        const float re_odd = odd_fft[2 * k    ];
+        const float im_odd = odd_fft[2 * k + 1];
+        out[2 * k    ]            = even_fft[2 * k    ] + w_re * re_odd - w_im * im_odd;
+        out[2 * k + 1]            = even_fft[2 * k + 1] + w_re * im_odd + w_im * re_odd;
+        out[2 * (k + half_N)    ] = even_fft[2 * k    ] - w_re * re_odd + w_im * im_odd;
+        out[2 * (k + half_N) + 1] = even_fft[2 * k + 1] - w_re * im_odd - w_im * re_odd;
     }
 }
 
@@ -528,22 +521,28 @@ transcribe_status MelFrontend::compute(
         // on the odd leaf. At N=400 this is ~16 leaf DFTs of size 25
         // (~10k ops) plus butterfly work at four levels, versus 160k
         // ops for the old O(N²) direct-DFT path per frame.
+        //
+        // fp32 throughout: WER-neutral on librispeech test-clean-300
+        // (5.83% vs 5.84% fp64) and ~40% faster than the fp64 path.
+        // Worst-case mel drift vs HF reference: 3.4e-4 absolute (rel
+        // 2.5e-4) on the german worst case — well below encoder weight
+        // quantization noise.
         auto worker = [&](int tid) {
-            std::vector<double> fft_in(2 * static_cast<size_t>(n_fft), 0.0);
-            std::vector<double> fft_out(8 * static_cast<size_t>(n_fft), 0.0);
+            std::vector<float> fft_in(2 * static_cast<size_t>(n_fft), 0.0f);
+            std::vector<float> fft_out(8 * static_cast<size_t>(n_fft), 0.0f);
             for (int t = tid; t < n_frames; t += stft_threads) {
                 const size_t start =
                     static_cast<size_t>(t) * static_cast<size_t>(hop);
                 for (int n = 0; n < n_fft; ++n) {
-                    fft_in[n] = padded[start + n] * window_[n];
+                    fft_in[n] = static_cast<float>(padded[start + n] * window_[n]);
                 }
-                mixed_radix_fft(fft_in.data(), n_fft, fft_out.data());
+                mixed_radix_fft_f32(fft_in.data(), n_fft, fft_out.data());
                 float * pwr_row =
                     power.data() + static_cast<size_t>(t) * n_freq;
                 for (int k = 0; k < n_freq; ++k) {
-                    const double re = fft_out[2 * k    ];
-                    const double im = fft_out[2 * k + 1];
-                    pwr_row[k] = static_cast<float>(re * re + im * im);
+                    const float re = fft_out[2 * k    ];
+                    const float im = fft_out[2 * k + 1];
+                    pwr_row[k] = re * re + im * im;
                 }
             }
         };

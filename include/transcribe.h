@@ -263,6 +263,17 @@ struct transcribe_context;
  *         for exercising the pure-CPU kernels under test. Always
  *         succeeds.
  *
+ * CPU_ACCEL  CPU primary plus host-memory accelerators (BLAS/AMX/…
+ *            whatever ggml registers as ACCEL). primary_kind stays
+ *            Cpu so any CPU-keyed policy still triggers, but mat-mul-
+ *            shaped graph nodes that fit the accel backend's gates
+ *            (large F32 src1, ne ≥ 32) get dispatched there. Useful
+ *            when GPU is unavailable or undesired but you still want
+ *            production-grade CPU throughput. Requires the build to
+ *            include the relevant accel backend (e.g. GGML_BLAS=ON).
+ *            Falls back to plain CPU semantics if no accel device is
+ *            registered. Always succeeds.
+ *
  * METAL   Require the Metal backend. Returns TRANSCRIBE_ERR_BACKEND
  *         if Metal is not available in this build. Host-memory
  *         accelerators are still layered on when present.
@@ -275,10 +286,11 @@ struct transcribe_context;
  * can query transcribe_model_backend() after load.
  */
 typedef enum {
-    TRANSCRIBE_BACKEND_AUTO   = 0,
-    TRANSCRIBE_BACKEND_CPU    = 1,
-    TRANSCRIBE_BACKEND_METAL  = 2,
-    TRANSCRIBE_BACKEND_VULKAN = 3,
+    TRANSCRIBE_BACKEND_AUTO      = 0,
+    TRANSCRIBE_BACKEND_CPU       = 1,
+    TRANSCRIBE_BACKEND_METAL     = 2,
+    TRANSCRIBE_BACKEND_VULKAN    = 3,
+    TRANSCRIBE_BACKEND_CPU_ACCEL = 4,
 } transcribe_backend_request;
 
 /*

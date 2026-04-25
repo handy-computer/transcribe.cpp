@@ -560,8 +560,12 @@ def cmd_mel(args: argparse.Namespace) -> int:
         ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
         with tempfile.TemporaryDirectory() as td:
             tol = Path(td) / "mel-tolerances.json"
+            # fp32 STFT path: worst observed drift on librispeech-style
+            # speech is 3.4e-4 max_abs (german) at peak signal ~1.4 →
+            # ~2.5e-4 relative. 5e-4 leaves headroom for new clips
+            # without crossing into territory that would shift WER.
             tol.write_text(json.dumps({
-                "enc.mel.in": {"max_abs": 1e-4, "mean_abs": 1e-5},
+                "enc.mel.in": {"max_abs": 5e-4, "mean_abs": 5e-6},
             }) + "\n")
             cmp_cmd = [
                 "uv", "run", str(compare_script),
@@ -739,7 +743,7 @@ def main() -> int:
     sp_cpp.add_argument("--gguf", help="GGUF path (overrides auto-detection)")
     sp_cpp.add_argument(
         "--backend", default="cpu",
-        choices=["auto", "cpu", "metal", "vulkan"],
+        choices=["auto", "cpu", "cpu_accel", "metal", "vulkan"],
         help="Compute backend (default: cpu)",
     )
     sp_cpp.set_defaults(func=cmd_cpp)
@@ -750,7 +754,7 @@ def main() -> int:
     sp_mel.add_argument("--gguf", help="GGUF path (overrides auto-detection)")
     sp_mel.add_argument(
         "--backend", default="cpu",
-        choices=["auto", "cpu", "metal", "vulkan"],
+        choices=["auto", "cpu", "cpu_accel", "metal", "vulkan"],
         help="Compute backend (default: cpu)",
     )
     sp_mel.set_defaults(func=cmd_mel)
@@ -769,7 +773,7 @@ def main() -> int:
     add_common(sp_all)
     sp_all.add_argument("--model", help="HF model ID or local path")
     sp_all.add_argument("--gguf", help="GGUF path")
-    sp_all.add_argument("--backend", default="cpu", choices=["auto", "cpu", "metal", "vulkan"])
+    sp_all.add_argument("--backend", default="cpu", choices=["auto", "cpu", "cpu_accel", "metal", "vulkan"])
     sp_all.add_argument(
         "--report", action="store_true",
         help="Emit a report bundle after compare completes.",
