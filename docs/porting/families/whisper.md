@@ -110,6 +110,18 @@ Expected first-order behavior for the manual check:
 - The longer Jobs speech excerpts produce segment-timestamp JSONL with coverage close to the input duration.
 - With `whisper-tiny-F32`, decoded text for these samples should match the pinned Transformers reference exactly when the reference is run with the same generation knobs.
 
+A scripted long-form parity regression (Stage 3 — `condition_on_prev_tokens` and prev-context stitching) is available:
+
+```bash
+uv run --project scripts/envs/whisper \
+  scripts/whisper_long_form_parity.py \
+    --model openai/whisper-tiny \
+    --gguf models/whisper-tiny/whisper-tiny-F32.gguf \
+    --audio samples/whole-earth.wav
+```
+
+It runs HF transformers and `transcribe-cli` on the same clip with `return_timestamps=True` and `condition_on_prev_tokens=True`, then asserts WER ≤ 0.05 between the two transcripts. As of Stage 3 ship, `whole-earth.wav` (~84 s, 3 chunks) and `love-loss.wav` (~197 s, 7 chunks) both match HF at WER 0.0000 with identical segment counts, exercising the prev-context window assembly and the `skip_ending_double_timestamps` rule. Pass `--no-condition` to test the no-prev-tokens path.
+
 For Hugging Face long-form comparisons, build processor inputs with `truncation=False`. Without that flag, `WhisperProcessor` pads/trims to the normal 30-second window and the reference only evaluates the first chunk. The reference invocation used for this manual check is:
 
 ```python

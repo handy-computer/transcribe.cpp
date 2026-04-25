@@ -28,12 +28,12 @@ void apply_family_invariants(transcribe_capabilities & caps) {
 
     // Stage 2 lights up temperature fallback + long-form decoding +
     // per-chunk decoding trace. Stage 1 already shipped cancellation
-    // (abort callback between chunks and between decode steps). The
-    // initial_prompt + condition_on_prev_tokens path lights up in
-    // Stage 3; until then we keep supports_initial_prompt=false so
-    // callers that key off capability bits don't pass a prompt that
-    // would silently be ignored.
-    caps.supports_initial_prompt       = false;
+    // (abort callback between chunks and between decode steps). Stage 3
+    // wires initial_prompt (text or pre-tokenized) and
+    // condition_on_prev_tokens (cross-chunk coherence under
+    // <|startofprev|>) — both surfaces are reachable through
+    // transcribe_whisper_params.
+    caps.supports_initial_prompt       = true;
     caps.supports_temperature_fallback = true;
     caps.supports_long_form            = true;
     caps.supports_cancellation         = true;

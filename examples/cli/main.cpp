@@ -97,6 +97,13 @@ struct cli_args {
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
     transcribe_backend_request backend = TRANSCRIBE_BACKEND_AUTO;
     transcribe_timestamp_kind timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
+
+    // Whisper-family knobs. Ignored for non-Whisper models.
+    std::string initial_prompt;                // --initial-prompt TEXT
+    bool        whisper_set                  = false;
+    bool        condition_on_prev_tokens     = false; // --condition-on-prev-tokens
+    enum transcribe_whisper_prompt_condition prompt_condition =
+        TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;       // --prompt-condition first|all
 };
 
 void print_usage(const char * argv0) {
@@ -115,6 +122,9 @@ void print_usage(const char * argv0) {
         "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: auto)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
+        "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"
+        "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
+        "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
 }
@@ -198,6 +208,26 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             out.batch_file = v;
         } else if (a == "--batch-jsonl") {
             out.batch_jsonl = true;
+        } else if (a == "--initial-prompt") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.initial_prompt = v;
+            out.whisper_set    = true;
+        } else if (a == "--condition-on-prev-tokens") {
+            out.condition_on_prev_tokens = true;
+            out.whisper_set              = true;
+        } else if (a == "--prompt-condition") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            const std::string vs = v;
+            if      (vs == "first") out.prompt_condition = TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;
+            else if (vs == "all")   out.prompt_condition = TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS;
+            else {
+                std::fprintf(stderr,
+                             "error: --prompt-condition must be first or all\n");
+                return false;
+            }
+            out.whisper_set = true;
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -324,6 +354,18 @@ int main(int argc, char ** argv) {
         if (!args.language.empty()) rp.language = args.language.c_str();
         rp.timestamps = args.timestamps;
 
+        // Whisper extension. Allocated outside rp's scope so its bytes
+        // outlive the per-file loop below.
+        struct transcribe_whisper_params wp = transcribe_whisper_default_params();
+        if (args.whisper_set) {
+            if (!args.initial_prompt.empty()) {
+                wp.initial_prompt = args.initial_prompt.c_str();
+            }
+            wp.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            wp.prompt_condition         = args.prompt_condition;
+            rp.whisper                  = &wp;
+        }
+
         // Emit a batch header line once, before any per-file output. Carries
         // the one-shot load time so downstream WER tooling can record it
         // without parsing stderr. Per-file lines follow on subsequent lines.
@@ -444,6 +486,16 @@ int main(int argc, char ** argv) {
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
         rp.timestamps = args.timestamps;
+
+        struct transcribe_whisper_params wp = transcribe_whisper_default_params();
+        if (args.whisper_set) {
+            if (!args.initial_prompt.empty()) {
+                wp.initial_prompt = args.initial_prompt.c_str();
+            }
+            wp.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            wp.prompt_condition         = args.prompt_condition;
+            rp.whisper                  = &wp;
+        }
 
         // --repeat N runs transcribe_run() N times for steady-state
         // perf measurements.

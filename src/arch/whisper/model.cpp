@@ -1028,6 +1028,159 @@ transcribe_status whisper_run(
             ? params->whisper : &default_wp;
     std::mt19937 rng(wp->seed != 0 ? wp->seed : std::random_device{}());
 
+    // ===== Stage 3: prompt + condition_on_prev_tokens setup =============
+    //
+    // HF generation_whisper.py:1743-1745 raises ValueError when
+    // prompt_condition_type=="all-segments" without
+    // condition_on_prev_tokens=True. Mirror as INVALID_ARG before any
+    // compute runs.
+    if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS &&
+        !wp->condition_on_prev_tokens)
+    {
+        std::fprintf(stderr,
+                     "whisper run: prompt_condition=ALL_SEGMENTS requires "
+                     "condition_on_prev_tokens=true (HF parity)\n");
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Resolve <|startofprev|> id. The converter writes
+    // stt.whisper.prev_sot_token_id into the GGUF; tokenizer fallback
+    // covers older artifacts that pre-date that key.
+    int32_t prev_sot_id = cm->hparams.prev_sot_token_id;
+    if (prev_sot_id < 0) {
+        prev_sot_id = cm->tok.find("<|startofprev|>");
+    }
+    const bool prompt_requested =
+        (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) ||
+        (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0');
+    if (prev_sot_id < 0 &&
+        (prompt_requested || wp->condition_on_prev_tokens))
+    {
+        std::fprintf(stderr,
+                     "whisper run: model has no <|startofprev|> token; "
+                     "initial_prompt / condition_on_prev_tokens unavailable\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // Resolve initial prompt → text-only token ids (no <|startofprev|>;
+    // the library prepends it). Two input paths:
+    //
+    //   prompt_tokens: caller-owned bytes used verbatim. Caller must
+    //     supply only the text-side tokens — we add <|startofprev|>.
+    //
+    //   initial_prompt (string): tokenize HF's get_prompt_ids form
+    //     ("<|startofprev|>" + " " + initial_prompt.strip()) and reject
+    //     any special token (id >= eos_id) that appears in the text
+    //     tokens, mirroring tokenization_whisper.py:716. We feed the
+    //     leading-space-stripped form through the GPT-2 BPE encoder
+    //     (which doesn't itself emit specials), so only special tokens
+    //     present literally in user text would surface here.
+    const int max_prev_cap = wp->max_prev_context_tokens > 0
+                                 ? wp->max_prev_context_tokens
+                                 : (cm->hparams.dec_max_target_positions / 2 - 1);
+    std::vector<int32_t> prompt_text_ids;
+    if (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) {
+        // Caller-owned bytes used verbatim. The library prepends
+        // <|startofprev|>, so a leading prev_sot id from the caller
+        // would double-prepend — surface as INVALID_ARG so the
+        // mistake is caught immediately rather than silently producing
+        // a malformed prefix. (Header documents this contract;
+        // runtime check makes it observable.)
+        if (prev_sot_id >= 0 && wp->prompt_tokens[0] == prev_sot_id) {
+            std::fprintf(stderr,
+                         "whisper run: prompt_tokens must not include "
+                         "<|startofprev|> (id %d) at index 0; the library "
+                         "prepends it. See transcribe_whisper_params docs.\n",
+                         prev_sot_id);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        prompt_text_ids.assign(wp->prompt_tokens,
+                               wp->prompt_tokens + wp->n_prompt_tokens);
+    } else if (wp->initial_prompt != nullptr &&
+               wp->initial_prompt[0] != '\0')
+    {
+        std::string s(wp->initial_prompt);
+        auto issp = [](char c) {
+            return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+        };
+        size_t a = 0, b = s.size();
+        while (a < b && issp(s[a])) ++a;
+        while (b > a && issp(s[b - 1])) --b;
+        if (b > a) {
+            std::string text(" ");
+            text.append(s.data() + a, b - a);
+
+            // Pre-check for special-token literals (`<|...|>`) before
+            // BPE-encoding. HF's get_prompt_ids relies on the
+            // tokenizer's added-token recognition to surface specials
+            // as single ids and rejects any with id >=
+            // all_special_ids[0] (== eos_id). Our gpt-2 BPE encoder
+            // doesn't recognize specials, so without this scan a
+            // literal "<|en|>" in user text would silently BPE-encode
+            // byte-by-byte and slip through. Mirror HF's intent by
+            // checking each "<|...|>" substring against the vocab
+            // directly.
+            for (size_t i = 0; i + 1 < text.size(); ) {
+                if (text[i] == '<' && text[i + 1] == '|') {
+                    const size_t end = text.find("|>", i + 2);
+                    if (end != std::string::npos) {
+                        const size_t close = end + 2;
+                        std::string piece = text.substr(i, close - i);
+                        const int id = cm->tok.find(piece);
+                        if (id >= eos_id) {
+                            std::fprintf(stderr,
+                                         "whisper run: initial_prompt contains "
+                                         "disallowed special token \"%s\" (id %d)\n",
+                                         piece.c_str(), id);
+                            return TRANSCRIBE_ERR_INVALID_ARG;
+                        }
+                        i = close;
+                        continue;
+                    }
+                }
+                ++i;
+            }
+
+            if (cm->tok.encode(text, prompt_text_ids) != TRANSCRIBE_OK) {
+                std::fprintf(stderr,
+                             "whisper run: tokenizer.encode failed on "
+                             "initial_prompt\n");
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            for (int32_t id : prompt_text_ids) {
+                if (id >= eos_id) {
+                    std::fprintf(stderr,
+                                 "whisper run: initial_prompt contains "
+                                 "disallowed special token id %d\n", id);
+                    return TRANSCRIBE_ERR_INVALID_ARG;
+                }
+            }
+        }
+    }
+    // Cap prompt tokens to max_prev_cap (left-truncate, keep most-recent).
+    if (static_cast<int>(prompt_text_ids.size()) > max_prev_cap) {
+        prompt_text_ids.erase(prompt_text_ids.begin(),
+                              prompt_text_ids.end() - max_prev_cap);
+    }
+
+    // HF current_segments[0]. Store history as segment token slices,
+    // not one flattened vector, because _pad_to_max_length applies
+    // skip_ending_double_timestamps to each segment independently.
+    // For "first-segment" the prompt sits at the head of the history;
+    // for "all-segments" the history starts empty and the prompt is
+    // prepended per-chunk as the BOS.
+    std::vector<std::vector<int32_t>> prev_history_segments;
+    if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT &&
+        !prompt_text_ids.empty())
+    {
+        prev_history_segments.push_back(prompt_text_ids);
+    }
+
+    // Per-chunk decision; HF auto-disables on the previous chunk's hot
+    // accepted temperature (>= 0.5) per generation_whisper.py:1090-1093.
+    // Initialize to the user knob; flip per accepted tier at chunk end.
+    bool do_condition_on_prev_tokens = wp->condition_on_prev_tokens;
+
     int seek = 0;
     while (seek < total_mel_frames) {
         if (cc->poll_abort()) {
@@ -1125,9 +1278,61 @@ transcribe_status whisper_run(
             return TRANSCRIBE_ERR_GGUF;
         }
 
-        // Prompt for this chunk: [SOT, lang, task, notimestamps?]
+        // ===== Stage 3: per-chunk prefix assembly =====================
+        //
+        // Mirrors HF generation_whisper.py:_prepare_decoder_input_ids
+        // (1853-1918). The decoder input is prev_tokens + init_tokens:
+        //
+        //   if do_condition_on_prev_tokens AND history non-empty:
+        //     prev_tokens = bos + history[-cut_off:]
+        //       bos = [<|startofprev|>, prompt_text_ids...] for ALL_SEGMENTS
+        //       bos = [<|startofprev|>] for FIRST_SEGMENT
+        //     skip_ending_double_timestamps: if history's last two ids are
+        //     both timestamps, drop the last one (PR #34537 / #35750).
+        //   elif initial prompt is set:
+        //     prev_tokens = [<|startofprev|>, prompt_text_ids...] (every chunk)
+        //   else:
+        //     prev_tokens = empty (Stage 2 behavior)
+        std::vector<int32_t> prev_tokens;
+        if (do_condition_on_prev_tokens && !prev_history_segments.empty() &&
+            prev_sot_id >= 0)
+        {
+            prev_tokens.push_back(prev_sot_id);
+            if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS &&
+                !prompt_text_ids.empty())
+            {
+                prev_tokens.insert(prev_tokens.end(),
+                                   prompt_text_ids.begin(),
+                                   prompt_text_ids.end());
+            }
+            std::vector<int32_t> hist;
+            for (const auto & seg : prev_history_segments) {
+                size_t n = seg.size();
+                if (n > 2 && token_is_timestamp(seg[n - 2])) {
+                    // HF _pad_to_max_length(...,
+                    // skip_ending_double_timestamps=True) drops the
+                    // last token from any segment whose penultimate
+                    // token is a timestamp.
+                    --n;
+                }
+                hist.insert(hist.end(), seg.begin(), seg.begin() + n);
+            }
+            const int cap = std::min<int>(static_cast<int>(hist.size()),
+                                          max_prev_cap);
+            prev_tokens.insert(prev_tokens.end(),
+                               hist.end() - cap, hist.end());
+        } else if (!prompt_text_ids.empty() && prev_sot_id >= 0) {
+            prev_tokens.push_back(prev_sot_id);
+            prev_tokens.insert(prev_tokens.end(),
+                               prompt_text_ids.begin(),
+                               prompt_text_ids.end());
+        }
+
+        // Prefix for this chunk: prev_tokens + [SOT, lang, task, notimestamps?]
         std::vector<int32_t> prompt_ids;
-        prompt_ids.reserve(4);
+        prompt_ids.reserve(prev_tokens.size() + 4);
+        prompt_ids.insert(prompt_ids.end(),
+                          prev_tokens.begin(), prev_tokens.end());
         prompt_ids.push_back(cm->hparams.decoder_start_token_id);
         prompt_ids.push_back(lang_token);
         prompt_ids.push_back(task_token);
@@ -1135,6 +1340,24 @@ transcribe_status whisper_run(
             prompt_ids.push_back(cm->hparams.no_timestamps_token_id);
         }
         const int seq_len = static_cast<int>(prompt_ids.size());
+
+        // Position of the SOT token within the prefix. Used to read the
+        // no-speech logits row from the prompt-pass (HF's
+        // begin_index - start_of_trans_offset == len(prev_tokens)).
+        const int sot_index = static_cast<int>(prev_tokens.size());
+
+        // Guard: prefix + 1 generated token must fit in the decoder
+        // self-attention window. With max_target_positions=448 and a
+        // maxed prev (224) + init (4) prefix this is 228 — plenty. A
+        // pathological caller passing prompt_tokens > 444 would land
+        // here.
+        if (seq_len + 1 > static_cast<int>(n_ctx_decoder)) {
+            std::fprintf(stderr,
+                         "whisper run: prefix length %d exceeds decoder "
+                         "context %lld\n",
+                         seq_len, static_cast<long long>(n_ctx_decoder));
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
 
         // Per-chunk generated state.
         std::vector<int32_t> generated_ids;
@@ -1542,8 +1765,8 @@ transcribe_status whisper_run(
 
                 const size_t row_bytes = static_cast<size_t>(vocab_size) * sizeof(float);
 
-                // Capture no_speech_prob from the RAW SOT-position row
-                // (row 0), matching HF WhisperNoSpeechDetection semantics
+                // Capture no_speech_prob from the RAW SOT-position row,
+                // matching HF WhisperNoSpeechDetection semantics
                 // (transformers generation/logits_process.py:2095-2115):
                 // on the first generated-token step, when
                 // start_of_trans_offset > 1 — which is always our case
@@ -1551,11 +1774,10 @@ transcribe_status whisper_run(
                 // notimestamps]) — HF reruns the model on the full
                 // decoder prefix and indexes
                 //   logits[:, begin_index - start_of_trans_offset]
-                // which collapses to logits[:, 0] for the no-prev-context
-                // Stage-2 prefix layout. Row 0 is the SOT position; its
-                // next-token distribution is the one HF evaluates for
-                // no-speech probability (predicting the first token given
-                // only the SOT).
+                // which collapses to logits[:, sot_index] where sot_index
+                // is the position of <|startoftranscript|> within the
+                // prefix. With Stage 3 prev tokens this is len(prev_tokens);
+                // with no prev tokens it's 0 (matches the Stage 2 capture).
                 //
                 // Tier 0 only — matches HF's one-shot capture. Read the
                 // raw SOT row into a temporary buffer so suppress /
@@ -1568,8 +1790,10 @@ transcribe_status whisper_run(
                 {
                     std::vector<float> sot_logits(
                         static_cast<size_t>(vocab_size));
-                    ggml_backend_tensor_get(db.dumps.logits_raw,
-                                            sot_logits.data(), 0, row_bytes);
+                    ggml_backend_tensor_get(
+                        db.dumps.logits_raw, sot_logits.data(),
+                        row_bytes * static_cast<size_t>(sot_index),
+                        row_bytes);
                     float max_l = -std::numeric_limits<float>::infinity();
                     for (auto l : sot_logits) {
                         if (std::isfinite(l) && l > max_l) max_l = l;
@@ -1792,6 +2016,19 @@ transcribe_status whisper_run(
             trace.n_fallbacks         = accepted_n_fallbacks;
             cc->chunk_traces.push_back(trace);
         }
+
+        // Stage 3 — condition_on_prev_tokens gate for the NEXT chunk.
+        //
+        // HF generation_whisper.py:1090-1093 sets:
+        //   is_low_temperature = temperature is None or temperature < 0.5
+        //   do_condition[i] = condition_on_prev_tokens AND is_low_temperature
+        // Hot tiers (>= 0.5) are presumed to have hallucinated, so the
+        // next chunk forgoes the prev-context window to avoid immediate
+        // propagation. The history itself is updated after
+        // _retrieve_segment below, because HF carries only the segment
+        // tokens that survive that slicing step.
+        do_condition_on_prev_tokens =
+            wp->condition_on_prev_tokens && (accepted_T < 0.5f);
     } else {
         // -------------------------------------------------------------
         // Non-cached path (debug escape hatch, TRANSCRIBE_WHISPER_NO_KV=1).
@@ -1961,6 +2198,7 @@ transcribe_status whisper_run(
 
         const int gn = static_cast<int>(generated_ids.size());
         int segment_offset_frames = seek_num_frames;
+        std::vector<std::vector<int32_t>> prev_chunk_segments;
 
         // Collect indices where generated_ids[i] and [i+1] are both
         // timestamps. slices[k] = i+1 (one past the first ts of the
@@ -2029,6 +2267,9 @@ transcribe_status whisper_run(
                         cc->segments.push_back(std::move(seg));
                     }
                 }
+                prev_chunk_segments.emplace_back(
+                    generated_ids.begin() + last_slice,
+                    generated_ids.begin() + current_slice);
 
                 last_slice = current_slice;
             }
@@ -2067,7 +2308,26 @@ transcribe_status whisper_run(
                     cc->segments.push_back(std::move(seg));
                 }
             }
+            if (gn > 0) {
+                prev_chunk_segments.emplace_back(generated_ids.begin(),
+                                                 generated_ids.end());
+            }
             segment_offset_frames = seek_num_frames;
+        }
+
+        // Stage 3 — update prev-context history for later chunks.
+        //
+        // HF appends the `segments` returned by _retrieve_segment to
+        // current_segments, then _prepare_decoder_input_ids builds the
+        // prev window from those segment tokens. In the closed-pair
+        // branch, _retrieve_segment intentionally discards unfinished
+        // tail tokens after the last completed timestamp pair; carrying
+        // accepted_generated_ids directly would leak that discarded
+        // tail into the next prompt and diverge from HF.
+        if (!no_speech_fired_this_chunk && !prev_chunk_segments.empty()) {
+            prev_history_segments.insert(prev_history_segments.end(),
+                                         prev_chunk_segments.begin(),
+                                         prev_chunk_segments.end());
         }
 
         all_text_ids.insert(all_text_ids.end(),

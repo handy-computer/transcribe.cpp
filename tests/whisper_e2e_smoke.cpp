@@ -97,13 +97,14 @@ int main() {
         CHECK(caps->n_languages > 0);
         CHECK(caps->languages != nullptr);
 
-        // Stage 2 capability surface. Cancellation + temperature
-        // fallback + long-form are all live; initial_prompt waits for
-        // Stage 3 when <|startofprev|> plumbing lands.
+        // Stage 2 + 3 capability surface. Cancellation + temperature
+        // fallback + long-form shipped in Stage 2; initial_prompt
+        // (initial_prompt / prompt_tokens / condition_on_prev_tokens)
+        // shipped in Stage 3.
         CHECK(caps->supports_cancellation);
         CHECK(caps->supports_temperature_fallback);
         CHECK(caps->supports_long_form);
-        CHECK(!caps->supports_initial_prompt);
+        CHECK(caps->supports_initial_prompt);
     }
 
     transcribe_context_params cp = transcribe_context_default_params();
@@ -418,6 +419,217 @@ int main() {
 
         CHECK(text_a == text_b);
         CHECK(!text_a.empty());
+    }
+
+    // ============ Stage 3: prompt + condition_on_prev_tokens ============
+
+    // ALL_SEGMENTS without condition_on_prev_tokens must reject with
+    // INVALID_ARG before any compute runs (HF generation_whisper.py
+    // :1743-1745 raises ValueError; our parity is to translate that
+    // into a non-OK status). No abort callback is set; the rejection
+    // happens inside transcribe_run, not the callback.
+    {
+        transcribe_params rp = transcribe_default_params();
+        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        wp.prompt_condition         = TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS;
+        wp.condition_on_prev_tokens = false;
+        rp.whisper = &wp;
+        st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+        CHECK_EQ_INT(st, TRANSCRIBE_ERR_INVALID_ARG);
+    }
+
+    // initial_prompt rejects literal special-token strings ("<|en|>",
+    // "<|notimestamps|>", etc.). HF's get_prompt_ids relies on its
+    // tokenizer's added-token recognition to surface specials and
+    // rejects ids >= all_special_ids[0]. Our gpt-2 BPE encoder doesn't
+    // recognize specials, so we precheck for "<|...|>" patterns
+    // directly against the vocab. "<|en|>" is a real id (50259 for
+    // multilingual whisper) and must be rejected before any compute.
+    {
+        transcribe_params rp = transcribe_default_params();
+        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        wp.initial_prompt = "Inaugural <|en|> address";
+        rp.whisper = &wp;
+        st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+        CHECK_EQ_INT(st, TRANSCRIBE_ERR_INVALID_ARG);
+    }
+
+    // prompt_tokens must NOT include <|startofprev|> at index 0 — the
+    // library prepends it. A leading prev_sot id is a double-prepend
+    // and surfaces as INVALID_ARG so the API contract is observable.
+    {
+        /* multilingual whisper-tiny: <|startofprev|> = 50361 */
+        int32_t bad[] = { 50361, 100, 200 };
+        transcribe_params rp = transcribe_default_params();
+        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        wp.prompt_tokens   = bad;
+        wp.n_prompt_tokens = 3;
+        rp.whisper = &wp;
+        st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+        CHECK_EQ_INT(st, TRANSCRIBE_ERR_INVALID_ARG);
+    }
+
+    // initial_prompt path: a domain-term prompt should not break the
+    // JFK transcript. We don't assert biasing here (would need a
+    // pathological audio); we assert that the run completes and
+    // "country" still appears.
+    {
+        transcribe_params rp = transcribe_default_params();
+        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        wp.initial_prompt = "Inaugural address";
+        rp.whisper = &wp;
+        st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+        CHECK_EQ_INT(st, TRANSCRIBE_OK);
+        CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
+    }
+
+    // prompt_tokens (pre-tokenized) path: roundtrip a small token list
+    // and confirm the run completes. Use transcribe_tokenize for
+    // realistic ids matching the model's vocab.
+    {
+        int32_t tok_buf[32];
+        const int n = transcribe_tokenize(model, " inaugural address",
+                                          tok_buf, 32);
+        CHECK(n > 0);
+        if (n > 0) {
+            transcribe_params rp = transcribe_default_params();
+            transcribe_whisper_params wp = transcribe_whisper_default_params();
+            wp.prompt_tokens   = tok_buf;
+            wp.n_prompt_tokens = static_cast<size_t>(n);
+            rp.whisper = &wp;
+            st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+            CHECK_EQ_INT(st, TRANSCRIBE_OK);
+            CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
+        }
+    }
+
+    // Meaningful initial_prompt regression: this fixture contains
+    // deliberately awkward product names. The glossary prompt should
+    // move the transcript toward the exact dashed/camel-cased names,
+    // matching HF's prompt_ids path on the same clip.
+    {
+        const std::string product_path =
+            std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/product-names.wav";
+        std::vector<float> product_pcm;
+        std::string product_err;
+        if (!transcribe_cli::load_wav_mono_16k(product_path,
+                                               product_pcm, product_err))
+        {
+            std::fprintf(stderr, "whisper_e2e_smoke: wav load: %s\n",
+                         product_err.c_str());
+            ++g_failures;
+        } else {
+            auto product_hits = [](const char * text) {
+                const char * terms[] = {
+                    "QuirkQuid",
+                    "P3-Quattro",
+                    "O3-Omni",
+                    "B3-BondX",
+                    "E3-Equity",
+                    "W3-WrapZ",
+                    "O2-Outlier",
+                    "U3-UniFund",
+                    "M3-Mover",
+                };
+                int n = 0;
+                for (const char * term : terms) {
+                    if (std::strstr(text, term) != nullptr) {
+                        ++n;
+                    }
+                }
+                return n;
+            };
+
+            transcribe_params rp = transcribe_default_params();
+            rp.language = "en";
+            rp.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+            st = transcribe_run(ctx, product_pcm.data(),
+                                static_cast<int>(product_pcm.size()), &rp);
+            CHECK_EQ_INT(st, TRANSCRIBE_OK);
+            const int unprompted_hits =
+                product_hits(transcribe_full_text(ctx));
+
+            transcribe_whisper_params wp =
+                transcribe_whisper_default_params();
+            wp.initial_prompt =
+                "QuirkQuid Quill Inc, P3-Quattro, O3-Omni, "
+                "B3-BondX, E3-Equity, W3-WrapZ, O2-Outlier, "
+                "U3-UniFund, M3-Mover";
+            rp.whisper = &wp;
+            st = transcribe_run(ctx, product_pcm.data(),
+                                static_cast<int>(product_pcm.size()), &rp);
+            CHECK_EQ_INT(st, TRANSCRIBE_OK);
+            const int prompted_hits =
+                product_hits(transcribe_full_text(ctx));
+            CHECK(prompted_hits >= 5);
+            CHECK(prompted_hits > unprompted_hits + 3);
+        }
+    }
+
+    // Whitespace-only prompts must collapse to "no prompt" — nothing
+    // to tokenize, nothing prepended. We can't directly assert "no
+    // prompt was used", but the run must succeed with output that
+    // still contains "country" (matches the no-prompt default).
+    {
+        transcribe_params rp = transcribe_default_params();
+        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        wp.initial_prompt = "   \t\n  ";
+        rp.whisper = &wp;
+        st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+        CHECK_EQ_INT(st, TRANSCRIBE_OK);
+        CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
+    }
+
+    // condition_on_prev_tokens on long-form: synthesize a >30s clip
+    // from JFK and confirm the prev-context wiring doesn't crash and
+    // doesn't degrade the obvious markers in the transcript.
+    {
+        std::vector<float> long_pcm;
+        const int repeats = 4;
+        long_pcm.reserve(pcm.size() * repeats);
+        for (int i = 0; i < repeats; ++i) {
+            long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
+        }
+        transcribe_params rp = transcribe_default_params();
+        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        wp.condition_on_prev_tokens = true;
+        rp.language = "en";
+        rp.whisper = &wp;
+        st = transcribe_run(ctx, long_pcm.data(),
+                            static_cast<int>(long_pcm.size()), &rp);
+        CHECK_EQ_INT(st, TRANSCRIBE_OK);
+        const char * text = transcribe_full_text(ctx);
+        int country_hits = 0;
+        for (const char * p = text;
+             (p = std::strstr(p, "country")) != nullptr; ++p)
+        {
+            ++country_hits;
+        }
+        CHECK(country_hits >= 2);
+        CHECK(transcribe_get_whisper_chunk_count(ctx) >= 2);
+    }
+
+    // ALL_SEGMENTS with condition_on_prev_tokens=true: the prompt is
+    // re-prepended on every chunk as the BOS of the prev-context
+    // window. Run completes; "country" still present from the audio.
+    {
+        std::vector<float> long_pcm;
+        const int repeats = 4;
+        long_pcm.reserve(pcm.size() * repeats);
+        for (int i = 0; i < repeats; ++i) {
+            long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
+        }
+        transcribe_params rp = transcribe_default_params();
+        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        wp.initial_prompt           = "Inaugural address";
+        wp.prompt_condition         = TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS;
+        wp.condition_on_prev_tokens = true;
+        rp.language = "en";
+        rp.whisper = &wp;
+        st = transcribe_run(ctx, long_pcm.data(),
+                            static_cast<int>(long_pcm.size()), &rp);
+        CHECK_EQ_INT(st, TRANSCRIBE_OK);
+        CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
     }
 
     // Partial result visibility on abort: after the abort callback
