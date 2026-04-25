@@ -1,10 +1,10 @@
 {
   "schema": "transcribe-golden-manifest-v1",
   "family": "whisper",
-  "variant": "whisper-tiny",
+  "variant": "whisper-medium",
   "source_model": {
-    "hf_repo": "openai/whisper-tiny",
-    "hf_revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
+    "hf_repo": "openai/whisper-medium",
+    "hf_revision": "abdf7c39ab9d0397620ccaea8974cc764cd0953e"
   },
   "reference": {
     "kind": "transformers",
@@ -27,7 +27,7 @@
   },
   "tokenizer_summary": {
     "type": "bpe",
-    "vocab_size": 50258,
+    "vocab_size": 51865,
     "special_tokens": {
       "bos": 50257,
       "eos": 50257,
@@ -59,7 +59,7 @@
     "voice_activity_detection": false,
     "speaker_diarization": false
   },
-  "tolerance_file": "tests/tolerances/whisper.json",
+  "tolerance_file": "tests/tolerances/whisper-medium.json",
   "cases": [
     {"audio": "jfk", "language": "en"},
     {"audio": "german", "language": "de"}

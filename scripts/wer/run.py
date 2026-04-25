@@ -131,6 +131,7 @@ def main() -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            errors="replace",
         )
     except Exception as e:
         print(f"error: failed to start transcribe-cli: {e}", file=sys.stderr)

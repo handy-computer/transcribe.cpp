@@ -119,6 +119,25 @@ def manifest_dump_script(repo: Path, manifest: dict[str, Any]) -> Path:
     return script
 
 
+def case_audio(case) -> str:
+    """A case is either a bare string (legacy) or a dict with at least
+    {audio: <stem>}. Returns the audio stem."""
+    if isinstance(case, str):
+        return case
+    if isinstance(case, dict) and "audio" in case:
+        return str(case["audio"])
+    raise SystemExit(f"error: malformed case in manifest: {case!r}")
+
+
+def case_language(case) -> str:
+    """Per-case language code. Defaults to 'en' for legacy bare-string
+    cases and for dict cases that omit the field — matches the prior
+    hardcoded behavior."""
+    if isinstance(case, dict):
+        return str(case.get("language") or "en")
+    return "en"
+
+
 def find_gguf(repo: Path, family: str, slug: str | None = None) -> Path:
     """Find a GGUF under models/.
 
@@ -256,11 +275,13 @@ def cmd_ref(args: argparse.Namespace) -> int:
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
-        audio = repo / "samples" / f"{case}.wav"
+        case_name = case_audio(case)
+        language = case_language(case)
+        audio = repo / "samples" / f"{case_name}.wav"
         if not audio.exists():
             raise SystemExit(f"error: audio not found: {audio}")
 
-        out_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
+        out_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
@@ -274,6 +295,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
             "--audio", str(audio),
             "--out", str(out_dir),
             "--torch-threads", "1",
+            "--language", language,
         ]
 
         # Pin the HF revision when the manifest declares one and the
@@ -295,7 +317,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
             run_cmd(
                 cmd,
                 repo,
-                f"ref {stage} [{args.family}/{variant}/{case}/{reference['kind']}]",
+                f"ref {stage} [{args.family}/{variant}/{case_name}/{reference['kind']}]",
             )
 
     return 0
@@ -311,11 +333,13 @@ def cmd_cpp(args: argparse.Namespace) -> int:
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
-        audio = repo / "samples" / f"{case}.wav"
+        case_name = case_audio(case)
+        language = case_language(case)
+        audio = repo / "samples" / f"{case_name}.wav"
         if not audio.exists():
             raise SystemExit(f"error: audio not found: {audio}")
 
-        out_dir = repo / "build" / "validate" / args.family / variant / case / "cpp"
+        out_dir = repo / "build" / "validate" / args.family / variant / case_name / "cpp"
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
@@ -330,7 +354,7 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         # The C++ mel frontend is validated by `validate.py mel` against
         # its own tolerance (see mel_parity below).
         if args.family == "whisper":
-            ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
+            ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
             env["TRANSCRIBE_WHISPER_MEL_FROM_REF"] = str(ref_dir)
 
         cmd = [
@@ -340,11 +364,11 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             "-m", str(gguf),
         ]
         if args.family == "whisper":
-            cmd += ["--timestamps", "none", "--language", "en"]
+            cmd += ["--timestamps", "none", "--language", language]
         cmd.append(str(audio))
 
         print(f"\n{'=' * 60}", file=sys.stderr)
-        print(f"  cpp dump [{args.family}/{case}]", file=sys.stderr)
+        print(f"  cpp dump [{args.family}/{case_name}]", file=sys.stderr)
         print(f"  TRANSCRIBE_DUMP_DIR={out_dir}", file=sys.stderr)
         print(f"  {' '.join(cmd)}", file=sys.stderr)
         print(f"{'=' * 60}", file=sys.stderr)
@@ -361,19 +385,19 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             print(result.stdout, end="")
         if result.returncode != 0:
             raise SystemExit(
-                f"error: cpp dump [{args.family}/{case}] failed "
+                f"error: cpp dump [{args.family}/{case_name}] failed "
                 f"with exit code {result.returncode}"
             )
         transcript = parse_cli_transcript(result.stdout or "")
         if transcript is None:
             raise SystemExit(
-                f"error: cpp dump [{args.family}/{case}] did not emit a transcript line"
+                f"error: cpp dump [{args.family}/{case_name}] did not emit a transcript line"
             )
         write_cpp_transcript(
             out_dir,
             family=args.family,
             variant=variant,
-            case=case,
+            case=case_name,
             gguf=gguf,
             backend=args.backend,
             text=transcript,
@@ -413,15 +437,16 @@ def cmd_compare(args: argparse.Namespace) -> int:
     cmd_log: list[dict[str, Any]] = []
 
     for case in cases:
-        cpp_dir = repo / "build" / "validate" / args.family / variant / case / "cpp"
-        ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
+        case_name = case_audio(case)
+        cpp_dir = repo / "build" / "validate" / args.family / variant / case_name / "cpp"
+        ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
 
         if not cpp_dir.exists():
-            print(f"SKIP {case}: no C++ dumps at {cpp_dir}", file=sys.stderr)
+            print(f"SKIP {case_name}: no C++ dumps at {cpp_dir}", file=sys.stderr)
             all_passed = False
             continue
         if not ref_dir.exists():
-            print(f"SKIP {case}: no reference dumps at {ref_dir}", file=sys.stderr)
+            print(f"SKIP {case_name}: no reference dumps at {ref_dir}", file=sys.stderr)
             all_passed = False
             continue
 
@@ -433,7 +458,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             cmd += ["--tolerances", str(tolerances)]
 
         print(f"\n{'=' * 60}", file=sys.stderr)
-        print(f"  compare [{args.family}/{case}]", file=sys.stderr)
+        print(f"  compare [{args.family}/{case_name}]", file=sys.stderr)
         print(f"{'=' * 60}", file=sys.stderr)
 
         if report_mode:
@@ -443,14 +468,14 @@ def cmd_compare(args: argparse.Namespace) -> int:
             if result.stderr:
                 print(result.stderr, file=sys.stderr)
             compare_outputs.append({
-                "case": case,
+                "case": case_name,
                 "returncode": result.returncode,
                 "stdout": result.stdout or "",
                 "stderr": result.stderr or "",
             })
         else:
             result = subprocess.run(cmd, cwd=repo)
-        cmd_log.append({"case": case, "cmd": cmd, "returncode": result.returncode})
+        cmd_log.append({"case": case_name, "cmd": cmd, "returncode": result.returncode})
         if result.returncode != 0:
             all_passed = False
 
@@ -468,7 +493,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 )
                 all_passed = False
                 transcript_results.append({
-                    "case": case, "match": False,
+                    "case": case_name, "match": False,
                     "reason": "missing C++ transcript artifact",
                 })
                 continue
@@ -477,7 +502,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             cpp_text = str(cpp_data.get("text", ""))
             match = cpp_text == ref_text
             transcript_results.append({
-                "case": case, "match": match,
+                "case": case_name, "match": match,
                 "reference": ref_text, "cpp": cpp_text,
             })
             if not match:
@@ -518,11 +543,13 @@ def cmd_mel(args: argparse.Namespace) -> int:
     all_passed = True
 
     for case in cases:
-        audio = repo / "samples" / f"{case}.wav"
+        case_name = case_audio(case)
+        language = case_language(case)
+        audio = repo / "samples" / f"{case_name}.wav"
         if not audio.exists():
             raise SystemExit(f"error: audio not found: {audio}")
 
-        out_dir = repo / "build" / "validate" / args.family / variant / case / "mel_cpp"
+        out_dir = repo / "build" / "validate" / args.family / variant / case_name / "mel_cpp"
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
@@ -537,12 +564,12 @@ def cmd_mel(args: argparse.Namespace) -> int:
             "--threads", "1",
             "-m", str(gguf),
             "--timestamps", "none",
-            "--language", "en",
+            "--language", language,
             str(audio),
         ]
 
         print(f"\n{'=' * 60}", file=sys.stderr)
-        print(f"  mel parity cpp dump [{args.family}/{case}]", file=sys.stderr)
+        print(f"  mel parity cpp dump [{args.family}/{case_name}]", file=sys.stderr)
         print(f"  TRANSCRIBE_DUMP_DIR={out_dir}", file=sys.stderr)
         print(f"  {' '.join(cmd)}", file=sys.stderr)
         print(f"{'=' * 60}", file=sys.stderr)
@@ -557,7 +584,7 @@ def cmd_mel(args: argparse.Namespace) -> int:
             all_passed = False
             continue
 
-        ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
+        ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
         with tempfile.TemporaryDirectory() as td:
             tol = Path(td) / "mel-tolerances.json"
             # fp32 STFT path: worst observed drift on librispeech-style
@@ -576,7 +603,7 @@ def cmd_mel(args: argparse.Namespace) -> int:
                 "--quiet",
             ]
             print(f"\n{'=' * 60}", file=sys.stderr)
-            print(f"  mel parity compare [{args.family}/{case}]", file=sys.stderr)
+            print(f"  mel parity compare [{args.family}/{case_name}]", file=sys.stderr)
             print(f"{'=' * 60}", file=sys.stderr)
             cmp = subprocess.run(cmp_cmd, cwd=repo)
             if cmp.returncode != 0:

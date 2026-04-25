@@ -243,13 +243,24 @@ def build_prompt_ids(
     return ids
 
 
+def auto_blocks(n_layers: int) -> set[int]:
+    """Default block selection: dump all if <=5 layers, else 5 evenly
+    spaced indices including first and last. Keeps tensor-coverage
+    constant across variant sizes (whisper-tiny=4, base=6, small=12,
+    medium=24, large=32) without requiring per-variant --blocks args."""
+    if n_layers <= 5:
+        return set(range(n_layers))
+    last = n_layers - 1
+    return {0, round(last / 4), round(last / 2), round(3 * last / 4), last}
+
+
 def dump_encoder(
     *,
     model,
     inputs: dict[str, Any],
     out_dir: Path,
     source: dict[str, Any],
-    blocks: set[int],
+    blocks: set[int] | None,
 ):
     import torch
     import torch.nn.functional as F
@@ -287,8 +298,9 @@ def dump_encoder(
         x = x + embed_pos
         dump("enc.embed.out", x, "encoder.embed")
 
-        # Transformer blocks.
-        block_set = set(blocks)
+        # Transformer blocks. If caller did not specify, pick a sparse
+        # set that scales with depth.
+        block_set = set(blocks) if blocks is not None else auto_blocks(len(encoder.layers))
         block_set.add(0)
         block_set.add(len(encoder.layers) - 1)
         for i, layer in enumerate(encoder.layers):
@@ -311,7 +323,7 @@ def dump_decoder(
     prompt_ids: list[int],
     out_dir: Path,
     source: dict[str, Any],
-    blocks: set[int],
+    blocks: set[int] | None,
     device: str,
 ):
     import torch
@@ -345,7 +357,7 @@ def dump_decoder(
         # In transformers 5.x, WhisperAttention self-attn sets is_causal=True when
         # is_decoder=True, so the SDPA backend generates the causal mask internally
         # for prefill (no past KV). Passing attention_mask=None is correct here.
-        block_set = set(blocks)
+        block_set = set(blocks) if blocks is not None else auto_blocks(len(decoder.layers))
         block_set.add(0)
         block_set.add(len(decoder.layers) - 1)
         for i, layer in enumerate(decoder.layers):
@@ -582,7 +594,7 @@ def cmd_encoder(args: argparse.Namespace) -> int:
         inputs=inputs,
         out_dir=out_dir,
         source=source,
-        blocks=set(args.blocks),
+        blocks=set(args.blocks) if args.blocks else None,
     )
     return 0
 
@@ -619,7 +631,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
         inputs=inputs,
         out_dir=out_dir,
         source=source,
-        blocks=set(args.blocks),
+        blocks=set(args.blocks) if args.blocks else None,
     )
 
     prompt_ids = build_prompt_ids(processor, language, task, no_timestamps=True)
@@ -629,7 +641,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
         prompt_ids=prompt_ids,
         out_dir=out_dir,
         source=source,
-        blocks=set(args.blocks),
+        blocks=set(args.blocks) if args.blocks else None,
         device=args.device,
     )
     pred_token = processor.tokenizer.decode([pred_id])
@@ -692,8 +704,9 @@ def main() -> int:
         "--blocks",
         type=int,
         nargs="*",
-        default=[0, 1, 2, 3],
-        help="Block indices to dump (default: all 4 blocks for whisper-tiny)",
+        default=None,
+        help="Block indices to dump (default: auto — all if <=5 layers, "
+             "else 5 evenly spaced indices including first and last)",
     )
     ep.set_defaults(func=cmd_encoder)
 
@@ -715,8 +728,9 @@ def main() -> int:
         "--blocks",
         type=int,
         nargs="*",
-        default=[0, 1, 2, 3],
-        help="Block indices to dump (default: all 4 blocks for whisper-tiny)",
+        default=None,
+        help="Block indices to dump (default: auto — all if <=5 layers, "
+             "else 5 evenly spaced indices including first and last)",
     )
     dp.set_defaults(func=cmd_decode)
 

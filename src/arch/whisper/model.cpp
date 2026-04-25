@@ -1641,16 +1641,55 @@ transcribe_status whisper_run(
             }
         }
 
+        // ---- Cross-attention K/V precompute (chunk-scoped) ------------
+        //
+        // Cross-K/V depends only on encoder output and the cross-attn
+        // weights — both are tier-invariant. Compute once per chunk and
+        // reuse across every fallback tier. Previously this lived inside
+        // the tier loop and re-ran every tier, paying n_layers × T_enc ×
+        // d_model² of redundant matmul per tier on fallback chunks.
+        {
+            if (!new_compute_ctx(8 * 1024 * 1024)) {
+                std::fprintf(stderr,
+                             "whisper run: ggml_init for cross_kv failed\n");
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            DecoderBuild cross_db = build_cross_kv_graph(
+                cc->compute_ctx, cm->weights, cm->hparams,
+                cc->kv_cache, T_enc_local);
+            if (cross_db.graph == nullptr) {
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            ggml_backend_sched_reset(cc->sched);
+            if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
+                std::fprintf(stderr,
+                             "whisper run: alloc_graph failed (cross_kv)\n");
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            ggml_backend_tensor_set(cross_db.encoder_out_in,
+                                    cc->enc_host.data(), 0,
+                                    cc->enc_host.size() * sizeof(float));
+            if (const ggml_status gs = ggml_backend_sched_graph_compute(
+                    cc->sched, cross_db.graph);
+                gs != GGML_STATUS_SUCCESS)
+            {
+                std::fprintf(stderr,
+                             "whisper run: cross_kv compute failed (%d)\n",
+                             static_cast<int>(gs));
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            cc->kv_cache.cross_populated = true;
+        }
+
         // ===== Tier loop (temperature fallback) ========================
         for (size_t ti = 0; ti < temperatures.size(); ++ti) {
             const float tier_T = temperatures[ti];
 
-            // Per-tier reset. generated_ids/text_ids are the ones
-            // scoped inside the chunk-loop body; apply_timestamp_rules
-            // captures them by reference so a clear() suffices.
-            cc->kv_cache.n               = 0;
-            cc->kv_cache.head            = 0;
-            cc->kv_cache.cross_populated = false;
+            // Per-tier reset. Self-cache resets every tier (each tier
+            // generates its own token sequence); cross-cache stays
+            // populated — its contents are tier-invariant.
+            cc->kv_cache.n    = 0;
+            cc->kv_cache.head = 0;
             generated_ids.clear();
             generated_text_ids.clear();
             tier_hit_eos = false;
@@ -1668,40 +1707,6 @@ transcribe_status whisper_run(
                     transcribe::debug::dump_tensor(name, t, stage);
                 }
             };
-
-            // ---- Cross-attention K/V precompute -----------------------
-            {
-                if (!new_compute_ctx(8 * 1024 * 1024)) {
-                    std::fprintf(stderr,
-                                 "whisper run: ggml_init for cross_kv failed\n");
-                    return TRANSCRIBE_ERR_GGUF;
-                }
-                DecoderBuild cross_db = build_cross_kv_graph(
-                    cc->compute_ctx, cm->weights, cm->hparams,
-                    cc->kv_cache, T_enc_local);
-                if (cross_db.graph == nullptr) {
-                    return TRANSCRIBE_ERR_GGUF;
-                }
-                ggml_backend_sched_reset(cc->sched);
-                if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
-                    std::fprintf(stderr,
-                                 "whisper run: alloc_graph failed (cross_kv)\n");
-                    return TRANSCRIBE_ERR_GGUF;
-                }
-                ggml_backend_tensor_set(cross_db.encoder_out_in,
-                                        cc->enc_host.data(), 0,
-                                        cc->enc_host.size() * sizeof(float));
-                if (const ggml_status gs = ggml_backend_sched_graph_compute(
-                        cc->sched, cross_db.graph);
-                    gs != GGML_STATUS_SUCCESS)
-                {
-                    std::fprintf(stderr,
-                                 "whisper run: cross_kv compute failed (%d)\n",
-                                 static_cast<int>(gs));
-                    return TRANSCRIBE_ERR_GGUF;
-                }
-                cc->kv_cache.cross_populated = true;
-            }
 
             // ---- Prompt pass (emit dumps, n_past=0) -------------------
             {
