@@ -68,6 +68,7 @@ WhisperModel::~WhisperModel() {
 
 WhisperContext::~WhisperContext() {
     kv_cache.free();
+    enc_out.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -75,6 +76,54 @@ WhisperContext::~WhisperContext() {
     if (compute_ctx != nullptr) {
         ggml_free(compute_ctx);
         compute_ctx = nullptr;
+    }
+    compute_ctx_size = 0;
+}
+
+bool enc_out_init(WhisperEncOut & enc_out,
+                  ggml_backend_t  backend,
+                  int             d_model,
+                  int             T_enc)
+{
+    enc_out.free();
+
+    const size_t ctx_size = ggml_tensor_overhead() + 256;
+    ggml_init_params params {};
+    params.mem_size   = ctx_size;
+    params.mem_buffer = nullptr;
+    params.no_alloc   = true;
+
+    enc_out.ctx = ggml_init(params);
+    if (enc_out.ctx == nullptr) {
+        std::fprintf(stderr, "whisper enc_out: ggml_init failed\n");
+        return false;
+    }
+
+    enc_out.tensor = ggml_new_tensor_2d(enc_out.ctx, GGML_TYPE_F32,
+                                        d_model, T_enc);
+    ggml_set_name(enc_out.tensor, "enc_out");
+
+    enc_out.buffer = ggml_backend_alloc_ctx_tensors(enc_out.ctx, backend);
+    if (enc_out.buffer == nullptr) {
+        std::fprintf(stderr, "whisper enc_out: buffer alloc failed\n");
+        ggml_free(enc_out.ctx);
+        enc_out.ctx    = nullptr;
+        enc_out.tensor = nullptr;
+        return false;
+    }
+
+    enc_out.d_model = d_model;
+    enc_out.T_enc   = T_enc;
+    return true;
+}
+
+int kv_pad_self_attn(transcribe::BackendKind kind, bool use_flash) {
+    if (!use_flash) return 1;
+    switch (kind) {
+        // Match whisper.cpp's whisper_kv_cache_get_padding (Metal+FA).
+        case transcribe::BackendKind::Metal: return 32;
+        // CUDA uses 256 in whisper.cpp; not exercised here yet.
+        default: return 1;
     }
 }
 
@@ -105,8 +154,16 @@ bool kv_cache_init(WhisperKvCache & cache,
         return false;
     }
 
-    const int64_t self_elements  = static_cast<int64_t>(d_model) * n_layer * n_ctx;
-    const int64_t cross_elements = static_cast<int64_t>(d_model) * n_layer * T_enc;
+    // Cross K/V allocated at GGML_PAD(T_enc, 256) rows per layer so
+    // the FA op consumes a sequence dim that is a multiple of the
+    // Metal kernel's block size. Only the first T_enc rows are
+    // written by build_cross_kv_graph; the trailing rows stay zero
+    // (buffer_clear below). With K=V=0 in the padded slots, the
+    // unmasked FA cross-attn output picks up a small dilution
+    // factor — whisper.cpp ships with this trade-off.
+    const int     T_enc_pad     = static_cast<int>(GGML_PAD(T_enc, k_cross_kv_pad));
+    const int64_t self_elements = static_cast<int64_t>(d_model) * n_layer * n_ctx;
+    const int64_t cross_elements = static_cast<int64_t>(d_model) * n_layer * T_enc_pad;
 
     cache.self_k  = ggml_new_tensor_1d(cache.ctx, kv_type, self_elements);
     cache.self_v  = ggml_new_tensor_1d(cache.ctx, kv_type, self_elements);
@@ -127,10 +184,11 @@ bool kv_cache_init(WhisperKvCache & cache,
     }
     ggml_backend_buffer_clear(cache.buffer, 0);
 
-    cache.n_ctx  = n_ctx;
-    cache.T_enc  = T_enc;
-    cache.n      = 0;
-    cache.head   = 0;
+    cache.n_ctx     = n_ctx;
+    cache.T_enc     = T_enc;
+    cache.T_enc_pad = T_enc_pad;
+    cache.n         = 0;
+    cache.head      = 0;
     cache.cross_populated = false;
 
     return true;
@@ -139,6 +197,149 @@ bool kv_cache_init(WhisperKvCache & cache,
 namespace {
 
 constexpr const char k_default_variant[] = "whisper";
+
+// Prepare cc->compute_ctx for a graph build of capacity at most
+// `mem`. If a context already exists and is at least that large,
+// ggml_reset clears the tensor metadata in-place (cheap). Only when
+// the existing context is too small do we ggml_free + ggml_init.
+//
+// Replaces the previous "free + init per graph build" pattern that
+// allocated a fresh compute context for the encoder, cross-KV graph,
+// every tier's prompt prefill, and every step in the generation
+// loop. The free + malloc churn was visible in the per-step build
+// timer (~30 us per step on tiny F16) plus allocator pressure on
+// very long inputs.
+bool ensure_compute_ctx(WhisperContext * cc, size_t mem) {
+    if (cc->compute_ctx != nullptr) {
+        if (cc->compute_ctx_size >= mem) {
+            ggml_reset(cc->compute_ctx);
+            return true;
+        }
+        ggml_free(cc->compute_ctx);
+        cc->compute_ctx      = nullptr;
+        cc->compute_ctx_size = 0;
+    }
+
+    ggml_init_params p {};
+    p.mem_size   = mem;
+    p.mem_buffer = nullptr;
+    p.no_alloc   = true;
+    cc->compute_ctx = ggml_init(p);
+    if (cc->compute_ctx == nullptr) {
+        return false;
+    }
+    cc->compute_ctx_size = mem;
+    return true;
+}
+
+// Print the per-stage performance summary collected during the most
+// recent whisper_run. Opt-in via TRANSCRIBE_WHISPER_PROFILE=1 — gated
+// by the caller, this helper just formats the counters. Output is one
+// summary line per stage (encoder / cross / prompt / step) plus a
+// per-step average for the steady-state generation loop, which is the
+// metric most directly comparable to whisper.cpp's bench numbers.
+void print_whisper_perf(const WhisperPerf & p) {
+    auto avg_us = [](const WhisperPerfStage & s) -> double {
+        return s.count > 0
+                   ? static_cast<double>(s.total_us) /
+                         static_cast<double>(s.count)
+                   : 0.0;
+    };
+    auto ms = [](int64_t us) -> double {
+        return static_cast<double>(us) / 1000.0;
+    };
+    auto stage_total = [&](const WhisperPerfStage & s) {
+        return s.total_us;
+    };
+
+    const int64_t enc_total =
+        stage_total(p.enc_build) + stage_total(p.enc_alloc) +
+        stage_total(p.enc_compute) + stage_total(p.enc_tensor_get);
+    const int64_t cross_total =
+        stage_total(p.cross_build) + stage_total(p.cross_alloc) +
+        stage_total(p.cross_compute);
+    const int64_t prompt_total =
+        stage_total(p.prompt_build) + stage_total(p.prompt_alloc) +
+        stage_total(p.prompt_compute) + stage_total(p.prompt_tensor_get) +
+        stage_total(p.prompt_cpu);
+    const int64_t step_total =
+        stage_total(p.step_build) + stage_total(p.step_alloc) +
+        stage_total(p.step_compute) + stage_total(p.step_tensor_get) +
+        stage_total(p.step_cpu);
+
+    std::fprintf(stderr,
+        "[whisper-perf] chunks=%d  encs=%d  crosses=%d  prompts=%d  steps=%d\n",
+        p.chunks, p.enc_compute.count, p.cross_compute.count,
+        p.prompt_compute.count, p.step_compute.count);
+    std::fprintf(stderr,
+        "[whisper-perf] enc    total=%7.2f ms  build=%7.2f  alloc=%7.2f  "
+        "compute=%7.2f  tget=%7.2f\n",
+        ms(enc_total), ms(p.enc_build.total_us), ms(p.enc_alloc.total_us),
+        ms(p.enc_compute.total_us), ms(p.enc_tensor_get.total_us));
+    std::fprintf(stderr,
+        "[whisper-perf] cross  total=%7.2f ms  build=%7.2f  alloc=%7.2f  "
+        "compute=%7.2f\n",
+        ms(cross_total), ms(p.cross_build.total_us),
+        ms(p.cross_alloc.total_us), ms(p.cross_compute.total_us));
+    std::fprintf(stderr,
+        "[whisper-perf] prompt total=%7.2f ms  build=%7.2f  alloc=%7.2f  "
+        "compute=%7.2f  tget=%7.2f  cpu=%7.2f\n",
+        ms(prompt_total), ms(p.prompt_build.total_us),
+        ms(p.prompt_alloc.total_us), ms(p.prompt_compute.total_us),
+        ms(p.prompt_tensor_get.total_us), ms(p.prompt_cpu.total_us));
+    std::fprintf(stderr,
+        "[whisper-perf] step   total=%7.2f ms  build=%7.2f  alloc=%7.2f  "
+        "compute=%7.2f  tget=%7.2f  cpu=%7.2f\n",
+        ms(step_total), ms(p.step_build.total_us),
+        ms(p.step_alloc.total_us), ms(p.step_compute.total_us),
+        ms(p.step_tensor_get.total_us), ms(p.step_cpu.total_us));
+    std::fprintf(stderr,
+        "[whisper-perf] step avg us  build=%6.1f  alloc=%6.1f  "
+        "compute=%6.1f  tget=%6.1f  cpu=%6.1f\n",
+        avg_us(p.step_build), avg_us(p.step_alloc),
+        avg_us(p.step_compute), avg_us(p.step_tensor_get),
+        avg_us(p.step_cpu));
+
+    // CPU sub-section breakdown — opt-in via TRANSCRIBE_WHISPER_PROFILE
+    // values that contain "cpu" or "all". Keeps the default profile
+    // output unchanged for existing benchmarks while still surfacing
+    // suppress/timestamp/sample/logprob splits when needed.
+    const char * profile_env = std::getenv("TRANSCRIBE_WHISPER_PROFILE");
+    bool show_cpu_breakdown = false;
+    if (profile_env != nullptr) {
+        const std::string v = profile_env;
+        if (v.find("cpu") != std::string::npos ||
+            v.find("all") != std::string::npos) {
+            show_cpu_breakdown = true;
+        }
+    }
+    if (show_cpu_breakdown) {
+        std::fprintf(stderr,
+            "[whisper-perf] prompt cpu  suppress=%7.2f  ts=%7.2f  "
+            "sample=%7.2f  logprob=%7.2f  (ms)\n",
+            ms(p.prompt_cpu_suppress.total_us),
+            ms(p.prompt_cpu_timestamp.total_us),
+            ms(p.prompt_cpu_sample.total_us),
+            ms(p.prompt_cpu_logprob.total_us));
+        std::fprintf(stderr,
+            "[whisper-perf] step   cpu  suppress=%7.2f  ts=%7.2f  "
+            "sample=%7.2f  logprob=%7.2f  (ms)\n",
+            ms(p.step_cpu_suppress.total_us),
+            ms(p.step_cpu_timestamp.total_us),
+            ms(p.step_cpu_sample.total_us),
+            ms(p.step_cpu_logprob.total_us));
+        std::fprintf(stderr,
+            "[whisper-perf] step avg us  suppress=%6.1f  ts=%6.1f  "
+            "sample=%6.1f  logprob=%6.1f\n",
+            avg_us(p.step_cpu_suppress), avg_us(p.step_cpu_timestamp),
+            avg_us(p.step_cpu_sample),   avg_us(p.step_cpu_logprob));
+    }
+}
+
+bool whisper_perf_enabled() {
+    const char * s = std::getenv("TRANSCRIBE_WHISPER_PROFILE");
+    return s != nullptr && s[0] != '\0' && s[0] != '0';
+}
 
 // ---------------------------------------------------------------------------
 // load
@@ -412,24 +613,14 @@ transcribe_status run_whisper_encoder_on_window(
     bool             allow_dumps,
     int &            out_T_enc)
 {
-    // Reset per-call compute state.
-    if (cc->compute_ctx != nullptr) {
-        ggml_free(cc->compute_ctx);
-        cc->compute_ctx = nullptr;
-    }
-
-    // Build encoder graph.
-    {
-        ggml_init_params init_params {};
-        init_params.mem_size   = 8 * 1024 * 1024;
-        init_params.mem_buffer = nullptr;
-        init_params.no_alloc   = true;
-        cc->compute_ctx = ggml_init(init_params);
-        if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr,
-                         "whisper run: ggml_init for compute_ctx failed\n");
-            return TRANSCRIBE_ERR_GGUF;
-        }
+    // Reset per-call compute state. ensure_compute_ctx reuses the
+    // context across encoder / cross-KV / prompt / step builds —
+    // ggml_reset between calls instead of free + reinit.
+    const int64_t t_enc_build_start = ggml_time_us();
+    if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
+        std::fprintf(stderr,
+                     "whisper run: ensure_compute_ctx (encoder) failed\n");
+        return TRANSCRIBE_ERR_GGUF;
     }
 
     EncoderBuild eb = build_encoder_graph(
@@ -439,7 +630,40 @@ transcribe_status run_whisper_encoder_on_window(
         return TRANSCRIBE_ERR_GGUF;
     }
 
+    // Backend-resident encoder output. Allocate the persistent
+    // F32 tensor once (or re-allocate if T_enc / d_model changed).
+    // After build_encoder_graph, append a final ggml_cpy from eb.out
+    // into a view of cc->enc_out.tensor — both live on the primary
+    // backend, so this is a single intra-backend memcpy that stays
+    // off the host. Subsequent graphs (cross-KV, lang-det) read
+    // from cc->enc_out.tensor directly.
+    {
+        const int d_enc_g = static_cast<int>(eb.out->ne[0]);
+        const int T_enc_g = static_cast<int>(eb.out->ne[1]);
+        if (cc->enc_out.tensor == nullptr ||
+            cc->enc_out.d_model != d_enc_g ||
+            cc->enc_out.T_enc   != T_enc_g)
+        {
+            if (!enc_out_init(cc->enc_out, cm->plan.primary,
+                              d_enc_g, T_enc_g))
+            {
+                std::fprintf(stderr,
+                             "whisper run: enc_out_init failed\n");
+                return TRANSCRIBE_ERR_GGUF;
+            }
+        }
+        ggml_tensor * enc_out_view = ggml_view_2d(
+            cc->compute_ctx, cc->enc_out.tensor,
+            d_enc_g, T_enc_g,
+            cc->enc_out.tensor->nb[1],
+            0);
+        ggml_build_forward_expand(
+            eb.graph, ggml_cpy(cc->compute_ctx, eb.out, enc_out_view));
+    }
+    cc->perf.enc_build.add(ggml_time_us() - t_enc_build_start);
+
     // Allocate + compute encoder graph.
+    const int64_t t_enc_alloc_start = ggml_time_us();
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(
             cm->plan.scheduler_list.data(), nullptr,
@@ -464,8 +688,10 @@ transcribe_status run_whisper_encoder_on_window(
                              static_cast<size_t>(n_mel_frames) *
                              sizeof(float);
     ggml_backend_tensor_set(eb.mel_in, mel_data, 0, mel_bytes);
+    cc->perf.enc_alloc.add(ggml_time_us() - t_enc_alloc_start);
 
     // Compute.
+    const int64_t t_enc_compute_start = ggml_time_us();
     if (const ggml_status gs =
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
@@ -475,6 +701,7 @@ transcribe_status run_whisper_encoder_on_window(
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
+    cc->perf.enc_compute.add(ggml_time_us() - t_enc_compute_start);
 
     // Dumps. Only the first (or only) chunk emits intermediates so
     // validate.py against a reference dump directory sees stable output.
@@ -500,16 +727,15 @@ transcribe_status run_whisper_encoder_on_window(
         try_dump("enc.final", eb.dumps.final_out, "encoder.final");
     }
 
-    // Stash encoder output to host. Materialize so the decoder pass can
-    // operate from a fresh compute_ctx (we ggml_free the encoder ctx
-    // before building the decoder graph, which would dangle eb.out).
+    // The persistent enc_out tensor is now populated. Cross-KV
+    // reads from it directly — no host materialization needed for
+    // the hot path. Lang-detect (one-shot, first chunk) still uses
+    // a tensor-set into a graph input; we lazily materialize to
+    // enc_host there (see chunk loop below).
     const int d_enc = static_cast<int>(eb.out->ne[0]);
     out_T_enc       = static_cast<int>(eb.out->ne[1]);
     cc->enc_T       = out_T_enc;
-    cc->enc_host.resize(static_cast<size_t>(d_enc) *
-                        static_cast<size_t>(out_T_enc));
-    ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0,
-                            cc->enc_host.size() * sizeof(float));
+    (void)d_enc;
     return TRANSCRIBE_OK;
 }
 
@@ -563,10 +789,15 @@ float compute_compression_ratio_hf(
 // numerically stable form with max-subtracted exponentials.
 //
 // -INFINITY logits (from suppress/timestamp rules) contribute 0 mass.
+//
+// `scratch` is reused across calls to avoid the per-step double[vocab]
+// alloc on the T>0 hot path. Sized lazily; iteration order matches the
+// previous code so the multinomial draw is bit-identical.
 int sample_from_logits(
     const std::vector<float> & logits,
     float                      temperature,
-    std::mt19937 &             rng)
+    std::mt19937 &             rng,
+    std::vector<double> *      scratch = nullptr)
 {
     const int n = static_cast<int>(logits.size());
     if (temperature <= 0.0f) {
@@ -590,7 +821,15 @@ int sample_from_logits(
         return 0;
     }
 
-    std::vector<double> probs(static_cast<size_t>(n), 0.0);
+    std::vector<double>   local_probs;
+    std::vector<double> & probs = (scratch != nullptr) ? *scratch : local_probs;
+    if (probs.size() < static_cast<size_t>(n)) {
+        probs.resize(static_cast<size_t>(n));
+    }
+    // Zero only the prefix we will read in the cumulative pass; the
+    // tail past n is irrelevant.
+    std::fill_n(probs.begin(), n, 0.0);
+
     double sum = 0.0;
     for (int i = 0; i < n; ++i) {
         const float l = logits[i];
@@ -618,6 +857,54 @@ int sample_from_logits(
         if (r < acc) return i;
     }
     return n - 1;  // numerical edge
+}
+
+// Fused argmax + log-softmax for the T == 0 (greedy) path.
+//
+// Returns the argmax token id; *out_logprob receives logprob_of_token_hf
+// of that token at temperature 0 (which uses rescale_T = 1.0). Two
+// passes total: pass 1 finds max_l + argmax, pass 2 sums exp.
+//
+// Numerics: identical to running sample_from_logits(T=0) +
+// logprob_of_token_hf(T=0) on the same buffer. -INFINITY logits
+// contribute zero mass to the partition; if every entry is -INF
+// (shouldn't happen) the function returns id 0 with logprob -inf,
+// matching the existing fallback.
+int sample_argmax_and_logprob(
+    const std::vector<float> & logits,
+    float *                    out_logprob)
+{
+    const int n = static_cast<int>(logits.size());
+    int   best_id = 0;
+    float best_l  = logits[0];
+    float max_l   = std::isfinite(best_l) ? best_l : -INFINITY;
+    for (int i = 1; i < n; ++i) {
+        const float l = logits[i];
+        if (l > best_l) { best_l = l; best_id = i; }
+        if (std::isfinite(l) && l > max_l) max_l = l;
+    }
+
+    if (out_logprob != nullptr) {
+        if (!std::isfinite(max_l)) {
+            *out_logprob = -INFINITY;
+        } else {
+            double sum_exp = 0.0;
+            for (int i = 0; i < n; ++i) {
+                const float l = logits[i];
+                if (std::isfinite(l)) {
+                    sum_exp += std::exp(static_cast<double>(l - max_l));
+                }
+            }
+            if (sum_exp <= 0.0) {
+                *out_logprob = -INFINITY;
+            } else {
+                const float log_Z =
+                    max_l + static_cast<float>(std::log(sum_exp));
+                *out_logprob = best_l - log_Z;
+            }
+        }
+    }
+    return best_id;
 }
 
 // Compute log_softmax(logits * rescale_T)[token_id] in the numerically
@@ -718,6 +1005,11 @@ transcribe_status whisper_run(
     }
 
     transcribe::debug::init();
+
+    // Reset per-stage timing counters; the summary printed at end-of-run
+    // is opt-in via TRANSCRIBE_WHISPER_PROFILE=1 but the counters
+    // themselves are always populated (the timestamps are negligible).
+    cc->perf.reset();
 
     // ----- Mel frontend ------------------------------------------------
     //
@@ -909,16 +1201,7 @@ transcribe_status whisper_run(
     }
 
     auto new_compute_ctx = [&](size_t mem) -> bool {
-        if (cc->compute_ctx != nullptr) {
-            ggml_free(cc->compute_ctx);
-            cc->compute_ctx = nullptr;
-        }
-        ggml_init_params p {};
-        p.mem_size   = mem;
-        p.mem_buffer = nullptr;
-        p.no_alloc   = true;
-        cc->compute_ctx = ggml_init(p);
-        return cc->compute_ctx != nullptr;
+        return ensure_compute_ctx(cc, mem);
     };
     auto suppress_in_place = [&](std::vector<float> & logits) {
         for (int32_t id : cm->hparams.suppress_tokens) {
@@ -1003,6 +1286,10 @@ transcribe_status whisper_run(
                               ? TRANSCRIBE_TIMESTAMPS_SEGMENT
                               : TRANSCRIBE_TIMESTAMPS_NONE;
         cc->has_result  = true;
+
+        if (whisper_perf_enabled()) {
+            print_whisper_perf(cc->perf);
+        }
     };
 
     // Run-scoped Whisper params pointer + RNG.
@@ -1187,6 +1474,7 @@ transcribe_status whisper_run(
             commit_result();
             return TRANSCRIBE_ERR_ABORTED;
         }
+        cc->perf.chunks += 1;
 
         const bool is_first_chunk = (seek == 0);
         const int64_t time_offset_ms = static_cast<int64_t>(seek) * 10;
@@ -1227,6 +1515,19 @@ transcribe_status whisper_run(
 
         // Language detection — once, on first chunk, only if no hint.
         if (is_first_chunk && lang_token < 0 && !cm->lang_token_ids.empty()) {
+            // Lazily materialize encoder output to host for the
+            // prefill graph's encoder_out_in input. The hot path
+            // (cross-KV) reads cc->enc_out.tensor directly; this
+            // copy is one-shot per run when language detection
+            // is needed.
+            const int d_enc_lang = cc->enc_out.d_model;
+            const int T_enc_lang = cc->enc_out.T_enc;
+            cc->enc_host.resize(static_cast<size_t>(d_enc_lang) *
+                                static_cast<size_t>(T_enc_lang));
+            ggml_backend_tensor_get(cc->enc_out.tensor,
+                                    cc->enc_host.data(), 0,
+                                    cc->enc_host.size() * sizeof(float));
+
             if (!new_compute_ctx(16 * 1024 * 1024)) {
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -1649,6 +1950,7 @@ transcribe_status whisper_run(
         // the tier loop and re-ran every tier, paying n_layers × T_enc ×
         // d_model² of redundant matmul per tier on fallback chunks.
         {
+            const int64_t t_cross_build_start = ggml_time_us();
             if (!new_compute_ctx(8 * 1024 * 1024)) {
                 std::fprintf(stderr,
                              "whisper run: ggml_init for cross_kv failed\n");
@@ -1656,19 +1958,25 @@ transcribe_status whisper_run(
             }
             DecoderBuild cross_db = build_cross_kv_graph(
                 cc->compute_ctx, cm->weights, cm->hparams,
-                cc->kv_cache, T_enc_local);
+                cc->kv_cache, cc->enc_out.tensor, T_enc_local);
             if (cross_db.graph == nullptr) {
                 return TRANSCRIBE_ERR_GGUF;
             }
+            cc->perf.cross_build.add(ggml_time_us() - t_cross_build_start);
+
+            const int64_t t_cross_alloc_start = ggml_time_us();
             ggml_backend_sched_reset(cc->sched);
             if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
                 std::fprintf(stderr,
                              "whisper run: alloc_graph failed (cross_kv)\n");
                 return TRANSCRIBE_ERR_GGUF;
             }
-            ggml_backend_tensor_set(cross_db.encoder_out_in,
-                                    cc->enc_host.data(), 0,
-                                    cc->enc_host.size() * sizeof(float));
+            // No tensor_set: cross-KV reads cc->enc_out.tensor via
+            // a view inside build_cross_kv_graph, populated by the
+            // encoder graph's final ggml_cpy.
+            cc->perf.cross_alloc.add(ggml_time_us() - t_cross_alloc_start);
+
+            const int64_t t_cross_compute_start = ggml_time_us();
             if (const ggml_status gs = ggml_backend_sched_graph_compute(
                     cc->sched, cross_db.graph);
                 gs != GGML_STATUS_SUCCESS)
@@ -1678,6 +1986,7 @@ transcribe_status whisper_run(
                              static_cast<int>(gs));
                 return TRANSCRIBE_ERR_GGUF;
             }
+            cc->perf.cross_compute.add(ggml_time_us() - t_cross_compute_start);
             cc->kv_cache.cross_populated = true;
         }
 
@@ -1710,15 +2019,23 @@ transcribe_status whisper_run(
 
             // ---- Prompt pass (emit dumps, n_past=0) -------------------
             {
+                const int64_t t_prompt_build_start = ggml_time_us();
                 if (!new_compute_ctx(16 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+                const int kv_pad = kv_pad_self_attn(
+                    cm->plan.primary_kind, cc->decoder_use_flash);
                 DecoderBuild db = build_decoder_graph_kv(
                     cc->compute_ctx, cm->weights, cm->hparams,
                     cc->kv_cache,
                     /*n_tokens=*/seq_len, /*n_past=*/0, T_enc_local,
+                    /*kv_pad=*/kv_pad,
                     /*skip_log_softmax=*/false, cc->decoder_use_flash);
                 if (db.out == nullptr || db.graph == nullptr) {
                     return TRANSCRIBE_ERR_GGUF;
                 }
+                cc->perf.prompt_build.add(
+                    ggml_time_us() - t_prompt_build_start);
+
+                const int64_t t_prompt_alloc_start = ggml_time_us();
                 ggml_backend_sched_reset(cc->sched);
                 if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) {
                     std::fprintf(stderr,
@@ -1735,23 +2052,54 @@ transcribe_status whisper_run(
                                         0, pos_ids.size() * sizeof(int32_t));
 
                 if (db.causal_mask_in != nullptr) {
-                    std::vector<float> mask(static_cast<size_t>(seq_len) * seq_len);
+                    // Mask shape: [n_kv, n_tokens] = [n_kv, seq_len].
+                    // db.causal_mask_in carries the runtime n_kv (may
+                    // be padded beyond seq_len for FA alignment).
+                    const int n_kv_mask =
+                        static_cast<int>(db.causal_mask_in->ne[0]);
+                    std::vector<float> mask(
+                        static_cast<size_t>(n_kv_mask) * seq_len);
                     for (int q = 0; q < seq_len; ++q) {
-                        for (int k = 0; k < seq_len; ++k) {
-                            mask[static_cast<size_t>(q) * seq_len + k] =
-                                (k <= q) ? 0.0f : -1e9f;
+                        for (int k = 0; k < n_kv_mask; ++k) {
+                            // Causal in [0, seq_len), -inf for padded
+                            // slots in [seq_len, n_kv_mask).
+                            mask[static_cast<size_t>(q) * n_kv_mask + k] =
+                                (k < seq_len && k <= q) ? 0.0f : -1e9f;
                         }
                     }
                     ggml_backend_tensor_set(db.causal_mask_in, mask.data(),
                                             0, mask.size() * sizeof(float));
                 }
 
+                if (db.cross_mask_in != nullptr) {
+                    // Cross mask shape [T_enc_pad, n_tokens]. Zero
+                    // for k in [0, T_enc), -inf for trailing padded
+                    // slots — same for every query row.
+                    const int n_kv_cross =
+                        static_cast<int>(db.cross_mask_in->ne[0]);
+                    std::vector<float> mask(
+                        static_cast<size_t>(n_kv_cross) * seq_len);
+                    for (int q = 0; q < seq_len; ++q) {
+                        for (int k = 0; k < n_kv_cross; ++k) {
+                            mask[static_cast<size_t>(q) * n_kv_cross + k] =
+                                (k < T_enc_local) ? 0.0f : -1e9f;
+                        }
+                    }
+                    ggml_backend_tensor_set(db.cross_mask_in, mask.data(),
+                                            0, mask.size() * sizeof(float));
+                }
+                cc->perf.prompt_alloc.add(
+                    ggml_time_us() - t_prompt_alloc_start);
+
+                const int64_t t_prompt_compute_start = ggml_time_us();
                 if (const ggml_status gs = ggml_backend_sched_graph_compute(
                         cc->sched, db.graph);
                     gs != GGML_STATUS_SUCCESS)
                 {
                     return TRANSCRIBE_ERR_GGUF;
                 }
+                cc->perf.prompt_compute.add(
+                    ggml_time_us() - t_prompt_compute_start);
                 cc->kv_cache.n    = seq_len;
                 cc->kv_cache.head = seq_len;
 
@@ -1795,10 +2143,13 @@ transcribe_status whisper_run(
                 {
                     std::vector<float> sot_logits(
                         static_cast<size_t>(vocab_size));
+                    const int64_t t_prompt_tget_sot = ggml_time_us();
                     ggml_backend_tensor_get(
                         db.dumps.logits_raw, sot_logits.data(),
                         row_bytes * static_cast<size_t>(sot_index),
                         row_bytes);
+                    cc->perf.prompt_tensor_get.add(
+                        ggml_time_us() - t_prompt_tget_sot);
                     float max_l = -std::numeric_limits<float>::infinity();
                     for (auto l : sot_logits) {
                         if (std::isfinite(l) && l > max_l) max_l = l;
@@ -1826,21 +2177,54 @@ transcribe_status whisper_run(
                 }
 
                 // Last-row logits → first generated token.
+                const int64_t t_prompt_tget_last = ggml_time_us();
                 ggml_backend_tensor_get(db.dumps.logits_raw, last_logits.data(),
                                         row_bytes * static_cast<size_t>(seq_len - 1),
                                         row_bytes);
+                cc->perf.prompt_tensor_get.add(
+                    ggml_time_us() - t_prompt_tget_last);
 
+                const int64_t t_prompt_cpu_start = ggml_time_us();
+                const int64_t t_prompt_suppress_start = ggml_time_us();
                 suppress_in_place(last_logits);
                 for (int32_t id : cm->hparams.begin_suppress_tokens) {
                     if (id >= 0 && id < vocab_size) {
                         last_logits[static_cast<size_t>(id)] = -INFINITY;
                     }
                 }
+                cc->perf.prompt_cpu_suppress.add(
+                    ggml_time_us() - t_prompt_suppress_start);
+
+                const int64_t t_prompt_ts_start = ggml_time_us();
                 apply_timestamp_rules(last_logits);
-                next_id = sample_from_logits(last_logits, tier_T, rng);
-                sum_logprob +=
-                    logprob_of_token_hf(last_logits, next_id, tier_T);
+                cc->perf.prompt_cpu_timestamp.add(
+                    ggml_time_us() - t_prompt_ts_start);
+
+                if (tier_T <= 0.0f) {
+                    // T==0: fused argmax + log-softmax. The whole call
+                    // is recorded under sample; logprob bucket stays 0
+                    // for this path (it is computed for free here).
+                    const int64_t t_prompt_sample_start = ggml_time_us();
+                    float lp = 0.0f;
+                    next_id = sample_argmax_and_logprob(last_logits, &lp);
+                    sum_logprob += lp;
+                    cc->perf.prompt_cpu_sample.add(
+                        ggml_time_us() - t_prompt_sample_start);
+                } else {
+                    const int64_t t_prompt_sample_start = ggml_time_us();
+                    next_id = sample_from_logits(
+                        last_logits, tier_T, rng, &cc->sample_scratch);
+                    cc->perf.prompt_cpu_sample.add(
+                        ggml_time_us() - t_prompt_sample_start);
+
+                    const int64_t t_prompt_lp_start = ggml_time_us();
+                    sum_logprob +=
+                        logprob_of_token_hf(last_logits, next_id, tier_T);
+                    cc->perf.prompt_cpu_logprob.add(
+                        ggml_time_us() - t_prompt_lp_start);
+                }
                 n_logprob_samples += 1;
+                cc->perf.prompt_cpu.add(ggml_time_us() - t_prompt_cpu_start);
             }
 
             // ---- Step loop (n_tokens=1) -------------------------------
@@ -1858,13 +2242,19 @@ transcribe_status whisper_run(
 
                 if (n_past + 1 > static_cast<int>(n_ctx_decoder)) break;
 
+                const int64_t t_step_build_start = ggml_time_us();
                 if (!new_compute_ctx(4 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+                const int kv_pad = kv_pad_self_attn(
+                    cm->plan.primary_kind, cc->decoder_use_flash);
                 DecoderBuild step_db = build_decoder_graph_kv(
                     cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
                     /*n_tokens=*/1, /*n_past=*/n_past, T_enc_local,
+                    /*kv_pad=*/kv_pad,
                     /*skip_log_softmax=*/true, cc->decoder_use_flash);
                 if (step_db.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+                cc->perf.step_build.add(ggml_time_us() - t_step_build_start);
 
+                const int64_t t_step_alloc_start = ggml_time_us();
                 ggml_backend_sched_reset(cc->sched);
                 if (!ggml_backend_sched_alloc_graph(cc->sched, step_db.graph)) {
                     return TRANSCRIBE_ERR_GGUF;
@@ -1876,12 +2266,50 @@ transcribe_status whisper_run(
                 ggml_tensor * pos_in = ggml_graph_get_tensor(step_db.graph, "dec.pos_ids");
                 ggml_backend_tensor_set(pos_in, &pos, 0, sizeof(int32_t));
 
+                // Padded step: build the trailing-padding mask. The
+                // valid range [0, n_past+1) is 0; trailing slots are
+                // -inf so the FA op ignores stale K/V values left in
+                // the cache from previous tiers / chunks.
+                if (step_db.causal_mask_in != nullptr) {
+                    const int n_kv_mask =
+                        static_cast<int>(step_db.causal_mask_in->ne[0]);
+                    std::vector<float> mask(
+                        static_cast<size_t>(n_kv_mask), 0.0f);
+                    const int n_valid = n_past + 1;
+                    for (int k = n_valid; k < n_kv_mask; ++k) {
+                        mask[static_cast<size_t>(k)] = -1e9f;
+                    }
+                    ggml_backend_tensor_set(
+                        step_db.causal_mask_in, mask.data(),
+                        0, mask.size() * sizeof(float));
+                }
+
+                if (step_db.cross_mask_in != nullptr) {
+                    // Cross mask shape [T_enc_pad, 1]. Same shape
+                    // every step within a chunk; could be hoisted out
+                    // of the step loop later, but T_enc_pad is small
+                    // (1536 floats) so the upload is negligible.
+                    const int n_kv_cross =
+                        static_cast<int>(step_db.cross_mask_in->ne[0]);
+                    std::vector<float> mask(
+                        static_cast<size_t>(n_kv_cross), 0.0f);
+                    for (int k = T_enc_local; k < n_kv_cross; ++k) {
+                        mask[static_cast<size_t>(k)] = -1e9f;
+                    }
+                    ggml_backend_tensor_set(
+                        step_db.cross_mask_in, mask.data(),
+                        0, mask.size() * sizeof(float));
+                }
+                cc->perf.step_alloc.add(ggml_time_us() - t_step_alloc_start);
+
+                const int64_t t_step_compute_start = ggml_time_us();
                 if (const ggml_status gs = ggml_backend_sched_graph_compute(
                         cc->sched, step_db.graph);
                     gs != GGML_STATUS_SUCCESS)
                 {
                     return TRANSCRIBE_ERR_GGUF;
                 }
+                cc->perf.step_compute.add(ggml_time_us() - t_step_compute_start);
 
                 n_past += 1;
                 cc->kv_cache.n    = n_past;
@@ -1900,13 +2328,43 @@ transcribe_status whisper_run(
                 // when T=0, so tolerance paths still produce the same
                 // token sequence).
                 const size_t row_bytes = static_cast<size_t>(vocab_size) * sizeof(float);
+                const int64_t t_step_tget_start = ggml_time_us();
                 ggml_backend_tensor_get(step_db.out, last_logits.data(), 0, row_bytes);
+                cc->perf.step_tensor_get.add(ggml_time_us() - t_step_tget_start);
+
+                const int64_t t_step_cpu_start = ggml_time_us();
+                const int64_t t_step_suppress_start = ggml_time_us();
                 suppress_in_place(last_logits);
+                cc->perf.step_cpu_suppress.add(
+                    ggml_time_us() - t_step_suppress_start);
+
+                const int64_t t_step_ts_start = ggml_time_us();
                 apply_timestamp_rules(last_logits);
-                next_id = sample_from_logits(last_logits, tier_T, rng);
-                sum_logprob +=
-                    logprob_of_token_hf(last_logits, next_id, tier_T);
+                cc->perf.step_cpu_timestamp.add(
+                    ggml_time_us() - t_step_ts_start);
+
+                if (tier_T <= 0.0f) {
+                    const int64_t t_step_sample_start = ggml_time_us();
+                    float lp = 0.0f;
+                    next_id = sample_argmax_and_logprob(last_logits, &lp);
+                    sum_logprob += lp;
+                    cc->perf.step_cpu_sample.add(
+                        ggml_time_us() - t_step_sample_start);
+                } else {
+                    const int64_t t_step_sample_start = ggml_time_us();
+                    next_id = sample_from_logits(
+                        last_logits, tier_T, rng, &cc->sample_scratch);
+                    cc->perf.step_cpu_sample.add(
+                        ggml_time_us() - t_step_sample_start);
+
+                    const int64_t t_step_lp_start = ggml_time_us();
+                    sum_logprob +=
+                        logprob_of_token_hf(last_logits, next_id, tier_T);
+                    cc->perf.step_cpu_logprob.add(
+                        ggml_time_us() - t_step_lp_start);
+                }
                 n_logprob_samples += 1;
+                cc->perf.step_cpu.add(ggml_time_us() - t_step_cpu_start);
             }
 
             // ---- Compute tier metrics ---------------------------------

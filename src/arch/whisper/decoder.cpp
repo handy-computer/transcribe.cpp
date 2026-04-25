@@ -29,6 +29,7 @@
 
 #include "ggml.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -212,12 +213,16 @@ ggml_tensor * mha_self_cached(ggml_context *   ctx,
                               int              il,
                               int              n_past,
                               int              n_tokens,
+                              int              n_kv,
                               bool             use_flash)
 {
     const int head_dim = d_model / n_heads;
     const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int n_ctx    = kv_cache.n_ctx;
-    const int n_kv     = n_past + n_tokens;
+    // n_kv may be padded to a FA-friendly multiple beyond n_past +
+    // n_tokens. Trailing slots are masked to -inf via the caller's
+    // mask so they do not contribute. The cache write below still
+    // touches only the [n_past, n_past+n_tokens) range.
 
     // Q / K / V projections for the *new* tokens only.
     ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
@@ -306,6 +311,7 @@ ggml_tensor * mha_self_cached(ggml_context *   ctx,
 ggml_tensor * mha_cross_cached(ggml_context *   ctx,
                                ggml_tensor *    x,
                                WhisperKvCache & kv_cache,
+                               ggml_tensor *    mask,
                                ggml_tensor *    q_w, ggml_tensor * q_b,
                                ggml_tensor *    out_w, ggml_tensor * out_b,
                                int              n_heads,
@@ -318,6 +324,15 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
     const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t n_tokens = x->ne[1];
 
+    // Cross-attn cache is laid out at T_enc_pad rows per layer; the
+    // trailing T_enc_pad - T_enc rows hold zeros (cleared at init,
+    // never written by build_cross_kv_graph). FA reads the padded
+    // shape — the unmasked padded slots contribute a small dilution
+    // but produce a kernel-friendly sequence dim.
+    const int T_enc_pad = kv_cache.T_enc_pad > 0
+                              ? kv_cache.T_enc_pad : T_enc;
+    (void)T_enc;
+
     // Q from current input; K / V read from the cross cache.
     ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
     if (q_b != nullptr) Qcur = ggml_add(ctx, Qcur, q_b);
@@ -328,28 +343,28 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
     const size_t k_elem = ggml_element_size(kv_cache.cross_k);
     ggml_tensor * K = ggml_view_3d(
         ctx, kv_cache.cross_k,
-        head_dim, T_enc, n_heads,
+        head_dim, T_enc_pad, n_heads,
         k_elem * d_model,
         k_elem * head_dim,
         k_elem * static_cast<size_t>(
-            static_cast<int64_t>(il) * T_enc * d_model));
+            static_cast<int64_t>(il) * T_enc_pad * d_model));
 
     const size_t v_elem = ggml_element_size(kv_cache.cross_v);
     ggml_tensor * V = ggml_view_3d(
         ctx, kv_cache.cross_v,
-        head_dim, T_enc, n_heads,
+        head_dim, T_enc_pad, n_heads,
         v_elem * d_model,
         v_elem * head_dim,
         v_elem * static_cast<size_t>(
-            static_cast<int64_t>(il) * T_enc * d_model));
+            static_cast<int64_t>(il) * T_enc_pad * d_model));
 
     ggml_tensor * o;
     if (use_flash) {
-        o = ggml_flash_attn_ext(ctx, Q, K, V, nullptr, scale, 0.0f, 0.0f);
+        o = ggml_flash_attn_ext(ctx, Q, K, V, mask, scale, 0.0f, 0.0f);
         o = ggml_reshape_2d(ctx, o, d_model, n_tokens);
     } else {
         ggml_tensor * kq      = ggml_mul_mat(ctx, K, Q);
-        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, nullptr, scale, 0.0f);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask, scale, 0.0f);
         ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, V, 1, 0, 2, 3));
         o = ggml_mul_mat(ctx, v_t, kq_soft);
         o = ggml_permute(ctx, o, 0, 2, 1, 3);
@@ -504,24 +519,29 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
                                   const WhisperWeights & w,
                                   const WhisperHParams & hp,
                                   WhisperKvCache &       kv_cache,
+                                  ggml_tensor *          encoder_out,
                                   int                    T_enc)
 {
     DecoderBuild db {};
 
-    if (ctx == nullptr || T_enc <= 0) {
+    if (ctx == nullptr || encoder_out == nullptr || T_enc <= 0) {
         std::fprintf(stderr,
-                     "whisper cross_kv: invalid arg (ctx=%p, T_enc=%d)\n",
-                     static_cast<void *>(ctx), T_enc);
+                     "whisper cross_kv: invalid arg "
+                     "(ctx=%p, encoder_out=%p, T_enc=%d)\n",
+                     static_cast<void *>(ctx),
+                     static_cast<void *>(encoder_out), T_enc);
         return db;
     }
 
     const int d_model = hp.dec_d_model;
 
-    // Input: encoder output [d_model, T_enc]. Caller uploads via
-    // ggml_backend_tensor_set after alloc_graph.
-    db.encoder_out_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_enc);
+    // View the persistent encoder_out tensor into this compute_ctx.
+    // No data is copied — the view shares storage with the source,
+    // which the encoder graph populated on the same backend.
+    db.encoder_out_in = ggml_view_2d(ctx, encoder_out,
+                                     d_model, T_enc,
+                                     encoder_out->nb[1], 0);
     named(db.encoder_out_in, "dec.encoder_out");
-    ggml_set_input(db.encoder_out_in);
 
     db.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (db.graph == nullptr) {
@@ -529,6 +549,12 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
                      "whisper cross_kv: ggml_new_graph_custom failed\n");
         return db;
     }
+
+    // Layer slots in the flat cross cache are spaced by T_enc_pad
+    // (allocator size) but each layer only writes T_enc rows; the
+    // trailing T_enc_pad - T_enc rows stay zero from buffer_clear.
+    const int T_enc_pad = kv_cache.T_enc_pad > 0
+                              ? kv_cache.T_enc_pad : T_enc;
 
     const int n_layers = static_cast<int>(w.dec_blocks.size());
     for (int il = 0; il < n_layers; ++il) {
@@ -544,7 +570,9 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
         }
 
         // Write the [d_model, T_enc] projections into the flat cache
-        // slot for this layer. Offset in elements = il * T_enc * d_model.
+        // slot for this layer. Offset in elements = il * T_enc_pad *
+        // d_model so the layer slots in the padded cache do not
+        // overlap; the size of each write is T_enc * d_model.
         const size_t k_elem = ggml_element_size(kv_cache.cross_k);
         const size_t v_elem = ggml_element_size(kv_cache.cross_v);
 
@@ -552,13 +580,13 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
             ctx, kv_cache.cross_k,
             static_cast<int64_t>(T_enc) * d_model,
             k_elem * static_cast<size_t>(
-                static_cast<int64_t>(il) * T_enc * d_model));
+                static_cast<int64_t>(il) * T_enc_pad * d_model));
 
         ggml_tensor * v_dst = ggml_view_1d(
             ctx, kv_cache.cross_v,
             static_cast<int64_t>(T_enc) * d_model,
             v_elem * static_cast<size_t>(
-                static_cast<int64_t>(il) * T_enc * d_model));
+                static_cast<int64_t>(il) * T_enc_pad * d_model));
 
         ggml_build_forward_expand(db.graph, ggml_cpy(ctx, Kcross, k_dst));
         ggml_build_forward_expand(db.graph, ggml_cpy(ctx, Vcross, v_dst));
@@ -574,6 +602,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
                                     int                    n_tokens,
                                     int                    n_past,
                                     int                    T_enc,
+                                    int                    kv_pad,
                                     bool                   skip_log_softmax,
                                     bool                   use_flash)
 {
@@ -586,13 +615,27 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
                      static_cast<void *>(ctx), n_tokens, T_enc);
         return db;
     }
-    const int n_kv = n_past + n_tokens;
-    if (n_kv > kv_cache.n_ctx) {
+    const int n_kv_active = n_past + n_tokens;
+    if (n_kv_active > kv_cache.n_ctx) {
         std::fprintf(stderr,
                      "whisper decoder_kv: n_kv=%d exceeds n_ctx=%d\n",
-                     n_kv, kv_cache.n_ctx);
+                     n_kv_active, kv_cache.n_ctx);
         return db;
     }
+
+    // Pad the K/V view length up to a FA-friendly multiple. Trailing
+    // slots in [n_kv_active, n_kv) hold either zeros (first use of a
+    // freshly-cleared cache) or stale K/V values from prior tiers /
+    // chunks; the mask zeroes them out so they do not contribute.
+    // Clamp to kv_cache.n_ctx so we do not read past the allocation.
+    const int kv_pad_eff = kv_pad > 0 ? kv_pad : 1;
+    int n_kv = n_kv_active;
+    if (kv_pad_eff > 1) {
+        n_kv = std::max(kv_pad_eff,
+                        static_cast<int>(GGML_PAD(n_kv_active, kv_pad_eff)));
+        if (n_kv > kv_cache.n_ctx) n_kv = kv_cache.n_ctx;
+    }
+    const bool has_padding = n_kv > n_kv_active;
 
     const int d_model = hp.dec_d_model;
     const int n_heads = hp.dec_n_heads;
@@ -610,17 +653,21 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     named(pos_ids_in, "dec.pos_ids");
     ggml_set_input(pos_ids_in);
 
-    // Causal mask only needed when n_tokens > 1 (prompt pass). For
-    // step pass, the current token can attend to everything in the
-    // cache, so mask is all zeros and we skip it.
+    // Self-attention mask. Two reasons we need one:
+    //   (1) prompt pass (n_tokens > 1) needs a causal mask
+    //   (2) padded step (kv_pad > 1) needs -inf at trailing slots
+    // The single mask covers both: shape [n_kv, n_tokens] with -inf
+    // for k >= n_kv_active (covers padding) and -inf for k > q +
+    // n_past (covers causality when n_tokens > 1). Caller in model.cpp
+    // populates the values.
     //
-    // The mask-null branch is only sound when exactly one new token is
-    // being added to the cache — otherwise later tokens in the batch
-    // would see each other and leak future context. Enforce the
-    // invariant explicitly: if a beam-search caller ever passes
-    // n_tokens > 1 with n_past > 0 it must also build a mask.
+    // When n_tokens == 1 AND there is no padding, the mask can be
+    // omitted (single token attends to the full real cache window).
+    // Preserve that fast path so non-FA / non-Metal paths skip the
+    // extra input tensor.
     ggml_tensor * causal_mask = nullptr;
-    if (n_tokens > 1) {
+    const bool need_mask = (n_tokens > 1) || has_padding;
+    if (need_mask) {
         db.causal_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
                                                n_kv, n_tokens);
         named(db.causal_mask_in, "dec.causal_mask");
@@ -629,6 +676,23 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     } else {
         GGML_ASSERT(n_tokens == 1 &&
                     "decoder_kv mask-null branch requires single-token step");
+    }
+
+    // Cross-attention mask. Only needed when the cross cache has
+    // been allocated with padding (T_enc_pad > T_enc); the trailing
+    // padded slots hold zero K/V and would otherwise dilute the
+    // unmasked FA softmax. -inf at those positions zeros the
+    // contribution and restores numerical equivalence to an
+    // unpadded view.
+    ggml_tensor * cross_mask = nullptr;
+    const int T_enc_pad = kv_cache.T_enc_pad > 0
+                              ? kv_cache.T_enc_pad : T_enc;
+    if (T_enc_pad > T_enc) {
+        db.cross_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                                              T_enc_pad, n_tokens);
+        named(db.cross_mask_in, "dec.cross_mask");
+        ggml_set_input(db.cross_mask_in);
+        cross_mask = ggml_cast(ctx, db.cross_mask_in, GGML_TYPE_F16);
     }
 
     // ---- Token embedding -------------------------------------------
@@ -682,14 +746,14 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
                 b.self_v_w, b.self_v_b,
                 b.self_out_w, b.self_out_b,
                 n_heads, d_model,
-                i, n_past, n_tokens, use_flash);
+                i, n_past, n_tokens, n_kv, use_flash);
             x = ggml_add(ctx, x, y);
         }
         // Cross-attention (pre-LN, reads cross cache).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, b.norm_cross_b);
             y = mha_cross_cached(
-                ctx, y, kv_cache,
+                ctx, y, kv_cache, cross_mask,
                 b.cross_q_w, b.cross_q_b,
                 b.cross_out_w, b.cross_out_b,
                 n_heads, d_model, i, T_enc, use_flash);

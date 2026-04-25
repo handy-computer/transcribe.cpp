@@ -56,6 +56,13 @@ struct DecoderBuild {
     ggml_tensor * encoder_out_in = nullptr;  // [d_model, T_enc] f32 (non-cached + cross_kv graph)
     ggml_tensor * causal_mask_in = nullptr;  // [n_kv, seq_len] f32 (cast to f16 inside)
 
+    // Cross-attention mask, only present when the cross K/V cache
+    // is padded (T_enc_pad > T_enc). Shape [T_enc_pad, n_tokens] f32
+    // (cast to f16 inside). Caller populates with 0 for k in [0,
+    // T_enc) and -inf for k in [T_enc, T_enc_pad), so the unmasked
+    // padded slots do not contribute to the cross-attn output.
+    ggml_tensor * cross_mask_in  = nullptr;
+
     // Output: log-softmax logits [vocab_size, seq_len].
     ggml_tensor * out = nullptr;
 
@@ -75,12 +82,15 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         compute_ctx,
 // layer from the encoder output and writes them into the cross-attn
 // KV cache. Run once per utterance.
 //
-// The returned DecoderBuild has only encoder_out_in and graph set.
-// Caller uploads encoder output and calls ggml_backend_sched_graph_compute.
+// encoder_out is the backend-resident persistent tensor populated by
+// the encoder graph (shape [d_model, T_enc]). The cross-KV graph
+// reads it via a view in compute_ctx — no host roundtrip required.
+// Caller calls ggml_backend_sched_graph_compute after alloc_graph.
 DecoderBuild build_cross_kv_graph(ggml_context *         compute_ctx,
                                   const WhisperWeights & weights,
                                   const WhisperHParams & hp,
                                   WhisperKvCache &       kv_cache,
+                                  ggml_tensor *          encoder_out,
                                   int                    T_enc);
 
 // Build a KV-cached decoder graph. Works for both prompt pass
@@ -95,6 +105,12 @@ DecoderBuild build_cross_kv_graph(ggml_context *         compute_ctx,
 //
 // skip_log_softmax=true outputs pre-softmax logits (argmax-invariant,
 // cheaper readback). skip_log_softmax=false matches the reference dump.
+//
+// kv_pad is the active-KV padding multiple for the FA kernel
+// (whisper.cpp: 32 on Metal+FA, 1 elsewhere). When kv_pad > 1 the
+// effective n_kv is rounded up to a multiple of kv_pad, and the
+// caller-supplied causal_mask_in covers the trailing padded slots
+// with -inf so they do not contribute to the FA output.
 DecoderBuild build_decoder_graph_kv(ggml_context *         compute_ctx,
                                     const WhisperWeights & weights,
                                     const WhisperHParams & hp,
@@ -102,6 +118,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         compute_ctx,
                                     int                    n_tokens,
                                     int                    n_past,
                                     int                    T_enc,
+                                    int                    kv_pad           = 1,
                                     bool                   skip_log_softmax = false,
                                     bool                   use_flash        = true);
 
