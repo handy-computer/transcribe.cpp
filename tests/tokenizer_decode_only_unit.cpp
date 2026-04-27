@@ -19,8 +19,10 @@
 //   - vocab + piece_to_id round-trip via token(), find(), n_tokens().
 //   - decode() picks the right strategy: byte-unicode inversion for
 //     gpt2-decode-only, verbatim concatenation for raw-bytes.
-//   - has_encoder() returns false (no merges).
-//   - encode() rejects with NOT_IMPLEMENTED (model_ != "gpt2").
+//   - gpt2-decode-only reports has_encoder() false and rejects encode()
+//     because no merges are present.
+//   - raw-bytes mode reports has_encoder() true and can encode via
+//     tiktoken-style piece_to_id_ ranks.
 //   - DecodeOnlySpecials values are carried into bos/eos/unk/blank ids.
 
 #include "transcribe-tokenizer.h"
