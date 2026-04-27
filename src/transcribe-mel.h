@@ -135,6 +135,16 @@ private:
     int n_freq_;                      // n_fft/2 + 1
     std::vector<double> window_;      // [n_fft], periodic hann zero-padded
     std::vector<float>  mel_fb_;      // [num_mels * n_freq] row-major, Slaney
+
+    // sin/cos LUT for the mixed-radix FFT. Sized to n_fft so that every
+    // recursion-level N (n_fft, n_fft/2, n_fft/4, ..., odd leaf) divides
+    // the LUT exactly and lookups never fall back to live std::cos/sin.
+    // Stored as fp32 to match the FFT precision and avoid a per-load
+    // cast in the inner butterfly. Only populated when n_fft is non-pow2
+    // (the only path that uses the LUT — pow2 sizes use fft_radix2 /
+    // vDSP, which carry their own twiddle factors). Empty when unused.
+    std::vector<float> cos_lut_;
+    std::vector<float> sin_lut_;
 };
 
 } // namespace transcribe

@@ -194,65 +194,35 @@ void build_hann_window_symmetric_padded(
 // path), and a single hand-rolled radix-2 keeps the dependency
 // surface zero. Drop in pocketfft only if profiling later shows the
 // frontend is a bottleneck.
-// Process-wide sin/cos cache, indexed by 2π*i / SIN_COS_N_COUNT. The
-// leaf DFT at size N uses LUT-stride = SIN_COS_N_COUNT / N. A single
-// 65536-entry table handles any N that divides 65536 evenly. For
-// Whisper's 400 = 2^4 * 5^2 the leaf size is 25, and 65536 / 25 ≈ 2621.
-// To keep the table index exact for all leaves we encounter we pad to
-// the LCM of common leaf sizes. 2520 covers 1..10 and up to ~30
-// comfortably — sufficient for n_fft ∈ {400, 512, 1024, …}. The FFT
-// butterflies also use the LUT via 2π*k/N with stride LCM/N.
-constexpr int kSinCosLut = 5040;  // 7! covers divisors 1..10 exactly
-
-struct SinCosLut {
-    double cos_vals[kSinCosLut];
-    double sin_vals[kSinCosLut];
-
-    SinCosLut() {
-        for (int i = 0; i < kSinCosLut; ++i) {
-            const double theta = 2.0 * M_PI * i / kSinCosLut;
-            cos_vals[i] = std::cos(theta);
-            sin_vals[i] = std::sin(theta);
-        }
-    }
-};
-
-const SinCosLut & sin_cos_lut() {
-    static SinCosLut g_lut;
-    return g_lut;
-}
+// Per-MelFrontend sin/cos cache, indexed by 2π*i / lut_size. The mixed-
+// radix path is the only consumer; for it to hit the LUT on every level
+// we need lut_size divisible by every N seen during recursion. With
+// lut_size == n_fft this holds automatically: n_fft → n_fft/2 → … → odd
+// leaf, all divisors of n_fft. Stride at recursion level N is
+// lut_size / N, and (k*n*stride) % lut_size lands on the right phase.
+//
+// Historical note: this was previously a process-wide 5040-entry
+// singleton ("7! covers divisors 1..10"), but for Whisper's n_fft=400 =
+// 2^4·5² the recursion sizes are {400, 200, 100, 50, 25} — none divide
+// 5040, so use_lut was false at every level and we silently fell
+// through to live std::cos/sin in tight loops (~10K trig calls per
+// frame from the leaf DFT alone). Sizing the LUT to n_fft fixes that.
 
 // Naive O(N^2) DFT leaf for the mixed-radix path. Used when N hits an
 // odd factor during recursive halving (e.g. N=400 → 200 → 100 → 50 → 25
-// odd → leaf). Uses the shared fp64 sin_cos_lut() so trig calls collapse
-// to table lookups; downcasts to fp32 on read.
-void dft_naive_f32(const float * in, int N, float * out) {
-    const auto & lut = sin_cos_lut();
-    const int    stride = kSinCosLut / N;
-
-    if (stride * N == kSinCosLut) {
-        for (int k = 0; k < N; ++k) {
-            float re = 0.0f;
-            float im = 0.0f;
-            for (int n = 0; n < N; ++n) {
-                const int idx = (k * n * stride) % kSinCosLut;
-                re += in[n] * static_cast<float>(lut.cos_vals[idx]);
-                im -= in[n] * static_cast<float>(lut.sin_vals[idx]);
-            }
-            out[2 * k    ] = re;
-            out[2 * k + 1] = im;
-        }
-        return;
-    }
+// odd → leaf). Uses the per-frontend fp32 LUT (lut_size divisible by N
+// by construction).
+void dft_naive_f32(const float * in, int N,
+                   const float * cos_lut, const float * sin_lut, int lut_size,
+                   float * out) {
+    const int stride = lut_size / N;
     for (int k = 0; k < N; ++k) {
         float re = 0.0f;
         float im = 0.0f;
         for (int n = 0; n < N; ++n) {
-            const float ang = static_cast<float>(-2.0 * M_PI) *
-                static_cast<float>(k) * static_cast<float>(n) /
-                static_cast<float>(N);
-            re += in[n] * std::cos(ang);
-            im += in[n] * std::sin(ang);
+            const int idx = (k * n * stride) % lut_size;
+            re += in[n] * cos_lut[idx];
+            im -= in[n] * sin_lut[idx];
         }
         out[2 * k    ] = re;
         out[2 * k + 1] = im;
@@ -270,41 +240,34 @@ void dft_naive_f32(const float * in, int N, float * out) {
 //           used as scratch for the even/odd split at this level.
 //   out   : 8*N floats. The top-level result lands in the first 2*N;
 //           recursion uses the remainder as intermediate output.
-void mixed_radix_fft_f32(float * in, int N, float * out) {
+void mixed_radix_fft_f32(float * in, int N,
+                         const float * cos_lut, const float * sin_lut, int lut_size,
+                         float * out) {
     if (N == 1) {
         out[0] = in[0];
         out[1] = 0.0f;
         return;
     }
     if (N & 1) {
-        dft_naive_f32(in, N, out);
+        dft_naive_f32(in, N, cos_lut, sin_lut, lut_size, out);
         return;
     }
     const int half_N = N / 2;
     float * even = in + N;
     for (int i = 0; i < half_N; ++i) even[i] = in[2 * i];
     float * even_fft = out + 2 * N;
-    mixed_radix_fft_f32(even, half_N, even_fft);
+    mixed_radix_fft_f32(even, half_N, cos_lut, sin_lut, lut_size, even_fft);
 
     float * odd = even;
     for (int i = 0; i < half_N; ++i) odd[i] = in[2 * i + 1];
     float * odd_fft = even_fft + N;
-    mixed_radix_fft_f32(odd, half_N, odd_fft);
+    mixed_radix_fft_f32(odd, half_N, cos_lut, sin_lut, lut_size, odd_fft);
 
-    const auto & lut = sin_cos_lut();
-    const int    step = kSinCosLut / N;
-    const bool   use_lut = (step * N == kSinCosLut);
+    const int step = lut_size / N;
     for (int k = 0; k < half_N; ++k) {
-        float w_re, w_im;
-        if (use_lut) {
-            const int idx = k * step;
-            w_re =  static_cast<float>(lut.cos_vals[idx]);
-            w_im = -static_cast<float>(lut.sin_vals[idx]);
-        } else {
-            const float ang = static_cast<float>(-2.0 * M_PI * k / N);
-            w_re = std::cos(ang);
-            w_im = std::sin(ang);
-        }
+        const int idx = k * step;
+        const float w_re =  cos_lut[idx];
+        const float w_im = -sin_lut[idx];
         const float re_odd = odd_fft[2 * k    ];
         const float im_odd = odd_fft[2 * k + 1];
         out[2 * k    ]            = even_fft[2 * k    ] + w_re * re_odd - w_im * im_odd;
@@ -391,6 +354,22 @@ MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
             mel_fb_);
     }
 
+    // Sin/cos LUT for the mixed-radix FFT. Only the non-pow2 path
+    // consumes it; pow2 sizes go through fft_radix2 (Linux) or vDSP
+    // (Apple), both of which carry their own twiddle factors.
+    const bool n_fft_is_pow2 =
+        ((cfg.n_fft > 0) && ((cfg.n_fft & (cfg.n_fft - 1)) == 0));
+    if (!n_fft_is_pow2) {
+        cos_lut_.resize(cfg.n_fft);
+        sin_lut_.resize(cfg.n_fft);
+        for (int i = 0; i < cfg.n_fft; ++i) {
+            // Compute in fp64 for accuracy, store as fp32 to match the
+            // FFT precision. The downcast is one-time per construction.
+            const double theta = 2.0 * M_PI * i / cfg.n_fft;
+            cos_lut_[i] = static_cast<float>(std::cos(theta));
+            sin_lut_[i] = static_cast<float>(std::sin(theta));
+        }
+    }
 }
 
 int MelFrontend::n_frames_for(size_t n_samples) const {
@@ -427,58 +406,132 @@ transcribe_status MelFrontend::compute(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // ---- 1. Pre-emphasis (in fp64; one-tap filter, ULP drift vs fp32 negligible) ----
-    std::vector<double> emph(n_samples);
-    if (cfg_.pre_emphasis != 0.0f) {
-        const double alpha = static_cast<double>(cfg_.pre_emphasis);
-        emph[0] = static_cast<double>(pcm[0]);
-        for (size_t i = 1; i < n_samples; ++i) {
-            emph[i] = static_cast<double>(pcm[i]) -
-                      alpha * static_cast<double>(pcm[i - 1]);
+    // ---- 1. Pad + pre-emphasis ----
+    //
+    // The non-pow2 (mixed-radix) path runs fp32 throughout, so we build
+    // the padded buffer directly in fp32 and skip the intermediate emph
+    // copy entirely. The pow2 paths (vDSP / hand-rolled radix-2) stay
+    // fp64 since their FFT routines are fp64-native.
+    //
+    // Whisper's mel was already lossy-cast fp64→fp32 right before the
+    // FFT in the non-pow2 path, so this just removes a memory-bandwidth
+    // hit (and one allocation) without changing the precision the FFT
+    // itself sees.
+    const bool n_fft_is_pow2 = ((n_fft > 0) && ((n_fft & (n_fft - 1)) == 0));
+
+    std::vector<float>  padded_f32;
+    std::vector<float>  window_f32;
+    std::vector<double> padded;
+
+    if (!n_fft_is_pow2) {
+        // FP32 path: pre-emphasis (or copy) directly into the middle of
+        // padded_f32, then reflect/zero-pad in place. window_ is
+        // downcast once for the worker.
+        padded_f32.resize(n_samples + 2 * static_cast<size_t>(pad));
+        if (cfg_.pre_emphasis != 0.0f) {
+            const float alpha = cfg_.pre_emphasis;
+            padded_f32[pad] = pcm[0];
+            for (size_t i = 1; i < n_samples; ++i) {
+                padded_f32[pad + i] = pcm[i] - alpha * pcm[i - 1];
+            }
+        } else {
+            std::memcpy(padded_f32.data() + pad, pcm, n_samples * sizeof(float));
+        }
+        if (use_reflect) {
+            // padded[i] = src[pad - i] for i in [0, pad). After writing
+            // src into padded_f32[pad..pad+n_samples), this becomes
+            // padded_f32[i] = padded_f32[2*pad - i].
+            for (int i = 0; i < pad; ++i) {
+                padded_f32[i] = padded_f32[2 * pad - i];
+            }
+            for (int i = 0; i < pad; ++i) {
+                padded_f32[static_cast<size_t>(pad) + n_samples + i] =
+                    padded_f32[static_cast<size_t>(pad) + n_samples - 2 - i];
+            }
+        } else {
+            std::memset(padded_f32.data(), 0,
+                        static_cast<size_t>(pad) * sizeof(float));
+            std::memset(padded_f32.data() + pad + n_samples, 0,
+                        static_cast<size_t>(pad) * sizeof(float));
+        }
+
+        window_f32.resize(n_fft);
+        for (int i = 0; i < n_fft; ++i) {
+            window_f32[i] = static_cast<float>(window_[i]);
         }
     } else {
-        for (size_t i = 0; i < n_samples; ++i) {
-            emph[i] = static_cast<double>(pcm[i]);
+        // FP64 path (Parakeet, Cohere): unchanged. emph buffer + fp64
+        // padded, identical to the original implementation.
+        std::vector<double> emph(n_samples);
+        if (cfg_.pre_emphasis != 0.0f) {
+            const double alpha = static_cast<double>(cfg_.pre_emphasis);
+            emph[0] = static_cast<double>(pcm[0]);
+            for (size_t i = 1; i < n_samples; ++i) {
+                emph[i] = static_cast<double>(pcm[i]) -
+                          alpha * static_cast<double>(pcm[i - 1]);
+            }
+        } else {
+            for (size_t i = 0; i < n_samples; ++i) {
+                emph[i] = static_cast<double>(pcm[i]);
+            }
+        }
+
+        padded.resize(n_samples + 2 * static_cast<size_t>(pad));
+        if (use_reflect) {
+            for (int i = 0; i < pad; ++i) {
+                padded[i] = emph[static_cast<size_t>(pad - i)];
+            }
+            std::memcpy(
+                padded.data() + pad,
+                emph.data(),
+                n_samples * sizeof(double));
+            for (int i = 0; i < pad; ++i) {
+                padded[static_cast<size_t>(pad) + n_samples + i] =
+                    emph[n_samples - 2 - static_cast<size_t>(i)];
+            }
+        } else {
+            std::memset(padded.data(), 0,
+                        static_cast<size_t>(pad) * sizeof(double));
+            std::memcpy(
+                padded.data() + pad,
+                emph.data(),
+                n_samples * sizeof(double));
+            std::memset(padded.data() + pad + n_samples, 0,
+                        static_cast<size_t>(pad) * sizeof(double));
         }
     }
 
-    // ---- 2. Pad by n_fft/2 on each side ----
-    std::vector<double> padded(n_samples + 2 * static_cast<size_t>(pad));
-    if (use_reflect) {
-        // Reflect padding.
-        // For input [a, b, c, d] padded by 2: [c, b, a, b, c, d, c, b].
-        // Boundary samples are NOT repeated (reflect not symmetric).
-        for (int i = 0; i < pad; ++i) {
-            padded[i] = emph[static_cast<size_t>(pad - i)];
-        }
-        std::memcpy(
-            padded.data() + pad,
-            emph.data(),
-            n_samples * sizeof(double));
-        for (int i = 0; i < pad; ++i) {
-            padded[static_cast<size_t>(pad) + n_samples + i] =
-                emph[n_samples - 2 - static_cast<size_t>(i)];
-        }
-    } else {
-        // Constant (zero) padding.
-        std::memset(padded.data(), 0,
-                    static_cast<size_t>(pad) * sizeof(double));
-        std::memcpy(
-            padded.data() + pad,
-            emph.data(),
-            n_samples * sizeof(double));
-        std::memset(padded.data() + pad + n_samples, 0,
-                    static_cast<size_t>(pad) * sizeof(double));
-    }
-    // Free emph eagerly; it's not needed past this point.
-    std::vector<double>().swap(emph);
+    // ---- 3. STFT + mel filterbank matmul + log ----
+    //
+    // Output: log_mel[n_mels, n_frames] row-major float32.
+    //
+    // Two distinct architectures depending on n_fft factorization:
+    //
+    //   non-pow2 (Whisper, Qwen3-ASR): the FFT worker also runs the
+    //     per-frame mel matmul + log directly into log_mel. No shared
+    //     power[] buffer, and the matmul parallelizes across all
+    //     stft_threads (it's per-frame work). This is the same
+    //     architecture whisper.cpp uses, and on no-BLAS CPUs it's a
+    //     significant win — the matmul cost moves from a single-
+    //     threaded post-pass to fully threaded inline work.
+    //
+    //   pow2 (Parakeet, Cohere): the FFT worker writes a shared
+    //     power[] buffer, then a post-pass does the matmul + log. On
+    //     Apple/Linux+OpenBLAS the post-pass uses cblas_sgemm, which
+    //     is dramatically faster than a per-frame scalar matmul, so
+    //     worker fusion would be a regression there. The fp64 vDSP /
+    //     fft_radix2 routines are also fp64-native, so keeping the
+    //     existing fp64 power[] avoids cast traffic at the worker.
+    //
+    // log mode (whisper_mode): per_utterance writes log10(max(x, 1e-10))
+    // so the normalize step skips the 1/ln(10) conversion. per_feature
+    // writes log(x + 2^-24) (natural log; base doesn't matter for the
+    // per-bin mean/std normalize that follows).
+    std::vector<float> log_mel(
+        static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames));
 
-    // ---- 3. STFT in fp64. Output power spectrum [n_frames * n_freq] f32 row-major. ----
-    std::vector<float>  power(static_cast<size_t>(n_frames) * n_freq);
+    const bool whisper_mode = (cfg_.normalize == "per_utterance");
 
-    // Thread count for the STFT loop. The filterbank matmul (step 4)
-    // is already parallelized by Accelerate/OpenBLAS; threading only
-    // the STFT is where the win is.
     int stft_threads = n_threads;
     if (stft_threads <= 0) {
         const unsigned hw = std::thread::hardware_concurrency();
@@ -489,18 +542,9 @@ transcribe_status MelFrontend::compute(
         stft_threads = std::max(1, n_frames);
     }
 
-    // Both the vDSP real-input FFT path and the hand-rolled radix-2
-    // fallback require n_fft to be a power of 2. Qwen3-ASR uses
-    // n_fft=400 (Whisper), which factors as 2^4 * 5^2 and is not
-    // supported. For non-pow2 sizes we drop to a mixed-radix FFT with
-    // an odd-factor DFT leaf.
-    const bool n_fft_is_pow2 = ((n_fft > 0) && ((n_fft & (n_fft - 1)) == 0));
-
-    // Per-thread worker lambdas. Each worker owns its FFT scratch; the
-    // power[] buffer is written with disjoint frame indices so no
-    // locking is needed. Stride is n_threads so work is interleaved —
-    // keeps per-worker memory access patterns contiguous enough to hit
-    // the L2 after the first frame.
+    // Per-thread worker dispatcher. Strided frame assignment (stride =
+    // stft_threads) keeps load balanced and per-thread memory access
+    // patterns mostly sequential.
     auto run_threaded = [&](auto && worker) {
         if (stft_threads <= 1) {
             worker(0);
@@ -516,192 +560,203 @@ transcribe_status MelFrontend::compute(
     };
 
     if (!n_fft_is_pow2) {
-        // Mixed-radix FFT: recursive radix-2 butterflies until N hits
-        // an odd factor (25 for Whisper's 400=2^4*5^2), then naive DFT
-        // on the odd leaf. At N=400 this is ~16 leaf DFTs of size 25
-        // (~10k ops) plus butterfly work at four levels, versus 160k
-        // ops for the old O(N²) direct-DFT path per frame.
+        // Fused worker: window mul → mixed-radix FFT → power → mel
+        // matmul + log → log_mel, all in fp32, all per-frame on this
+        // thread. Per-thread scratches stay tiny (~14 KB total) and
+        // L1-resident; nothing crosses thread boundaries except the
+        // final log_mel writes.
         //
-        // fp32 throughout: WER-neutral on librispeech test-clean-300
-        // (5.83% vs 5.84% fp64) and ~40% faster than the fp64 path.
-        // Worst-case mel drift vs HF reference: 3.4e-4 absolute (rel
-        // 2.5e-4) on the german worst case — well below encoder weight
-        // quantization noise.
+        // Matmul: outer m (mel), inner k (freq) with 4-way unroll.
+        // fp64 sum accumulator for numerical stability vs the linear
+        // sum size; cast back to fp32 at the log boundary.
         auto worker = [&](int tid) {
             std::vector<float> fft_in(2 * static_cast<size_t>(n_fft), 0.0f);
             std::vector<float> fft_out(8 * static_cast<size_t>(n_fft), 0.0f);
+            std::vector<float> power_scratch(static_cast<size_t>(n_freq));
             for (int t = tid; t < n_frames; t += stft_threads) {
                 const size_t start =
                     static_cast<size_t>(t) * static_cast<size_t>(hop);
                 for (int n = 0; n < n_fft; ++n) {
-                    fft_in[n] = static_cast<float>(padded[start + n] * window_[n]);
+                    fft_in[n] = padded_f32[start + n] * window_f32[n];
                 }
-                mixed_radix_fft_f32(fft_in.data(), n_fft, fft_out.data());
-                float * pwr_row =
-                    power.data() + static_cast<size_t>(t) * n_freq;
+                mixed_radix_fft_f32(fft_in.data(), n_fft,
+                                    cos_lut_.data(), sin_lut_.data(),
+                                    static_cast<int>(cos_lut_.size()),
+                                    fft_out.data());
                 for (int k = 0; k < n_freq; ++k) {
                     const float re = fft_out[2 * k    ];
                     const float im = fft_out[2 * k + 1];
-                    pwr_row[k] = re * re + im * im;
+                    power_scratch[k] = re * re + im * im;
+                }
+                for (int m = 0; m < n_mels; ++m) {
+                    const float * fb_row =
+                        mel_fb_.data() + static_cast<size_t>(m) * n_freq;
+                    double sum = 0.0;
+                    int k = 0;
+                    for (; k < n_freq - 3; k += 4) {
+                        sum += static_cast<double>(fb_row[k    ]) * static_cast<double>(power_scratch[k    ])
+                             + static_cast<double>(fb_row[k + 1]) * static_cast<double>(power_scratch[k + 1])
+                             + static_cast<double>(fb_row[k + 2]) * static_cast<double>(power_scratch[k + 2])
+                             + static_cast<double>(fb_row[k + 3]) * static_cast<double>(power_scratch[k + 3]);
+                    }
+                    for (; k < n_freq; ++k) {
+                        sum += static_cast<double>(fb_row[k]) * static_cast<double>(power_scratch[k]);
+                    }
+                    float result;
+                    if (whisper_mode) {
+                        if (sum < 1.0e-10) sum = 1.0e-10;
+                        result = static_cast<float>(std::log10(sum));
+                    } else {
+                        result = static_cast<float>(std::log(sum + static_cast<double>(kLogEps)));
+                    }
+                    log_mel[static_cast<size_t>(m) * n_frames + t] = result;
                 }
             }
         };
         run_threaded(worker);
     } else {
+        // pow2 paths (Parakeet, Cohere): unchanged structure. FFT
+        // worker writes shared power[]; post-pass does the matmul +
+        // log.
+        std::vector<float> power(
+            static_cast<size_t>(n_frames) * static_cast<size_t>(n_freq));
+
 #ifdef __APPLE__
-    // vDSP real-input FFT path (fp64, vectorized). Same precision as
-    // the hand-rolled radix-2 — both are fp64 throughout — but ~5-10x
-    // faster via Accelerate's SIMD kernels. Requires n_fft a power of 2.
-    int log2n = 0;
-    { int tmp = n_fft; while (tmp > 1) { tmp >>= 1; ++log2n; } }
+        // vDSP real-input FFT (fp64, vectorized via Accelerate SIMD).
+        int log2n = 0;
+        { int tmp = n_fft; while (tmp > 1) { tmp >>= 1; ++log2n; } }
 
-    // A single FFTSetupD is shared across threads: it stores
-    // precomputed twiddle factors, not transient state, and vDSP's
-    // forward FFTs are thread-safe for concurrent use given per-thread
-    // split-complex buffers.
-    FFTSetupD fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
-    const size_t half_n = static_cast<size_t>(n_fft / 2);
+        // A single FFTSetupD is shared across threads: it stores
+        // precomputed twiddle factors, not transient state. vDSP's
+        // forward FFT is thread-safe given per-thread split-complex
+        // buffers.
+        FFTSetupD fft_setup = vDSP_create_fftsetupD(log2n, FFT_RADIX2);
+        const size_t half_n = static_cast<size_t>(n_fft / 2);
 
-    auto worker = [&](int tid) {
-        std::vector<double> fft_real(half_n);
-        std::vector<double> fft_imag(half_n);
-        DSPDoubleSplitComplex split = { fft_real.data(), fft_imag.data() };
+        auto worker = [&](int tid) {
+            std::vector<double> fft_real(half_n);
+            std::vector<double> fft_imag(half_n);
+            DSPDoubleSplitComplex split = { fft_real.data(), fft_imag.data() };
 
-        for (int t = tid; t < n_frames; t += stft_threads) {
-            const size_t start = static_cast<size_t>(t) * static_cast<size_t>(hop);
-            // Window-multiply and pack into split-complex form:
-            // realp[k] = windowed[2k], imagp[k] = windowed[2k+1].
-            for (size_t k = 0; k < half_n; ++k) {
-                fft_real[k] = padded[start + 2 * k]     * window_[2 * k];
-                fft_imag[k] = padded[start + 2 * k + 1] * window_[2 * k + 1];
+            for (int t = tid; t < n_frames; t += stft_threads) {
+                const size_t start = static_cast<size_t>(t) * static_cast<size_t>(hop);
+                for (size_t k = 0; k < half_n; ++k) {
+                    fft_real[k] = padded[start + 2 * k]     * window_[2 * k];
+                    fft_imag[k] = padded[start + 2 * k + 1] * window_[2 * k + 1];
+                }
+                vDSP_fft_zripD(fft_setup, &split, 1, log2n, FFT_FORWARD);
+                // vDSP output is 2x the standard DFT, so power is 4x.
+                // realp[0]=DC*2, imagp[0]=Nyquist*2, otherwise complex
+                // pairs in (realp[k], imagp[k]).
+                float * pwr_row =
+                    power.data() + static_cast<size_t>(t) * n_freq;
+                pwr_row[0]         = static_cast<float>(fft_real[0] * fft_real[0] * 0.25);
+                pwr_row[n_fft / 2] = static_cast<float>(fft_imag[0] * fft_imag[0] * 0.25);
+                for (size_t k = 1; k < half_n; ++k) {
+                    pwr_row[k] = static_cast<float>(
+                        (fft_real[k] * fft_real[k] + fft_imag[k] * fft_imag[k]) * 0.25);
+                }
             }
-
-            vDSP_fft_zripD(fft_setup, &split, 1, log2n, FFT_FORWARD);
-
-            // vDSP output is 2x the standard DFT. Power = re^2 + im^2,
-            // so the raw squared values are 4x. Multiply by 0.25.
-            //
-            // Output packing: realp[0]=DC*2, imagp[0]=Nyquist*2,
-            // realp[k]+i*imagp[k] = X[k]*2 for k=1..N/2-1.
-            float * pwr_row =
-                power.data() + static_cast<size_t>(t) * n_freq;
-            pwr_row[0]         = static_cast<float>(fft_real[0] * fft_real[0] * 0.25);
-            pwr_row[n_fft / 2] = static_cast<float>(fft_imag[0] * fft_imag[0] * 0.25);
-            for (size_t k = 1; k < half_n; ++k) {
-                pwr_row[k] = static_cast<float>(
-                    (fft_real[k] * fft_real[k] + fft_imag[k] * fft_imag[k]) * 0.25);
-            }
-        }
-    };
-    run_threaded(worker);
-
-    vDSP_destroy_fftsetupD(fft_setup);
+        };
+        run_threaded(worker);
+        vDSP_destroy_fftsetupD(fft_setup);
 #else
-    // Hand-rolled radix-2 Cooley-Tukey FFT fallback for non-Apple.
-    auto worker = [&](int tid) {
-        std::vector<double> frame(2 * static_cast<size_t>(n_fft));   // interleaved complex
-        for (int t = tid; t < n_frames; t += stft_threads) {
-            const size_t start = static_cast<size_t>(t) * static_cast<size_t>(hop);
-            // Window-multiply real input into the complex frame buffer.
-            for (int k = 0; k < n_fft; ++k) {
-                frame[2 * static_cast<size_t>(k)]     =
-                    padded[start + static_cast<size_t>(k)] * window_[k];
-                frame[2 * static_cast<size_t>(k) + 1] = 0.0;
+        // Hand-rolled radix-2 Cooley-Tukey FFT fallback for non-Apple.
+        auto worker = [&](int tid) {
+            std::vector<double> frame(2 * static_cast<size_t>(n_fft));
+            for (int t = tid; t < n_frames; t += stft_threads) {
+                const size_t start = static_cast<size_t>(t) * static_cast<size_t>(hop);
+                for (int k = 0; k < n_fft; ++k) {
+                    frame[2 * static_cast<size_t>(k)]     =
+                        padded[start + static_cast<size_t>(k)] * window_[k];
+                    frame[2 * static_cast<size_t>(k) + 1] = 0.0;
+                }
+                fft_radix2(frame.data(), n_fft);
+                float * pwr_row =
+                    power.data() + static_cast<size_t>(t) * n_freq;
+                for (int k = 0; k < n_freq; ++k) {
+                    const double re = frame[2 * static_cast<size_t>(k)];
+                    const double im = frame[2 * static_cast<size_t>(k) + 1];
+                    pwr_row[k] = static_cast<float>(re * re + im * im);
+                }
             }
-            fft_radix2(frame.data(), n_fft);
-            // Power spectrum = re^2 + im^2 over the first n_freq bins.
-            float * pwr_row =
-                power.data() + static_cast<size_t>(t) * n_freq;
-            for (int k = 0; k < n_freq; ++k) {
-                const double re = frame[2 * static_cast<size_t>(k)];
-                const double im = frame[2 * static_cast<size_t>(k) + 1];
-                pwr_row[k] = static_cast<float>(re * re + im * im);
-            }
-        }
-    };
-    run_threaded(worker);
+        };
+        run_threaded(worker);
 #endif
-    }  // end else (pow2 path)
-    std::vector<double>().swap(padded);
 
-    // ---- 4. Mel filterbank matmul + log ----
-    //
-    // Computes log_mel = log(mel_fb @ power^T + eps).
-    //   mel_fb: [n_mels, n_freq] row-major
-    //   power:  [n_frames, n_freq] row-major
-    //   result: [n_mels, n_frames] row-major
-    //
-    // When BLAS is available, this is a single sgemm call; otherwise
-    // falls back to the scalar triple loop.
-    std::vector<float> log_mel(
-        static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames));
-
-    // Whisper clips the pre-log mel energy to 1e-10 (hard floor), while
-    // NeMo adds a softer 2^-24 offset. The difference matters on silent
-    // frames / unused mel bins where the raw energy is O(1e-9) or below.
-    const bool   whisper_mode = (cfg_.normalize == "per_utterance");
-    const double log_floor    = whisper_mode ? 1.0e-10 : kLogEps;
-
+        // pow2 post-pass matmul + log → log_mel.
 #if defined(__APPLE__) || TRANSCRIBE_HAS_BLAS
-    // C = A @ B^T  where A=[n_mels, n_freq], B=[n_frames, n_freq].
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                n_mels, n_frames, n_freq,
-                1.0f, mel_fb_.data(), n_freq,
-                power.data(), n_freq,
-                0.0f, log_mel.data(), n_frames);
-    {
-        const size_t total = static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames);
-        if (whisper_mode) {
-            for (size_t i = 0; i < total; ++i) {
-                double v = static_cast<double>(log_mel[i]);
-                if (v < log_floor) v = log_floor;
-                log_mel[i] = static_cast<float>(std::log(v));
-            }
-        } else {
-            for (size_t i = 0; i < total; ++i) {
-                log_mel[i] = std::log(log_mel[i] + kLogEps);
+        // C = A @ B^T  where A=[n_mels, n_freq], B=[n_frames, n_freq].
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                    n_mels, n_frames, n_freq,
+                    1.0f, mel_fb_.data(), n_freq,
+                    power.data(), n_freq,
+                    0.0f, log_mel.data(), n_frames);
+        {
+            const size_t total = static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames);
+            if (whisper_mode) {
+                for (size_t i = 0; i < total; ++i) {
+                    double v = static_cast<double>(log_mel[i]);
+                    if (v < 1.0e-10) v = 1.0e-10;
+                    log_mel[i] = static_cast<float>(std::log10(v));
+                }
+            } else {
+                for (size_t i = 0; i < total; ++i) {
+                    log_mel[i] = std::log(log_mel[i] + kLogEps);
+                }
             }
         }
-    }
 #else
-    for (int t = 0; t < n_frames; ++t) {
-        const float * pwr = power.data() + static_cast<size_t>(t) * n_freq;
-        for (int m = 0; m < n_mels; ++m) {
-            const float * fb_row =
-                mel_fb_.data() + static_cast<size_t>(m) * n_freq;
-            float acc = 0.0f;
-            for (int k = 0; k < n_freq; ++k) {
-                acc += fb_row[k] * pwr[k];
+        // Scalar fused matmul + log fallback (no BLAS available).
+        for (int t = 0; t < n_frames; ++t) {
+            const float * pwr = power.data() + static_cast<size_t>(t) * n_freq;
+            for (int m = 0; m < n_mels; ++m) {
+                const float * fb_row =
+                    mel_fb_.data() + static_cast<size_t>(m) * n_freq;
+                double sum = 0.0;
+                int k = 0;
+                for (; k < n_freq - 3; k += 4) {
+                    sum += static_cast<double>(fb_row[k    ]) * static_cast<double>(pwr[k    ])
+                         + static_cast<double>(fb_row[k + 1]) * static_cast<double>(pwr[k + 1])
+                         + static_cast<double>(fb_row[k + 2]) * static_cast<double>(pwr[k + 2])
+                         + static_cast<double>(fb_row[k + 3]) * static_cast<double>(pwr[k + 3]);
+                }
+                for (; k < n_freq; ++k) {
+                    sum += static_cast<double>(fb_row[k]) * static_cast<double>(pwr[k]);
+                }
+                float result;
+                if (whisper_mode) {
+                    if (sum < 1.0e-10) sum = 1.0e-10;
+                    result = static_cast<float>(std::log10(sum));
+                } else {
+                    result = static_cast<float>(std::log(sum + static_cast<double>(kLogEps)));
+                }
+                log_mel[static_cast<size_t>(m) * n_frames + t] = result;
             }
-            const double v = whisper_mode
-                ? std::max(static_cast<double>(acc), log_floor)
-                : static_cast<double>(acc) + static_cast<double>(kLogEps);
-            log_mel[static_cast<size_t>(m) * n_frames + t] =
-                static_cast<float>(std::log(v));
         }
-    }
 #endif
-    std::vector<float>().swap(power);
+        // power[] released at end of this scope.
+    }  // end pow2 path
+
+    std::vector<double>().swap(padded);
+    std::vector<float>().swap(padded_f32);
+    std::vector<float>().swap(window_f32);
 
     // ---- 5a. Whisper-style per-utterance normalization ----
-    // log_mel currently holds ln(x + eps) values (natural log). Whisper
-    // uses log10 with a max(x, 1e-10) floor, then global clamp to
-    // max - 8.0, then (x + 4) / 4. Dividing ln(x+eps) by ln(10) gives
-    // log10(x+eps) which is numerically equivalent to log10(max(x, eps))
-    // within the clamp region. Whisper also drops the trailing center-
-    // pad STFT frame so the output has n_samples / hop_length frames.
+    // log_mel already holds log10(max(x, 1e-10)) values (the matmul step
+    // wrote them directly). Find the global max, clamp to max - 8.0,
+    // then scale (x + 4) / 4. Whisper drops the trailing center-pad
+    // STFT frame so the output has n_samples / hop_length frames.
     if (cfg_.normalize == "per_utterance") {
         const int n_out = n_frames - 1;
         if (n_out <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
-
-        const double inv_ln10 = 1.0 / std::log(10.0);
 
         double global_max = -std::numeric_limits<double>::infinity();
         for (int m = 0; m < n_mels; ++m) {
             const float * src =
                 log_mel.data() + static_cast<size_t>(m) * n_frames;
             for (int t = 0; t < n_out; ++t) {
-                const double v = static_cast<double>(src[t]) * inv_ln10;
+                const double v = static_cast<double>(src[t]);
                 if (v > global_max) global_max = v;
             }
         }
@@ -714,7 +769,7 @@ transcribe_status MelFrontend::compute(
                 log_mel.data() + static_cast<size_t>(m) * n_frames;
             float * dst = out_mel.data() + static_cast<size_t>(m) * n_out;
             for (int t = 0; t < n_out; ++t) {
-                double v = static_cast<double>(src[t]) * inv_ln10;
+                double v = static_cast<double>(src[t]);
                 if (v < floor_val) v = floor_val;
                 dst[t] = static_cast<float>((v + 4.0) / 4.0);
             }
