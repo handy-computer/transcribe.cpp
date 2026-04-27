@@ -92,10 +92,22 @@ const std::string & Tokenizer::token(int id) const {
 
 int Tokenizer::find(const std::string & piece) const {
     const auto it = piece_to_id_.find(piece);
-    if (it == piece_to_id_.end()) {
-        return -1;
+    if (it != piece_to_id_.end()) {
+        return it->second;
     }
-    return it->second;
+    // Synthesized special-piece map: only populated by adapters that
+    // need find() to surface literals absent from tokens_ (whisper.cpp
+    // .bin). Empty for GGUF whisper, where every special is already
+    // in piece_to_id_.
+    const auto sit = special_pieces_.find(piece);
+    if (sit != special_pieces_.end()) {
+        return sit->second;
+    }
+    return -1;
+}
+
+void Tokenizer::add_special_piece(const std::string & literal, int32_t id) {
+    special_pieces_[literal] = id;
 }
 
 bool Tokenizer::has_encoder() const {
@@ -779,6 +791,7 @@ transcribe_status Tokenizer::load_decode_only_gpt2(
     scores_.clear();
     token_type_.clear();
     merge_rank_.clear();
+    special_pieces_.clear();
 
     unk_id_   = specials.unk_id;
     bos_id_   = specials.bos_id;
@@ -801,6 +814,7 @@ transcribe_status Tokenizer::load_decode_only_raw_bytes(
     scores_.clear();
     token_type_.clear();
     merge_rank_.clear();
+    special_pieces_.clear();
 
     unk_id_   = specials.unk_id;
     bos_id_   = specials.bos_id;

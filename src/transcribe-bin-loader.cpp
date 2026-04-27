@@ -86,12 +86,20 @@ uint64_t tensor_nbytes(ggml_type type, const int64_t ne[4]) {
 
 // Whisper-shape gate. The `ggml` magic byte is shared with non-
 // Whisper artifacts (notably Silero VAD), so after reading the 11
-// hparam ints we sanity-check the geometry. A real whisper.cpp `.bin`
-// matches one of the canonical model sizes; anything else is rejected
-// as UNSUPPORTED_ARCH (not GGUF, so no further probing makes sense).
+// hparam ints we sanity-check the geometry. The gate's job is to
+// reject obviously-non-Whisper files (Silero comes back with
+// n_audio_layer=131072, n_mels=8454144 — values out by orders of
+// magnitude); it is intentionally permissive about layer counts so
+// distilled / turbo variants with shrunk decoders (e.g. distil-medium
+// with n_text_layer=2, large-v3-turbo with n_text_layer=4) pass.
+//
+// The discriminating signals are n_mels (whisper uses 80 or 128
+// across every shipped variant) and n_vocab (51864 / 51865 / 51866
+// for HF-compatible vocabularies). A future fine-tune outside those
+// vocab sizes would need a small extension here.
 bool hparams_look_whisper(const WhisperBinHParams & hp) {
     auto layer_ok = [](int32_t l) {
-        return l == 4 || l == 6 || l == 12 || l == 24 || l == 32;
+        return l > 0 && l <= 64;
     };
     if (!layer_ok(hp.n_audio_layer)) return false;
     if (!layer_ok(hp.n_text_layer))  return false;
@@ -207,6 +215,18 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         std::fprintf(stderr,
                      "%s: invalid mel filter dims n_mel=%d n_fft=%d\n",
                      kTag, out.n_mel_filters, out.n_fft_filters);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    // Whisper's frontend is fixed: n_fft=400 → n_fft/2+1=201 frequency
+    // bins. Every shipped variant uses these exact dimensions, and the
+    // adapter creates a [201, n_mels] tensor downstream — accepting any
+    // other value here would mean a size-mismatched ggml_backend_tensor_set
+    // later (partial write at best, OOB at worst).
+    if (out.n_fft_filters != 201) {
+        std::fprintf(stderr,
+                     "%s: mel filter n_fft=%d is not 201 (whisper "
+                     "canonical n_fft=400 → n_fft/2+1=201); refusing "
+                     "to load\n", kTag, out.n_fft_filters);
         return TRANSCRIBE_ERR_GGUF;
     }
     const size_t fb_elems =

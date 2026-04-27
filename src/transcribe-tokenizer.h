@@ -134,8 +134,10 @@ public:
     // the byte-to-unicode-remapped form "Ã©" that the GGUF "gpt2"
     // decoder expects). Decode just concatenates token bytes.
     //
-    // No merges → encode() returns the standard "encoder unavailable"
-    // error; has_encoder() returns false.
+    // Encode IS available in this mode: tiktoken-style BPE doesn't
+    // need a separate merges list because the vocab id IS the merge
+    // rank. encode() walks adjacent pairs and looks up "left+right"
+    // in piece_to_id_ directly; has_encoder() returns true.
     transcribe_status load_decode_only_raw_bytes(std::vector<std::string>   tokens,
                                                  const DecodeOnlySpecials & specials);
     transcribe_status load_decode_only_raw_bytes(std::vector<std::string>   tokens) {
@@ -145,10 +147,21 @@ public:
     // Vocabulary access. token(id) returns an empty string for an
     // out-of-range id (matching the safe-sentinel pattern used by the
     // public result accessors). find(piece) returns -1 if the piece
-    // is not in the vocabulary.
+    // is not in the vocabulary OR the synthesized special-piece map.
     int                 n_tokens() const { return static_cast<int>(tokens_.size()); }
     const std::string & token   (int id) const;
     int                 find    (const std::string & piece) const;
+
+    // Register a synthesized "special-piece" literal that find() will
+    // resolve. Used by source adapters that don't carry every special-
+    // token string in the vocab itself — notably the legacy whisper.cpp
+    // .bin loader, where tokens like "<|en|>" / "<|notimestamps|>" are
+    // synthesized from id arithmetic at load time rather than stored
+    // in the vocab pieces. This map is consulted by find() but is
+    // intentionally NOT used by encode(); a special literal in user
+    // text should be detected at the prompt-validation layer (which
+    // calls find), not silently merged into BPE output.
+    void add_special_piece(const std::string & literal, int32_t id);
 
     // Join a token-id sequence into a single string. SentencePiece
     // tokenizers ("unigram", "bpe") replace the word-boundary marker
@@ -160,16 +173,24 @@ public:
 
     // UTF-8 text -> token ids.
     //
-    // model == "gpt2":
-    //   Pretokenize (Qwen2 regex), byte-level encode each pretoken,
-    //   then apply BPE merges in rank order. The output is the same
-    //   token-id sequence the Hugging Face tokenizer would produce
-    //   with add_special_tokens=False (no BOS/EOS added). Special
-    //   tokens in the input (e.g. "<|im_start|>") are NOT recognized
-    //   by this encoder; if they appear in the text they get
-    //   BPE-encoded piece-by-piece, which is usually wrong. Callers
-    //   render special tokens via direct id lookups and encode only
-    //   the plain-text fragments between them.
+    // model == "gpt2" (GGUF, with merges):
+    //   Pretokenize (Qwen2 or GPT-2 regex), byte-level encode each
+    //   pretoken via the GPT-2 byte-to-unicode mapping, then apply
+    //   BPE merges in rank order. The output matches the HF
+    //   tokenizer with add_special_tokens=False (no BOS/EOS added).
+    //
+    // decode_mode_ == RawBytes (.bin tiktoken vocab, no merges):
+    //   Pretokenize (GPT-2 regex), seed symbols at byte granularity,
+    //   then run the same merge loop using piece_to_id_ as the rank
+    //   table directly — tiktoken's invariant that vocab id IS rank
+    //   removes the need for a separate merges list. Output is
+    //   byte-identical to the GGUF gpt2 path for plain text.
+    //
+    // Special tokens in the input (e.g. "<|en|>") are NOT recognized
+    // by either encoder; if they appear in the text they get
+    // BPE-encoded piece-by-piece, which is usually wrong. Callers
+    // render special tokens via direct id lookups and encode only
+    // the plain-text fragments between them.
     //
     // model == "unigram" / "bpe":
     //   Currently returns TRANSCRIBE_ERR_NOT_IMPLEMENTED; no live
@@ -232,6 +253,13 @@ private:
     // (only from the byte-fallback vocab augmentation); we keep the
     // first-occurrence id which matches the forward tokens_ ordering.
     std::unordered_map<std::string, int32_t> piece_to_id_;
+
+    // Optional synthesized special-token lookup. Populated only by
+    // adapters that need find() to recognize literals that aren't in
+    // tokens_ (legacy whisper.cpp .bin: synthesized "<|en|>",
+    // "<|notimestamps|>", "<|0.00|>", …). Consulted by find() but not
+    // by encode() — see add_special_piece for the rationale.
+    std::unordered_map<std::string, int32_t> special_pieces_;
 
     // BPE merge table (populated only when model_ == "gpt2").
     //

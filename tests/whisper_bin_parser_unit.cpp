@@ -36,11 +36,15 @@
 #include "transcribe-bin-loader.h"
 
 #include <sys/stat.h>
+#include <unistd.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -138,10 +142,113 @@ void test_missing_path() {
     CHECK(rc == TRANSCRIBE_ERR_FILE_NOT_FOUND);
 }
 
+// Write a minimal header-only .bin with the given hparams + mel
+// filter dims to `path`. Vocab and tensors are intentionally absent
+// so the parser will fail at the manifest stage if it gets past the
+// header checks — but for these tests we only care about the
+// hparams + mel-filter-dim gates.
+bool write_synthetic_bin(const std::string &  path,
+                         int32_t              n_vocab,
+                         int32_t              n_audio_layer,
+                         int32_t              n_text_layer,
+                         int32_t              n_mels,
+                         int32_t              n_mel_filters,
+                         int32_t              n_fft_filters)
+{
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    auto wi = [&](int32_t v) {
+        f.write(reinterpret_cast<const char *>(&v), sizeof(v));
+    };
+    const uint32_t magic = 0x67676d6cu;
+    f.write(reinterpret_cast<const char *>(&magic), sizeof(magic));
+    // 11 × int32 hparams.
+    wi(n_vocab);
+    wi(1500);              // n_audio_ctx
+    wi(384);               // n_audio_state
+    wi(6);                 // n_audio_head
+    wi(n_audio_layer);
+    wi(448);               // n_text_ctx
+    wi(384);               // n_text_state
+    wi(6);                 // n_text_head
+    wi(n_text_layer);
+    wi(n_mels);
+    wi(0);                 // ftype
+    // mel filter dims, then n_mel_filters * n_fft_filters floats.
+    wi(n_mel_filters);
+    wi(n_fft_filters);
+    const size_t fb_bytes =
+        static_cast<size_t>(n_mel_filters) *
+        static_cast<size_t>(n_fft_filters) * sizeof(float);
+    std::vector<char> zeros(fb_bytes, 0);
+    f.write(zeros.data(), zeros.size());
+    return static_cast<bool>(f);
+}
+
+void test_bad_n_fft() {
+    char tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
+    const int fd = ::mkstemps(tmpl, 4);
+    if (fd < 0) {
+        std::fprintf(stderr,
+                     "SKIP: could not create tempfile for synthetic bin\n");
+        ++g_skipped;
+        return;
+    }
+    ::close(fd);
+    const std::string path = tmpl;
+
+    // Whisper-shaped hparams but non-canonical n_fft (200 instead of
+    // 201). Parser must reject before we even get to the vocab phase.
+    if (!write_synthetic_bin(path, 51865, 4, 4, 80, 80, 200)) {
+        std::fprintf(stderr,
+                     "SKIP: failed to write synthetic .bin\n");
+        ++g_skipped;
+        ::unlink(path.c_str());
+        return;
+    }
+    transcribe::bin_loader::WhisperBinModel m;
+    const auto rc = transcribe::bin_loader::parse_whisper_bin(
+        path.c_str(), m);
+    CHECK(rc == TRANSCRIBE_ERR_GGUF);
+    ::unlink(path.c_str());
+}
+
+void test_distil_layer_count_accepted() {
+    // Distil-style asymmetric layers: n_text_layer=2 with otherwise
+    // whisper-shaped hparams should pass the hparams gate. We don't
+    // care that the parser later fails at "no tensors" — the hparams
+    // check should not be the gating step.
+    char tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
+    const int fd = ::mkstemps(tmpl, 4);
+    if (fd < 0) {
+        ++g_skipped;
+        return;
+    }
+    ::close(fd);
+    const std::string path = tmpl;
+
+    if (!write_synthetic_bin(path, 51865, 24, 2, 80, 80, 201)) {
+        ++g_skipped;
+        ::unlink(path.c_str());
+        return;
+    }
+    transcribe::bin_loader::WhisperBinModel m;
+    const auto rc = transcribe::bin_loader::parse_whisper_bin(
+        path.c_str(), m);
+    // Header + mel filters parse; we then run out of bytes for the
+    // vocab/tensor sections. The expected status is ERR_GGUF (with a
+    // "no tensors" / truncated diagnostic), NOT UNSUPPORTED_ARCH —
+    // that's the proof that the geometry gate accepts distil layers.
+    CHECK(rc == TRANSCRIBE_ERR_GGUF);
+    ::unlink(path.c_str());
+}
+
 } // namespace
 
 int main() {
     test_missing_path();
+    test_bad_n_fft();
+    test_distil_layer_count_accepted();
     test_silero_rejected();
     test_truncated_rejected();
     test_tiny_q8_parsed();

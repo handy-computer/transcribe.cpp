@@ -555,11 +555,18 @@ void apply_caps_and_languages(WhisperModel &                                  m,
 // Build the Tokenizer via the in-memory raw-bytes loader. The .bin
 // vocab is tiktoken-style (raw UTF-8 byte sequences, no GPT-2 byte-
 // to-unicode remap), so the raw-bytes decode mode is the right
-// strategy.
+// strategy. has_encoder() returns true: the tiktoken-style encoder
+// uses piece_to_id_ as its rank table directly.
 //
-// Decode-only: encode() returns NOT_IMPLEMENTED, has_encoder() is
-// false. The whisper run path's text initial_prompt path checks
-// has_encoder before encoding.
+// We then synthesize the canonical Whisper special-token literals
+// ("<|en|>", "<|notimestamps|>", "<|0.00|>", …) into the tokenizer's
+// special-piece map so find() can resolve them. The .bin file itself
+// only stores the ~50256 base vocab pieces; whisper.cpp synthesizes
+// the special strings at load time too. Without these entries the
+// run path's initial_prompt rejection check would miss literals like
+// "<|en|>" embedded in user text — leading to the literal getting
+// byte-encoded as raw context noise instead of being rejected
+// symmetrically with the GGUF path.
 // ---------------------------------------------------------------------------
 
 transcribe_status install_tokenizer(WhisperModel &                                  m,
@@ -569,7 +576,40 @@ transcribe_status install_tokenizer(WhisperModel &                              
     const WhisperSpecials s = compute_specials(bm.hp.n_vocab);
     sp.eos_id = s.eot;
     sp.bos_id = s.eot;
-    return m.tok.load_decode_only_raw_bytes(bm.vocab_tokens, sp);
+    if (auto st = m.tok.load_decode_only_raw_bytes(bm.vocab_tokens, sp);
+        st != TRANSCRIBE_OK) return st;
+
+    // Discrete specials that exist in every Whisper variant.
+    m.tok.add_special_piece("<|endoftext|>",        s.eot);
+    m.tok.add_special_piece("<|startoftranscript|>", s.sot);
+    m.tok.add_special_piece("<|startofprev|>",      s.prev);
+    m.tok.add_special_piece("<|nospeech|>",         s.nosp);
+    m.tok.add_special_piece("<|notimestamps|>",     s.notimestamps);
+
+    // Multilingual-only specials: language tokens + task tokens.
+    if (bm.is_multilingual) {
+        m.tok.add_special_piece("<|translate|>",  s.translate);
+        m.tok.add_special_piece("<|transcribe|>", s.transcribe);
+        const int n_lang = std::min(bm.num_languages,
+                                    k_whisper_n_lang_codes);
+        for (int i = 0; i < n_lang; ++i) {
+            std::string lit = std::string("<|") +
+                              k_whisper_lang_codes[i] + "|>";
+            m.tok.add_special_piece(lit, s.sot + 1 + i);
+        }
+    }
+
+    // 1501 timestamp tokens at <|0.00|>, <|0.02|>, …, <|30.00|>.
+    // ids beg + 0 .. beg + 1500. Format matches HF Whisper's
+    // tokenizer added_tokens convention exactly so a literal
+    // "<|0.00|>" or "<|30.00|>" in user text is detected.
+    char tsbuf[16];
+    for (int i = 0; i <= 1500; ++i) {
+        std::snprintf(tsbuf, sizeof(tsbuf), "<|%.2f|>",
+                      static_cast<double>(i) * 0.02);
+        m.tok.add_special_piece(tsbuf, s.beg + i);
+    }
+    return TRANSCRIBE_OK;
 }
 
 } // namespace
@@ -679,17 +719,37 @@ transcribe_status load_from_bin(const char *                           path,
 
         // Vestigial: weights.frontend.* slots are populated for catalog
         // completeness. The runtime mel pipeline reads from m->mel.
+        // The parser already enforces n_fft_filters == 201 and
+        // n_mel_filters == hp.n_mels, so the byte counts match by
+        // construction; the asserts here are defense in depth so a
+        // future parser regression can't turn into a backend OOB write.
         if (m->weights.frontend.mel_filterbank != nullptr) {
+            const size_t want = ggml_nbytes(m->weights.frontend.mel_filterbank);
+            const size_t have = filterbank.size() * sizeof(float);
+            if (have != want) {
+                std::fprintf(stderr,
+                             "%s: mel filterbank size mismatch "
+                             "(have %zu bytes, expected %zu)\n",
+                             kTag, have, want);
+                return TRANSCRIBE_ERR_GGUF;
+            }
             ggml_backend_tensor_set(
                 m->weights.frontend.mel_filterbank,
-                filterbank.data(), 0,
-                filterbank.size() * sizeof(float));
+                filterbank.data(), 0, have);
         }
         if (m->weights.frontend.window != nullptr) {
+            const size_t want = ggml_nbytes(m->weights.frontend.window);
+            const size_t have = window.size() * sizeof(float);
+            if (have != want) {
+                std::fprintf(stderr,
+                             "%s: hann window size mismatch "
+                             "(have %zu bytes, expected %zu)\n",
+                             kTag, have, want);
+                return TRANSCRIBE_ERR_GGUF;
+            }
             ggml_backend_tensor_set(
                 m->weights.frontend.window,
-                window.data(), 0,
-                window.size() * sizeof(float));
+                window.data(), 0, have);
         }
 
         if (auto st = install_mel_from_buffers(

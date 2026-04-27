@@ -25,7 +25,9 @@
 //   mel filters      int32 n_mel, int32 n_fft, then n_mel*n_fft float32s
 //   vocab            int32 count, then each token: int32 len + raw bytes
 //   tensors (×N)     int32 n_dims, int32 name_len, int32 ttype,
-//                    n_dims × int32 dims (file-stored REVERSED from ne),
+//                    n_dims × int32 dims (in ggml ne order: ne[0] first,
+//                    fastest-varying; the convert script writes the
+//                    reverse of numpy shape, which is exactly ne order),
 //                    name_len bytes name, then ggml_nbytes bytes payload.
 
 #pragma once

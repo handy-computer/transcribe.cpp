@@ -167,6 +167,33 @@ void test_multilingual(const char * model_path) {
         }
     }
 
+    // Special-token literals embedded in initial_prompt must be
+    // rejected with INVALID_ARG, matching the GGUF path. The .bin
+    // vocab does not store "<|en|>" / "<|notimestamps|>" / "<|0.00|>"
+    // strings directly; the bin adapter synthesizes them into the
+    // tokenizer's special-piece map so find() can resolve them. A
+    // gap here would let users smuggle special bytes into the
+    // decoder context.
+    {
+        const char * literals[] = {
+            "transcribe <|en|> address",
+            "use <|notimestamps|> please",
+            "<|0.00|> beginning",
+            "<|30.00|> end",
+            "<|translate|> task",
+        };
+        for (const char * t : literals) {
+            transcribe_params rp = transcribe_default_params();
+            rp.language = "en";
+            transcribe_whisper_params wp = transcribe_whisper_default_params();
+            wp.initial_prompt = t;
+            rp.whisper = &wp;
+            st = transcribe_run(ctx, jfk.data(),
+                                static_cast<int>(jfk.size()), &rp);
+            CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
+        }
+    }
+
     // Text initial_prompt — now ACCEPTED (tiktoken encoder works).
     {
         transcribe_params rp = transcribe_default_params();
