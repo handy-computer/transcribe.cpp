@@ -647,8 +647,12 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
     }
 
     // Build the piece -> id hash. First-occurrence wins (matches the
-    // forward tokens_ ordering that token(id) exposes).
+    // forward tokens_ ordering that token(id) exposes). special_pieces_
+    // is cleared too: GGUFs carry every special as a real vocab entry,
+    // so the synthesized-special fallback should be empty here. Hygiene
+    // matters if a Tokenizer instance is ever reused across loads.
     piece_to_id_.clear();
+    special_pieces_.clear();
     piece_to_id_.reserve(tokens_.size() * 2);
     for (size_t i = 0; i < tokens_.size(); ++i) {
         piece_to_id_.emplace(tokens_[i], static_cast<int32_t>(i));
@@ -755,9 +759,11 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
 namespace {
 
 // Shared vocab + specials installation for the decode-only loaders.
-// Leaves model_ / pre_ unset (encode() requires model_ == "gpt2", so
-// leaving it empty makes encode() return NOT_IMPLEMENTED, while
-// has_encoder() returns false because merge_rank_ is empty).
+// Leaves model_ / pre_ unset; the per-mode caller picks decode_mode_
+// after this returns. Encode availability follows from decode_mode_:
+// the RawBytes loader (whisper.cpp .bin) gets a tiktoken-style
+// encoder via piece_to_id_ ranks; the Gpt2ByteUnicode decode-only
+// loader (no merges populated) reports has_encoder() == false.
 transcribe_status install_decode_only_vocab(
     std::vector<std::string> &                  tokens_dst,
     std::unordered_map<std::string, int32_t> &  piece_to_id_dst,

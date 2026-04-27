@@ -181,6 +181,12 @@ void test_multilingual(const char * model_path) {
             "<|0.00|> beginning",
             "<|30.00|> end",
             "<|translate|> task",
+            // EOS — locks the eos_id == 50257 case explicitly. The
+            // first-line check at model.cpp:1442 catches this via
+            // find(); the second-line id-vs-eos_id check would also
+            // catch it, but a literal in user text should never reach
+            // the encoder in the first place.
+            "ending <|endoftext|> here",
         };
         for (const char * t : literals) {
             transcribe_params rp = transcribe_default_params();
