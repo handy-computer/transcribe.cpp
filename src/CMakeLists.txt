@@ -25,6 +25,7 @@ add_library(transcribe
     transcribe-backend.cpp
     transcribe-load-common.cpp
     transcribe-weights-util.cpp
+    transcribe-bin-loader.cpp
     conformer/conformer.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp
@@ -46,6 +47,7 @@ add_library(transcribe
     arch/whisper/weights.cpp
     arch/whisper/encoder.cpp
     arch/whisper/decoder.cpp
+    arch/whisper/bin_load.cpp
 )
 
 target_include_directories(transcribe

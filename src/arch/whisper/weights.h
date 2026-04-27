@@ -37,8 +37,10 @@
 #pragma once
 
 #include "transcribe.h"
+#include "transcribe-mel.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -221,9 +223,21 @@ struct WhisperWeights {
     std::vector<WhisperDecBlock>   dec_blocks;
 };
 
-transcribe_status build_whisper_weights(const gguf_context *    gguf,
-                                        ggml_context *          ctx_meta,
+transcribe_status build_whisper_weights(ggml_context *          ctx_meta,
                                         const WhisperHParams &  hp,
                                         WhisperWeights &        weights);
+
+// Build a MelConfig from `hp`, install the caller-provided
+// `filterbank` + `window` buffers (either may be empty — MelFrontend
+// reconstructs from cfg constants in that case), validate the
+// fe_normalize tag, and emplace a MelFrontend into `out_mel`. Shared
+// between the GGUF load path (buffers fetched via
+// read_f32_tensor_checked) and the legacy whisper.cpp `.bin` adapter
+// (mel filterbank from the parsed file, Hann window computed in C++).
+transcribe_status install_mel_from_buffers(
+    const WhisperHParams &                   hp,
+    std::vector<float>                       filterbank,
+    std::vector<float>                       window,
+    std::optional<transcribe::MelFrontend> & out_mel);
 
 } // namespace transcribe::whisper

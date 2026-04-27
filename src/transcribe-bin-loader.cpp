@@ -1,0 +1,448 @@
+// transcribe-bin-loader.cpp - whisper.cpp `.bin` parser implementation.
+
+#include "transcribe-bin-loader.h"
+
+#include "ggml.h"
+#include "ggml-backend.h"
+
+#include <sys/stat.h>
+
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <ios>
+
+namespace transcribe::bin_loader {
+
+namespace {
+
+constexpr const char * kTag = "whisper-bin";
+
+// Same path-existence check transcribe-loader uses for GGUFs: ENOENT /
+// ENOTDIR are conclusive "file is not at this path"; anything else
+// means we couldn't reach the path and the open below should surface
+// the underlying error.
+bool path_is_present(const char * path) {
+    struct stat st {};
+    if (::stat(path, &st) == 0) {
+        return true;
+    }
+    if (errno == ENOENT || errno == ENOTDIR) {
+        return false;
+    }
+    return true;
+}
+
+// Read sizeof(T) bytes into `out`. Returns false on short read or
+// stream failure.
+template <typename T>
+bool read_pod(std::ifstream & fin, T & out) {
+    fin.read(reinterpret_cast<char *>(&out), sizeof(T));
+    return static_cast<bool>(fin);
+}
+
+// Map `ftype % 1000` (the GGML_FTYPE_* enum) to a ggml_type. Whisper
+// .bin files write the `ftype` global once in the hparams; per-tensor
+// `ttype` is independent and uses ggml_type values directly. This
+// helper only validates that a given ttype is a ggml_type our loader
+// knows how to size. We accept the same set the linear/conv allowlists
+// expose plus a few extras whisper.cpp emits (Q5_0/Q5_1).
+bool is_known_ggml_type(int32_t ttype) {
+    switch (ttype) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_K:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Size in bytes of a tensor with the given (type, ne[]) using ggml's
+// block-quant accounting. Mirrors ggml_nbytes for a freshly created
+// tensor: bytes = (n_elements / blck_size) * type_size.
+uint64_t tensor_nbytes(ggml_type type, const int64_t ne[4]) {
+    const int64_t n_elem =
+        ne[0] * (ne[1] > 0 ? ne[1] : 1) *
+        (ne[2] > 0 ? ne[2] : 1) * (ne[3] > 0 ? ne[3] : 1);
+    const int64_t blck = ggml_blck_size(type);
+    if (blck <= 0) return 0;
+    if (n_elem % blck != 0) return 0;
+    return static_cast<uint64_t>(n_elem / blck) *
+           static_cast<uint64_t>(ggml_type_size(type));
+}
+
+// Whisper-shape gate. The `ggml` magic byte is shared with non-
+// Whisper artifacts (notably Silero VAD), so after reading the 11
+// hparam ints we sanity-check the geometry. A real whisper.cpp `.bin`
+// matches one of the canonical model sizes; anything else is rejected
+// as UNSUPPORTED_ARCH (not GGUF, so no further probing makes sense).
+bool hparams_look_whisper(const WhisperBinHParams & hp) {
+    auto layer_ok = [](int32_t l) {
+        return l == 4 || l == 6 || l == 12 || l == 24 || l == 32;
+    };
+    if (!layer_ok(hp.n_audio_layer)) return false;
+    if (!layer_ok(hp.n_text_layer))  return false;
+    if (hp.n_mels != 80 && hp.n_mels != 128) return false;
+    if (hp.n_vocab != 51864 && hp.n_vocab != 51865 && hp.n_vocab != 51866) {
+        return false;
+    }
+    if (hp.n_audio_state <= 0 || hp.n_audio_head <= 0) return false;
+    if (hp.n_audio_state % hp.n_audio_head != 0) return false;
+    if (hp.n_text_state <= 0 || hp.n_text_head <= 0)  return false;
+    if (hp.n_text_state % hp.n_text_head != 0) return false;
+    // n_audio_ctx and n_text_ctx are 1500 / 448 across all shipped
+    // variants; permit anything plausible to keep the gate from
+    // rejecting a hypothetical fine-tune with a different n_text_ctx.
+    if (hp.n_audio_ctx <= 0 || hp.n_audio_ctx > 4096) return false;
+    if (hp.n_text_ctx  <= 0 || hp.n_text_ctx  > 4096) return false;
+
+    const int32_t qntvr = hp.ftype / 1000;
+    const int32_t base  = hp.ftype % 1000;
+    (void)qntvr;
+    if (base < 0 || base > 30) return false;
+    return true;
+}
+
+} // namespace
+
+transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
+    out = WhisperBinModel{};
+
+    if (path == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (!path_is_present(path)) {
+        return TRANSCRIBE_ERR_FILE_NOT_FOUND;
+    }
+    out.path = path;
+
+    std::ifstream fin(path, std::ios::binary);
+    if (!fin) {
+        std::fprintf(stderr,
+                     "%s: failed to open %s\n", kTag, path);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // ---- magic ----
+    uint32_t magic = 0;
+    if (!read_pod(fin, magic)) {
+        std::fprintf(stderr, "%s: short read on magic\n", kTag);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (magic != k_whisper_bin_magic) {
+        // Caller (transcribe_model_load_file) is responsible for
+        // routing GGUF magic to the GGUF loader before reaching here.
+        // Anything else with non-`ggml` magic is just unsupported.
+        std::fprintf(stderr,
+                     "%s: bad magic 0x%08x (expected 0x%08x for legacy "
+                     "whisper.cpp .bin)\n",
+                     kTag, magic, k_whisper_bin_magic);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // ---- hparams (11 × int32) ----
+    auto & hp = out.hp;
+    if (!read_pod(fin, hp.n_vocab)        ||
+        !read_pod(fin, hp.n_audio_ctx)    ||
+        !read_pod(fin, hp.n_audio_state)  ||
+        !read_pod(fin, hp.n_audio_head)   ||
+        !read_pod(fin, hp.n_audio_layer)  ||
+        !read_pod(fin, hp.n_text_ctx)     ||
+        !read_pod(fin, hp.n_text_state)   ||
+        !read_pod(fin, hp.n_text_head)    ||
+        !read_pod(fin, hp.n_text_layer)   ||
+        !read_pod(fin, hp.n_mels)         ||
+        !read_pod(fin, hp.ftype))
+    {
+        std::fprintf(stderr, "%s: short read on hparams\n", kTag);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    if (!hparams_look_whisper(hp)) {
+        // Magic was `ggml` but the geometry isn't Whisper. Likely a
+        // Silero VAD `.bin` or some other ggml artifact — reject
+        // cleanly so the caller surfaces UNSUPPORTED_ARCH.
+        std::fprintf(stderr,
+                     "%s: hparams do not match a known Whisper geometry "
+                     "(n_audio_layer=%d n_text_layer=%d n_mels=%d "
+                     "n_vocab=%d) — refusing to load as Whisper\n",
+                     kTag, hp.n_audio_layer, hp.n_text_layer,
+                     hp.n_mels, hp.n_vocab);
+        return TRANSCRIBE_ERR_UNSUPPORTED_ARCH;
+    }
+
+    // is_multilingual / num_languages mirror the whisper.cpp
+    // formulas at whisper.cpp:451-457. .en variants use n_vocab=51864.
+    out.is_multilingual = hp.n_vocab >= 51865;
+    out.num_languages   = hp.n_vocab - 51765 - (out.is_multilingual ? 1 : 0);
+
+    // ---- mel filters ----
+    if (!read_pod(fin, out.n_mel_filters) ||
+        !read_pod(fin, out.n_fft_filters))
+    {
+        std::fprintf(stderr,
+                     "%s: short read on mel filter dims\n", kTag);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (out.n_mel_filters != hp.n_mels) {
+        std::fprintf(stderr,
+                     "%s: mel filter n_mel=%d disagrees with hparams "
+                     "n_mels=%d\n", kTag, out.n_mel_filters, hp.n_mels);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (out.n_fft_filters <= 0 || out.n_mel_filters <= 0) {
+        std::fprintf(stderr,
+                     "%s: invalid mel filter dims n_mel=%d n_fft=%d\n",
+                     kTag, out.n_mel_filters, out.n_fft_filters);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    const size_t fb_elems =
+        static_cast<size_t>(out.n_mel_filters) *
+        static_cast<size_t>(out.n_fft_filters);
+    out.mel_filterbank.resize(fb_elems);
+    fin.read(reinterpret_cast<char *>(out.mel_filterbank.data()),
+             static_cast<std::streamsize>(fb_elems * sizeof(float)));
+    if (!fin) {
+        std::fprintf(stderr,
+                     "%s: short read on mel filterbank (%zu floats)\n",
+                     kTag, fb_elems);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // ---- vocab ----
+    int32_t n_vocab_in_file = 0;
+    if (!read_pod(fin, n_vocab_in_file)) {
+        std::fprintf(stderr, "%s: short read on vocab count\n", kTag);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (n_vocab_in_file <= 0 || n_vocab_in_file > hp.n_vocab + 64) {
+        // The file's vocab count may legitimately be smaller than
+        // hparams.n_vocab (whisper.cpp synthesizes the missing tokens
+        // at load), but it should never overshoot by much.
+        std::fprintf(stderr,
+                     "%s: implausible vocab count %d (hparams n_vocab=%d)\n",
+                     kTag, n_vocab_in_file, hp.n_vocab);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    out.vocab_tokens.reserve(static_cast<size_t>(n_vocab_in_file));
+    std::string scratch;
+    for (int32_t i = 0; i < n_vocab_in_file; ++i) {
+        uint32_t len = 0;
+        if (!read_pod(fin, len)) {
+            std::fprintf(stderr,
+                         "%s: short read on vocab token %d length\n",
+                         kTag, i);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (len > 1024) {
+            // No legitimate Whisper token is anywhere near this long.
+            std::fprintf(stderr,
+                         "%s: vocab token %d claims absurd length %u\n",
+                         kTag, i, len);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        scratch.assign(static_cast<size_t>(len), '\0');
+        if (len > 0) {
+            fin.read(scratch.data(), static_cast<std::streamsize>(len));
+            if (!fin) {
+                std::fprintf(stderr,
+                             "%s: short read on vocab token %d body\n",
+                             kTag, i);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+        }
+        out.vocab_tokens.emplace_back(scratch);
+    }
+
+    // ---- tensors (header + dims + name + payload) ----
+    // We walk the whole file, recording each tensor's metadata + the
+    // file offset where its bytes start. We do NOT load payload bytes
+    // here — stream_tensor_data_from_bin reopens the file fresh and
+    // seeks per tensor, matching the GGUF byte-streaming pattern.
+    while (true) {
+        // Peek for EOF by attempting to read n_dims. If the read
+        // fails cleanly at EOF (no partial bytes), we're done.
+        int32_t n_dims = 0;
+        fin.read(reinterpret_cast<char *>(&n_dims), sizeof(n_dims));
+        if (fin.eof() && fin.gcount() == 0) {
+            break;
+        }
+        if (!fin || fin.gcount() != sizeof(n_dims)) {
+            std::fprintf(stderr,
+                         "%s: truncated tensor header (after %zu tensors)\n",
+                         kTag, out.tensors.size());
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        int32_t name_len = 0;
+        int32_t ttype    = 0;
+        if (!read_pod(fin, name_len) || !read_pod(fin, ttype)) {
+            std::fprintf(stderr,
+                         "%s: truncated tensor header (after %zu tensors)\n",
+                         kTag, out.tensors.size());
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (n_dims < 1 || n_dims > 4) {
+            std::fprintf(stderr,
+                         "%s: tensor n_dims=%d out of range\n",
+                         kTag, n_dims);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (name_len <= 0 || name_len > 256) {
+            std::fprintf(stderr,
+                         "%s: tensor name_len=%d out of range\n",
+                         kTag, name_len);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (!is_known_ggml_type(ttype)) {
+            std::fprintf(stderr,
+                         "%s: unknown ttype %d\n", kTag, ttype);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        // Dimensions are stored in ne-order directly. The convert
+        // script's "reverse the numpy shape" step is purely about
+        // mapping numpy's row-major axis 0 (slowest) to ggml's ne[0]
+        // (fastest); the bytes that follow are still C-order, and
+        // whisper.cpp's loader reads dims into ne[i] without any
+        // reversal (whisper.cpp:1884-1887). We do the same.
+        BinTensorEntry entry {};
+        entry.type   = static_cast<ggml_type>(ttype);
+        entry.n_dims = n_dims;
+        for (int32_t i = 0; i < 4; ++i) entry.ne[i] = 1;
+        for (int32_t i = 0; i < n_dims; ++i) {
+            int32_t v = 0;
+            if (!read_pod(fin, v)) {
+                std::fprintf(stderr,
+                             "%s: truncated tensor dims\n", kTag);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            if (v <= 0) {
+                std::fprintf(stderr,
+                             "%s: tensor dim ne[%d]=%d non-positive\n",
+                             kTag, i, v);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            entry.ne[i] = v;
+        }
+
+        std::string name(static_cast<size_t>(name_len), '\0');
+        fin.read(name.data(), name_len);
+        if (!fin) {
+            std::fprintf(stderr,
+                         "%s: truncated tensor name\n", kTag);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        entry.name = std::move(name);
+
+        // Payload: position is current; size is ggml_nbytes-equivalent
+        // for the declared (type, ne).
+        entry.nbytes = tensor_nbytes(entry.type, entry.ne);
+        if (entry.nbytes == 0) {
+            std::fprintf(stderr,
+                         "%s: tensor \"%s\" has 0 nbytes (type=%s, "
+                         "ne=[%lld,%lld,%lld,%lld] not a multiple of "
+                         "block size)\n",
+                         kTag, entry.name.c_str(),
+                         ggml_type_name(entry.type),
+                         (long long)entry.ne[0], (long long)entry.ne[1],
+                         (long long)entry.ne[2], (long long)entry.ne[3]);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        entry.offset = static_cast<uint64_t>(fin.tellg());
+
+        // Skip the payload to land on the next tensor header.
+        fin.seekg(static_cast<std::streamoff>(entry.nbytes),
+                  std::ios::cur);
+        if (!fin) {
+            std::fprintf(stderr,
+                         "%s: tensor \"%s\" payload runs past end of file "
+                         "(offset=%llu nbytes=%llu) — file is truncated\n",
+                         kTag, entry.name.c_str(),
+                         (unsigned long long)entry.offset,
+                         (unsigned long long)entry.nbytes);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        out.tensors.emplace_back(std::move(entry));
+    }
+
+    if (out.tensors.empty()) {
+        std::fprintf(stderr, "%s: file declares no tensors\n", kTag);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status stream_tensor_data_from_bin(
+    const std::string &                 path,
+    const std::vector<BinStreamSlot> &  slots,
+    const char *                        error_tag)
+{
+    std::ifstream fin(path, std::ios::binary);
+    if (!fin) {
+        std::fprintf(stderr,
+                     "%s: failed to reopen %s for tensor data\n",
+                     error_tag, path.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // Reused staging buffer: largest tensor in a quantized whisper
+    // model is ~80 MB (token embedding); allocating once amortizes.
+    std::vector<uint8_t> staging;
+
+    for (const BinStreamSlot & s : slots) {
+        if (s.dst == nullptr) {
+            std::fprintf(stderr,
+                         "%s: stream slot has null dst tensor\n",
+                         error_tag);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        const size_t want = ggml_nbytes(s.dst);
+        if (s.src_bytes != want) {
+            std::fprintf(stderr,
+                         "%s: tensor \"%s\" byte-size mismatch "
+                         "(.bin says %llu, ggml expects %zu)\n",
+                         error_tag, s.dst->name,
+                         (unsigned long long)s.src_bytes, want);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (staging.size() < want) {
+            staging.resize(want);
+        }
+        fin.seekg(static_cast<std::streamoff>(s.src_off));
+        if (!fin) {
+            std::fprintf(stderr,
+                         "%s: seek failed for tensor \"%s\"\n",
+                         error_tag, s.dst->name);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        fin.read(reinterpret_cast<char *>(staging.data()),
+                 static_cast<std::streamsize>(want));
+        if (!fin || static_cast<size_t>(fin.gcount()) != want) {
+            std::fprintf(stderr,
+                         "%s: short read for tensor \"%s\"\n",
+                         error_tag, s.dst->name);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_tensor_set(s.dst, staging.data(), 0, want);
+    }
+
+    return TRANSCRIBE_OK;
+}
+
+} // namespace transcribe::bin_loader

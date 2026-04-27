@@ -9,22 +9,17 @@
 #include "transcribe-weights-util.h"
 
 #include "ggml.h"
-#include "gguf.h"
 
 #include <cstdio>
 
 namespace transcribe::weights {
 
-ggml_tensor * find_tensor(const gguf_context *              gguf,
-                          ggml_context *                    ctx_meta,
+ggml_tensor * find_tensor(ggml_context *                    ctx_meta,
                           const char *                      name,
                           std::initializer_list<ggml_type>  allowed_types,
                           std::initializer_list<int64_t>    expected_ne,
                           const char *                      error_tag)
 {
-    (void)gguf; // signature stays wide so a future impl can cross-
-                // reference gguf_find_tensor if needed.
-
     ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
     if (t == nullptr) {
         std::fprintf(stderr, "%s: missing tensor \"%s\"\n", error_tag, name);

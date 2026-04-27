@@ -463,7 +463,7 @@ transcribe_status load(
     }
 
     if (const transcribe_status st =
-            build_cohere_weights(gguf_data, m->ctx_meta, m->hparams, m->weights);
+            build_cohere_weights(m->ctx_meta, m->hparams, m->weights);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);

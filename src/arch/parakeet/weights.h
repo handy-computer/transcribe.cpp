@@ -281,8 +281,7 @@ struct ParakeetWeights {
 // On failure the partially-built `weights` is left in an
 // indeterminate state — the caller is expected to throw the whole
 // model away.
-transcribe_status build_parakeet_weights(const gguf_context *    gguf,
-                                         ggml_context *          ctx_meta,
+transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
                                          const ParakeetHParams & hp,
                                          ParakeetWeights &       weights);
 

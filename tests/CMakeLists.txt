@@ -482,6 +482,43 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     set_tests_properties(transcribe_whisper_e2e_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
 
+    # Legacy whisper.cpp `.bin` end-to-end smoke. Gated by
+    # TRANSCRIBE_WHISPER_BIN_TINY_Q8_0 so CI without an upstream
+    # `.bin` skips cleanly (RC 77). Same gating pattern as the
+    # other real-model tests.
+    add_executable(transcribe_whisper_bin_e2e_smoke
+        whisper_bin_e2e_smoke.cpp)
+
+    target_link_libraries(transcribe_whisper_bin_e2e_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_whisper_bin_e2e_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_whisper_bin_e2e_smoke)
+
+    add_test(NAME transcribe_whisper_bin_e2e_smoke
+        COMMAND transcribe_whisper_bin_e2e_smoke)
+    set_tests_properties(transcribe_whisper_bin_e2e_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # Tokenizer parity: tiktoken-style raw-bytes encoder (.bin) vs
+    # HF GPT-2 byte-level BPE with merges (GGUF). Both surfaces feed
+    # transcribe_tokenize; the parity test asserts byte-for-byte
+    # identical token id sequences across a representative probe set.
+    add_executable(transcribe_whisper_bin_tokenize_parity
+        whisper_bin_tokenize_parity.cpp)
+
+    target_link_libraries(transcribe_whisper_bin_tokenize_parity
+        PRIVATE transcribe)
+
+    transcribe_apply_warnings(transcribe_whisper_bin_tokenize_parity)
+
+    add_test(NAME transcribe_whisper_bin_tokenize_parity
+        COMMAND transcribe_whisper_bin_tokenize_parity)
+    set_tests_properties(transcribe_whisper_bin_tokenize_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
+
     # Stage 1 parity: HF-byte-identical tokenization for Whisper,
     # including digit and contraction edge cases that the GPT-2
     # pretokenizer regex handles differently from Qwen2.
@@ -648,6 +685,58 @@ target_include_directories(transcribe_mel_unit PRIVATE
 transcribe_apply_warnings(transcribe_mel_unit)
 
 add_test(NAME transcribe_mel_unit COMMAND transcribe_mel_unit)
+
+# -----------------------------------------------------------------------------
+# Tokenizer decode-only mode unit test
+# -----------------------------------------------------------------------------
+#
+# Covers the in-memory load_decode_only_gpt2 / load_decode_only_raw_bytes
+# constructors that the legacy whisper.cpp .bin adapter (PR3) will use.
+# No fixtures: the test builds tiny in-memory vocabularies and asserts
+# decode() picks the right strategy (byte-unicode inversion vs verbatim
+# concatenation), encoder is reported absent, and DecodeOnlySpecials
+# values are propagated.
+
+add_executable(transcribe_tokenizer_decode_only_unit
+    tokenizer_decode_only_unit.cpp)
+
+target_link_libraries(transcribe_tokenizer_decode_only_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_tokenizer_decode_only_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_tokenizer_decode_only_unit)
+
+add_test(NAME transcribe_tokenizer_decode_only_unit
+    COMMAND transcribe_tokenizer_decode_only_unit)
+
+# -----------------------------------------------------------------------------
+# Whisper .bin parser unit test
+# -----------------------------------------------------------------------------
+#
+# Covers the legacy whisper.cpp `.bin` parser surfaces:
+#   - missing path → ERR_FILE_NOT_FOUND
+#   - non-Whisper `ggml`-magic file (Silero VAD) → ERR_UNSUPPORTED_ARCH
+#     (gated by TRANSCRIBE_WHISPER_BIN_SILERO)
+#   - truncated `for-tests-*.bin` → ERR_GGUF
+#     (gated by TRANSCRIBE_WHISPER_BIN_TRUNCATED)
+#   - real ggml-tiny-q8_0.bin parses to expected metadata
+#     (gated by TRANSCRIBE_WHISPER_BIN_TINY_Q8_0)
+#
+# Always built; sub-tests skip when their gating env var is unset.
+
+add_executable(transcribe_whisper_bin_parser_unit
+    whisper_bin_parser_unit.cpp)
+
+target_link_libraries(transcribe_whisper_bin_parser_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_whisper_bin_parser_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_whisper_bin_parser_unit)
+
+add_test(NAME transcribe_whisper_bin_parser_unit
+    COMMAND transcribe_whisper_bin_parser_unit)
 
 # -----------------------------------------------------------------------------
 # WAV loader unit smoke (example helper)

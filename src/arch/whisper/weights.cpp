@@ -330,6 +330,50 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
 }
 
 // ---------------------------------------------------------------------------
+// Frontend (mel filterbank + Hann window install)
+// ---------------------------------------------------------------------------
+
+transcribe_status install_mel_from_buffers(
+    const WhisperHParams &                   hp,
+    std::vector<float>                       filterbank,
+    std::vector<float>                       window,
+    std::optional<transcribe::MelFrontend> & out_mel)
+{
+    transcribe::MelConfig cfg {};
+    cfg.sample_rate  = hp.fe_sample_rate;
+    cfg.num_mels     = hp.fe_num_mels;
+    cfg.n_fft        = hp.fe_n_fft;
+    cfg.win_length   = hp.fe_win_length;
+    cfg.hop_length   = hp.fe_hop_length;
+    cfg.pre_emphasis = hp.fe_pre_emphasis;
+    cfg.f_min        = hp.fe_f_min;
+    cfg.f_max        = hp.fe_f_max;
+    cfg.pad_mode     = hp.fe_pad_mode;        // "reflect"
+    cfg.window_type  = hp.fe_window;          // "hann_periodic"
+
+    // Map whisper's "whisper_logmel" tag to MelFrontend's
+    // "per_utterance" mode, which implements exactly the
+    // log10 → clamp(max-8) → (+4)/4 sequence. Other normalize
+    // strings would be a converter bug — guard at load.
+    if (hp.fe_normalize == "whisper_logmel" ||
+        hp.fe_normalize == "per_utterance")
+    {
+        cfg.normalize = "per_utterance";
+    } else {
+        std::fprintf(stderr,
+                     "whisper: unsupported fe_normalize='%s'\n",
+                     hp.fe_normalize.c_str());
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    cfg.filterbank = std::move(filterbank);
+    cfg.window     = std::move(window);
+
+    out_mel.emplace(cfg);
+    return TRANSCRIBE_OK;
+}
+
+// ---------------------------------------------------------------------------
 // Weights
 // ---------------------------------------------------------------------------
 
@@ -342,7 +386,7 @@ constexpr const char * kTag = kFamilyTag;
 #define GET_F32(slot, name, ...) \
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
-            gguf, ctx_meta, (name), \
+            ctx_meta, (name), \
             {GGML_TYPE_F32}, {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \
@@ -351,7 +395,7 @@ constexpr const char * kTag = kFamilyTag;
 #define GET_CONV(slot, name, ...) \
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
-            gguf, ctx_meta, (name), \
+            ctx_meta, (name), \
             {TRANSCRIBE_QUANT_CONV_TYPES}, \
             {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
@@ -361,7 +405,7 @@ constexpr const char * kTag = kFamilyTag;
 #define GET_LIN(slot, name, ...) \
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
-            gguf, ctx_meta, (name), \
+            ctx_meta, (name), \
             {TRANSCRIBE_QUANT_LINEAR_TYPES}, \
             {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
@@ -370,12 +414,11 @@ constexpr const char * kTag = kFamilyTag;
 
 } // namespace
 
-transcribe_status build_whisper_weights(const gguf_context *    gguf,
-                                        ggml_context *          ctx_meta,
+transcribe_status build_whisper_weights(ggml_context *          ctx_meta,
                                         const WhisperHParams &  hp,
                                         WhisperWeights &        weights)
 {
-    if (gguf == nullptr || ctx_meta == nullptr) {
+    if (ctx_meta == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 

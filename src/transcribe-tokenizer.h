@@ -97,6 +97,51 @@ public:
     //                                  supported (e.g. "wordpiece").
     transcribe_status load(const gguf_context * gguf);
 
+    // Optional special-token ids for the decode-only constructors. The
+    // GGUF load() path reads these from tokenizer.ggml.*_token_id keys;
+    // the decode-only constructors take them as a struct since legacy
+    // weight formats (whisper.cpp .bin) carry no analogous KVs and
+    // callers must supply them explicitly. Defaults of -1 match the
+    // "absent" sentinel used by the GGUF path.
+    struct DecodeOnlySpecials {
+        int unk_id   = -1;
+        int bos_id   = -1;
+        int eos_id   = -1;
+        int blank_id = -1;
+    };
+
+    // Decode-only tokenizer for GGUF "gpt2" byte-level vocabularies.
+    // Tokens are stored under the GPT-2 byte-to-unicode mapping; decode
+    // inverts that mapping per codepoint to recover raw UTF-8 bytes.
+    // No merges → encode() returns the standard "encoder unavailable"
+    // error; has_encoder() returns false.
+    //
+    // Provided as a sibling to load() so a non-GGUF source (currently
+    // only used by tests) can wire up a decoder against an in-memory
+    // vocab without forging GGUF KVs.
+    //
+    // Returns TRANSCRIBE_OK on success, TRANSCRIBE_ERR_INVALID_ARG if
+    // `tokens` is empty.
+    transcribe_status load_decode_only_gpt2(std::vector<std::string>   tokens,
+                                            const DecodeOnlySpecials & specials);
+    transcribe_status load_decode_only_gpt2(std::vector<std::string>   tokens) {
+        return load_decode_only_gpt2(std::move(tokens), DecodeOnlySpecials{});
+    }
+
+    // Decode-only tokenizer for legacy whisper.cpp .bin vocabularies,
+    // which are tiktoken-style: tokens are stored as raw UTF-8 byte
+    // sequences (a token containing "é" is the two bytes 0xC3 0xA9, not
+    // the byte-to-unicode-remapped form "Ã©" that the GGUF "gpt2"
+    // decoder expects). Decode just concatenates token bytes.
+    //
+    // No merges → encode() returns the standard "encoder unavailable"
+    // error; has_encoder() returns false.
+    transcribe_status load_decode_only_raw_bytes(std::vector<std::string>   tokens,
+                                                 const DecodeOnlySpecials & specials);
+    transcribe_status load_decode_only_raw_bytes(std::vector<std::string>   tokens) {
+        return load_decode_only_raw_bytes(std::move(tokens), DecodeOnlySpecials{});
+    }
+
     // Vocabulary access. token(id) returns an empty string for an
     // out-of-range id (matching the safe-sentinel pattern used by the
     // public result accessors). find(piece) returns -1 if the piece
@@ -162,8 +207,23 @@ public:
     void set_pretokenizer(const std::string & pre) { pre_ = pre; }
 
 private:
+    // How decode() should reassemble token bytes. Set during load().
+    //   SentencePiece    - U+2581 → ASCII space (unigram / bpe)
+    //   Gpt2ByteUnicode  - invert GPT-2 byte-to-unicode per codepoint
+    //                      (GGUF "gpt2", which stores tokens in the
+    //                      remapped form)
+    //   RawBytes         - concatenate token bytes verbatim (legacy
+    //                      whisper.cpp .bin tiktoken-style vocab,
+    //                      where tokens are already raw UTF-8 bytes)
+    enum class DecodeMode {
+        SentencePiece,
+        Gpt2ByteUnicode,
+        RawBytes,
+    };
+
     std::string              model_;
     std::string              pre_;        // "qwen2" (default) or "gpt2"
+    DecodeMode               decode_mode_ = DecodeMode::SentencePiece;
     std::vector<std::string> tokens_;
     std::vector<float>       scores_;     // optional, may be empty
     std::vector<int32_t>     token_type_; // optional, may be empty

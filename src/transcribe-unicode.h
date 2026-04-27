@@ -141,4 +141,11 @@ std::vector<std::string> pretokenize_qwen2(const std::string & text);
 // split into three single-digit pretokens and block the merge.
 std::vector<std::string> pretokenize_gpt2(const std::string & text);
 
+// Same regex split as pretokenize_gpt2, but each pretoken is the raw
+// UTF-8 substring of the input — no byte-to-unicode remap. Used by
+// the tiktoken-style encoder for whisper.cpp `.bin` vocabularies,
+// which store tokens as raw byte sequences rather than the GPT-2
+// remapped form.
+std::vector<std::string> pretokenize_gpt2_raw_bytes(const std::string & text);
+
 } // namespace transcribe::unicode

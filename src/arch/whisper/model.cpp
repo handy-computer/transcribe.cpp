@@ -395,58 +395,40 @@ transcribe_status whisper_load(
     // C++ frontend matches the WhisperFeatureExtractor reference
     // bit-for-bit modulo fp32 reduction-order drift.
     {
-        transcribe::MelConfig cfg {};
-        cfg.sample_rate  = m->hparams.fe_sample_rate;
-        cfg.num_mels     = m->hparams.fe_num_mels;
-        cfg.n_fft        = m->hparams.fe_n_fft;
-        cfg.win_length   = m->hparams.fe_win_length;
-        cfg.hop_length   = m->hparams.fe_hop_length;
-        cfg.pre_emphasis = m->hparams.fe_pre_emphasis;
-        cfg.f_min        = m->hparams.fe_f_min;
-        cfg.f_max        = m->hparams.fe_f_max;
-        cfg.pad_mode     = m->hparams.fe_pad_mode;        // "reflect"
-        cfg.window_type  = m->hparams.fe_window;          // "hann_periodic"
-        // Map whisper's "whisper_logmel" tag to MelFrontend's
-        // "per_utterance" mode, which implements exactly the
-        // log10 → clamp(max-8) → (+4)/4 sequence. Other normalize
-        // strings would be a converter bug — guard at load.
-        if (m->hparams.fe_normalize == "whisper_logmel" ||
-            m->hparams.fe_normalize == "per_utterance")
-        {
-            cfg.normalize = "per_utterance";
-        } else {
-            std::fprintf(stderr,
-                         "whisper: unsupported fe_normalize='%s'\n",
-                         m->hparams.fe_normalize.c_str());
-            return TRANSCRIBE_ERR_GGUF;
-        }
-
         // Filterbank + window from the GGUF (frontend.mel_filterbank,
         // frontend.window). Both are F32 arrays whose shapes match
         // what MelConfig wants (row-major [num_mels, n_fft/2+1] and
         // [n_fft] respectively). When present, MelFrontend uses them
         // verbatim instead of reconstructing from cfg constants.
         using R = transcribe::load_common::ReadF32Result;
+        std::vector<float> fb_buf;
+        std::vector<float> win_buf;
+
         const size_t fb_elems =
-            static_cast<size_t>(cfg.num_mels) *
-            static_cast<size_t>(cfg.n_fft / 2 + 1);
+            static_cast<size_t>(m->hparams.fe_num_mels) *
+            static_cast<size_t>(m->hparams.fe_n_fft / 2 + 1);
         const auto fb_rc = transcribe::load_common::read_f32_tensor_checked(
             loader.gguf(), loader.path(),
             "frontend.mel_filterbank", fb_elems,
-            "whisper", cfg.filterbank);
+            "whisper", fb_buf);
         if (fb_rc != R::Ok && fb_rc != R::Absent) {
             return TRANSCRIBE_ERR_GGUF;
         }
-        const size_t win_elems = static_cast<size_t>(cfg.n_fft);
+        const size_t win_elems = static_cast<size_t>(m->hparams.fe_n_fft);
         const auto win_rc = transcribe::load_common::read_f32_tensor_checked(
             loader.gguf(), loader.path(),
             "frontend.window", win_elems,
-            "whisper", cfg.window);
+            "whisper", win_buf);
         if (win_rc != R::Ok && win_rc != R::Absent) {
             return TRANSCRIBE_ERR_GGUF;
         }
 
-        m->mel.emplace(cfg);
+        if (const transcribe_status st = install_mel_from_buffers(
+                m->hparams, std::move(fb_buf), std::move(win_buf), m->mel);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
     }
 
     // Stage 2: reopen with no_alloc to build the tensor catalog.
@@ -461,7 +443,7 @@ transcribe_status whisper_load(
     }
 
     if (const transcribe_status st = build_whisper_weights(
-            gguf_data, m->ctx_meta, m->hparams, m->weights);
+            m->ctx_meta, m->hparams, m->weights);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
@@ -527,14 +509,29 @@ transcribe_status whisper_load(
     // storage lifetime (set_languages owns the string backing for
     // caps.languages[], but accessing it requires walking the capability
     // chain — a direct owned vector here is simpler for decoder code).
+    //
+    // Non-multilingual (.en) models advertise a single-language list
+    // ["en"] but their vocab does NOT contain a "<|en|>" token: the
+    // .en decoder prefix is just <|sot|>, with no language or task
+    // tokens. So for .en we keep lang_codes (so the run path can
+    // accept params.language == "en") but leave lang_token_ids empty.
+    // The run path branches on supports_language_detect to skip the
+    // <|lang|>/<|task|> emission for .en.
     m->lang_codes.clear();
     m->lang_token_ids.clear();
+    const bool is_multilingual = m->caps.supports_language_detect;
     if (m->caps.languages != nullptr && m->caps.n_languages > 0) {
         m->lang_codes.reserve(static_cast<size_t>(m->caps.n_languages));
-        m->lang_token_ids.reserve(static_cast<size_t>(m->caps.n_languages));
+        if (is_multilingual) {
+            m->lang_token_ids.reserve(static_cast<size_t>(m->caps.n_languages));
+        }
         for (int i = 0; i < m->caps.n_languages; ++i) {
             const char * code = m->caps.languages[i];
             if (code == nullptr || code[0] == '\0') continue;
+            m->lang_codes.emplace_back(code);
+            if (!is_multilingual) {
+                continue;
+            }
             const std::string piece = std::string("<|") + code + "|>";
             const int id = m->tok.find(piece);
             if (id < 0) {
@@ -544,7 +541,6 @@ transcribe_status whisper_load(
                              code, piece.c_str());
                 return TRANSCRIBE_ERR_GGUF;
             }
-            m->lang_codes.emplace_back(code);
             m->lang_token_ids.push_back(static_cast<int32_t>(id));
         }
     }
@@ -1170,33 +1166,63 @@ transcribe_status whisper_run(
         requested_timestamps == TRANSCRIBE_TIMESTAMPS_AUTO ||
         requested_timestamps == TRANSCRIBE_TIMESTAMPS_SEGMENT;
 
-    const int32_t task_token =
-        (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE)
-            ? cm->hparams.translate_token_id
-            : cm->hparams.transcribe_token_id;
-    if (task_token < 0) {
-        return TRANSCRIBE_ERR_GGUF;
+    // Multilingual whisper variants emit <|lang|> + <|task|> tokens in
+    // the decoder prefix; English-only (.en) variants do not — their
+    // prefix is just <|sot|>. The two also differ at runtime: .en
+    // models do NOT carry <|translate|> / <|transcribe|> task tokens
+    // and have no per-language tokens to detect against. The
+    // supports_language_detect capability is the canonical signal; .en
+    // load sets it to false.
+    const bool is_multilingual = cm->caps.supports_language_detect;
+
+    int32_t task_token = -1;
+    if (is_multilingual) {
+        task_token = (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE)
+                         ? cm->hparams.translate_token_id
+                         : cm->hparams.transcribe_token_id;
+        if (task_token < 0) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    } else if (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE) {
+        std::fprintf(stderr,
+                     "whisper run: this model does not support translate "
+                     "(non-multilingual variant)\n");
+        return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
     // Language hint wins; otherwise we run a SOT-only prefill inside the
     // first chunk's loop iteration (once we have that chunk's enc_host).
+    // For non-multilingual (.en) models, the only accepted language is
+    // "en" and there is no language token to resolve — the prefix omits
+    // the <|lang|> slot entirely.
     int32_t lang_token = -1;
     if (params != nullptr && params->language != nullptr &&
         params->language[0] != '\0')
     {
         const std::string lang_code = params->language;
-        for (size_t i = 0; i < cm->lang_codes.size(); ++i) {
-            if (cm->lang_codes[i] == lang_code) {
-                lang_token = cm->lang_token_ids[i];
-                break;
+        if (!is_multilingual) {
+            if (lang_code != "en") {
+                std::fprintf(stderr,
+                             "whisper run: language '%s' is not supported by "
+                             "this non-multilingual model (only 'en')\n",
+                             lang_code.c_str());
+                return TRANSCRIBE_ERR_INVALID_ARG;
             }
-        }
-        if (lang_token < 0) {
-            std::fprintf(stderr,
-                         "whisper run: language '%s' not in model's language "
-                         "table — cannot build decoder prompt\n",
-                         lang_code.c_str());
-            return TRANSCRIBE_ERR_INVALID_ARG;
+            // Accepted; lang_token stays -1 by design.
+        } else {
+            for (size_t i = 0; i < cm->lang_codes.size(); ++i) {
+                if (cm->lang_codes[i] == lang_code) {
+                    lang_token = cm->lang_token_ids[i];
+                    break;
+                }
+            }
+            if (lang_token < 0) {
+                std::fprintf(stderr,
+                             "whisper run: language '%s' not in model's language "
+                             "table — cannot build decoder prompt\n",
+                             lang_code.c_str());
+                return TRANSCRIBE_ERR_INVALID_ARG;
+            }
         }
     }
 
@@ -1513,8 +1539,14 @@ transcribe_status whisper_run(
             t_decode_started = true;
         }
 
-        // Language detection — once, on first chunk, only if no hint.
-        if (is_first_chunk && lang_token < 0 && !cm->lang_token_ids.empty()) {
+        // Language detection — once, on first chunk, only if no hint
+        // and the model actually has language tokens. Non-multilingual
+        // (.en) models have no lang_token_ids so detection is skipped
+        // automatically; lang_token stays -1 and the prefix below omits
+        // the <|lang|> slot entirely.
+        if (is_first_chunk && is_multilingual &&
+            lang_token < 0 && !cm->lang_token_ids.empty())
+        {
             // Lazily materialize encoder output to host for the
             // prefill graph's encoder_out_in input. The hot path
             // (cross-KV) reads cc->enc_out.tensor directly; this
@@ -1572,7 +1604,7 @@ transcribe_status whisper_run(
                 }
             }
         }
-        if (lang_token < 0) {
+        if (is_multilingual && lang_token < 0) {
             std::fprintf(stderr,
                          "whisper run: could not resolve a decoder language "
                          "token\n");
@@ -1629,14 +1661,21 @@ transcribe_status whisper_run(
                                prompt_text_ids.end());
         }
 
-        // Prefix for this chunk: prev_tokens + [SOT, lang, task, notimestamps?]
+        // Prefix for this chunk:
+        //   multilingual: prev_tokens + [SOT, lang, task, notimestamps?]
+        //   .en:          prev_tokens + [SOT,             notimestamps?]
+        // Non-multilingual models have neither <|lang|> nor <|task|>
+        // tokens in their vocab; emitting either would land on a
+        // garbage id.
         std::vector<int32_t> prompt_ids;
         prompt_ids.reserve(prev_tokens.size() + 4);
         prompt_ids.insert(prompt_ids.end(),
                           prev_tokens.begin(), prev_tokens.end());
         prompt_ids.push_back(cm->hparams.decoder_start_token_id);
-        prompt_ids.push_back(lang_token);
-        prompt_ids.push_back(task_token);
+        if (is_multilingual) {
+            prompt_ids.push_back(lang_token);
+            prompt_ids.push_back(task_token);
+        }
         if (!want_segment_timestamps) {
             prompt_ids.push_back(cm->hparams.no_timestamps_token_id);
         }

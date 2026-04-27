@@ -29,13 +29,20 @@
 #include "transcribe-tokenizer.h"
 
 #include "arch/whisper/whisper.h"
+#include "arch/whisper/bin_load.h"
+
+#include <sys/stat.h>
 
 #include <atomic>
+#include <cerrno>
 #include <climits>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <ios>
 #include <string>
 #include <vector>
 
@@ -231,6 +238,53 @@ extern "C" transcribe_status transcribe_model_load_file(
             "(got %d); multi-device selection is reserved for a "
             "future release\n", params->gpu_device);
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Stage 0: format sniff. Two formats are supported today:
+    //   GGUF magic 0x46554747 ("GGUF") — the canonical path.
+    //   ggml magic 0x67676d6c           — legacy whisper.cpp `.bin`.
+    // We detect by reading the first four bytes rather than by file
+    // extension: HF distributes whisper.cpp models under the `.bin`
+    // suffix even though some are GGUFs internally, and conversely a
+    // user could rename a .bin to .gguf.
+    //
+    // Open semantics preserve the existing public contract: missing
+    // path → ERR_FILE_NOT_FOUND; everything else (truncated header,
+    // unrecognized magic, structural failure) collapses to ERR_GGUF.
+    {
+        struct stat st {};
+        if (::stat(path, &st) != 0) {
+            if (errno == ENOENT || errno == ENOTDIR) {
+                return TRANSCRIBE_ERR_FILE_NOT_FOUND;
+            }
+            // Other stat() failures (EACCES, etc.) are not "not found";
+            // the open below will surface them as ERR_GGUF.
+        }
+    }
+    uint32_t magic = 0;
+    {
+        std::ifstream fin(path, std::ios::binary);
+        if (!fin) {
+            // stat() said the path is reachable but ifstream couldn't
+            // open it — permissions / type issue. Treat as a generic
+            // load failure rather than FILE_NOT_FOUND.
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        fin.read(reinterpret_cast<char *>(&magic), sizeof(magic));
+        if (!fin || fin.gcount() != sizeof(magic)) {
+            std::fprintf(stderr,
+                         "transcribe_model_load_file: short read on file "
+                         "magic for %s\n", path);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    // 0x67676d6c ("ggml" little-endian): legacy whisper.cpp .bin.
+    // Hand off to the whisper-specific .bin adapter, which validates
+    // the hparams as whisper-shaped (rejecting Silero VAD and other
+    // unrelated `ggml`-magic files with UNSUPPORTED_ARCH).
+    if (magic == 0x67676d6cu) {
+        return transcribe::whisper::load_from_bin(path, params, out_model);
     }
 
     // Stage 1: header-only GGUF inspection. The loader returns

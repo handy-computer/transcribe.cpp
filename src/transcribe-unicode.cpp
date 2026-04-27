@@ -712,4 +712,26 @@ std::vector<std::string> pretokenize_gpt2(const std::string & text) {
     return out;
 }
 
+std::vector<std::string> pretokenize_gpt2_raw_bytes(const std::string & text) {
+    std::vector<std::string> out;
+    if (text.empty()) {
+        return out;
+    }
+    const auto cpts = cpts_from_utf8(text);
+    const auto ends = gpt2_split_offsets(cpts, 0, cpts.size());
+
+    out.reserve(ends.size());
+    size_t prev = 0;
+    for (size_t e : ends) {
+        std::string raw;
+        raw.reserve(e - prev);
+        for (size_t i = prev; i < e; ++i) {
+            raw += cpt_to_utf8(cpts[i]);
+        }
+        out.emplace_back(std::move(raw));
+        prev = e;
+    }
+    return out;
+}
+
 } // namespace transcribe::unicode
