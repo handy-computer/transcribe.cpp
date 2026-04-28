@@ -11,8 +11,9 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Cohere Transcribe | `cohere-transcribe-03-2026` | [docs/models/cohere-transcribe-03-2026.md](docs/models/cohere-transcribe-03-2026.md) |
 | Qwen3-ASR | `qwen3-asr-0.6b` | [docs/models/qwen3-asr-0.6b.md](docs/models/qwen3-asr-0.6b.md) |
 | Qwen3-ASR | `qwen3-asr-1.7b` | [docs/models/qwen3-asr-1.7b.md](docs/models/qwen3-asr-1.7b.md) |
+| Whisper | 12 variants (`tiny` through `large-v3-turbo`, plus `.en` siblings) | [docs/models/whisper.md](docs/models/whisper.md) |
 
-More families planned (Moonshine, Canary, SenseVoice, GigaAM, Whisper).
+More families planned (Moonshine, Canary, SenseVoice, GigaAM).
 
 ## Build
 
