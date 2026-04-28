@@ -78,6 +78,10 @@ def main() -> int:
                    choices=("auto", "f32", "f16"),
                    default=None,
                    help="Flash-attn KV cache type passthrough")
+    p.add_argument("--timestamps",
+                   choices=("auto", "none", "segment", "word", "token"),
+                   default=None,
+                   help="Timestamp granularity passthrough")
     args = p.parse_args()
 
     for path in (args.model, args.manifest, args.cli):
@@ -122,6 +126,8 @@ def main() -> int:
         cmd += ["--backend", args.backend]
     if args.kv_type:
         cmd += ["--kv-type", args.kv_type]
+    if args.timestamps:
+        cmd += ["--timestamps", args.timestamps]
     print(f"  $ {' '.join(cmd[:6])} ...")
 
     t_start = time.monotonic()
