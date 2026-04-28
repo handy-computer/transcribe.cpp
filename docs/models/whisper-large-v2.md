@@ -76,6 +76,30 @@ uv run scripts/bench/run.py \
   --name whisper-large-v2-publication
 ```
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  |  6.27 s (1.8×)  |  6.35 s (1.7×)  |
+| Vulkan  | dots (35.3s) |  15.09 s (2.3×) |  14.87 s (2.4×) |
+| CPU     | jfk (11.0s)  |  25.73 s (0.4×) |  19.46 s (0.6×) |
+| CPU     | dots (35.3s) |  53.75 s (0.7×) |  43.11 s (0.8×) |
+
+Fedora 43, transcribe.cpp `01127e6`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models whisper-large-v2 \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name whisper-large-v2-publication
+```
+
 ## Numerical Validation
 
 transcribe.cpp is validated tensor-by-tensor against the transformers
