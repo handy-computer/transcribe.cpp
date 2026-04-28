@@ -78,6 +78,30 @@ uv run scripts/bench/run.py \
   --name whisper-medium-publication
 ```
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |           Q8_0 |        Q4_K_M |
+| ------- | ------------ | -------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  3.46 s (3.2×) | 3.49 s (3.1×) |
+| Vulkan  | dots (35.3s) |  8.36 s (4.2×) | 8.18 s (4.3×) |
+| CPU     | jfk (11.0s)  | 13.14 s (0.8×) | 10.47 s (1.1×) |
+| CPU     | dots (35.3s) | 27.87 s (1.3×) | 22.57 s (1.6×) |
+
+Fedora 43, transcribe.cpp `5fccd5d`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models whisper-medium \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name whisper-medium-publication
+```
+
 ## Numerical Validation
 
 transcribe.cpp is validated tensor-by-tensor against the transformers
