@@ -115,10 +115,10 @@
       "dataset": "LibriSpeech test-clean",
       "language": "en",
       "metric": "wer",
-      "score": 3.08,
+      "score": 3.02,
       "score_unit": "percent",
       "source": "https://huggingface.co/openai/whisper-medium.en",
-      "notes": "Model card."
+      "notes": "Model card (Open ASR Leaderboard block; lower than the separate self-reported LibriSpeech block which lists 4.121)."
     },
     {
       "dataset": "LibriSpeech test-other",

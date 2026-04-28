@@ -115,10 +115,10 @@
       "dataset": "LibriSpeech test-clean",
       "language": "en",
       "metric": "wer",
-      "score": 4.27,
+      "score": 4.25,
       "score_unit": "percent",
       "source": "https://huggingface.co/openai/whisper-base.en",
-      "notes": "Model card."
+      "notes": "Model card (Open ASR Leaderboard block)."
     },
     {
       "dataset": "LibriSpeech test-other",

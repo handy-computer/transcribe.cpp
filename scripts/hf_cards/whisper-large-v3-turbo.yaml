@@ -133,7 +133,7 @@ default_quant_index: 1
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback). OpenAI's self-reported number on the same split is 3.00%. (Note: large-v3 family upstream number is approximate; the model card does not cite a single test-clean number.)
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback). OpenAI's self-reported number on the same split is 2.10%.
 
 quants:
   - name: F16

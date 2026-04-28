@@ -213,10 +213,10 @@
       "dataset": "LibriSpeech test-clean",
       "language": "en",
       "metric": "wer",
-      "score": 2.7,
+      "score": 2.73,
       "score_unit": "percent",
       "source": "https://huggingface.co/openai/whisper-large",
-      "notes": "Model card."
+      "notes": "Model card (Open ASR Leaderboard block; lower than the original block's 3.000)."
     },
     {
       "dataset": "LibriSpeech test-other",

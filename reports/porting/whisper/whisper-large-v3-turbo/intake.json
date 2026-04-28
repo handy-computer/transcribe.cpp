@@ -214,10 +214,10 @@
       "dataset": "LibriSpeech test-clean",
       "language": "en",
       "metric": "wer",
-      "score": 3.0,
+      "score": 2.10,
       "score_unit": "percent",
       "source": "https://huggingface.co/openai/whisper-large-v3-turbo",
-      "notes": "Best-effort: openai/whisper-large-v3 model card does not cite a single LibriSpeech test-clean number; using v2 baseline as comparison target. Treat the ref-dtype hard gate as informational, not blocking."
+      "notes": "Model card (Open ASR Leaderboard block)."
     }
   ],
   "reference_framework": "transformers",

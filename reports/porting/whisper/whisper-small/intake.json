@@ -213,7 +213,7 @@
       "dataset": "LibriSpeech test-clean",
       "language": "en",
       "metric": "wer",
-      "score": 3.43,
+      "score": 3.432,
       "score_unit": "percent",
       "source": "https://huggingface.co/openai/whisper-small",
       "notes": "Model card."
