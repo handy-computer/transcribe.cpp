@@ -1009,10 +1009,18 @@ transcribe_status whisper_run(
 
     // ----- Mel frontend ------------------------------------------------
     //
-    //   1. TRANSCRIBE_WHISPER_MEL_FROM_REF=<dir>  — read the reference
-    //      mel dump from disk. Used by validate.py so the encoder can
-    //      be diffed against the reference WITHOUT introducing C++ mel
-    //      drift into the comparison.
+    //   1. TRANSCRIBE_WHISPER_MEL_FROM_REF=<dir>  — debug-only knob.
+    //      Reads the reference mel dump from disk so the encoder can be
+    //      diffed against the reference WITHOUT introducing C++ mel
+    //      drift into the comparison. Use this when a per-tensor
+    //      compare regression fires and you want to isolate whether
+    //      the drift originates in the C++ mel frontend or downstream
+    //      in the encoder/decoder graph. validate.py exposes it via
+    //      `--mel-from-ref`; the default validation path exercises the
+    //      production C++ MelFrontend below so frontend regressions
+    //      (e.g. precision changes that pass tolerance under ref-mel
+    //      injection but break WER on borderline utterances) cannot
+    //      slip through.
     //
     //   2. C++ MelFrontend (default). Dual behavior:
     //      - Short-form (n_samples <= fe_n_samples): pad PCM to

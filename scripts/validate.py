@@ -347,13 +347,15 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
 
-        # Whisper: inject the reference mel via TRANSCRIBE_WHISPER_MEL_FROM_REF
-        # so enc.mel.in is bit-identical to HF's WhisperFeatureExtractor
-        # output. This isolates encoder/decoder numerical drift from mel-
-        # frontend drift so each can be tolerance-managed separately.
-        # The C++ mel frontend is validated by `validate.py mel` against
-        # its own tolerance (see mel_parity below).
-        if args.family == "whisper":
+        # Whisper: by default, exercise the production C++ MelFrontend so
+        # the per-tensor compare covers the full mel→encoder→decoder
+        # pipeline. The env-var ref-mel injection is preserved as an
+        # opt-in debug knob (--mel-from-ref): when a regression fires,
+        # re-running with --mel-from-ref isolates whether the drift
+        # originates in the C++ mel or downstream in the graph. Defaulting
+        # to ref-mel hid a base.en regression once (the mel-precision
+        # change in 4613129); we don't want that blind spot back.
+        if args.family == "whisper" and getattr(args, "mel_from_ref", False):
             ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
             env["TRANSCRIBE_WHISPER_MEL_FROM_REF"] = str(ref_dir)
 
@@ -773,6 +775,14 @@ def main() -> int:
         choices=["auto", "cpu", "cpu_accel", "metal", "vulkan"],
         help="Compute backend (default: cpu)",
     )
+    sp_cpp.add_argument(
+        "--mel-from-ref", action="store_true",
+        help="Whisper-only debug knob: inject the reference mel via "
+             "TRANSCRIBE_WHISPER_MEL_FROM_REF so enc.mel.in is bit-"
+             "identical to HF's WhisperFeatureExtractor. Use to isolate "
+             "graph drift from frontend drift when a regression fires. "
+             "Default is the production C++ MelFrontend.",
+    )
     sp_cpp.set_defaults(func=cmd_cpp)
 
     # mel
@@ -804,6 +814,12 @@ def main() -> int:
     sp_all.add_argument(
         "--report", action="store_true",
         help="Emit a report bundle after compare completes.",
+    )
+    sp_all.add_argument(
+        "--mel-from-ref", action="store_true",
+        help="Whisper-only debug knob: inject the reference mel via "
+             "TRANSCRIBE_WHISPER_MEL_FROM_REF for the cpp dump. Default "
+             "is the production C++ MelFrontend.",
     )
     sp_all.set_defaults(func=cmd_all)
 
