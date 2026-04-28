@@ -55,24 +55,26 @@ iterations after warmup), with speedup over realtime in parentheses. Units:
 `ms` below 1 s, `s` above (2 decimal places). Decode latency dominates as
 model size grows; the encoder is only run once per 30-second window.
 
-### Apple M4
+### Apple M4 Max
 
-| Backend | Sample      |          F16 |         Q8_0 |        Q4_K_M |
-| ------- | ----------- | -----------: | -----------: | ------------: |
-| Metal   | jfk (11.0s) | 359 ms (31×) | 331 ms (33×) |  324 ms (34×) |
-| CPU     | jfk (11.0s) |  1.79 s (6×) |  1.26 s (9×) |   1.34 s (8×) |
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  | 125.0 ms (88.0×) | 123.3 ms (89.2×) |
+| Metal   | dots (35.3s) | 414.7 ms (85.2×) | 416.0 ms (84.9×) |
+| CPU     | jfk (11.0s)  |    1.43 s (7.7×) |    1.30 s (8.4×) |
+| CPU     | dots (35.3s) |   3.01 s (11.8×) |   2.74 s (12.9×) |
 
-macOS 26.1, transcribe.cpp `11156dd`.
+macOS 26.4.1, transcribe.cpp `4d2270e`.
 
 Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
   --models whisper-small \
-  --quants f16,q8_0,q4_k_m \
-  --samples jfk \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
   --backends metal,cpu \
-  --iters 5 --warmup 2 \
+  --iters 3 --warmup 1 \
   --name whisper-small-publication
 ```
 
