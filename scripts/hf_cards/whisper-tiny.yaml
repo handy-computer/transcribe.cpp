@@ -149,13 +149,13 @@ quants:
     wer: 7.52%
   - name: Q6_K
     filename: whisper-tiny-Q6_K.gguf
-    size: 71 MB
+    size: 43 MB
     wer: 7.54%
   - name: Q5_K_M
     filename: whisper-tiny-Q5_K_M.gguf
-    size: 69 MB
+    size: 42 MB
     wer: 7.82%
   - name: Q4_K_M
     filename: whisper-tiny-Q4_K_M.gguf
-    size: 68 MB
+    size: 42 MB
     wer: 7.78%
