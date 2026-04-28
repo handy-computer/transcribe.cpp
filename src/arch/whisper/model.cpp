@@ -585,10 +585,15 @@ transcribe_status whisper_init_context(
 
 namespace {
 
-// Run the encoder on one mel window and leave the output in cc->enc_host
-// (host-side materialization, d_enc * T_enc floats). Also publishes T_enc
-// on the context. The compute_ctx is reset inside this helper; the
-// scheduler is created lazily on first call.
+// Run the encoder on one mel window and leave the output in the
+// backend-resident persistent tensor cc->enc_out.tensor (d_enc * T_enc
+// floats, F32). Downstream graphs (cross-KV precompute, KV-cached
+// decoder) read from that tensor directly via ggml views — no host
+// roundtrip. cc->enc_host is only populated on demand for language
+// detection's prefill graph, which still needs a host-side
+// encoder_out_in input. Also publishes T_enc on the context. The
+// compute_ctx is reset inside this helper; the scheduler is created
+// lazily on first call.
 //
 // mel_data is in encoder layout [n_mels, n_mel_frames] with n_mels
 // innermost, matching the ggml ne=[n_mels, n_mel_frames] input tensor.
@@ -1044,32 +1049,6 @@ transcribe_status whisper_run(
     // captured in short-form.
     const bool is_short_form = (n_samples <= n_samples_per_chunk);
 
-    // TRANSCRIBE_WHISPER_NO_KV gate. The non-KV decoder branch below
-    // is a validation-only oracle: it prefills on every step so its
-    // per-step graph matches validate.py's reference dumps. It does
-    // NOT implement Stage 2 semantics (no temperature fallback, no
-    // no-speech gate, no chunk trace, no per-step abort poll), so
-    // letting it run on long-form audio would silently produce output
-    // that diverges from the advertised capabilities. Capabilities say
-    // we support long-form + fallback; the NO_KV path does not. Reject
-    // the combination with INVALID_ARG so the drift is observable.
-    //
-    // validate.py's fixtures are all short-form (jfk=11 s, german=29 s);
-    // this guard is compatible with tolerance runs.
-    const bool no_kv_env = [] {
-        const char * s = std::getenv("TRANSCRIBE_WHISPER_NO_KV");
-        return s != nullptr && s[0] != '\0' && s[0] != '0';
-    }();
-    if (no_kv_env && !is_short_form) {
-        std::fprintf(stderr,
-                     "whisper run: TRANSCRIBE_WHISPER_NO_KV is a short-form "
-                     "validation-only oracle; long-form audio (%d samples > "
-                     "%d per chunk) requires the KV-cached path. Unset the "
-                     "env var or provide a short-form clip.\n",
-                     n_samples, n_samples_per_chunk);
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-
     const int64_t t_mel_start = ggml_time_us();
     int total_mel_frames = 0;
     if (const char * ref_dir = std::getenv("TRANSCRIBE_WHISPER_MEL_FROM_REF");
@@ -1147,18 +1126,6 @@ transcribe_status whisper_run(
     }
 
     // ----- Run-scoped constants --------------------------------------
-    //
-    // TRANSCRIBE_WHISPER_NO_KV is a debug / numerical-validation
-    // escape hatch: it forces the decoder through the full-prefix
-    // prefill graph on every step, bypassing the KV-cached path. This
-    // is the only variant whose per-step activations line up with the
-    // reference dumps that validate.py compares against, so it stays
-    // available for tolerance diffing on short-form clips. Long-form
-    // input was already rejected above (capabilities advertise Stage 2
-    // but the NO_KV branch doesn't implement fallback / no-speech /
-    // trace).
-    const bool use_kv = !no_kv_env;
-
     const int64_t n_ctx_decoder = cm->hparams.dec_max_target_positions;
     const int64_t vocab_size    = cm->hparams.dec_vocab_size;
     const int     eos_id        = cm->tok.eos_id() >= 0 ? cm->tok.eos_id() : 50257;
@@ -1243,17 +1210,6 @@ transcribe_status whisper_run(
                 logits[static_cast<size_t>(id)] = -INFINITY;
             }
         }
-    };
-    auto argmax_v = [&](const std::vector<float> & logits) {
-        int best_id = 0;
-        float best  = logits[0];
-        for (int i = 1; i < static_cast<int>(vocab_size); ++i) {
-            if (logits[i] > best) {
-                best = logits[i];
-                best_id = i;
-            }
-        }
-        return best_id;
     };
     auto token_is_timestamp = [&](int id) {
         return id >= timestamp_begin && id < static_cast<int>(vocab_size);
@@ -1867,17 +1823,6 @@ transcribe_status whisper_run(
             }
         };
 
-        // Per-chunk dump gate — only emit intermediates on the first
-        // chunk so validate.py references stay stable for long-form
-        // inputs.
-        auto try_dump = [&](const char * name, ggml_tensor * t,
-                            const char * stage)
-        {
-            if (t != nullptr && is_first_chunk) {
-                transcribe::debug::dump_tensor(name, t, stage);
-            }
-        };
-
         int next_id = 0;
 
         // ===== Stage 2.4: temperature fallback setup ===================
@@ -1946,11 +1891,6 @@ transcribe_status whisper_run(
         // EOS.
         bool tier_hit_eos = false;
 
-        if (use_kv) {
-        // -------------------------------------------------------------
-        // KV-cached path.
-        // -------------------------------------------------------------
-
         // KV cache allocation is tier-independent — done once per chunk
         // out here, then self-attention state (n, head) is reset per
         // tier below.
@@ -1962,11 +1902,11 @@ transcribe_status whisper_run(
         if (need_init) {
             cc->kv_cache.free();
             // AUTO: match cache dtype to the model's weight dtype. For
-            // F32 GGUFs that's F32 (zero-loss cache, matches the
-            // non-cached numerical story); for F16 and every quant
-            // preset it's F16 (the production default — weight+activation
-            // already pay F16 downcast costs, so the cache doesn't add
-            // new precision loss). Explicit --kv-type overrides.
+            // F32 GGUFs that's F32 (zero-loss cache, no precision loss
+            // on the round-trip); for F16 and every quant preset it's
+            // F16 (the production default — weight+activation already
+            // pay F16 downcast costs, so the cache doesn't add new
+            // precision loss). Explicit --kv-type overrides.
             ggml_type kv_type_g;
             if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) {
                 kv_type_g = GGML_TYPE_F32;
@@ -2539,117 +2479,6 @@ transcribe_status whisper_run(
         // tokens that survive that slicing step.
         do_condition_on_prev_tokens =
             wp->condition_on_prev_tokens && (accepted_T < 0.5f);
-    } else {
-        // -------------------------------------------------------------
-        // Non-cached path (debug escape hatch, TRANSCRIBE_WHISPER_NO_KV=1).
-        //
-        // Preserved as a correctness oracle: its graph shape per step
-        // matches validate.py's prefill dumps byte-for-byte. This is
-        // explicitly NOT Stage-2-parity — it runs a single greedy
-        // pass, does not consult temperatures[], does not populate
-        // chunk_traces, and does not apply the no-speech gate or the
-        // per-step abort poll. Short-form only; long-form callers get
-        // undefined behavior here.
-        //
-        // Keep this branch OFF for every production/API test path.
-        // -------------------------------------------------------------
-        if (!new_compute_ctx(16 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
-        DecoderBuild db = build_decoder_prefill_graph(
-            cc->compute_ctx, cm->weights, cm->hparams,
-            seq_len, T_enc_local, cc->decoder_use_flash);
-        if (db.out == nullptr || db.graph == nullptr) return TRANSCRIBE_ERR_GGUF;
-
-        ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) return TRANSCRIBE_ERR_GGUF;
-
-        ggml_backend_tensor_set(db.token_ids_in, prompt_ids.data(),
-                                0, prompt_ids.size() * sizeof(int32_t));
-        ggml_backend_tensor_set(db.encoder_out_in, cc->enc_host.data(),
-                                0, cc->enc_host.size() * sizeof(float));
-        if (db.causal_mask_in != nullptr) {
-            std::vector<float> mask(static_cast<size_t>(seq_len) * seq_len);
-            for (int q = 0; q < seq_len; ++q) {
-                for (int k = 0; k < seq_len; ++k) {
-                    mask[static_cast<size_t>(q) * seq_len + k] =
-                        (k <= q) ? 0.0f : -1e9f;
-                }
-            }
-            ggml_backend_tensor_set(db.causal_mask_in, mask.data(),
-                                    0, mask.size() * sizeof(float));
-        }
-        if (ggml_backend_sched_graph_compute(cc->sched, db.graph)
-            != GGML_STATUS_SUCCESS) return TRANSCRIBE_ERR_GGUF;
-
-        try_dump("dec.token_emb",       db.dumps.token_emb,       "decoder.embedding");
-        try_dump("dec.pos_emb",         db.dumps.pos_emb,         "decoder.position_embedding");
-        try_dump("dec.embed_sum",       db.dumps.embed_sum,       "decoder.embed_sum");
-        for (size_t i = 0; i < db.dumps.block_outs.size(); ++i) {
-            char bname[64], stage[64];
-            std::snprintf(bname, sizeof(bname), "dec.block.%zu.out", i);
-            std::snprintf(stage, sizeof(stage), "decoder.block%zu.out", i);
-            try_dump(bname, db.dumps.block_outs[i], stage);
-        }
-        try_dump("dec.out_before_head", db.dumps.out_before_head, "decoder.output_before_head");
-        try_dump("dec.logits_raw",      db.dumps.logits_raw,      "decoder.logits_raw");
-        try_dump("dec.logits",          db.dumps.logits,          "decoder.logits");
-
-        auto read_last = [&](DecoderBuild & build, int s_len) {
-            const size_t row_bytes = static_cast<size_t>(vocab_size) * sizeof(float);
-            ggml_backend_tensor_get(build.dumps.logits_raw, last_logits.data(),
-                                    row_bytes * static_cast<size_t>(s_len - 1),
-                                    row_bytes);
-        };
-        read_last(db, seq_len);
-        suppress_in_place(last_logits);
-        for (int32_t id : cm->hparams.begin_suppress_tokens) {
-            if (id >= 0 && id < vocab_size) {
-                last_logits[static_cast<size_t>(id)] = -INFINITY;
-            }
-        }
-        apply_timestamp_rules(last_logits);
-        next_id = argmax_v(last_logits);
-
-        for (int step = 0; step < k_max_new_tokens; ++step) {
-            if (next_id == eos_id) break;
-            consume_generated_token(next_id);
-            prompt_ids.push_back(next_id);
-
-            const int s_len = static_cast<int>(prompt_ids.size());
-            if (s_len > static_cast<int>(n_ctx_decoder)) break;
-
-            if (!new_compute_ctx(16 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
-            db = build_decoder_prefill_graph(
-                cc->compute_ctx, cm->weights, cm->hparams,
-                s_len, T_enc_local, cc->decoder_use_flash);
-            if (db.out == nullptr) return TRANSCRIBE_ERR_GGUF;
-
-            ggml_backend_sched_reset(cc->sched);
-            if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) return TRANSCRIBE_ERR_GGUF;
-
-            ggml_backend_tensor_set(db.token_ids_in, prompt_ids.data(),
-                                    0, prompt_ids.size() * sizeof(int32_t));
-            ggml_backend_tensor_set(db.encoder_out_in, cc->enc_host.data(),
-                                    0, cc->enc_host.size() * sizeof(float));
-            if (db.causal_mask_in != nullptr) {
-                std::vector<float> mask(static_cast<size_t>(s_len) * s_len);
-                for (int q = 0; q < s_len; ++q) {
-                    for (int k = 0; k < s_len; ++k) {
-                        mask[static_cast<size_t>(q) * s_len + k] =
-                            (k <= q) ? 0.0f : -1e9f;
-                    }
-                }
-                ggml_backend_tensor_set(db.causal_mask_in, mask.data(),
-                                        0, mask.size() * sizeof(float));
-            }
-            if (ggml_backend_sched_graph_compute(cc->sched, db.graph)
-                != GGML_STATUS_SUCCESS) return TRANSCRIBE_ERR_GGUF;
-
-            read_last(db, s_len);
-            suppress_in_place(last_logits);
-            apply_timestamp_rules(last_logits);
-            next_id = argmax_v(last_logits);
-        }
-    }
 
         // ----- _retrieve_segment ---------------------------------------
         //
