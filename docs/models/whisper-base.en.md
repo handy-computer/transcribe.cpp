@@ -50,29 +50,31 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Cells are wall-clock latency (mel + encode + decode, mean over the recorded
-iterations after warmup), with speedup over realtime in parentheses. Units:
-`ms` below 1 s, `s` above (2 decimal places). Decode latency dominates as
-model size grows; the encoder is only run once per 30-second window.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
+decimal places). Decode latency dominates as model size grows; the encoder
+is only run once per 30-second window.
 
-### Apple M4
+### Apple M4 Max
 
-| Backend | Sample      |          F16 |         Q8_0 |        Q4_K_M |
-| ------- | ----------- | -----------: | -----------: | ------------: |
-| Metal   | jfk (11.0s) | 85 ms (130×) | 85 ms (129×) |  87 ms (127×) |
-| CPU     | jfk (11.0s) | 437 ms (25×) | 329 ms (33×) |  362 ms (30×) |
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  |  56.8 ms (193.7×) |  54.2 ms (203.0×) |
+| Metal   | dots (35.3s) | 201.0 ms (175.8×) | 193.9 ms (182.2×) |
+| CPU     | jfk (11.0s)  | 352.5 ms (31.2×)  | 325.6 ms (33.8×)  |
+| CPU     | dots (35.3s) | 780.9 ms (45.2×)  | 733.6 ms (48.2×)  |
 
-macOS 26.1, transcribe.cpp `11156dd`.
+macOS 26.4.1, transcribe.cpp `e6a8a27`.
 
 Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
   --models whisper-base.en \
-  --quants f16,q8_0,q4_k_m \
-  --samples jfk \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
   --backends metal,cpu \
-  --iters 5 --warmup 2 \
+  --iters 3 --warmup 1 \
   --name whisper-base.en-publication
 ```
 
