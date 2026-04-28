@@ -151,11 +151,30 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 # Reference dtype
 # ---------------------------------------------------------------------------
-# Whisper checkpoints on HF ship in float32; the intake records that as the
-# reference dtype. Keep it exact here.
-REFERENCE_DTYPE_LABEL = "F32"
-REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
-REFERENCE_GGML_TYPE = GGMLQuantizationType.F32
+# Most Whisper checkpoints on HF ship in float32 (tiny … large-v2). The
+# large-v3 family (large-v3, large-v3-turbo) ship float16. The reference
+# dtype is whatever the safetensors header says — picked at convert time
+# below in `detect_reference_dtype` and threaded through as locals.
+
+
+def detect_reference_dtype(safetensors_path: Path) -> tuple[str, LlamaFileType, GGMLQuantizationType]:
+    """Inspect the safetensors header and pick (label, file_type, ggml_type).
+    Returns F32 by default; F16 if every floating tensor is float16."""
+    with safe_open(str(safetensors_path), framework="pt") as st:
+        dtypes = set()
+        for k in st.keys():
+            t = st.get_slice(k)
+            dtypes.add(str(t.get_dtype()))
+    if dtypes == {"F32"}:
+        return ("F32", LlamaFileType.ALL_F32, GGMLQuantizationType.F32)
+    if dtypes == {"F16"}:
+        return ("F16", LlamaFileType.MOSTLY_F16, GGMLQuantizationType.F16)
+    if dtypes <= {"F32", "F16"}:
+        # Mixed F32 + F16 — promote to F32 reference. Upcast on load.
+        return ("F32", LlamaFileType.ALL_F32, GGMLQuantizationType.F32)
+    raise ValueError(
+        f"unsupported safetensors dtype mix: {sorted(dtypes)} in {safetensors_path}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -427,8 +446,6 @@ def compute_size_label(total_params: int) -> str:
 
 
 def convert(model_dir: Path, out_path: Path, variant: str) -> None:
-    print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
-
     config_path     = model_dir / "config.json"
     gen_config_path = model_dir / "generation_config.json"
     preproc_path    = model_dir / "preprocessor_config.json"
@@ -437,6 +454,10 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     for p in (config_path, gen_config_path, preproc_path, safetensors_path):
         if not p.is_file():
             raise FileNotFoundError(f"missing required file: {p}")
+
+    REFERENCE_DTYPE_LABEL, REFERENCE_FILE_TYPE, REFERENCE_GGML_TYPE = \
+        detect_reference_dtype(safetensors_path)
+    print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     with config_path.open() as f:
         config = json.load(f)
@@ -483,10 +504,13 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer.add_string("stt.variant", variant)
 
         # ---- stt.capability.* ----
-        # whisper-tiny supports auto language detection and speech
-        # translation via the <|translate|> task token.
-        writer.add_bool("stt.capability.lang_detect", True)
-        writer.add_bool("stt.capability.translate",   True)
+        # Multilingual checkpoints support auto language detection and
+        # speech translation via the <|translate|> task token. The .en
+        # checkpoints (English-only) drop both: their vocab has no
+        # language tokens and no <|translate|> task token.
+        is_multilingual = len(hp["languages"]) > 1
+        writer.add_bool("stt.capability.lang_detect", is_multilingual)
+        writer.add_bool("stt.capability.translate",   is_multilingual)
         writer.add_bool("stt.capability.timestamps",  True)
 
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----
@@ -570,12 +594,29 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         bytes_out = 0
 
         # ---- frontend buffers ----
-        # The Whisper preprocessor_config.json ships the model's exact
-        # slaney mel filterbank (fixed-precision JSON). Use those raw
-        # values rather than recomputing via librosa — removes filterbank
-        # reconstruction as a variable during numerical bring-up.
-        mel_fb_list = preproc["mel_filters"]
-        mel_fb = np.asarray(mel_fb_list, dtype=np.float32)
+        # The Whisper preprocessor_config.json on tiny … large-v2 ships the
+        # model's exact slaney mel filterbank (fixed-precision JSON). Use
+        # those raw values when present. The large-v3 family
+        # (large-v3, large-v3-turbo) drops `mel_filters` from the JSON and
+        # expects WhisperFeatureExtractor to compute them at load time via
+        # transformers.audio_utils.mel_filter_bank. Reproduce that exact
+        # call here so the GGUF carries the same filters HF would build.
+        if "mel_filters" in preproc:
+            mel_fb_list = preproc["mel_filters"]
+            mel_fb = np.asarray(mel_fb_list, dtype=np.float32)
+        else:
+            from transformers.audio_utils import mel_filter_bank
+            mel_fb = mel_filter_bank(
+                num_frequency_bins=1 + hp["fe_n_fft"] // 2,
+                num_mel_filters=hp["fe_num_mels"],
+                min_frequency=0.0,
+                max_frequency=hp["fe_f_max"],
+                sampling_rate=hp["fe_sample_rate"],
+                norm="slaney",
+                mel_scale="slaney",
+            ).T.astype(np.float32)
+            print(f"computed mel filterbank via transformers.audio_utils "
+                  f"(no mel_filters in preprocessor_config.json)")
         if mel_fb.shape != (hp["fe_num_mels"], hp["fe_n_fft"] // 2 + 1):
             raise ValueError(
                 f"mel_filters shape {mel_fb.shape} does not match "
@@ -606,12 +647,14 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
             if src_name not in st_keys:
                 raise KeyError(f"safetensors missing tensor: {src_name!r}")
             t = st.get_tensor(src_name)
-            if t.dtype != torch.float32:
+            if t.dtype not in (torch.float32, torch.float16):
                 raise ValueError(
-                    f"{src_name}: expected torch.float32 (whisper-tiny ships F32),"
-                    f" got {t.dtype}"
+                    f"{src_name}: expected float32 or float16, got {t.dtype}"
                 )
-            arr = transform(t.numpy())
+            # encode_for_gguf wants fp32 input. F16 → F32 is exact, so we
+            # upcast on read and let encode_for_gguf re-pack to the
+            # per-tensor target dtype (which respects REFERENCE_GGML_TYPE).
+            arr = transform(t.float().numpy())
             if arr.dtype != np.float32:
                 raise ValueError(
                     f"{src_name}: expected float32 after transform, got {arr.dtype}"
@@ -753,7 +796,10 @@ def main(argv: list[str]) -> int:
                   file=sys.stderr)
             return 2
         slug = slug_from_repo_id(repo_id)
-        out_path = REPO_ROOT / "models" / slug / gguf_name(slug, REFERENCE_DTYPE_LABEL)
+        # Derive output filename from the safetensors header dtype so the
+        # filename matches the actual GGUF contents (F32 vs F16).
+        ref_label, _, _ = detect_reference_dtype(model_dir / "model.safetensors")
+        out_path = REPO_ROOT / "models" / slug / gguf_name(slug, ref_label)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
     variant = args.variant

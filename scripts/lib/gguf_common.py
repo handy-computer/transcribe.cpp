@@ -103,6 +103,8 @@ def reference_dtype_for(
         return GGMLQuantizationType.F32
     if name.endswith(".pos_enc"):
         return GGMLQuantizationType.F32
+    if name.endswith(".pos_emb.weight"):
+        return GGMLQuantizationType.F32
     if name in ("frontend.mel_filterbank", "frontend.window"):
         return GGMLQuantizationType.F32
 

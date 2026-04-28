@@ -154,6 +154,12 @@ def load_reference(args: argparse.Namespace):
         model_id,
         local_files_only=local_only,
     ).eval()
+    # Whisper-large-v3 / -turbo ship F16 weights; HF loads them as half but
+    # the encoder's conv1d input mel is fp32, which raises:
+    #   "Input type (float) and bias type (c10::Half) should be the same".
+    # The reference regime is fp32 inference (validates the F32 GGUF), so
+    # upcast all parameters to float here regardless of source dtype.
+    model = model.float()
     model.to(args.device)
     return processor, model
 
@@ -213,11 +219,15 @@ def build_prompt_ids(
     task: str,
     *,
     no_timestamps: bool = True,
+    is_multilingual: bool = True,
 ) -> list[int]:
-    """Build the Whisper decoder prompt: [SOT, <|lang|>, <|task|>, <|notimestamps|>].
+    """Build the Whisper decoder prompt.
 
-    For whisper-tiny (multilingual) this is 4 tokens. The English-only `.en`
-    variants drop the language token.
+    Multilingual checkpoints: `[SOT, <|lang|>, <|task|>, <|notimestamps|>]`
+    (4 tokens). English-only `.en` variants: `[SOT, <|notimestamps|>]`
+    (2 tokens) — they were trained without the language and task tokens
+    in the prefix, even though the tokens may still exist in the vocab.
+    Mirror HF's `WhisperGenerationMixin._retrieve_init_tokens`.
     """
     config = processor.tokenizer
     decoder_start = config.convert_tokens_to_ids("<|startoftranscript|>")
@@ -225,15 +235,16 @@ def build_prompt_ids(
         decoder_start = 50258
     ids: list[int] = [decoder_start]
 
-    lang_token = f"<|{language}|>"
-    lang_id = config.convert_tokens_to_ids(lang_token)
-    if lang_id is not None and lang_id >= 0:
-        ids.append(int(lang_id))
+    if is_multilingual:
+        lang_token = f"<|{language}|>"
+        lang_id = config.convert_tokens_to_ids(lang_token)
+        if lang_id is not None and lang_id >= 0:
+            ids.append(int(lang_id))
 
-    task_token = f"<|{task}|>"
-    task_id = config.convert_tokens_to_ids(task_token)
-    if task_id is not None and task_id >= 0:
-        ids.append(int(task_id))
+        task_token = f"<|{task}|>"
+        task_id = config.convert_tokens_to_ids(task_token)
+        if task_id is not None and task_id >= 0:
+            ids.append(int(task_id))
 
     if no_timestamps:
         nots_id = config.convert_tokens_to_ids("<|notimestamps|>")
@@ -634,7 +645,15 @@ def cmd_decode(args: argparse.Namespace) -> int:
         blocks=set(args.blocks) if args.blocks else None,
     )
 
-    prompt_ids = build_prompt_ids(processor, language, task, no_timestamps=True)
+    # WhisperConfig has no `is_multilingual` flag, so detect via the
+    # generation config: `.en` variants ship empty/missing `lang_to_id`,
+    # multilingual variants have ~99-100 entries.
+    gc = getattr(model, "generation_config", None)
+    lang_to_id = getattr(gc, "lang_to_id", None) if gc is not None else None
+    is_multilingual = bool(lang_to_id) and len(lang_to_id) > 1
+    prompt_ids = build_prompt_ids(processor, language, task,
+                                   no_timestamps=True,
+                                   is_multilingual=is_multilingual)
     pred_id = dump_decoder(
         model=model,
         encoder_hidden=encoder_hidden,

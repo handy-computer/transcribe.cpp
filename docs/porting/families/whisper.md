@@ -6,10 +6,19 @@ Status: research
 
 - Family key: `whisper`
 - Upstream architecture string: `whisper` (`WhisperForConditionalGeneration`)
-- Hugging Face repo: `openai/whisper-tiny`
-- Hugging Face revision: `169d4a4341b33bc18d8881c4b69c2e104e1cc0af`
-- License: Apache-2.0 (see HF repo)
-- Variants: `whisper-tiny` (first port). Sibling HF repos (`whisper-tiny.en`, `whisper-base`, `whisper-small`, `whisper-medium`, `whisper-large-v3`, etc.) share architecture and will be added as separate variants.
+- Hugging Face repo: `openai/whisper-tiny` (first port; per-variant intakes
+  pin each variant's repo + revision under
+  `reports/porting/whisper/<variant>/intake.json`)
+- License: Apache-2.0 (see each HF repo)
+- Variants ported (12):
+  - Multilingual `tiny`, `base`, `small`, `medium`, `large`, `large-v2`
+    (F32 reference dtype; 80 mel bins; 99 languages).
+  - English-only `tiny.en`, `base.en`, `small.en`, `medium.en` (F32; 80
+    mel bins; English-only — no language token, no `<|translate|>` task
+    token in the decoder prefix).
+  - `large-v3` and `large-v3-turbo` (F16 reference dtype; 128 mel bins;
+    100 languages — `large-v3` adds Cantonese/`yue`). `large-v3-turbo` is
+    the v3 encoder paired with a 4-layer decoder.
 
 ## References
 
@@ -193,6 +202,39 @@ See `reports/porting/whisper/whisper-tiny/intake.json::known_risks`. Highlights:
 
 - Whisper is the closest existing ggml reference (`refs/ggml-org/whisper.cpp`). Prefer re-using shapes and mel code conventions rather than reinventing.
 - First port targets single-chunk (≤30 s) transcription, single language, no timestamps. Word timestamps, translation, and chunked long-form decoding are follow-ups.
+
+## Variant quirks
+
+- **`.en` variants and bos_token_id.** The HF `whisper-*.en` checkpoints
+  ship a `generation_config.json` with `bos_token_id=50257`, but the
+  literal `<|endoftext|>` token in their `tokenizer.json` is at id
+  **50256** (one less than the multilingual location). The converter
+  trusts the literal token text, so the GGUF correctly carries
+  `tokenizer.ggml.bos_token_id=50256`. Whisper decoding does not use
+  `bos`; it uses `<|startoftranscript|>` and the task tokens, which are
+  unaffected. Preflight Gate B `tokenizer_alignment` reports the
+  intake↔reference mismatch as a `fail` for `.en` variants — accepted as
+  a known HF metadata inconsistency, not a runtime defect.
+- **`.en` variants and capabilities.** `whisper-*.en` are English-only;
+  their tokenizer has no language tokens and no `<|translate|>` task
+  token. The converter writes `stt.capability.lang_detect=False` and
+  `stt.capability.translate=False` for these, derived from the
+  `len(languages) == 1` check in `read_hparams`.
+- **`whisper-large-v3` family mel filterbank.** `large-v3` and
+  `large-v3-turbo` use 128 mel bins (not 80) and ship a
+  `preprocessor_config.json` without an embedded `mel_filters` array —
+  WhisperFeatureExtractor recomputes them at load time. The converter
+  reproduces this via `transformers.audio_utils.mel_filter_bank` and
+  bakes the result into the GGUF as `frontend.mel_filterbank`.
+- **`whisper-large-v3-turbo` decoder depth.** Turbo is the v3 encoder
+  paired with a 4-layer decoder (vs. 32 for full v3). The loader reads
+  decoder layer count dynamically from `stt.whisper.decoder.n_layers`,
+  no special-case needed.
+- **F16 vs F32 reference dtype.** `large-v3` and `large-v3-turbo` ship
+  `float16` safetensors; everything else (`tiny` … `large-v2`) ships
+  `float32`. The converter detects the source dtype from the safetensors
+  header and emits `<variant>-F32.gguf` or `<variant>-F16.gguf`
+  accordingly.
 
 ## Family-specific implementation notes
 

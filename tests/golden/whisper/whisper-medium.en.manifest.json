@@ -1,0 +1,62 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "whisper",
+  "variant": "whisper-medium.en",
+  "source_model": {
+    "hf_repo": "openai/whisper-medium.en",
+    "hf_revision": "2e98eb6279edf5095af0c8dedb36bdec0acd172b"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://github.com/huggingface/transformers",
+    "revision": "v5.6.1",
+    "entrypoint": "scripts/dump_reference_whisper_transformers.py"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "config",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "global",
+    "preemphasis": null,
+    "dither": null
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 51864,
+    "special_tokens": {
+      "bos": 50256,
+      "eos": 50256,
+      "pad": 50256,
+      "decoder_start": 50257,
+      "transcribe": 50358,
+      "translate": 50357,
+      "no_timestamps": 50362,
+      "prev_sot": 50360
+    }
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "segment",
+      "word"
+    ],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/whisper.json",
+  "cases": [
+    {
+      "audio": "jfk"
+    }
+  ]
+}

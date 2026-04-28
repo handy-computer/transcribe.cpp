@@ -1,0 +1,161 @@
+# Spec for the HF README of handy-computer/whisper-tiny-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: openai/whisper-tiny
+target_repo: handy-computer/whisper-tiny-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/whisper-tiny.md
+
+upstream_commit: 169d4a4
+pin_date: 2026-04-25
+
+validation:
+  reference: transformers
+  commit: 5.6.1
+  date: 2026-04-26
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - "en"
+  - "zh"
+  - "de"
+  - "es"
+  - "ru"
+  - "ko"
+  - "fr"
+  - "ja"
+  - "pt"
+  - "tr"
+  - "pl"
+  - "ca"
+  - "nl"
+  - "ar"
+  - "sv"
+  - "it"
+  - "id"
+  - "hi"
+  - "fi"
+  - "vi"
+  - "he"
+  - "uk"
+  - "el"
+  - "ms"
+  - "cs"
+  - "ro"
+  - "da"
+  - "hu"
+  - "ta"
+  - "no"
+  - "th"
+  - "ur"
+  - "hr"
+  - "bg"
+  - "lt"
+  - "la"
+  - "mi"
+  - "ml"
+  - "cy"
+  - "sk"
+  - "te"
+  - "fa"
+  - "lv"
+  - "bn"
+  - "sr"
+  - "az"
+  - "sl"
+  - "kn"
+  - "et"
+  - "mk"
+  - "br"
+  - "eu"
+  - "is"
+  - "hy"
+  - "ne"
+  - "mn"
+  - "bs"
+  - "kk"
+  - "sq"
+  - "sw"
+  - "gl"
+  - "mr"
+  - "pa"
+  - "si"
+  - "km"
+  - "sn"
+  - "yo"
+  - "so"
+  - "af"
+  - "oc"
+  - "ka"
+  - "be"
+  - "tg"
+  - "sd"
+  - "gu"
+  - "am"
+  - "yi"
+  - "lo"
+  - "uz"
+  - "fo"
+  - "ht"
+  - "ps"
+  - "tk"
+  - "nn"
+  - "mt"
+  - "sa"
+  - "lb"
+  - "my"
+  - "bo"
+  - "tl"
+  - "mg"
+  - "as"
+  - "tt"
+  - "haw"
+  - "ln"
+  - "ha"
+  - "ba"
+  - "jw"
+  - "su"
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - whisper
+  - openai
+
+summary: |
+  OpenAI Whisper tiny — converted to GGUF for transcribe.cpp. Multilingual transcription, language detection, and speech translation (audio in any supported language → English text). Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
+
+default_quant_index: 2
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback). OpenAI's self-reported number on the same split is 7.54%.
+
+quants:
+  - name: F32
+    filename: whisper-tiny-F32.gguf
+    size: 146 MB
+    wer: 7.49%
+  - name: F16
+    filename: whisper-tiny-F16.gguf
+    size: 76 MB
+    wer: 7.48%
+  - name: Q8_0
+    filename: whisper-tiny-Q8_0.gguf
+    size: 44 MB
+    wer: 7.52%
+  - name: Q6_K
+    filename: whisper-tiny-Q6_K.gguf
+    size: 71 MB
+    wer: 7.54%
+  - name: Q5_K_M
+    filename: whisper-tiny-Q5_K_M.gguf
+    size: 69 MB
+    wer: 7.82%
+  - name: Q4_K_M
+    filename: whisper-tiny-Q4_K_M.gguf
+    size: 68 MB
+    wer: 7.78%

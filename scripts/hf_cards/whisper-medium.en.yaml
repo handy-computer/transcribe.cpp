@@ -1,0 +1,64 @@
+# Spec for the HF README of handy-computer/whisper-medium.en-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: openai/whisper-medium.en
+target_repo: handy-computer/whisper-medium.en-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/whisper-medium.en.md
+
+upstream_commit: 2e98eb6
+pin_date: 2026-04-25
+
+validation:
+  reference: transformers
+  commit: 5.6.1
+  date: 2026-04-26
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - "en"
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - whisper
+  - openai
+  - en
+
+summary: |
+  OpenAI Whisper medium.en — converted to GGUF for transcribe.cpp. English-only; faster than the multilingual model at the same size. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
+
+default_quant_index: 2
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback). OpenAI's self-reported number on the same split is 3.08%.
+
+quants:
+  - name: F32
+    filename: whisper-medium.en-F32.gguf
+    size: 2.85 GB
+    wer: 2.73%
+  - name: F16
+    filename: whisper-medium.en-F16.gguf
+    size: 1.44 GB
+    wer: 2.73%
+  - name: Q8_0
+    filename: whisper-medium.en-Q8_0.gguf
+    size: 793 MB
+    wer: 2.72%
+  - name: Q6_K
+    filename: whisper-medium.en-Q6_K.gguf
+    size: 618 MB
+    wer: 2.82%
+  - name: Q5_K_M
+    filename: whisper-medium.en-Q5_K_M.gguf
+    size: 556 MB
+    wer: 2.75%
+  - name: Q4_K_M
+    filename: whisper-medium.en-Q4_K_M.gguf
+    size: 481 MB
+    wer: 2.91%

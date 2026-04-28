@@ -1,0 +1,146 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "whisper",
+  "hf_repo": "openai/whisper-base.en",
+  "hf_revision": "911407f4214e0e1d82085af863093ec0b66f9cd6",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    }
+  },
+  "variants": [
+    {
+      "name": "whisper-base.en",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-decoder"
+    ],
+    "key_fields": {
+      "activation_function": "gelu",
+      "architectures": [
+        "WhisperForConditionalGeneration"
+      ],
+      "d_model": 512,
+      "decoder_layers": 6,
+      "encoder_layers": 6,
+      "model_type": "whisper",
+      "num_hidden_layers": 6,
+      "vocab_size": 51864
+    }
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "config",
+    "evidence": "config dtype float32",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "F32": 245
+      }
+    }
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": null,
+    "normalization": null,
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": null,
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 51864,
+    "special_tokens": {
+      "bos": 50256,
+      "eos": 50256,
+      "pad": 50256,
+      "decoder_start": 50257
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "e35a33a0b2250c932ffdafc4c3a3552aef0cc7af7a11e9ebfddf1d2a6517371f"
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "segment",
+      "word"
+    ],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.27,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/openai/whisper-base.en",
+      "notes": "Model card."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 10.45,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/openai/whisper-base.en",
+      "notes": "Model card."
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "The openai/whisper-tiny model card shows direct use of `WhisperProcessor` + `WhisperForConditionalGeneration` from mainline `transformers` (no `trust_remote_code`). The Whisper classes are first-party in transformers and carry the publisher-maintained generation config, tokenizer, and feature extractor \u2014 they are the canonical instrumentable reference. The original `openai/whisper` PyPI package and `refs/ggml-org/whisper.cpp` are useful cross-checks but are not the published entrypoint for this HF repo.",
+  "architecture_pattern": "encoder-decoder",
+  "known_risks": [
+    "Whisper-specific log-mel post-processing: `log10(max(mel, 1e-10)) -> max(x, x.max()-8.0) -> (x + 4.0) / 4.0`. This is a per-utterance dynamic-range compression, not any of the standard stat normalizations (mean/std, per-feature). Must be replicated exactly or WER degrades silently.",
+    "Input is always pad-or-trimmed to exactly 30s (480000 samples \u2192 3000 mel frames \u2192 1500 encoder frames after two conv1d subsamples, the second stride=2). Short audio is zero-padded; audio longer than 30s requires chunking in the decoding loop. First port should target single-chunk transcription.",
+    "Mixed positional encoding: encoder uses sinusoidal positional embedding (precomputed for max_source_positions=1500, added to the post-conv embedding), decoder uses a learned positional embedding matrix of size max_target_positions=448. Two different code paths for positional info.",
+    "Decoder generation requires a forced prompt prefix: `<|startoftranscript|> <|lang|> <|task|> <|no_timestamps|>` (4 tokens). Skipping or mis-ordering these yields either the wrong language, translation instead of transcription, or timestamp-token noise in the output. These are configured via generation_config.forced_decoder_ids.",
+    "Tokenizer vs model vocab size mismatch: tokenizer base vocab is 50258 (GPT-2 BPE + 1); model output dim is 51865. The extra 1607 tokens are added special tokens (99 language tokens 50259\u201350357, 2 task tokens 50358/50359, ~4 auxiliary control tokens, and 1501 timestamp tokens 50364\u201351864 at 20ms granularity). Converter must export the full added_tokens list so the tokenizer rebuilt from GGUF matches the model's output space.",
+    "generation_config.suppress_tokens (87 ids including most punctuation and special tokens) must be applied at decode time; dropping it causes the decoder to emit junk.",
+    "Timestamp emission: segment timestamps come from generation of timestamp tokens (50364+); word-level timestamps come from DTW over selected cross-attention heads (generation_config.alignment_heads). Timestamp extraction is a post-processing step over the token stream + cross-attn, not a separate head."
+  ],
+  "intake_gaps": []
+}
