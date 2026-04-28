@@ -132,13 +132,13 @@ default_quant_index: 2
 wer:
   source: LibriSpeech test-clean
   notes: |
-    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback). OpenAI's self-reported number on the same split is 5.009%.
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 5.009%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled.
 
 quants:
   - name: F32
     filename: whisper-base-F32.gguf
     size: 279 MB
-    wer: 5.10%
+    wer: 5.11%
   - name: F16
     filename: whisper-base-F16.gguf
     size: 144 MB
