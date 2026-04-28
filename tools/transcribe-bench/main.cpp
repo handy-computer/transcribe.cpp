@@ -134,12 +134,25 @@ struct stat_summary { double min_v, max_v, mean_v; };
 __attribute__((format(printf, 2, 3)))
 #endif
 void append_fmt(std::string & out, const char * fmt, ...) {
-    char buf[256];
     va_list ap;
     va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    char buf[256];
     const int n = std::vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    if (n > 0) out.append(buf, static_cast<size_t>(n));
+    if (n < 0) { va_end(ap2); return; }
+    if (static_cast<size_t>(n) < sizeof(buf)) {
+        out.append(buf, static_cast<size_t>(n));
+    } else {
+        // vsnprintf reports the would-be length; fall back to a heap
+        // buffer so long fields (e.g. hyp_text) aren't truncated and
+        // we don't read past the stack buffer.
+        std::string big(static_cast<size_t>(n) + 1, '\0');
+        std::vsnprintf(big.data(), big.size(), fmt, ap2);
+        out.append(big.data(), static_cast<size_t>(n));
+    }
+    va_end(ap2);
 }
 
 stat_summary compute_stats(const std::vector<iter_timings> & iters,
