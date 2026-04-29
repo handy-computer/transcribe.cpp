@@ -138,7 +138,7 @@ quants:
   - name: F32
     filename: whisper-medium-F32.gguf
     size: 2.85 GB
-    wer: 2.64%
+    wer: 2.63%
   - name: F16
     filename: whisper-medium-F16.gguf
     size: 1.44 GB

@@ -138,11 +138,11 @@ quants:
   - name: F32
     filename: whisper-small-F32.gguf
     size: 924 MB
-    wer: 3.34%
+    wer: 3.33%
   - name: F16
     filename: whisper-small-F16.gguf
     size: 470 MB
-    wer: 3.33%
+    wer: 3.34%
   - name: Q8_0
     filename: whisper-small-Q8_0.gguf
     size: 257 MB

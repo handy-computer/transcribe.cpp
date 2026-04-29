@@ -138,7 +138,7 @@ quants:
   - name: F32
     filename: whisper-base-F32.gguf
     size: 279 MB
-    wer: 5.11%
+    wer: 5.10%
   - name: F16
     filename: whisper-base-F16.gguf
     size: 144 MB
@@ -150,7 +150,7 @@ quants:
   - name: Q6_K
     filename: whisper-base-Q6_K.gguf
     size: 65 MB
-    wer: 5.11%
+    wer: 5.12%
   - name: Q5_K_M
     filename: whisper-base-Q5_K_M.gguf
     size: 61 MB

@@ -25,8 +25,8 @@ on 2026-04-26.
 | F32    | [whisper-medium.en-F32.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-F32.gguf) | 2.85 GB | 2.74% |
 | F16    | [whisper-medium.en-F16.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-F16.gguf) | 1.44 GB | 2.73% |
 | Q8_0   | [whisper-medium.en-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q8_0.gguf) | 793 MB | 2.72% |
-| Q6_K   | [whisper-medium.en-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q6_K.gguf) | 618 MB | 2.82% |
-| Q5_K_M | [whisper-medium.en-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q5_K_M.gguf) | 556 MB | 2.75% |
+| Q6_K   | [whisper-medium.en-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q6_K.gguf) | 618 MB | 2.83% |
+| Q5_K_M | [whisper-medium.en-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q5_K_M.gguf) | 556 MB | 2.74% |
 | Q4_K_M | [whisper-medium.en-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q4_K_M.gguf) | 481 MB | 2.91% |
 
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 3.02%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled.

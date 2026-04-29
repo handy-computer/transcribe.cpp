@@ -22,7 +22,7 @@ on 2026-04-26.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-medium-F32.gguf](https://huggingface.co/handy-computer/whisper-medium-gguf/resolve/main/whisper-medium-F32.gguf) | 2.85 GB | 2.64% |
+| F32    | [whisper-medium-F32.gguf](https://huggingface.co/handy-computer/whisper-medium-gguf/resolve/main/whisper-medium-F32.gguf) | 2.85 GB | 2.63% |
 | F16    | [whisper-medium-F16.gguf](https://huggingface.co/handy-computer/whisper-medium-gguf/resolve/main/whisper-medium-F16.gguf) | 1.44 GB | 2.63% |
 | Q8_0   | [whisper-medium-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-medium-gguf/resolve/main/whisper-medium-Q8_0.gguf) | 793 MB | 2.64% |
 | Q6_K   | [whisper-medium-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-medium-gguf/resolve/main/whisper-medium-Q6_K.gguf) | 618 MB | 2.59% |

@@ -53,11 +53,11 @@ quants:
   - name: Q6_K
     filename: whisper-medium.en-Q6_K.gguf
     size: 618 MB
-    wer: 2.82%
+    wer: 2.83%
   - name: Q5_K_M
     filename: whisper-medium.en-Q5_K_M.gguf
     size: 556 MB
-    wer: 2.75%
+    wer: 2.74%
   - name: Q4_K_M
     filename: whisper-medium.en-Q4_K_M.gguf
     size: 481 MB

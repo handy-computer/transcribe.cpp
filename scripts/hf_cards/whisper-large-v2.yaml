@@ -138,15 +138,15 @@ quants:
   - name: F32
     filename: whisper-large-v2-F32.gguf
     size: 5.75 GB
-    wer: 2.67%
+    wer: 2.68%
   - name: F16
     filename: whisper-large-v2-F16.gguf
     size: 2.89 GB
-    wer: 2.68%
+    wer: 2.94%
   - name: Q8_0
     filename: whisper-large-v2-Q8_0.gguf
     size: 1.55 GB
-    wer: 2.97%
+    wer: 2.65%
   - name: Q6_K
     filename: whisper-large-v2-Q6_K.gguf
     size: 1.21 GB
@@ -154,7 +154,7 @@ quants:
   - name: Q5_K_M
     filename: whisper-large-v2-Q5_K_M.gguf
     size: 1.08 GB
-    wer: 2.71%
+    wer: 2.72%
   - name: Q4_K_M
     filename: whisper-large-v2-Q4_K_M.gguf
     size: 950 MB

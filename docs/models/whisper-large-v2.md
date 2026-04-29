@@ -22,11 +22,11 @@ on 2026-04-26.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-large-v2-F32.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-F32.gguf) | 5.75 GB | 2.67% |
-| F16    | [whisper-large-v2-F16.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-F16.gguf) | 2.89 GB | 2.68% |
-| Q8_0   | [whisper-large-v2-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-Q8_0.gguf) | 1.55 GB | 2.97% |
+| F32    | [whisper-large-v2-F32.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-F32.gguf) | 5.75 GB | 2.68% |
+| F16    | [whisper-large-v2-F16.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-F16.gguf) | 2.89 GB | 2.94% |
+| Q8_0   | [whisper-large-v2-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-Q8_0.gguf) | 1.55 GB | 2.65% |
 | Q6_K   | [whisper-large-v2-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-Q6_K.gguf) | 1.21 GB | 2.83% |
-| Q5_K_M | [whisper-large-v2-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-Q5_K_M.gguf) | 1.08 GB | 2.71% |
+| Q5_K_M | [whisper-large-v2-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-Q5_K_M.gguf) | 1.08 GB | 2.72% |
 | Q4_K_M | [whisper-large-v2-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v2-gguf/resolve/main/whisper-large-v2-Q4_K_M.gguf) | 950 MB | 2.46% |
 
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 2.83%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled.

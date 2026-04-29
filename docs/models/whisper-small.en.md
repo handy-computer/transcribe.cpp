@@ -22,12 +22,12 @@ on 2026-04-26.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-small.en-F32.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-F32.gguf) | 924 MB | 3.11% |
+| F32    | [whisper-small.en-F32.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-F32.gguf) | 924 MB | 3.09% |
 | F16    | [whisper-small.en-F16.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-F16.gguf) | 470 MB | 2.97% |
 | Q8_0   | [whisper-small.en-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q8_0.gguf) | 257 MB | 3.09% |
 | Q6_K   | [whisper-small.en-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q6_K.gguf) | 202 MB | 2.97% |
-| Q5_K_M | [whisper-small.en-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q5_K_M.gguf) | 185 MB | 3.11% |
-| Q4_K_M | [whisper-small.en-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q4_K_M.gguf) | 164 MB | 3.09% |
+| Q5_K_M | [whisper-small.en-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q5_K_M.gguf) | 185 MB | 3.12% |
+| Q4_K_M | [whisper-small.en-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-small.en-gguf/resolve/main/whisper-small.en-Q4_K_M.gguf) | 164 MB | 3.08% |
 
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 3.05%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled.
 

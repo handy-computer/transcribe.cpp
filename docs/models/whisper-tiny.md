@@ -22,12 +22,12 @@ on 2026-04-26.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-tiny-F32.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-F32.gguf) | 146 MB | 7.49% |
-| F16    | [whisper-tiny-F16.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-F16.gguf) | 76 MB | 7.48% |
-| Q8_0   | [whisper-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-Q8_0.gguf) | 44 MB | 7.52% |
-| Q6_K   | [whisper-tiny-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-Q6_K.gguf) | 43 MB | 7.54% |
-| Q5_K_M | [whisper-tiny-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-Q5_K_M.gguf) | 42 MB | 7.82% |
-| Q4_K_M | [whisper-tiny-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-Q4_K_M.gguf) | 42 MB | 7.78% |
+| F32    | [whisper-tiny-F32.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-F32.gguf) | 146 MB | 7.54% |
+| F16    | [whisper-tiny-F16.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-F16.gguf) | 76 MB | 7.49% |
+| Q8_0   | [whisper-tiny-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-Q8_0.gguf) | 44 MB | 7.53% |
+| Q6_K   | [whisper-tiny-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-Q6_K.gguf) | 43 MB | 7.63% |
+| Q5_K_M | [whisper-tiny-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-Q5_K_M.gguf) | 42 MB | 7.63% |
+| Q4_K_M | [whisper-tiny-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-tiny-gguf/resolve/main/whisper-tiny-Q4_K_M.gguf) | 42 MB | 7.76% |
 
 WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 7.54%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled.
 

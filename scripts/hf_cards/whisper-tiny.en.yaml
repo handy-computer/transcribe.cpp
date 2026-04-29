@@ -45,7 +45,7 @@ quants:
   - name: F16
     filename: whisper-tiny.en-F16.gguf
     size: 76 MB
-    wer: 5.78%
+    wer: 5.77%
   - name: Q8_0
     filename: whisper-tiny.en-Q8_0.gguf
     size: 44 MB
@@ -53,12 +53,12 @@ quants:
   - name: Q6_K
     filename: whisper-tiny.en-Q6_K.gguf
     size: 43 MB
-    wer: 5.83%
+    wer: 5.80%
   - name: Q5_K_M
     filename: whisper-tiny.en-Q5_K_M.gguf
     size: 42 MB
-    wer: 5.91%
+    wer: 5.89%
   - name: Q4_K_M
     filename: whisper-tiny.en-Q4_K_M.gguf
     size: 42 MB
-    wer: 5.96%
+    wer: 5.99%
