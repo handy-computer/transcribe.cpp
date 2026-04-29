@@ -96,7 +96,7 @@ struct cli_args {
     int         n_threads = 0; // 0 = library default (all cores)
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
     transcribe_backend_request backend = TRANSCRIBE_BACKEND_AUTO;
-    transcribe_timestamp_kind timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
+    transcribe_timestamp_kind timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
 
     // Whisper-family knobs. Ignored for non-Whisper models.
     std::string initial_prompt;                // --initial-prompt TEXT
@@ -119,7 +119,7 @@ void print_usage(const char * argv0) {
         "  --threads N           CPU threads (default: all cores)\n"
         "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
         "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan (default: auto)\n"
-        "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: auto)\n"
+        "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: none)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
         "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"

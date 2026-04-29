@@ -114,7 +114,7 @@ static void test_factories(void) {
 
     struct transcribe_params rp = transcribe_default_params();
     CHECK(rp.task               == TRANSCRIBE_TASK_TRANSCRIBE);
-    CHECK(rp.timestamps         == TRANSCRIBE_TIMESTAMPS_AUTO);
+    CHECK(rp.timestamps         == TRANSCRIBE_TIMESTAMPS_NONE);
     CHECK(rp.language           == NULL);
     CHECK(rp.target_language    == NULL);
     CHECK(rp.strip_special_tags == true);

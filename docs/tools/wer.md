@@ -46,15 +46,19 @@ uv run scripts/wer/run.py \
 ```
 
 Invokes `transcribe-cli --batch` (one model load, N utterances in one
-process) and writes:
+process). By default it runs `--timestamps none`, matching the library
+and CLI text-first default, and writes the timestamp mode into the
+auto-derived output name:
 
 ```text
-reports/wer/<model-stem>.<dataset>.jsonl
+reports/wer/<model-stem>.<dataset>-timestamps_none.jsonl
   {"id":..., "ref_text":..., "hyp_text":..., "mel_ms":..., "encode_ms":..., "decode_ms":...}
 ```
 
 Output path is auto-derived from model name and manifest name; override
-with `--out`.
+with `--out`. Pass `--timestamps segment` or another supported mode
+when you intentionally want timestamped WER; the auto path will use the
+same `-timestamps_<mode>` suffix.
 
 ## `score.py` — compute WER + CI
 

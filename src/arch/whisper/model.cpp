@@ -1133,7 +1133,7 @@ transcribe_status whisper_run(
     constexpr int k_max_new_tokens = 256;
 
     const transcribe_timestamp_kind requested_timestamps =
-        params != nullptr ? params->timestamps : TRANSCRIBE_TIMESTAMPS_AUTO;
+        params != nullptr ? params->timestamps : TRANSCRIBE_TIMESTAMPS_NONE;
     if (requested_timestamps == TRANSCRIBE_TIMESTAMPS_WORD) {
         return TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS;
     }

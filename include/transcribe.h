@@ -197,16 +197,17 @@ typedef enum {
 } transcribe_task;
 
 /*
- * AUTO timestamp policy: AUTO is treated as "equal to the model's
- * max_timestamp_kind." The dispatcher never rejects AUTO, and the
- * per-family run() handler resolves it to the finest granularity
- * the model can actually produce when it assembles the result. A
- * non-AUTO request is treated as a ceiling: if the request is
- * finer than the model's max, transcribe_run returns
- * TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS. If the request is
- * coarser-or-equal, the family handler emits only that granularity
- * and any finer per-run data is elided. The actual granularity
- * returned by a run is reported by
+ * Timestamp policy: transcribe_default_params() requests NONE for
+ * text-first transcription. AUTO is an opt-in "richest supported"
+ * mode: it is treated as "equal to the model's max_timestamp_kind."
+ * The dispatcher never rejects AUTO, and the per-family run() handler
+ * resolves it to the finest granularity the model can actually
+ * produce when it assembles the result. A non-AUTO request is treated
+ * as a ceiling: if the request is finer than the model's max,
+ * transcribe_run returns TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS. If the
+ * request is coarser-or-equal, the family handler emits only that
+ * granularity and any finer per-run data is elided. The actual
+ * granularity returned by a run is reported by
  * transcribe_returned_timestamp_kind(ctx).
  */
 typedef enum {
@@ -344,8 +345,9 @@ TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_param
  *              for translate via its capabilities; otherwise the run
  *              returns TRANSCRIBE_ERR_UNSUPPORTED_TASK.
  *
- * timestamps:  requested granularity. Use AUTO to get the finest the
- *              model supports.
+ * timestamps:  requested granularity. Default params request NONE.
+ *              Use AUTO to get the finest granularity the model
+ *              supports.
  *
  * language:        source language hint as a BCP-47-ish short code, or
  *                  NULL to autodetect (only if the model supports it).

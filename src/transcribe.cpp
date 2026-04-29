@@ -180,7 +180,7 @@ extern "C" struct transcribe_context_params transcribe_context_default_params(vo
 extern "C" struct transcribe_params transcribe_default_params(void) {
     struct transcribe_params p = {};
     p.task               = TRANSCRIBE_TASK_TRANSCRIBE;
-    p.timestamps         = TRANSCRIBE_TIMESTAMPS_AUTO;
+    p.timestamps         = TRANSCRIBE_TIMESTAMPS_NONE;
     p.language           = nullptr;
     p.target_language    = nullptr;
     p.strip_special_tags = true;

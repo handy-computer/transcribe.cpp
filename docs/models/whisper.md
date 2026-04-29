@@ -40,11 +40,11 @@ WER is on LibriSpeech test-clean for the **Q8_0** preset (the default
 recommended quant), measured by transcribe.cpp's WER pipeline with
 segment timestamps enabled. See each per-variant doc for the full quant
 matrix (F32/F16/Q8_0/Q6_K/Q5_K_M/Q4_K_M) and a discussion of how our
-numbers compare to OpenAI's self-reported figures.
+numbers compare to OpenAI's self-reported figures. Numbers come from single Metal-backed runs; Metal's non-deterministic parallel reductions add ~0.1pp run-to-run variance on the noise floor.
 
 | Variant | Languages | Q8_0 size | WER (Q8_0) | Doc |
 | --- | --- | ---: | ---: | --- |
-| `whisper-tiny`           | 99 + auto-detect    |   44 MB | 7.52% | [whisper-tiny.md](whisper-tiny.md) |
+| `whisper-tiny`           | 99 + auto-detect    |   44 MB | 7.53% | [whisper-tiny.md](whisper-tiny.md) |
 | `whisper-tiny.en`        | English only        |   44 MB | 5.72% | [whisper-tiny.en.md](whisper-tiny.en.md) |
 | `whisper-base`           | 99 + auto-detect    |   81 MB | 5.12% | [whisper-base.md](whisper-base.md) |
 | `whisper-base.en`        | English only        |   81 MB | 4.16% | [whisper-base.en.md](whisper-base.en.md) |
@@ -52,8 +52,8 @@ numbers compare to OpenAI's self-reported figures.
 | `whisper-small.en`       | English only        |  257 MB | 3.09% | [whisper-small.en.md](whisper-small.en.md) |
 | `whisper-medium`         | 99 + auto-detect    |  793 MB | 2.64% | [whisper-medium.md](whisper-medium.md) |
 | `whisper-medium.en`      | English only        |  793 MB | 2.72% | [whisper-medium.en.md](whisper-medium.en.md) |
-| `whisper-large`          | 99 + auto-detect    | 1.55 GB | 2.71% | [whisper-large.md](whisper-large.md) |
-| `whisper-large-v2`       | 99 + auto-detect    | 1.55 GB | 2.97% | [whisper-large-v2.md](whisper-large-v2.md) |
+| `whisper-large`          | 99 + auto-detect    | 1.55 GB | 2.74% | [whisper-large.md](whisper-large.md) |
+| `whisper-large-v2`       | 99 + auto-detect    | 1.55 GB | 2.65% | [whisper-large-v2.md](whisper-large-v2.md) |
 | `whisper-large-v3`       | 100 + auto-detect   | 1.55 GB | 1.82% | [whisper-large-v3.md](whisper-large-v3.md) |
 | `whisper-large-v3-turbo` | 100 + auto-detect   |  845 MB | 2.01% | [whisper-large-v3-turbo.md](whisper-large-v3-turbo.md) |
 

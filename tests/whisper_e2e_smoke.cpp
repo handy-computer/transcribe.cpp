@@ -2,8 +2,9 @@
 //
 // Covers the runtime capability contract that Stage 4 must not fake:
 // language detection is advertised and exercised by running without a
-// language hint, segment timestamps are advertised and returned for AUTO,
-// and an explicit NONE request keeps the tensor-validation prompt available.
+// language hint, default params use no-timestamp decode, explicit
+// SEGMENT timestamps are advertised and returned, and no-timestamp
+// decode keeps the tensor-validation prompt available.
 
 #include "transcribe.h"
 
@@ -119,6 +120,20 @@ int main() {
 
     {
         transcribe_params rp = transcribe_default_params();
+        st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+        CHECK(st == TRANSCRIBE_OK);
+        CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
+        CHECK_EQ_INT(transcribe_returned_timestamp_kind(ctx),
+                     TRANSCRIBE_TIMESTAMPS_NONE);
+        CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
+        CHECK_EQ_INT(transcribe_segment_t0_ms(ctx, 0), 0);
+        CHECK_EQ_INT(transcribe_segment_t1_ms(ctx, 0), 0);
+    }
+
+    {
+        transcribe_params rp = transcribe_default_params();
+        rp.language = "en";
+        rp.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
@@ -257,6 +272,7 @@ int main() {
         }
         transcribe_params rp = transcribe_default_params();
         rp.language = "en";
+        rp.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         st = transcribe_run(ctx, long_pcm.data(),
                             static_cast<int>(long_pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
@@ -644,11 +660,11 @@ int main() {
         AbortState state{0, 5};
         transcribe_set_abort_callback(ctx, abort_cb, &state);
         transcribe_params rp = transcribe_default_params();
+        rp.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_ERR_ABORTED);
         CHECK(transcribe_was_aborted(ctx));
-        /* TIMESTAMPS_AUTO resolves to TIMESTAMPS_SEGMENT for the
-         * whisper family; that value appears on the context even
+        /* The explicit SEGMENT request appears on the context even
          * after abort, confirming has_result=true was committed. */
         CHECK_EQ_INT(transcribe_returned_timestamp_kind(ctx),
                      TRANSCRIBE_TIMESTAMPS_SEGMENT);
