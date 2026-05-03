@@ -53,7 +53,7 @@
     "voice_activity_detection": false,
     "speaker_diarization": false
   },
-  "tolerance_file": "tests/tolerances/whisper.json",
+  "tolerance_file": "tests/tolerances/whisper-base.en.json",
   "cases": [
     {
       "audio": "jfk"

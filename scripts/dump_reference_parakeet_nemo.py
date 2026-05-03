@@ -461,6 +461,11 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
         default=1,
         help="Torch intra-op threads for deterministic dumps (default: 1)",
     )
+    p.add_argument(
+        "--language",
+        default="en",
+        help="Accepted for validate.py compatibility; Parakeet is English-only.",
+    )
 
 
 def main() -> int:

@@ -104,22 +104,33 @@ uv run scripts/bench/run.py \
 
 ## Numerical Validation
 
-transcribe.cpp is validated tensor-by-tensor against the transformers
-reference (WhisperForConditionalGeneration, fp32 CPU) on the manifest's
-case audio. Tolerance budget lives at
-[`tests/tolerances/whisper.json`](https://github.com/handy-computer/transcribe.cpp/blob/main/tests/tolerances/whisper.json).
-The reference dtype regime (F32 GGUF + F32 KV cache + production C++ mel
-frontend) lights up any frontend regression by design — see the family
-note at
-[`docs/porting/families/whisper.md`](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/porting/families/whisper.md)
-for the full architecture and validation contract.
+transcribe.cpp is validated tensor-by-tensor against the transformers reference (`WhisperForConditionalGeneration`, fp32 CPU) on the manifest's cases (`samples/jfk.wav` and `samples/german.wav`). All 23 checkpointed tensors fall within per-variant tolerance, and the transcripts match the HF reference verbatim. Tolerance budget lives at
+[`tests/tolerances/whisper-small.json`](https://github.com/handy-computer/transcribe.cpp/blob/main/tests/tolerances/whisper-small.json). Last validated at commit [`1854f57`](https://github.com/handy-computer/transcribe.cpp/tree/1854f57).
 
 | Field | Value |
 | --- | --- |
 | Reference | transformers 5.6.1 (`WhisperForConditionalGeneration`, CPU fp32) |
 | Manifest | `tests/golden/whisper/whisper-small.manifest.json` |
-| Tolerance file | `tests/tolerances/whisper.json` |
+| Tolerance file | `tests/tolerances/whisper-small.json` |
 | Command | `uv run scripts/validate.py all --family whisper --variant whisper-small` |
+
+Selected tensors (worst observed across cases; see tolerance file for per-tensor budgets):
+
+| Tensor                 | Max abs diff | Mean abs diff | Notes |
+| ---------------------- | ---: | ---: | --- |
+| `enc.mel.in`           |  `2.229e-05` |   `3.381e-08` | fp32 mixed-radix FFT vs torch fp64 frontend |
+| `enc.conv1.out`        |  `5.454e-06` |   `4.815e-08` | fp32 conv stem |
+| `enc.conv2.out`        |  `2.146e-05` |   `2.704e-07` | stride-2 conv stem (matches enc.embed.out) |
+| `enc.block.0.out`      |  `2.134e-05` |   `6.858e-07` | first encoder block |
+| `enc.block.11.out`     |  `1.669e-02` |   `6.139e-06` | final encoder block (peak signal grows with depth) |
+| `enc.final`            |  `2.100e-03` |   `3.882e-06` | post-LN encoder output |
+| `dec.token_emb`        |  `0.000e+00` |   `0.000e+00` | exact zero-drift (`ggml_get_rows` on the F32 GGUF) |
+| `dec.block.0.out`      |  `4.768e-06` |   `2.997e-07` | first decoder block, prompt pass |
+| `dec.block.11.out`     |  `3.662e-04` |   `2.471e-06` | final decoder block (accumulated) |
+| `dec.out_before_head`  |  `1.755e-04` |   `7.318e-06` | post final LN, pre-vocab projection |
+| `dec.logits_raw`       |  `3.719e-05` |   `7.083e-06` | vocab projection (raw logits) |
+| `dec.logits`           |  `8.965e-05` |   `1.926e-05` | log-softmax over vocab |
+| `dec.logits_raw.gen20` |  `2.289e-05` |   `8.815e-06` | step-20 logits (KV-cached path) |
 
 The C++ mel frontend (Slaney filterbank + Hann periodic window +
 whisper-style log-mel compression) drives `enc.mel.in` to fp32-vs-fp64

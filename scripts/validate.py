@@ -364,9 +364,10 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             "--backend", args.backend,
             "--threads", "1",
             "-m", str(gguf),
+            "--language", language,
         ]
         if args.family == "whisper":
-            cmd += ["--timestamps", "none", "--language", language]
+            cmd += ["--timestamps", "none"]
         cmd.append(str(audio))
 
         print(f"\n{'=' * 60}", file=sys.stderr)
