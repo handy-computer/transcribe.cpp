@@ -41,6 +41,7 @@ import datetime as dt
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,10 @@ from typing import Any
 
 def normalize_text(text: str) -> str:
     return " ".join(text.strip().lower().split())
+
+
+def normalize_text_for_compare(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]+", " ", text.lower()).split())
 
 
 def find_repo_root(start: Path) -> Path:
@@ -146,6 +151,21 @@ def case_language(case) -> str | None:
             return None
         return language
     return "en"
+
+
+def case_transcript_compare(manifest: dict[str, Any], case) -> str:
+    value = manifest.get("transcript_compare", "exact")
+    if isinstance(case, dict) and "transcript_compare" in case:
+        value = case["transcript_compare"]
+    if value is None:
+        value = "exact"
+    mode = str(value).lower()
+    if mode not in {"exact", "normalized"}:
+        raise SystemExit(
+            f"error: unsupported transcript_compare={value!r}; "
+            "expected 'exact' or 'normalized'"
+        )
+    return mode
 
 
 def find_gguf(repo: Path, family: str, slug: str | None = None) -> Path:
@@ -494,10 +514,12 @@ def cmd_compare(args: argparse.Namespace) -> int:
         if result.returncode != 0:
             all_passed = False
 
-        # Transcript comparison: if the reference produced a
-        # transcript.json, verify the C++ transcript matches exactly.
+        # Transcript comparison: if the reference produced a transcript.json,
+        # verify the C++ transcript. Manifests can opt into normalized compare
+        # for models whose generation differs only in punctuation/casing.
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists():
+            transcript_compare = case_transcript_compare(manifest, case)
             ref_data = json.loads(ref_transcript.read_text())
             ref_text = str(ref_data.get("text", ""))
             cpp_transcript = cpp_dir / "transcript.json"
@@ -515,18 +537,28 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
             cpp_data = json.loads(cpp_transcript.read_text())
             cpp_text = str(cpp_data.get("text", ""))
-            match = cpp_text == ref_text
+            if transcript_compare == "exact":
+                ref_compare = ref_text
+                cpp_compare = cpp_text
+            else:
+                ref_compare = normalize_text_for_compare(ref_text)
+                cpp_compare = normalize_text_for_compare(cpp_text)
+            match = cpp_compare == ref_compare
             transcript_results.append({
                 "case": case_name, "match": match,
                 "reference": ref_text, "cpp": cpp_text,
+                "mode": transcript_compare,
             })
             if not match:
-                print("\nFAIL transcript mismatch")
+                print(f"\nFAIL transcript mismatch ({transcript_compare})")
                 print(f"  reference: {ref_text!r}")
                 print(f"  c++:       {cpp_text!r}")
+                if transcript_compare != "exact":
+                    print(f"  reference normalized: {ref_compare!r}")
+                    print(f"  c++ normalized:       {cpp_compare!r}")
                 all_passed = False
             else:
-                print(f"\n  Transcript: ok {cpp_text!r}")
+                print(f"\n  Transcript: ok ({transcript_compare}) {cpp_text!r}")
 
     if report_mode:
         write_report_bundle(
@@ -695,9 +727,11 @@ def write_report_bundle(
             summary.append("")
             if tr["match"]:
                 summary.append(f"- Match: **yes**")
+                summary.append(f"- Mode: `{tr.get('mode', 'exact')}`")
                 summary.append(f"- text: `{tr.get('cpp', '')!r}`")
             else:
                 summary.append(f"- Match: **no**")
+                summary.append(f"- Mode: `{tr.get('mode', 'exact')}`")
                 if "reason" in tr:
                     summary.append(f"- Reason: {tr['reason']}")
                 else:

@@ -14,6 +14,7 @@
   },
   "expected_dtype": "float32",
   "dtype_source": "config",
+  "transcript_compare": "normalized",
   "frontend": {
     "sample_rate": 16000,
     "n_mels": 80,
