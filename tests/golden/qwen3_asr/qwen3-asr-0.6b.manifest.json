@@ -50,5 +50,10 @@
     "speaker_diarization": false
   },
   "tolerance_file": "tests/tolerances/qwen3_asr.json",
-  "cases": ["jfk"]
+  "cases": [
+    {
+      "audio": "jfk",
+      "language": "auto"
+    }
+  ]
 }

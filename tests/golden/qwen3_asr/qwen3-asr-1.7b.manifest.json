@@ -78,6 +78,9 @@
   },
   "tolerance_file": "tests/tolerances/qwen3_asr-1.7b.json",
   "cases": [
-    "jfk"
+    {
+      "audio": "jfk",
+      "language": "auto"
+    }
   ]
 }

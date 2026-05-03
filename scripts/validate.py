@@ -129,12 +129,22 @@ def case_audio(case) -> str:
     raise SystemExit(f"error: malformed case in manifest: {case!r}")
 
 
-def case_language(case) -> str:
-    """Per-case language code. Defaults to 'en' for legacy bare-string
-    cases and for dict cases that omit the field — matches the prior
-    hardcoded behavior."""
+def case_language(case) -> str | None:
+    """Per-case language code.
+
+    Legacy bare-string cases and dict cases that omit the field keep the
+    historical default of "en". Dict cases may set language to "auto",
+    "detect", or null to exercise the model's native language-detection path;
+    callers should omit the language flag in that case.
+    """
     if isinstance(case, dict):
-        return str(case.get("language") or "en")
+        value = case.get("language", "en")
+        if value is None:
+            return None
+        language = str(value)
+        if language == "" or language.lower() in {"auto", "detect"}:
+            return None
+        return language
     return "en"
 
 
@@ -295,8 +305,9 @@ def cmd_ref(args: argparse.Namespace) -> int:
             "--audio", str(audio),
             "--out", str(out_dir),
             "--torch-threads", "1",
-            "--language", language,
         ]
+        if language is not None:
+            common_args += ["--language", language]
 
         # Pin the HF revision when the manifest declares one and the
         # family's dumper accepts --revision. Currently only the
@@ -364,8 +375,9 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             "--backend", args.backend,
             "--threads", "1",
             "-m", str(gguf),
-            "--language", language,
         ]
+        if language is not None:
+            cmd += ["--language", language]
         if args.family == "whisper":
             cmd += ["--timestamps", "none"]
         cmd.append(str(audio))
@@ -567,9 +579,10 @@ def cmd_mel(args: argparse.Namespace) -> int:
             "--threads", "1",
             "-m", str(gguf),
             "--timestamps", "none",
-            "--language", language,
             str(audio),
         ]
+        if language is not None:
+            cmd[-1:-1] = ["--language", language]
 
         print(f"\n{'=' * 60}", file=sys.stderr)
         print(f"  mel parity cpp dump [{args.family}/{case_name}]", file=sys.stderr)
