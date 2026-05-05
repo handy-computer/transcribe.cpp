@@ -36,22 +36,41 @@ encoder and decoder bring-up can proceed in parallel.
 
 ## Stages
 
-1. Research the model and choose references.
-2. Establish a reproducible reference run.
-3. Define the artifact and golden plan.
-4. Generate reference dumps.
-5. Build the first accuracy GGUF.
-6. Add the C++ loader and synthetic fixture smoke.
-7. Bring up numerical validation.
-8. Add real-model structural and end-to-end smokes.
-9. Add benchmark coverage.
-10. Add quantized variants.
-11. Promote the family to supported.
+The authoritative stage chain is the eight `porting-N` skills under
+`.claude/skills/`:
+
+```
+1-intake → 2-oracle → 3-convert → 4-cpp → 5-quants → 6-bench → 7-wer → 8-ship
+```
+
+Each skill owns its postconditions and is the source of truth for what
+must exist by the time you advance. Read the corresponding SKILL.md
+before starting each stage. `docs/porting/skills-v2-proposal.md` records
+the v2 framing and the rationale for the split.
+
+The high-level intent of each stage:
+
+1. **Intake** — research identity, capabilities; draft the family doc's
+   `## Capability Validation` table; clear Preflight Gate A.
+2. **Oracle** — run the reference framework on every manifest case,
+   twice (ref + ref2 stability), capture transcripts and a provisional
+   tolerances file.
+3. **Convert** — produce only the reference-dtype GGUF; clear Preflight
+   Gate B.
+4. **C++** — implement `src/arch/<family>/`, finalize tolerances, run
+   the family-doc Capability Validation table, gate Stage 4 subset WER
+   vs reference.
+5. **Quants** — generate the shipped quant matrix and CLI smoke each
+   produced GGUF.
+6. **Bench** — performance matrix; every accepted iteration re-runs
+   `validate.py all`.
+7. **WER** — full release WER sweep against the upstream acceptance
+   number; ref-dtype hard gate, quants reported but not gated.
+8. **Ship** — checklist-driven local prep of the family doc, model card,
+   HF YAML, HF README.
 
 The detailed testing contract is in
-[`docs/model-family-testing.md`](../model-family-testing.md). This
-porting guide covers the earlier decisions and artifact flow that happen
-before those tests exist.
+[`docs/model-family-testing.md`](../model-family-testing.md).
 
 ## Required Artifacts
 

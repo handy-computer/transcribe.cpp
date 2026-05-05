@@ -1,16 +1,16 @@
 ---
 name: porting-3-convert
-description: Converts a model family's upstream checkpoint into a reference-dtype GGUF that transcribe.cpp's loader can ingest. Produces ONLY the reference-dtype artifact (F32 / F16 / BF16 per the intake); the full quant matrix is a Stage 4 concern. Use this after porting-2-refdump has emitted the contract tensor dumps. Input: intake.json, per-family converter, and the upstream checkpoint. Output: models/<slug>/<slug>-<REFDTYPE>.gguf, reports/convert/<variant>-<refdtype>.json, and Preflight Gate B green.
+description: Converts a model family's upstream checkpoint into a reference-dtype GGUF that transcribe.cpp's loader can ingest. Produces ONLY the reference-dtype artifact (F32 / F16 / BF16 per the intake); the full quant matrix is a Stage 5 (porting-5-quants) concern. Use this after porting-2-oracle has emitted the contract tensor dumps. Input: intake.json, per-family converter, and the upstream checkpoint. Output: models/<slug>/<slug>-<REFDTYPE>.gguf, reports/convert/<variant>-<refdtype>.json, and Preflight Gate B green.
 ---
 
 # porting-3-convert
 
-Third stage of the porting pipeline. Runs the family's converter to emit the reference-dtype GGUF, records a converter manifest, and clears Preflight Gate B. Deferring the full quant matrix (F16 / Q8_0 / Q6_K / Q5_K_M / Q4_K_M) to Stage 4 means we never re-quantize over the course of a C++ bringup.
+Third stage of the porting pipeline. Runs the family's converter to emit the reference-dtype GGUF, records a converter manifest, and clears Preflight Gate B. Deferring the full quant matrix (F16 / Q8_0 / Q6_K / Q5_K_M / Q4_K_M) to Stage 5 (`porting-5-quants`) means we never re-quantize over the course of a C++ bringup.
 
 ## Preconditions
 
 - `reports/porting/<family>/<variant>/intake.json` exists and is schema-valid.
-- `build/validate/<family>/<variant>/dump_coverage.json` exists (output of `porting-2-refdump`).
+- `build/validate/<family>/<variant>/dump_coverage.json` exists (output of `porting-2-oracle`).
 - The per-family converter exists at `scripts/convert-<family>.py`. If not, this skill creates a skeleton from the closest existing converter.
 - The per-family reference env exists at `scripts/envs/<family>/pyproject.toml`.
 - `$TRANSCRIBE_MODELS_DIR` is set.
@@ -33,7 +33,7 @@ Check for `scripts/convert-<family>.py`.
 
 **If present**: reuse. For sibling variants (e.g. `-v3` when `-v2` is ported) the converter usually handles the new variant via `--repo-id` alone; confirm by reading the converter's source for any hard-coded variant checks.
 
-**If absent**: mirror the closest existing converter's shape — `convert-cohere.py` (Transformers HF dir), `convert-parakeet.py` (NeMo `.nemo`), or `convert-qwen3_asr.py` (author-repo with `--revision`, `--variant`). All converters accept positional HF repo or local path, `--repo-id` for the output name, preserve source dtypes exactly (CLAUDE.md policy #2), and emit the `general.*` and `stt.*` KV that the C++ loader's per-family `read_*_hparams` reads (see `src/arch/<closest>/weights.cpp`). Ask the user to confirm the stub before running it against real weights.
+**If absent**: mirror the closest existing converter's shape — `convert-cohere.py` (Transformers HF dir), `convert-parakeet.py` (NeMo `.nemo`), or `convert-qwen3_asr.py` (author-repo with `--revision`, `--variant`). All converters accept positional HF repo or local path, `--repo-id` for the output name, preserve source dtypes exactly (CLAUDE.md policy #2), and emit the `general.*` and `stt.*` KV that the C++ loader's per-family `read_*_hparams` reads (see `src/arch/<closest>/weights.cpp`). Surface only unresolved decisions to the user (tensor-name mappings the closest converter does not handle, novel sharding, etc.); a routine stub does not need confirmation before running.
 
 ### Step 2: Identify reference dtype (read intake)
 
@@ -117,7 +117,7 @@ Loader-open smoke: the C++ loader must open the new GGUF:
 build/bin/transcribe-cli -m models/<variant>/<variant>-<REFDTYPE>.gguf samples/jfk.wav >/dev/null
 ```
 
-For a brand-new family where `src/arch/<family>/` doesn't exist yet, the loader returns `TRANSCRIBE_ERR_UNSUPPORTED_ARCH`. That is acceptable at Stage 3 — note it in sign-off; Stage 4 brings up the arch. For an established family the smoke must exit 0. A per-family real-model smoke (`tests/<family>_real_smoke.cpp`) is a Stage 4 artifact, not a Stage 3 gate.
+For a brand-new family where `src/arch/<family>/` doesn't exist yet, the loader returns `TRANSCRIBE_ERR_UNSUPPORTED_ARCH`. That is acceptable at Stage 3 — note it in sign-off; Stage 4 (`porting-4-cpp`) brings up the arch. For an established family the smoke must exit 0. A per-family real-model smoke (`tests/<family>_real_smoke.cpp`) is a Stage 4 artifact, not a Stage 3 gate.
 
 ### Step 6: Sign-off
 
@@ -135,7 +135,7 @@ Report:
 - `models/<variant>/<variant>-<REFDTYPE>.gguf` exists.
 - `reports/convert/<variant>-<REFDTYPE>.json` exists and records the SHA + source revision.
 - Preflight Gate B is green.
-- The full quant matrix is NOT generated here — that is Stage 4.
+- The full quant matrix is NOT generated here — that is Stage 5 (`porting-5-quants`).
 
 ## Pointers (read, not execute)
 

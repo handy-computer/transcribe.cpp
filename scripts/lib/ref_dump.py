@@ -67,15 +67,30 @@ def write_tensor(
     json_path = out_dir / f"{name}.json"
 
     array.tofile(f32_path)
+    if array.size:
+        flat64 = array.astype(np.float64, copy=False).reshape(-1)
+        rms = float(np.sqrt(np.mean(flat64 * flat64)))
+        p99_abs = float(np.quantile(np.abs(flat64), 0.99))
+        a_min = float(array.min())
+        a_max = float(array.max())
+        a_mean = float(flat64.mean())
+    else:
+        rms = 0.0
+        p99_abs = 0.0
+        a_min = 0.0
+        a_max = 0.0
+        a_mean = 0.0
     meta: dict[str, Any] = {
         "name": name,
         "stage": stage,
         "shape": list(array.shape),
         "dtype": "f32",
         "layout": "row-major",
-        "min": float(array.min()) if array.size else 0.0,
-        "max": float(array.max()) if array.size else 0.0,
-        "mean": float(array.mean(dtype=np.float64)) if array.size else 0.0,
+        "min": a_min,
+        "max": a_max,
+        "mean": a_mean,
+        "rms": rms,
+        "p99_abs": p99_abs,
         "source": source,
     }
     json_path.write_text(json.dumps(meta, indent=2) + "\n")

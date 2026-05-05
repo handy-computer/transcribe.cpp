@@ -155,7 +155,7 @@ uv run scripts/wer.py --family whisper --variant whisper-tiny --dataset librispe
 - LibriSpeech test-other (en): 17.15 WER %
 - Common Voice 11.0 (multilingual aggregate): 141.0 WER % (as reported)
 
-Acceptance dataset for Stage 6 WER gate: **LibriSpeech test-clean** (upstream-reported 7.54 %).
+Acceptance dataset for Stage 7 WER gate: **LibriSpeech test-clean** (upstream-reported 7.54 %).
 
 ## Known risks
 
