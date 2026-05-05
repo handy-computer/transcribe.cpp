@@ -48,6 +48,11 @@ add_library(transcribe
     arch/whisper/encoder.cpp
     arch/whisper/decoder.cpp
     arch/whisper/bin_load.cpp
+    arch/moonshine/model.cpp
+    arch/moonshine/capabilities.cpp
+    arch/moonshine/weights.cpp
+    arch/moonshine/encoder.cpp
+    arch/moonshine/decoder.cpp
 )
 
 target_include_directories(transcribe

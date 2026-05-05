@@ -165,11 +165,12 @@ def frontend_inputs(processor, pcm: np.ndarray, sr: int, device: str):
 
 
 def auto_blocks(n_layers: int) -> set[int]:
-    """Default block selection: dump all if <=5 layers, else 5 evenly
-    spaced indices including first and last. Keeps tensor coverage
-    constant across variant sizes (moonshine-tiny=6, base=8) without
-    requiring per-variant --blocks args."""
-    if n_layers <= 5:
+    """Default block selection: dump all blocks if n_layers <= 8, else
+    5 evenly spaced indices including first and last. The ≤8 threshold
+    covers moonshine-tiny (6) and moonshine-base (8) without leaving
+    middle blocks uncovered (Python's banker's rounding made `round(2.5)`
+    skip block 3 in the older 5-sample heuristic for n_layers=6)."""
+    if n_layers <= 8:
         return set(range(n_layers))
     last = n_layers - 1
     return {0, round(last / 4), round(last / 2), round(3 * last / 4), last}
@@ -234,15 +235,12 @@ def dump_encoder(
                     stage="encoder.conv3", source=source)
 
         # No additive positional embedding — RoPE is applied inside
-        # self_attn. The rotary cos/sin are precomputed once for the
-        # encoder seq len and broadcast to every layer.
+        # self_attn. C++ uses ggml_rope_ext which computes cos/sin
+        # internally; we don't dump them on the reference side because
+        # there's no C++ counterpart to compare against (correctness is
+        # verified transitively by enc.block.0.out).
         position_ids = torch.arange(0, x.shape[1], device=x.device).unsqueeze(0)
         position_embeddings = encoder.rotary_emb(x, position_ids=position_ids)
-        cos, sin = position_embeddings
-        dump_tensor(out_dir, "enc.rope.cos", to_np(cos),
-                    stage="encoder.rope", source=source)
-        dump_tensor(out_dir, "enc.rope.sin", to_np(sin),
-                    stage="encoder.rope", source=source)
 
         block_set = set(blocks) if blocks is not None else auto_blocks(len(encoder.layers))
         block_set.add(0)
@@ -568,6 +566,78 @@ def cmd_decode(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_wer(args: argparse.Namespace) -> int:
+    """Run HF moonshine over a manifest.jsonl in the same regime as the
+    decode dumper (greedy, num_beams=1, do_sample=False, max_new_tokens
+    matching the dumper default), and write a hypothesis JSONL that
+    `scripts/wer/score.py` can consume. Output schema mirrors
+    `scripts/wer/run.py`'s per-utterance lines (id, ref_text, hyp_text,
+    timing fields kept for parity though we leave them at 0)."""
+    import json
+    import time
+
+    configure_torch(args)
+    processor, model = load_reference(args)
+    tokenizer = processor.tokenizer
+
+    manifest_path = resolve_path(args.manifest)
+    out_path = resolve_path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    eos = int(model.config.eos_token_id)
+    decoder_start = int(model.config.decoder_start_token_id)
+
+    with manifest_path.open() as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    print(f"manifest: {manifest_path.name} entries={len(rows)}")
+
+    import torch  # noqa: F401  (used inside generate_transcript)
+
+    t0 = time.monotonic()
+    written = 0
+    with out_path.open("w") as out:
+        out.write(json.dumps({"type": "batch_header",
+                              "kind": "moonshine-transformers-native",
+                              "model": resolve_model(args.model)[0]}) + "\n")
+        for i, row in enumerate(rows):
+            audio_path = Path(row["audio"])
+            if not audio_path.is_absolute():
+                audio_path = (manifest_path.parent / audio_path).resolve()
+            pcm, sr = load_audio(audio_path)
+            if sr != 16000:
+                print(f"skipping {row['id']}: sr={sr}", file=sys.stderr)
+                continue
+            inputs = frontend_inputs(processor, pcm, sr, args.device)
+            with torch.inference_mode():
+                generated_ids = model.generate(
+                    input_values=inputs["input_values"],
+                    attention_mask=inputs.get("attention_mask"),
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=False,
+                    num_beams=1,
+                )
+            ids = generated_ids[0].detach().cpu().tolist()
+            ids = [t for t in ids if t not in (eos, decoder_start)]
+            hyp = tokenizer.decode(ids, skip_special_tokens=True).strip()
+            out.write(json.dumps({
+                "id": row["id"],
+                "ref_text": row["ref_text"],
+                "hyp_text": hyp,
+                "mel_ms": 0,
+                "encode_ms": 0,
+                "decode_ms": 0,
+            }) + "\n")
+            written += 1
+            if (i + 1) % 50 == 0 or i == len(rows) - 1:
+                rate = (i + 1) / (time.monotonic() - t0)
+                eta = (len(rows) - i - 1) / rate if rate > 0 else 0
+                print(f"  [{i+1}/{len(rows)}] {rate:.1f} utt/s  ETA {eta:.0f}s")
+
+    print(f"done. {written} utterances in {time.monotonic() - t0:.1f}s")
+    print(f"report: {out_path}")
+    return 0
+
+
 def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model", required=True,
                    help="HF repo id or local path to the Moonshine model directory")
@@ -579,6 +649,14 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
         type=int,
         default=1,
         help="Torch intra-op threads for deterministic dumps (default: 1)",
+    )
+    # validate.py threads --language through every dumper. Moonshine is
+    # English-only and ignores it, but accept the flag so the shared
+    # invocation does not fail with "unrecognized arguments".
+    p.add_argument(
+        "--language",
+        default=None,
+        help="Ignored — moonshine is English-only with no language tokens.",
     )
 
 
@@ -625,6 +703,22 @@ def main() -> int:
              "else 5 evenly spaced indices including first and last)",
     )
     dp.set_defaults(func=cmd_decode)
+
+    wp = sub.add_parser("wer",
+                        help="Run HF moonshine over a manifest.jsonl and write a "
+                             "hypothesis JSONL for scripts/wer/score.py")
+    wp.add_argument("--model", required=True,
+                    help="HF repo id or local path to the Moonshine model directory")
+    wp.add_argument("--manifest", required=True,
+                    help="Input manifest.jsonl with id/audio/ref_text per row")
+    wp.add_argument("--out", required=True,
+                    help="Output JSONL (matches scripts/wer/run.py format)")
+    wp.add_argument("--device", default="cpu", help="Torch device (default: cpu)")
+    wp.add_argument("--torch-threads", type=int, default=1,
+                    help="Torch intra-op threads (default: 1)")
+    wp.add_argument("--max-new-tokens", type=int, default=192,
+                    help="Max generated tokens per utterance (default: 192)")
+    wp.set_defaults(func=cmd_wer)
 
     args = p.parse_args()
     return args.func(args)

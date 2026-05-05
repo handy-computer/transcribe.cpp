@@ -93,7 +93,7 @@ KV emitted:
     stt.capability.translate   = false
     stt.capability.timestamps  = false
 
-    tokenizer.ggml.model = "llama"          (SentencePiece-style BPE)
+    tokenizer.ggml.model = "bpe"            (SentencePiece-style BPE)
     tokenizer.ggml.pre   = "default"
     tokenizer.ggml.tokens / token_type / merges
     tokenizer.ggml.byte_fallback = true
@@ -521,10 +521,13 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer.add_bool("stt.capability.timestamps",  False)
 
         # ---- tokenizer.ggml.* (SentencePiece-style BPE with byte fallback) ----
-        # llama.cpp tags SentencePiece-style BPE as "llama". Pre is "default":
-        # the normalizer chain (Prepend ▁ + Replace ' ' → ▁) is applied at
-        # encode time, not via a regex pretokenizer.
-        writer.add_string("tokenizer.ggml.model", "llama")
+        # The tag is "bpe" (matching parakeet/cohere) — transcribe.cpp's
+        # tokenizer recognizes "unigram"/"bpe" for the SentencePiece-style
+        # decode path and "gpt2" for byte-level BPE. (llama.cpp's
+        # equivalent tag is "llama", but our loader has no such alias.)
+        # Pre is "default": the normalizer chain (Prepend ▁ + Replace ' ' → ▁)
+        # is applied at encode time, not via a regex pretokenizer.
+        writer.add_string("tokenizer.ggml.model", "bpe")
         writer.add_string("tokenizer.ggml.pre",   "default")
         writer.add_array("tokenizer.ggml.tokens",     tok["tokens"])
         writer.add_array("tokenizer.ggml.token_type", tok["types"])
