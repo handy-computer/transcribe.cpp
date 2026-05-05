@@ -188,7 +188,7 @@ constexpr const char * kTag = kFamilyTag;
 #define GET_F32(slot, name, ...) \
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
-            gguf, ctx_meta, (name), \
+            ctx_meta, (name), \
             {GGML_TYPE_F32}, {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
         (slot) = _t; \
@@ -197,7 +197,7 @@ constexpr const char * kTag = kFamilyTag;
 #define GET_CONV(slot, name, ...) \
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
-            gguf, ctx_meta, (name), \
+            ctx_meta, (name), \
             {TRANSCRIBE_QUANT_CONV_TYPES}, \
             {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
@@ -207,7 +207,7 @@ constexpr const char * kTag = kFamilyTag;
 #define GET_LIN(slot, name, ...) \
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
-            gguf, ctx_meta, (name), \
+            ctx_meta, (name), \
             {TRANSCRIBE_QUANT_LINEAR_TYPES}, \
             {__VA_ARGS__}, kTag); \
         if (_t == nullptr) return TRANSCRIBE_ERR_GGUF; \
@@ -216,12 +216,11 @@ constexpr const char * kTag = kFamilyTag;
 
 } // namespace
 
-transcribe_status build_cohere_weights(const gguf_context *   gguf,
-                                       ggml_context *         ctx_meta,
+transcribe_status build_cohere_weights(ggml_context *         ctx_meta,
                                        const CohereHParams &  hp,
                                        CohereWeights &        weights)
 {
-    if (gguf == nullptr || ctx_meta == nullptr) {
+    if (ctx_meta == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 

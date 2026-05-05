@@ -16,7 +16,8 @@ Usage:
         --manifest samples/wer/test-clean.manifest.jsonl
 
   Options:
-    --out PATH      output report file (default: auto-derived from model name)
+    --out PATH      output report file (default: auto-derived from model,
+                    manifest, and timestamp mode)
     --cli PATH      transcribe-cli binary (default: build/bin/transcribe-cli)
 
 Output JSONL:
@@ -49,9 +50,12 @@ def find_repo_root(start: Path) -> Path:
     raise FileNotFoundError("cannot locate repo root")
 
 
-def derive_out_path(repo: Path, model: Path, manifest: Path) -> Path:
+def derive_out_path(
+    repo: Path, model: Path, manifest: Path, timestamps: str
+) -> Path:
     model_stem = model.stem
     dataset = manifest.stem.replace(".manifest", "")
+    dataset = f"{dataset}-timestamps_{timestamps}"
     return repo / "reports" / "wer" / f"{model_stem}.{dataset}.jsonl"
 
 
@@ -69,15 +73,19 @@ def main() -> int:
                    default=repo / "build/bin/transcribe-cli",
                    help="transcribe-cli binary")
     p.add_argument("--out", type=Path, default=None,
-                   help="Output report file (default: auto)")
+                   help="Output report file (default: auto-derived)")
     p.add_argument("--backend",
-                   choices=("auto", "cpu", "metal", "vulkan"),
+                   choices=("auto", "cpu", "cpu_accel", "metal", "vulkan"),
                    default=None,
                    help="Compute backend (default: transcribe-cli default)")
     p.add_argument("--kv-type",
                    choices=("auto", "f32", "f16"),
                    default=None,
                    help="Flash-attn KV cache type passthrough")
+    p.add_argument("--timestamps",
+                   choices=("auto", "none", "segment", "word", "token"),
+                   default="none",
+                   help="Timestamp granularity passthrough (default: none)")
     args = p.parse_args()
 
     for path in (args.model, args.manifest, args.cli):
@@ -85,7 +93,9 @@ def main() -> int:
             print(f"error: {path} does not exist", file=sys.stderr)
             return 2
 
-    out_path = args.out or derive_out_path(repo, args.model, args.manifest)
+    out_path = args.out or derive_out_path(
+        repo, args.model, args.manifest, args.timestamps
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Load manifest and build id→ref_text lookup.
@@ -122,6 +132,7 @@ def main() -> int:
         cmd += ["--backend", args.backend]
     if args.kv_type:
         cmd += ["--kv-type", args.kv_type]
+    cmd += ["--timestamps", args.timestamps]
     print(f"  $ {' '.join(cmd[:6])} ...")
 
     t_start = time.monotonic()
@@ -131,6 +142,7 @@ def main() -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            errors="replace",
         )
     except Exception as e:
         print(f"error: failed to start transcribe-cli: {e}", file=sys.stderr)

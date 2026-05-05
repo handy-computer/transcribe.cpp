@@ -11,8 +11,9 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Cohere Transcribe | `cohere-transcribe-03-2026` | [docs/models/cohere-transcribe-03-2026.md](docs/models/cohere-transcribe-03-2026.md) |
 | Qwen3-ASR | `qwen3-asr-0.6b` | [docs/models/qwen3-asr-0.6b.md](docs/models/qwen3-asr-0.6b.md) |
 | Qwen3-ASR | `qwen3-asr-1.7b` | [docs/models/qwen3-asr-1.7b.md](docs/models/qwen3-asr-1.7b.md) |
+| Whisper | 12 variants (`tiny` through `large-v3-turbo`, plus `.en` siblings) | [docs/models/whisper.md](docs/models/whisper.md) |
 
-More families planned (Moonshine, Canary, SenseVoice, GigaAM, Whisper).
+More families planned (Moonshine, Canary, SenseVoice, GigaAM).
 
 ## Build
 
@@ -66,7 +67,8 @@ the llama.cpp-style `<slug>-<QUANT>.gguf` naming convention. Pass a local
 ### Quantize
 
 The `transcribe-quantize` tool produces smaller models from the
-reference GGUF. Available presets: `F16`, `Q8_0`, `Q5_K_M`, `Q4_K_M`.
+reference GGUF. Available presets: `F16`, `Q8_0`, `Q6_K`, `Q5_K_M`,
+`Q4_K_M`.
 
 ```bash
 build/bin/transcribe-quantize \

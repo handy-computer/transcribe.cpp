@@ -61,6 +61,14 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // word- and segment-level timings. TOKEN is the finest the
     // family can honestly produce, and that is what we advertise.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
+
+    // Abort callback is honored at the top of each run. Other
+    // long-form / temperature-fallback / initial-prompt features
+    // belong to autoregressive families and don't apply here.
+    caps.supports_initial_prompt       = false;
+    caps.supports_temperature_fallback = false;
+    caps.supports_long_form            = false;
+    caps.supports_cancellation         = true;
 }
 
 } // namespace transcribe::parakeet

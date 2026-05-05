@@ -235,8 +235,7 @@ struct CohereWeights {
     CohereHead                   head;
 };
 
-transcribe_status build_cohere_weights(const gguf_context *   gguf,
-                                       ggml_context *         ctx_meta,
+transcribe_status build_cohere_weights(ggml_context *         ctx_meta,
                                        const CohereHParams &  hp,
                                        CohereWeights &        weights);
 

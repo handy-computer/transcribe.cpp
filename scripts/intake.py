@@ -261,10 +261,22 @@ def _vocab_size(tok_json) -> int | None:
         return None
     vocab = (tok_json.get("model") or {}).get("vocab")
     if isinstance(vocab, dict):
-        return len(vocab)
-    if isinstance(vocab, list):
-        return len(vocab)
-    return None
+        base = len(vocab)
+    elif isinstance(vocab, list):
+        base = len(vocab)
+    else:
+        return None
+    # Whisper-style tokenizers carry their special tokens (lang/task/timestamp)
+    # in `added_tokens` rather than the base BPE vocab. The model output dim
+    # (and the GGUF vocab_size we ship) is base + added, not base.
+    added = tok_json.get("added_tokens") or []
+    if isinstance(added, list):
+        max_id = base - 1
+        for entry in added:
+            if isinstance(entry, dict) and isinstance(entry.get("id"), int):
+                max_id = max(max_id, entry["id"])
+        return max(base, max_id + 1)
+    return base
 
 
 def extract_capabilities(config, tok_cfg, gen_cfg) -> dict[str, Any]:

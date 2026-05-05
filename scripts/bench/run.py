@@ -46,7 +46,7 @@ one matching GGUF is benched.
     --iters N                        measured iterations per cell (default: 2)
     --warmup N                       warmup iterations per cell (default: 1)
     --backends B[,B...]|all          backends to bench (default: all, auto-detected)
-                                     valid: metal,cpu,vulkan,all
+                                     valid: metal,cpu,cpu_accel,vulkan,all
     --name LABEL                     stable label for named baselines; when set,
                                      output filenames use <name> instead of <ts>
                                      and are overwritten on re-run
@@ -88,7 +88,7 @@ from pathlib import Path
 
 DEFAULT_QUANTS = ["f16", "q8_0", "q4_k_m"]
 DEFAULT_SAMPLES = ["jfk", "dots"]
-KNOWN_BACKENDS = ["metal", "cpu", "vulkan"]
+KNOWN_BACKENDS = ["metal", "cpu", "cpu_accel", "vulkan"]
 
 
 @dataclass(slots=True)
@@ -388,14 +388,18 @@ def resolve_backends(repo: Path, requested: str | None,
                 # Explicit request on non-darwin: surface as unavailable.
                 missing.append(f"metal: requires darwin host (got {sys.platform})")
                 continue
-        elif name == "cpu":
-            # We reuse the darwin bench binary for cpu runs — the
-            # --backend cpu flag makes it a strict-CPU run regardless
-            # of what's compiled in.
+        elif name == "cpu" or name == "cpu_accel":
+            # We reuse the darwin bench binary for CPU runs. --backend cpu
+            # forces strict-CPU regardless of what's compiled in;
+            # --backend cpu_accel additionally layers any registered
+            # accel backends (BLAS/AMX) onto the scheduler. The accel
+            # backend has to be compiled in (e.g. GGML_BLAS=ON) for
+            # cpu_accel to engage anything; otherwise it degrades to
+            # plain cpu semantics.
             binary = bench_bin_override or _metal_binary(repo)
-            backend_arg = "cpu"
+            backend_arg = name
             if not binary.exists():
-                missing.append(f"cpu: {binary}")
+                missing.append(f"{name}: {binary}")
         elif name == "vulkan":
             binary = bench_bin_override or _vulkan_binary(repo)
             backend_arg = "vulkan"

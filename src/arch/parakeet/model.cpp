@@ -410,7 +410,7 @@ transcribe_status load(
     // only inspects type + shape (not data pointers), so this works
     // before the backend buffer is bound.
     if (const transcribe_status st =
-            build_parakeet_weights(gguf_data, m->ctx_meta, m->hparams, m->weights);
+            build_parakeet_weights(m->ctx_meta, m->hparams, m->weights);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
@@ -562,6 +562,14 @@ transcribe_status run(
     auto * pm = static_cast<ParakeetModel *>(pc->model);
     if (pm == nullptr || pm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Pre-run abort check. Parakeet is non-chunked today; this is the
+    // single observation point. A caller that wants to veto a run
+    // without paying encoder cost flips the callback's state and the
+    // next transcribe_run short-circuits here.
+    if (pc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
     }
 
     // Initialize the debug dumper from TRANSCRIBE_DUMP_DIR. Idempotent

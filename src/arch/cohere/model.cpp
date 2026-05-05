@@ -463,7 +463,7 @@ transcribe_status load(
     }
 
     if (const transcribe_status st =
-            build_cohere_weights(gguf_data, m->ctx_meta, m->hparams, m->weights);
+            build_cohere_weights(m->ctx_meta, m->hparams, m->weights);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
@@ -596,6 +596,12 @@ transcribe_status run(
     auto * cm = static_cast<CohereModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Pre-run abort check. Cohere ASR is single-chunk today; this is
+    // the single observation point.
+    if (cc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
     }
 
     transcribe::debug::init();

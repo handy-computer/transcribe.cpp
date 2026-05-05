@@ -25,6 +25,7 @@ add_library(transcribe
     transcribe-backend.cpp
     transcribe-load-common.cpp
     transcribe-weights-util.cpp
+    transcribe-bin-loader.cpp
     conformer/conformer.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp
@@ -41,6 +42,12 @@ add_library(transcribe
     arch/qwen3_asr/weights.cpp
     arch/qwen3_asr/encoder.cpp
     arch/qwen3_asr/decoder.cpp
+    arch/whisper/model.cpp
+    arch/whisper/capabilities.cpp
+    arch/whisper/weights.cpp
+    arch/whisper/encoder.cpp
+    arch/whisper/decoder.cpp
+    arch/whisper/bin_load.cpp
 )
 
 target_include_directories(transcribe
@@ -99,5 +106,12 @@ set_target_properties(transcribe PROPERTIES
     OUTPUT_NAME transcribe
     POSITION_INDEPENDENT_CODE ON
 )
+
+# zlib for Whisper's temperature-fallback compression_ratio metric
+# (HF generation_whisper.py:_retrieve_compression_ratio uses
+# len(token_bytes) / len(zlib.compress(token_bytes)) to detect decoder
+# token-id loops). System zlib is ubiquitous; compile fails if absent.
+find_package(ZLIB REQUIRED)
+target_link_libraries(transcribe PRIVATE ZLIB::ZLIB)
 
 transcribe_apply_warnings(transcribe)

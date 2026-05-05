@@ -92,14 +92,31 @@ const std::string & Tokenizer::token(int id) const {
 
 int Tokenizer::find(const std::string & piece) const {
     const auto it = piece_to_id_.find(piece);
-    if (it == piece_to_id_.end()) {
-        return -1;
+    if (it != piece_to_id_.end()) {
+        return it->second;
     }
-    return it->second;
+    // Synthesized special-piece map: only populated by adapters that
+    // need find() to surface literals absent from tokens_ (whisper.cpp
+    // .bin). Empty for GGUF whisper, where every special is already
+    // in piece_to_id_.
+    const auto sit = special_pieces_.find(piece);
+    if (sit != special_pieces_.end()) {
+        return sit->second;
+    }
+    return -1;
+}
+
+void Tokenizer::add_special_piece(const std::string & literal, int32_t id) {
+    special_pieces_[literal] = id;
 }
 
 bool Tokenizer::has_encoder() const {
-    return model_ == "gpt2" && !merge_rank_.empty();
+    // GGUF "gpt2" with merges → HF byte-unicode + merge-rank encoder.
+    // Decode-only raw-bytes (whisper.cpp .bin) → tiktoken-style
+    // encoder using piece_to_id_ as the rank table.
+    if (model_ == "gpt2" && !merge_rank_.empty()) return true;
+    if (decode_mode_ == DecodeMode::RawBytes && !tokens_.empty()) return true;
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +151,24 @@ std::string decode_sentencepiece(const std::vector<std::string> & tokens,
                 ++j;
             }
         }
+    }
+    return out;
+}
+
+// Raw-byte decode: tokens already contain raw UTF-8 byte sequences
+// (legacy whisper.cpp .bin tiktoken-style vocab). Concatenate verbatim.
+std::string decode_raw_bytes(const std::vector<std::string> & tokens,
+                             const int *                       ids,
+                             int                               n)
+{
+    std::string out;
+    out.reserve(static_cast<size_t>(n) * 2);
+    for (int i = 0; i < n; ++i) {
+        const int id = ids[i];
+        if (id < 0 || static_cast<size_t>(id) >= tokens.size()) {
+            continue;
+        }
+        out.append(tokens[static_cast<size_t>(id)]);
     }
     return out;
 }
@@ -181,11 +216,14 @@ std::string Tokenizer::decode(const int * ids, int n) const {
     if (ids == nullptr || n <= 0) {
         return {};
     }
-    if (model_ == "gpt2") {
-        return decode_gpt2_bytes(tokens_, ids, n);
+    switch (decode_mode_) {
+        case DecodeMode::Gpt2ByteUnicode:
+            return decode_gpt2_bytes(tokens_, ids, n);
+        case DecodeMode::RawBytes:
+            return decode_raw_bytes(tokens_, ids, n);
+        case DecodeMode::SentencePiece:
+            break;
     }
-    // SentencePiece is the default decode convention. Unknown
-    // tokenizer models never get here because load() rejects them.
     return decode_sentencepiece(tokens_, ids, n);
 }
 
@@ -230,15 +268,169 @@ struct BigramGreater {
 
 } // namespace
 
+// Tiktoken-style encoder for raw-bytes vocabularies (whisper.cpp .bin):
+//   - pretokens are pure UTF-8 byte sequences (no GPT-2 byte-unicode remap),
+//   - symbols are seeded one per byte (not one per codepoint),
+//   - merge ranks come from piece_to_id_ directly: the rank of "ab" is
+//     piece_to_id_["ab"] (lower id = lower rank = higher merge priority).
+//
+// This is the algorithm OpenAI tiktoken uses: there is no separate
+// merges list, the vocab order IS the merge order. Splitting/merging
+// emits whatever the BPE-encoded sequence is for the model's training-
+// time tokenization.
+//
+// Defined as a free function over the Tokenizer state so encode() can
+// dispatch into it cleanly.
+namespace {
+
+transcribe_status encode_tiktoken_raw_bytes(
+    const std::string &                                     text,
+    const std::string &                                     pre,
+    const std::unordered_map<std::string, int32_t> &        piece_to_id,
+    std::vector<int32_t> &                                  out_ids)
+{
+    out_ids.clear();
+    if (text.empty()) {
+        return TRANSCRIBE_OK;
+    }
+
+    std::vector<std::string> words;
+    if (pre == "gpt2" || pre.empty()) {
+        words = transcribe::unicode::pretokenize_gpt2_raw_bytes(text);
+    } else {
+        // Whisper / tiktoken uses the GPT-2 regex; falling back to
+        // raw bytes without a regex would produce a different
+        // tokenization. Reject loudly.
+        std::fprintf(stderr,
+                     "tokenizer.encode: pretokenizer \"%s\" not "
+                     "supported with raw-bytes vocab\n",
+                     pre.c_str());
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    auto rank_of_concat = [&](const std::string & left,
+                              const std::string & right) -> int
+    {
+        std::string key;
+        key.reserve(left.size() + right.size());
+        key.append(left);
+        key.append(right);
+        const auto it = piece_to_id.find(key);
+        return (it == piece_to_id.end()) ? -1 : it->second;
+    };
+
+    std::vector<Symbol> symbols;
+    symbols.reserve(64);
+    std::priority_queue<Bigram, std::vector<Bigram>, BigramGreater> queue;
+
+    auto push_bigram = [&](int l, int r) {
+        if (l < 0 || r < 0) return;
+        const std::string left (symbols[l].text, symbols[l].n);
+        const std::string right(symbols[r].text, symbols[r].n);
+        const int rank = rank_of_concat(left, right);
+        if (rank < 0) return;
+        Bigram bg;
+        bg.left  = l;
+        bg.right = r;
+        bg.text  = left + right;
+        bg.rank  = rank;
+        bg.size  = left.size() + right.size();
+        queue.push(std::move(bg));
+    };
+
+    out_ids.reserve(words.size() * 2);
+    for (const auto & word : words) {
+        while (!queue.empty()) queue.pop();
+        symbols.clear();
+
+        // Seed: one symbol per BYTE (not codepoint). Tiktoken-style
+        // BPE works at byte granularity, with single-byte tokens
+        // forming the bottom of the rank ladder.
+        for (size_t off = 0; off < word.size(); ++off) {
+            Symbol s;
+            s.text = word.data() + off;
+            s.n    = 1;
+            s.prev = static_cast<int>(off) - 1;
+            s.next = (off + 1 == word.size())
+                         ? -1
+                         : static_cast<int>(off) + 1;
+            symbols.push_back(s);
+        }
+
+        for (int i = 1; i < static_cast<int>(symbols.size()); ++i) {
+            push_bigram(i - 1, i);
+        }
+
+        while (!queue.empty()) {
+            Bigram bg = queue.top();
+            queue.pop();
+            Symbol & left  = symbols[bg.left];
+            Symbol & right = symbols[bg.right];
+            if (left.n == 0 || right.n == 0) continue;
+            if (left.n + right.n != bg.size) continue;
+            if (std::memcmp(left.text,  bg.text.data(),           left.n)  != 0) continue;
+            if (std::memcmp(right.text, bg.text.data() + left.n,  right.n) != 0) continue;
+
+            left.n += right.n;
+            right.n = 0;
+            left.next = right.next;
+            if (right.next >= 0) {
+                symbols[right.next].prev = bg.left;
+            }
+            push_bigram(left.prev, bg.left);
+            push_bigram(bg.left,   left.next);
+        }
+
+        for (int i = 0; i != -1; i = symbols[i].next) {
+            const Symbol & s = symbols[i];
+            if (s.n == 0) continue;
+            const std::string piece(s.text, s.n);
+            const auto it = piece_to_id.find(piece);
+            if (it != piece_to_id.end()) {
+                out_ids.push_back(it->second);
+                continue;
+            }
+            // Single-byte fallback: every byte should be in the
+            // vocab as a base-rank token. If not, the .bin is
+            // structurally broken.
+            for (size_t j = 0; j < piece.size(); ++j) {
+                const std::string sub(piece, j, 1);
+                const auto it2 = piece_to_id.find(sub);
+                if (it2 == piece_to_id.end()) {
+                    std::fprintf(stderr,
+                                 "tokenizer.encode: byte 0x%02X not in "
+                                 "vocab\n",
+                                 static_cast<unsigned>(static_cast<unsigned char>(piece[j])));
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                out_ids.push_back(it2->second);
+            }
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+} // namespace
+
 transcribe_status Tokenizer::encode(const std::string &    text,
                                     std::vector<int32_t> & out_ids) const
 {
     out_ids.clear();
+
+    // Raw-bytes mode: tiktoken-style encoder, no merge table needed.
+    // Set by load_decode_only_raw_bytes for whisper.cpp .bin files.
+    if (decode_mode_ == DecodeMode::RawBytes) {
+        if (tokens_.empty()) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        return encode_tiktoken_raw_bytes(text, pre_, piece_to_id_, out_ids);
+    }
+
     if (model_ != "gpt2") {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
     if (merge_rank_.empty()) {
-        // The vocab loaded but the merges array was absent. encode()
+        // GGUF "gpt2" tokenizer without merges array. encode()
         // can't run a greedy merge loop without ranks; fall back to
         // the byte-level decomposition would produce correct but
         // under-merged output (every character its own token), which
@@ -253,8 +445,22 @@ transcribe_status Tokenizer::encode(const std::string &    text,
         return TRANSCRIBE_OK;
     }
 
-    // Stage 1: pretokenize into byte-encoded "words".
-    const auto words = unicode::pretokenize_qwen2(text);
+    // Stage 1: pretokenize into byte-encoded "words". Dispatch on the
+    // pretokenizer flavor (set at load time from tokenizer.ggml.pre,
+    // or overridden by a per-family loader via set_pretokenizer).
+    // Unknown flavors fall back to qwen2 with a warning — keeps old
+    // GGUFs that lack the key working.
+    std::vector<std::string> words;
+    if (pre_ == "gpt2") {
+        words = unicode::pretokenize_gpt2(text);
+    } else {
+        if (pre_ != "qwen2" && !pre_.empty()) {
+            std::fprintf(stderr,
+                         "tokenizer.encode: unknown tokenizer.ggml.pre "
+                         "\"%s\"; falling back to qwen2\n", pre_.c_str());
+        }
+        words = unicode::pretokenize_qwen2(text);
+    }
 
     // Stage 2: run the BPE merge loop per word and collect ids.
     out_ids.reserve(words.size() * 2);
@@ -402,13 +608,30 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
 
     // Accepted: "unigram"/"bpe" (SentencePiece flavors used by NeMo
     // Parakeet and Cohere ASR) and "gpt2" (llama.cpp's tag for
-    // byte-level BPE, used by Qwen3-ASR). Per-family encode/decode
-    // paths branch on model_. Recognized-but-unsupported strings
-    // surface as NOT_IMPLEMENTED so the caller can tell "the file is
-    // fine, the library is just not ready for this tokenizer" from
-    // "the file is broken."
+    // byte-level BPE, used by Qwen3-ASR and Whisper). Per-family
+    // encode/decode paths branch on model_. Recognized-but-unsupported
+    // strings surface as NOT_IMPLEMENTED so the caller can tell "the
+    // file is fine, the library is just not ready for this tokenizer"
+    // from "the file is broken."
     if (model_ != "unigram" && model_ != "bpe" && model_ != "gpt2") {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+    decode_mode_ = (model_ == "gpt2") ? DecodeMode::Gpt2ByteUnicode
+                                      : DecodeMode::SentencePiece;
+
+    // Optional: pretokenizer flavor. Absent means "qwen2" (historical
+    // default for the "gpt2" model tag on Qwen3-ASR GGUFs). Per-family
+    // loaders override after load() when the source file did not emit
+    // the key but the family's pretokenizer is fixed (Whisper → "gpt2").
+    pre_.clear();
+    switch (read_string_kv(gguf, "tokenizer.ggml.pre", pre_)) {
+        case KvResult::Absent:
+            pre_ = "qwen2";
+            break;
+        case KvResult::BadType:
+            return TRANSCRIBE_ERR_GGUF;
+        case KvResult::Ok:
+            break;
     }
 
     // Required: tokens array. Same Absent/BadType semantics.
@@ -424,8 +647,12 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
     }
 
     // Build the piece -> id hash. First-occurrence wins (matches the
-    // forward tokens_ ordering that token(id) exposes).
+    // forward tokens_ ordering that token(id) exposes). special_pieces_
+    // is cleared too: GGUFs carry every special as a real vocab entry,
+    // so the synthesized-special fallback should be empty here. Hygiene
+    // matters if a Tokenizer instance is ever reused across loads.
     piece_to_id_.clear();
+    special_pieces_.clear();
     piece_to_id_.reserve(tokens_.size() * 2);
     for (size_t i = 0; i < tokens_.size(); ++i) {
         piece_to_id_.emplace(tokens_[i], static_cast<int32_t>(i));
@@ -522,6 +749,83 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
     if (auto st = read_special("tokenizer.ggml.blank_token_id", blank_id_);
         st != TRANSCRIBE_OK) return st;
 
+    return TRANSCRIBE_OK;
+}
+
+// ---------------------------------------------------------------------------
+// load_decode_only_* - in-memory vocab loaders for non-GGUF sources.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Shared vocab + specials installation for the decode-only loaders.
+// Leaves model_ / pre_ unset; the per-mode caller picks decode_mode_
+// after this returns. Encode availability follows from decode_mode_:
+// the RawBytes loader (whisper.cpp .bin) gets a tiktoken-style
+// encoder via piece_to_id_ ranks; the Gpt2ByteUnicode decode-only
+// loader (no merges populated) reports has_encoder() == false.
+transcribe_status install_decode_only_vocab(
+    std::vector<std::string> &                  tokens_dst,
+    std::unordered_map<std::string, int32_t> &  piece_to_id_dst,
+    std::vector<std::string>                    tokens_src)
+{
+    if (tokens_src.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    tokens_dst = std::move(tokens_src);
+    piece_to_id_dst.clear();
+    piece_to_id_dst.reserve(tokens_dst.size() * 2);
+    for (size_t i = 0; i < tokens_dst.size(); ++i) {
+        piece_to_id_dst.emplace(tokens_dst[i], static_cast<int32_t>(i));
+    }
+    return TRANSCRIBE_OK;
+}
+
+} // namespace
+
+transcribe_status Tokenizer::load_decode_only_gpt2(
+    std::vector<std::string>   tokens,
+    const DecodeOnlySpecials & specials)
+{
+    if (auto st = install_decode_only_vocab(tokens_, piece_to_id_,
+                                            std::move(tokens));
+        st != TRANSCRIBE_OK) return st;
+
+    decode_mode_ = DecodeMode::Gpt2ByteUnicode;
+    model_.clear();
+    pre_.clear();
+    scores_.clear();
+    token_type_.clear();
+    merge_rank_.clear();
+    special_pieces_.clear();
+
+    unk_id_   = specials.unk_id;
+    bos_id_   = specials.bos_id;
+    eos_id_   = specials.eos_id;
+    blank_id_ = specials.blank_id;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status Tokenizer::load_decode_only_raw_bytes(
+    std::vector<std::string>   tokens,
+    const DecodeOnlySpecials & specials)
+{
+    if (auto st = install_decode_only_vocab(tokens_, piece_to_id_,
+                                            std::move(tokens));
+        st != TRANSCRIBE_OK) return st;
+
+    decode_mode_ = DecodeMode::RawBytes;
+    model_.clear();
+    pre_.clear();
+    scores_.clear();
+    token_type_.clear();
+    merge_rank_.clear();
+    special_pieces_.clear();
+
+    unk_id_   = specials.unk_id;
+    bos_id_   = specials.bos_id;
+    eos_id_   = specials.eos_id;
+    blank_id_ = specials.blank_id;
     return TRANSCRIBE_OK;
 }
 

@@ -48,12 +48,12 @@ bool iequals(const char * a, const char * b) {
 // override pattern.
 
 Bucket classify_tensor(const std::string & name) {
-    // --- Cohere & Qwen3-ASR: tied token embedding ---
-    // Both families tie the input embedding to the LM head. Under _M
-    // presets it bumps to Q6_K — without this, WER regresses
-    // measurably. Cohere uses dec.embed.token.weight; Qwen3-ASR uses
-    // the llama.cpp-style dec.token_embd.weight. head.bias stays in
-    // Norm (it's a 1D per-logit offset after the matmul; loader
+    // --- Decoder token embeddings ---
+    // Cohere and Qwen3-ASR tie the input embedding to the LM head. Under
+    // _M presets it bumps to Q6_K — without this, WER regresses
+    // measurably. Cohere uses dec.embed.token.weight; Qwen3-ASR and
+    // Whisper use the llama.cpp-style dec.token_embd.weight. head.bias
+    // stays in Norm (it's a 1D per-logit offset after the matmul; loader
     // requires F32).
     if (name == "dec.embed.token.weight" ||
         name == "dec.token_embd.weight")
@@ -102,6 +102,13 @@ Bucket classify_tensor(const std::string & name) {
     }
     // Cohere: sinusoidal positional encoding table, precision-sensitive.
     if (ends_with(name, ".pos_enc")) {
+        return Bucket::Norm;
+    }
+    // Whisper: encoder sinusoidal pos_emb (1500 x d_model) and decoder
+    // learned pos_emb (448 x d_model). Both are small and added directly
+    // to the residual stream every layer; quantizing them costs accuracy
+    // for negligible file-size savings. Keep at F32 across all presets.
+    if (name == "enc.pos_emb.weight" || name == "dec.pos_emb.weight") {
         return Bucket::Norm;
     }
     // Cohere: mel frontend buffers (filterbank + window) — stored as
@@ -168,11 +175,22 @@ const Preset kPresets[] = {
     {"Q5_1",   GGML_TYPE_Q5_1, GGML_TYPE_F16, GGML_TYPE_Q5_1, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q5_1*/   9 },
     {"Q8_0",   GGML_TYPE_Q8_0, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q8_0*/   7 },
 
-    // K-quants. Block size 256; linear_fallback drops to F16 when ne0
-    // doesn't divide 256 (Parakeet predictor/joint at ne0=640).
-    {"Q6_K",   GGML_TYPE_Q6_K, GGML_TYPE_F16, GGML_TYPE_Q6_K, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q6_K*/  18 },
-    {"Q5_K_M", GGML_TYPE_Q5_K, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q5_K_M*/ 17 },
-    {"Q4_K_M", GGML_TYPE_Q4_K, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q4_K_M*/ 15 },
+    // K-quants. Block size 256; linear_fallback is Q8_0 for every K
+    // preset, not a scaled-down legacy quant, because fallback triggers
+    // frequently on ASR models (Whisper-tiny d_model=384, Parakeet
+    // predictor/joint ne0=640, Qwen3-ASR encoder ne0=896 — none divide
+    // 256). Two reasons Q8_0 is the right floor:
+    //   1. Size. F16 fallback makes K presets larger than Q8_0 on those
+    //      families, which defeats the preset entirely.
+    //   2. Quality. The tensors that hit fallback are the *same* ones
+    //      that were already shape-awkward; using a scaled legacy quant
+    //      (Q4_K → Q4_1) would penalize them twice. Q8_0 is ~lossless
+    //      vs F16 and keeps fallback quality monotonically above main.
+    // The tradeoff vs Q4_1/Q5_1 fallback is a few percent on file size,
+    // paid on tensors that couldn't be K-quantized anyway.
+    {"Q6_K",   GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K, GGML_TYPE_COUNT, GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q6_K*/  18 },
+    {"Q5_K_M", GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q5_K_M*/ 17 },
+    {"Q4_K_M", GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,  GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, /*MOSTLY_Q4_K_M*/ 15 },
 };
 
 constexpr size_t kPresetCount = sizeof(kPresets) / sizeof(kPresets[0]);
@@ -204,7 +222,11 @@ ggml_type resolve_target_type(const Preset & preset,
         case Bucket::ConvPw: return preset.conv_pw;
         case Bucket::Embed: {
             // If the preset has no explicit embed override, fall back
-            // to linear_main (with its own fallback when misaligned).
+            // to linear_main. Shape-misaligned embeddings route through
+            // the same linear_fallback as everything else — for K
+            // presets that's Q8_0, which is strictly higher quality than
+            // the Q6_K bump we'd have applied, so there's no special
+            // case to make here.
             ggml_type target = (preset.linear_embed != GGML_TYPE_COUNT)
                 ? preset.linear_embed
                 : preset.linear_main;
@@ -217,21 +239,27 @@ ggml_type resolve_target_type(const Preset & preset,
         case Bucket::Linear: {
             // Attention output projection bumped per _M recipe. Cohere
             // and Parakeet name it "attn.linear_out.weight"; Qwen3-ASR
-            // names it "attn.out.weight" (encoder) or "attn.o.weight"
-            // (decoder). All three land in the same bump.
-            if (ends_with(name, "attn.linear_out.weight") ||
+            // and Whisper name it "attn.out.weight" (encoder); Qwen3-ASR
+            // also uses "attn.o.weight" (decoder). All land in the same
+            // bump. Whisper additionally has self_attn / cross_attn
+            // out projections in the decoder under those exact names.
+            const bool is_attn_out =
+                ends_with(name, "attn.linear_out.weight") ||
                 ends_with(name, "attn.out.weight") ||
-                ends_with(name, "attn.o.weight"))
-            {
-                return preset.linear_attn_out;
-            }
+                ends_with(name, "attn.o.weight");
+            ggml_type target = is_attn_out
+                ? preset.linear_attn_out
+                : preset.linear_main;
             // Fall back when inner dim doesn't divide the chosen
-            // quant's block size.
-            const int64_t blk = ggml_blck_size(preset.linear_main);
+            // quant's block size. Same rule for both linear_main and
+            // linear_attn_out — without it, e.g. whisper-tiny's
+            // d_model=384 attn.out.weight under Q6_K would land at
+            // Q6_K (block size 256) and the GGUF would refuse to load.
+            const int64_t blk = ggml_blck_size(target);
             if (blk > 1 && (ne0 % blk) != 0) {
                 return preset.linear_fallback;
             }
-            return preset.linear_main;
+            return target;
         }
     }
     return preset.norm; // unreachable

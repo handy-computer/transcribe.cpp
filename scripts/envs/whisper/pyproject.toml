@@ -1,0 +1,20 @@
+[project]
+name = "transcribe-whisper-env"
+version = "0.1.0"
+description = "Python env for Whisper ASR reference dumps (Transformers)"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.2",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "librosa>=0.10",
+    "safetensors>=0.4",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    # Exact pin: HF stitching + long-form semantics (PRs #34537, #35750)
+    # are version-specific, and the per-tensor tolerances baked into
+    # tests/tolerances/whisper-*.json were captured against 5.6.1. A
+    # silent bump to 5.7+ could shift no_speech_prob capture row or
+    # seek/stride semantics without tripping any mechanical test.
+    "transformers==5.6.1",
+]

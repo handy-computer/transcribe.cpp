@@ -62,6 +62,18 @@ public:
     //                           Must be non-empty.
     //
     // Optional keys (parsed if present, ignored otherwise):
+    //   tokenizer.ggml.pre            (string) - pretokenizer flavor used
+    //                                 by encode() when model == "gpt2".
+    //                                 Recognized values: "qwen2" (default
+    //                                 when absent, for historical
+    //                                 compatibility with Qwen3-ASR
+    //                                 GGUFs) and "gpt2" (required for
+    //                                 Whisper parity — the two split
+    //                                 digit / contraction / whitespace
+    //                                 runs differently). Per-family
+    //                                 loaders MAY override the absent
+    //                                 default after load() via
+    //                                 set_pretokenizer().
     //   tokenizer.ggml.scores         (array of float32)
     //   tokenizer.ggml.token_type     (array of int32)
     //   tokenizer.ggml.merges         (array of string) - "left right"
@@ -85,13 +97,71 @@ public:
     //                                  supported (e.g. "wordpiece").
     transcribe_status load(const gguf_context * gguf);
 
+    // Optional special-token ids for the decode-only constructors. The
+    // GGUF load() path reads these from tokenizer.ggml.*_token_id keys;
+    // the decode-only constructors take them as a struct since legacy
+    // weight formats (whisper.cpp .bin) carry no analogous KVs and
+    // callers must supply them explicitly. Defaults of -1 match the
+    // "absent" sentinel used by the GGUF path.
+    struct DecodeOnlySpecials {
+        int unk_id   = -1;
+        int bos_id   = -1;
+        int eos_id   = -1;
+        int blank_id = -1;
+    };
+
+    // Decode-only tokenizer for GGUF "gpt2" byte-level vocabularies.
+    // Tokens are stored under the GPT-2 byte-to-unicode mapping; decode
+    // inverts that mapping per codepoint to recover raw UTF-8 bytes.
+    // No merges → encode() returns the standard "encoder unavailable"
+    // error; has_encoder() returns false.
+    //
+    // Provided as a sibling to load() so a non-GGUF source (currently
+    // only used by tests) can wire up a decoder against an in-memory
+    // vocab without forging GGUF KVs.
+    //
+    // Returns TRANSCRIBE_OK on success, TRANSCRIBE_ERR_INVALID_ARG if
+    // `tokens` is empty.
+    transcribe_status load_decode_only_gpt2(std::vector<std::string>   tokens,
+                                            const DecodeOnlySpecials & specials);
+    transcribe_status load_decode_only_gpt2(std::vector<std::string>   tokens) {
+        return load_decode_only_gpt2(std::move(tokens), DecodeOnlySpecials{});
+    }
+
+    // Decode-only tokenizer for legacy whisper.cpp .bin vocabularies,
+    // which are tiktoken-style: tokens are stored as raw UTF-8 byte
+    // sequences (a token containing "é" is the two bytes 0xC3 0xA9, not
+    // the byte-to-unicode-remapped form "Ã©" that the GGUF "gpt2"
+    // decoder expects). Decode just concatenates token bytes.
+    //
+    // Encode IS available in this mode: tiktoken-style BPE doesn't
+    // need a separate merges list because the vocab id IS the merge
+    // rank. encode() walks adjacent pairs and looks up "left+right"
+    // in piece_to_id_ directly; has_encoder() returns true.
+    transcribe_status load_decode_only_raw_bytes(std::vector<std::string>   tokens,
+                                                 const DecodeOnlySpecials & specials);
+    transcribe_status load_decode_only_raw_bytes(std::vector<std::string>   tokens) {
+        return load_decode_only_raw_bytes(std::move(tokens), DecodeOnlySpecials{});
+    }
+
     // Vocabulary access. token(id) returns an empty string for an
     // out-of-range id (matching the safe-sentinel pattern used by the
     // public result accessors). find(piece) returns -1 if the piece
-    // is not in the vocabulary.
+    // is not in the vocabulary OR the synthesized special-piece map.
     int                 n_tokens() const { return static_cast<int>(tokens_.size()); }
     const std::string & token   (int id) const;
     int                 find    (const std::string & piece) const;
+
+    // Register a synthesized "special-piece" literal that find() will
+    // resolve. Used by source adapters that don't carry every special-
+    // token string in the vocab itself — notably the legacy whisper.cpp
+    // .bin loader, where tokens like "<|en|>" / "<|notimestamps|>" are
+    // synthesized from id arithmetic at load time rather than stored
+    // in the vocab pieces. This map is consulted by find() but is
+    // intentionally NOT used by encode(); a special literal in user
+    // text should be detected at the prompt-validation layer (which
+    // calls find), not silently merged into BPE output.
+    void add_special_piece(const std::string & literal, int32_t id);
 
     // Join a token-id sequence into a single string. SentencePiece
     // tokenizers ("unigram", "bpe") replace the word-boundary marker
@@ -103,16 +173,24 @@ public:
 
     // UTF-8 text -> token ids.
     //
-    // model == "gpt2":
-    //   Pretokenize (Qwen2 regex), byte-level encode each pretoken,
-    //   then apply BPE merges in rank order. The output is the same
-    //   token-id sequence the Hugging Face tokenizer would produce
-    //   with add_special_tokens=False (no BOS/EOS added). Special
-    //   tokens in the input (e.g. "<|im_start|>") are NOT recognized
-    //   by this encoder; if they appear in the text they get
-    //   BPE-encoded piece-by-piece, which is usually wrong. Callers
-    //   render special tokens via direct id lookups and encode only
-    //   the plain-text fragments between them.
+    // model == "gpt2" (GGUF, with merges):
+    //   Pretokenize (Qwen2 or GPT-2 regex), byte-level encode each
+    //   pretoken via the GPT-2 byte-to-unicode mapping, then apply
+    //   BPE merges in rank order. The output matches the HF
+    //   tokenizer with add_special_tokens=False (no BOS/EOS added).
+    //
+    // decode_mode_ == RawBytes (.bin tiktoken vocab, no merges):
+    //   Pretokenize (GPT-2 regex), seed symbols at byte granularity,
+    //   then run the same merge loop using piece_to_id_ as the rank
+    //   table directly — tiktoken's invariant that vocab id IS rank
+    //   removes the need for a separate merges list. Output is
+    //   byte-identical to the GGUF gpt2 path for plain text.
+    //
+    // Special tokens in the input (e.g. "<|en|>") are NOT recognized
+    // by either encoder; if they appear in the text they get
+    // BPE-encoded piece-by-piece, which is usually wrong. Callers
+    // render special tokens via direct id lookups and encode only
+    // the plain-text fragments between them.
     //
     // model == "unigram" / "bpe":
     //   Currently returns TRANSCRIBE_ERR_NOT_IMPLEMENTED; no live
@@ -130,6 +208,7 @@ public:
     // Identification + special token ids. -1 if the corresponding key
     // was absent from the GGUF.
     const std::string & model_type() const { return model_; }
+    const std::string & pretokenizer() const { return pre_; }
     int                 unk_id   () const { return unk_id_; }
     int                 bos_id   () const { return bos_id_; }
     int                 eos_id   () const { return eos_id_; }
@@ -140,8 +219,32 @@ public:
     // without inspecting model_type().
     bool has_encoder() const;
 
+    // Override the pretokenizer flavor after load(). Per-family loaders
+    // call this when the source GGUF did not emit tokenizer.ggml.pre
+    // but the family has a fixed pretokenizer by construction (Whisper
+    // → "gpt2"). Values other than "qwen2" / "gpt2" are stored but
+    // encode() will fall back to the default ("qwen2") for unknown
+    // strings with a warning.
+    void set_pretokenizer(const std::string & pre) { pre_ = pre; }
+
 private:
+    // How decode() should reassemble token bytes. Set during load().
+    //   SentencePiece    - U+2581 → ASCII space (unigram / bpe)
+    //   Gpt2ByteUnicode  - invert GPT-2 byte-to-unicode per codepoint
+    //                      (GGUF "gpt2", which stores tokens in the
+    //                      remapped form)
+    //   RawBytes         - concatenate token bytes verbatim (legacy
+    //                      whisper.cpp .bin tiktoken-style vocab,
+    //                      where tokens are already raw UTF-8 bytes)
+    enum class DecodeMode {
+        SentencePiece,
+        Gpt2ByteUnicode,
+        RawBytes,
+    };
+
     std::string              model_;
+    std::string              pre_;        // "qwen2" (default) or "gpt2"
+    DecodeMode               decode_mode_ = DecodeMode::SentencePiece;
     std::vector<std::string> tokens_;
     std::vector<float>       scores_;     // optional, may be empty
     std::vector<int32_t>     token_type_; // optional, may be empty
@@ -150,6 +253,13 @@ private:
     // (only from the byte-fallback vocab augmentation); we keep the
     // first-occurrence id which matches the forward tokens_ ordering.
     std::unordered_map<std::string, int32_t> piece_to_id_;
+
+    // Optional synthesized special-token lookup. Populated only by
+    // adapters that need find() to recognize literals that aren't in
+    // tokens_ (legacy whisper.cpp .bin: synthesized "<|en|>",
+    // "<|notimestamps|>", "<|0.00|>", …). Consulted by find() but not
+    // by encode() — see add_special_piece for the rationale.
+    std::unordered_map<std::string, int32_t> special_pieces_;
 
     // BPE merge table (populated only when model_ == "gpt2").
     //

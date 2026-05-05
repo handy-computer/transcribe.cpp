@@ -32,6 +32,58 @@
 
 namespace {
 
+// Minimal JSON string escape: covers the characters MUST be escaped by
+// the JSON spec (quote, backslash, control chars). Transcribed text is
+// short UTF-8 in practice; we don't need unicode escaping.
+std::string json_escape(const char * s) {
+    std::string out;
+    for (const char * p = s ? s : ""; *p; ++p) {
+        const unsigned char c = static_cast<unsigned char>(*p);
+        if      (c == '"')  out += "\\\"";
+        else if (c == '\\') out += "\\\\";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') out += "\\r";
+        else if (c == '\t') out += "\\t";
+        else if (c < 0x20) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+            out += buf;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
+// Build the ",\"segments\":[...]" fragment when the context has real
+// segment timestamps. Returns an empty string when the result kind is
+// NONE (the library still populates a single dummy entry in that case,
+// but with zero timing — don't pollute the JSON with it).
+std::string segments_json(const transcribe_context * ctx) {
+    if (transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE) {
+        return {};
+    }
+    const int n_seg = transcribe_n_segments(ctx);
+    if (n_seg <= 0) return {};
+    std::string out = ",\"segments\":[";
+    for (int s = 0; s < n_seg; ++s) {
+        if (s > 0) out += ",";
+        const int64_t t0 = transcribe_segment_t0_ms(ctx, s);
+        const int64_t t1 = transcribe_segment_t1_ms(ctx, s);
+        const char *  st = transcribe_segment_text(ctx, s);
+        char head[96];
+        std::snprintf(head, sizeof(head),
+                      "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"text\":\"",
+                      static_cast<long long>(t0),
+                      static_cast<long long>(t1));
+        out += head;
+        out += json_escape(st);
+        out += "\"}";
+    }
+    out += "]";
+    return out;
+}
+
 struct cli_args {
     std::string wav_path;
     std::string model_path;
@@ -44,6 +96,14 @@ struct cli_args {
     int         n_threads = 0; // 0 = library default (all cores)
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
     transcribe_backend_request backend = TRANSCRIBE_BACKEND_AUTO;
+    transcribe_timestamp_kind timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
+
+    // Whisper-family knobs. Ignored for non-Whisper models.
+    std::string initial_prompt;                // --initial-prompt TEXT
+    bool        whisper_set                  = false;
+    bool        condition_on_prev_tokens     = false; // --condition-on-prev-tokens
+    enum transcribe_whisper_prompt_condition prompt_condition =
+        TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;       // --prompt-condition first|all
 };
 
 void print_usage(const char * argv0) {
@@ -58,9 +118,13 @@ void print_usage(const char * argv0) {
         "  -r, --repeat N        run N times per file (benchmark)\n"
         "  --threads N           CPU threads (default: all cores)\n"
         "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
-        "  --backend TYPE        compute backend: auto, cpu, metal, vulkan (default: auto)\n"
+        "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan (default: auto)\n"
+        "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: none)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
+        "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"
+        "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
+        "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
 }
@@ -116,12 +180,27 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             const char * v = take_value(a.c_str());
             if (!v) return false;
             const std::string vs = v;
-            if      (vs == "auto")   out.backend = TRANSCRIBE_BACKEND_AUTO;
-            else if (vs == "cpu")    out.backend = TRANSCRIBE_BACKEND_CPU;
-            else if (vs == "metal")  out.backend = TRANSCRIBE_BACKEND_METAL;
-            else if (vs == "vulkan") out.backend = TRANSCRIBE_BACKEND_VULKAN;
+            if      (vs == "auto")      out.backend = TRANSCRIBE_BACKEND_AUTO;
+            else if (vs == "cpu")       out.backend = TRANSCRIBE_BACKEND_CPU;
+            else if (vs == "cpu_accel") out.backend = TRANSCRIBE_BACKEND_CPU_ACCEL;
+            else if (vs == "metal")     out.backend = TRANSCRIBE_BACKEND_METAL;
+            else if (vs == "vulkan")    out.backend = TRANSCRIBE_BACKEND_VULKAN;
             else {
-                std::fprintf(stderr, "error: --backend must be auto, cpu, metal, or vulkan\n");
+                std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, or vulkan\n");
+                return false;
+            }
+        } else if (a == "--timestamps") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            const std::string vs = v;
+            if      (vs == "auto")    out.timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
+            else if (vs == "none")    out.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
+            else if (vs == "segment") out.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+            else if (vs == "word")    out.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
+            else if (vs == "token")   out.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
+            else {
+                std::fprintf(stderr,
+                             "error: --timestamps must be auto, none, segment, word, or token\n");
                 return false;
             }
         } else if (a == "--batch") {
@@ -130,6 +209,26 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             out.batch_file = v;
         } else if (a == "--batch-jsonl") {
             out.batch_jsonl = true;
+        } else if (a == "--initial-prompt") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.initial_prompt = v;
+            out.whisper_set    = true;
+        } else if (a == "--condition-on-prev-tokens") {
+            out.condition_on_prev_tokens = true;
+            out.whisper_set              = true;
+        } else if (a == "--prompt-condition") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            const std::string vs = v;
+            if      (vs == "first") out.prompt_condition = TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;
+            else if (vs == "all")   out.prompt_condition = TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS;
+            else {
+                std::fprintf(stderr,
+                             "error: --prompt-condition must be first or all\n");
+                return false;
+            }
+            out.whisper_set = true;
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -254,6 +353,19 @@ int main(int argc, char ** argv) {
         struct transcribe_params rp = transcribe_default_params();
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
+        rp.timestamps = args.timestamps;
+
+        // Whisper extension. Allocated outside rp's scope so its bytes
+        // outlive the per-file loop below.
+        struct transcribe_whisper_params wp = transcribe_whisper_default_params();
+        if (args.whisper_set) {
+            if (!args.initial_prompt.empty()) {
+                wp.initial_prompt = args.initial_prompt.c_str();
+            }
+            wp.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            wp.prompt_condition         = args.prompt_condition;
+            rp.whisper                  = &wp;
+        }
 
         // Emit a batch header line once, before any per-file output. Carries
         // the one-shot load time so downstream WER tooling can record it
@@ -303,19 +415,13 @@ int main(int argc, char ** argv) {
             // Output.
             if (args.batch_jsonl) {
                 struct transcribe_timings tm = transcribe_get_timings(ctx);
-                // Minimal JSON escaping: the only characters in
-                // transcribed text that need escaping are quote and
-                // backslash. The text is short ASCII in practice.
-                std::string escaped;
-                for (const char * p = text; *p; ++p) {
-                    if (*p == '"')       escaped += "\\\"";
-                    else if (*p == '\\') escaped += "\\\\";
-                    else                 escaped += *p;
-                }
-                std::printf("{\"file\":\"%s\",\"text\":\"%s\","
+                const std::string escaped  = json_escape(text);
+                const std::string segments = segments_json(ctx);
+                std::printf("{\"file\":\"%s\",\"text\":\"%s\"%s,"
                             "\"mel_ms\":%.1f,\"encode_ms\":%.1f,"
                             "\"decode_ms\":%.1f}\n",
                             wav.c_str(), escaped.c_str(),
+                            segments.c_str(),
                             (double)tm.mel_ms, (double)tm.encode_ms,
                             (double)tm.decode_ms);
             } else {
@@ -380,6 +486,17 @@ int main(int argc, char ** argv) {
         struct transcribe_params rp = transcribe_default_params();
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
+        rp.timestamps = args.timestamps;
+
+        struct transcribe_whisper_params wp = transcribe_whisper_default_params();
+        if (args.whisper_set) {
+            if (!args.initial_prompt.empty()) {
+                wp.initial_prompt = args.initial_prompt.c_str();
+            }
+            wp.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            wp.prompt_condition         = args.prompt_condition;
+            rp.whisper                  = &wp;
+        }
 
         // --repeat N runs transcribe_run() N times for steady-state
         // perf measurements.
@@ -393,6 +510,21 @@ int main(int argc, char ** argv) {
         if (run_st == TRANSCRIBE_OK) {
             const char * text = transcribe_full_text(ctx);
             std::printf("text: %s\n", (text && *text) ? text : "(empty)");
+
+            const int n_seg = transcribe_n_segments(ctx);
+            if (n_seg > 0 &&
+                transcribe_returned_timestamp_kind(ctx) != TRANSCRIBE_TIMESTAMPS_NONE)
+            {
+                std::printf("segments: %d\n", n_seg);
+                for (int i = 0; i < n_seg; ++i) {
+                    const int64_t t0 = transcribe_segment_t0_ms(ctx, i);
+                    const int64_t t1 = transcribe_segment_t1_ms(ctx, i);
+                    const char *  seg_text = transcribe_segment_text(ctx, i);
+                    std::printf("  [%7.2f -> %7.2f] %s\n",
+                                t0 / 1000.0, t1 / 1000.0,
+                                (seg_text && *seg_text) ? seg_text : "");
+                }
+            }
         }
 
         transcribe_print_timings(ctx);

@@ -99,6 +99,29 @@ int main() {
     }
 
     // ---------------------------------------------------------------
+    // 1b. CPU + ACCEL — primary still classifies as CPU; scheduler may
+    // include extra accel handles depending on what ggml registered.
+    // ---------------------------------------------------------------
+    {
+        BackendPlan plan;
+        transcribe_status st = init_backends(
+            TRANSCRIBE_BACKEND_CPU_ACCEL, "test-cpu-accel", plan);
+        REQUIRE(st == TRANSCRIBE_OK);
+        CHECK_EQ(plan.primary_kind, BackendKind::Cpu);
+        REQUIRE(plan.primary != nullptr);
+        REQUIRE(plan.scheduler_list.size() >= 1);
+
+        // CPU must sit last in the scheduler list (ggml requirement);
+        // any additional handles ahead of it are accel devices.
+        ggml_backend_dev_t last_dev =
+            ggml_backend_get_device(plan.scheduler_list.back());
+        REQUIRE(last_dev != nullptr);
+        CHECK_EQ(classify_device(last_dev), BackendKind::Cpu);
+
+        free_plan(plan);
+    }
+
+    // ---------------------------------------------------------------
     // 2. Explicit Metal — assert based on actual init result
     // ---------------------------------------------------------------
     //

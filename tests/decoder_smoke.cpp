@@ -16,7 +16,7 @@
 //      boundary handling in the result builder).
 //   5. transcribe_n_segments == 1 (v1 produces a single segment per
 //      run).
-//   6. transcribe_returned_timestamp_kind == TRANSCRIBE_TIMESTAMPS_TOKEN
+//   6. Explicit token timestamp request returns TRANSCRIBE_TIMESTAMPS_TOKEN
 //      (Parakeet TDT produces token-level timestamps from encoder
 //      frame indices).
 //   7. transcribe_get_timings reports non-zero mel + encode + decode.
@@ -205,6 +205,7 @@ int main() {
     CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
 
     transcribe_params rp = transcribe_default_params();
+    rp.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
     {
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);

@@ -19,7 +19,9 @@
 
 #include "transcribe.h"
 
+#include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,6 +66,7 @@ static void test_status_string(void) {
         TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE,
         TRANSCRIBE_ERR_UNSUPPORTED_TASK,
         TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS,
+        TRANSCRIBE_ERR_ABORTED,
     };
     for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
         const char * s = transcribe_status_string(all[i]);
@@ -111,10 +114,33 @@ static void test_factories(void) {
 
     struct transcribe_params rp = transcribe_default_params();
     CHECK(rp.task               == TRANSCRIBE_TASK_TRANSCRIBE);
-    CHECK(rp.timestamps         == TRANSCRIBE_TIMESTAMPS_AUTO);
+    CHECK(rp.timestamps         == TRANSCRIBE_TIMESTAMPS_NONE);
     CHECK(rp.language           == NULL);
     CHECK(rp.target_language    == NULL);
     CHECK(rp.strip_special_tags == true);
+    CHECK(rp.whisper            == NULL);
+
+    struct transcribe_whisper_params wp = transcribe_whisper_default_params();
+    CHECK(wp.initial_prompt           == NULL);
+    CHECK(wp.prompt_tokens            == NULL);
+    CHECK(wp.n_prompt_tokens          == 0);
+    CHECK(wp.prompt_condition         == TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT);
+    CHECK(wp.condition_on_prev_tokens == false);
+    CHECK(wp.max_prev_context_tokens  == 223);
+    CHECK(wp.temperature              == 0.0f);
+    CHECK(wp.temperature_inc          == 0.2f);
+    CHECK(wp.compression_ratio_thold  == 2.4f);
+    CHECK(wp.logprob_thold            == -1.0f);
+    CHECK(wp.no_speech_thold          == 0.6f);
+    CHECK(wp.seed                     == 0);
+    CHECK(wp.max_initial_timestamp    == 1.0f);
+
+    /* The disabled-sentinel defines must be usable as compile-time
+     * constants with the right signs. */
+    CHECK(TRANSCRIBE_WHISPER_THOLD_DISABLED   > 0.0f);
+    CHECK(TRANSCRIBE_WHISPER_LOGPROB_DISABLED < 0.0f);
+    CHECK(isinf(TRANSCRIBE_WHISPER_THOLD_DISABLED));
+    CHECK(isinf(TRANSCRIBE_WHISPER_LOGPROB_DISABLED));
 }
 
 /*
@@ -226,6 +252,61 @@ static void test_model_introspection_null(void) {
     CHECK_STR_EMPTY(transcribe_model_backend(NULL));
 }
 
+static void test_tokenize_null(void) {
+    int32_t tokens[8];
+    /* NULL model -> INT_MIN (hard error). */
+    CHECK(transcribe_tokenize(NULL, "hello", tokens, 8) == INT_MIN);
+    /* NULL text -> INT_MIN. */
+    CHECK(transcribe_tokenize((const struct transcribe_model *)0x1,
+                              NULL, tokens, 8) == INT_MIN);
+}
+
+static int g_abort_calls = 0;
+static bool abort_cb_false(void * u) {
+    (void)u;
+    g_abort_calls++;
+    return false;
+}
+
+static void test_abort_callback_null(void) {
+    /* NULL ctx: set is a no-op, was_aborted returns false. */
+    transcribe_set_abort_callback(NULL, abort_cb_false, NULL);
+    CHECK(transcribe_was_aborted(NULL) == false);
+    CHECK(g_abort_calls == 0);
+}
+
+static void test_whisper_chunk_trace_null(void) {
+    /* Whisper-specific trace accessors must also honor the safe-sentinel
+     * contract: NULL ctx returns 0 / zeroed-struct, not a crash. A
+     * non-Whisper context (anything whose arch-name does not match
+     * "whisper") is likewise treated as a zero/empty read — the
+     * accessor is defined over every context type for C-API
+     * uniformity but produces no state for families that don't have a
+     * per-chunk fallback loop to trace. NULL exercises both legs here;
+     * the arch-mismatch leg is covered by the family-specific smoke
+     * tests for Parakeet / Qwen3-ASR / Cohere which never call the
+     * Whisper trace accessors in their happy path. */
+    CHECK(transcribe_get_whisper_chunk_count(NULL) == 0);
+
+    struct transcribe_whisper_chunk_trace tr =
+        transcribe_get_whisper_chunk_trace(NULL, 0);
+    CHECK(tr.t0_ms               == 0);
+    CHECK(tr.t1_ms               == 0);
+    CHECK(tr.temperature_used    == 0.0f);
+    CHECK(tr.compression_ratio   == 0.0f);
+    CHECK(tr.avg_logprob         == 0.0f);
+    CHECK(tr.no_speech_prob      == 0.0f);
+    CHECK(tr.no_speech_triggered == false);
+    CHECK(tr.n_fallbacks         == 0);
+
+    /* Out-of-range index against NULL must also return the zeroed
+     * struct, not crash. */
+    struct transcribe_whisper_chunk_trace tr2 =
+        transcribe_get_whisper_chunk_trace(NULL, 42);
+    CHECK(tr2.t0_ms == 0);
+    CHECK(tr2.t1_ms == 0);
+}
+
 static void test_result_accessors_null(void) {
     const struct transcribe_context * ctx = NULL;
 
@@ -275,6 +356,9 @@ int main(void) {
     test_run_invalid();
     test_model_introspection_null();
     test_result_accessors_null();
+    test_tokenize_null();
+    test_abort_callback_null();
+    test_whisper_chunk_trace_null();
 
     if (g_failures > 0) {
         fprintf(stderr, "api_smoke: %d failures\n", g_failures);

@@ -336,6 +336,11 @@ def generate_transcript(
         return_tensors="pt",
     )
     inputs = {k: v.to(args.device) if hasattr(v, "to") else v for k, v in inputs.items()}
+    input_features = inputs.get("input_features")
+    if input_features is not None:
+        conv_dtype = model.model.encoder.subsampling.layers[0].weight.dtype
+        if input_features.dtype != conv_dtype:
+            inputs["input_features"] = input_features.to(dtype=conv_dtype)
 
     with torch.inference_mode():
         generated_ids = model.generate(

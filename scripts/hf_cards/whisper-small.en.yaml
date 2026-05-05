@@ -1,0 +1,64 @@
+# Spec for the HF README of handy-computer/whisper-small.en-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: openai/whisper-small.en
+target_repo: handy-computer/whisper-small.en-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/whisper-small.en.md
+
+upstream_commit: e872752
+pin_date: 2026-04-25
+
+validation:
+  reference: transformers
+  commit: 5.6.1
+  date: 2026-04-26
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - "en"
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - whisper
+  - openai
+  - en
+
+summary: |
+  OpenAI Whisper small.en — converted to GGUF for transcribe.cpp. English-only; faster than the multilingual model at the same size. Encoder-decoder transformer; 30-second windows with chunked long-form decoding.
+
+default_quant_index: 2
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 3.05%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions can shift corpus WER by ~0.1pp between runs, mostly driven by short-clip hallucination outcomes on the noise floor.
+
+quants:
+  - name: F32
+    filename: whisper-small.en-F32.gguf
+    size: 924 MB
+    wer: 3.09%
+  - name: F16
+    filename: whisper-small.en-F16.gguf
+    size: 470 MB
+    wer: 2.97%
+  - name: Q8_0
+    filename: whisper-small.en-Q8_0.gguf
+    size: 257 MB
+    wer: 3.09%
+  - name: Q6_K
+    filename: whisper-small.en-Q6_K.gguf
+    size: 202 MB
+    wer: 2.97%
+  - name: Q5_K_M
+    filename: whisper-small.en-Q5_K_M.gguf
+    size: 185 MB
+    wer: 3.12%
+  - name: Q4_K_M
+    filename: whisper-small.en-Q4_K_M.gguf
+    size: 164 MB
+    wer: 3.08%

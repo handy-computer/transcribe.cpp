@@ -259,7 +259,7 @@ transcribe_status load(
     }
 
     if (const transcribe_status st = build_qwen3_asr_weights(
-            gguf_data, m->ctx_meta, m->hparams, m->weights);
+            m->ctx_meta, m->hparams, m->weights);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
@@ -662,6 +662,15 @@ transcribe_status run(
     auto * cm = static_cast<QwenAsrModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Pre-run abort check. Qwen3-ASR is single-shot today; this is
+    // the single observation point. Stage 2's long-form loop will add
+    // per-chunk polling for Whisper; the other autoregressive families
+    // can wire per-step polling when they grow their own long-form
+    // paths.
+    if (cc->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
     }
 
     // Language hint handling. Null / empty == auto-detect (the LM

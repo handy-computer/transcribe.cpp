@@ -41,15 +41,21 @@ import datetime as dt
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 
 def normalize_text(text: str) -> str:
     return " ".join(text.strip().lower().split())
+
+
+def normalize_text_for_compare(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]+", " ", text.lower()).split())
 
 
 def find_repo_root(start: Path) -> Path:
@@ -116,6 +122,50 @@ def manifest_dump_script(repo: Path, manifest: dict[str, Any]) -> Path:
     if not script.exists():
         raise SystemExit(f"error: reference entrypoint not found: {script}")
     return script
+
+
+def case_audio(case) -> str:
+    """A case is either a bare string (legacy) or a dict with at least
+    {audio: <stem>}. Returns the audio stem."""
+    if isinstance(case, str):
+        return case
+    if isinstance(case, dict) and "audio" in case:
+        return str(case["audio"])
+    raise SystemExit(f"error: malformed case in manifest: {case!r}")
+
+
+def case_language(case) -> str | None:
+    """Per-case language code.
+
+    Legacy bare-string cases and dict cases that omit the field keep the
+    historical default of "en". Dict cases may set language to "auto",
+    "detect", or null to exercise the model's native language-detection path;
+    callers should omit the language flag in that case.
+    """
+    if isinstance(case, dict):
+        value = case.get("language", "en")
+        if value is None:
+            return None
+        language = str(value)
+        if language == "" or language.lower() in {"auto", "detect"}:
+            return None
+        return language
+    return "en"
+
+
+def case_transcript_compare(manifest: dict[str, Any], case) -> str:
+    value = manifest.get("transcript_compare", "exact")
+    if isinstance(case, dict) and "transcript_compare" in case:
+        value = case["transcript_compare"]
+    if value is None:
+        value = "exact"
+    mode = str(value).lower()
+    if mode not in {"exact", "normalized"}:
+        raise SystemExit(
+            f"error: unsupported transcript_compare={value!r}; "
+            "expected 'exact' or 'normalized'"
+        )
+    return mode
 
 
 def find_gguf(repo: Path, family: str, slug: str | None = None) -> Path:
@@ -255,11 +305,13 @@ def cmd_ref(args: argparse.Namespace) -> int:
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
-        audio = repo / "samples" / f"{case}.wav"
+        case_name = case_audio(case)
+        language = case_language(case)
+        audio = repo / "samples" / f"{case_name}.wav"
         if not audio.exists():
             raise SystemExit(f"error: audio not found: {audio}")
 
-        out_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
+        out_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
@@ -274,6 +326,8 @@ def cmd_ref(args: argparse.Namespace) -> int:
             "--out", str(out_dir),
             "--torch-threads", "1",
         ]
+        if language is not None:
+            common_args += ["--language", language]
 
         # Pin the HF revision when the manifest declares one and the
         # family's dumper accepts --revision. Currently only the
@@ -294,7 +348,7 @@ def cmd_ref(args: argparse.Namespace) -> int:
             run_cmd(
                 cmd,
                 repo,
-                f"ref {stage} [{args.family}/{variant}/{case}/{reference['kind']}]",
+                f"ref {stage} [{args.family}/{variant}/{case_name}/{reference['kind']}]",
             )
 
     return 0
@@ -310,11 +364,13 @@ def cmd_cpp(args: argparse.Namespace) -> int:
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
-        audio = repo / "samples" / f"{case}.wav"
+        case_name = case_audio(case)
+        language = case_language(case)
+        audio = repo / "samples" / f"{case_name}.wav"
         if not audio.exists():
             raise SystemExit(f"error: audio not found: {audio}")
 
-        out_dir = repo / "build" / "validate" / args.family / variant / case / "cpp"
+        out_dir = repo / "build" / "validate" / args.family / variant / case_name / "cpp"
         if out_dir.exists():
             shutil.rmtree(out_dir)
         out_dir.mkdir(parents=True)
@@ -322,16 +378,32 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
 
+        # Whisper: by default, exercise the production C++ MelFrontend so
+        # the per-tensor compare covers the full mel→encoder→decoder
+        # pipeline. The env-var ref-mel injection is preserved as an
+        # opt-in debug knob (--mel-from-ref): when a regression fires,
+        # re-running with --mel-from-ref isolates whether the drift
+        # originates in the C++ mel or downstream in the graph. Defaulting
+        # to ref-mel hid a base.en regression once (the mel-precision
+        # change in 4613129); we don't want that blind spot back.
+        if args.family == "whisper" and getattr(args, "mel_from_ref", False):
+            ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
+            env["TRANSCRIBE_WHISPER_MEL_FROM_REF"] = str(ref_dir)
+
         cmd = [
             str(cli),
             "--backend", args.backend,
             "--threads", "1",
             "-m", str(gguf),
-            str(audio),
         ]
+        if language is not None:
+            cmd += ["--language", language]
+        if args.family == "whisper":
+            cmd += ["--timestamps", "none"]
+        cmd.append(str(audio))
 
         print(f"\n{'=' * 60}", file=sys.stderr)
-        print(f"  cpp dump [{args.family}/{case}]", file=sys.stderr)
+        print(f"  cpp dump [{args.family}/{case_name}]", file=sys.stderr)
         print(f"  TRANSCRIBE_DUMP_DIR={out_dir}", file=sys.stderr)
         print(f"  {' '.join(cmd)}", file=sys.stderr)
         print(f"{'=' * 60}", file=sys.stderr)
@@ -348,19 +420,19 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             print(result.stdout, end="")
         if result.returncode != 0:
             raise SystemExit(
-                f"error: cpp dump [{args.family}/{case}] failed "
+                f"error: cpp dump [{args.family}/{case_name}] failed "
                 f"with exit code {result.returncode}"
             )
         transcript = parse_cli_transcript(result.stdout or "")
         if transcript is None:
             raise SystemExit(
-                f"error: cpp dump [{args.family}/{case}] did not emit a transcript line"
+                f"error: cpp dump [{args.family}/{case_name}] did not emit a transcript line"
             )
         write_cpp_transcript(
             out_dir,
             family=args.family,
             variant=variant,
-            case=case,
+            case=case_name,
             gguf=gguf,
             backend=args.backend,
             text=transcript,
@@ -400,15 +472,16 @@ def cmd_compare(args: argparse.Namespace) -> int:
     cmd_log: list[dict[str, Any]] = []
 
     for case in cases:
-        cpp_dir = repo / "build" / "validate" / args.family / variant / case / "cpp"
-        ref_dir = repo / "build" / "validate" / args.family / variant / case / "ref"
+        case_name = case_audio(case)
+        cpp_dir = repo / "build" / "validate" / args.family / variant / case_name / "cpp"
+        ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
 
         if not cpp_dir.exists():
-            print(f"SKIP {case}: no C++ dumps at {cpp_dir}", file=sys.stderr)
+            print(f"SKIP {case_name}: no C++ dumps at {cpp_dir}", file=sys.stderr)
             all_passed = False
             continue
         if not ref_dir.exists():
-            print(f"SKIP {case}: no reference dumps at {ref_dir}", file=sys.stderr)
+            print(f"SKIP {case_name}: no reference dumps at {ref_dir}", file=sys.stderr)
             all_passed = False
             continue
 
@@ -420,7 +493,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             cmd += ["--tolerances", str(tolerances)]
 
         print(f"\n{'=' * 60}", file=sys.stderr)
-        print(f"  compare [{args.family}/{case}]", file=sys.stderr)
+        print(f"  compare [{args.family}/{case_name}]", file=sys.stderr)
         print(f"{'=' * 60}", file=sys.stderr)
 
         if report_mode:
@@ -430,21 +503,23 @@ def cmd_compare(args: argparse.Namespace) -> int:
             if result.stderr:
                 print(result.stderr, file=sys.stderr)
             compare_outputs.append({
-                "case": case,
+                "case": case_name,
                 "returncode": result.returncode,
                 "stdout": result.stdout or "",
                 "stderr": result.stderr or "",
             })
         else:
             result = subprocess.run(cmd, cwd=repo)
-        cmd_log.append({"case": case, "cmd": cmd, "returncode": result.returncode})
+        cmd_log.append({"case": case_name, "cmd": cmd, "returncode": result.returncode})
         if result.returncode != 0:
             all_passed = False
 
-        # Transcript comparison: if the reference produced a
-        # transcript.json, verify the C++ transcript matches exactly.
+        # Transcript comparison: if the reference produced a transcript.json,
+        # verify the C++ transcript. Manifests can opt into normalized compare
+        # for models whose generation differs only in punctuation/casing.
         ref_transcript = ref_dir / "transcript.json"
         if ref_transcript.exists():
+            transcript_compare = case_transcript_compare(manifest, case)
             ref_data = json.loads(ref_transcript.read_text())
             ref_text = str(ref_data.get("text", ""))
             cpp_transcript = cpp_dir / "transcript.json"
@@ -455,25 +530,35 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 )
                 all_passed = False
                 transcript_results.append({
-                    "case": case, "match": False,
+                    "case": case_name, "match": False,
                     "reason": "missing C++ transcript artifact",
                 })
                 continue
 
             cpp_data = json.loads(cpp_transcript.read_text())
             cpp_text = str(cpp_data.get("text", ""))
-            match = cpp_text == ref_text
+            if transcript_compare == "exact":
+                ref_compare = ref_text
+                cpp_compare = cpp_text
+            else:
+                ref_compare = normalize_text_for_compare(ref_text)
+                cpp_compare = normalize_text_for_compare(cpp_text)
+            match = cpp_compare == ref_compare
             transcript_results.append({
-                "case": case, "match": match,
+                "case": case_name, "match": match,
                 "reference": ref_text, "cpp": cpp_text,
+                "mode": transcript_compare,
             })
             if not match:
-                print("\nFAIL transcript mismatch")
+                print(f"\nFAIL transcript mismatch ({transcript_compare})")
                 print(f"  reference: {ref_text!r}")
                 print(f"  c++:       {cpp_text!r}")
+                if transcript_compare != "exact":
+                    print(f"  reference normalized: {ref_compare!r}")
+                    print(f"  c++ normalized:       {cpp_compare!r}")
                 all_passed = False
             else:
-                print(f"\n  Transcript: ok {cpp_text!r}")
+                print(f"\n  Transcript: ok ({transcript_compare}) {cpp_text!r}")
 
     if report_mode:
         write_report_bundle(
@@ -485,6 +570,92 @@ def cmd_compare(args: argparse.Namespace) -> int:
             cmd_log=cmd_log,
             overall_passed=all_passed,
         )
+
+    return 0 if all_passed else 1
+
+
+def cmd_mel(args: argparse.Namespace) -> int:
+    repo = find_repo_root(Path(__file__).parent)
+    manifest = load_manifest(repo, args.family, getattr(args, "variant", None))
+    variant = manifest["variant"]
+    if args.family != "whisper":
+        print("mel parity is currently only defined for whisper", file=sys.stderr)
+        return 0
+
+    cli = find_cli(repo)
+    slug = manifest_source_model(manifest).split("/", 1)[-1]
+    gguf = Path(args.gguf) if getattr(args, "gguf", None) else find_gguf(repo, args.family, slug)
+    compare_script = repo / "scripts" / "compare_tensors.py"
+    cases = manifest.get("cases", ["jfk"])
+    all_passed = True
+
+    for case in cases:
+        case_name = case_audio(case)
+        language = case_language(case)
+        audio = repo / "samples" / f"{case_name}.wav"
+        if not audio.exists():
+            raise SystemExit(f"error: audio not found: {audio}")
+
+        out_dir = repo / "build" / "validate" / args.family / variant / case_name / "mel_cpp"
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True)
+
+        env = os.environ.copy()
+        env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
+        env.pop("TRANSCRIBE_WHISPER_MEL_FROM_REF", None)
+
+        cmd = [
+            str(cli),
+            "--backend", getattr(args, "backend", "cpu"),
+            "--threads", "1",
+            "-m", str(gguf),
+            "--timestamps", "none",
+            str(audio),
+        ]
+        if language is not None:
+            cmd[-1:-1] = ["--language", language]
+
+        print(f"\n{'=' * 60}", file=sys.stderr)
+        print(f"  mel parity cpp dump [{args.family}/{case_name}]", file=sys.stderr)
+        print(f"  TRANSCRIBE_DUMP_DIR={out_dir}", file=sys.stderr)
+        print(f"  {' '.join(cmd)}", file=sys.stderr)
+        print(f"{'=' * 60}", file=sys.stderr)
+
+        result = subprocess.run(
+            cmd, cwd=repo, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.returncode != 0:
+            all_passed = False
+            continue
+
+        ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
+        with tempfile.TemporaryDirectory() as td:
+            tol = Path(td) / "mel-tolerances.json"
+            # fp32 STFT path: worst observed drift on librispeech-style
+            # speech is 3.4e-4 max_abs (german) at peak signal ~1.4 →
+            # ~2.5e-4 relative. 5e-4 leaves headroom for new clips
+            # without crossing into territory that would shift WER.
+            tol.write_text(json.dumps({
+                "enc.mel.in": {"max_abs": 5e-4, "mean_abs": 5e-6},
+            }) + "\n")
+            cmp_cmd = [
+                "uv", "run", str(compare_script),
+                str(out_dir), str(ref_dir),
+                "--max-abs", "1e9",
+                "--mean-abs", "1e9",
+                "--tolerances", str(tol),
+                "--quiet",
+            ]
+            print(f"\n{'=' * 60}", file=sys.stderr)
+            print(f"  mel parity compare [{args.family}/{case_name}]", file=sys.stderr)
+            print(f"{'=' * 60}", file=sys.stderr)
+            cmp = subprocess.run(cmp_cmd, cwd=repo)
+            if cmp.returncode != 0:
+                all_passed = False
 
     return 0 if all_passed else 1
 
@@ -556,9 +727,11 @@ def write_report_bundle(
             summary.append("")
             if tr["match"]:
                 summary.append(f"- Match: **yes**")
+                summary.append(f"- Mode: `{tr.get('mode', 'exact')}`")
                 summary.append(f"- text: `{tr.get('cpp', '')!r}`")
             else:
                 summary.append(f"- Match: **no**")
+                summary.append(f"- Mode: `{tr.get('mode', 'exact')}`")
                 if "reason" in tr:
                     summary.append(f"- Reason: {tr['reason']}")
                 else:
@@ -603,6 +776,10 @@ def cmd_all(args: argparse.Namespace) -> int:
     rc = cmd_ref(args)
     if rc != 0:
         return rc
+    if args.family == "whisper":
+        rc = cmd_mel(args)
+        if rc != 0:
+            return rc
     rc = cmd_cpp(args)
     if rc != 0:
         return rc
@@ -643,10 +820,29 @@ def main() -> int:
     sp_cpp.add_argument("--gguf", help="GGUF path (overrides auto-detection)")
     sp_cpp.add_argument(
         "--backend", default="cpu",
-        choices=["auto", "cpu", "metal", "vulkan"],
+        choices=["auto", "cpu", "cpu_accel", "metal", "vulkan"],
         help="Compute backend (default: cpu)",
     )
+    sp_cpp.add_argument(
+        "--mel-from-ref", action="store_true",
+        help="Whisper-only debug knob: inject the reference mel via "
+             "TRANSCRIBE_WHISPER_MEL_FROM_REF so enc.mel.in is bit-"
+             "identical to HF's WhisperFeatureExtractor. Use to isolate "
+             "graph drift from frontend drift when a regression fires. "
+             "Default is the production C++ MelFrontend.",
+    )
     sp_cpp.set_defaults(func=cmd_cpp)
+
+    # mel
+    sp_mel = sub.add_parser("mel", help="Compare production C++ mel vs reference mel")
+    add_common(sp_mel)
+    sp_mel.add_argument("--gguf", help="GGUF path (overrides auto-detection)")
+    sp_mel.add_argument(
+        "--backend", default="cpu",
+        choices=["auto", "cpu", "cpu_accel", "metal", "vulkan"],
+        help="Compute backend (default: cpu)",
+    )
+    sp_mel.set_defaults(func=cmd_mel)
 
     # compare
     sp_cmp = sub.add_parser("compare", help="Compare C++ vs reference dumps")
@@ -662,10 +858,16 @@ def main() -> int:
     add_common(sp_all)
     sp_all.add_argument("--model", help="HF model ID or local path")
     sp_all.add_argument("--gguf", help="GGUF path")
-    sp_all.add_argument("--backend", default="cpu", choices=["auto", "cpu", "metal", "vulkan"])
+    sp_all.add_argument("--backend", default="cpu", choices=["auto", "cpu", "cpu_accel", "metal", "vulkan"])
     sp_all.add_argument(
         "--report", action="store_true",
         help="Emit a report bundle after compare completes.",
+    )
+    sp_all.add_argument(
+        "--mel-from-ref", action="store_true",
+        help="Whisper-only debug knob: inject the reference mel via "
+             "TRANSCRIBE_WHISPER_MEL_FROM_REF for the cpp dump. Default "
+             "is the production C++ MelFrontend.",
     )
     sp_all.set_defaults(func=cmd_all)
 

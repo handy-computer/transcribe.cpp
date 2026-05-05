@@ -95,6 +95,30 @@ struct transcribe_context {
     transcribe_timestamp_kind    result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     bool                         has_result  = false;
 
+    // -----------------------------------------------------------------
+    // Abort / cancellation (set via transcribe_set_abort_callback).
+    //
+    // Per-family run() drivers call poll_abort() at chunk boundaries
+    // and between greedy decode steps. A callback returning true sets
+    // was_aborted and the run path returns TRANSCRIBE_ERR_ABORTED,
+    // preserving whatever partial segments accumulated before the
+    // abort point.
+    //
+    // was_aborted is cleared at the top of every transcribe_run; it
+    // is NOT cleared by clear_result because the result may be
+    // explicitly preserved after an abort (partial-retained contract).
+    transcribe_abort_callback    abort_cb        = nullptr;
+    void *                       abort_userdata  = nullptr;
+    bool                         was_aborted     = false;
+
+    bool poll_abort() {
+        if (abort_cb != nullptr && abort_cb(abort_userdata)) {
+            was_aborted = true;
+            return true;
+        }
+        return false;
+    }
+
     void clear_result();
 
     transcribe_context() = default;

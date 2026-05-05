@@ -50,9 +50,11 @@ void print_usage(const char * argv0) {
         "  --json-out PATH    write result JSON here (default: stdout)\n"
         "  --quiet            suppress progress lines on stderr\n"
         "  --threads N        CPU threads (default 0 = library default)\n"
-        "  --backend KIND     request a specific backend: auto|cpu|metal|vulkan\n"
-        "                     (default auto). cpu is strict CPU — no GPU,\n"
-        "                     no BLAS/AMX.\n"
+        "  --backend KIND     request a specific backend:\n"
+        "                       auto|cpu|cpu_accel|metal|vulkan (default auto)\n"
+        "                     cpu is strict CPU (no GPU, no BLAS/AMX).\n"
+        "                     cpu_accel is CPU + host-memory accelerators\n"
+        "                       (BLAS/AMX) when the build includes them.\n"
         "  -h, --help         show this help\n",
         argv0);
 }
@@ -63,13 +65,14 @@ bool parse_backend_kind(const char *                   s,
                         transcribe_backend_request &   out)
 {
     if (s == nullptr) return false;
-    if (std::strcmp(s, "auto")   == 0) { out = TRANSCRIBE_BACKEND_AUTO;   return true; }
-    if (std::strcmp(s, "cpu")    == 0) { out = TRANSCRIBE_BACKEND_CPU;    return true; }
-    if (std::strcmp(s, "metal")  == 0) { out = TRANSCRIBE_BACKEND_METAL;  return true; }
-    if (std::strcmp(s, "vulkan") == 0) { out = TRANSCRIBE_BACKEND_VULKAN; return true; }
+    if (std::strcmp(s, "auto")      == 0) { out = TRANSCRIBE_BACKEND_AUTO;      return true; }
+    if (std::strcmp(s, "cpu")       == 0) { out = TRANSCRIBE_BACKEND_CPU;       return true; }
+    if (std::strcmp(s, "cpu_accel") == 0) { out = TRANSCRIBE_BACKEND_CPU_ACCEL; return true; }
+    if (std::strcmp(s, "metal")     == 0) { out = TRANSCRIBE_BACKEND_METAL;     return true; }
+    if (std::strcmp(s, "vulkan")    == 0) { out = TRANSCRIBE_BACKEND_VULKAN;    return true; }
     std::fprintf(stderr,
         "error: --backend value '%s' not recognized "
-        "(expected one of: auto, cpu, metal, vulkan)\n", s);
+        "(expected one of: auto, cpu, cpu_accel, metal, vulkan)\n", s);
     return false;
 }
 
@@ -131,12 +134,25 @@ struct stat_summary { double min_v, max_v, mean_v; };
 __attribute__((format(printf, 2, 3)))
 #endif
 void append_fmt(std::string & out, const char * fmt, ...) {
-    char buf[256];
     va_list ap;
     va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    char buf[256];
     const int n = std::vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    if (n > 0) out.append(buf, static_cast<size_t>(n));
+    if (n < 0) { va_end(ap2); return; }
+    if (static_cast<size_t>(n) < sizeof(buf)) {
+        out.append(buf, static_cast<size_t>(n));
+    } else {
+        // vsnprintf reports the would-be length; fall back to a heap
+        // buffer so long fields (e.g. hyp_text) aren't truncated and
+        // we don't read past the stack buffer.
+        std::string big(static_cast<size_t>(n) + 1, '\0');
+        std::vsnprintf(big.data(), big.size(), fmt, ap2);
+        out.append(big.data(), static_cast<size_t>(n));
+    }
+    va_end(ap2);
 }
 
 stat_summary compute_stats(const std::vector<iter_timings> & iters,

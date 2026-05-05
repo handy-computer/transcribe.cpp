@@ -23,8 +23,9 @@ namespace transcribe::quantize {
 // exactly one bucket; each preset maps each bucket to one ggml_type.
 enum class Bucket {
     Linear, // ggml_mul_mat operands — full linear allowlist.
-    Embed,  // Tied token embedding (Cohere). Mixed _M presets bump to
-            // Q6_K; other presets fall back to Linear.
+    Embed,  // Decoder token embedding. Mixed _M presets bump to Q6_K
+            // where shape-compatible; otherwise the preset's
+            // linear_fallback (Q8_0 for all K presets).
     ConvPw, // 1×1 pointwise convs in conformer blocks (F16 on im2col + mul_mat).
     Conv,   // Non-pointwise conv kernels (F32 / F16 — no quant im2col).
     Norm,   // Biases, LayerNorm/BN, pos_bias, pos_enc, frontend buffers (F32).
@@ -46,13 +47,15 @@ struct Preset {
     ggml_type linear_main;
     // Fallback when the inner dim doesn't divide linear_main's block
     // size (e.g. Parakeet predictor/joint at ne0=640 vs K-quant block
-    // 256). Always something blockless or smaller-block.
+    // 256). Q8_0 for every K preset — see policy.cpp for the rationale.
+    // Legacy block quants (block 32) set this to F16 as a tripwire;
+    // it should never trigger in practice.
     ggml_type linear_fallback;
     // Attention output projection (attn.linear_out.weight). _M recipes
     // bump this to Q8_0 for quality; uniform presets leave it at
     // linear_main.
     ggml_type linear_attn_out;
-    // Tied token embedding (Embed bucket). GGML_TYPE_COUNT means "no
+    // Decoder token embedding (Embed bucket). GGML_TYPE_COUNT means "no
     // override" — resolve to linear_main.
     ggml_type linear_embed;
     // Non-pointwise conv kernels.

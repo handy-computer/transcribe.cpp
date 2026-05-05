@@ -28,6 +28,14 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // callers get transcript-only output in the audio's source
     // language.
     caps.supports_translate = false;
+
+    // Cancellation is wired at the per-run level. Whisper-specific
+    // long-form / temperature-fallback / initial-prompt features do
+    // not apply here.
+    caps.supports_initial_prompt       = false;
+    caps.supports_temperature_fallback = false;
+    caps.supports_long_form            = false;
+    caps.supports_cancellation         = true;
 }
 
 } // namespace transcribe::qwen3_asr
