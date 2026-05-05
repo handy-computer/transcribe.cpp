@@ -33,6 +33,11 @@ FAMILY_PRESETS: dict[str, tuple[str, ...]] = {
     # moonshine-tiny: hidden=288 / intermediate=1152 / vocab=32768 — none
     # divide 256, so Q6_K/Q5_K_M/Q4_K_M all fall back to Q8_0 storage.
     "moonshine": ("F16", "Q8_0"),
+    # moonshine-streaming-tiny: enc hidden=320 / dec hidden=320 /
+    # ffn=1280 / vocab=32768 — none divide 256, so Q6_K/Q5_K_M/Q4_K_M
+    # land within ~5% of Q8_0 file size (measured Stage 5). Drop the K
+    # tiers to avoid shipping near-duplicate GGUFs.
+    "moonshine_streaming": ("F16", "Q8_0"),
 }
 
 
