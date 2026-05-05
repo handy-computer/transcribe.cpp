@@ -305,6 +305,14 @@ transcribe_status run(
 
     const auto & hp = cm->hparams;
 
+    // Phase timers. Moonshine has no mel/STFT (raw PCM passthrough), so
+    // t_mel_us stays 0; t_encode_us covers encoder graph + cross-KV
+    // precompute, t_decode_us covers prompt pass + step loop.
+    cc->t_mel_us    = 0;
+    cc->t_encode_us = 0;
+    cc->t_decode_us = 0;
+    const int64_t t_encode_start = ggml_time_us();
+
     ggml_type resolved_kv = GGML_TYPE_COUNT;
     if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) resolved_kv = GGML_TYPE_F32;
     if (cc->kv_type == TRANSCRIBE_KV_TYPE_F16) resolved_kv = GGML_TYPE_F16;
@@ -433,7 +441,10 @@ transcribe_status run(
         cc->kv_cache.cross_populated = true;
     }
 
+    cc->t_encode_us = ggml_time_us() - t_encode_start;
+
     // ----- Greedy decoder loop -----
+    const int64_t t_decode_start = ggml_time_us();
     const int decoder_start = hp.decoder_start_token_id;   // 1
     const int eos           = hp.eos_token_id;             // 2
     const int max_pos       = hp.dec_max_position_embeddings;
@@ -586,6 +597,8 @@ transcribe_status run(
             generated_ids.push_back(next_token);
         }
     }
+
+    cc->t_decode_us = ggml_time_us() - t_decode_start;
 
     // Decode IDs to text.
     if (!generated_ids.empty()) {
