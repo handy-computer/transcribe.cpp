@@ -13,7 +13,7 @@ Status: research
 - License: MIT (see model card)
 - Variants:
   - `moonshine-tiny` (27M params, 6 enc / 6 dec layers, hidden 288, F32 reference dtype, English-only).
-  - `moonshine-base` (61M params; deferred — first port targets `tiny`).
+  - `moonshine-base` (61M params, 8 enc / 8 dec layers, hidden 416, intermediate 1664, partial_rotary_factor 0.62, F32 reference dtype, English-only). HF revision `7a73d8d55ac0ba2ef3ae761593f6784b51f96dcf`.
 
 ## References
 
@@ -118,11 +118,15 @@ each command. Allowed statuses:
 
 | Capability | Mode | Command / test | Expected observable | Status |
 |------------|------|----------------|---------------------|--------|
-| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/moonshine-tiny/moonshine-tiny-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS — exact JFK quote: "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country." |
-| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/moonshine-tiny/moonshine-tiny-F32.gguf samples/jfk.wav` | non-empty plausible transcript (English-only model — auto path is the same as explicit `en`) | PASS — identical output to explicit `--language en` (no language token in this model) |
+| Transcribe (tiny) | explicit language hint | `build/bin/transcribe-cli -m models/moonshine-tiny/moonshine-tiny-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS — exact JFK quote: "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country." |
+| Transcribe (tiny) | auto / no language hint | `build/bin/transcribe-cli -m models/moonshine-tiny/moonshine-tiny-F32.gguf samples/jfk.wav` | non-empty plausible transcript (English-only model — auto path is the same as explicit `en`) | PASS — identical output to explicit `--language en` (no language token in this model) |
+| Transcribe (base) | explicit language hint | `build/bin/transcribe-cli -m models/moonshine-base/moonshine-base-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS — JFK quote: "And so my fellow Americans ask not what your country can do for you ask what you can do for your country" |
+| Transcribe (base) | auto / no language hint | `build/bin/transcribe-cli -m models/moonshine-base/moonshine-base-F32.gguf samples/jfk.wav` | non-empty plausible transcript (English-only model — auto path is the same as explicit `en`) | PASS — identical output to explicit `--language en` |
 
 ## Notes
 
 - Moonshine is English-only and emits transcript-only output (no language tokens, no task tokens, no timestamp tokens). Translate / language-detect / timestamps rows are intentionally absent from the capability table because the model does not advertise them.
 - First port targets greedy argmax single-utterance transcription. Temperature sampling, beam search, and any post-hoc timestamp extraction are out of scope.
-- **Stage 4 subset WER vs HF reference**: identical. C++ 3.25% vs HF reference 3.25% on the same `samples/wer/test-clean.512.manifest.jsonl` (512 utterances). All 512 hypotheses are byte-equal between the two — no per-utterance diffs. Substitution/deletion/insertion counts match exactly (269/41/43). HF reference runner is the new `wer` subcommand on `scripts/dump_reference_moonshine_transformers.py` (greedy, num_beams=1, max_new_tokens=192 — same regime as the decode dumper). Reports: `reports/wer/moonshine-tiny-F32.test-clean-512.score.json` (C++) and `reports/wer/moonshine-tiny-REF.test-clean-512.score.json` (HF).
+- **Stage 4 subset WER vs HF reference**:
+  - moonshine-tiny: identical. C++ 3.25% vs HF reference 3.25% on `samples/wer/test-clean.512.manifest.jsonl` (512 utterances). All 512 hypotheses byte-equal. Sub/Del/Ins 269/41/43. Reports: `reports/wer/moonshine-tiny-F32.test-clean-512.score.json`, `reports/wer/moonshine-tiny-REF.test-clean-512.score.json`.
+  - moonshine-base: identical. C++ 2.34% vs HF reference 2.34% on the same 512-row subset. All 512 hypotheses byte-equal. Sub/Del/Ins 191/33/31. Reports: `reports/wer/moonshine-base-F32.test-clean-512.score.json`, `reports/wer/moonshine-base-REF.test-clean-512.score.json`. HF reference runner is the `wer` subcommand on `scripts/dump_reference_moonshine_transformers.py` (greedy, num_beams=1, max_new_tokens=192 — same regime as the decode dumper).

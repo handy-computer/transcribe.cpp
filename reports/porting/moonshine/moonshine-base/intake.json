@@ -1,0 +1,232 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "moonshine",
+  "hf_repo": "UsefulSensors/moonshine-base",
+  "hf_revision": "7a73d8d55ac0ba2ef3ae761593f6784b51f96dcf",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "no tokenizer_config.json on the repo; tokenizer.json + generation_config.json carry the special-token IDs"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/UsefulSensors/moonshine-base",
+      "status": "found",
+      "detail": "model card text shared with moonshine-tiny (license MIT, English-only, paper link); per-model WER scores not present in card body — taken from the Moonshine paper / Open ASR Leaderboard"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "transformers.models.moonshine (MoonshineForConditionalGeneration, AutoProcessor wrapping Wav2Vec2FeatureExtractor + PreTrainedTokenizerFast); cross-check refs/mlx/mlx-audio/mlx_audio/stt/models/moonshine/",
+      "status": "found",
+      "detail": "Same reference framework as moonshine-tiny — first-party in transformers since 4.48, no trust_remote_code."
+    }
+  },
+  "variants": [
+    {
+      "name": "moonshine-base",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-decoder"
+    ],
+    "key_fields": {
+      "architectures": [
+        "MoonshineForConditionalGeneration"
+      ],
+      "model_type": "moonshine",
+      "is_encoder_decoder": true,
+      "hidden_size": 416,
+      "intermediate_size": 1664,
+      "encoder_num_hidden_layers": 8,
+      "decoder_num_hidden_layers": 8,
+      "encoder_num_attention_heads": 8,
+      "decoder_num_attention_heads": 8,
+      "encoder_num_key_value_heads": 8,
+      "decoder_num_key_value_heads": 8,
+      "encoder_hidden_act": "gelu",
+      "decoder_hidden_act": "silu",
+      "max_position_embeddings": 194,
+      "partial_rotary_factor": 0.62,
+      "rope_theta": 10000.0,
+      "attention_bias": false,
+      "pad_head_dim_to_multiple_of": 8,
+      "vocab_size": 32768
+    },
+    "varying_across_variants": [
+      "hidden_size",
+      "intermediate_size",
+      "encoder_num_hidden_layers",
+      "decoder_num_hidden_layers",
+      "partial_rotary_factor"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "config",
+    "evidence": "config torch_dtype=float32; safetensors header distribution F32=210 (100%)",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "F32": 210
+      }
+    }
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 1,
+    "hop_length": null,
+    "fft_size": null,
+    "window": null,
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": null,
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 32768,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 2,
+      "decoder_start": 1
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "167ef33e0aa23978fd1bfa643785768b75ad36ff247f06d7f3c5e4e506453a80"
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.27,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Moonshine paper Table 2; also matches the Open ASR Leaderboard."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 8.30,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Moonshine paper / Open ASR Leaderboard."
+    },
+    {
+      "dataset": "TED-LIUM",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.74,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Open ASR Leaderboard (TED-LIUM 3)."
+    },
+    {
+      "dataset": "Common Voice (mean)",
+      "language": "en",
+      "metric": "wer",
+      "score": 8.25,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Open ASR Leaderboard (Common Voice 16.1 English)."
+    },
+    {
+      "dataset": "GigaSpeech",
+      "language": "en",
+      "metric": "wer",
+      "score": 12.40,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Open ASR Leaderboard."
+    },
+    {
+      "dataset": "AMI",
+      "language": "en",
+      "metric": "wer",
+      "score": 17.79,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Open ASR Leaderboard."
+    },
+    {
+      "dataset": "Earnings22",
+      "language": "en",
+      "metric": "wer",
+      "score": 12.85,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Open ASR Leaderboard."
+    },
+    {
+      "dataset": "SPGISpeech",
+      "language": "en",
+      "metric": "wer",
+      "score": 5.13,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Open ASR Leaderboard."
+    },
+    {
+      "dataset": "VoxPopuli",
+      "language": "en",
+      "metric": "wer",
+      "score": 12.20,
+      "score_unit": "percent",
+      "source": "https://arxiv.org/abs/2410.15608",
+      "notes": "Open ASR Leaderboard."
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "Same canonical reference as moonshine-tiny: the UsefulSensors model card demonstrates direct use of `MoonshineForConditionalGeneration` + `AutoProcessor` from mainline `transformers` (no `trust_remote_code`). The Moonshine classes have been first-party in transformers since 4.48 and carry the publisher-maintained generation config, tokenizer, and feature extractor — they are the canonical instrumentable reference. `refs/mlx/mlx-audio/mlx_audio/stt/models/moonshine/` is a useful clean Python cross-read but is not the published entrypoint. The dumper at scripts/dump_reference_moonshine_transformers.py already covers this path for moonshine-tiny and works for moonshine-base by repo-id alone.",
+  "architecture_pattern": "encoder-decoder",
+  "known_risks": [
+    "All seven moonshine-tiny risks carry forward unchanged: novel raw-PCM conv frontend, variable-length input, partial RoPE, dual MLP shapes (encoder GELU vs decoder SwiGLU), tied word embeddings, dual KV-cache regime (cross-attn precomputed once vs self-attn per-step growth), hallucination throttling. The C++ port at src/arch/moonshine/ already handles all of these.",
+    "Variant deltas vs tiny that the C++ port must keep correct: hidden_size 416 (vs 288), intermediate_size 1664 (vs 1152), encoder/decoder layers 8 (vs 6), partial_rotary_factor 0.62 (vs 0.9). All four are config-driven inputs to the existing weights.cpp/encoder.cpp/decoder.cpp graph — no structural difference is expected. If any was hardcoded against tiny's value, validate.py at Stage 4 will surface it.",
+    "head_dim padding: moonshine-base nominal head_dim = 416/8 = 52 (vs 36 on tiny). With pad_head_dim_to_multiple_of=8, padded head_dim = 56 (vs 40 on tiny). FlashAttention/SDPA paths in C++ that hardcoded head_dim=40 to match the dk40_dv40 Metal kernel are a likely friction point. Confirm at Stage 4 whether the existing fa kernel selection is data-driven or hardcoded.",
+    "Partial RoPE rotary dim: tiny rotates 32 of 36 head dims (int(36*0.9)=32, even-rounded). Base rotates int(52*0.62)=32 of 52 head dims, even-rounded = 32 — coincidentally the same rotary dim, but the unrotated tail is 20 dims (vs 4 on tiny). Cohere-style partial RoPE handling in the existing port should already split rotated/unrotated by data; verify."
+  ],
+  "intake_gaps": []
+}

@@ -1,0 +1,49 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "moonshine",
+  "variant": "moonshine-base",
+  "source_model": {
+    "hf_repo": "UsefulSensors/moonshine-base",
+    "hf_revision": "7a73d8d55ac0ba2ef3ae761593f6784b51f96dcf"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://github.com/huggingface/transformers",
+    "revision": "v5.7.0",
+    "entrypoint": "scripts/dump_reference_moonshine_transformers.py"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "config",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 1,
+    "hop_length": null,
+    "fft_size": null,
+    "win_length": null,
+    "window": null,
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 32768,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 2,
+      "decoder_start": 1
+    }
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/moonshine.json",
+  "cases": ["jfk"]
+}
