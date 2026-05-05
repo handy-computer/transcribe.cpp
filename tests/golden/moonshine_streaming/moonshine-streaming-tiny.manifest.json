@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "moonshine_streaming",
+  "variant": "moonshine-streaming-tiny",
+  "source_model": {
+    "hf_repo": "UsefulSensors/moonshine-streaming-tiny",
+    "hf_revision": "f8e9dfd8c562c257c151a907b7b7f2fe8ff8511a"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "weights_header",
+  "_skeleton": true
+}
