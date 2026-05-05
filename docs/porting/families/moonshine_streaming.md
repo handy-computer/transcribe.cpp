@@ -204,9 +204,9 @@ each command. Allowed statuses:
 
 | Capability | Mode | Command / test | Expected observable | Status |
 |------------|------|----------------|---------------------|--------|
-| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | TODO |
-| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf samples/jfk.wav` | non-empty plausible transcript (English-only model — auto path is the same as explicit `en`) | TODO |
-| Streaming | chunked / real-time decode | `<TBD: streaming session API does not exist yet in transcribe-cli; row resolves to SKIP — not exposed by runtime at Stage 4 unless the streaming surface lands first>` | partial transcripts emitted as audio is fed in chunks | TODO |
+| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS |
+| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf samples/jfk.wav` | non-empty plausible transcript (English-only model — auto path is the same as explicit `en`) | PASS |
+| Streaming | chunked / real-time decode | streaming session API not implemented in transcribe-cli at Stage 4 (the HF reference is also one-shot today) | partial transcripts emitted as audio is fed in chunks | SKIP — not exposed by runtime |
 
 ## Notes
 
