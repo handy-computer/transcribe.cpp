@@ -187,16 +187,19 @@ mel frontend, GPU backends — produce different (usually wider) drift.
 Those measurements belong in Stage 6/7 reports, NOT in this file.
 
 Load Stage 2 provisional `tests/tolerances/<family>.json` and for each
-tensor compare the provisional (10× ref-vs-ref noise floor) against
-observed C++ drift. **Tighten, keep, or widen each entry with explicit
-justification.** Recipe:
-`finalized = max(1.5 × observed, provisional_noise_floor, 1e-6)`.
+tensor compare the provisional (magnitude-aware: `1e-4 × p99_abs` /
+`1e-5 × rms`) against observed C++ drift. **Tighten, keep, or widen
+each entry with explicit justification.** Recipe:
+`finalized = max(1.5 × observed, provisional_magnitude_budget, 1e-6)`.
 
-- `1.5 × observed < provisional`: C++ drift is at or below noise — rare,
-  suspicious. Keep the noise floor; tighten only with user confirmation.
-- `1.5 × observed ≈ provisional`: C++ within noise. Preserve provisional.
-- `1.5 × observed > provisional`: C++ introduced drift. Record the
-  widening factor in `_comment` and name the mechanism.
+- `1.5 × observed < provisional`: C++ drift is well below the magnitude
+  budget — common on simple tensors. Keep the magnitude budget;
+  tighten only with user confirmation.
+- `1.5 × observed ≈ provisional`: C++ within budget. Preserve provisional.
+- `1.5 × observed > provisional`: C++ drift exceeds the magnitude
+  budget. Record the widening factor in `_comment` and name the
+  mechanism (BLAS accumulation order, frontend FFT precision,
+  bf16 vs fp32 storage, etc.).
 
 **Zero-drift exception.** For tensors that are pure GGUF reads (embedding
 lookups, positional embedding views) or pure adds of GGUF-baked F32

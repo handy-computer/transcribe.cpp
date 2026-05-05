@@ -62,13 +62,10 @@ requested stage.
       `tensors[]` is non-empty.
 - [ ] Every entry in `tensors[]` has a matching `.f32` + `.json` pair
       under `build/validate/<family>/<variant>/<case>/<stage>/ref/`.
-- [ ] A parallel `ref2/` directory exists alongside each `ref/` with
-      the same tensor set — the ref-vs-ref stability pass. Missing
-      `ref2/` means the noise floor was not measured and the
-      tolerances will be arbitrary.
 - [ ] Every `.json` sidecar carries `rms` and `p99_abs` alongside
       `min`/`max`/`mean` (the shared `ref_dump.write_tensor` helper
-      writes them; their absence indicates a stale dumper).
+      writes them; their absence indicates a stale dumper, and Stage 6
+      tolerances cannot be sized without them).
 - [ ] For every manifest case whose decode pass produces text or
       tokens, `build/validate/<family>/<variant>/<case>/<stage>/ref/transcript.json`
       exists. (Optional when the dumper does not expose a transcript
@@ -79,9 +76,10 @@ requested stage.
       family-specific extras).
 - [ ] `tests/tolerances/<family>.json` exists. Every tensor entry
       carries `_provisional: true`. Top-of-file `_comment` array names
-      ref-vs-ref stability (noise floor) as the derivation source.
-      Provisional numbers derive from `max(10 × noise, 1e-6)` per
-      tensor.
+      magnitude-aware sizing as the derivation source. Provisional
+      numbers derive from `max_abs = max(1e-4 × p99_abs, 1e-6)` and
+      `mean_abs = max(1e-5 × rms, 1e-6)` per tensor, reading p99_abs
+      and rms from the sidecars.
 
 **Stage 3 — porting-3-convert**
 - [ ] `models/<variant>/<variant>-<REFDTYPE>.gguf` exists, where
