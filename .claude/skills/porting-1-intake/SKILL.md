@@ -5,7 +5,7 @@ description: Produces the machine-readable intake packet (reports/porting/<famil
 
 # porting-1-intake
 
-First stage of the porting pipeline. Runs the mechanical intake bootstrapper, walks the user through the human-judgment ask-points, schema-validates the result, and runs Preflight Gate A. On green, the port is ready for `porting-2-refdump`.
+First stage of the porting pipeline. Runs the mechanical intake bootstrapper, walks the user through the human-judgment ask-points, schema-validates the result, and runs Preflight Gate A. On green, the port is ready for `porting-2-oracle`.
 
 ## Preconditions
 
@@ -41,7 +41,7 @@ uv run scripts/intake.py inspect \
 
 This writes a draft with mechanical fields populated (hf_revision, config, dtype distribution, frontend, tokenizer summary, capabilities) and null-valued human-judgment fields.
 
-**If the family is already ported** (there is a prior `reports/porting/<family>/<other-variant>/intake.json`): read the prior intake and carry its `reference_framework`, `reference_rationale`, `architecture_pattern`, and `known_risks` forward as DEFAULTS for the ask-points. Do not silently copy them — confirm each with the user.
+**If the family is already ported** (there is a prior `reports/porting/<family>/<other-variant>/intake.json`): read the prior intake and carry its `reference_framework`, `reference_rationale`, `architecture_pattern`, and `known_risks` forward as defaults.
 
 ### Step 2: Potential Ask-points
 
@@ -51,9 +51,11 @@ Try and research and fill out the following questions/ask-points on your own. Fi
 
 2. **Architecture pattern.** One of `encoder-transducer`, `encoder-decoder`, `audio-llm`, `encoder-ctc`. The script's `config.architecture_candidates` is a heuristic starting point. If it doesn't fit, propose a new pattern and have the user accept it based on your research of the architecture.
 
-3. **Acceptance dataset.** Default: LibriSpeech test-clean (upstream-reported WER must be captured in `upstream_benchmarks`). For non-English-only models LibriSpeech is NOT a valid target — ask the user which dataset the publisher reports on (FLEURS `<lang>`, Common Voice `<lang>`, etc.) and record that as the acceptance dataset. This choice drives the Stage 6 WER hard gate.
+3. **Acceptance dataset.** Default: LibriSpeech test-clean (upstream-reported WER must be captured in `upstream_benchmarks`). For models not supporting English LibriSpeech is NOT a valid target. This must be flagged and become a hard stop for the time being.
 
 4. **Known risks.** Anything the agent cannot infer from HF metadata: novel positional encoding, custom attention masks, multimodal fusion quirks, streaming, long-sequence degradation, per-layer dtype differences, upstream doing one precision but our quantize path assuming another. Free-form list; one risk per entry. Only flag these if they are CRITICAL blockers for the next stages. If not, DO NOT ask the human.
+
+5. **Capability validation table.** The family doc holds a `## Capability Validation` table — one row per advertised capability (transcribe with explicit language, transcribe with auto/no-hint, translate if exposed, segment/word timestamps if exposed, etc.). At intake time, draft a row for every advertised capability with `Status: TODO`. Stage 4 fills in the actual command and the resulting status (PASS / SKIP — not exposed by runtime / ACCEPTED GAP — `<reason>`). Capabilities that the C++ runtime cannot observe today get a row anyway and resolve to SKIP at Stage 4 — that keeps the gap visible without inventing a check. The table replaces older intake-resident behavior cases.
 
 If `scripts/intake.py` reported non-empty `intake_gaps`, surface them here too. Gaps affecting dtype, frontend, tokenizer IDs, architecture pattern, or reference framework must be resolved or explicitly accepted by the user.
 
@@ -87,7 +89,7 @@ If `docs/porting/families/<family>.md` does not exist yet, create it by copying 
 
 ### Step 6: Golden manifest skeleton (execute)
 
-Seed `tests/golden/<family>/<variant>.manifest.json` with the identity fields derived from intake. This is a **skeleton** — `porting-2-refdump` completes it with `reference.entrypoint`, frontend, tokenizer_summary, capabilities, and the contract case set. Writing the skeleton now lets later stages reference `manifest.source_model` and `manifest.variant` without having to re-derive them.
+Seed `tests/golden/<family>/<variant>.manifest.json` with the identity fields derived from intake. This is a **skeleton** — `porting-2-oracle` completes it with `reference.entrypoint`, frontend, tokenizer_summary, capabilities, and the per-family case set the dumper actually runs (typically `samples/jfk.wav` plus any extra audio the family wants). Writing the skeleton now lets later stages reference `manifest.source_model` and `manifest.variant` without having to re-derive them.
 
 ```python
 # uv run python -c '...'
@@ -100,7 +102,7 @@ skel = {
     "source_model": {"hf_repo": intake["hf_repo"], "hf_revision": intake["hf_revision"]},
     "expected_dtype": intake["dtype"]["expected"],
     "dtype_source": intake["dtype"]["source"],
-    "_skeleton": True,  # porting-2-refdump removes this when filling the rest
+    "_skeleton": True,  # porting-2-oracle removes this when filling the rest
 }
 out = pathlib.Path(f"tests/golden/{intake['family']}/{intake['variants'][0]['name']}.manifest.json")
 out.parent.mkdir(parents=True, exist_ok=True)
@@ -115,6 +117,8 @@ Report to the user:
 - Preflight Gate A result.
 - Any unresolved `intake_gaps`.
 - Whether the acceptance dataset is LibriSpeech or an alternate (name it).
+- The advertised capabilities and the row count of the family doc's
+  Capability Validation table — Stage 4 will exercise each row.
 
 **Do not commit.** The user authors the commit manually after reviewing.
 
@@ -123,7 +127,7 @@ Report to the user:
 - `reports/porting/<family>/<variant>/intake.json` exists and validates against `docs/porting/families/_intake-schema.json`.
 - All four human-judgment fields (`reference_framework`, `reference_rationale`, `architecture_pattern`, `known_risks`) are filled.
 - Upstream acceptance target is captured in `upstream_benchmarks` — LibriSpeech test-clean by default, or an explicit alternate for non-English models.
-- `docs/porting/families/<family>.md` exists as a draft.
+- `docs/porting/families/<family>.md` exists as a draft and includes a `## Capability Validation` table with one row per advertised capability; rows for capabilities the runtime cannot observe stay in the table and resolve to SKIP at Stage 4. Stage 1 just makes the table exist with `Status: TODO`.
 - `tests/golden/<family>/<variant>.manifest.json` exists as a skeleton (identity fields only, `_skeleton: true`).
 - Preflight Gate A is green.
 

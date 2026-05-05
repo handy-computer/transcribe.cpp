@@ -16,5 +16,4 @@
 
 ## Porting a new model
 Use the `porting-*` skills in `.claude/skills/`. Stage skills are independent and run in order:
-`porting-1-intake` → `porting-2-refdump` → `porting-3-convert` → `porting-4-cpp` → `porting-5-bench` → `porting-6-wer` → `porting-7-ship`.
-Each stage ends with a manual human-authored commit. See `docs/porting/agent-automation-plan.md` for the full plan.
+`porting-1-intake` → `porting-2-oracle` → `porting-3-convert` → `porting-4-cpp` → `porting-5-quants` → `porting-6-bench` → `porting-7-wer` → `porting-8-ship`.

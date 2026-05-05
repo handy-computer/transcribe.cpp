@@ -60,12 +60,18 @@ Backend resolution (each run also passes --backend <name> to the
 bench binary so the library selector is exercised end-to-end):
     metal  -> repo/build/bin/transcribe-bench         --backend metal
     cpu    -> repo/build/bin/transcribe-bench         --backend cpu
-    vulkan -> repo/build-vulkan/bin/transcribe-bench  --backend vulkan
+    vulkan -> repo/build/bin/transcribe-bench         --backend vulkan
+              (falls through to repo/build-vulkan/bin/transcribe-bench
+              only when build/bin/transcribe-bench does not exist —
+              legacy split-build setups)
 
 Auto-detection (when --backends is unset or 'all'):
     metal  available if build/bin/transcribe-bench exists AND sys.platform=='darwin'
     cpu    available if build/bin/transcribe-bench exists
-    vulkan available if build-vulkan/bin/transcribe-bench exists
+    vulkan available only if build-vulkan/bin/transcribe-bench exists
+           (we cannot tell from a path whether build/bin/ was compiled
+           with Vulkan support; pass --backends vulkan explicitly to
+           bench Vulkan from a unified build)
 
 Output: one aggregated JSON per (variant, backend) at
     reports/perf/<machine-slug>/<timestamp-or-name>_<variant>_<backend>.json
@@ -328,19 +334,39 @@ def _metal_binary(repo: Path) -> Path:
 
 
 def _vulkan_binary(repo: Path) -> Path:
+    """Prefer build/bin/transcribe-bench (modern unified build).
+
+    Fall through to legacy build-vulkan/bin/transcribe-bench only when
+    build/bin/transcribe-bench is absent. A modern build with Vulkan
+    compiled in always lives at build/bin/. If the user has a stale
+    build-vulkan/ directory they should delete it; we do not let it
+    shadow the unified build.
+    """
+    primary = repo / "build/bin/transcribe-bench"
+    if primary.exists():
+        return primary
     return repo / "build-vulkan/bin/transcribe-bench"
 
 
 def auto_detect_backends(repo: Path) -> list[str]:
-    """Return list of backend ids that appear usable on this host."""
+    """Return list of backend ids that appear usable on this host.
+
+    Auto-detect is conservative for vulkan: we cannot tell from a path
+    alone whether build/bin/transcribe-bench was compiled with Vulkan
+    support, and a --backends all that silently included a non-Vulkan
+    binary would hard-fail. So vulkan only auto-detects when the user
+    has the legacy build-vulkan/ tree (a strong signal they built
+    Vulkan separately). To benchmark Vulkan from a unified build, pass
+    --backends vulkan explicitly.
+    """
     found: list[str] = []
     metal_bin = _metal_binary(repo)
-    vulkan_bin = _vulkan_binary(repo)
+    legacy_vulkan_bin = repo / "build-vulkan/bin/transcribe-bench"
     if metal_bin.exists() and sys.platform == "darwin":
         found.append("metal")
     if metal_bin.exists():
         found.append("cpu")
-    if vulkan_bin.exists():
+    if legacy_vulkan_bin.exists():
         found.append("vulkan")
     return found
 
