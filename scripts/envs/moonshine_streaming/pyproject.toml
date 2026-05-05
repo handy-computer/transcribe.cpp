@@ -1,0 +1,15 @@
+[project]
+name = "transcribe-moonshine-streaming-env"
+version = "0.1.0"
+description = "Python env for Moonshine Streaming ASR reference dumps (Transformers)"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.2",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "librosa>=0.10",
+    "safetensors>=0.4",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "transformers>=5.7,<6",
+]
