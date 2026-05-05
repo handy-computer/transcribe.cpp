@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "moonshine",
+  "variant": "moonshine-tiny",
+  "source_model": {
+    "hf_repo": "UsefulSensors/moonshine-tiny",
+    "hf_revision": "390624ed33d594443aa4aa221f5b9f283b545b5a"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "config",
+  "_skeleton": true
+}
