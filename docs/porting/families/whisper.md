@@ -29,37 +29,6 @@ Status: research
   - `refs/mlx/mlx-audio/mlx_audio/stt/models/whisper/` — MLX Python implementation (also carries the DTW word-timestamp path and decoding loop).
   - `openai/whisper` PyPI package — original OpenAI implementation; useful for mel constants and decoding strategy.
 
-Bridge validation (to be completed in Stage 2):
-
-- Transcript: TODO
-- Token ids: TODO
-- Frontend: TODO
-- Encoder: TODO
-- Decoder/logits: TODO
-- Known drift: TODO
-
-## Environment
-
-- OS: TODO
-- CPU: TODO
-- RAM: TODO
-- GPU: TODO
-- Backend/runtime: TODO
-- Python: TODO
-- Reference package versions: TODO (transformers, torch, soundfile, numpy)
-
-## Artifacts
-
-- Intake: `reports/porting/whisper/whisper-tiny/intake.json`
-- Preflight Gate A: `reports/porting/whisper/whisper-tiny/preflight-gate-A.json`
-- Reference run report: TODO
-- Golden manifest: `tests/golden/whisper/whisper-tiny.manifest.json` (skeleton; filled in Stage 2)
-- Reference dumps: TODO (`dumps/ref/whisper/whisper-tiny/...`)
-- C++ dumps: TODO (`dumps/cpp/whisper/whisper-tiny/...`)
-- Validation report: TODO
-- Benchmark report: TODO
-- Converter report: TODO
-
 ## Commands
 
 Reference run:

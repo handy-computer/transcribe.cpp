@@ -17,34 +17,11 @@ Status: research | bring-up | validation | supported
 - Instrumented reference:
 - Cross-check references:
 
-Bridge validation:
-
-- Transcript:
-- Token ids:
-- Frontend:
-- Encoder:
-- Decoder/logits:
-- Known drift:
-
-## Environment
-
-- OS:
-- CPU:
-- RAM:
-- GPU:
-- Backend/runtime:
-- Python:
-- Reference package versions:
-
-## Artifacts
-
-- Reference run report:
-- Golden manifest:
-- Reference dumps:
-- C++ dumps:
-- Validation report:
-- Benchmark report:
-- Converter report:
+<!-- Optional: only add a "Bridge validation" subsection here if the
+canonical and instrumented references differ. Per-machine env details
+live in `reports/perf/<machine>/*.json`; reference package pins live in
+`scripts/envs/<family>/pyproject.toml`; per-port artifact paths follow
+the layout policy in CLAUDE.md and don't need to be enumerated here. -->
 
 ## Commands
 
