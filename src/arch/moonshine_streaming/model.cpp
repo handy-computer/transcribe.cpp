@@ -400,6 +400,9 @@ transcribe_status run(
     try_dump("enc.embedder.conv1.out",  eb.dumps.conv1_out,  "encoder.embedder.conv1");
     try_dump("enc.embedder.conv2.out",  eb.dumps.conv2_out,  "encoder.embedder.conv2");
     for (size_t i = 0; i < eb.dumps.block_outs.size(); ++i) {
+        if (!dump_block_index(static_cast<int>(i), hp.enc_n_layers)) {
+            continue;
+        }
         char bname[64], stage[64];
         std::snprintf(bname, sizeof(bname), "enc.block.%zu.out", i);
         std::snprintf(stage, sizeof(stage), "encoder.block%zu.out", i);
@@ -575,6 +578,9 @@ transcribe_status run(
             try_dump("dec.token_emb",       db.dumps.token_emb,       "decoder.embedding");
             try_dump("dec.embed_sum",       db.dumps.embed_sum,       "decoder.embed_sum");
             for (size_t i = 0; i < db.dumps.block_outs.size(); ++i) {
+                if (!dump_block_index(static_cast<int>(i), hp.dec_n_layers)) {
+                    continue;
+                }
                 char bname[64], stage[64];
                 std::snprintf(bname, sizeof(bname), "dec.block.%zu.out", i);
                 std::snprintf(stage, sizeof(stage), "decoder.block%zu.out", i);

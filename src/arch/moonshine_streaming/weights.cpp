@@ -194,9 +194,15 @@ transcribe_status read_moonshine_streaming_hparams(const gguf_context *         
         std::fprintf(stderr, "moonshine_streaming: encoder hparams must be positive\n");
         return TRANSCRIBE_ERR_GGUF;
     }
-    if (hp.enc_d_model != hp.enc_n_heads * hp.enc_head_dim) {
+    // Encoder allows enc_d_model > n_heads * head_dim (small: 620 vs 512;
+    // medium: 768 vs 640). Q/K/V project residual_dim → attn_dim and O
+    // projects attn_dim → residual_dim. We require enc_d_model >=
+    // n_heads * head_dim because the attention internal dim cannot exceed
+    // the residual stream dim in any in-the-wild moonshine_streaming
+    // variant; flag the inverted case to catch a malformed config early.
+    if (hp.enc_d_model < hp.enc_n_heads * hp.enc_head_dim) {
         std::fprintf(stderr,
-                     "moonshine_streaming: encoder d_model (%d) != n_heads (%d) * head_dim (%d)\n",
+                     "moonshine_streaming: encoder d_model (%d) < n_heads (%d) * head_dim (%d)\n",
                      hp.enc_d_model, hp.enc_n_heads, hp.enc_head_dim);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -353,15 +359,20 @@ transcribe_status build_moonshine_streaming_weights(ggml_context *              
     GET_F32(weights.enc_top.final_norm_w, "enc.final_norm.weight", enc_h);
 
     // ----- encoder blocks -----
+    // Q/K/V project residual_dim → attn_dim (PyTorch [attn, in_h]
+    // → ggml ne [in_h, attn]); O projects attn_dim → residual_dim
+    // ([in_h, attn_dim] → ggml ne [attn, in_h]). For tiny attn_h ==
+    // enc_h; for small/medium attn_h < enc_h.
+    const int64_t enc_attn_h = hp.enc_attn_dim();
     weights.enc_blocks.assign(hp.enc_n_layers, MoonshineStreamingEncBlock{});
     for (int i = 0; i < hp.enc_n_layers; ++i) {
         auto & b = weights.enc_blocks[i];
 
         GET_F32(b.norm_attn_w, lname("enc.blocks.%d.norm_attn.weight", i), enc_h);
-        GET_LIN(b.attn_q_w,    lname("enc.blocks.%d.attn.q.weight",    i), enc_h, enc_h);
-        GET_LIN(b.attn_k_w,    lname("enc.blocks.%d.attn.k.weight",    i), enc_h, enc_h);
-        GET_LIN(b.attn_v_w,    lname("enc.blocks.%d.attn.v.weight",    i), enc_h, enc_h);
-        GET_LIN(b.attn_out_w,  lname("enc.blocks.%d.attn.out.weight",  i), enc_h, enc_h);
+        GET_LIN(b.attn_q_w,    lname("enc.blocks.%d.attn.q.weight",    i), enc_h,      enc_attn_h);
+        GET_LIN(b.attn_k_w,    lname("enc.blocks.%d.attn.k.weight",    i), enc_h,      enc_attn_h);
+        GET_LIN(b.attn_v_w,    lname("enc.blocks.%d.attn.v.weight",    i), enc_h,      enc_attn_h);
+        GET_LIN(b.attn_out_w,  lname("enc.blocks.%d.attn.out.weight",  i), enc_attn_h, enc_h);
 
         GET_F32(b.norm_ffn_w,  lname("enc.blocks.%d.norm_ffn.weight",  i), enc_h);
         GET_LIN(b.ffn_fc1_w,   lname("enc.blocks.%d.ffn.fc1.weight",   i), enc_h, enc_ff);

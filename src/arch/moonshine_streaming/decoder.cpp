@@ -17,6 +17,7 @@
 
 #include "decoder.h"
 
+#include "encoder.h"
 #include "moonshine_streaming.h"
 #include "weights.h"
 
@@ -529,12 +530,17 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
             x = ggml_add(ctx, x, y);
         }
 
-        char bname[64];
-        std::snprintf(bname, sizeof(bname), "dec.block.%d.out", i);
-        named(x, bname);
         if (n_past == 0) {
-            transcribe::debug::mark_tensor_for_dump(x);
+            // Track every block so model.cpp can index by layer; only mark
+            // the auto_blocks subset for set_output so the scheduler keeps
+            // matching tensors as the reference dumper.
             db.dumps.block_outs.push_back(x);
+            if (dump_block_index(i, n_blocks)) {
+                char bname[64];
+                std::snprintf(bname, sizeof(bname), "dec.block.%d.out", i);
+                named(x, bname);
+                transcribe::debug::mark_tensor_for_dump(x);
+            }
         }
     }
 

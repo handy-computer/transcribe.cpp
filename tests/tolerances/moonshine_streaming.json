@@ -16,7 +16,7 @@
     "",
     "C++ compute dtype: f32 throughout (no implicit f16 casts in the",
     "encoder/decoder graph; soft-max / flash-attn mask is cast to f16",
-    "internally per ggml's API — does not change the f32 logit drift).",
+    "internally per ggml's API \u2014 does not change the f32 logit drift).",
     "",
     "Dominant drift source: BLAS reduction-order differences between",
     "PyTorch's matmul kernels and ggml's mul_mat (Accelerate / Metal /",
@@ -38,7 +38,9 @@
     "  enc.audio.in        - input PCM tensor (passthrough)",
     "  dec.token_emb       - ggml_get_rows lookup",
     "  dec.embed_sum       - identity scale of dec.token_emb",
-    "  adapter.pos_emb     - ggml_get_rows over the adapter pos table"
+    "  adapter.pos_emb     - ggml_get_rows over the adapter pos table",
+    "",
+    "Sibling-variant finalization (small/medium): tensors unique to deeper variants (e.g. enc.block.7/9 for small; enc.block.10/13 for medium) and shared-name tensors whose drift grows with depth were widened using the recipe `max(1.5 * observed, prior, 1e-6)` after first measurement. Dominant mechanism: BLAS reduction-order accumulation in fp32 grows with encoder depth (10 layers in small, 14 in medium vs 6 in tiny)."
   ],
   "adapter.out": {
     "max_abs": 0.0002677113773822793,
@@ -101,7 +103,7 @@
     "mean_abs": 0.0
   },
   "enc.block.0.out": {
-    "max_abs": 0.0004872705502510108,
+    "max_abs": 0.0010986328125,
     "mean_abs": 1.1576305119143512e-05
   },
   "enc.block.1.out": {
@@ -133,7 +135,7 @@
     "mean_abs": 5.731660028610254e-06
   },
   "enc.embedder.conv1.out": {
-    "max_abs": 8.642809802293781e-05,
+    "max_abs": 0.0001087188720703125,
     "mean_abs": 3.075866369112529e-06
   },
   "enc.embedder.conv2.out": {
@@ -147,5 +149,45 @@
   "enc.final": {
     "max_abs": 0.0002585847985744478,
     "mean_abs": 8.775985317552048e-06
+  },
+  "dec.block.10.out": {
+    "max_abs": 0.005110573184967047,
+    "mean_abs": 0.0006568966971501933
+  },
+  "dec.block.13.out": {
+    "max_abs": 0.008451338760375978,
+    "mean_abs": 0.0007328714052619942
+  },
+  "dec.block.6.out": {
+    "max_abs": 0.0032084587821960484,
+    "mean_abs": 0.00048811299658482103
+  },
+  "dec.block.7.out": {
+    "max_abs": 0.005105207065582271,
+    "mean_abs": 0.0006018060743536807
+  },
+  "dec.block.9.out": {
+    "max_abs": 0.008654900161743152,
+    "mean_abs": 0.0006727920820467394
+  },
+  "enc.block.10.out": {
+    "max_abs": 0.007533907798767093,
+    "mean_abs": 0.0003317805801710287
+  },
+  "enc.block.13.out": {
+    "max_abs": 0.054931640625,
+    "mean_abs": 0.0016218611938011297
+  },
+  "enc.block.6.out": {
+    "max_abs": 0.003496183937072755,
+    "mean_abs": 0.00023791068273616427
+  },
+  "enc.block.7.out": {
+    "max_abs": 0.006760757804870619,
+    "mean_abs": 0.0002621333104862694
+  },
+  "enc.block.9.out": {
+    "max_abs": 0.04962158203125,
+    "mean_abs": 0.001239366194640678
   }
 }

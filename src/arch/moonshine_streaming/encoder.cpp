@@ -75,9 +75,13 @@ ggml_tensor * asinh_op(ggml_context * ctx, ggml_tensor * z) {
 
 // Encoder MHSA without RoPE, with a per-layer sliding-window mask.
 //
-// x:        [d_model, T_enc]
+// x:        [d_model, T_enc]            (residual stream dim = enc_d_model)
 // mask:     [T_enc, T_enc] f32 — uploaded by caller, cast to F16 inside graph
 // Returns:  [d_model, T_enc]
+//
+// q_w/k_w/v_w have ggml ne [d_model, attn_dim]; out_w has ne
+// [attn_dim, d_model]. attn_dim = n_heads * head_dim. attn_dim may be
+// smaller than d_model (small/medium); for tiny they are equal.
 ggml_tensor * mha_encoder_swa(ggml_context *                    ctx,
                               ggml_tensor *                     x,
                               ggml_tensor *                     mask_f32,
@@ -87,21 +91,22 @@ ggml_tensor * mha_encoder_swa(ggml_context *                    ctx,
                               ggml_tensor *                     out_w,
                               const MoonshineStreamingHParams & hp,
                               int                               n_heads,
-                              int                               d_model,
+                              int                               head_dim,
                               bool                              use_flash)
 {
-    const int     head_dim     = d_model / n_heads;
+    const int     attn_dim     = n_heads * head_dim;
     const int     head_dim_pad = hp.enc_head_dim_padded();
     const int     pad          = head_dim_pad - head_dim;
     // HF reference uses unpadded head_dim for the scale.
     const float   scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T            = x->ne[1];
 
+    // After projections: ne0 = attn_dim (not d_model when non-square).
     ggml_tensor * Q = ggml_mul_mat(ctx, q_w, x);
     ggml_tensor * K = ggml_mul_mat(ctx, k_w, x);
     ggml_tensor * V = ggml_mul_mat(ctx, v_w, x);
 
-    // [d_model, T] → [head_dim, n_heads, T, 1]
+    // [attn_dim, T] → [head_dim, n_heads, T, 1]
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads, T, 1);
     K = ggml_reshape_4d(ctx, K, head_dim, n_heads, T, 1);
     V = ggml_reshape_4d(ctx, V, head_dim, n_heads, T, 1);
@@ -144,10 +149,11 @@ ggml_tensor * mha_encoder_swa(ggml_context *                    ctx,
         o = ggml_cont(ctx, o);
     }
 
-    // Merge heads: [head_dim, T, n_heads] → [head_dim, n_heads, T] → [d_model, T].
+    // Merge heads: [head_dim, T, n_heads] → [head_dim, n_heads, T] → [attn_dim, T].
+    // The output projection out_w (ne [attn_dim, d_model]) lifts back to d_model.
     o = ggml_permute(ctx, o, 0, 2, 1, 3);
     o = ggml_cont(ctx, o);
-    o = ggml_reshape_2d(ctx, o, d_model, T);
+    o = ggml_reshape_2d(ctx, o, attn_dim, T);
 
     o = ggml_mul_mat(ctx, out_w, o);
     return o;
@@ -173,14 +179,14 @@ ggml_tensor * build_encoder_block(ggml_context *                       ctx,
                                   const MoonshineStreamingEncBlock &   b,
                                   const MoonshineStreamingHParams &    hp,
                                   int                                  n_heads,
-                                  int                                  d_model,
+                                  int                                  head_dim,
                                   bool                                 use_flash)
 {
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_attn_w, /*beta=*/nullptr);
         y = mha_encoder_swa(ctx, y, mask_f32,
                             b.attn_q_w, b.attn_k_w, b.attn_v_w, b.attn_out_w,
-                            hp, n_heads, d_model, use_flash);
+                            hp, n_heads, head_dim, use_flash);
         x = ggml_add(ctx, x, y);
     }
     {
@@ -201,7 +207,22 @@ int causal_conv1d_t_out(int T_in, int /*k*/, int s) {
     return (T_in + s - 1) / s;
 }
 
+
 } // namespace
+
+bool dump_block_index(int i, int n_layers) {
+    if (n_layers <= 8) return true;
+    const int last = n_layers - 1;
+    auto round_he = [](double x) -> int {
+        return static_cast<int>(std::nearbyint(x));
+    };
+    if (i == 0) return true;
+    if (i == last) return true;
+    if (i == round_he(last / 4.0)) return true;
+    if (i == round_he(last / 2.0)) return true;
+    if (i == round_he(3.0 * last / 4.0)) return true;
+    return false;
+}
 
 int encoder_t_enc(const MoonshineStreamingHParams & hp, int n_samples) {
     if (n_samples <= 0 || hp.enc_frame_len <= 0) return 0;
@@ -373,12 +394,14 @@ EncoderBuild build_encoder_graph(ggml_context *                       ctx,
     for (int i = 0; i < hp.enc_n_layers; ++i) {
         x = build_encoder_block(ctx, x, eb.per_layer_masks[i],
                                 w.enc_blocks[i], hp,
-                                n_heads, hidden, use_flash);
+                                n_heads, hp.enc_head_dim, use_flash);
 
-        char bname[64];
-        std::snprintf(bname, sizeof(bname), "enc.block.%d.out", i);
-        named(x, bname);
-        transcribe::debug::mark_tensor_for_dump(x);
+        if (dump_block_index(i, hp.enc_n_layers)) {
+            char bname[64];
+            std::snprintf(bname, sizeof(bname), "enc.block.%d.out", i);
+            named(x, bname);
+            transcribe::debug::mark_tensor_for_dump(x);
+        }
         eb.dumps.block_outs.push_back(x);
     }
 

@@ -105,6 +105,15 @@ struct MoonshineStreamingHParams {
     bool cap_streaming   = true;
 
     // Derived helpers.
+    //
+    // Encoder attention "channel" dimension = n_heads * head_dim. Note this
+    // is NOT necessarily equal to enc_d_model: small/medium have
+    // enc_d_model=620/768 while enc_attn_dim=512/640. Q/K/V project from
+    // enc_d_model to enc_attn_dim and the output projection takes
+    // enc_attn_dim back to enc_d_model. Tiny coincidentally has both equal
+    // (320 = 8 × 40).
+    int32_t enc_attn_dim() const { return enc_n_heads * enc_head_dim; }
+
     int32_t enc_head_dim_padded() const {
         const int32_t hd = enc_head_dim;
         const int32_t m  = pad_head_dim_multiple;

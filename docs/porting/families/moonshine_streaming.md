@@ -13,8 +13,15 @@ Status: research
 - License: MIT (see model card)
 - Variants:
   - `moonshine-streaming-tiny` (34M params, 6 enc / 6 dec layers, hidden 320, F32 reference dtype, English-only).
-  - `moonshine-streaming-small` (123M params, 10 enc / 10 dec layers, encoder 620 / decoder 512, F32, English-only) — not yet ported.
-  - `moonshine-streaming-medium` (245M params, 14 enc / 14 dec layers, encoder 768 / decoder 640, F32, English-only) — not yet ported.
+  - `moonshine-streaming-small` (123M params, 10 enc / 10 dec layers, encoder 620 / decoder 512, encoder attn-dim 512 = 8×64, F32, English-only).
+  - `moonshine-streaming-medium` (245M params, 14 enc / 14 dec layers, encoder 768 / decoder 640, encoder attn-dim 640 = 10×64, F32, English-only).
+
+Note: small/medium have **non-square encoder attention** —
+`enc_d_model > enc_n_heads × enc_head_dim`. Encoder Q/K/V projections
+take residual_dim → attn_dim and O projects attn_dim → residual_dim.
+Tiny coincidentally has them equal (320 = 8 × 40) and so the original
+arch port does not separate the two dims; small/medium force the
+distinction.
 
 ## Relationship to the moonshine family
 

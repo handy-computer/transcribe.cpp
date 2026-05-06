@@ -70,6 +70,13 @@ struct EncoderBuild {
 // Returns 0 if the input is too short.
 int encoder_t_enc(const MoonshineStreamingHParams & hp, int n_samples);
 
+// Mirror dump_reference_moonshine_streaming_transformers.py::auto_blocks.
+// Used by encoder + decoder graph builders to emit debug dumps for the
+// same per-layer subset the reference dumper does, so validate.py compares
+// matching tensors on both sides instead of generating MISSING-right
+// reports for blocks the reference skips.
+bool dump_block_index(int i, int n_layers);
+
 // Build the encoder forward graph in compute_ctx.
 EncoderBuild build_encoder_graph(ggml_context *                       compute_ctx,
                                  const MoonshineStreamingWeights &    weights,
