@@ -427,10 +427,39 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     writer = GGUFWriter(str(out_path), "sensevoice")
 
     # ----- general.* -----
-    writer.add_string("general.basename",   variant)
-    writer.add_string("general.size_label", size_label)
-    writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",  hp["languages"])
+    # FunASR Model Open Source License Agreement v1.1 attribution
+    # requirement (`MODEL_LICENSE` 2.2): "you must attribute the source
+    # and author information and retain relevant model names". Bake the
+    # canonical attribution into the GGUF KV so downstream consumers
+    # see source + author + model names without reading external docs.
+    writer.add_string("general.name",         "SenseVoiceSmall")
+    writer.add_string("general.basename",     variant)
+    writer.add_string("general.size_label",   size_label)
+    writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
+    writer.add_array ("general.languages",    hp["languages"])
+    writer.add_string("general.author",       "Alibaba Group / FunAudioLLM")
+    writer.add_string("general.organization", "FunAudioLLM")
+    writer.add_string("general.license",      "FunASR-Model-License-1.1")
+    writer.add_string("general.license.link",
+                      "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE")
+    writer.add_string("general.url",
+                      "https://huggingface.co/FunAudioLLM/SenseVoiceSmall")
+    writer.add_string("general.source.url",
+                      "https://github.com/modelscope/FunASR")
+    writer.add_array("general.tags", [
+        "asr",
+        "speech-recognition",
+        "encoder-ctc",
+        "SenseVoiceSmall",
+        "SenseVoiceEncoderSmall",
+    ])
+    writer.add_string("general.description",
+                      "SenseVoiceSmall (Alibaba FunAudioLLM): non-AR "
+                      "CTC ASR with multilingual + emotion/event/ITN "
+                      "label heads. Converted from FunAudioLLM/"
+                      "SenseVoiceSmall; see "
+                      "https://github.com/modelscope/FunASR/blob/main/"
+                      "MODEL_LICENSE for FunASR redistribution terms.")
 
     # ----- stt.variant + capabilities -----
     writer.add_string("stt.variant", variant)

@@ -1,0 +1,91 @@
+# Spec for the HF README of handy-computer/sensevoice-small-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: FunAudioLLM/SenseVoiceSmall
+target_repo: handy-computer/sensevoice-small-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/sensevoice-small.md
+
+# Pinned at intake (Stage 1).
+upstream_commit: 3eb3b4eeffc2f2dde6051b853983753db33e35c3
+pin_date: 2026-05-06
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: FunASR
+  commit: 4c09ba0
+  date: 2026-05-06
+
+# Upstream license is "model-license" (FunASR's MODEL_LICENSE), not a
+# standard SPDX id. The HF YAML field accepts a free-form `other` plus a
+# license_name / license_link override on the upstream card; the renderer
+# emits `license: other` and surfaces the human-facing form via
+# `license_display`.
+license: other
+license_display: model-license (FunASR MODEL_LICENSE)
+pipeline_tag: automatic-speech-recognition
+languages:
+  - zh
+  - yue
+  - en
+  - ja
+  - ko
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - sensevoice
+  - san-m
+  - ctc
+  - multilingual
+
+summary: |
+  Offline multilingual speech-to-text in Chinese, Cantonese, English, Japanese,
+  and Korean. A 234M-parameter SAN-M encoder with a single CTC head over a
+  25,055-token SentencePiece vocabulary. Takes a 16 kHz mono WAV (capped at
+  30 seconds per call, per upstream's direct-inference contract) and produces
+  a transcript. Not a streaming model, no translation, no built-in long-form
+  chunking. The same CTC head also emits language-ID, simple emotion labels,
+  audio-event tags, and an inverse-text-normalization flag — opt-in via
+  `--raw-tokens` and `--itn`.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances)
+    with greedy CTC decoding. The publisher does not report a numerical
+    LibriSpeech WER (the model card publishes scores only as PNG figures), so
+    the gate baseline is our own FunASR 1.3.1 reference run on the same
+    manifest: 3.13% (95% CI [2.93%, 3.34%]). transcribe.cpp's F32 port matches
+    that baseline within +0.002 percentage-points. LibriSpeech is an English
+    benchmark; SenseVoice's strongest case is Mandarin, and AISHELL-1 (CER)
+    is the recommended complementary check.
+
+quants:
+  - name: F32
+    filename: sensevoice-small-F32.gguf
+    size: 893 MB
+    wer: 3.13%
+  - name: F16
+    filename: sensevoice-small-F16.gguf
+    size: 449 MB
+    wer: 3.13%
+  - name: Q8_0
+    filename: sensevoice-small-Q8_0.gguf
+    size: 241 MB
+    wer: 3.13%
+  - name: Q6_K
+    filename: sensevoice-small-Q6_K.gguf
+    size: 187 MB
+    wer: 3.14%
+  - name: Q5_K_M
+    filename: sensevoice-small-Q5_K_M.gguf
+    size: 164 MB
+    wer: 3.18%
+  - name: Q4_K_M
+    filename: sensevoice-small-Q4_K_M.gguf
+    size: 139 MB
+    wer: 3.45%

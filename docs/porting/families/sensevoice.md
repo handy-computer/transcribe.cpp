@@ -1,6 +1,10 @@
 # SenseVoice
 
-Status: research
+Status: supported with manifest-driven numerical validation against the
+FunASR canonical reference. C++ CPU validation passes locally; transcript
+matches FunASR verbatim on `samples/jfk.wav` and on multilingual samples
+(zh/yue/ja/ko). Stage 7 LibriSpeech test-clean WER matches our FunASR
+reference run within 0.002 percentage-points (3.13% vs 3.13%).
 
 ## Identity
 
@@ -8,7 +12,7 @@ Status: research
 - Upstream architecture string: `SenseVoiceSmall` (encoder `SenseVoiceEncoderSmall` + CTC head)
 - Hugging Face repo: `FunAudioLLM/SenseVoiceSmall`
 - Hugging Face revision: `3eb3b4eeffc2f2dde6051b853983753db33e35c3` (pinned at intake)
-- License: `model-license` (see https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE — confirm redistribution terms before publishing converted GGUFs)
+- **License: FunASR Model Open Source License Agreement v1.1** — `https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE`. Clause 2.2: *"When using, copying, modifying, and sharing [FunASR Software], you must attribute the source and author information and retain relevant model names in [FunASR Software]."* The converter bakes `general.author = "Alibaba Group / FunAudioLLM"`, `general.organization = "FunAudioLLM"`, `general.license = "FunASR-Model-License-1.1"`, `general.license.link`, `general.url`, `general.source.url`, and a `general.tags` array that retains `SenseVoiceSmall` and `SenseVoiceEncoderSmall`. Anyone redistributing the converted GGUF must keep these KVs intact.
 - Variants:
   - `sensevoice-small` — 234M params, F32, 5 advertised languages (zh, yue, en, ja, ko), audio capped at 30 s per direct-inference call
 
@@ -24,46 +28,105 @@ There is no HF Transformers / NeMo / ESPnet equivalent for this model.
 There is no `trust_remote_code` shim (the HF repo carries no `config.json`
 or `modeling_*.py`). FunASR is the only framework that can run it.
 
+## Environment
+
+Python env: `scripts/envs/sensevoice/pyproject.toml`
+(funasr==1.3.1, torch>=2.2, torchaudio>=2.2, soundfile, librosa,
+sentencepiece, kaldiio, gguf). FunASR 1.3.1 is pinned exactly because
+SenseVoiceSmall is registered through FunASR's class registry and minor
+version bumps can shift state-dict keys or hook points.
+
+## Golden Manifest
+
+`tests/golden/sensevoice/sensevoice-small.manifest.json`
+
+## Artifacts
+
+| Artifact | Path |
+| --- | --- |
+| Intake | `reports/porting/sensevoice/sensevoice-small/intake.json` |
+| Forward map | `reports/porting/sensevoice/forward-map.md` |
+| Tolerances | `tests/tolerances/sensevoice.json` |
+| Converter report | `reports/convert/sensevoice-small-F32.json` |
+| Reference dump root | `build/validate/sensevoice/sensevoice-small/` |
+| Bench reports | `reports/perf/apple-m4-max/sensevoice-small-publication_*.json` |
+| WER scores | `reports/wer/sensevoice-small-{REF,F32,F16,Q8_0,Q6_K,Q5_K_M,Q4_K_M}.test-clean.score.json` |
+| WER summary | `reports/wer/sensevoice-small.test-clean.summary.md` |
+
 ## Commands
 
-Reference run:
+Full numerical validation (reference dumps + C++ dumps + comparison):
 
 ```bash
-TODO  # Stage 2 will add: uv run scripts/validate.py ref --family sensevoice --variant sensevoice-small
+uv run scripts/validate.py all --family sensevoice --variant sensevoice-small
 ```
 
-Reference dumps:
+Step by step:
 
 ```bash
-TODO  # Stage 2 will add:
-#   uv run --project scripts/envs/sensevoice \
-#     scripts/dump_reference_sensevoice_funasr.py decode \
-#     --model FunAudioLLM/SenseVoiceSmall \
-#     --audio samples/jfk.wav \
-#     --out build/validate/sensevoice/sensevoice-small/jfk/ref
+uv run scripts/validate.py ref     --family sensevoice --variant sensevoice-small
+uv run scripts/validate.py cpp     --family sensevoice --variant sensevoice-small
+uv run scripts/validate.py compare --family sensevoice --variant sensevoice-small
 ```
 
-Conversion:
+Reference dump (single audio):
 
 ```bash
-TODO  # Stage 3 will add:
-#   uv run --project scripts/envs/sensevoice \
-#     scripts/convert-sensevoice.py FunAudioLLM/SenseVoiceSmall
+uv run --project scripts/envs/sensevoice \
+  scripts/dump_reference_sensevoice_funasr.py decode \
+    --model FunAudioLLM/SenseVoiceSmall \
+    --audio samples/jfk.wav \
+    --language en \
+    --out build/validate/sensevoice/sensevoice-small/jfk/decode/ref
 ```
 
-Validation:
+Conversion (reference dtype = F32):
 
 ```bash
-TODO  # Stage 4 will add:
-#   uv run scripts/validate.py all --family sensevoice --variant sensevoice-small
+uv run --project scripts/envs/sensevoice \
+  scripts/convert-sensevoice.py FunAudioLLM/SenseVoiceSmall
 ```
 
-Benchmarks:
+Quantize (run once per target preset; see Stage 5 for the full matrix):
 
 ```bash
-TODO  # Stage 7 will add:
-#   uv run scripts/wer.py --family sensevoice --variant sensevoice-small \
-#     --dataset librispeech-test-clean
+build/bin/transcribe-quantize \
+  models/sensevoice-small/sensevoice-small-F32.gguf \
+  models/sensevoice-small/sensevoice-small-Q8_0.gguf \
+  --quant Q8_0
+```
+
+Bench (Stage 6 publication run):
+
+```bash
+uv run scripts/bench/run.py \
+  --models sensevoice-small \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends metal,cpu \
+  --iters 3 --warmup 1 \
+  --name sensevoice-small-publication
+```
+
+WER (Stage 7 — full LibriSpeech test-clean sweep + reference baseline):
+
+```bash
+# Reference (FunASR) — establishes the gate target since the publisher
+# only published WER as PNG figures.
+uv run --project scripts/envs/sensevoice \
+  scripts/wer/run_reference_sensevoice.py \
+    --manifest samples/wer/test-clean.manifest.jsonl \
+    --out      reports/wer/sensevoice-small-REF.test-clean.jsonl
+uv run scripts/wer/score.py reports/wer/sensevoice-small-REF.test-clean.jsonl
+
+# transcribe.cpp ports (loop over the shipped quant matrix)
+for PRESET in F32 F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
+  uv run scripts/wer/run.py \
+    --model models/sensevoice-small/sensevoice-small-${PRESET}.gguf \
+    --manifest samples/wer/test-clean.manifest.jsonl \
+    --out      reports/wer/sensevoice-small-${PRESET}.test-clean.jsonl
+  uv run scripts/wer/score.py reports/wer/sensevoice-small-${PRESET}.test-clean.jsonl
+done
 ```
 
 ## Architecture summary
