@@ -203,6 +203,15 @@ def load_reference(args: argparse.Namespace):
         dither=0.0,
     )
     auto.kwargs["frontend"].dither = 0.0
+    # FunASR's AutoModel snapshots `self.kwargs` as a baseline at __init__ time
+    # (auto_model.py: _store_base_configs); every subsequent `auto.generate(...)`
+    # call invokes `_reset_runtime_configs` which deep-copies the baseline back
+    # over `self.kwargs`. The dither=0.0 tweak on the live frontend instance is
+    # lost in that round-trip — auto.generate ends up using a freshly cloned
+    # frontend with the default dither=1.0, which adds NON-DETERMINISTIC noise to
+    # the kaldi fbank. Re-snapshot the baseline AFTER our dither tweak so it
+    # survives the reset.
+    auto._store_base_configs()
     return auto
 
 

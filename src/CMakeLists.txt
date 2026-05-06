@@ -63,6 +63,13 @@ add_library(transcribe
     arch/sensevoice/weights.cpp
     arch/sensevoice/encoder.cpp
     arch/sensevoice/frontend.cpp
+    arch/funasr_nano/model.cpp
+    arch/funasr_nano/capabilities.cpp
+    arch/funasr_nano/weights.cpp
+    arch/funasr_nano/encoder.cpp
+    arch/funasr_nano/decoder.cpp
+    arch/funasr_nano/adaptor.cpp
+    arch/funasr_nano/frontend.cpp
 )
 
 target_include_directories(transcribe

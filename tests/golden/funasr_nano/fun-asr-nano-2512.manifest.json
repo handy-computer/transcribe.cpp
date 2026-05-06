@@ -20,7 +20,7 @@
     "hop_length": 160,
     "fft_size": 400,
     "window": "hamming",
-    "normalization": "per_feature",
+    "normalization": "none",
     "preemphasis": null,
     "dither": null,
     "center": null,

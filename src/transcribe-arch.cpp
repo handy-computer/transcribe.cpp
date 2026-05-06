@@ -25,6 +25,7 @@ namespace whisper            { extern const Arch arch; }
 namespace moonshine          { extern const Arch arch; }
 namespace moonshine_streaming { extern const Arch arch; }
 namespace sensevoice         { extern const Arch arch; }
+namespace funasr_nano        { extern const Arch arch; }
 
 const Arch * find_arch(const char * name) {
     if (name == nullptr) {
@@ -39,6 +40,7 @@ const Arch * find_arch(const char * name) {
         &moonshine::arch,
         &moonshine_streaming::arch,
         &sensevoice::arch,
+        &funasr_nano::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
 

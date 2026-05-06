@@ -1,102 +1,64 @@
 {
   "_comment": [
-    "Provisional tolerances for funasr_nano. Stage 4 finalizes against",
-    "observed C++ drift.",
-    "Magnitude-aware: max_abs = max(1e-4 * p99_abs, 1e-6); mean_abs =",
-    "max(1e-5 * rms, 1e-6).",
-    "Reference regime: F32 across the whole stack (encoder/adaptor are F32 in",
-    "the checkpoint; the BF16 LLM is upcast to F32 by FunASR's default",
-    "inference path because passing bf16=True would cast speech to BF16",
-    "before the F32 encoder and crash on dtype mismatch).",
-    "Encoder/adaptor produce well-conditioned outputs after their final",
-    "norm; before the norm magnitudes blow up through the SAN-M stack",
-    "(enc.encoders.48 max ~2.5e4) \u2014 the budget below tracks that profile.",
-    "Every entry carries _provisional: true; do NOT ship a model while",
-    "any _provisional flag remains."
+    "funasr_nano correctness regime:",
+    "  - GGUF dtype: BF16 (per-tensor: BF16 matrices/embeddings, F32 norms/biases).",
+    "  - KV cache dtype: F16 (TRANSCRIBE_KV_TYPE_AUTO falls back to F16; ggml does",
+    "    not yet support BF16 KV cache, which would be the natural match for the",
+    "    LM's BF16 weights).",
+    "  - Frontend: C++ kaldi-fbank+LFR (no CMVN), production path; the reference",
+    "    runs FunASR's WavFrontend on CPU with dither=0 (after the baseline-",
+    "    snapshot fix in the dumper, see below).",
+    "  - Backend / threads: --backend cpu --threads 1 (deterministic).",
+    "  - Reference framework: FunASR 1.3.1 author repo, F32-upcast inference",
+    "    (encoder + adaptor) + BF16 LM (HF transformers Qwen3 in bf16).",
+    "  - C++ compute: F32 throughout the encoder + adaptor; LM uses BF16 weights",
+    "    with F32 mul_mat compute. KV cache reads/writes go through F16.",
+    "",
+    "Dominant drift sources:",
+    "  - 70-block SAN-M residual stack (encoders0+encoders+tp_encoders) accumulates",
+    "    fp32 reduction-order error and BF16 weight-storage error linearly through",
+    "    each residual add. After ~50 blocks the post-residual magnitude carries",
+    "    O(80) drift on a position with strong signal; the trailing LayerNorm",
+    "    (after_norm, tp_norm) collapses it back to O(0.02).",
+    "  - 28-block Qwen3 LM with BF16 weights and F16 KV. Prefill drift on logits",
+    "    is small (~5e-2 max) because the F32 mul_mat dominates. Step-graph (gen8)",
+    "    drift is ~50x larger because the F16 KV cache rounds K/V at every write",
+    "    and step attention amplifies the per-write error across the cached",
+    "    positions.",
+    "  - Adaptor: 2 LayerNorm-residual blocks. Block-0 / block-1 outputs each",
+    "    grow to O(10-30) before the next LayerNorm absorbs the magnitude.",
+    "",
+    "Tolerances are set to ~2x observed C++-vs-reference drift on jfk @ Stage 4",
+    "(see reports/porting/funasr_nano/forward-map.md for the per-stage map).",
+    "",
+    "Reference-dumper note: FunASR's AutoModel snapshots `self.kwargs` at __init__",
+    "time and resets it with copy.deepcopy on every auto.generate() call. Setting",
+    "auto.kwargs[\"frontend\"].dither=0 in the dumper was wiped by that reset, so",
+    "auto.generate ran with the default dither=1.0, adding non-deterministic",
+    "noise to the kaldi fbank feeding the encoder. The dumper now calls",
+    "auto._store_base_configs() AFTER the dither tweak so the baseline carries",
+    "the deterministic frontend. Without that fix every encoder dump diverged",
+    "wildly at silence positions (drift up to ~565 on enc.embed.out) for reasons",
+    "unrelated to the C++ port.",
+    "",
+    "Ship gate: transcript exact-match on jfk + dec.logits_raw.prefill drift small",
+    "enough that argmax decisions agree with the reference. Both hold at ref dtype."
   ],
-  "adaptor.blocks.0.out": {
-    "max_abs": 0.0034138289031982413,
-    "mean_abs": 0.00017896020836494523,
-    "_provisional": true
-  },
-  "adaptor.linear1.out": {
-    "max_abs": 0.0008630010528564452,
-    "mean_abs": 2.28872765665591e-05,
-    "_provisional": true
-  },
-  "adaptor.linear2.out": {
-    "max_abs": 0.006811815986633285,
-    "mean_abs": 0.00014283584506967018,
-    "_provisional": true
-  },
-  "adaptor.out": {
-    "max_abs": 0.006181859676361082,
-    "mean_abs": 0.0002672932364148201,
-    "_provisional": true
-  },
-  "dec.logits_raw.gen8": {
-    "max_abs": 0.000586672575473785,
-    "mean_abs": 2.1633146387303813e-05,
-    "_provisional": true
-  },
-  "dec.logits_raw.prefill": {
-    "max_abs": 0.0015415232610702502,
-    "mean_abs": 0.00010611364522445808,
-    "_provisional": true
-  },
-  "enc.after_norm.out": {
-    "max_abs": 0.0011241110897064214,
-    "mean_abs": 2.567070811234031e-05,
-    "_provisional": true
-  },
-  "enc.embed.out": {
-    "max_abs": 0.0550393470458984,
-    "mean_abs": 0.0036511827386624274,
-    "_provisional": true
-  },
-  "enc.encoders.0.out": {
-    "max_abs": 0.003948250980377225,
-    "mean_abs": 0.00016604747360162437,
-    "_provisional": true
-  },
-  "enc.encoders.24.out": {
-    "max_abs": 0.030762244720459075,
-    "mean_abs": 0.000737022046985934,
-    "_provisional": true
-  },
-  "enc.encoders.48.out": {
-    "max_abs": 0.06784943054199222,
-    "mean_abs": 0.002575615189738996,
-    "_provisional": true
-  },
-  "enc.encoders0.0.out": {
-    "max_abs": 0.0033920969963073776,
-    "mean_abs": 0.00012763567537808754,
-    "_provisional": true
-  },
-  "enc.tp_encoders.0.out": {
-    "max_abs": 0.001227200784683229,
-    "mean_abs": 8.249996218862937e-05,
-    "_provisional": true
-  },
-  "enc.tp_encoders.10.out": {
-    "max_abs": 0.0026170226764678983,
-    "mean_abs": 0.0005596314943982829,
-    "_provisional": true
-  },
-  "enc.tp_encoders.19.out": {
-    "max_abs": 0.006325508403778096,
-    "mean_abs": 0.0008071931402567518,
-    "_provisional": true
-  },
-  "enc.tp_norm.out": {
-    "max_abs": 0.00019241314411163357,
-    "mean_abs": 5.54169335621307e-06,
-    "_provisional": true
-  },
-  "frontend.fbank.lfr.cmvn.out": {
-    "max_abs": 0.0024300873584747317,
-    "mean_abs": 0.00016144118109513066,
-    "_provisional": true
-  }
+  "frontend.fbank.lfr.cmvn.out": { "max_abs": 0.030,  "mean_abs": 0.006   },
+  "enc.embed.out":               { "max_abs": 0.7,    "mean_abs": 0.13    },
+  "enc.encoders0.0.out":         { "max_abs": 0.40,   "mean_abs": 0.032   },
+  "enc.encoders.0.out":          { "max_abs": 0.60,   "mean_abs": 0.036   },
+  "enc.encoders.24.out":         { "max_abs": 3.0,    "mean_abs": 0.16    },
+  "enc.encoders.48.out":         { "max_abs": 160.0,  "mean_abs": 0.60    },
+  "enc.after_norm.out":          { "max_abs": 0.22,   "mean_abs": 0.0062  },
+  "enc.tp_encoders.0.out":       { "max_abs": 5.0,    "mean_abs": 0.008   },
+  "enc.tp_encoders.10.out":      { "max_abs": 22.0,   "mean_abs": 0.020   },
+  "enc.tp_encoders.19.out":      { "max_abs": 20.0,   "mean_abs": 0.040   },
+  "enc.tp_norm.out":             { "max_abs": 0.05,   "mean_abs": 0.0016  },
+  "adaptor.linear1.out":         { "max_abs": 0.32,   "mean_abs": 0.006   },
+  "adaptor.linear2.out":         { "max_abs": 3.5,    "mean_abs": 0.022   },
+  "adaptor.blocks.0.out":        { "max_abs": 25.0,   "mean_abs": 0.36    },
+  "adaptor.out":                 { "max_abs": 75.0,   "mean_abs": 0.26    },
+  "dec.logits_raw.prefill":      { "max_abs": 0.12,   "mean_abs": 0.022   },
+  "dec.logits_raw.gen8":         { "max_abs": 25.0,   "mean_abs": 2.5     }
 }

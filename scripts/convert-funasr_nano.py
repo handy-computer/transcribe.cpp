@@ -271,6 +271,12 @@ def per_tensor_target_dtype(name: str) -> GGMLQuantizationType:
         return GGMLQuantizationType.F32
     if name.endswith(".q_norm.weight") or name.endswith(".k_norm.weight"):
         return GGMLQuantizationType.F32
+    # FSMN depthwise conv1d (3D weight). The C++ loader's CONV bucket
+    # only accepts F32/F16; BF16 conv is not in the supported types
+    # (matches sensevoice's policy). Upcast at convert time — the
+    # storage cost is single-digit MB total across all 70 SAN-M blocks.
+    if name.endswith(".attn.fsmn.weight"):
+        return GGMLQuantizationType.F32
     return REFERENCE_GGML_TYPE
 
 
@@ -536,10 +542,47 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     writer = GGUFWriter(str(out_path), "funasr_nano")
 
     # ----- general.* -----
-    writer.add_string("general.basename",   "fun-asr-nano")
-    writer.add_string("general.size_label", size_label)
-    writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",  hp["languages"])
+    # FunASR Model Open Source License Agreement v1.1 attribution
+    # requirement (`MODEL_LICENSE` 2.2): "you must attribute the source
+    # and author information and retain relevant model names". Bake the
+    # canonical attribution into the GGUF KV so downstream consumers
+    # (anyone loading the converted file) see source + author + model
+    # names without having to read external docs.
+    writer.add_string("general.name",         "Fun-ASR-Nano-2512")
+    writer.add_string("general.basename",     "fun-asr-nano")
+    writer.add_string("general.size_label",   size_label)
+    writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
+    writer.add_array ("general.languages",    hp["languages"])
+    writer.add_string("general.author",       "Alibaba Group / FunAudioLLM")
+    writer.add_string("general.organization", "FunAudioLLM")
+    writer.add_string("general.license",      "FunASR-Model-License-1.1")
+    writer.add_string("general.license.link",
+                      "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE")
+    writer.add_string("general.url",
+                      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512")
+    writer.add_string("general.source.url",
+                      "https://github.com/modelscope/FunASR")
+    # Model-name retention (license clause 2.2): list every canonical
+    # upstream component the checkpoint stitches together. Anyone using,
+    # copying, modifying, or sharing this GGUF must keep these visible.
+    writer.add_array("general.tags", [
+        "asr",
+        "speech-recognition",
+        "audio-llm",
+        "FunASRNano",
+        "Fun-ASR-Nano-2512",
+        "SenseVoiceEncoderSmall",
+        "Qwen3-0.6B",
+    ])
+    writer.add_string("general.description",
+                      "Fun-ASR-Nano-2512 (Alibaba FunAudioLLM): "
+                      "SenseVoiceEncoderSmall encoder + 2-layer audio "
+                      "adaptor + Qwen3-0.6B LLM. Bundled Qwen3-0.6B "
+                      "weights are derivative of Qwen/Qwen3-0.6B "
+                      "(Apache-2.0). Converted from FunAudioLLM/"
+                      "Fun-ASR-Nano-2512 model.pt; see "
+                      "https://github.com/modelscope/FunASR/blob/main/"
+                      "MODEL_LICENSE for FunASR redistribution terms.")
 
     # ----- stt.variant -----
     writer.add_string("stt.variant", variant)
