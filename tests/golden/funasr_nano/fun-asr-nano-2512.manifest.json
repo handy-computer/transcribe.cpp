@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "funasr_nano",
+  "variant": "fun-asr-nano-2512",
+  "source_model": {
+    "hf_repo": "FunAudioLLM/Fun-ASR-Nano-2512",
+    "hf_revision": "a7088d620f755dcdca575b63db184c3ad55b2865"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "manual",
+  "_skeleton": true
+}
