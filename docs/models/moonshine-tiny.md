@@ -60,6 +60,35 @@ If your audio is not already 16 kHz mono WAV, convert it first:
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 ```
 
+## Performance
+
+Cells are wall-clock latency (mean over 5 iterations after 2 warmups),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
+(2 decimal places).
+
+### Apple M4 Max
+
+| Backend | Sample       |         Q8_0 |
+| ------- | ------------ | -----------: |
+| Metal   | jfk (11.0s)  |  59 ms (188×) |
+| Metal   | dots (35.3s) | 442 ms (80×)  |
+| CPU     | jfk (11.0s)  |  52 ms (214×) |
+| CPU     | dots (35.3s) | 378 ms (93×)  |
+
+macOS 26.4.1, transcribe.cpp `0d312ce`.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models moonshine-tiny \
+  --quants q8_0 \
+  --samples jfk,dots \
+  --backends metal,cpu \
+  --iters 5 --warmup 2 \
+  --name moonshine-publication
+```
+
 ## Numerical Validation
 
 transcribe.cpp is validated tensor-by-tensor against the transformers reference

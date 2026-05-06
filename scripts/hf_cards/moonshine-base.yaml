@@ -25,7 +25,7 @@ tags:
   - speech-to-text
   - moonshine
   - useful-sensors
-  - en
+  - encoder-decoder
 
 summary: |
   Useful Sensors Moonshine base — a 62M-parameter encoder-decoder transformer

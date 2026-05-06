@@ -1,6 +1,11 @@
 # Moonshine Streaming
 
-Status: research
+Status: supported (one-shot decode) with manifest-driven numerical
+validation against the HF Transformers reference, `validate.py all`
+passing on CPU. Streaming session API not yet wired into
+`transcribe-cli` — the reference itself is one-shot at the time of port,
+so the C++ scope mirrors that and the chunked-feed surface is a
+follow-up.
 
 ## Identity
 
@@ -69,39 +74,74 @@ Independent of moonshine:
 
 ## Commands
 
-Reference run:
+The variant key is one of `moonshine-streaming-tiny`,
+`moonshine-streaming-small`, or `moonshine-streaming-medium`. Examples
+below use `moonshine-streaming-tiny`; substitute as needed.
+
+Full validation (reference dump → C++ dump → tensor compare):
 
 ```bash
-TODO  # uv run scripts/validate.py ref --family moonshine_streaming --variant moonshine-streaming-tiny
+uv run scripts/validate.py all --family moonshine_streaming --variant moonshine-streaming-tiny
 ```
 
-Reference dumps:
+Reference dumps (encoder intermediates + decode prompt-pass + transcript):
 
 ```bash
-TODO  # uv run --project scripts/envs/moonshine_streaming \
-      #   scripts/dump_reference_moonshine_streaming_transformers.py decode \
-      #   --model UsefulSensors/moonshine-streaming-tiny \
-      #   --audio samples/jfk.wav \
-      #   --out build/validate/moonshine_streaming/moonshine-streaming-tiny/jfk/decode/ref \
-      #   --torch-threads 1
+uv run --project scripts/envs/moonshine_streaming \
+  scripts/dump_reference_moonshine_streaming_transformers.py decode \
+  --model UsefulSensors/moonshine-streaming-tiny \
+  --audio samples/jfk.wav \
+  --out build/validate/moonshine_streaming/moonshine-streaming-tiny/jfk/decode/ref \
+  --torch-threads 1
 ```
 
 Conversion:
 
 ```bash
-TODO  # uv run --project scripts/envs/moonshine_streaming scripts/convert-moonshine_streaming.py UsefulSensors/moonshine-streaming-tiny
+uv run --project scripts/envs/moonshine_streaming \
+  scripts/convert-moonshine_streaming.py UsefulSensors/moonshine-streaming-tiny
 ```
 
-Validation:
+Quantize (after conversion produces the F32 reference GGUF):
 
 ```bash
-TODO  # uv run scripts/validate.py all --family moonshine_streaming --variant moonshine-streaming-tiny
+build/bin/transcribe-quantize \
+  models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf \
+  models/moonshine-streaming-tiny/moonshine-streaming-tiny-Q8_0.gguf \
+  --quant Q8_0
 ```
 
-Benchmarks:
+Performance benchmark:
 
 ```bash
-TODO  # uv run scripts/wer.py --family moonshine_streaming --variant moonshine-streaming-tiny --dataset librispeech-test-clean
+uv run scripts/bench/run.py \
+  --models moonshine-streaming-tiny \
+  --quants f16,q8_0 \
+  --samples jfk \
+  --backends metal,cpu \
+  --iters 5 --warmup 2 \
+  --name moonshine-streaming-tiny-publication
+```
+
+WER sweep (LibriSpeech test-clean, 2620 utterances; one run per shipped quant):
+
+```bash
+uv run scripts/wer/run.py \
+  --model models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf \
+  --manifest samples/wer/test-clean.manifest.jsonl \
+  --out reports/wer/moonshine-streaming-tiny-F32.test-clean.jsonl
+uv run scripts/wer/score.py reports/wer/moonshine-streaming-tiny-F32.test-clean.jsonl
+```
+
+HF reference WER on the same manifest (sanity check; CPU-only, ~4 min for tiny):
+
+```bash
+uv run --project scripts/envs/moonshine_streaming \
+  scripts/dump_reference_moonshine_streaming_transformers.py wer \
+  --model UsefulSensors/moonshine-streaming-tiny \
+  --manifest samples/wer/test-clean.manifest.jsonl \
+  --out reports/wer/moonshine-streaming-tiny-REF.test-clean.jsonl
+uv run scripts/wer/score.py reports/wer/moonshine-streaming-tiny-REF.test-clean.jsonl
 ```
 
 ## Architecture summary

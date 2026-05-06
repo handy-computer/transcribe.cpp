@@ -1,0 +1,66 @@
+# Spec for the HF README of handy-computer/moonshine-streaming-small-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: UsefulSensors/moonshine-streaming-small
+target_repo: handy-computer/moonshine-streaming-small-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine-streaming-small.md
+
+upstream_commit: 2c03650
+pin_date: 2026-05-06
+
+validation:
+  reference: HF Transformers v5.7.0
+  commit: 0d312ce
+  date: 2026-05-06
+
+license: mit
+license_display: MIT
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - moonshine
+  - moonshine-streaming
+  - useful-sensors
+  - encoder-decoder
+
+summary: |
+  Offline English speech-to-text. A 123M-parameter encoder-decoder ASR model
+  designed for streaming use (ergodic encoder + sliding-window attention,
+  50 Hz time-domain frontend). Same family as moonshine-streaming-tiny;
+  deeper encoder/decoder (10 / 10 layers) and wider hidden dims (encoder 620 /
+  decoder 512). Takes a 16 kHz mono WAV and produces a transcript.
+  No translation, no multilingual capability, no timestamps.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances)
+    with greedy decoding (`num_beams=1`, `do_sample=False`). F32 reference
+    baseline: 2.53%. Useful Sensors' self-reported number on this split is
+    2.49% from the Open ASR Leaderboard table; the +0.04pp residual matches
+    the same scoring / text-normalization difference seen on the tiny variant
+    where we cross-checked against the HF Transformers reference (4.52% on
+    the same manifest, 99.6% identical hypotheses to our F32) and confirmed
+    it is not a numerical drift in the port. Q6_K / Q5_K_M / Q4_K_M GGUFs
+    are not currently shipped for this variant.
+
+quants:
+  - name: F32
+    filename: moonshine-streaming-small-F32.gguf
+    size: 536 MB
+    wer: 2.53%
+  - name: F16
+    filename: moonshine-streaming-small-F16.gguf
+    size: 269 MB
+    wer: 2.53%
+  - name: Q8_0
+    filename: moonshine-streaming-small-Q8_0.gguf
+    size: 189 MB
+    wer: 2.54%
