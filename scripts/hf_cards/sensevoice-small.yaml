@@ -13,7 +13,7 @@ pin_date: 2026-05-06
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: FunASR
-  commit: 4c09ba0
+  commit: f094d28
   date: 2026-05-06
 
 # Upstream license is "model-license" (FunASR's MODEL_LICENSE), not a
@@ -66,26 +66,26 @@ wer:
 
 quants:
   - name: F32
-    filename: sensevoice-small-F32.gguf
+    filename: SenseVoiceSmall-F32.gguf
     size: 893 MB
     wer: 3.13%
   - name: F16
-    filename: sensevoice-small-F16.gguf
+    filename: SenseVoiceSmall-F16.gguf
     size: 449 MB
     wer: 3.13%
   - name: Q8_0
-    filename: sensevoice-small-Q8_0.gguf
+    filename: SenseVoiceSmall-Q8_0.gguf
     size: 241 MB
     wer: 3.13%
   - name: Q6_K
-    filename: sensevoice-small-Q6_K.gguf
+    filename: SenseVoiceSmall-Q6_K.gguf
     size: 187 MB
     wer: 3.14%
   - name: Q5_K_M
-    filename: sensevoice-small-Q5_K_M.gguf
+    filename: SenseVoiceSmall-Q5_K_M.gguf
     size: 164 MB
     wer: 3.18%
   - name: Q4_K_M
-    filename: sensevoice-small-Q4_K_M.gguf
+    filename: SenseVoiceSmall-Q4_K_M.gguf
     size: 139 MB
     wer: 3.45%

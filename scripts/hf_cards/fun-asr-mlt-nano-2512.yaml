@@ -1,0 +1,124 @@
+# Spec for the HF README of handy-computer/fun-asr-mlt-nano-2512-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: FunAudioLLM/Fun-ASR-MLT-Nano-2512
+target_repo: handy-computer/fun-asr-mlt-nano-2512-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/fun-asr-mlt-nano-2512.md
+
+# Pinned at intake (Stage 1).
+upstream_commit: cf67a938bf2829959d08fdfb84e186eff02a67ff
+pin_date: 2026-05-06
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: FunASR
+  commit: f094d28
+  date: 2026-05-06
+
+# Upstream license is "FunASR-Model-License-1.1" — not a standard SPDX id.
+# The HF YAML field accepts a free-form `other` plus a license_name /
+# license_link override on the upstream card; the renderer emits
+# `license: other` and surfaces the human-facing form via `license_display`.
+license: other
+license_display: FunASR Model Open Source License Agreement v1.1
+pipeline_tag: automatic-speech-recognition
+languages:
+  - zh
+  - en
+  - yue
+  - ja
+  - ko
+  - vi
+  - id
+  - th
+  - ms
+  - tl
+  - ar
+  - hi
+  - bg
+  - hr
+  - cs
+  - da
+  - nl
+  - et
+  - fi
+  - el
+  - hu
+  - ga
+  - lv
+  - lt
+  - mt
+  - pl
+  - pt
+  - ro
+  - sk
+  - sl
+  - sv
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - fun-asr-nano
+  - fun-asr-mlt-nano
+  - sense-voice-encoder
+  - qwen3
+  - audio-llm
+  - multilingual
+
+summary: |
+  Offline speech-to-text covering 31 languages, with focused optimization
+  on East and Southeast Asian languages: Chinese, English, Cantonese,
+  Japanese, Korean, Vietnamese, Indonesian, Thai, Malay, Filipino, plus
+  Arabic, Hindi, and 19 European languages (Bulgarian, Croatian, Czech,
+  Danish, Dutch, Estonian, Finnish, Greek, Hungarian, Irish, Latvian,
+  Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian,
+  Swedish). Same architecture as Fun-ASR-Nano-2512 (~800M trainable
+  parameters: frozen SenseVoiceEncoderSmall + 2-layer audio adaptor +
+  bundled Qwen3-0.6B LLM); trained on a smaller multilingual corpus
+  ("hundreds of thousands of hours" per the model card, vs Nano's
+  "tens of millions"). Takes a 16 kHz mono WAV and emits text. Not
+  streaming, no translation, no timestamps.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances)
+    with greedy LLM decoding via the bundled Qwen3-0.6B head. The publisher
+    does not report a numerical LibriSpeech WER for the MLT variant
+    specifically (the shared README's per-model table covers Fun-ASR-Nano
+    only). Gate baseline is our own FunASR 1.3.1 reference run on the same
+    manifest: 1.76% (95% CI [1.60%, 1.93%]). transcribe.cpp's BF16 port
+    matches that baseline within -0.02 percentage-points. LibriSpeech is
+    English only; the strength of the MLT variant is multilingual coverage,
+    not English accuracy. For the other 30 languages, run your own
+    representative manifest.
+
+quants:
+  - name: BF16
+    filename: Fun-ASR-MLT-Nano-2512-BF16.gguf
+    size: 1590 MB
+    wer: 1.74%
+  - name: F16
+    filename: Fun-ASR-MLT-Nano-2512-F16.gguf
+    size: 1590 MB
+    wer: 1.74%
+  - name: Q8_0
+    filename: Fun-ASR-MLT-Nano-2512-Q8_0.gguf
+    size: 850 MB
+    wer: 1.74%
+  - name: Q6_K
+    filename: Fun-ASR-MLT-Nano-2512-Q6_K.gguf
+    size: 659 MB
+    wer: 1.69%
+  - name: Q5_K_M
+    filename: Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf
+    size: 602 MB
+    wer: 1.77%
+  - name: Q4_K_M
+    filename: Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf
+    size: 531 MB
+    wer: 1.89%

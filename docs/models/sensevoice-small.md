@@ -30,12 +30,12 @@ pinned 2026-05-06.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [sensevoice-small-F32.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/sensevoice-small-F32.gguf)       | 893 MB | 3.13% |
-| F16    | [sensevoice-small-F16.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/sensevoice-small-F16.gguf)       | 449 MB | 3.13% |
-| Q8_0   | [sensevoice-small-Q8_0.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/sensevoice-small-Q8_0.gguf)     | 241 MB | 3.13% |
-| Q6_K   | [sensevoice-small-Q6_K.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/sensevoice-small-Q6_K.gguf)     | 187 MB | 3.14% |
-| Q5_K_M | [sensevoice-small-Q5_K_M.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/sensevoice-small-Q5_K_M.gguf) | 164 MB | 3.18% |
-| Q4_K_M | [sensevoice-small-Q4_K_M.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/sensevoice-small-Q4_K_M.gguf) | 139 MB | 3.45% |
+| F32    | [SenseVoiceSmall-F32.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-F32.gguf)       | 893 MB | 3.13% |
+| F16    | [SenseVoiceSmall-F16.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-F16.gguf)       | 449 MB | 3.13% |
+| Q8_0   | [SenseVoiceSmall-Q8_0.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-Q8_0.gguf)     | 241 MB | 3.13% |
+| Q6_K   | [SenseVoiceSmall-Q6_K.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-Q6_K.gguf)     | 187 MB | 3.14% |
+| Q5_K_M | [SenseVoiceSmall-Q5_K_M.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-Q5_K_M.gguf) | 164 MB | 3.18% |
+| Q4_K_M | [SenseVoiceSmall-Q4_K_M.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-Q4_K_M.gguf) | 139 MB | 3.45% |
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy CTC decoding. The publisher does not report a numerical
@@ -56,7 +56,7 @@ cmake -B build
 cmake --build build
 
 build/bin/transcribe-cli \
-  -m models/sensevoice-small/sensevoice-small-Q8_0.gguf \
+  -m models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf \
   --language en \
   samples/jfk.wav
 ```
@@ -93,13 +93,13 @@ above (2 decimal places).
 | CPU     | jfk (11.0s)  |   210 ms (52×)  |   213 ms (52×)  |
 | CPU     | dots (35.3s) |   698 ms (51×)  |   727 ms (49×)  |
 
-macOS 26.4.1, transcribe.cpp `f248c1a`.
+macOS 26.4.1, transcribe.cpp `f094d28`.
 
 Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
-  --models sensevoice-small \
+  --models SenseVoiceSmall \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
   --backends metal,cpu \
@@ -114,7 +114,7 @@ on `samples/jfk.wav`. All 16 checkpointed tensors fall within family
 tolerance, and the final transcript matches the FunASR reference verbatim
 (both spelled `… laled out …` on token `1089-134686-0000` — a quirk of
 SenseVoice, not a port defect). Last validated at commit
-[`4c09ba0`](https://github.com/handy-computer/transcribe.cpp/tree/4c09ba0).
+[`f094d28`](https://github.com/handy-computer/transcribe.cpp/tree/f094d28).
 
 | Field | Value |
 | --- | --- |
@@ -166,8 +166,8 @@ Run `transcribe-quantize` once per target quant.
 ```bash
 for Q in F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
   build/bin/transcribe-quantize \
-    models/sensevoice-small/sensevoice-small-F32.gguf \
-    models/sensevoice-small/sensevoice-small-${Q}.gguf \
+    models/SenseVoiceSmall/SenseVoiceSmall-F32.gguf \
+    models/SenseVoiceSmall/SenseVoiceSmall-${Q}.gguf \
     --quant ${Q}
 done
 ```
@@ -190,7 +190,7 @@ uv run scripts/wer/score.py reports/wer/sensevoice-small-REF.test-clean.jsonl
 
 # transcribe.cpp ports (one preset shown; loop in the family doc).
 uv run scripts/wer/run.py \
-  --model models/sensevoice-small/sensevoice-small-F32.gguf \
+  --model models/SenseVoiceSmall/SenseVoiceSmall-F32.gguf \
   --manifest samples/wer/test-clean.manifest.jsonl \
   --out      reports/wer/sensevoice-small-F32.test-clean.jsonl
 uv run scripts/wer/score.py reports/wer/sensevoice-small-F32.test-clean.jsonl
