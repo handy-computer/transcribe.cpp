@@ -185,6 +185,15 @@ extern "C" struct transcribe_params transcribe_default_params(void) {
     p.target_language    = nullptr;
     p.strip_special_tags = true;
     p.whisper            = nullptr;
+    p.sensevoice         = nullptr;
+    return p;
+}
+
+extern "C" struct transcribe_sensevoice_params
+transcribe_sensevoice_default_params(void)
+{
+    struct transcribe_sensevoice_params p = {};
+    p.use_itn = false;
     return p;
 }
 

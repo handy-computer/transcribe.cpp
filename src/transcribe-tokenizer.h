@@ -152,6 +152,17 @@ public:
     const std::string & token   (int id) const;
     int                 find    (const std::string & piece) const;
 
+    // True if the token at `id` is a CONTROL-typed entry per the GGUF
+    // tokenizer.ggml.token_type array (= TOKEN_TYPE_CONTROL = 3, the
+    // llama.cpp convention used in scripts/lib/gguf_common.py).
+    // SenseVoice's `<|en|>` / `<|HAPPY|>` / `<|woitn|>` tokens are
+    // CONTROL-typed; whisper's `<|0.00|>` / `<|notimestamps|>` are
+    // CONTROL-typed in the GGUF path. Out-of-range ids and tokenizers
+    // that did not carry a token_type array return false (= "not
+    // control"), so this is safe to consult without a per-family
+    // token-type guard.
+    bool                is_control(int id) const;
+
     // Register a synthesized "special-piece" literal that find() will
     // resolve. Used by source adapters that don't carry every special-
     // token string in the vocab itself — notably the legacy whisper.cpp

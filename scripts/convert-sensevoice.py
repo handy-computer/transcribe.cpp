@@ -124,28 +124,33 @@ REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
 REFERENCE_GGML_TYPE = GGMLQuantizationType.F32
 
 
-# Special token IDs from the SenseVoice vocabulary, used by the C++
-# loader to find language / event / emotion / textnorm prompt tokens
-# without re-decoding the SentencePiece vocab. Values come from the
-# upstream model.py (lid_dict / textnorm_dict / dictionaries) and were
-# verified at intake time against chn_jpn_yue_eng_ko_spectok.bpe.model.
+# Prefix-token row indices into the 16-row enc.embed.weight table.
+# These are NOT SentencePiece output IDs — they map a language /
+# textnorm choice into the small input-embedding table that gets
+# prepended to the encoder input. Values come from
+# funasr.models.sense_voice.model.SenseVoiceSmall: lid_dict / textnorm_dict.
+# event_emo always uses literal indices [1, 2] (hard-coded in the
+# upstream forward), so they do not need to be exposed via KV.
+#
+# (The C++ output vocabulary's <|en|> = 24885 etc. are unrelated —
+# those are how the CTC head LABELS its output, not how the encoder
+# is INPUT-prefixed.)
 SPECIAL_TOKENS = {
-    "lang_auto":        0,      # placeholder; SenseVoice has no auto token
-    "lang_zh":          24884,
-    "lang_en":          24885,
-    "lang_yue":         24888,
-    "lang_ja":          24892,
-    "lang_ko":          24896,
-    "lang_nospeech":    24992,
-    "event_speech":     24993,
-    "event_bgm":        24995,
-    "event_unk":        25019,
-    "emotion_happy":    25001,
-    "emotion_sad":      25002,
-    "emotion_angry":    25003,
-    "emotion_neutral":  25004,
-    "withitn":          25016,
-    "woitn":            25017,
+    "lang_auto":        0,
+    "lang_zh":          3,
+    "lang_en":          4,
+    "lang_yue":         7,
+    "lang_ja":          11,
+    "lang_ko":          12,
+    "lang_nospeech":    13,
+    # event/emotion are NOT prefix slots — they ride along on the CTC
+    # output. The upstream `event_emo_query = embed[[1, 2]]` uses
+    # hard-coded indices 1 and 2; expose them here for the loader's
+    # documentation only.
+    "event_speech":     1,
+    "emotion_neutral":  2,
+    "withitn":          14,
+    "woitn":            15,
 }
 
 
@@ -225,12 +230,24 @@ def extract_tokenizer(sp_model_path: Path) -> dict:
     scores: list[float] = []
     types:  list[int]   = []
 
+    # SentencePiece marks `<|en|>` / `<|Speech|>` / `<|HAPPY|>` /
+    # `<|woitn|>` etc. as `is_control()=False` (i.e. NORMAL) inside the
+    # .bpe.model. Semantically they ARE control / metadata tokens — they
+    # ride along the CTC output as language / event / emotion / ITN
+    # labels, never as transcribed speech. To match the llama.cpp
+    # token_type contract (CONTROL = 3) and to let downstream code strip
+    # them via Tokenizer::is_control(), we re-classify any piece matching
+    # the `<|...|>` pattern as CONTROL. The two genuine SP control tokens
+    # `<s>` (id 1) and `</s>` (id 2) are ALSO CONTROL.
+    import re as _re
+    angle_re = _re.compile(r"^<\|[^|]+\|>$")
+
     for i in range(vocab_size):
         piece = sp.id_to_piece(i)
         score = sp.get_score(i)
         if sp.is_unknown(i):
             ttype = TOKEN_TYPE_UNKNOWN
-        elif sp.is_control(i):
+        elif sp.is_control(i) or angle_re.match(piece):
             ttype = TOKEN_TYPE_CONTROL
         elif sp.is_unused(i):
             ttype = TOKEN_TYPE_UNUSED
@@ -419,10 +436,12 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     writer.add_string("stt.variant", variant)
     writer.add_bool("stt.capability.lang_detect", True)
 
-    # ----- tokenizer.ggml.* (SentencePiece) -----
-    # llama.cpp tokenizer model name "spm" matches their SentencePiece
-    # detokenizer; the loader reuses the same vocab structure.
-    writer.add_string("tokenizer.ggml.model", "spm")
+    # ----- tokenizer.ggml.* (SentencePiece BPE) -----
+    # llama.cpp tags SentencePiece BPE/unigram vocabularies as "bpe" in
+    # tokenizer.ggml.model. The C++ loader's SentencePiece decode path
+    # accepts both "unigram" and "bpe"; SenseVoice's
+    # chn_jpn_yue_eng_ko_spectok.bpe.model is BPE.
+    writer.add_string("tokenizer.ggml.model", "bpe")
     writer.add_array ("tokenizer.ggml.tokens",     tok["tokens"])
     writer.add_array ("tokenizer.ggml.scores",     tok["scores"])
     writer.add_array ("tokenizer.ggml.token_type", tok["types"])

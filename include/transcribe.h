@@ -359,6 +359,7 @@ TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_param
  *                     still expose the raw token text.
  */
 struct transcribe_whisper_params;
+struct transcribe_sensevoice_params;
 
 struct transcribe_params {
     transcribe_task           task;
@@ -368,7 +369,7 @@ struct transcribe_params {
     bool                      strip_special_tags;
 
     /*
-     * Family-specific extension pointer. NULL selects family defaults.
+     * Family-specific extension pointers. NULL selects family defaults.
      * Only consulted when the loaded model's architecture matches the
      * pointed-to struct's family; other families ignore it.
      *
@@ -383,7 +384,8 @@ struct transcribe_params {
      * not system-installed-independent, and callers MUST rebuild when
      * they upgrade transcribe.cpp.
      */
-    const struct transcribe_whisper_params * whisper;
+    const struct transcribe_whisper_params *    whisper;
+    const struct transcribe_sensevoice_params * sensevoice;
 };
 
 TRANSCRIBE_API struct transcribe_params transcribe_default_params(void);
@@ -500,6 +502,43 @@ struct transcribe_whisper_params {
 };
 
 TRANSCRIBE_API struct transcribe_whisper_params transcribe_whisper_default_params(void);
+
+/* ----------------------------------------------------------------------- */
+/* SenseVoice-specific params                                              */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * SenseVoiceSmall family knobs. Reached via transcribe_params::sensevoice.
+ * A NULL pointer selects transcribe_sensevoice_default_params() values.
+ *
+ * SenseVoice is non-autoregressive (encoder + CTC head) and ships four
+ * input prefix-embedding slots that condition the encoder on language,
+ * audio-event, emotion, and inverse text normalization (ITN). The
+ * language slot is driven by the family-agnostic transcribe_params::language
+ * field; the audio-event and emotion slots are hard-coded by the upstream
+ * inference path so they emerge in the OUTPUT (not as input prefixes).
+ * The ITN slot is the only remaining user-facing knob:
+ *
+ *   use_itn = false (default): encoder receives the `woitn` prefix, and
+ *     the CTC head emits raw transcription with no inverse text
+ *     normalization. The control token `<|woitn|>` rides along in the
+ *     output.
+ *
+ *   use_itn = true: encoder receives the `withitn` prefix, the CTC head
+ *     applies inverse text normalization (numbers/punctuation rendered
+ *     in formal form), and `<|withitn|>` rides along in the output.
+ *
+ * NOTE: the runtime cannot enable ITN for languages the upstream model
+ * was not trained to ITN-format. SenseVoiceSmall ships ITN coverage for
+ * its five advertised languages (zh, yue, en, ja, ko). Setting use_itn
+ * on a non-supported audio is a no-op rather than an error.
+ */
+struct transcribe_sensevoice_params {
+    bool use_itn;
+};
+
+TRANSCRIBE_API struct transcribe_sensevoice_params
+    transcribe_sensevoice_default_params(void);
 
 /* ----------------------------------------------------------------------- */
 /* Whisper decoding trace                                                  */

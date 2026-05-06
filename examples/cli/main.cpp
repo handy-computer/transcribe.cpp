@@ -104,6 +104,11 @@ struct cli_args {
     bool        condition_on_prev_tokens     = false; // --condition-on-prev-tokens
     enum transcribe_whisper_prompt_condition prompt_condition =
         TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;       // --prompt-condition first|all
+
+    // SenseVoice-family knobs. Ignored for non-SenseVoice models.
+    bool        use_itn                      = false; // --itn
+    bool        sensevoice_set               = false;
+    bool        keep_special_tags            = false; // --raw-tokens
 };
 
 void print_usage(const char * argv0) {
@@ -125,6 +130,8 @@ void print_usage(const char * argv0) {
         "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"
         "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
         "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
+        "  --itn                 (sensevoice) enable inverse text normalization\n"
+        "  --raw-tokens          keep <|...|> control tokens in output text\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
 }
@@ -229,6 +236,11 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                 return false;
             }
             out.whisper_set = true;
+        } else if (a == "--itn") {
+            out.use_itn         = true;
+            out.sensevoice_set  = true;
+        } else if (a == "--raw-tokens") {
+            out.keep_special_tags = true;
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -367,6 +379,15 @@ int main(int argc, char ** argv) {
             rp.whisper                  = &wp;
         }
 
+        struct transcribe_sensevoice_params svp = transcribe_sensevoice_default_params();
+        if (args.sensevoice_set) {
+            svp.use_itn   = args.use_itn;
+            rp.sensevoice = &svp;
+        }
+        if (args.keep_special_tags) {
+            rp.strip_special_tags = false;
+        }
+
         // Emit a batch header line once, before any per-file output. Carries
         // the one-shot load time so downstream WER tooling can record it
         // without parsing stderr. Per-file lines follow on subsequent lines.
@@ -496,6 +517,15 @@ int main(int argc, char ** argv) {
             wp.condition_on_prev_tokens = args.condition_on_prev_tokens;
             wp.prompt_condition         = args.prompt_condition;
             rp.whisper                  = &wp;
+        }
+
+        struct transcribe_sensevoice_params svp = transcribe_sensevoice_default_params();
+        if (args.sensevoice_set) {
+            svp.use_itn   = args.use_itn;
+            rp.sensevoice = &svp;
+        }
+        if (args.keep_special_tags) {
+            rp.strip_special_tags = false;
         }
 
         // --repeat N runs transcribe_run() N times for steady-state

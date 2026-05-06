@@ -400,6 +400,11 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             cmd += ["--language", language]
         if args.family == "whisper":
             cmd += ["--timestamps", "none"]
+        if args.family == "sensevoice":
+            # The reference dumper emits the raw token stream including
+            # the language / event / emotion / itn control tokens, so
+            # the C++ dump must keep them too for exact-string compare.
+            cmd += ["--raw-tokens"]
         cmd.append(str(audio))
 
         print(f"\n{'=' * 60}", file=sys.stderr)

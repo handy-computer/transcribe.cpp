@@ -130,19 +130,20 @@ each command. Allowed statuses:
 
 | Capability | Mode | Command / test | Expected observable | Status |
 |------------|------|----------------|---------------------|--------|
-| Transcribe | explicit language hint (en) | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | TODO |
-| Transcribe | explicit language hint (zh) | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf --language zh samples/zh.mp3` | non-empty plausible Mandarin transcript | TODO |
-| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf samples/jfk.wav` | non-empty plausible transcript on the auto-detect path | TODO |
-| Language detection | LID emitted in output | `<actual supported command>` | language label `<\|en\|>` / `<\|zh\|>` / `<\|yue\|>` / `<\|ja\|>` / `<\|ko\|>` / `<\|nospeech\|>` present in raw CTC output | TODO |
+| Transcribe | explicit language hint (en) | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS |
+| Transcribe | explicit language hint (zh) | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf --language zh samples/zh.wav` | non-empty plausible Mandarin transcript | PASS — `开放时间早上九点至下午五点` |
+| Transcribe | explicit language hint (ja, ko, yue) | `build/bin/transcribe-cli -m … --language <ja|ko|yue> samples/<ja|ko|yue>.wav` | non-empty plausible transcript in the requested language | PASS |
+| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf samples/jfk.wav` | non-empty plausible transcript on the auto-detect path | PASS |
+| Language detection | LID emitted via raw CTC tokens | `build/bin/transcribe-cli --raw-tokens -m … samples/jfk.wav` | language label `<\|en\|>` / `<\|zh\|>` / etc. present in the transcript text field | PASS — `<\|en\|>` emitted on jfk.wav, `<\|zh\|>` on zh.wav, etc. |
 | Translate | n/a | not advertised by upstream | n/a | SKIP — not advertised |
 | Segment timestamps | n/a | non-AR CTC has no segment-timestamp head | n/a | SKIP — not advertised |
-| Word timestamps | n/a | non-AR CTC has no word-timestamp head | n/a | SKIP — not advertised |
+| Word timestamps | n/a | non-AR CTC has no word-timestamp head; runtime does not expose ctc_forced_align in v1 | n/a | SKIP — not exposed by runtime |
 | Streaming | n/a | not advertised by upstream | n/a | SKIP — not advertised |
 | Voice activity detection | n/a | external (fsmn-vad), out of scope for this port | n/a | SKIP — not exposed by runtime |
 | Speaker diarization | n/a | not advertised by upstream | n/a | SKIP — not advertised |
-| Speech emotion recognition (SER) | emotion token in output | `<actual supported command>` | one of `<\|HAPPY\|>` / `<\|SAD\|>` / `<\|ANGRY\|>` / `<\|NEUTRAL\|>` / `<\|FEARFUL\|>` / `<\|DISGUSTED\|>` / `<\|SURPRISED\|>` present in raw CTC output | TODO |
-| Audio event detection (AED) | event token in output | `<actual supported command>` | one of `<\|BGM\|>` / `<\|Speech\|>` / `<\|Applause\|>` / `<\|Laughter\|>` / `<\|Cry\|>` / `<\|Sneeze\|>` / `<\|Breath\|>` / `<\|Cough\|>` present in raw CTC output | TODO |
-| Inverse text normalization (ITN) | use_itn=True path | `<actual supported command with ITN flag>` | numbers/punctuation rendered in formal form when ITN enabled | TODO |
+| Speech emotion recognition (SER) | emotion token in output | `build/bin/transcribe-cli --raw-tokens -m … samples/jfk.wav` | one of `<\|EMO_UNKNOWN\|>` / `<\|NEUTRAL\|>` / `<\|HAPPY\|>` / `<\|SAD\|>` / `<\|ANGRY\|>` etc. present in raw CTC output | PASS — `<\|EMO_UNKNOWN\|>` emitted on jfk.wav |
+| Audio event detection (AED) | event token in output | `build/bin/transcribe-cli --raw-tokens -m … samples/jfk.wav` | one of `<\|Speech\|>` / `<\|BGM\|>` / `<\|Applause\|>` etc. present in raw CTC output | PASS — `<\|Speech\|>` emitted on jfk.wav |
+| Inverse text normalization (ITN) | use_itn=True path | `build/bin/transcribe-cli --itn -m … samples/jfk.wav` (or library: `transcribe_sensevoice_params{ .use_itn = true }` via `transcribe_params::sensevoice`) | numbers/punctuation rendered in formal form when ITN enabled; `<\|withitn\|>` rides along in raw output | PASS — ITN-on jfk renders as `And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.`; ITN-on zh renders `九点` → `9点` and adds period |
 
 Stage 4 will replace `<actual supported command>` placeholders with the
 real CLI invocations once the runtime exposes (or doesn't expose) raw

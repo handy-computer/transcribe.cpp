@@ -181,9 +181,18 @@ def load_reference(args: argparse.Namespace):
         disable_update=True,
         disable_pbar=True,
         disable_log=True,
-        # Force deterministic frontend.
+        # Forcing the frontend deterministic — `dither=0.0` passed to
+        # AutoModel does NOT actually propagate to WavFrontend in
+        # funasr 1.3.1; the kwarg is consumed silently and the
+        # frontend's `self.dither` stays at the constructor default of
+        # 1.0 (verified empirically). We override the attribute
+        # directly after the model is built so the kaldi fbank path
+        # runs without dithering noise. Without this, repeat runs
+        # produce non-bit-identical features and silent frames hit a
+        # noise-floor instead of FLT_EPSILON, breaking C++ parity.
         dither=0.0,
     )
+    auto.kwargs["frontend"].dither = 0.0
     return auto
 
 

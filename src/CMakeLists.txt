@@ -58,6 +58,11 @@ add_library(transcribe
     arch/moonshine_streaming/weights.cpp
     arch/moonshine_streaming/encoder.cpp
     arch/moonshine_streaming/decoder.cpp
+    arch/sensevoice/model.cpp
+    arch/sensevoice/capabilities.cpp
+    arch/sensevoice/weights.cpp
+    arch/sensevoice/encoder.cpp
+    arch/sensevoice/frontend.cpp
 )
 
 target_include_directories(transcribe
