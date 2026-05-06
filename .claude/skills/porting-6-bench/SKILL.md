@@ -1,15 +1,20 @@
 ---
 name: porting-6-bench
-description: Runs the performance benchmark matrix for a ported model variant and scripts the hypothesis → change → bench → accept-or-revert loop. Use after porting-5-quants has produced the full shipped quant matrix. Input: full quant matrix at models/<variant>/, reference machine matrix. Output: reports/perf/<machine>/<name>_<variant>_<backend>.json per bench run. Every accepted performance iteration is followed by a validate.py all gate so a perf change cannot land while breaking ref-dtype numerics.
+description: Runs the publication performance benchmark for a ported model variant and scripts the hypothesis → change → bench → accept-or-revert loop. Use after porting-5-quants has produced the full shipped quant matrix. Input: full quant matrix at models/<variant>/, reference machine matrix. Output: reports/perf/<machine>/<name>_<variant>_<backend>.json per bench run, scoped to the cells that ship in docs/models/<variant>.md. Every accepted performance iteration is followed by a validate.py all gate so a perf change cannot land while breaking ref-dtype numerics.
 ---
 
 # porting-6-bench
 
-Stage 6 of the porting pipeline. Drives `scripts/bench/run.py` across the
-variant's quant matrix, validates the emitted reports against the
+Stage 6 of the porting pipeline. Drives `scripts/bench/run.py` over the
+**publication scope** — the cells that actually ship in
+`docs/models/<variant>.md` — validates the emitted reports against the
 standardized bench schema, and scripts the accept/revert cycle when the
 human is manually optimizing. Every accepted change re-runs `validate.py`
 so we never trade numerical correctness for speed silently.
+
+Anything beyond the publication scope (more presets, more samples,
+longer iter counts) is good-to-know exploration, not a sign-off
+requirement.
 
 ## Preconditions
 
@@ -63,8 +68,8 @@ field blocks Stage 6.
 ```
 Bench progress:
 - [ ] Step 1: Confirm full quant matrix present
-- [ ] Step 2: Decide bench scope (backends × quants × samples)
-- [ ] Step 3: Capture baseline
+- [ ] Step 2: Confirm bench scope (publication default, optional widening)
+- [ ] Step 3: Capture publication baseline
 - [ ] Step 4: Validate schema completeness
 - [ ] Step 5: Iteration loop (human-driven, with validate gate per accept)
 - [ ] Step 6: Sign-off review
@@ -81,10 +86,22 @@ the variant declared. Missing files → return to Stage 5.
 
 ### Step 2: Bench scope (ask-point)
 
-Default scope: every backend available on the machine (cpu, metal,
-vulkan — whatever the build supports) × every shipped preset ×
-`samples/jfk.wav`. Ask the user to confirm, or to narrow (e.g.
-`--backends metal --quants F16,Q4_K_M` during tight iteration).
+**Publication scope (default, required for sign-off).** This is the
+matrix that ends up rendered in `docs/models/<variant>.md`:
+
+- Quants: `q8_0,q4_k_m` (the two columns the per-model perf table ships)
+- Samples: `jfk,dots` (short + medium-length sample)
+- Backends: `metal,cpu,vulkan` — `run.py` filters to whatever this machine
+  actually supports (Metal on macOS, Vulkan on Linux with the Vulkan
+  build, CPU everywhere)
+- Iters: `3`, Warmup: `1`
+- `--name <variant>-publication`
+
+Confirm publication scope with the user. The user may opt to narrow
+during tight iteration (e.g. `--backends metal --quants q4_k_m`) or
+widen for a one-off "good-to-know" sweep (more presets, more samples,
+larger iter counts). A widened sweep is exploratory and does not gate
+sign-off; sign-off is decided on the publication-scope cells.
 
 ### Step 3: Baseline capture (execute)
 
@@ -92,16 +109,22 @@ vulkan — whatever the build supports) × every shipped preset ×
 `transcribe-bench` processes. Concurrent runs contend for CPU/GPU and
 pollute timings.
 
+Publication-scope baseline (default):
+
 ```bash
 uv run scripts/bench/run.py \
   --models <variant> \
-  --samples jfk \
-  --iters 5 --warmup 2 \
-  --name baseline-$(date -u +%Y%m%dT%H%M%SZ)
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends metal,cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name <variant>-publication-baseline-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
 Writes one report per (variant, backend) pair to `reports/perf/<machine>/`.
-Record the file paths.
+Record the file paths. The final on-doc bench at sign-off should re-run
+this command with `--name <variant>-publication` (matching the
+reproduction command rendered in `docs/models/<variant>.md`).
 
 ### Step 4: Schema validation (execute)
 
@@ -144,10 +167,17 @@ For each optimization hypothesis the user has:
    ```bash
    cmake --build build --target transcribe-cli transcribe-bench
    ```
-4. Skill re-runs the bench at the same scope:
+4. Skill re-runs the bench at the **same scope used for the baseline**.
+   For tight iteration the user may have narrowed (e.g. one backend,
+   one quant); otherwise this is publication scope:
    ```bash
-   uv run scripts/bench/run.py --models <variant> --samples jfk \
-     --iters 5 --warmup 2 --name "<hypothesis-slug>-$(date -u +%Y%m%dT%H%M%SZ)"
+   uv run scripts/bench/run.py \
+     --models <variant> \
+     --quants q8_0,q4_k_m \
+     --samples jfk,dots \
+     --backends metal,cpu,vulkan \
+     --iters 3 --warmup 1 \
+     --name "<hypothesis-slug>-$(date -u +%Y%m%dT%H%M%SZ)"
    ```
 5. Skill compares baseline ↔ candidate using `scripts/bench/compare.py`:
    ```bash
@@ -186,14 +216,20 @@ committed at the user's discretion.
 
 ## Postconditions
 
-- At least one baseline bench report per (variant, backend, preset) cell
-  under `reports/perf/<machine>/`.
+- At least one bench report covering every **publication-scope** cell
+  (`q8_0`/`q4_k_m` × `jfk`/`dots` × machine-supported backends, iters 3,
+  warmup 1) under `reports/perf/<machine>/`. The final on-doc run
+  uses `--name <variant>-publication` so the reproduction command in
+  `docs/models/<variant>.md` matches a real artifact.
 - Schema completeness reported to the user; any gap is a known bench-
   harness task, not a porting task.
 - Optimization iteration loop scripted end-to-end (user drives
   hypotheses; skill runs the loop).
 - Every accepted performance iteration was followed by a passing
   `validate.py all` run.
+- Wider sweeps (more presets, more samples, larger iter counts) are
+  optional. They are good-to-know context and may inform follow-up work
+  but do not gate Stage 6 sign-off.
 
 ## Pointers (read, not execute)
 

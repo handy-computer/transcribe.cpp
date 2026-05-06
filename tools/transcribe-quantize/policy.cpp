@@ -116,6 +116,13 @@ Bucket classify_tensor(const std::string & name) {
     if (name == "frontend.mel_filterbank" || name == "frontend.window") {
         return Bucket::Norm;
     }
+    // Moonshine Streaming: learned scalar inside the asinh frontend
+    // (`asinh(exp(log_k) * x)`). [1]-element F32 — smaller than every
+    // quant block size, and precision-sensitive (it controls the
+    // magnitude of every encoder input feature).
+    if (name == "enc.embedder.comp.log_k") {
+        return Bucket::Norm;
+    }
     // Conformer-block 1×1 pointwise convs — split out from Conv so
     // they can run at F16 on the im2col+matmul path. Matches
     // "enc.blocks.<N>.conv.pointwise1.weight" and ".pointwise2.weight"
@@ -230,9 +237,15 @@ ggml_type resolve_target_type(const Preset & preset,
             ggml_type target = (preset.linear_embed != GGML_TYPE_COUNT)
                 ? preset.linear_embed
                 : preset.linear_main;
-            const int64_t blk = ggml_blck_size(target);
-            if (blk > 1 && (ne0 % blk) != 0) {
-                return preset.linear_fallback;
+            if (const int64_t blk = ggml_blck_size(target); blk > 1 && (ne0 % blk) != 0) {
+                target = preset.linear_fallback;
+            }
+            // If even the fallback's block size doesn't divide ne0
+            // (e.g. moonshine-streaming's frame_len=80 hitting a Q8_0
+            // fallback with block 32), drop to F16 — the universal
+            // floor. F16 has block size 1 so it always fits.
+            if (const int64_t blk = ggml_blck_size(target); blk > 1 && (ne0 % blk) != 0) {
+                target = GGML_TYPE_F16;
             }
             return target;
         }
@@ -255,9 +268,15 @@ ggml_type resolve_target_type(const Preset & preset,
             // linear_attn_out — without it, e.g. whisper-tiny's
             // d_model=384 attn.out.weight under Q6_K would land at
             // Q6_K (block size 256) and the GGUF would refuse to load.
-            const int64_t blk = ggml_blck_size(target);
-            if (blk > 1 && (ne0 % blk) != 0) {
-                return preset.linear_fallback;
+            if (const int64_t blk = ggml_blck_size(target); blk > 1 && (ne0 % blk) != 0) {
+                target = preset.linear_fallback;
+            }
+            // F16 floor: if linear_fallback's block size also doesn't
+            // divide ne0 (e.g. moonshine-streaming's enc.embedder.linear
+            // with ne0=frame_len=80 → Q8_0 fallback block 32), drop to
+            // F16. F16 has block size 1 so it is the universal floor.
+            if (const int64_t blk = ggml_blck_size(target); blk > 1 && (ne0 % blk) != 0) {
+                target = GGML_TYPE_F16;
             }
             return target;
         }

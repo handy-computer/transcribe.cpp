@@ -1,13 +1,13 @@
 ---
 name: porting-2-oracle
-description: Builds the oracle packet — the reference answer key Stage 4 implements against. Runs the reference framework against the family's manifest cases twice (ref/ and ref2/), captures tensor sidecars (with rms / p99_abs), reference transcripts (transcript.json), and a provisional tests/tolerances/<family>.json derived from ref-vs-ref noise. Use after porting-1-intake clears Gate A and before porting-3-convert. Output: build/validate/<family>/<variant>/<case>/<stage>/{ref,ref2}/, dump_coverage.json, transcript.json per decode case, and a provisional tolerances file Stage 4 will finalize.
+description: Builds the oracle packet — the reference answer key Stage 4 implements against. Runs the reference framework against the family's manifest cases once, captures tensor sidecars (with rms / p99_abs), reference transcripts (transcript.json), and a provisional tests/tolerances/<family>.json derived from per-tensor magnitude statistics (1e-4 × p99_abs for max, 1e-5 × rms for mean). Use after porting-1-intake clears Gate A and before porting-3-convert. Output: build/validate/<family>/<variant>/<case>/<stage>/ref/, dump_coverage.json, transcript.json per decode case, and a provisional tolerances file Stage 4 will finalize.
 ---
 
 # porting-2-oracle
 
 Second stage of the porting pipeline. Produces the oracle packet — the
-collection of artifacts Stage 4 implements C++ against. The oracle is 
-the tensor dumps + transcripts + stability pass + tolerances under tightened conventions.
+collection of artifacts Stage 4 implements C++ against. The oracle is
+the tensor dumps + transcripts + magnitude-aware provisional tolerances.
 
 ## Preconditions
 
@@ -30,7 +30,6 @@ After this stage finishes, the oracle packet is exactly:
 ```text
 tests/golden/<family>/<variant>.manifest.json
 build/validate/<family>/<variant>/<case>/<stage>/ref/                  # tensor dumps + sidecars
-build/validate/<family>/<variant>/<case>/<stage>/ref2/                 # stability pass
 build/validate/<family>/<variant>/dump_coverage.json                   # tensor catalog
 build/validate/<family>/<variant>/<case>/<stage>/ref/transcript.json   # reference transcript per decode case
 tests/tolerances/<family>.json                                         # provisional, Stage 4 finalizes
@@ -47,12 +46,11 @@ names.
 Oracle progress:
 - [ ] Step 1: Confirm or write per-family env + dumper
 - [ ] Step 2: Complete the golden manifest
-- [ ] Step 3: Run the dumper for every manifest case (pass 1, ref/)
-- [ ] Step 4: Repeat (pass 2, ref2/) for reference stability
-- [ ] Step 5: Write transcript.json for every decode case
-- [ ] Step 6: Generate dump_coverage.json
-- [ ] Step 7: Write provisional tolerances from ref-vs-ref noise
-- [ ] Step 8: Sign-off review
+- [ ] Step 3: Run the dumper for every manifest case
+- [ ] Step 4: Verify reference transcripts
+- [ ] Step 5: Generate dump_coverage.json
+- [ ] Step 6: Write provisional tolerances from per-tensor magnitude
+- [ ] Step 7: Sign-off review
 ```
 
 ### Step 1: Per-family env and dumper
@@ -71,8 +69,8 @@ Check for `scripts/envs/<family>/pyproject.toml` and
   argparse subcommand shape of the closest existing dumper. All dumpers
   MUST emit tensors via `scripts/lib/ref_dump.py::write_tensor` and
   transcripts via `write_transcript` so the on-disk contract is identical
-  across families. The shared sidecar now records `rms` and `p99_abs`
-  alongside `min`/`max`/`mean`.
+  across families. The shared sidecar records `rms` and `p99_abs`
+  alongside `min`/`max`/`mean` — Step 6 reads these to size tolerances.
 - Surface to the user any unresolved technical decisions the closest
   existing dumper does not answer (novel reference framework wiring,
   unusual hook points, multi-stage decode quirks). Routine stubs do not
@@ -97,7 +95,7 @@ Check for `scripts/envs/<family>/pyproject.toml` and
 See `tests/golden/parakeet/parakeet-tdt-0.6b-v2.manifest.json` for the
 complete shape.
 
-### Step 3: Reference dumps, pass 1 (execute)
+### Step 3: Reference dumps (execute)
 
 For every entry in `manifest.cases[]`, run the dumper's encoder + decode
 subcommands. Default invocation for `samples/jfk.wav`:
@@ -120,25 +118,11 @@ Subcommand names vary per dumper — check the script's `--help` for the
 exact set. For families with extra subcommands (e.g. `mel`, `prompt`)
 run each as the family contract requires.
 
-### Step 4: Reference dumps, pass 2 — stability (execute)
-
-Run every Step 3 invocation a second time with `--out .../ref2` instead
-of `--out .../ref`. Most reference frameworks are deterministic at
-inference, so ref vs ref2 typically diffs to fp32 round-off (~1e-7).
-If diffs are larger, the reference has a stochastic element (dropout not
-disabled, non-deterministic CUDA kernels, etc.); surface this to the user
-— a non-deterministic reference invalidates the tolerance contract.
-
-Per tensor, compute `noise_max_abs` / `noise_mean_abs` = max/mean abs
-diff between ref and ref2. This is the **noise floor**. A tolerance
-tighter than ~10× noise is physically impossible; Step 7 uses this to
-derive the provisional tolerances.
-
 If the reference produces a transcript that is implausible (gibberish,
 empty, language mismatch), STOP — the reference setup is broken, and
 fixing it is a precondition for any C++ work. Do not proceed.
 
-### Step 5: Reference transcripts (execute)
+### Step 4: Reference transcripts (execute)
 
 Every reference decode pass should produce a transcript when the dumper
 exposes one. Use `scripts/lib/ref_dump.py::write_transcript` (most
@@ -152,15 +136,15 @@ inventing one — Stage 4's behavior validation runs against the C++
 runtime via the family-doc Capability Validation table, not against
 synthetic reference transcripts.
 
-### Step 6: Generate dump_coverage.json (execute)
+### Step 5: Generate dump_coverage.json (execute)
 
 Walk `build/validate/<family>/<variant>/` and write `dump_coverage.json`
-with `{family, variant, tensors: [{case, stage, name, shape, dtype}, ...]}`.
+with `{family, variant, tensors: [{case, stage_dir, stage, name, shape, dtype}, ...]}`.
 
 One entry per **tensor** sidecar — that means every `.json` file under
 `<case>/<stage>/ref/` whose contents include the tensor metadata fields
 written by `scripts/lib/ref_dump.py::write_tensor` (`name`, `shape`,
-`dtype`, `layout`, plus the new `rms` / `p99_abs`). Skip any other JSON
+`dtype`, `layout`, plus `rms` / `p99_abs`). Skip any other JSON
 files in the same directory: `transcript.json` (text/tokens, not a
 tensor), and any future behavioral artifacts the dumper grows. The
 discriminator is presence of `shape` + `dtype` + `layout` in the parsed
@@ -170,34 +154,55 @@ transcripts and corrupt validate.py's tensor list.
 This catalog is the contract Stage 4 consumes to know exactly which
 tensors to emit and compare.
 
-### Step 7: Provisional tolerances from the noise floor (execute)
+### Step 6: Provisional tolerances from per-tensor magnitude (execute)
 
 Write `tests/tolerances/<family>.json` with one entry per tensor, derived
-from the Step 4 ref-vs-ref diffs:
+from the magnitude statistics already recorded in each sidecar
+(`p99_abs` and `rms`):
 
 ```
-max_abs  = max(10 × noise_max_abs,  1e-6)
-mean_abs = max(10 × noise_mean_abs, 1e-6)
+max_abs  = max(1e-4 × p99_abs, 1e-6)   # 0.01% of typical large value
+mean_abs = max(1e-5 × rms,     1e-6)   # 0.001% of RMS energy
 ```
+
+When the same tensor name appears in multiple `(case, stage_dir)`
+sidecars, take the **max** p99_abs and rms across them so the budget
+covers the worst-magnitude instance.
+
+Why these multipliers: observed fp32-vs-fp32 drift between two correct
+implementations (different BLAS, different reduction order, FMA vs
+mul+add) is typically ~1e-5 relative per tensor — well below
+Wilkinson worst-case (~1e-4 for stacked matmuls of width K across
+L layers). The 1e-4 / 1e-5 prior is 10× looser than typical observed
+drift: loose enough to admit benign cross-library variation, tight
+enough that a real port issue (wrong layer norm epsilon, missing
+residual, scale factor off, unintended dtype upcast) trips the
+budget on first Stage 4 run. The 1e-6 floor catches near-zero
+tensors (zero-init biases, all-zero pad regions) where the relative
+budget would otherwise vanish.
 
 Per-tensor entry: `{max_abs, mean_abs, _provisional: true}`. Top-of-file
 `_comment` (array of strings) states:
-- These tolerances derive from 10× ref-vs-ref stability noise.
+- These tolerances are magnitude-aware: `1e-4 × p99_abs` for max,
+  `1e-5 × rms` for mean, with a `1e-6` floor.
 - They are provisional — Stage 4 finalizes them against observed C++ drift.
 - Entries with `_provisional: true` make finalization-not-yet-run obvious.
 - Do NOT ship a model while `_provisional` entries remain.
 
-The provisional file is deliberately loose so Stage 4's first
-`validate.py` pass runs end-to-end and produces honest observed drift
-rather than short-circuiting on a missing-tolerance error.
+A correctly-ported tensor should land near or below this budget on
+first run; tensors well above it are real signals to investigate, not
+artifacts of a placeholder floor.
 
-### Step 8: Sign-off
+### Step 7: Sign-off
 
 Report:
-- Number of manifest cases dumped (pass 1 + pass 2).
+- Number of manifest cases dumped.
 - Total tensor count in `dump_coverage.json`.
 - Path to the manifest.
-- Noise-floor summary: median and max ref-vs-ref noise across tensors.
+- Tolerance summary: median and max `max_abs` across tensors so the
+  user can eyeball whether the magnitude-aware numbers look sane (e.g.
+  a logits-scale tensor should have a budget on the order of 1e-2; an
+  embedding-scale tensor 1e-4).
 - Per-case transcript paths so the user can sanity-check the reference
   output before C++ work.
 - Confirmation that the user reviewed the provisional tolerances.
@@ -207,7 +212,7 @@ Report:
 ## Postconditions
 
 - `.f32` + `.json` sidecar pairs exist under
-  `build/validate/<family>/<variant>/<case>/<stage>/{ref,ref2}/` for every
+  `build/validate/<family>/<variant>/<case>/<stage>/ref/` for every
   tensor the dumper emits.
 - Sidecars include `rms` and `p99_abs` (provided by the shared
   `ref_dump.write_tensor`).
@@ -218,9 +223,10 @@ Report:
   exists wherever the reference dumper exposes a transcript.
 - `tests/golden/<family>/<variant>.manifest.json` lists the audio cases
   the dumper actually ran and names the reference entrypoint.
-- `tests/tolerances/<family>.json` exists, populated from 10× ref-vs-ref
-  noise, every tensor carries `_provisional: true`, top-of-file `_comment`
-  states the derivation source.
+- `tests/tolerances/<family>.json` exists, populated from per-tensor
+  magnitude (`max(1e-4 × p99_abs, 1e-6)` for max, `max(1e-5 × rms, 1e-6)`
+  for mean), every tensor carries `_provisional: true`, top-of-file
+  `_comment` states the derivation source.
 
 ## Pointers (read, not execute)
 

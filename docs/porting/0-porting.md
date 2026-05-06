@@ -53,8 +53,8 @@ The high-level intent of each stage:
 1. **Intake** — research identity, capabilities; draft the family doc's
    `## Capability Validation` table; clear Preflight Gate A.
 2. **Oracle** — run the reference framework on every manifest case,
-   twice (ref + ref2 stability), capture transcripts and a provisional
-   tolerances file.
+   capture tensor dumps + transcripts and a provisional tolerances file
+   sized from per-tensor magnitude (`1e-4 × p99_abs` / `1e-5 × rms`).
 3. **Convert** — produce only the reference-dtype GGUF; clear Preflight
    Gate B.
 4. **C++** — implement `src/arch/<family>/`, finalize tolerances, run

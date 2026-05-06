@@ -182,6 +182,38 @@ axis, Q/K transpose order error, or wrong scale factor such as
 **Fix:** dump Q, K, V projections separately from attention scores and
 attention output.
 
+### RoPE rotation pattern (NORMAL vs NEOX)
+
+**Symptoms:** encoder/decoder tensors upstream of MHSA match cleanly, but
+the very first attention block output diverges by a large constant factor
+(seen at ~16x on the first encoder block, growing exponentially with
+depth). Disabling flash-attention, head-dim padding, or tweaking the
+attention scale leaves the drift unchanged because the bug is orthogonal
+to those.
+
+**Common cause:** wrong `mode` argument to `ggml_rope_ext`. ggml has two
+incompatible rotation pairings:
+
+- `GGML_ROPE_TYPE_NORMAL` (=0) — interleaved / GPT-J style. Rotation
+  pairs are `(0, 1), (2, 3), (4, 5), ...`. Reference's `rotate_half`
+  slices `x[..., 0::2]` / `x[..., 1::2]`, and `apply_rotary_pos_emb`
+  expands cos/sin via `repeat_interleave(2, dim=-1)`.
+- `GGML_ROPE_TYPE_NEOX` (=2) — split-halves / GPT-NeoX style. Rotation
+  pairs are `(0, D/2), (1, D/2+1), ...`. Reference's `rotate_half`
+  slices `x[..., :D//2]` / `x[..., D//2:]`, and cos/sin are built via
+  `cat((emb, emb), dim=-1)`.
+
+The two modes produce numerically completely different attention even
+though the rotation angles per position are identical.
+
+**Fix:** before writing the C++ MHSA, open the reference's `rotate_half`
+function (and the cos/sin assembly in `apply_rotary_pos_emb`) and pick
+the matching mode. The rotate_half slicing pattern is the deciding
+signal. `src/arch/moonshine/encoder.cpp` (interleaved → `NORMAL`) and
+`src/arch/qwen3_asr/decoder.cpp` (split-halves → `NEOX`) are the
+in-tree examples of the two modes. Different families inside the same
+HF library make different choices — do not assume one based on another.
+
 ### Mask, length, or position mismatch
 
 **Symptoms:** early decoder tensors are close, but attention output or

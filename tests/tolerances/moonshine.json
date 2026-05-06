@@ -1,0 +1,191 @@
+{
+  "_comment": [
+    "Moonshine per-tensor tolerances for compare_tensors.py. Shared between",
+    "moonshine-tiny (6 enc / 6 dec layers, hidden 288) and moonshine-base",
+    "(8 enc / 8 dec layers, hidden 416). Tiny finalized first; base reuses",
+    "blocks 0-5 unchanged and adds enc/dec.block.{6,7} entries. The shared",
+    "file is correct because both variants run in the same correctness",
+    "regime (F32 GGUF, F32 KV, raw PCM passthrough, --backend cpu",
+    "--threads 1) — drift mechanisms are identical, only depth differs.",
+    "",
+    "Correctness regime:",
+    "  - GGUF dtype:    F32 (reference dtype per intake)",
+    "  - KV cache:      F32 (matches weight dtype; auto policy resolves",
+    "                   F32 on this F32 model)",
+    "  - Frontend:      raw 16 kHz PCM passthrough — moonshine has no",
+    "                   mel/STFT. HF processor is",
+    "                   Wav2Vec2FeatureExtractor(do_normalize=False),",
+    "                   which is a no-op batcher. Both sides see the",
+    "                   identical PCM tensor at enc.audio.in.",
+    "  - Backend:       CPU, --threads 1 (deterministic)",
+    "",
+    "Reference: HuggingFace Transformers",
+    "  MoonshineForConditionalGeneration, fp32 inference mode",
+    "  (model.float() in scripts/dump_reference_moonshine_transformers.py).",
+    "",
+    "C++ compute dtype: F32 throughout. Flash-attn enabled (Apple Metal",
+    "kernel_flash_attn_ext_f32_dk40_dv40 path on the validation host but",
+    "Stage 4 runs --backend cpu).",
+    "",
+    "Drift profile and source:",
+    "  - Pure-lookup / pure-PCM tensors (enc.audio.in, dec.token_emb,",
+    "    dec.embed_sum) drift exactly 0.0 — pinned to 0 per the Step 4",
+    "    zero-drift rule. Any nonzero drift here would indicate an",
+    "    unintended dtype conversion in the lookup path.",
+    "  - Conv stem (conv1, groupnorm, conv2, conv3) drifts at 1e-6 to",
+    "    1e-4 — fp32 reduction-order noise from im2col-based ggml_conv_1d",
+    "    versus PyTorch native conv. Spread, not localized.",
+    "  - Encoder transformer blocks accumulate from 1.4e-4 (block 0) to",
+    "    1.7e-2 (block 5). Mean drift stays ~5e-5; max grows because the",
+    "    activation magnitudes themselves grow with depth (block 5 p99",
+    "    ≈ 268 vs block 0 ≈ 12). Source is fp32 reduction-order noise in",
+    "    the FA + MLP + bias-less LayerNorm chain, with partial RoPE",
+    "    rotating the leading 32 of 36 head dims (head_dim padded to 40",
+    "    for FA, then sliced).",
+    "  - Decoder blocks drift at 1e-6 to 1e-4 across both prompt-pass",
+    "    (n_past=0) and step graph (dec.logits_raw.gen20 at n_past=20).",
+    "    Mid-generation logit drift (2.2e-5) confirms the KV cache",
+    "    write/read offsets and step-loop position handling are correct.",
+    "",
+    "Magnitude-aware budget:",
+    "  max_abs  = max(1e-4 * p99_abs, 1e-6)",
+    "  mean_abs = max(1e-5 * rms,     1e-6)",
+    "  derived from per-tensor sidecar statistics in",
+    "  scripts/lib/ref_dump.py::write_tensor.",
+    "",
+    "Widenings vs Stage 2 provisional: NONE for tiny (every entry kept at",
+    "the magnitude budget; worst-case observed/budget ratio 62%).",
+    "",
+    "Base-only entries (enc.block.6, enc.block.7) — the deeper layers tiny",
+    "doesn't have. For these, the magnitude-aware budget undershoots the",
+    "1.5x-observed C++ drift, so the finalized max_abs is 1.5x observed",
+    "(named widening). Mechanism is the same as tiny's earlier blocks: fp32",
+    "reduction-order noise in the FA + MLP + LayerNorm chain accumulating",
+    "with depth, but base activations grow further (block 7 p99 ~183 vs",
+    "tiny block 5 p99 ~268 — comparable, the widening reflects two",
+    "additional layers of accumulation, not a different mechanism).",
+    "Widening factors (1.5x_observed / magnitude_budget):",
+    "  - enc.block.6.out: max_abs 1.40x  (5.2e-3 budget -> 7.3e-3 used)",
+    "  - enc.block.7.out: max_abs 2.35x  (1.8e-2 budget -> 4.3e-2 used)",
+    "Block 7's 2.35x is above the typical 1.5x-headroom threshold but is",
+    "not a structural-bug signal: drift remains spread across all",
+    "elements (not localized to a position/feature dim), and the cpp",
+    "transcript is byte-equal to the reference. mean_abs stays at the",
+    "magnitude budget for both new entries.",
+    "",
+    "Decoder blocks 6 and 7 (added for base) are at the magnitude budget;",
+    "no widening mechanism needed there."
+  ],
+  "dec.block.0.out": {
+    "max_abs": 0.0005211390309333799,
+    "mean_abs": 1.6239685760798355e-05
+  },
+  "dec.block.1.out": {
+    "max_abs": 0.0027935711135864227,
+    "mean_abs": 0.00013761514052250314
+  },
+  "dec.block.2.out": {
+    "max_abs": 0.003807158275604245,
+    "mean_abs": 0.00017742444411479317
+  },
+  "dec.block.3.out": {
+    "max_abs": 0.004451153411865231,
+    "mean_abs": 0.00018529016932738884
+  },
+  "dec.block.4.out": {
+    "max_abs": 0.005197581802368145,
+    "mean_abs": 0.0002172761727891108
+  },
+  "dec.block.5.out": {
+    "max_abs": 0.0038623179168700947,
+    "mean_abs": 0.00018938879699321136
+  },
+  "dec.block.6.out": {
+    "max_abs": 0.007663,
+    "mean_abs": 0.00042097
+  },
+  "dec.block.7.out": {
+    "max_abs": 0.005614,
+    "mean_abs": 0.00032266
+  },
+  "dec.embed_sum": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0
+  },
+  "dec.logits": {
+    "max_abs": 0.0027211896724700924,
+    "mean_abs": 0.00020706935654146025
+  },
+  "dec.logits_raw": {
+    "max_abs": 0.0013102806186676022,
+    "mean_abs": 7.16090714433564e-05
+  },
+  "dec.logits_raw.gen20": {
+    "max_abs": 0.0016325365486145015,
+    "mean_abs": 9.392910544653738e-05
+  },
+  "dec.out_before_head": {
+    "max_abs": 0.00022948249173164364,
+    "mean_abs": 8.447906025906225e-06
+  },
+  "dec.token_emb": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0
+  },
+  "enc.audio.in": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.0013305659198760995,
+    "mean_abs": 3.5611846195604894e-05
+  },
+  "enc.block.1.out": {
+    "max_abs": 0.0015775402355194378,
+    "mean_abs": 6.055653277938396e-05
+  },
+  "enc.block.2.out": {
+    "max_abs": 0.002805454826354993,
+    "mean_abs": 0.00010311878028661434
+  },
+  "enc.block.3.out": {
+    "max_abs": 0.003578689079284693,
+    "mean_abs": 0.00012578914830403809
+  },
+  "enc.block.4.out": {
+    "max_abs": 0.0066707958984375555,
+    "mean_abs": 0.0001953734428778125
+  },
+  "enc.block.5.out": {
+    "max_abs": 0.026778117065429718,
+    "mean_abs": 0.0006303826171242299
+  },
+  "enc.block.6.out": {
+    "max_abs": 0.007325,
+    "mean_abs": 0.0003057
+  },
+  "enc.block.7.out": {
+    "max_abs": 0.04304,
+    "mean_abs": 0.0005578
+  },
+  "enc.conv1.out": {
+    "max_abs": 7.92701696753502e-05,
+    "mean_abs": 1.6464737231421672e-06
+  },
+  "enc.conv2.out": {
+    "max_abs": 0.0007922532830238313,
+    "mean_abs": 2.3088217100406967e-05
+  },
+  "enc.conv3.out": {
+    "max_abs": 0.0007022460460662874,
+    "mean_abs": 1.874942669923854e-05
+  },
+  "enc.final": {
+    "max_abs": 0.00024504312038421737,
+    "mean_abs": 5.538488218426499e-06
+  },
+  "enc.groupnorm.out": {
+    "max_abs": 0.0001258937603235245,
+    "mean_abs": 2.8720455204290088e-06
+  }
+}

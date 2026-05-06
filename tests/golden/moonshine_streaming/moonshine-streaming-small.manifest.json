@@ -1,0 +1,53 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "moonshine_streaming",
+  "variant": "moonshine-streaming-small",
+  "source_model": {
+    "hf_repo": "UsefulSensors/moonshine-streaming-small",
+    "hf_revision": "2c036506f23a09c18df5a50057599ba6d9280999"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://github.com/huggingface/transformers",
+    "revision": "v5.7.0",
+    "entrypoint": "scripts/dump_reference_moonshine_streaming_transformers.py"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "weights_header",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 1,
+    "hop_length": null,
+    "fft_size": null,
+    "win_length": null,
+    "window": null,
+    "normalization": "per_feature",
+    "preemphasis": null,
+    "dither": null
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 32768,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 0,
+      "decoder_start": 1
+    }
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/moonshine_streaming.json",
+  "cases": [
+    "jfk"
+  ]
+}
