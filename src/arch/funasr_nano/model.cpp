@@ -890,14 +890,17 @@ transcribe_status run(
     const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
     std::vector<ggml_fp16_t> step_mask(max_n_kv, mask_neg_inf);
 
-    // Mid-generation logits dump. The reference dumper captures the
-    // 9th lm_head call (call index 8) in auto.generate's KV-cached
-    // step loop. `dec.logits_raw.gen8` corresponds to the logits
-    // produced AFTER the 9th forward — i.e. step 8 of our step loop
-    // (0-indexed step at which 8 prior generations have already been
-    // emitted). Capture the logits BEFORE we issue argmax for that
-    // step so it's the same tensor the reference hooks.
-    const int gen_dump_step = 8;
+    // Mid-generation logits dump. The reference dumper captures
+    // `lm_head_h.values[8]` — the 9th lm_head call (0-indexed, where
+    // call 0 is the prefill pass). In our step loop, the 9th lm_head
+    // call corresponds to iter 7 of the loop (prefill = 1st call,
+    // iter K = (K+2)th call), so we dump when n_steps == 7. Misnamed
+    // historically as gen_dump_step=8 — that captured the 10th call
+    // and produced an off-by-one against the reference; the bug
+    // happened to pass nano's tolerances because nano's adjacent-step
+    // logits are similar in magnitude, but blew up on MLT where the
+    // tied-lm_head distribution is heavily shifted.
+    const int gen_dump_step = 7;
     int n_steps = 0;
     while (next_tok != eos_id &&
            static_cast<int32_t>(generated_ids.size()) < max_new &&

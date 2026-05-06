@@ -357,7 +357,23 @@ def extract_tokenizer(qwen_dir: Path, vocab_size: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def read_hparams(yaml_config: dict, qwen_config: dict) -> dict:
+# Per-variant language coverage advertised by the publisher's model card.
+# Stage 1 intake is the source of truth; this table mirrors it for the
+# converter's `general.languages` KV. Add new sibling variants here.
+VARIANT_LANGUAGES: dict[str, list[str]] = {
+    "fun-asr-nano-2512":     ["zh", "en", "ja"],
+    "fun-asr-mlt-nano-2512": [
+        "zh", "en", "yue", "ja", "ko",
+        "vi", "id", "th", "ms", "tl",
+        "ar", "hi", "bg", "hr", "cs",
+        "da", "nl", "et", "fi", "el",
+        "hu", "ga", "lv", "lt", "mt",
+        "pl", "pt", "ro", "sk", "sl", "sv",
+    ],
+}
+
+
+def read_hparams(yaml_config: dict, qwen_config: dict, variant: str) -> dict:
     enc = yaml_config["audio_encoder_conf"]
     adp = yaml_config["audio_adaptor_conf"]
     fe  = yaml_config["frontend_conf"]
@@ -434,7 +450,7 @@ def read_hparams(yaml_config: dict, qwen_config: dict) -> dict:
         "fe_fbank_style":       "kaldi_htk",
         "fe_apply_cmvn":        False,
 
-        "languages":            ["zh", "en", "ja"],
+        "languages":            VARIANT_LANGUAGES.get(variant, ["zh", "en", "ja"]),
     }
 
 
@@ -456,7 +472,7 @@ def compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, display_name: str) -> None:
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (per-tensor BF16; norms/biases F32)")
     _patch_fun_asr_nano_imports()
 
@@ -481,7 +497,7 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     with qwen_config_path.open() as f:
         qwen_config = json.load(f)
 
-    hp = read_hparams(yaml_config, qwen_config)
+    hp = read_hparams(yaml_config, qwen_config, variant)
     print(
         f"Encoder: {hp['enc_n_blocks']} main + {hp['enc_tp_blocks']} tp blocks; "
         f"d_model={hp['enc_d_model']} d_input={hp['enc_d_input']} "
@@ -548,8 +564,8 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     # canonical attribution into the GGUF KV so downstream consumers
     # (anyone loading the converted file) see source + author + model
     # names without having to read external docs.
-    writer.add_string("general.name",         "Fun-ASR-Nano-2512")
-    writer.add_string("general.basename",     "fun-asr-nano")
+    writer.add_string("general.name",         display_name)
+    writer.add_string("general.basename",     variant.rsplit("-", 1)[0] if "-" in variant else variant)
     writer.add_string("general.size_label",   size_label)
     writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
     writer.add_array ("general.languages",    hp["languages"])
@@ -559,7 +575,7 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     writer.add_string("general.license.link",
                       "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE")
     writer.add_string("general.url",
-                      "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512")
+                      f"https://huggingface.co/FunAudioLLM/{display_name}")
     writer.add_string("general.source.url",
                       "https://github.com/modelscope/FunASR")
     # Model-name retention (license clause 2.2): list every canonical
@@ -570,17 +586,17 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         "speech-recognition",
         "audio-llm",
         "FunASRNano",
-        "Fun-ASR-Nano-2512",
+        display_name,
         "SenseVoiceEncoderSmall",
         "Qwen3-0.6B",
     ])
     writer.add_string("general.description",
-                      "Fun-ASR-Nano-2512 (Alibaba FunAudioLLM): "
+                      f"{display_name} (Alibaba FunAudioLLM): "
                       "SenseVoiceEncoderSmall encoder + 2-layer audio "
                       "adaptor + Qwen3-0.6B LLM. Bundled Qwen3-0.6B "
                       "weights are derivative of Qwen/Qwen3-0.6B "
                       "(Apache-2.0). Converted from FunAudioLLM/"
-                      "Fun-ASR-Nano-2512 model.pt; see "
+                      f"{display_name} model.pt; see "
                       "https://github.com/modelscope/FunASR/blob/main/"
                       "MODEL_LICENSE for FunASR redistribution terms.")
 
@@ -857,10 +873,18 @@ def main(argv: list[str]) -> int:
 
     out_path = args.out_path
     if out_path is None:
-        out_path = REPO_ROOT / "models" / variant / gguf_name(variant, REFERENCE_DTYPE_LABEL)
+        # GGUF dir + filename use the upstream HF casing (`raw_slug`); the
+        # `stt.variant` KV in the GGUF body stays kebab-case (`variant`)
+        # so internal tooling (manifest, build/validate, family doc paths)
+        # remains lowercase. Matches the qwen3_asr / parakeet / whisper
+        # pattern.
+        output_slug = raw_slug or variant
+        out_path = REPO_ROOT / "models" / output_slug / gguf_name(output_slug, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        output_slug = raw_slug or variant
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, display_name=output_slug)
     return 0
 
 

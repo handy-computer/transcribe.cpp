@@ -6,7 +6,48 @@
     "hf_repo": "FunAudioLLM/Fun-ASR-MLT-Nano-2512",
     "hf_revision": "cf67a938bf2829959d08fdfb84e186eff02a67ff"
   },
+  "reference": {
+    "kind": "author_repo_funasr",
+    "source": "https://github.com/modelscope/FunASR",
+    "revision": "v1.3.1",
+    "entrypoint": "scripts/dump_reference_funasr_nano_funasr.py"
+  },
   "expected_dtype": "bfloat16",
   "dtype_source": "manual",
-  "_skeleton": true
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hamming",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": null,
+    "mel_filterbank_norm": null
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 151936,
+    "special_tokens": {}
+  },
+  "capabilities": {
+    "languages": [
+      "zh", "en", "yue", "ja", "ko",
+      "vi", "id", "th", "ms", "tl",
+      "ar", "hi", "bg", "hr", "cs",
+      "da", "nl", "et", "fi", "el",
+      "hu", "ga", "lv", "lt", "mt",
+      "pl", "pt", "ro", "sk", "sl", "sv"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["none"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/funasr_nano.json",
+  "cases": ["jfk"]
 }

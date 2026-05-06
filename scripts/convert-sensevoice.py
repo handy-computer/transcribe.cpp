@@ -696,7 +696,13 @@ def main(argv: list[str]) -> int:
 
     out_path = args.out_path
     if out_path is None:
-        out_path = REPO_ROOT / "models" / variant / gguf_name(variant, REFERENCE_DTYPE_LABEL)
+        # GGUF dir + filename use the upstream HF casing (`raw_slug`); the
+        # `stt.variant` KV in the GGUF body stays kebab-case (`variant`)
+        # so internal tooling (manifest, build/validate, family doc paths)
+        # remains lowercase. Matches the qwen3_asr / parakeet / whisper
+        # pattern.
+        output_slug = raw_slug or variant
+        out_path = REPO_ROOT / "models" / output_slug / gguf_name(output_slug, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
     convert(model_dir, out_path, variant)
