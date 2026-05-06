@@ -52,7 +52,7 @@ trusting an old range.
 | Cross-attention (precomputed K/V) | `src/arch/cohere/decoder.cpp:276` (`mha_cross_cached`) | `ggml-org/whisper.cpp :: src/whisper.cpp :: search "Kcross"` |
 | Encoder-decoder bridge (enc → K/V proj) | `src/arch/cohere/encoder.cpp:220-227`; `src/arch/cohere/decoder.cpp:513-572` (`build_cross_kv_graph`) | `ggml-org/whisper.cpp :: src/whisper.cpp :: search "Kcross"` |
 | GQA (`n_head != n_head_kv`) | `src/arch/qwen3_asr/decoder.cpp:118-122`; `src/arch/qwen3_asr/decoder.cpp:233-235`; `src/arch/qwen3_asr/decoder.cpp:319-329` | `ggml-org/llama.cpp :: src/models/llama.cpp :: search "n_head_kv"` |
-| RoPE (`ggml_rope_ext`, NeoX) | `src/arch/qwen3_asr/decoder.cpp:242-253`; `src/arch/qwen3_asr/decoder.cpp:525-536` | `ggml-org/llama.cpp :: src/models/llama.cpp :: search "ggml_rope_ext"` |
+| RoPE (`ggml_rope_ext`, mode = NORMAL or NEOX — read reference's `rotate_half` first) | NEOX (split-halves): `src/arch/qwen3_asr/decoder.cpp:242-253`; `src/arch/qwen3_asr/decoder.cpp:525-536`. NORMAL (interleaved / GPT-J): `src/arch/moonshine/encoder.cpp` (`apply_partial_rope`) | `ggml-org/llama.cpp :: src/models/llama.cpp :: search "ggml_rope_ext"` |
 | Flash attention (`ggml_flash_attn_ext`) + manual fallback | `src/arch/cohere/decoder.cpp:239-260`; `src/arch/qwen3_asr/decoder.cpp:302-340` | `ggml-org/llama.cpp :: src/llama-graph.cpp :: search "ggml_flash_attn_ext"` |
 | Causal mask (built host-side, fed as input) | `src/arch/qwen3_asr/decoder.cpp:154-158` (F16 input mask) | `ggml-org/llama.cpp :: src/llama-graph.cpp :: search "build_attn_inp_kq_mask"` |
 | Audio-token injection (splice enc output into LM embeddings) | `src/arch/qwen3_asr/decoder.cpp:168-212` | — |
@@ -110,6 +110,18 @@ op, flash-attn handles head-count broadcasting natively; the manual
 path repeats K/V across `n_groups = n_heads / n_kv_heads` via
 `ggml_repeat` onto a 4D template (319-329). The closest upstream mirror is
 `ggml-org/llama.cpp :: src/models/llama.cpp :: search "n_head_kv"`.
+
+**RoPE rotation mode is per-family.** `ggml_rope_ext` accepts two
+incompatible pairings: `GGML_ROPE_TYPE_NEOX` (split-halves: pairs
+`(0, D/2), (1, D/2+1), ...`) used by qwen3-asr above, and
+`GGML_ROPE_TYPE_NORMAL` (interleaved / GPT-J: pairs `(0, 1), (2, 3),
+...`) used by moonshine (`src/arch/moonshine/encoder.cpp`
+`apply_partial_rope`). Pick the mode by reading the reference's
+`rotate_half` and `apply_rotary_pos_emb`: slicing `[0::2]` /
+`[1::2]` ⇒ NORMAL; slicing `[: D//2]` / `[D//2 :]` ⇒ NEOX. Picking
+the wrong mode silently drifts ~16x at the first attention block —
+see `docs/porting/4a-numerical-troubleshooting.md` "RoPE rotation
+pattern".
 
 **Encoder-decoder bridge vs audio-token injection.** Two different
 models. Cohere (encoder-decoder): encoder output is projected once per

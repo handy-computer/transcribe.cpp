@@ -1,0 +1,204 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "moonshine_streaming",
+  "hf_repo": "UsefulSensors/moonshine-streaming-small",
+  "hf_revision": "2c036506f23a09c18df5a50057599ba6d9280999",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    }
+  },
+  "variants": [
+    {
+      "name": "moonshine-streaming-small",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-decoder"
+    ],
+    "key_fields": {
+      "hidden_act": "silu",
+      "hidden_size": 512,
+      "max_position_embeddings": 4096,
+      "model_type": "moonshine_streaming",
+      "num_attention_heads": 8,
+      "num_hidden_layers": 10,
+      "vocab_size": 32768
+    },
+    "varying_across_variants": [
+      "hidden_size",
+      "intermediate_size",
+      "num_hidden_layers",
+      "encoder_hidden_size"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "weights_header",
+    "evidence": "safetensors header F32=262; F32 selected as dominant floating dtype",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {
+        "F32": 262
+      }
+    }
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": null,
+    "hop_length": null,
+    "fft_size": null,
+    "window": null,
+    "normalization": null,
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": null,
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 32768,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 0,
+      "decoder_start": 1
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "0f97b4337921e6e7e9b4620fc73338ee570aecd3c16038bc23870a887e995045"
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.49,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+      "notes": "Open ASR benchmark table on the model card."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 6.78,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+      "notes": "Open ASR benchmark table on the model card."
+    },
+    {
+      "dataset": "TED-LIUM",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.77,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+      "notes": "Open ASR benchmark table on the model card."
+    },
+    {
+      "dataset": "GigaSpeech",
+      "language": "en",
+      "metric": "wer",
+      "score": 10.41,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+      "notes": "Open ASR benchmark table on the model card."
+    },
+    {
+      "dataset": "AMI",
+      "language": "en",
+      "metric": "wer",
+      "score": 12.54,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+      "notes": "Open ASR benchmark table on the model card."
+    },
+    {
+      "dataset": "Earnings-22",
+      "language": "en",
+      "metric": "wer",
+      "score": 13.53,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+      "notes": "Open ASR benchmark table on the model card."
+    },
+    {
+      "dataset": "SPGISpeech",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.19,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+      "notes": "Open ASR benchmark table on the model card."
+    },
+    {
+      "dataset": "VoxPopuli",
+      "language": "en",
+      "metric": "wer",
+      "score": 9.98,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/UsefulSensors/moonshine-streaming-small",
+      "notes": "Open ASR benchmark table on the model card."
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "The UsefulSensors model card demonstrates direct use of `MoonshineStreamingForConditionalGeneration` + `AutoProcessor` from mainline `transformers` (no `trust_remote_code`). The streaming class is first-party in `transformers` and ships in released versions (verified present at v5.7.0 \u2014 `src/transformers/models/moonshine_streaming/`). The processor wires `Wav2Vec2FeatureExtractor` (do_normalize=False, pad_to_multiple_of=80, feature_size=1) plus a `PreTrainedTokenizerFast`. Same canonical-reference rationale as moonshine: publisher-maintained, instrumentable via forward hooks, and ships the generation_config + tokenizer + feature_extractor as one. `refs/mlx/mlx-audio/mlx_audio/stt/models/` does not yet have a streaming entry as of this intake \u2014 verify when porting; if absent, the upstream Moonshine-streaming paper (download.moonshine.ai/docs/moonshine_streaming_paper.pdf) is the only architectural cross-read.",
+  "architecture_pattern": "encoder-decoder",
+  "known_risks": [
+    "Family-placement decision: this is a NEW family `moonshine_streaming`, not a moonshine variant. Reasons: (a) HF model_type is `moonshine_streaming` with a separate `MoonshineStreamingForConditionalGeneration` class; (b) the encoder is structurally novel (no positional embeddings \u2014 'ergodic' \u2014 plus sliding-window attention with per-layer (L,R) windows [(16,4),(16,4),(16,0),(16,0),(16,4),(16,4)] \u2014 vs moonshine's full self-attn with partial RoPE); (c) the frontend differs (50 Hz time-domain + CMVN + 2 causal stride-2 convs vs moonshine's 3-conv stack on raw PCM at ~42 Hz); (d) a new `adapter` layer injects learned positional embeddings between encoder and decoder; (e) `tie_word_embeddings=false` (vs true on moonshine), `pad_token_id=0` (vs 2), and the tokenizer vocab_sha256 differs from non-streaming moonshine. Sharing with moonshine should go through scripts/lib/ helpers and shared C++ utilities (SwiGLU, partial-RoPE) \u2014 NOT through co-locating in src/arch/moonshine/.",
+    "Novel encoder: ergodic (no positional embeddings on encoder self-attn) + sliding-window attention with per-layer left/right windows. Lookahead layers use (16,4) \u2014 16 left, 4 right context. Intermediate layers use (16,0) \u2014 strictly causal. Total of 80 ms lookahead from the four lookahead layers. Need a custom mask shape for ggml; the existing causal mask helpers will not cover the lookahead pattern.",
+    "Streaming runtime contract: chunked encoder feeding with persistent encoder state. The current `transcribe-cli` and `transcribe-bench` have no streaming surface \u2014 they consume a whole utterance and emit a transcript. Stage 4 must decide between (a) implementing the encoder graph as a one-shot first (matches existing CLI, validates numerics, defers streaming-API work) and (b) building a streaming session API in C++ alongside the port. The model card itself notes 'the current Transformers code path does not yet implement fully efficient streaming' \u2014 even the reference is one-shot today, so option (a) is the natural Stage-4 scope and streaming is a post-port follow-up.",
+    "Adapter layer is new \u2014 not present in moonshine. The adapter aligns dims and adds learned positional embeddings before the decoder cross-attn input. Its shape and op set are not yet enumerated; need to read transformers' moonshine_streaming source (or the reference dumps) to confirm whether it is a single Linear+Embedding combo or something more involved.",
+    "Frontend is novel: '50 Hz audio frontend with simple time-domain operations, CMVN, and two causal stride-2 convs.' frame_ms=5.0 in encoder_config implies 50 Hz feature rate. CMVN (cepstral mean/variance normalization, but here likely just feature-level mean/variance normalization since this is time-domain) requires running statistics that are NOT in the safetensors header \u2014 confirm at oracle stage whether they are stored as model weights or computed online.",
+    "Config schema diverges from moonshine: encoder hyperparameters live in a nested `encoder_config` sub-object (not flat). The `read_*_hparams()` C++ loader for this family must descend into `stt.encoder.*` GGUF KV (or equivalent) and the converter must write it.",
+    "tie_word_embeddings=false (decoder lm_head is a separate weight) and pad_token_id=0 (vs moonshine's 2). Converter must NOT tie, and GGUF must carry an explicit lm_head tensor. tokenizer vocab_sha256 differs from moonshine \u2014 re-verifying the BPE merges/added_tokens mapping is required, do not assume tokenizer parity.",
+    "max_position_embeddings=4096 (vs moonshine's 194) reflects streaming long-context. Decoder KV cache sizing must accommodate the longer max length even though the per-utterance token count is typically short.",
+    "ffn_mult=4 in the top-level config but intermediate_size=1280 = 4*320 already encodes that; verify ffn_mult is purely descriptive and not multiplied a second time on top of intermediate_size.",
+    "Encoder attention is non-square: enc_d_model (residual stream) > n_heads \u00d7 head_dim (attention internal) for both small (620 vs 512) and medium (768 vs 640). Encoder Q/K/V projections are [residual_dim \u2192 attn_dim] and O is [attn_dim \u2192 residual_dim]. Stage 4 must drop the `enc_d_model == n_heads \u00d7 head_dim` invariant from weights.cpp and add an `enc_attn_dim` hparam separate from `enc_d_model`. Tiny coincidentally satisfies the equality (320 = 8 \u00d7 40); small/medium do not.",
+    "adapter has projection: encoder_hidden_size (620 / 768) \u2260 decoder_hidden_size (512 / 640), so adapter_has_proj=true and the converter must emit `adapter.proj.weight` of shape [enc_h, dec_h]. The pos_emb table is sized to enc_h (so the residual+pos add happens in encoder-hidden space, then the proj reduces to dec_h). Tiny had enc_h == dec_h so adapter.proj was absent."
+  ],
+  "intake_gaps": []
+}

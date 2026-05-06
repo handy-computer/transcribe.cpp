@@ -1,16 +1,23 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = [
+#   "gguf>=0.10",
+# ]
 # ///
 """
-quantize-all.py — drive transcribe-quantize across the full shipped preset matrix.
+quantize-all.py — drive transcribe-quantize across the shipped preset matrix.
 
 Given a reference-dtype GGUF (F32, F16, or BF16 — the converter's output),
-produces one quantized GGUF per preset in DERIVED_PRESETS (see
-scripts/lib/quant_policy.py), skipping any preset that equals the source
-dtype. Output filenames follow the llama.cpp convention:
-<variant>-<PRESET>.gguf in the same directory as the input.
+produces one quantized GGUF per preset in the matrix, skipping any preset
+that equals the source dtype. Output filenames follow the llama.cpp
+convention: <variant>-<PRESET>.gguf in the same directory as the input.
+
+The default matrix is DERIVED_PRESETS, but an architecture may register a
+narrower override in scripts/lib/quant_policy.py::FAMILY_PRESETS (used
+when k-quant tiers would degenerate into Q8_0 for that model's shapes).
+The architecture is read from the input GGUF's `general.architecture`
+KV; pass --presets to override explicitly.
 
 Usage:
     uv run scripts/quantize-all.py \\
@@ -34,7 +41,11 @@ from pathlib import Path
 # Import via path so the script stays `uv run`-compatible (no project context).
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from lib.quant_policy import DERIVED_PRESETS, validate_preset  # noqa: E402
+from lib.quant_policy import (  # noqa: E402
+    DERIVED_PRESETS,
+    derived_presets_for_arch,
+    validate_preset,
+)
 
 
 def detect_source_preset(path: Path) -> str | None:
@@ -46,11 +57,28 @@ def detect_source_preset(path: Path) -> str | None:
     return None
 
 
+def read_architecture(gguf_path: Path) -> str | None:
+    """Return the general.architecture string from a GGUF, or None on failure."""
+    try:
+        from gguf.gguf_reader import GGUFReader
+    except ImportError:
+        return None
+    try:
+        reader = GGUFReader(str(gguf_path))
+        fld = reader.fields.get("general.architecture")
+        if fld is None or not fld.parts:
+            return None
+        return bytes(fld.parts[-1]).decode("utf-8")
+    except Exception:
+        return None
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("input", type=Path, help="Reference-dtype GGUF produced by convert-<family>.py")
-    p.add_argument("--presets", type=str, default=",".join(DERIVED_PRESETS),
-                   help=f"Comma-separated subset of {DERIVED_PRESETS} (default: all)")
+    p.add_argument("--presets", type=str, default=None,
+                   help="Comma-separated preset subset (default: per-architecture matrix from "
+                        "quant_policy.FAMILY_PRESETS, falling back to DERIVED_PRESETS)")
     p.add_argument("--quantize-bin", type=Path, default=Path("build/bin/transcribe-quantize"),
                    help="Path to transcribe-quantize (default: build/bin/transcribe-quantize)")
     args = p.parse_args(argv)
@@ -64,7 +92,15 @@ def main(argv: list[str]) -> int:
               f"Run: cmake --build build --target transcribe-quantize", file=sys.stderr)
         return 2
 
-    presets = [validate_preset(x) for x in args.presets.split(",") if x.strip()]
+    if args.presets is None:
+        arch = read_architecture(src)
+        matrix = derived_presets_for_arch(arch)
+        if matrix is not DERIVED_PRESETS:
+            print(f"[quantize-all] arch={arch!r}: per-family preset matrix {matrix}", flush=True)
+        presets_str = ",".join(matrix)
+    else:
+        presets_str = args.presets
+    presets = [validate_preset(x) for x in presets_str.split(",") if x.strip()]
     src_tier = detect_source_preset(src)
     stem_base = src.stem.removesuffix(f"-{src_tier}") if src_tier else src.stem
 
