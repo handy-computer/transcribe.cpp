@@ -1,0 +1,112 @@
+{
+  "_comment": [
+    "Provisional tolerances for sensevoice-small. Derived per-tensor from",
+    "reference-side magnitude statistics:",
+    "  max_abs  = max(1e-4 * p99_abs, 1e-6)   # 0.01% of typical large value",
+    "  mean_abs = max(1e-5 * rms,     1e-6)   # 0.001% of RMS energy",
+    "p99_abs and rms are read from the ref sidecars under",
+    "build/validate/sensevoice/sensevoice-small/<case>/<stage_dir>/ref/.",
+    "When the same tensor name appears in multiple (case, stage_dir),",
+    "we take the max p99_abs / rms across instances so the budget",
+    "covers the worst-magnitude case.",
+    "",
+    "These multipliers (1e-4 / 1e-5) are roughly 10x looser than the",
+    "typical fp32-vs-fp32 cross-library drift (~1e-5 relative) and well",
+    "below Wilkinson worst-case (~1e-4 for stacked matmuls), so a",
+    "correctly-ported tensor lands at or below this budget on first",
+    "Stage 4 run, while real porting bugs (wrong epsilon, missing",
+    "residual, scale factor off, unintended dtype upcast) trip it.",
+    "The 1e-6 floor catches near-zero tensors where the relative budget",
+    "would otherwise vanish (zero-init biases, all-zero pad regions).",
+    "",
+    "Provisional \u2014 Stage 4 finalizes against observed C++ drift. Do NOT",
+    "ship the model while any entry still carries _provisional: true."
+  ],
+  "tensors": {
+    "ctc.log_probs": {
+      "max_abs": 0.0048649586334228515,
+      "mean_abs": 0.0003086522966799364,
+      "_provisional": true
+    },
+    "ctc.logits.raw": {
+      "max_abs": 0.002681630645751956,
+      "mean_abs": 0.0001228407677796088,
+      "_provisional": true
+    },
+    "enc.after_norm.out": {
+      "max_abs": 0.000602037347793577,
+      "mean_abs": 1.7081482680697675e-05,
+      "_provisional": true
+    },
+    "enc.embed.out": {
+      "max_abs": 0.003717715721130371,
+      "mean_abs": 0.0001384958834510254,
+      "_provisional": true
+    },
+    "enc.encoders.0.out": {
+      "max_abs": 0.003496459606170652,
+      "mean_abs": 0.0001306103865063775,
+      "_provisional": true
+    },
+    "enc.encoders.24.out": {
+      "max_abs": 0.0213638471832275,
+      "mean_abs": 0.0005394695917187486,
+      "_provisional": true
+    },
+    "enc.encoders.48.out": {
+      "max_abs": 0.09284444042968716,
+      "mean_abs": 0.007915573537096147,
+      "_provisional": true
+    },
+    "enc.encoders0.0.out": {
+      "max_abs": 0.003090355215072629,
+      "mean_abs": 0.00010695938599474428,
+      "_provisional": true
+    },
+    "enc.input.with_prefix": {
+      "max_abs": 0.00016280735766887661,
+      "mean_abs": 6.044500430341404e-06,
+      "_provisional": true
+    },
+    "enc.prefix.event_emo_emb": {
+      "max_abs": 0.0002671511695384979,
+      "mean_abs": 1.049312491858613e-05,
+      "_provisional": true
+    },
+    "enc.prefix.lid_emb": {
+      "max_abs": 0.0002529262504577635,
+      "mean_abs": 1.001893624181289e-05,
+      "_provisional": true
+    },
+    "enc.prefix.textnorm_emb": {
+      "max_abs": 0.00011466283452510829,
+      "mean_abs": 5.942358987456376e-06,
+      "_provisional": true
+    },
+    "enc.tp_encoders.0.out": {
+      "max_abs": 0.0006880405187606776,
+      "mean_abs": 6.13967089465086e-05,
+      "_provisional": true
+    },
+    "enc.tp_encoders.10.out": {
+      "max_abs": 0.0020415397586822444,
+      "mean_abs": 0.0007119040154812295,
+      "_provisional": true
+    },
+    "enc.tp_encoders.19.out": {
+      "max_abs": 0.013040062057495055,
+      "mean_abs": 0.0006356935552875023,
+      "_provisional": true
+    },
+    "enc.tp_norm.out": {
+      "max_abs": 0.00047786578178405726,
+      "mean_abs": 1.4616283534220835e-05,
+      "_provisional": true
+    },
+    "frontend.fbank.lfr.cmvn.out": {
+      "max_abs": 0.00016007313382625574,
+      "mean_abs": 5.94892984118657e-06,
+      "_provisional": true
+    }
+  }
+}
