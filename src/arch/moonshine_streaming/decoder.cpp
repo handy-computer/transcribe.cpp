@@ -141,23 +141,15 @@ ggml_tensor * mha_self_cached(ggml_context *                    ctx,
     ggml_tensor * Q_rope = apply_partial_rope(ctx, Qcur, pos_ids, hp, head_dim_rot);
     ggml_tensor * K_rope = apply_partial_rope(ctx, Kcur, pos_ids, hp, head_dim_rot);
 
-    auto to_attn_layout = [&](ggml_tensor * t) -> ggml_tensor * {
-        t = ggml_permute(ctx, t, 0, 2, 1, 3);
-        t = ggml_cont(ctx, t);
-        return t;
-    };
-    ggml_tensor * Q_unpad = to_attn_layout(Q_rope);
-    ggml_tensor * K_unpad = to_attn_layout(K_rope);
-    ggml_tensor * V_unpad = to_attn_layout(Vcur);
+    // Q needs [head_dim, n_tokens, n_heads, 1] for attention. K/V are
+    // already [head_dim, n_heads, n_tokens, 1] contiguous after RoPE
+    // (or reshape, for V) — same memory order as the cache slot. Skip
+    // the round-trip permute+cont before writing.
+    ggml_tensor * Q_unpad = ggml_cont(ctx, ggml_permute(ctx, Q_rope, 0, 2, 1, 3));
 
     {
         const size_t k_elem = ggml_element_size(kv_cache.self_k);
         const size_t v_elem = ggml_element_size(kv_cache.self_v);
-
-        ggml_tensor * K_cache_layout = ggml_cont(ctx,
-            ggml_permute(ctx, K_unpad, 0, 2, 1, 3));
-        ggml_tensor * V_cache_layout = ggml_cont(ctx,
-            ggml_permute(ctx, V_unpad, 0, 2, 1, 3));
 
         ggml_tensor * k_dst = ggml_view_1d(
             ctx, kv_cache.self_k,
@@ -172,8 +164,8 @@ ggml_tensor * mha_self_cached(ggml_context *                    ctx,
                 static_cast<int64_t>(il) * n_ctx * d_model +
                 static_cast<int64_t>(n_past) * d_model));
 
-        ggml_build_forward_expand(gf, ggml_cpy(ctx, K_cache_layout, k_dst));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx, V_cache_layout, v_dst));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx, K_rope, k_dst));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx, Vcur,   v_dst));
     }
 
     const size_t k_elem = ggml_element_size(kv_cache.self_k);
@@ -572,7 +564,30 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
 
     db.out = logits;
     ggml_set_output(db.out);
-    ggml_build_forward_expand(db.graph, db.out);
+
+    // Backend argmax over the last position when skipping log_softmax —
+    // every step pass downloads a single int32 instead of full vocab
+    // logits. Mirrors cohere/decoder.cpp:756-771 and the moonshine
+    // sibling change.
+    if (skip_log_softmax) {
+        ggml_tensor * last_logits = logits;
+        if (n_tokens > 1) {
+            const int64_t vocab     = logits->ne[0];
+            const size_t  row_bytes = ggml_element_size(logits) *
+                                      static_cast<size_t>(vocab);
+            last_logits = ggml_view_2d(ctx, logits,
+                                       vocab, /*n=*/1,
+                                       row_bytes,
+                                       row_bytes * static_cast<size_t>(n_tokens - 1));
+            last_logits = ggml_cont(ctx, last_logits);
+        }
+        db.argmax_out = ggml_argmax(ctx, last_logits);
+        ggml_set_name(db.argmax_out, "dec.argmax");
+        ggml_set_output(db.argmax_out);
+        ggml_build_forward_expand(db.graph, db.argmax_out);
+    } else {
+        ggml_build_forward_expand(db.graph, db.out);
+    }
 
     return db;
 }

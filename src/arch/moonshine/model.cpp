@@ -536,23 +536,31 @@ transcribe_status run(
             try_dump(mid_gen_dump_name, db.out, "decoder.logits_raw.gen");
         }
 
-        // Argmax over the LAST position's logits to pick next_token.
-        // For n_tokens=1, db.out has shape [vocab, 1] (or [vocab] after
-        // reshape). For n_tokens>1, take the last row.
-        const int64_t vocab_size = db.out->ne[0];
-        const int64_t last_T     = (ggml_n_dims(db.out) == 1) ? 1 : db.out->ne[1];
-        std::vector<float> logits_host(static_cast<size_t>(vocab_size) *
-                                       static_cast<size_t>(last_T));
-        ggml_backend_tensor_get(db.out, logits_host.data(), 0,
-                                logits_host.size() * sizeof(float));
-        const float * last_logits = logits_host.data() +
-                                    static_cast<size_t>(last_T - 1) * vocab_size;
-        int best_idx = 0;
-        float best_v = last_logits[0];
-        for (int j = 1; j < static_cast<int>(vocab_size); ++j) {
-            if (last_logits[j] > best_v) { best_v = last_logits[j]; best_idx = j; }
+        // Pick next_token. Fast path: argmax tensor computed on-device
+        // (every step pass uses skip_log_softmax=true, so argmax_out is
+        // populated). Slow path: prompt pass dumps full log_softmax;
+        // argmax in C against the downloaded vocab row.
+        if (db.argmax_out != nullptr) {
+            int32_t argmax_id = 0;
+            ggml_backend_tensor_get(db.argmax_out, &argmax_id,
+                                    0, sizeof(int32_t));
+            next_token = argmax_id;
+        } else {
+            const int64_t vocab_size = db.out->ne[0];
+            const int64_t last_T     = (ggml_n_dims(db.out) == 1) ? 1 : db.out->ne[1];
+            std::vector<float> logits_host(static_cast<size_t>(vocab_size) *
+                                           static_cast<size_t>(last_T));
+            ggml_backend_tensor_get(db.out, logits_host.data(), 0,
+                                    logits_host.size() * sizeof(float));
+            const float * last_logits = logits_host.data() +
+                                        static_cast<size_t>(last_T - 1) * vocab_size;
+            int best_idx = 0;
+            float best_v = last_logits[0];
+            for (int j = 1; j < static_cast<int>(vocab_size); ++j) {
+                if (last_logits[j] > best_v) { best_v = last_logits[j]; best_idx = j; }
+            }
+            next_token = best_idx;
         }
-        next_token = best_idx;
 
         cc->kv_cache.n    = n_past_in + n_tokens;
         cc->kv_cache.head = cc->kv_cache.n;
