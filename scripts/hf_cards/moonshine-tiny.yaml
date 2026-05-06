@@ -1,0 +1,61 @@
+# Spec for the HF README of handy-computer/moonshine-tiny-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: UsefulSensors/moonshine-tiny
+target_repo: handy-computer/moonshine-tiny-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine-tiny.md
+
+upstream_commit: 390624e
+pin_date: 2026-05-05
+
+validation:
+  reference: transformers
+  commit: 07a8a84
+  date: 2026-05-05
+
+license: mit
+license_display: MIT
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - moonshine
+  - useful-sensors
+  - en
+
+summary: |
+  Useful Sensors Moonshine tiny — a 27M-parameter encoder-decoder transformer
+  for English speech recognition. Consumes raw 16 kHz PCM directly via a
+  three-layer Conv1d stem (no STFT, no mel) and emits transcript-only output.
+  English-only; no translation, no language detection, no timestamps.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances)
+    with the transcribe.cpp default decode (greedy, num_beams=1,
+    max_length=194 — matching the upstream generation_config). Useful
+    Sensors' self-reported number on the same split is 4.55% (model card).
+    Our F32 reference baseline lands at 4.58%, within rounding of upstream
+    and well within the ±1.00 pp Stage 7 acceptance gate. Q8_0 drift is
+    +0.02 pp vs F32 — within bootstrap CI noise.
+
+quants:
+  - name: F32
+    filename: moonshine-tiny-F32.gguf
+    size: 105 MB
+    wer: 4.58%
+  - name: F16
+    filename: moonshine-tiny-F16.gguf
+    size: 57 MB
+    wer: 4.58%
+  - name: Q8_0
+    filename: moonshine-tiny-Q8_0.gguf
+    size: 34 MB
+    wer: 4.60%
