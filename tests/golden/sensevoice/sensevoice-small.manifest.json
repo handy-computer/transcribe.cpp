@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "sensevoice",
+  "variant": "sensevoice-small",
+  "source_model": {
+    "hf_repo": "FunAudioLLM/SenseVoiceSmall",
+    "hf_revision": "3eb3b4eeffc2f2dde6051b853983753db33e35c3"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}
