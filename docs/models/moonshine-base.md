@@ -167,6 +167,3 @@ uv run scripts/wer/run.py \
 uv run scripts/wer/score.py \
   reports/wer/moonshine-base-F32.librispeech-test-clean.jsonl
 ```
-
-Per-quant summary at
-[`reports/wer/moonshine-base.librispeech-test-clean.summary.md`](https://github.com/handy-computer/transcribe.cpp/blob/main/reports/wer/moonshine-base.librispeech-test-clean.summary.md).
