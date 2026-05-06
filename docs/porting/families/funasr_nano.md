@@ -10,8 +10,8 @@ Status: research
 - Hugging Face revision: `a7088d620f755dcdca575b63db184c3ad55b2865` (pinned at intake)
 - **License: FunASR Model Open Source License Agreement v1.1** — `https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE`. Clause 2.2: *"When using, copying, modifying, and sharing [FunASR Software], you must attribute the source and author information and retain relevant model names in [FunASR Software]."* This obligation flows down through our converted GGUF: the converter bakes `general.author = "Alibaba Group / FunAudioLLM"`, `general.organization = "FunAudioLLM"`, `general.license = "FunASR-Model-License-1.1"`, `general.license.link`, `general.url`, `general.source.url`, and a `general.tags` array that retains `FunASRNano`, `Fun-ASR-Nano-2512`, `SenseVoiceEncoderSmall`, and `Qwen3-0.6B`. Anyone redistributing the converted GGUF must keep these KVs intact. Note: the bundled Qwen3-0.6B LLM weights are derivative of `Qwen/Qwen3-0.6B` (Apache-2.0); see `general.description` in the GGUF for the full attribution chain.
 - Variants:
-  - `fun-asr-nano-2512` — ~800 M params on the trainable side; bundled Qwen3-0.6B brings total checkpoint to 1.97 GB (mixed-precision: encoder F32, LLM BF16). Headline languages zh / en / ja, plus Chinese dialects and accents.
-  - (sibling, not yet ported) `FunAudioLLM/Fun-ASR-MLT-Nano-2512` — same architecture, 31 languages incl. Southeast Asian + European.
+  - `fun-asr-nano-2512` — `FunAudioLLM/Fun-ASR-Nano-2512`, ~800 M params on the trainable side; bundled Qwen3-0.6B brings total checkpoint to 1.97 GB (mixed-precision: encoder F32, LLM BF16). Headline languages zh / en / ja, plus Chinese dialects and accents.
+  - `fun-asr-mlt-nano-2512` — `FunAudioLLM/Fun-ASR-MLT-Nano-2512`, identical architecture and ~1.97 GB checkpoint, trained on a smaller corpus (hundreds of thousands of hours vs Nano's tens of millions). Covers 31 languages: zh, en, yue, ja, ko, vi, id, th, ms, tl, ar, hi, bg, hr, cs, da, nl, et, fi, el, hu, ga, lv, lt, mt, pl, pt, ro, sk, sl, sv. Stage 4 sibling-variant shortcut applies.
 
 ## References
 
@@ -76,17 +76,23 @@ each command.
 
 | Capability | Mode | Command / test | Expected observable | Status |
 |------------|------|----------------|---------------------|--------|
-| Transcribe | explicit language hint (en) | `build/bin/transcribe-cli -m models/fun-asr-nano-2512/fun-asr-nano-2512-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS — "And so my fellow Americans ask not what your country can do for you ask what you can do for your country." |
-| Transcribe | explicit language hint (zh) | `build/bin/transcribe-cli -m models/fun-asr-nano-2512/fun-asr-nano-2512-BF16.gguf --language zh samples/zh.wav` | non-empty plausible Mandarin transcript | PASS — "开饭时间早上九点至下午五点" |
-| Transcribe | explicit language hint (ja) | `build/bin/transcribe-cli -m models/fun-asr-nano-2512/fun-asr-nano-2512-BF16.gguf --language ja samples/ja.wav` | non-empty plausible Japanese transcript | PASS — "うちの中学は弁当制で持っていけない場合は五十円の学校販売のパンを買う" |
-| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/fun-asr-nano-2512/fun-asr-nano-2512-BF16.gguf samples/jfk.wav` | non-empty plausible transcript without language flag | PASS — same JFK transcript as explicit `en` (auto-mode prompt template `语音转写：` with no language suffix) |
-| ITN (inverse text normalization) | flag-driven | `build/bin/transcribe-cli -m models/fun-asr-nano-2512/fun-asr-nano-2512-BF16.gguf --itn samples/jfk.wav` (or library-level params) | output contains digits / capitalization / punctuation that the no-ITN path omits | SKIP — not exposed by runtime (Stage 4 left `use_itn=false` hardcoded in `run()`; library callers will route it through a future `transcribe_funasr_nano_params { use_itn }` struct mirroring `sensevoice`'s shape) |
+| Transcribe (nano) | explicit language hint (en) | `build/bin/transcribe-cli -m models/Fun-ASR-Nano-2512/Fun-ASR-Nano-2512-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS — "And so my fellow Americans ask not what your country can do for you ask what you can do for your country." |
+| Transcribe (nano) | explicit language hint (zh) | `build/bin/transcribe-cli -m models/Fun-ASR-Nano-2512/Fun-ASR-Nano-2512-BF16.gguf --language zh samples/zh.wav` | non-empty plausible Mandarin transcript | PASS — "开饭时间早上九点至下午五点" |
+| Transcribe (nano) | explicit language hint (ja) | `build/bin/transcribe-cli -m models/Fun-ASR-Nano-2512/Fun-ASR-Nano-2512-BF16.gguf --language ja samples/ja.wav` | non-empty plausible Japanese transcript | PASS — "うちの中学は弁当制で持っていけない場合は五十円の学校販売のパンを買う" |
+| Transcribe (nano) | auto / no language hint | `build/bin/transcribe-cli -m models/Fun-ASR-Nano-2512/Fun-ASR-Nano-2512-BF16.gguf samples/jfk.wav` | non-empty plausible transcript without language flag | PASS — same JFK transcript as explicit `en` (auto-mode prompt template `语音转写：` with no language suffix) |
+| Transcribe (mlt) | explicit language hint (en) | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | TODO |
+| Transcribe (mlt) | explicit language hint (zh) | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf --language zh samples/zh.wav` | non-empty plausible Mandarin transcript | TODO |
+| Transcribe (mlt) | explicit language hint (ja) | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf --language ja samples/ja.wav` | non-empty plausible Japanese transcript | TODO |
+| Transcribe (mlt) | explicit language hint (ko) | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf --language ko samples/ko.wav` | non-empty plausible Korean transcript | TODO — MLT-specific (Nano does not advertise ko) |
+| Transcribe (mlt) | explicit language hint (yue) | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf --language yue samples/yue.wav` | non-empty plausible Cantonese transcript | TODO — MLT-specific |
+| Transcribe (mlt) | auto / no language hint | `build/bin/transcribe-cli -m models/Fun-ASR-MLT-Nano-2512/Fun-ASR-MLT-Nano-2512-BF16.gguf samples/jfk.wav` | non-empty plausible transcript without language flag | TODO |
+| ITN (inverse text normalization) | flag-driven, both variants | `build/bin/transcribe-cli -m models/<variant>/<variant>-BF16.gguf --itn samples/jfk.wav` (or library-level params) | output contains digits / capitalization / punctuation that the no-ITN path omits | SKIP — not exposed by runtime (Stage 4 left `use_itn=false` hardcoded in `run()`; library callers will route it through a future `transcribe_funasr_nano_params { use_itn }` struct mirroring `sensevoice`'s shape) |
 | Translate | not exposed upstream | n/a | n/a | SKIP — not advertised |
-| Segment timestamps | not exposed upstream | n/a | n/a | SKIP — not advertised |
+| Segment timestamps | not exposed upstream | n/a | n/a | SKIP — README explicitly lists `Support returning timestamps` as TODO |
 | Word timestamps | not exposed upstream | n/a | n/a | SKIP — not advertised |
 | Streaming / real-time | non-streaming decode despite README marketing | n/a | n/a | SKIP — not advertised at API level |
 | VAD | not part of FunASRNano (FunASR pipeline uses separate fsmn-vad) | n/a | n/a | SKIP — out of family scope |
-| Diarization | not advertised | n/a | n/a | SKIP — not advertised |
+| Diarization | not advertised | n/a | n/a | SKIP — README explicitly lists `Support speaker diarization` as TODO |
 
 ## Stage 4 acceptance notes
 
