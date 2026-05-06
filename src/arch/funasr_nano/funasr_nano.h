@@ -5,11 +5,11 @@
 
 #pragma once
 
-#include "frontend.h"
 #include "weights.h"
 
 #include "transcribe-backend.h"
 #include "transcribe-context.h"
+#include "transcribe-kaldi-fbank.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
 
@@ -87,7 +87,7 @@ struct FunAsrNanoModel final : public transcribe_model {
 
     // Constructed once at load() time; const-after-construction. Kaldi
     // HTK fbank + LFR; CMVN dropped (fe_apply_cmvn=false).
-    std::unique_ptr<KaldiFbankFrontend> frontend;
+    std::unique_ptr<transcribe::KaldiFbankFrontend> frontend;
 
     // Jinja chat template string (verbatim from GGUF KV).
     std::string chat_template;

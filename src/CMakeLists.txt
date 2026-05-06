@@ -15,6 +15,7 @@ add_library(transcribe
     transcribe-loader.cpp
     transcribe-arch.cpp
     transcribe-meta.cpp
+    transcribe-kaldi-fbank.cpp
     transcribe-mel.cpp
     transcribe-model.cpp
     transcribe-tokenizer.cpp
@@ -27,6 +28,7 @@ add_library(transcribe
     transcribe-weights-util.cpp
     transcribe-bin-loader.cpp
     conformer/conformer.cpp
+    sanm/sanm.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp
@@ -62,14 +64,12 @@ add_library(transcribe
     arch/sensevoice/capabilities.cpp
     arch/sensevoice/weights.cpp
     arch/sensevoice/encoder.cpp
-    arch/sensevoice/frontend.cpp
     arch/funasr_nano/model.cpp
     arch/funasr_nano/capabilities.cpp
     arch/funasr_nano/weights.cpp
     arch/funasr_nano/encoder.cpp
     arch/funasr_nano/decoder.cpp
     arch/funasr_nano/adaptor.cpp
-    arch/funasr_nano/frontend.cpp
 )
 
 target_include_directories(transcribe

@@ -1,23 +1,17 @@
-// arch/sensevoice/frontend.cpp - kaldi HTK fbank + LFR + CMVN.
+// transcribe-kaldi-fbank.cpp - kaldi HTK fbank + LFR (+ optional CMVN).
 //
-// See frontend.h for the high-level contract. This is a faithful
-// reimplementation of `torchaudio.compliance.kaldi.fbank` with the
-// exact parameters WavFrontend passes (window=hamming, dither=0,
-// energy_floor=0, snip_edges=True, num_mel_bins=80, frame_length=25ms,
-// frame_shift=10ms) plus FunASR's per-feature CMVN and LFR stack.
+// Pure host code (no ggml). See transcribe-kaldi-fbank.h for the
+// high-level contract.
 
-#include "frontend.h"
-
-#include "ggml.h"
-#include "ggml-backend.h"
+#include "transcribe-kaldi-fbank.h"
 
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
-namespace transcribe::sensevoice {
+namespace transcribe {
 
 namespace {
 
@@ -31,7 +25,7 @@ int next_pow2(int n) {
     return p;
 }
 
-// HTK mel formula. Same constant 1127.x = 1000 / log10(1 + 1000/700) up
+// HTK mel formula. The constant 1127.x = 1000 / log10(1 + 1000/700) up
 // to ~ulp; using 1127.0 here matches kaldi's `mel-computations.h`.
 double hz_to_mel(double f) {
     return 1127.0 * std::log(1.0 + f / 700.0);
@@ -40,12 +34,12 @@ double mel_to_hz(double m) {
     return 700.0 * (std::exp(m / 1127.0) - 1.0);
 }
 
-// Build the HTK mel filterbank. Output: [n_mels, n_freq] row-major
-// f32, n_freq = padded_n_fft/2 + 1. Triangular bins peak at 1.0 with
-// no area normalization (HTK semantics; differs from slaney).
-std::vector<float> build_htk_mel_filterbank(int sample_rate,
-                                            int padded_n_fft,
-                                            int n_mels,
+// HTK mel filterbank: [n_mels, n_freq] row-major f32, n_freq =
+// padded_n_fft/2 + 1. Triangular bins peak at 1.0 with no area
+// normalization (HTK semantics; differs from slaney).
+std::vector<float> build_htk_mel_filterbank(int   sample_rate,
+                                            int   padded_n_fft,
+                                            int   n_mels,
                                             float low_freq,
                                             float high_freq)
 {
@@ -57,20 +51,18 @@ std::vector<float> build_htk_mel_filterbank(int sample_rate,
     const double mel_high = hz_to_mel(high_freq);
     const double mel_step = (mel_high - mel_low) / (n_mels + 1);
 
-    // FFT bin frequencies. Using fftbin -> kaldi-style: `fft_bin_width =
-    // sample_rate / padded_n_fft`.
+    // kaldi-style fft_bin_width = sample_rate / padded_n_fft.
     const double fft_bin_width = static_cast<double>(sample_rate) /
                                  static_cast<double>(padded_n_fft);
 
     std::vector<float> fb(static_cast<size_t>(n_mels) * n_freq, 0.0f);
-
     for (int m = 0; m < n_mels; ++m) {
         const double left_mel   = mel_low + m * mel_step;
         const double center_mel = mel_low + (m + 1) * mel_step;
         const double right_mel  = mel_low + (m + 2) * mel_step;
-        const double left_hz   = mel_to_hz(left_mel);
-        const double center_hz = mel_to_hz(center_mel);
-        const double right_hz  = mel_to_hz(right_mel);
+        const double left_hz    = mel_to_hz(left_mel);
+        const double center_hz  = mel_to_hz(center_mel);
+        const double right_hz   = mel_to_hz(right_mel);
 
         for (int b = 0; b < n_freq; ++b) {
             const double bin_hz = b * fft_bin_width;
@@ -148,96 +140,88 @@ void fft_radix2(double * data, int n) {
 
 } // namespace
 
-KaldiFbankFrontend::KaldiFbankFrontend(const SenseVoiceHParams & hp,
-                                       const SenseVoiceWeights & weights)
-    : n_mels_(hp.fe_num_mels)
-    , sample_rate_(hp.fe_sample_rate)
-    , win_length_(hp.fe_win_length)
-    , hop_length_(hp.fe_hop_length)
-    , padded_n_fft_(next_pow2(hp.fe_win_length))
-    , lfr_m_(hp.fe_lfr_m)
-    , lfr_n_(hp.fe_lfr_n)
-    , d_input_(hp.enc_d_input)
-    , upscale_samples_(hp.fe_upscale_samples)
+KaldiFbankFrontend::KaldiFbankFrontend(KaldiFbankParams params)
+    : params_(std::move(params))
+    , padded_n_fft_(next_pow2(params_.win_length))
 {
     mel_fb_ = build_htk_mel_filterbank(
-        sample_rate_, padded_n_fft_, n_mels_, kMelLowFreq, kMelHighFreq);
-    window_ = build_hamming_window(win_length_);
-
-    // Read CMVN tensors into host buffers.
-    const size_t bytes = static_cast<size_t>(d_input_) * sizeof(float);
-    cmvn_shift_.resize(static_cast<size_t>(d_input_));
-    cmvn_scale_.resize(static_cast<size_t>(d_input_));
-    ggml_backend_tensor_get(weights.cmvn_shift, cmvn_shift_.data(), 0, bytes);
-    ggml_backend_tensor_get(weights.cmvn_scale, cmvn_scale_.data(), 0, bytes);
+        params_.sample_rate, padded_n_fft_, params_.n_mels,
+        kMelLowFreq, kMelHighFreq);
+    window_ = build_hamming_window(params_.win_length);
 }
 
 int KaldiFbankFrontend::compute(const float *        pcm,
                                 size_t               n_samples,
                                 std::vector<float> & out_features) const
 {
-    if (pcm == nullptr || n_samples < static_cast<size_t>(win_length_)) {
+    const int win_length = params_.win_length;
+    const int hop_length = params_.hop_length;
+    const int n_mels     = params_.n_mels;
+    const int lfr_m      = params_.lfr_m;
+    const int lfr_n      = params_.lfr_n;
+    const int d_input    = params_.d_input;
+
+    if (pcm == nullptr || n_samples < static_cast<size_t>(win_length)) {
         out_features.clear();
         return 0;
     }
 
     // Snip-edges framing: T_frames = 1 + floor((N - win_length) / hop).
     const int T_frames = 1 + static_cast<int>(
-        (n_samples - static_cast<size_t>(win_length_)) /
-        static_cast<size_t>(hop_length_));
+        (n_samples - static_cast<size_t>(win_length)) /
+        static_cast<size_t>(hop_length));
     if (T_frames <= 0) {
         out_features.clear();
         return 0;
     }
 
-    const int n_freq    = padded_n_fft_ / 2 + 1;
-    const float upscale = upscale_samples_ ? 32768.0f : 1.0f;
+    const int   n_freq  = padded_n_fft_ / 2 + 1;
+    const float upscale = params_.upscale_samples ? 32768.0f : 1.0f;
 
     // Per-frame buffers reused across the loop.
     std::vector<double> frame(static_cast<size_t>(padded_n_fft_) * 2, 0.0);
-    std::vector<float>  frame_f(static_cast<size_t>(win_length_), 0.0f);
+    std::vector<float>  frame_f(static_cast<size_t>(win_length), 0.0f);
     std::vector<float>  power(static_cast<size_t>(n_freq), 0.0f);
 
     // Mel features [T_frames, n_mels] row-major.
-    std::vector<float> mel(static_cast<size_t>(T_frames) * n_mels_, 0.0f);
+    std::vector<float> mel(static_cast<size_t>(T_frames) * n_mels, 0.0f);
 
     for (int t = 0; t < T_frames; ++t) {
         // Step 1: read frame, upscale.
-        const size_t base = static_cast<size_t>(t) * hop_length_;
-        for (int i = 0; i < win_length_; ++i) {
-            frame_f[static_cast<size_t>(i)] =
-                pcm[base + i] * upscale;
+        const size_t base = static_cast<size_t>(t) * hop_length;
+        for (int i = 0; i < win_length; ++i) {
+            frame_f[static_cast<size_t>(i)] = pcm[base + i] * upscale;
         }
 
         // Step 2: remove DC offset (mean subtraction).
         double sum = 0.0;
-        for (int i = 0; i < win_length_; ++i) {
+        for (int i = 0; i < win_length; ++i) {
             sum += frame_f[static_cast<size_t>(i)];
         }
-        const float mean = static_cast<float>(sum / win_length_);
-        for (int i = 0; i < win_length_; ++i) {
+        const float mean = static_cast<float>(sum / win_length);
+        for (int i = 0; i < win_length; ++i) {
             frame_f[static_cast<size_t>(i)] -= mean;
         }
 
         // Step 3: kaldi preemphasis with special x[0] handling. The
         // operation must not be done in-place forward (each x[i]
-        // depends on x[i-1] from BEFORE preemph) — kaldi works
-        // backward i = N-1 .. 1, then handles i=0.
-        for (int i = win_length_ - 1; i >= 1; --i) {
+        // depends on x[i-1] from BEFORE preemph) — kaldi works backward
+        // i = N-1 .. 1, then handles i=0.
+        for (int i = win_length - 1; i >= 1; --i) {
             frame_f[static_cast<size_t>(i)] -=
                 kPreemphasis * frame_f[static_cast<size_t>(i - 1)];
         }
         frame_f[0] *= (1.0f - kPreemphasis);
 
         // Step 4: apply hamming window.
-        for (int i = 0; i < win_length_; ++i) {
+        for (int i = 0; i < win_length; ++i) {
             frame_f[static_cast<size_t>(i)] *=
                 window_[static_cast<size_t>(i)];
         }
 
         // Step 5: pad to padded_n_fft and FFT.
         for (int i = 0; i < padded_n_fft_; ++i) {
-            const float re = i < win_length_
+            const float re = i < win_length
                 ? frame_f[static_cast<size_t>(i)]
                 : 0.0f;
             frame[2 * i]     = static_cast<double>(re);
@@ -253,54 +237,42 @@ int KaldiFbankFrontend::compute(const float *        pcm,
                 static_cast<float>(re * re + im * im);
         }
 
-        // Step 7: HTK mel filterbank.
-        float * mel_row = mel.data() + static_cast<size_t>(t) * n_mels_;
-        for (int m = 0; m < n_mels_; ++m) {
+        // Step 7-8: HTK mel filterbank + log with energy_floor. funasr
+        // passes energy_floor=0.0; with that, kaldi falls back to its
+        // hard-coded mel-energy floor of `FLT_EPSILON` (≈ 1.19e-7), NOT
+        // the underflow-floor `FLT_MIN`. log of that floor is ~ -15.94.
+        float * mel_row = mel.data() + static_cast<size_t>(t) * n_mels;
+        for (int m = 0; m < n_mels; ++m) {
             const float * fb_row =
                 mel_fb_.data() + static_cast<size_t>(m) * n_freq;
             float acc = 0.0f;
             for (int b = 0; b < n_freq; ++b) {
                 acc += fb_row[b] * power[static_cast<size_t>(b)];
             }
-            // Step 8: log with energy_floor. funasr passes
-            // energy_floor=0.0; with that, kaldi falls back to its
-            // hard-coded mel-energy floor of `FLT_EPSILON`
-            // (≈ 1.19e-7), NOT the underflow-floor `FLT_MIN`. log of
-            // that floor is ~ -15.94, matching the reference's
-            // first-frame value on near-silence.
             constexpr float kMelEpsilon = 1.1920928955078125e-07f;
             const float floored = std::max(acc, kMelEpsilon);
             mel_row[static_cast<size_t>(m)] = std::log(floored);
         }
     }
 
-    // Step 9: LFR stacking. Mirrors funasr.frontends.wav_frontend.apply_lfr
-    // exactly:
-    //   left-pad mel by (lfr_m - 1) / 2 copies of mel frame 0 BEFORE
-    //   striding (so the first LFR row sees a centered context around
-    //   mel frame 0). With lfr_m=7, lfr_n=6 the left pad is 3 frames.
+    // Step 9: LFR stacking. Mirrors funasr.frontends.wav_frontend.apply_lfr.
+    // Left-pad mel by (lfr_m - 1) / 2 copies of mel frame 0 BEFORE
+    // striding (so the first LFR row sees a centered context around
+    // mel frame 0). Row i then covers padded[i·lfr_n : i·lfr_n + lfr_m];
+    // when a row reads past the last real mel frame, the source index
+    // is clamped to T_frames - 1 (right-edge replication).
     //
-    //   Row i then covers padded[i*lfr_n : i*lfr_n + lfr_m]:
-    //     row 0 -> [mel0, mel0, mel0, mel0, mel1, mel2, mel3]
-    //     row 1 -> [mel3, mel4, mel5, mel6, mel7, mel8, mel9]
-    //     ...
-    //
-    //   When a row reads past the last real mel frame, apply_lfr pads
-    //   on the right by repeating the final mel frame; we mirror that
-    //   with a clamp on the source index.
     // T_lfr = ceil(T_frames / lfr_n) — based on the ORIGINAL mel frame
-    // count, NOT the left-padded count. This is what apply_lfr does.
-    const int left_pad = (lfr_m_ - 1) / 2;
-    const int T_lfr    = (T_frames + lfr_n_ - 1) / lfr_n_;
-    out_features.assign(static_cast<size_t>(T_lfr) * d_input_, 0.0f);
+    // count, NOT the left-padded count. This matches apply_lfr.
+    const int left_pad = (lfr_m - 1) / 2;
+    const int T_lfr    = (T_frames + lfr_n - 1) / lfr_n;
+    out_features.assign(static_cast<size_t>(T_lfr) * d_input, 0.0f);
     for (int t_lfr = 0; t_lfr < T_lfr; ++t_lfr) {
         float * out_row =
-            out_features.data() + static_cast<size_t>(t_lfr) * d_input_;
-        for (int k = 0; k < lfr_m_; ++k) {
-            const int padded_idx = t_lfr * lfr_n_ + k;
-            // Map padded index back to real mel frame:
-            //   padded[0..left_pad-1] = mel[0]   (left padding)
-            //   padded[left_pad + j]  = mel[j]   (real frame j)
+            out_features.data() + static_cast<size_t>(t_lfr) * d_input;
+        for (int k = 0; k < lfr_m; ++k) {
+            const int padded_idx = t_lfr * lfr_n + k;
+            // Map padded index back to real mel frame.
             int src;
             if (padded_idx < left_pad) {
                 src = 0;
@@ -309,18 +281,21 @@ int KaldiFbankFrontend::compute(const float *        pcm,
                 if (src >= T_frames) src = T_frames - 1;
             }
             const float * src_row =
-                mel.data() + static_cast<size_t>(src) * n_mels_;
-            std::memcpy(out_row + static_cast<size_t>(k) * n_mels_,
-                        src_row, sizeof(float) * n_mels_);
+                mel.data() + static_cast<size_t>(src) * n_mels;
+            std::memcpy(out_row + static_cast<size_t>(k) * n_mels,
+                        src_row, sizeof(float) * n_mels);
         }
-        // Step 10: per-feature CMVN: (x + shift) * scale.
-        for (int j = 0; j < d_input_; ++j) {
-            out_row[j] = (out_row[j] + cmvn_shift_[static_cast<size_t>(j)]) *
-                         cmvn_scale_[static_cast<size_t>(j)];
+        // Step 10: optional per-feature CMVN: (x + shift) * scale.
+        if (params_.apply_cmvn) {
+            const float * shift = params_.cmvn_shift.data();
+            const float * scale = params_.cmvn_scale.data();
+            for (int j = 0; j < d_input; ++j) {
+                out_row[j] = (out_row[j] + shift[j]) * scale[j];
+            }
         }
     }
 
     return T_lfr;
 }
 
-} // namespace transcribe::sensevoice
+} // namespace transcribe

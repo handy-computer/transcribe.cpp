@@ -9,11 +9,12 @@
 #include "sensevoice.h"
 
 #include "encoder.h"
-#include "frontend.h"
 #include "weights.h"
 
+#include "sanm/sanm.h"
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
+#include "transcribe-kaldi-fbank.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-meta.h"
@@ -154,8 +155,32 @@ transcribe_status load(
     gguf_free(gguf_data);
 
     // Construct the kaldi fbank frontend now that the CMVN tensors
-    // are bound to backend memory.
-    m->frontend = std::make_unique<KaldiFbankFrontend>(m->hparams, m->weights);
+    // are bound to backend memory. SenseVoice uses the shared
+    // host-side frontend with apply_cmvn=true; pull the CMVN tensors
+    // off backend storage into host buffers first.
+    {
+        const auto & hp_ = m->hparams;
+        transcribe::KaldiFbankParams fe_params;
+        fe_params.n_mels          = hp_.fe_num_mels;
+        fe_params.sample_rate     = hp_.fe_sample_rate;
+        fe_params.win_length      = hp_.fe_win_length;
+        fe_params.hop_length      = hp_.fe_hop_length;
+        fe_params.lfr_m           = hp_.fe_lfr_m;
+        fe_params.lfr_n           = hp_.fe_lfr_n;
+        fe_params.d_input         = hp_.enc_d_input;
+        fe_params.upscale_samples = hp_.fe_upscale_samples;
+        fe_params.apply_cmvn      = true;
+        fe_params.cmvn_shift.resize(static_cast<size_t>(hp_.enc_d_input));
+        fe_params.cmvn_scale.resize(static_cast<size_t>(hp_.enc_d_input));
+        const size_t cmvn_bytes =
+            static_cast<size_t>(hp_.enc_d_input) * sizeof(float);
+        ggml_backend_tensor_get(m->weights.cmvn_shift,
+                                fe_params.cmvn_shift.data(), 0, cmvn_bytes);
+        ggml_backend_tensor_get(m->weights.cmvn_scale,
+                                fe_params.cmvn_scale.data(), 0, cmvn_bytes);
+        m->frontend = std::make_unique<transcribe::KaldiFbankFrontend>(
+            std::move(fe_params));
+    }
 
     m->t_load_us = ggml_time_us() - t_load_start;
     *out_model = m.release();
@@ -193,49 +218,6 @@ int resolve_lid_idx(const SenseVoiceHParams & hp, const char * lang_or_null) {
     if (std::strcmp(lang_or_null, "ko")   == 0) return hp.prefix_lang_ko;
     if (std::strcmp(lang_or_null, "nospeech") == 0) return hp.prefix_lang_nospeech;
     return hp.prefix_lang_auto;
-}
-
-// Build the sinusoidal positional encoding host-side, then upload.
-// Mirrors funasr.SinusoidalPositionEncoder.encode():
-//   positions[i] = i + 1                                  (i = 0..T-1)
-//   log_timescale_increment = log(10000) / (depth/2 - 1)
-//   inv_timescale[k] = exp(k * -log_timescale_increment)  (k = 0..half-1)
-//   scaled[i,k]      = positions[i] * inv_timescale[k]
-//   pe[i, k]         = sin(scaled[i, k])         (depth axis half 0)
-//   pe[i, half + k]  = cos(scaled[i, k])         (depth axis half 1)
-//
-// LAYOUT NOTE: the reference uses CONCATENATED sin/cos halves
-// (`torch.cat([sin, cos], dim=2)`), not the interleaved (sin, cos,
-// sin, cos, ...) pattern. Interleaved == GPT-J / NORMAL RoPE; the
-// reference is Vaswani-style additive PE with split halves.
-void fill_sinusoidal_pe(std::vector<float> & out_buf,
-                        int                  depth,
-                        int                  T)
-{
-    out_buf.assign(static_cast<size_t>(T) * depth, 0.0f);
-    if (depth <= 1 || T <= 0) return;
-
-    const int half = depth / 2;
-    if (half <= 1) return;
-
-    const double log_increment =
-        std::log(10000.0) / static_cast<double>(half - 1);
-
-    std::vector<double> inv_ts(static_cast<size_t>(half));
-    for (int k = 0; k < half; ++k) {
-        inv_ts[static_cast<size_t>(k)] =
-            std::exp(static_cast<double>(k) * (-log_increment));
-    }
-
-    for (int i = 0; i < T; ++i) {
-        const double pos = static_cast<double>(i + 1);  // 1-based
-        float * row = out_buf.data() + static_cast<size_t>(i) * depth;
-        for (int k = 0; k < half; ++k) {
-            const double s = pos * inv_ts[static_cast<size_t>(k)];
-            row[k]        = static_cast<float>(std::sin(s));
-            row[half + k] = static_cast<float>(std::cos(s));
-        }
-    }
 }
 
 void apply_thread_policy(SenseVoiceContext * cc) {
@@ -368,7 +350,7 @@ transcribe_status run(
     ggml_backend_tensor_set(eb.textnorm_idx,  &textnorm_idx,  0, sizeof(int32_t));
 
     // Sinusoidal PE: depth = current width = d_input (NOT d_model).
-    fill_sinusoidal_pe(cc->pe_buf, hp.enc_d_input, T_full);
+    transcribe::sanm::build_sinusoidal_pe(cc->pe_buf, hp.enc_d_input, T_full);
     ggml_tensor * pe_in = nullptr;
     for (ggml_tensor * t = ggml_get_first_tensor(cc->compute_ctx);
          t != nullptr; t = ggml_get_next_tensor(cc->compute_ctx, t))

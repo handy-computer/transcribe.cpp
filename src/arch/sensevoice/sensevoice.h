@@ -6,11 +6,11 @@
 
 #pragma once
 
-#include "frontend.h"
 #include "weights.h"
 
 #include "transcribe-backend.h"
 #include "transcribe-context.h"
+#include "transcribe-kaldi-fbank.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
 
@@ -40,7 +40,7 @@ struct SenseVoiceModel final : public transcribe_model {
     // Constructed once at load() time; const-after-construction so
     // every context that derives from this model can share the cached
     // hamming window + HTK mel filterbank + CMVN buffers.
-    std::unique_ptr<KaldiFbankFrontend> frontend;
+    std::unique_ptr<transcribe::KaldiFbankFrontend> frontend;
 
     SenseVoiceModel() = default;
     ~SenseVoiceModel() override;

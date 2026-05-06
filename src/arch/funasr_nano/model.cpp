@@ -5,12 +5,13 @@
 #include "adaptor.h"
 #include "decoder.h"
 #include "encoder.h"
-#include "frontend.h"
 #include "weights.h"
 
+#include "sanm/sanm.h"
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
+#include "transcribe-kaldi-fbank.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-meta.h"
@@ -289,34 +290,6 @@ transcribe_status build_funasr_nano_prompt(const transcribe::Tokenizer & tok,
     return TRANSCRIBE_OK;
 }
 
-// Sinusoidal positional encoding (depth = current width = d_input,
-// 1-based positions) - matches funasr.SinusoidalPositionEncoder.
-void fill_sinusoidal_pe(std::vector<float> & out_buf,
-                        int                  depth,
-                        int                  T)
-{
-    out_buf.assign(static_cast<size_t>(T) * depth, 0.0f);
-    if (depth <= 1 || T <= 0) return;
-    const int half = depth / 2;
-    if (half <= 1) return;
-
-    const double log_increment =
-        std::log(10000.0) / static_cast<double>(half - 1);
-    std::vector<double> inv_ts(static_cast<size_t>(half));
-    for (int k = 0; k < half; ++k) {
-        inv_ts[k] = std::exp(static_cast<double>(k) * (-log_increment));
-    }
-    for (int i = 0; i < T; ++i) {
-        const double pos = static_cast<double>(i + 1);  // 1-based
-        float * row = out_buf.data() + static_cast<size_t>(i) * depth;
-        for (int k = 0; k < half; ++k) {
-            const double s = pos * inv_ts[k];
-            row[k]        = static_cast<float>(std::sin(s));
-            row[half + k] = static_cast<float>(std::cos(s));
-        }
-    }
-}
-
 void apply_thread_policy(FunAsrNanoContext * cc) {
     int n_threads = cc->n_threads;
     if (n_threads <= 0) {
@@ -481,7 +454,23 @@ transcribe_status load(
         }
     }
 
-    m->frontend = std::make_unique<KaldiFbankFrontend>(m->hparams);
+    {
+        const auto & hp_ = m->hparams;
+        transcribe::KaldiFbankParams fe_params;
+        fe_params.n_mels          = hp_.fe_num_mels;
+        fe_params.sample_rate     = hp_.fe_sample_rate;
+        fe_params.win_length      = hp_.fe_win_length;
+        fe_params.hop_length      = hp_.fe_hop_length;
+        fe_params.lfr_m           = hp_.fe_lfr_m;
+        fe_params.lfr_n           = hp_.fe_lfr_n;
+        fe_params.d_input         = hp_.enc_d_input;
+        fe_params.upscale_samples = hp_.fe_upscale_samples;
+        fe_params.apply_cmvn      = hp_.fe_apply_cmvn;
+        // Fun-ASR-Nano trains on raw LFR features (apply_cmvn=false), so
+        // the cmvn_shift / cmvn_scale buffers are intentionally empty.
+        m->frontend = std::make_unique<transcribe::KaldiFbankFrontend>(
+            std::move(fe_params));
+    }
 
     m->t_load_us = ggml_time_us() - t_load_start;
     *out_model = m.release();
@@ -622,7 +611,7 @@ transcribe_status run(
     // Upload frontend output and PE.
     ggml_backend_tensor_set(eb.frontend_in, cc->frontend_buf.data(),
                             0, cc->frontend_buf.size() * sizeof(float));
-    fill_sinusoidal_pe(cc->pe_buf, hp.enc_d_input, T_lfr);
+    transcribe::sanm::build_sinusoidal_pe(cc->pe_buf, hp.enc_d_input, T_lfr);
     ggml_backend_tensor_set(eb.pe_in, cc->pe_buf.data(),
                             0, cc->pe_buf.size() * sizeof(float));
 
