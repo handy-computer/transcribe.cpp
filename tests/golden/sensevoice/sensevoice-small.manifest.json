@@ -6,7 +6,52 @@
     "hf_repo": "FunAudioLLM/SenseVoiceSmall",
     "hf_revision": "3eb3b4eeffc2f2dde6051b853983753db33e35c3"
   },
+  "reference": {
+    "kind": "author_repo_funasr",
+    "source": "https://github.com/modelscope/FunASR",
+    "revision": "v1.3.1",
+    "entrypoint": "scripts/dump_reference_sensevoice_funasr.py"
+  },
   "expected_dtype": "float32",
   "dtype_source": "manual",
-  "_skeleton": true
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "win_length": 400,
+    "window": "hamming",
+    "normalization": "per_feature",
+    "lfr_m": 7,
+    "lfr_n": 6,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "sentencepiece",
+    "vocab_size": 25055,
+    "special_tokens": {
+      "unk": 0,
+      "bos": 1,
+      "eos": 2,
+      "lang_zh": 24884,
+      "lang_en": 24885,
+      "lang_yue": 24888,
+      "lang_ja": 24892,
+      "lang_ko": 24896,
+      "lang_nospeech": 24992,
+      "withitn": 25016,
+      "woitn": 25017
+    }
+  },
+  "capabilities": {
+    "languages": ["zh", "yue", "en", "ja", "ko"],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/sensevoice.json",
+  "cases": ["jfk"]
 }
