@@ -51,14 +51,6 @@ fields are surfaced if absent but do not gate.
 6. **`transcript_sha256`** per run — SHA256 of the decoded text.
    Structural regression check.
 
-**Optional:**
-- `token_ids_sha256` per run — SHA256 over the comma-separated token-ID
-  sequence. Strictly more sensitive than the transcript hash; catches
-  regressions the normalizer would mask.
-- `rtf_compute_mean` per run — phase-timer-based RTFx (backward-compat
-  with v1 consumers).
-- `git_dirty` at the top level — working-tree dirty flag.
-
 All required fields are emitted today by `scripts/bench/run.py` +
 `build/bin/transcribe-bench`. Any future regression that drops a required
 field blocks Stage 6.
