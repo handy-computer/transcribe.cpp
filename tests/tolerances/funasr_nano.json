@@ -1,0 +1,102 @@
+{
+  "_comment": [
+    "Provisional tolerances for funasr_nano. Stage 4 finalizes against",
+    "observed C++ drift.",
+    "Magnitude-aware: max_abs = max(1e-4 * p99_abs, 1e-6); mean_abs =",
+    "max(1e-5 * rms, 1e-6).",
+    "Reference regime: F32 across the whole stack (encoder/adaptor are F32 in",
+    "the checkpoint; the BF16 LLM is upcast to F32 by FunASR's default",
+    "inference path because passing bf16=True would cast speech to BF16",
+    "before the F32 encoder and crash on dtype mismatch).",
+    "Encoder/adaptor produce well-conditioned outputs after their final",
+    "norm; before the norm magnitudes blow up through the SAN-M stack",
+    "(enc.encoders.48 max ~2.5e4) \u2014 the budget below tracks that profile.",
+    "Every entry carries _provisional: true; do NOT ship a model while",
+    "any _provisional flag remains."
+  ],
+  "adaptor.blocks.0.out": {
+    "max_abs": 0.0034138289031982413,
+    "mean_abs": 0.00017896020836494523,
+    "_provisional": true
+  },
+  "adaptor.linear1.out": {
+    "max_abs": 0.0008630010528564452,
+    "mean_abs": 2.28872765665591e-05,
+    "_provisional": true
+  },
+  "adaptor.linear2.out": {
+    "max_abs": 0.006811815986633285,
+    "mean_abs": 0.00014283584506967018,
+    "_provisional": true
+  },
+  "adaptor.out": {
+    "max_abs": 0.006181859676361082,
+    "mean_abs": 0.0002672932364148201,
+    "_provisional": true
+  },
+  "dec.logits_raw.gen8": {
+    "max_abs": 0.000586672575473785,
+    "mean_abs": 2.1633146387303813e-05,
+    "_provisional": true
+  },
+  "dec.logits_raw.prefill": {
+    "max_abs": 0.0015415232610702502,
+    "mean_abs": 0.00010611364522445808,
+    "_provisional": true
+  },
+  "enc.after_norm.out": {
+    "max_abs": 0.0011241110897064214,
+    "mean_abs": 2.567070811234031e-05,
+    "_provisional": true
+  },
+  "enc.embed.out": {
+    "max_abs": 0.0550393470458984,
+    "mean_abs": 0.0036511827386624274,
+    "_provisional": true
+  },
+  "enc.encoders.0.out": {
+    "max_abs": 0.003948250980377225,
+    "mean_abs": 0.00016604747360162437,
+    "_provisional": true
+  },
+  "enc.encoders.24.out": {
+    "max_abs": 0.030762244720459075,
+    "mean_abs": 0.000737022046985934,
+    "_provisional": true
+  },
+  "enc.encoders.48.out": {
+    "max_abs": 0.06784943054199222,
+    "mean_abs": 0.002575615189738996,
+    "_provisional": true
+  },
+  "enc.encoders0.0.out": {
+    "max_abs": 0.0033920969963073776,
+    "mean_abs": 0.00012763567537808754,
+    "_provisional": true
+  },
+  "enc.tp_encoders.0.out": {
+    "max_abs": 0.001227200784683229,
+    "mean_abs": 8.249996218862937e-05,
+    "_provisional": true
+  },
+  "enc.tp_encoders.10.out": {
+    "max_abs": 0.0026170226764678983,
+    "mean_abs": 0.0005596314943982829,
+    "_provisional": true
+  },
+  "enc.tp_encoders.19.out": {
+    "max_abs": 0.006325508403778096,
+    "mean_abs": 0.0008071931402567518,
+    "_provisional": true
+  },
+  "enc.tp_norm.out": {
+    "max_abs": 0.00019241314411163357,
+    "mean_abs": 5.54169335621307e-06,
+    "_provisional": true
+  },
+  "frontend.fbank.lfr.cmvn.out": {
+    "max_abs": 0.0024300873584747317,
+    "mean_abs": 0.00016144118109513066,
+    "_provisional": true
+  }
+}
