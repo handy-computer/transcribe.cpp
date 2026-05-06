@@ -79,6 +79,18 @@ with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
 
 macOS 26.4.1, transcribe.cpp `0d312ce`.
 
+### AMD Ryzen 7 4750U Pro
+
+| Backend | Sample       |          Q8_0 |
+| ------- | ------------ | ------------: |
+| Vulkan  | jfk (11.0s)  |  239 ms (46×) |
+| Vulkan  | dots (35.3s) | 2.00 s (18×)  |
+| CPU     | jfk (11.0s)  |  331 ms (33×) |
+| CPU     | dots (35.3s) | 3.17 s (11×)  |
+
+Fedora 43, transcribe.cpp `f243f34`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash
@@ -86,7 +98,7 @@ uv run scripts/bench/run.py \
   --models moonshine-base \
   --quants q8_0 \
   --samples jfk,dots \
-  --backends metal,cpu \
+  --backends metal,cpu,vulkan \
   --iters 5 --warmup 2 \
   --name moonshine-publication
 ```
