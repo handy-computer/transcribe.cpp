@@ -24,6 +24,7 @@
 #pragma once
 
 #include "qwen3_asr.h"
+#include "qwen3_lm/qwen3_lm.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -74,16 +75,16 @@ struct PrefillBuild {
 //
 // The kv_cache is WRITTEN by the graph. Callers should set
 // kv_cache.n = T_prompt and kv_cache.head = T_prompt after compute.
-PrefillBuild build_prefill_graph(ggml_context *         ctx,
-                                 const QwenAsrWeights & weights,
-                                 const QwenAsrHParams & hp,
-                                 QwenAsrKvCache &       kv_cache,
-                                 int                    T_prompt,
-                                 int                    T_enc,
-                                 int                    prefix_len,
-                                 int                    suffix_len,
-                                 bool                   use_flash,
-                                 bool                   slice_last);
+PrefillBuild build_prefill_graph(ggml_context *                ctx,
+                                 const QwenAsrWeights &        weights,
+                                 const QwenAsrHParams &        hp,
+                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 int                           T_prompt,
+                                 int                           T_enc,
+                                 int                           prefix_len,
+                                 int                           suffix_len,
+                                 bool                          use_flash,
+                                 bool                          slice_last);
 
 // ---------- Step graph (one token) ----------
 
@@ -110,11 +111,11 @@ struct StepBuild {
 // Reusing the same graph every step eliminates the ggml_free/init +
 // rebuild + sched_reset + sched_alloc_graph overhead that per-step
 // construction incurs (measured ~0.4 ms/step before this change).
-StepBuild build_step_graph(ggml_context *         ctx,
-                           const QwenAsrWeights & weights,
-                           const QwenAsrHParams & hp,
-                           QwenAsrKvCache &       kv_cache,
-                           int                    max_n_kv,
-                           bool                   use_flash);
+StepBuild build_step_graph(ggml_context *                  ctx,
+                           const QwenAsrWeights &          weights,
+                           const QwenAsrHParams &          hp,
+                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           int                             max_n_kv,
+                           bool                            use_flash);
 
 } // namespace transcribe::qwen3_asr

@@ -13,6 +13,7 @@
 #include "encoder.h"
 #include "weights.h"
 
+#include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
@@ -63,18 +64,11 @@ QwenAsrModel::~QwenAsrModel() {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
     }
-    if (ctx_packed != nullptr) {
-        ggml_free(ctx_packed);
-        ctx_packed = nullptr;
-    }
     if (backend_buffer != nullptr) {
         ggml_backend_buffer_free(backend_buffer);
         backend_buffer = nullptr;
     }
-    if (packed_buffer != nullptr) {
-        ggml_backend_buffer_free(packed_buffer);
-        packed_buffer = nullptr;
-    }
+    packed_gate_up.free();
     for (auto it = plan.scheduler_list.rbegin();
          it != plan.scheduler_list.rend(); ++it)
     {
@@ -83,56 +77,6 @@ QwenAsrModel::~QwenAsrModel() {
     plan.scheduler_list.clear();
     plan.primary      = nullptr;
     plan.primary_kind = transcribe::BackendKind::Unknown;
-}
-
-bool kv_cache_init(QwenAsrKvCache & cache,
-                   ggml_backend_t   backend,
-                   int              n_ctx,
-                   int              n_kv_heads,
-                   int              head_dim,
-                   int              n_layer,
-                   ggml_type        kv_type)
-{
-    if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr,
-                     "qwen3_asr kv_cache: unsupported kv_type=%d "
-                     "(only F16/F32)\n", static_cast<int>(kv_type));
-        return false;
-    }
-
-    const size_t ctx_size = 2 * ggml_tensor_overhead() + 256;
-    ggml_init_params params {};
-    params.mem_size   = ctx_size;
-    params.mem_buffer = nullptr;
-    params.no_alloc   = true;
-
-    cache.ctx = ggml_init(params);
-    if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "qwen3_asr kv_cache: ggml_init failed\n");
-        return false;
-    }
-
-    const int64_t elems =
-        static_cast<int64_t>(n_kv_heads) * head_dim * n_ctx * n_layer;
-
-    cache.self_k = ggml_new_tensor_1d(cache.ctx, kv_type, elems);
-    cache.self_v = ggml_new_tensor_1d(cache.ctx, kv_type, elems);
-    ggml_set_name(cache.self_k, "kv_self_k");
-    ggml_set_name(cache.self_v, "kv_self_v");
-
-    cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
-    if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "qwen3_asr kv_cache: buffer alloc failed\n");
-        ggml_free(cache.ctx);
-        cache.ctx = nullptr;
-        return false;
-    }
-    ggml_backend_buffer_clear(cache.buffer, 0);
-
-    cache.n_ctx = n_ctx;
-    cache.n     = 0;
-    cache.head  = 0;
-    return true;
 }
 
 namespace {
@@ -302,66 +246,24 @@ transcribe_status load(
     // Pack gate+up into a separate ctx + backend buffer so the FFN
     // can run a single mul_mat instead of two. ctx_meta is sized
     // exactly for GGUF file tensors with no headroom, so packed
-    // tensors live in their own context.
+    // tensors live in their own context owned by `qwen3_lm::pack_gate_up`.
     {
-        const size_t packed_ctx_size =
-            static_cast<size_t>(m->hparams.dec_n_layers) *
-            ggml_tensor_overhead() + 1024;
-        ggml_init_params packed_params {};
-        packed_params.mem_size   = packed_ctx_size;
-        packed_params.mem_buffer = nullptr;
-        packed_params.no_alloc   = true;
-        m->ctx_packed = ggml_init(packed_params);
-        if (m->ctx_packed == nullptr) {
-            std::fprintf(stderr,
-                         "qwen3_asr: ggml_init for ctx_packed failed\n");
+        std::vector<transcribe::qwen3_lm::GateUpEntry> entries;
+        entries.reserve(m->weights.dec_blocks.size());
+        for (auto & b : m->weights.dec_blocks) {
+            entries.push_back({b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w});
+        }
+        if (!transcribe::qwen3_lm::pack_gate_up(
+                m->plan.primary,
+                m->hparams.dec_hidden,
+                m->hparams.dec_intermediate,
+                entries,
+                m->packed_gate_up,
+                "qwen3_asr"))
+        {
+            m->packed_gate_up.free();
             return TRANSCRIBE_ERR_GGUF;
         }
-
-        const int64_t dec_h  = m->hparams.dec_hidden;
-        const int64_t dec_im = m->hparams.dec_intermediate;
-        for (auto & b : m->weights.dec_blocks) {
-            b.ffn_gate_up_w = ggml_new_tensor_2d(
-                m->ctx_packed, b.ffn_gate_w->type, dec_h, 2 * dec_im);
-            if (b.ffn_gate_up_w == nullptr) {
-                return TRANSCRIBE_ERR_GGUF;
-            }
-        }
-
-        m->packed_buffer = ggml_backend_alloc_ctx_tensors(
-            m->ctx_packed, m->plan.primary);
-        if (m->packed_buffer == nullptr) {
-            std::fprintf(stderr,
-                         "qwen3_asr: packed_buffer alloc failed\n");
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        ggml_backend_buffer_set_usage(m->packed_buffer,
-                                      GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-        // Fill: for Q8_0 (and other row-wise quants) concat along dim 1
-        // is just gate's bytes followed by up's bytes. One CPU round-
-        // trip per layer at load time; zero cost at inference.
-        std::vector<uint8_t> buf;
-        for (auto & b : m->weights.dec_blocks) {
-            const size_t gate_bytes = ggml_nbytes(b.ffn_gate_w);
-            const size_t up_bytes   = ggml_nbytes(b.ffn_up_w);
-            if (ggml_nbytes(b.ffn_gate_up_w) != gate_bytes + up_bytes) {
-                std::fprintf(stderr,
-                             "qwen3_asr: gate_up size mismatch "
-                             "(%zu vs %zu + %zu)\n",
-                             ggml_nbytes(b.ffn_gate_up_w),
-                             gate_bytes, up_bytes);
-                return TRANSCRIBE_ERR_GGUF;
-            }
-            buf.resize(std::max(gate_bytes, up_bytes));
-            ggml_backend_tensor_get(b.ffn_gate_w, buf.data(), 0, gate_bytes);
-            ggml_backend_tensor_set(b.ffn_gate_up_w, buf.data(),
-                                    0, gate_bytes);
-            ggml_backend_tensor_get(b.ffn_up_w, buf.data(), 0, up_bytes);
-            ggml_backend_tensor_set(b.ffn_gate_up_w, buf.data(),
-                                    gate_bytes, up_bytes);
-        }
-
     }
 
     m->t_load_us = ggml_time_us() - t_load_start;
@@ -393,14 +295,14 @@ transcribe_status init_context(
     {
         ggml_type kv_type = GGML_TYPE_F16;
         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
-        if (!kv_cache_init(cc->kv_cache, cm->plan.primary,
-                           /*n_ctx=*/2048,
-                           cm->hparams.dec_n_kv_heads,
-                           cm->hparams.dec_head_dim,
-                           cm->hparams.dec_n_layers,
-                           kv_type))
+        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary,
+                                           /*n_ctx=*/2048,
+                                           cm->hparams.dec_n_kv_heads,
+                                           cm->hparams.dec_head_dim,
+                                           cm->hparams.dec_n_layers,
+                                           kv_type))
         {
-            std::fprintf(stderr, "qwen3_asr init_context: kv_cache_init failed\n");
+            std::fprintf(stderr, "qwen3_asr init_context: kv_init failed\n");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -911,14 +813,14 @@ transcribe_status run(
     if (cc->kv_cache.ctx == nullptr) {
         ggml_type kv_type = GGML_TYPE_F16;
         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
-        if (!kv_cache_init(cc->kv_cache, cm->plan.primary,
-                           kv_n_ctx,
-                           cm->hparams.dec_n_kv_heads,
-                           cm->hparams.dec_head_dim,
-                           cm->hparams.dec_n_layers,
-                           kv_type))
+        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary,
+                                           kv_n_ctx,
+                                           cm->hparams.dec_n_kv_heads,
+                                           cm->hparams.dec_head_dim,
+                                           cm->hparams.dec_n_layers,
+                                           kv_type))
         {
-            std::fprintf(stderr, "qwen3_asr run: kv_cache_init failed\n");
+            std::fprintf(stderr, "qwen3_asr run: kv_init failed\n");
             return TRANSCRIBE_ERR_GGUF;
         }
     } else {

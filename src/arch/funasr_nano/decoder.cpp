@@ -1,16 +1,29 @@
 // arch/funasr_nano/decoder.cpp - Qwen3-0.6B LM prefill / step graphs.
 //
-// Pruned fork of arch/qwen3_asr/decoder.cpp. The Qwen3 block math is
-// identical (pre-LN RMSNorm, GQA, per-head Q/K-RMSNorm, NeoX RoPE,
-// SwiGLU). Audio injection differs in surface only — funasr_nano splices
-// the first `fake_token_len` rows of the adaptor output at the
-// `fbank_beg` position via a three-way concat
-// [prefix | audio | suffix]. Token-id stream contains zero placeholders
-// at the audio positions (the embedding lookup is computed for the
-// dump but the rows are then overridden by the concat).
+// The Qwen3 block math (pre-LN RMSNorm, GQA with per-head Q/K-RMSNorm,
+// NeoX RoPE @ θ=1e6, KV write/read, SwiGLU on packed gate_up) is shared
+// with arch/qwen3_asr via `src/qwen3_lm/`. This file owns:
+//   - graph allocation
+//   - audio injection (3-way concat: prefix | adaptor_out | suffix);
+//     T_audio == 0 is a supported chat-only path
+//   - tensor naming and dump-point preservation for validate.py parity
+//   - final RMSNorm + tied lm_head head
+//   - block_prefill / block_step driver loops
+//
+// Notes vs qwen3_asr:
+//   - The audio block is the adaptor output (already in llm_dim=1024
+//     space), not the raw encoder output.
+//   - T_audio is allowed to be 0 (no audio); the prefill skips the
+//     concat and uses token_emb_all directly. Kept here at the call
+//     site since the shared block helper has no business knowing about
+//     audio shapes.
+//   - The step graph also exposes raw logits as an output (not just
+//     argmax) so the autoregressive driver can dump `dec.logits_raw.gen8`
+//     for tensor parity at gen step 7.
 
 #include "decoder.h"
 
+#include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-debug.h"
 
 #include "ggml.h"
@@ -27,24 +40,44 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
     return t;
 }
 
-ggml_tensor * rms_norm(ggml_context * ctx, ggml_tensor * x,
-                       ggml_tensor * weight, float eps)
-{
-    return ggml_mul(ctx, ggml_rms_norm(ctx, x, eps), weight);
+qwen3_lm::BlockView to_block_view(const DecBlock & b) {
+    qwen3_lm::BlockView v {};
+    v.norm_attn_w   = b.norm_attn_w;
+    v.norm_ffn_w    = b.norm_ffn_w;
+    v.attn_q_w      = b.attn_q_w;
+    v.attn_k_w      = b.attn_k_w;
+    v.attn_v_w      = b.attn_v_w;
+    v.attn_o_w      = b.attn_o_w;
+    v.attn_q_norm   = b.attn_q_norm;
+    v.attn_k_norm   = b.attn_k_norm;
+    v.ffn_gate_up_w = b.ffn_gate_up_w;
+    v.ffn_down_w    = b.ffn_down_w;
+    return v;
+}
+
+qwen3_lm::BlockParams to_block_params(const FunAsrNanoHParams & hp) {
+    qwen3_lm::BlockParams p {};
+    p.n_heads      = hp.dec_n_heads;
+    p.n_kv_heads   = hp.dec_n_kv_heads;
+    p.head_dim     = hp.dec_head_dim;
+    p.max_position = hp.dec_max_position_embeddings;
+    p.rms_eps      = hp.dec_rms_norm_eps;
+    p.rope_theta   = hp.dec_rope_theta;
+    return p;
 }
 
 } // namespace
 
-PrefillBuild build_prefill_graph(ggml_context *             ctx,
-                                 const FunAsrNanoWeights &  weights,
-                                 const FunAsrNanoHParams &  hp,
-                                 KvCache &                  kv_cache,
-                                 int                        T_prompt,
-                                 int                        T_audio,
-                                 int                        prefix_len,
-                                 int                        suffix_len,
-                                 bool                       use_flash,
-                                 bool                       slice_last)
+PrefillBuild build_prefill_graph(ggml_context *                  ctx,
+                                 const FunAsrNanoWeights &       weights,
+                                 const FunAsrNanoHParams &       hp,
+                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 int                             T_prompt,
+                                 int                             T_audio,
+                                 int                             prefix_len,
+                                 int                             suffix_len,
+                                 bool                            use_flash,
+                                 bool                            slice_last)
 {
     PrefillBuild pb {};
     pb.T_prompt   = T_prompt;
@@ -77,24 +110,14 @@ PrefillBuild build_prefill_graph(ggml_context *             ctx,
         return pb;
     }
 
-    const int64_t hidden     = hp.dec_hidden;
-    const int64_t n_heads    = hp.dec_n_heads;
-    const int64_t n_kv_heads = hp.dec_n_kv_heads;
-    const int64_t n_groups   = n_heads / n_kv_heads;
-    const int64_t head_dim   = hp.dec_head_dim;
-    const int64_t q_dim      = n_heads    * head_dim;
-    const int64_t kv_dim     = n_kv_heads * head_dim;
-    const int64_t vocab      = hp.dec_vocab_size;
-    const int     n_layer    = hp.dec_n_layers;
-    const int     n_ctx      = kv_cache.n_ctx;
-    const float   rms_eps    = hp.dec_rms_norm_eps;
-    const float   rope_theta = hp.dec_rope_theta;
-    const float   scale_attn = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const int64_t hidden  = hp.dec_hidden;
+    const int64_t vocab   = hp.dec_vocab_size;
+    const int     n_layer = hp.dec_n_layers;
+    const float   rms_eps = hp.dec_rms_norm_eps;
 
-    const size_t k_elem = ggml_element_size(kv_cache.self_k);
-    const size_t v_elem = ggml_element_size(kv_cache.self_v);
+    const auto block_params = to_block_params(hp);
 
-    // ---------- Inputs ----------
+    // ---------- Graph inputs ----------
     pb.input_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_prompt);
     named(pb.input_ids_in, "dec.input_ids");
     ggml_set_input(pb.input_ids_in);
@@ -128,7 +151,7 @@ PrefillBuild build_prefill_graph(ggml_context *             ctx,
     pb.dumps.token_emb = token_emb_all;
     transcribe::debug::mark_tensor_for_dump(token_emb_all);
 
-    // ---------- Audio injection via concat ----------
+    // ---------- Audio injection via 3-way concat ----------
     const size_t emb_elem = ggml_element_size(token_emb_all);
     ggml_tensor * x_prefix = nullptr;
     if (prefix_len > 0) {
@@ -160,109 +183,22 @@ PrefillBuild build_prefill_graph(ggml_context *             ctx,
     pb.dumps.audio_injected = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
+    // ---------- Block stack ----------
     for (int il = 0; il < n_layer; ++il) {
-        const auto & w = weights.dec_blocks[il];
+        qwen3_lm::BlockOpts opts {};
+        opts.use_flash             = use_flash;
+        opts.slice_last_before_ffn = slice_last && (il == n_layer - 1);
 
-        // ---- Attention sub-layer ----
-        ggml_tensor * x_norm = rms_norm(ctx, x, w.norm_attn_w, rms_eps);
-
-        ggml_tensor * Q = ggml_mul_mat(ctx, w.attn_q_w, x_norm);
-        ggml_tensor * K = ggml_mul_mat(ctx, w.attn_k_w, x_norm);
-        ggml_tensor * V = ggml_mul_mat(ctx, w.attn_v_w, x_norm);
-
-        Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads,    T_prompt, 1);
-        K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T_prompt, 1);
-        V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, T_prompt, 1);
-
-        Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), w.attn_q_norm);
-        K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), w.attn_k_norm);
-
-        Q = ggml_rope_ext(ctx, Q, pb.positions_in, nullptr,
-                          static_cast<int>(head_dim),
-                          GGML_ROPE_TYPE_NEOX,
-                          hp.dec_max_position_embeddings,
-                          rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
-        K = ggml_rope_ext(ctx, K, pb.positions_in, nullptr,
-                          static_cast<int>(head_dim),
-                          GGML_ROPE_TYPE_NEOX,
-                          hp.dec_max_position_embeddings,
-                          rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
-
-        // KV cache write.
-        {
-            const size_t layer_off = static_cast<size_t>(il) * n_ctx * kv_dim;
-            const size_t n_elem    = static_cast<size_t>(T_prompt) * kv_dim;
-            ggml_tensor * k_dst = ggml_view_1d(ctx, kv_cache.self_k,
-                                               n_elem, k_elem * layer_off);
-            ggml_tensor * v_dst = ggml_view_1d(ctx, kv_cache.self_v,
-                                               n_elem, v_elem * layer_off);
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, K, k_dst));
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, V, v_dst));
-        }
-
-        const size_t layer_off_bytes =
-            k_elem * static_cast<size_t>(il) * n_ctx * kv_dim;
-        ggml_tensor * K_att = ggml_view_3d(
-            ctx, kv_cache.self_k,
-            head_dim, T_prompt, n_kv_heads,
-            k_elem * kv_dim, k_elem * head_dim,
-            layer_off_bytes);
-        ggml_tensor * V_att = ggml_view_3d(
-            ctx, kv_cache.self_v,
-            head_dim, T_prompt, n_kv_heads,
-            v_elem * kv_dim, v_elem * head_dim,
-            v_elem * static_cast<size_t>(il) * n_ctx * kv_dim);
-
-        ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 1, 3));
-
-        ggml_tensor * o;
-        if (use_flash) {
-            o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, pb.mask_in,
-                                    scale_attn, /*max_bias=*/0.0f,
-                                    /*logit_softcap=*/0.0f);
-            o = ggml_reshape_2d(ctx, o, q_dim, T_prompt);
-        } else {
-            ggml_tensor * K_att_c = ggml_cont(ctx, K_att);
-            ggml_tensor * V_att_c = ggml_cont(ctx, V_att);
-            ggml_tensor * K_4d = ggml_reshape_4d(
-                ctx, K_att_c, head_dim, T_prompt, 1, n_kv_heads);
-            ggml_tensor * V_4d = ggml_reshape_4d(
-                ctx, V_att_c, head_dim, T_prompt, 1, n_kv_heads);
-            ggml_tensor * K_rep_template = ggml_new_tensor_4d(
-                ctx, K_att->type, head_dim, T_prompt, n_groups, n_kv_heads);
-            ggml_tensor * V_rep_template = ggml_new_tensor_4d(
-                ctx, V_att->type, head_dim, T_prompt, n_groups, n_kv_heads);
-            ggml_tensor * K_rep = ggml_repeat(ctx, K_4d, K_rep_template);
-            ggml_tensor * V_rep = ggml_repeat(ctx, V_4d, V_rep_template);
-            ggml_tensor * K_full = ggml_reshape_3d(ctx, K_rep, head_dim, T_prompt, n_heads);
-            ggml_tensor * V_full = ggml_reshape_3d(ctx, V_rep, head_dim, T_prompt, n_heads);
-
-            ggml_tensor * kq = ggml_mul_mat(ctx, K_full, Q_att);
-            ggml_tensor * kq_soft = ggml_soft_max_ext(
-                ctx, kq, pb.mask_in, scale_attn, /*max_bias=*/0.0f);
-            ggml_tensor * V_t = ggml_cont(ctx, ggml_permute(ctx, V_full, 1, 0, 2, 3));
-            o = ggml_mul_mat(ctx, V_t, kq_soft);
-            o = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
-            o = ggml_reshape_2d(ctx, o, q_dim, T_prompt);
-        }
-
-        o = ggml_mul_mat(ctx, w.attn_o_w, o);
-        x = ggml_add(ctx, x, o);
-
-        if (slice_last && il == n_layer - 1) {
-            const size_t elem = ggml_element_size(x);
-            x = ggml_view_2d(ctx, x, hidden, 1,
-                             elem * hidden,
-                             elem * hidden * static_cast<size_t>(T_prompt - 1));
-            x = ggml_cont(ctx, x);
-        }
-
-        ggml_tensor * ff_norm  = rms_norm(ctx, x, w.norm_ffn_w, rms_eps);
-        ggml_tensor * gate_up  = ggml_mul_mat(ctx, w.ffn_gate_up_w, ff_norm);
-        ggml_tensor * ff       = ggml_swiglu(ctx, gate_up);
-        ff = ggml_mul_mat(ctx, w.ffn_down_w, ff);
-
-        x = ggml_add(ctx, x, ff);
+        x = qwen3_lm::block_prefill(
+            ctx, gf, x,
+            to_block_view(weights.dec_blocks[il]),
+            block_params,
+            kv_cache,
+            il,
+            T_prompt,
+            pb.mask_in,
+            pb.positions_in,
+            opts);
 
         if (il == 0) {
             named(x, "dec.block.0.out");
@@ -277,7 +213,9 @@ PrefillBuild build_prefill_graph(ggml_context *             ctx,
         }
     }
 
-    x = rms_norm(ctx, x, weights.dec_final.norm_w, rms_eps);
+    // ---------- Final RMSNorm + tied lm_head ----------
+    x = ggml_mul(ctx, ggml_rms_norm(ctx, x, rms_eps),
+                 weights.dec_final.norm_w);
     named(x, "dec.out_before_head");
     pb.dumps.out_before_head = x;
     transcribe::debug::mark_tensor_for_dump(x);
@@ -312,12 +250,16 @@ PrefillBuild build_prefill_graph(ggml_context *             ctx,
     return pb;
 }
 
-StepBuild build_step_graph(ggml_context *             ctx,
-                           const FunAsrNanoWeights &  weights,
-                           const FunAsrNanoHParams &  hp,
-                           KvCache &                  kv_cache,
-                           int                        max_n_kv,
-                           bool                       use_flash)
+// ---------------------------------------------------------------------------
+// Step graph (single-token decode)
+// ---------------------------------------------------------------------------
+
+StepBuild build_step_graph(ggml_context *                  ctx,
+                           const FunAsrNanoWeights &       weights,
+                           const FunAsrNanoHParams &       hp,
+                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           int                             max_n_kv,
+                           bool                            use_flash)
 {
     StepBuild sb {};
     sb.max_n_kv = max_n_kv;
@@ -338,21 +280,11 @@ StepBuild build_step_graph(ggml_context *             ctx,
         return sb;
     }
 
-    const int64_t n_heads    = hp.dec_n_heads;
-    const int64_t n_kv_heads = hp.dec_n_kv_heads;
-    const int64_t n_groups   = n_heads / n_kv_heads;
-    const int64_t head_dim   = hp.dec_head_dim;
-    const int64_t q_dim      = n_heads    * head_dim;
-    const int64_t kv_dim     = n_kv_heads * head_dim;
-    const int64_t vocab      = hp.dec_vocab_size;
-    const int     n_layer    = hp.dec_n_layers;
-    const int     n_ctx      = kv_cache.n_ctx;
-    const float   rms_eps    = hp.dec_rms_norm_eps;
-    const float   rope_theta = hp.dec_rope_theta;
-    const float   scale_attn = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const int64_t vocab   = hp.dec_vocab_size;
+    const int     n_layer = hp.dec_n_layers;
+    const float   rms_eps = hp.dec_rms_norm_eps;
 
-    const size_t k_elem = ggml_element_size(kv_cache.self_k);
-    const size_t v_elem = ggml_element_size(kv_cache.self_v);
+    const auto block_params = to_block_params(hp);
 
     sb.input_id_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
     ggml_set_name(sb.input_id_in, "step.input_id");
@@ -382,106 +314,21 @@ StepBuild build_step_graph(ggml_context *             ctx,
                                     sb.input_id_in);
 
     for (int il = 0; il < n_layer; ++il) {
-        const auto & w = weights.dec_blocks[il];
-
-        ggml_tensor * x_norm = rms_norm(ctx, x, w.norm_attn_w, rms_eps);
-
-        ggml_tensor * Q = ggml_mul_mat(ctx, w.attn_q_w, x_norm);
-        ggml_tensor * K = ggml_mul_mat(ctx, w.attn_k_w, x_norm);
-        ggml_tensor * V = ggml_mul_mat(ctx, w.attn_v_w, x_norm);
-
-        Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads,    1, 1);
-        K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, 1, 1);
-        V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, 1, 1);
-
-        Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), w.attn_q_norm);
-        K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), w.attn_k_norm);
-
-        Q = ggml_rope_ext(ctx, Q, sb.position_in, nullptr,
-                          static_cast<int>(head_dim),
-                          GGML_ROPE_TYPE_NEOX,
-                          hp.dec_max_position_embeddings,
-                          rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
-        K = ggml_rope_ext(ctx, K, sb.position_in, nullptr,
-                          static_cast<int>(head_dim),
-                          GGML_ROPE_TYPE_NEOX,
-                          hp.dec_max_position_embeddings,
-                          rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
-
-        {
-            const size_t layer_off_k =
-                k_elem * static_cast<size_t>(il) * n_ctx * kv_dim;
-            const size_t layer_off_v =
-                v_elem * static_cast<size_t>(il) * n_ctx * kv_dim;
-
-            ggml_tensor * k_layer = ggml_view_2d(ctx, kv_cache.self_k,
-                                                 kv_dim, n_ctx,
-                                                 k_elem * kv_dim, layer_off_k);
-            ggml_tensor * v_layer = ggml_view_2d(ctx, kv_cache.self_v,
-                                                 kv_dim, n_ctx,
-                                                 v_elem * kv_dim, layer_off_v);
-            ggml_tensor * K_row = ggml_reshape_2d(ctx, K, kv_dim, 1);
-            ggml_tensor * V_row = ggml_reshape_2d(ctx, V, kv_dim, 1);
-
-            ggml_build_forward_expand(
-                gf, ggml_set_rows(ctx, k_layer, K_row, sb.kv_idx_in));
-            ggml_build_forward_expand(
-                gf, ggml_set_rows(ctx, v_layer, V_row, sb.kv_idx_in));
-        }
-
-        const size_t layer_off_bytes =
-            k_elem * static_cast<size_t>(il) * n_ctx * kv_dim;
-        ggml_tensor * K_att = ggml_view_3d(
-            ctx, kv_cache.self_k,
-            head_dim, max_n_kv, n_kv_heads,
-            k_elem * kv_dim, k_elem * head_dim,
-            layer_off_bytes);
-        ggml_tensor * V_att = ggml_view_3d(
-            ctx, kv_cache.self_v,
-            head_dim, max_n_kv, n_kv_heads,
-            v_elem * kv_dim, v_elem * head_dim,
-            v_elem * static_cast<size_t>(il) * n_ctx * kv_dim);
-
-        ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 1, 3));
-
-        ggml_tensor * o;
-        if (use_flash) {
-            o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, sb.mask_in,
-                                    scale_attn, 0.0f, 0.0f);
-            o = ggml_reshape_2d(ctx, o, q_dim, 1);
-        } else {
-            ggml_tensor * K_att_c = ggml_cont(ctx, K_att);
-            ggml_tensor * V_att_c = ggml_cont(ctx, V_att);
-            ggml_tensor * K_4d = ggml_reshape_4d(ctx, K_att_c, head_dim, max_n_kv, 1, n_kv_heads);
-            ggml_tensor * V_4d = ggml_reshape_4d(ctx, V_att_c, head_dim, max_n_kv, 1, n_kv_heads);
-            ggml_tensor * K_rep_template = ggml_new_tensor_4d(
-                ctx, K_att->type, head_dim, max_n_kv, n_groups, n_kv_heads);
-            ggml_tensor * V_rep_template = ggml_new_tensor_4d(
-                ctx, V_att->type, head_dim, max_n_kv, n_groups, n_kv_heads);
-            ggml_tensor * K_rep = ggml_repeat(ctx, K_4d, K_rep_template);
-            ggml_tensor * V_rep = ggml_repeat(ctx, V_4d, V_rep_template);
-            ggml_tensor * K_full = ggml_reshape_3d(ctx, K_rep, head_dim, max_n_kv, n_heads);
-            ggml_tensor * V_full = ggml_reshape_3d(ctx, V_rep, head_dim, max_n_kv, n_heads);
-
-            ggml_tensor * kq = ggml_mul_mat(ctx, K_full, Q_att);
-            ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, sb.mask_in, scale_attn, 0.0f);
-            ggml_tensor * V_t = ggml_cont(ctx, ggml_permute(ctx, V_full, 1, 0, 2, 3));
-            o = ggml_mul_mat(ctx, V_t, kq_soft);
-            o = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
-            o = ggml_reshape_2d(ctx, o, q_dim, 1);
-        }
-        o = ggml_mul_mat(ctx, w.attn_o_w, o);
-        x = ggml_add(ctx, x, o);
-
-        ggml_tensor * ff_norm = rms_norm(ctx, x, w.norm_ffn_w, rms_eps);
-        ggml_tensor * gate_up = ggml_mul_mat(ctx, w.ffn_gate_up_w, ff_norm);
-        ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-        ff = ggml_mul_mat(ctx, w.ffn_down_w, ff);
-
-        x = ggml_add(ctx, x, ff);
+        x = qwen3_lm::block_step(
+            ctx, gf, x,
+            to_block_view(weights.dec_blocks[il]),
+            block_params,
+            kv_cache,
+            il,
+            max_n_kv,
+            sb.mask_in,
+            sb.position_in,
+            sb.kv_idx_in,
+            use_flash);
     }
 
-    x = rms_norm(ctx, x, weights.dec_final.norm_w, rms_eps);
+    x = ggml_mul(ctx, ggml_rms_norm(ctx, x, rms_eps),
+                 weights.dec_final.norm_w);
     ggml_tensor * logits = ggml_mul_mat(ctx, weights.dec_embed.token_w, x);
     logits = ggml_reshape_1d(ctx, logits, vocab);
     ggml_set_name(logits, "step.logits");
@@ -489,7 +336,7 @@ StepBuild build_step_graph(ggml_context *             ctx,
     ggml_tensor * amax = ggml_argmax(ctx, logits);
     ggml_set_name(amax, "step.argmax");
 
-    sb.out = amax;
+    sb.out    = amax;
     sb.logits = logits;
     ggml_set_output(sb.out);
     ggml_set_output(sb.logits);
