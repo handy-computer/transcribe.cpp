@@ -8,6 +8,7 @@
 #pragma once
 
 #include "funasr_nano.h"
+#include "qwen3_lm/qwen3_lm.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -42,16 +43,16 @@ struct PrefillBuild {
     int suffix_len = 0;
 };
 
-PrefillBuild build_prefill_graph(ggml_context *             ctx,
-                                 const FunAsrNanoWeights &  weights,
-                                 const FunAsrNanoHParams &  hp,
-                                 KvCache &                  kv_cache,
-                                 int                        T_prompt,
-                                 int                        T_audio,
-                                 int                        prefix_len,
-                                 int                        suffix_len,
-                                 bool                       use_flash,
-                                 bool                       slice_last);
+PrefillBuild build_prefill_graph(ggml_context *                  ctx,
+                                 const FunAsrNanoWeights &       weights,
+                                 const FunAsrNanoHParams &       hp,
+                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 int                             T_prompt,
+                                 int                             T_audio,
+                                 int                             prefix_len,
+                                 int                             suffix_len,
+                                 bool                            use_flash,
+                                 bool                            slice_last);
 
 struct StepBuild {
     ggml_tensor * input_id_in = nullptr;  // [1] i32
@@ -68,11 +69,11 @@ struct StepBuild {
     int max_n_kv = 0;
 };
 
-StepBuild build_step_graph(ggml_context *             ctx,
-                           const FunAsrNanoWeights &  weights,
-                           const FunAsrNanoHParams &  hp,
-                           KvCache &                  kv_cache,
-                           int                        max_n_kv,
-                           bool                       use_flash);
+StepBuild build_step_graph(ggml_context *                  ctx,
+                           const FunAsrNanoWeights &       weights,
+                           const FunAsrNanoHParams &       hp,
+                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           int                             max_n_kv,
+                           bool                            use_flash);
 
 } // namespace transcribe::funasr_nano

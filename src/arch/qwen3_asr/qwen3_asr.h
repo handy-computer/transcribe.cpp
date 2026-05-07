@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-backend.h"
 #include "transcribe-context.h"
 #include "transcribe-mel.h"
@@ -62,56 +63,6 @@ transcribe_status encode_language_prefix(const transcribe::Tokenizer & tok,
                                          std::vector<int32_t> &        out_ids);
 
 // ---------------------------------------------------------------------------
-// KV cache for the autoregressive LM.
-//
-// Self-attention only (no cross-attention — audio features are fused
-// into the LM's input embedding stream via token injection). Flat 1D
-// tensors for K and V, with per-layer views used during graph
-// construction.
-//
-// Shape notes:
-//   K: [n_kv_heads * head_dim * n_ctx * n_layer]
-//   V: [n_kv_heads * head_dim * n_ctx * n_layer]
-//
-// GQA: n_kv_heads may be less than n_heads (Qwen3-ASR-0.6B: 16/8).
-// ---------------------------------------------------------------------------
-
-struct QwenAsrKvCache {
-    ggml_tensor * self_k = nullptr;
-    ggml_tensor * self_v = nullptr;
-
-    ggml_context *        ctx    = nullptr;
-    ggml_backend_buffer_t buffer = nullptr;
-
-    int n_ctx = 0;
-    int n     = 0;
-    int head  = 0;
-
-    void free() {
-        if (buffer != nullptr) {
-            ggml_backend_buffer_free(buffer);
-            buffer = nullptr;
-        }
-        if (ctx != nullptr) {
-            ggml_free(ctx);
-            ctx = nullptr;
-        }
-        self_k = nullptr;
-        self_v = nullptr;
-        n    = 0;
-        head = 0;
-    }
-};
-
-bool kv_cache_init(QwenAsrKvCache & cache,
-                   ggml_backend_t   backend,
-                   int              n_ctx,
-                   int              n_kv_heads,
-                   int              head_dim,
-                   int              n_layer,
-                   ggml_type        kv_type);
-
-// ---------------------------------------------------------------------------
 // Model / Context
 // ---------------------------------------------------------------------------
 
@@ -138,12 +89,11 @@ struct QwenAsrModel final : public transcribe_model {
     Tokenizer       tok;
     QwenAsrHParams  hparams;
     QwenAsrWeights  weights;
-    ggml_context *  ctx_meta   = nullptr;
-    ggml_context *  ctx_packed = nullptr;  // packed gate_up / qkv tensors
+    ggml_context *  ctx_meta = nullptr;
 
-    transcribe::BackendPlan plan;
-    ggml_backend_buffer_t   backend_buffer = nullptr;
-    ggml_backend_buffer_t   packed_buffer  = nullptr;
+    transcribe::BackendPlan       plan;
+    ggml_backend_buffer_t         backend_buffer = nullptr;
+    transcribe::qwen3_lm::PackedGateUpHandles packed_gate_up;
 
     std::optional<transcribe::MelFrontend> mel;
 
@@ -167,7 +117,7 @@ struct QwenAsrContext final : public transcribe_context {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
-    QwenAsrKvCache kv_cache;
+    transcribe::qwen3_lm::KvCache kv_cache;
 
     std::vector<float> mel_buf;
     std::vector<float> enc_host;  // audio encoder output, pre-injection

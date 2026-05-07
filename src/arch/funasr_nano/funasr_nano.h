@@ -7,6 +7,7 @@
 
 #include "weights.h"
 
+#include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-backend.h"
 #include "transcribe-context.h"
 #include "transcribe-kaldi-fbank.h"
@@ -31,33 +32,6 @@ namespace transcribe::funasr_nano {
 void apply_family_invariants(transcribe_capabilities & caps);
 
 // ---------------------------------------------------------------------------
-// KV cache for the autoregressive LM (audio-llm pattern; self-attention
-// only, audio fused into input embeddings via row-override).
-// ---------------------------------------------------------------------------
-
-struct KvCache {
-    ggml_tensor * self_k = nullptr;
-    ggml_tensor * self_v = nullptr;
-
-    ggml_context *        ctx    = nullptr;
-    ggml_backend_buffer_t buffer = nullptr;
-
-    int n_ctx = 0;
-    int n     = 0;
-    int head  = 0;
-
-    void free();
-};
-
-bool kv_cache_init(KvCache &       cache,
-                   ggml_backend_t  backend,
-                   int             n_ctx,
-                   int             n_kv_heads,
-                   int             head_dim,
-                   int             n_layer,
-                   ggml_type       kv_type);
-
-// ---------------------------------------------------------------------------
 // Resolved chat-template special-token ids (filled at load time).
 // ---------------------------------------------------------------------------
 
@@ -78,12 +52,11 @@ struct FunAsrNanoModel final : public transcribe_model {
     Tokenizer            tok;
     FunAsrNanoHParams    hparams;
     FunAsrNanoWeights    weights;
-    ggml_context *       ctx_meta   = nullptr;
-    ggml_context *       ctx_packed = nullptr;  // packed gate_up tensors
+    ggml_context *       ctx_meta = nullptr;
 
-    transcribe::BackendPlan plan;
-    ggml_backend_buffer_t   backend_buffer = nullptr;
-    ggml_backend_buffer_t   packed_buffer  = nullptr;
+    transcribe::BackendPlan       plan;
+    ggml_backend_buffer_t         backend_buffer = nullptr;
+    transcribe::qwen3_lm::PackedGateUpHandles packed_gate_up;
 
     // Constructed once at load() time; const-after-construction. Kaldi
     // HTK fbank + LFR; CMVN dropped (fe_apply_cmvn=false).
@@ -105,7 +78,7 @@ struct FunAsrNanoContext final : public transcribe_context {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
-    KvCache kv_cache;
+    transcribe::qwen3_lm::KvCache kv_cache;
 
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
