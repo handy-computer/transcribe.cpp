@@ -129,9 +129,9 @@
     "type": "sentencepiece",
     "vocab_size": 0,
     "special_tokens": {
-      "bos": 1,
-      "eos": 2,
-      "pad": 0
+      "bos": 4,
+      "eos": 3,
+      "pad": 2
     },
     "has_language_tokens": true,
     "vocab_sha256": null
