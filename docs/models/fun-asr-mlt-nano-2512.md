@@ -42,12 +42,12 @@ Licensed under the **FunASR Model Open Source License Agreement v1.1**
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [Fun-ASR-MLT-Nano-2512-BF16.gguf](https://huggingface.co/handy-computer/fun-asr-mlt-nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-BF16.gguf)     | 1590 MB | 1.74% |
-| F16    | [Fun-ASR-MLT-Nano-2512-F16.gguf](https://huggingface.co/handy-computer/fun-asr-mlt-nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-F16.gguf)       | 1590 MB | 1.74% |
-| Q8_0   | [Fun-ASR-MLT-Nano-2512-Q8_0.gguf](https://huggingface.co/handy-computer/fun-asr-mlt-nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q8_0.gguf)     |  850 MB | 1.74% |
-| Q6_K   | [Fun-ASR-MLT-Nano-2512-Q6_K.gguf](https://huggingface.co/handy-computer/fun-asr-mlt-nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q6_K.gguf)     |  659 MB | 1.69% |
-| Q5_K_M | [Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf](https://huggingface.co/handy-computer/fun-asr-mlt-nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf) |  602 MB | 1.77% |
-| Q4_K_M | [Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/fun-asr-mlt-nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf) |  531 MB | 1.89% |
+| BF16   | [Fun-ASR-MLT-Nano-2512-BF16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-BF16.gguf)     | 1590 MB | 1.74% |
+| F16    | [Fun-ASR-MLT-Nano-2512-F16.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-F16.gguf)       | 1590 MB | 1.74% |
+| Q8_0   | [Fun-ASR-MLT-Nano-2512-Q8_0.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q8_0.gguf)     |  850 MB | 1.74% |
+| Q6_K   | [Fun-ASR-MLT-Nano-2512-Q6_K.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q6_K.gguf)     |  659 MB | 1.69% |
+| Q5_K_M | [Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q5_K_M.gguf) |  602 MB | 1.77% |
+| Q4_K_M | [Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf](https://huggingface.co/handy-computer/Fun-ASR-MLT-Nano-2512-gguf/resolve/main/Fun-ASR-MLT-Nano-2512-Q4_K_M.gguf) |  531 MB | 1.89% |
 
 WER is measured on the full LibriSpeech test-clean split (2620
 utterances) with greedy LLM decoding via the bundled Qwen3-0.6B head.

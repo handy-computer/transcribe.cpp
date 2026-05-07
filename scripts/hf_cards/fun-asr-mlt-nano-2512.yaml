@@ -1,8 +1,8 @@
-# Spec for the HF README of handy-computer/fun-asr-mlt-nano-2512-gguf.
+# Spec for the HF README of handy-computer/Fun-ASR-MLT-Nano-2512-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
 hf_repo: FunAudioLLM/Fun-ASR-MLT-Nano-2512
-target_repo: handy-computer/fun-asr-mlt-nano-2512-gguf
+target_repo: handy-computer/Fun-ASR-MLT-Nano-2512-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/fun-asr-mlt-nano-2512.md
 
 # Pinned at intake (Stage 1).

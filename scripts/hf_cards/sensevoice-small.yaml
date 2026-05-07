@@ -1,8 +1,8 @@
-# Spec for the HF README of handy-computer/sensevoice-small-gguf.
+# Spec for the HF README of handy-computer/SenseVoiceSmall-gguf.
 # Consumed by scripts/hf_cards/generate.py.
 
 hf_repo: FunAudioLLM/SenseVoiceSmall
-target_repo: handy-computer/sensevoice-small-gguf
+target_repo: handy-computer/SenseVoiceSmall-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/sensevoice-small.md
 
 # Pinned at intake (Stage 1).

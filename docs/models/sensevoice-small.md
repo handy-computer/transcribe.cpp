@@ -30,12 +30,12 @@ pinned 2026-05-06.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [SenseVoiceSmall-F32.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-F32.gguf)       | 893 MB | 3.13% |
-| F16    | [SenseVoiceSmall-F16.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-F16.gguf)       | 449 MB | 3.13% |
-| Q8_0   | [SenseVoiceSmall-Q8_0.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-Q8_0.gguf)     | 241 MB | 3.13% |
-| Q6_K   | [SenseVoiceSmall-Q6_K.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-Q6_K.gguf)     | 187 MB | 3.14% |
-| Q5_K_M | [SenseVoiceSmall-Q5_K_M.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-Q5_K_M.gguf) | 164 MB | 3.18% |
-| Q4_K_M | [SenseVoiceSmall-Q4_K_M.gguf](https://huggingface.co/handy-computer/sensevoice-small-gguf/resolve/main/SenseVoiceSmall-Q4_K_M.gguf) | 139 MB | 3.45% |
+| F32    | [SenseVoiceSmall-F32.gguf](https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-F32.gguf)       | 893 MB | 3.13% |
+| F16    | [SenseVoiceSmall-F16.gguf](https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-F16.gguf)       | 449 MB | 3.13% |
+| Q8_0   | [SenseVoiceSmall-Q8_0.gguf](https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q8_0.gguf)     | 241 MB | 3.13% |
+| Q6_K   | [SenseVoiceSmall-Q6_K.gguf](https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q6_K.gguf)     | 187 MB | 3.14% |
+| Q5_K_M | [SenseVoiceSmall-Q5_K_M.gguf](https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q5_K_M.gguf) | 164 MB | 3.18% |
+| Q4_K_M | [SenseVoiceSmall-Q4_K_M.gguf](https://huggingface.co/handy-computer/SenseVoiceSmall-gguf/resolve/main/SenseVoiceSmall-Q4_K_M.gguf) | 139 MB | 3.45% |
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy CTC decoding. The publisher does not report a numerical
