@@ -1,0 +1,14 @@
+[project]
+name = "transcribe-canary-env"
+version = "0.1.0"
+description = "Python env for Canary multitask AED reference dumps via NeMo (EncDecMultiTaskModel)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.2",
+    "nemo_toolkit[asr]>=2.0",
+    "huggingface-hub>=0.20",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "sentencepiece>=0.2",
+    "gguf>=0.10.0",
+]

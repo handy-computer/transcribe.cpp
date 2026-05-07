@@ -6,7 +6,47 @@
     "hf_repo": "nvidia/canary-180m-flash",
     "hf_revision": "b12ab418510d093e83890178fd0e8b0d0f7918a6"
   },
+  "reference": {
+    "kind": "nemo",
+    "source": "https://github.com/NVIDIA-NeMo/NeMo",
+    "revision": "v2.7.2",
+    "entrypoint": "scripts/dump_reference_canary_nemo.py"
+  },
   "expected_dtype": "float32",
   "dtype_source": "manual",
-  "_skeleton": true
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "sentencepiece",
+    "vocab_size": null,
+    "special_tokens": {}
+  },
+  "capabilities": {
+    "languages": ["en", "de", "es", "fr"],
+    "language_detection": false,
+    "translation": true,
+    "timestamps": ["word", "segment"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "multitask_default": {
+    "source_lang": "en",
+    "target_lang": "en",
+    "task": "asr",
+    "pnc": "yes",
+    "toggle_timestamps": "no",
+    "beam": 1
+  },
+  "tolerance_file": "tests/tolerances/canary.json",
+  "cases": ["jfk"]
 }
