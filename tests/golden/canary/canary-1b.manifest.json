@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "canary",
+  "variant": "canary-1b",
+  "source_model": {
+    "hf_repo": "nvidia/canary-1b",
+    "hf_revision": "1698acf1700ed316ffce1cb42d79437c7e360cfa"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}

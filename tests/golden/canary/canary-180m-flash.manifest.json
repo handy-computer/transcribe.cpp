@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "canary",
+  "variant": "canary-180m-flash",
+  "source_model": {
+    "hf_repo": "nvidia/canary-180m-flash",
+    "hf_revision": "b12ab418510d093e83890178fd0e8b0d0f7918a6"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}

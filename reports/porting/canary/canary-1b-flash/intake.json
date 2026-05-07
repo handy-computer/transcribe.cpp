@@ -1,0 +1,289 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "canary",
+  "hf_repo": "nvidia/canary-1b-flash",
+  "hf_revision": "a9a55e0295e7dd50d0c8c2a19491900a0daf24f3",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "config.json on the HF repo describes the encoder-only HF Transformers shim (architectures=['FastConformerModel'], nemo_decoder_type='none'). The full multitask AED config (transformer decoder, task tokens, decoding cfg) lives inside the .nemo archive's model_config.yaml — the HF config is authoritative for the encoder block and the mel-spectrogram contract only."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found",
+      "detail": "preprocessor_config.json on the HF repo is the FastConformerFeatureExtractor — feature_size=128, sampling_rate=16000, win_length=400 (25 ms), hop_length=160 (10 ms), n_fft=512, mel_norm='slaney', mel_scale='htk', preemph=0.97, normalize='per_feature'. Used directly as the family-level frontend reference."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "no tokenizer_config.json on the HF repo; the multitask tokenizer is concatenated SentencePiece (one SP per language for en/de/es/fr) embedded in the .nemo archive."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "no fast-tokenizer JSON; concatenated SentencePiece protos only"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "decoding config (default beam_size=1 per model card example, length_penalty, prompt format) lives in the .nemo archive under model.cfg.decoding"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution: F32=1260, I64=32; this only covers the encoder weights exposed by the HF Transformers shim, not the full multitask checkpoint."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/canary-1b-flash",
+      "status": "found",
+      "detail": "languages (4), capability flags (timestamps experimental / translation EN<->{de,es,fr} / streaming no), Open ASR Leaderboard mean WER 6.35% and per-dataset numbers read from the model card"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/NVIDIA/NeMo (nemo.collections.asr.models.EncDecMultiTaskModel) and the .nemo archive's model_config.yaml",
+      "status": "found",
+      "detail": "NeMo source is authoritative for both encoder (FastConformerEncoder, 32 layers) and decoder (TransformerDecoder, 4 layers, smaller than canary-1b-v2's 8). The HF Transformers FastConformerModel shim is encoder-only and useful only for the mel-spectrogram contract and the encoder shape."
+    }
+  },
+  "variants": [
+    {
+      "name": "canary-1b-flash",
+      "memory_gb": 3.5,
+      "files": ["canary-1b-flash.nemo", "model.safetensors", "config.json", "preprocessor_config.json"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-decoder"],
+    "key_fields": {
+      "architectures": ["EncDecMultiTaskModel"],
+      "model_type": "canary",
+      "nemo_class": "nemo.collections.asr.models.EncDecMultiTaskModel",
+      "encoder.type": "FastConformerEncoder",
+      "encoder.n_layers": 32,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 8,
+      "encoder.ffn_dim": 4096,
+      "encoder.conv_kernel_size": 9,
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.activation_function": "silu",
+      "encoder.use_bias": true,
+      "encoder.xscaling": false,
+      "encoder.self_attention_model": "rel_pos",
+      "decoder.type": "TransformerDecoder",
+      "decoder.n_layers": 4,
+      "tokenizer.type": "concatenated_sentencepiece",
+      "task_tokens": ["<source_lang>", "<target_lang>", "<task>", "<pnc>", "<toggle_timestamps>"],
+      "params_total": "883M",
+      "max_audio_seconds": 40,
+      "min_audio_seconds": 1,
+      "hf_shim_bos_token_id": 1,
+      "hf_shim_eos_token_id": 2,
+      "hf_shim_pad_token_id": 0
+    },
+    "varying_across_variants": [
+      "encoder.n_layers",
+      "decoder.n_layers",
+      "decoder.type",
+      "tokenizer.vocab_size",
+      "capabilities.languages",
+      "capabilities.timestamps",
+      "license"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "config",
+    "evidence": "config.torch_dtype=float32 (HF Transformers shim) and safetensors header distribution F32=1260, I64=32 (zero non-F32 floating tensors). Per project policy 2 the converter preserves storage dtype, so the first accuracy GGUF will be canary-1b-flash-F32.gguf.",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "I64": 32,
+        "F32": 1260
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 0,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 0
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en", "de", "es", "fr"],
+    "language_detection": false,
+    "translation": true,
+    "timestamps": ["word", "segment"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.48,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-1b-flash",
+      "notes": "Open ASR Leaderboard, greedy decoding (beam=1)"
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.87,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-1b-flash",
+      "notes": "Open ASR Leaderboard"
+    },
+    {
+      "dataset": "Open ASR Leaderboard mean (8 English test sets)",
+      "language": "en",
+      "metric": "wer",
+      "score": 6.35,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-1b-flash",
+      "notes": "average across AMI/GigaSpeech/LS-clean/LS-other/Earnings22/SPGISpeech/Tedlium/VoxPopuli; RTFx 1045 on A100"
+    },
+    {
+      "dataset": "MLS de",
+      "language": "de",
+      "metric": "wer",
+      "score": 4.36,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-1b-flash"
+    },
+    {
+      "dataset": "MLS es",
+      "language": "es",
+      "metric": "wer",
+      "score": 2.69,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-1b-flash"
+    },
+    {
+      "dataset": "MLS fr",
+      "language": "fr",
+      "metric": "wer",
+      "score": 4.47,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-1b-flash"
+    },
+    {
+      "dataset": "FLEURS En->De",
+      "language": null,
+      "metric": "bleu",
+      "score": 32.27,
+      "score_unit": null,
+      "source": "https://huggingface.co/nvidia/canary-1b-flash",
+      "notes": "AST En->De; COMET=0.8114"
+    },
+    {
+      "dataset": "FLEURS De->En",
+      "language": null,
+      "metric": "bleu",
+      "score": 35.50,
+      "score_unit": null,
+      "source": "https://huggingface.co/nvidia/canary-1b-flash",
+      "notes": "AST De->En; COMET=0.8546"
+    },
+    {
+      "dataset": "FLEURS En->Fr",
+      "language": null,
+      "metric": "bleu",
+      "score": 41.22,
+      "score_unit": null,
+      "source": "https://huggingface.co/nvidia/canary-1b-flash",
+      "notes": "AST En->Fr; COMET=0.8165"
+    },
+    {
+      "dataset": "FLEURS En->Es",
+      "language": null,
+      "metric": "bleu",
+      "score": 22.60,
+      "score_unit": null,
+      "source": "https://huggingface.co/nvidia/canary-1b-flash",
+      "notes": "AST En->Es; COMET=0.8118"
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NeMo (`nvidia/NeMo`) is NVIDIA's first-party training and inference framework for the Canary family. The HF repo for canary-1b-flash carries an HF Transformers `FastConformerModel` shim (config.json + preprocessor_config.json + safetensors) but the shim explicitly sets `nemo_decoder_type='none'` — it exposes the FastConformer encoder only and cannot generate transcripts on its own. The full multitask AED runs through `nemo.collections.asr.models.EncDecMultiTaskModel.from_pretrained` consuming the .nemo archive. NeMo is also the only framework that exposes the multitask prompt protocol (source_lang / target_lang / task / pnc / toggle_timestamps) consistently with how the model was trained.",
+  "architecture_pattern": "encoder-decoder",
+  "known_risks": [
+    "Multitask AED with a task-token prompt fed into the transformer decoder before the BOS. The prompt sequence (`<source_lang>`, `<target_lang>`, `<task>` for asr/s2t_translation, `<pnc>`, `<toggle_timestamps>`) is not vocabulary tokens in the LM-head sense — they live inside the SentencePiece vocabulary at fixed IDs, but the *interpretation* by the decoder is positional. Mismatched prompt format silently swaps task semantics: asking for AST gets ASR, or vice versa, with no shape error.",
+    "Concatenated SentencePiece tokenizers — one SP model per language is concatenated into a unified vocabulary. The SP IDs of language-specific pieces depend on the concatenation order. The converter must preserve the exact concatenation order or every multilingual transcription decodes to wrong piece IDs.",
+    "FastConformer encoder uses depth-wise striding subsampling (factor 8) — three conv stacks with stride-2 in time. Frame count must round consistently with NeMo's `get_seq_len`; mismatches surface as edge-of-utterance hallucinations.",
+    "Relative-position attention (`rel_pos`) with untied biases. Same risk as Parakeet — ggml has no first-class op; the existing parakeet port materialises the relative-shift host-side per layer. Canary can likely reuse that code path.",
+    "NeMo FilterbankFeatures applies preemph=0.97 BEFORE windowing/STFT. Skipping this silently shifts the spectral tilt and degrades WER without changing shape.",
+    "Per-feature normalization (mean/std across time, per mel band). Distinct from per-utterance global-mean-var; mismatch with reference is a common bring-up bug.",
+    "Cross-attention from transformer decoder to encoder hidden states. Padding mask on the cross-attn keys must propagate from encoder input lengths after the FastConformer subsampling (factor 8).",
+    "Greedy decoding (beam=1) is the model card example default for canary-1b-flash and is what produces the reported Open ASR Leaderboard mean of 6.35%. The first port should use beam=1 by default; matching upstream's measured-config beam size is the gate.",
+    "Long-form audio (>40 s) is handled by a chunked inference script (`scripts/speech_to_text_aed_chunked_infer.py`) with 1-second overlap; recommended chunk for canary-1b-flash is 10 s. Not native streaming. Out of scope for the v1 port — first port is single-utterance up to 40 s.",
+    "Audio <1 s is symmetrically zero-padded to 1 s in the reference. The first port must replicate this padding floor or short clips drop off silently.",
+    "Timestamps for canary-1b-flash are explicitly experimental (model card calls them out as such; F1=95.5% on LS test-clean at 200 ms collar). The HF Transformers shim does not expose them; only NeMo's transcribe(timestamps=True) path does. Out of scope for the v1 port.",
+    "HF Transformers shim ships *encoder weights only*. The .nemo archive is required for transcript generation; do not try to load the safetensors and call generate() — there is no decoder to call.",
+    ".nemo archive distribution — no `tokenizer_config.json` / `generation_config.json` to lean on. Loader needs to read NeMo's `model_config.yaml` and the embedded SP models from the tar; converter mirrors the parakeet pattern of unpacking the .nemo before extraction."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_size",
+      "reason": "the HF Transformers shim's config.vocab_size=1024 is the encoder placeholder; the full multitask SP vocab lives inside the .nemo archive (concatenated per-language SP). Will be filled at Stage 2 from the reference dump."
+    },
+    {
+      "field": "tokenizer.special_tokens",
+      "reason": "task-token IDs (source_lang, target_lang, task, pnc, toggle_timestamps) live inside the .nemo archive's SP models + decoding cfg. The HF shim exposes only the encoder's bos/eos/pad placeholders (1/2/0) which are recorded above but may not be the IDs the AED decoder actually uses. Stage 2 will overwrite from .nemo."
+    },
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "concatenated SP models live inside .nemo at convert time; SHA can be computed during conversion but not yet recorded here."
+    },
+    {
+      "field": "frontend.dither",
+      "reason": "preprocessor_config.json on HF does not list a dither field. dither=0.0 is the NeMo inference default; training default is 1e-5. Stage 2 will confirm against model_config.yaml's preprocessor block."
+    },
+    {
+      "field": "frontend.window",
+      "reason": "preprocessor_config.json on HF does not list a window field. hann_periodic is the NeMo FilterbankFeatures default (matches Parakeet); .nemo cfg should be checked at Stage 2."
+    },
+    {
+      "field": "frontend.center",
+      "reason": "preprocessor_config.json on HF does not list center; assumed True (NeMo default). Stage 2 will confirm."
+    },
+    {
+      "field": "frontend.padding_mode",
+      "reason": "preprocessor_config.json on HF does not list padding_mode; assumed reflect (NeMo default). Stage 2 will confirm."
+    },
+    {
+      "field": "variants[].memory_gb",
+      "reason": "estimated from .nemo file size (3.54 GB); not measured against actual peak inference memory."
+    }
+  ]
+}
