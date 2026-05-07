@@ -1,0 +1,203 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "funasr_nano",
+  "hf_repo": "FunAudioLLM/Fun-ASR-MLT-Nano-2512",
+  "hf_revision": "cf67a938bf2829959d08fdfb84e186eff02a67ff",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.yaml",
+      "status": "found",
+      "detail": "FunASR-style YAML config (not HF transformers config.json); declares model:FunASRNano, encoder:SenseVoiceEncoderSmall, llm:Qwen3-0.6b, audio_adaptor:Transformer (2-layer, encoder_dim=512 → llm_dim=1024), ctc_decoder:Transformer (5-layer), frontend:WavFrontend. Identical structure to fun-asr-nano-2512."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "config.yaml#frontend_conf",
+      "status": "found",
+      "detail": "WavFrontend params (fs=16000, n_mels=80, frame_length=25, frame_shift=10, lfr_m=7, lfr_n=6, window=hamming, cmvn_file=null) — same as fun-asr-nano-2512. cmvn_file=null means no per-feature CMVN at inference (apply_cmvn=false)."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "Qwen3-0.6B/tokenizer_config.json",
+      "status": "found",
+      "detail": "LLM-side Qwen3 BPE tokenizer in subfolder; CTC head also has its own tiktoken vocab at multilingual.tiktoken (auxiliary)."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "Qwen3-0.6B/tokenizer.json",
+      "status": "found",
+      "detail": "Qwen3 fast-tokenizer JSON (11.4 MB, identical structure to fun-asr-nano-2512)."
+    },
+    "ctc_tokenizer": {
+      "kind": "hf_file",
+      "path": "multilingual.tiktoken",
+      "status": "found",
+      "detail": "Whisper-style multilingual tiktoken vocab used by the auxiliary CTC head; not the inference output tokenizer."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "Qwen3-0.6B/generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "FunASR ships a single legacy model.pt (1.97 GB pickle) — no safetensors header; per-tensor dtype must be inspected at converter time."
+    },
+    "configuration_json": {
+      "kind": "hf_file",
+      "path": "configuration.json",
+      "status": "found",
+      "detail": "ModelScope-style entry pointer: framework=pytorch, task=auto-speech-recognition, model.type=funasr, file_path_metas points init_param at model.pt, llm_conf.init_param_path at Qwen3-0.6B/, ctc_tokenizer at multilingual.tiktoken. Identical to fun-asr-nano-2512."
+    }
+  },
+  "variants": [
+    {
+      "name": "fun-asr-mlt-nano-2512",
+      "memory_gb": 1.97,
+      "files": [
+        "model.pt",
+        "config.yaml",
+        "configuration.json",
+        "multilingual.tiktoken",
+        "Qwen3-0.6B/config.json",
+        "Qwen3-0.6B/tokenizer.json",
+        "Qwen3-0.6B/tokenizer_config.json",
+        "Qwen3-0.6B/vocab.json",
+        "Qwen3-0.6B/merges.txt",
+        "Qwen3-0.6B/generation_config.json"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "audio-llm"
+    ],
+    "key_fields": {
+      "model.class": "FunASRNano",
+      "encoder.class": "SenseVoiceEncoderSmall",
+      "encoder.output_size": 512,
+      "encoder.attention_heads": 4,
+      "encoder.linear_units": 2048,
+      "encoder.num_blocks": 50,
+      "encoder.tp_blocks": 20,
+      "encoder.kernel_size": 11,
+      "encoder.input_layer": "pe",
+      "encoder.pos_enc_class": "SinusoidalPositionEncoder",
+      "encoder.normalize_before": true,
+      "encoder.frozen": true,
+      "audio_adaptor.class": "Transformer",
+      "audio_adaptor.num_layers": 2,
+      "audio_adaptor.encoder_dim": 512,
+      "audio_adaptor.llm_dim": 1024,
+      "audio_adaptor.frozen": true,
+      "llm.class": "Qwen3-0.6b",
+      "llm.hub": "hf",
+      "llm.dtype": "bf16",
+      "llm.frozen": true,
+      "llm.use_lora": false,
+      "llm.init_param_path": "Qwen3-0.6B",
+      "ctc_decoder.class": "Transformer",
+      "ctc_decoder.num_layers": 5,
+      "ctc_decoder.encoder_dim": 512,
+      "ctc_decoder.llm_dim": 512,
+      "ctc_decoder.ctc_weight": 1.0,
+      "ctc_decoder.frozen": false
+    },
+    "varying_across_variants": [
+      "llm.class",
+      "llm.init_param_path",
+      "encoder.num_blocks",
+      "encoder.tp_blocks",
+      "capabilities.languages"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "manual",
+    "evidence": "config.yaml declares llm.dtype=bf16 explicitly; model.pt size 1.97 GB matches the BF16 LLM (~600M × 2 bytes ≈ 1.2 GB) plus a F32 SenseVoiceEncoderSmall (~880 MB at F32) plus adaptor + CTC head — same checkpoint footprint as fun-asr-nano-2512. Mixed-precision: encoder tensors are likely F32 (frozen, inherited from sensevoice-small) and LLM tensors are BF16. Stage 3 must verify per-tensor dtypes from model.pt directly.",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": [
+      "encoder.* (SenseVoiceEncoderSmall is frozen and likely inherits F32; verify at convert time)",
+      "frontend.cmvn.shift",
+      "frontend.cmvn.scale"
+    ]
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hamming",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": null,
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 151936,
+    "special_tokens": {},
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": [
+      "zh", "en", "yue", "ja", "ko",
+      "vi", "id", "th", "ms", "tl",
+      "ar", "hi", "bg", "hr", "cs",
+      "da", "nl", "et", "fi", "el",
+      "hu", "ga", "lv", "lt", "mt",
+      "pl", "pt", "ro", "sk", "sl",
+      "sv"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "none"
+    ],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [],
+  "reference_framework": "author_repo_funasr",
+  "reference_rationale": "Same upstream as sensevoice + fun-asr-nano-2512 (`from funasr import AutoModel`) with `trust_remote_code=True`. The FunASRNano class is registered through FunASR's model registry and combines SenseVoice's encoder + adaptor + Qwen3-0.6B LLM + CTC head. There is no transformers-mainline path; FunASR is the canonical reference. Stage 2 will reuse the existing scripts/dump_reference_funasr_nano_funasr.py with --model FunAudioLLM/Fun-ASR-MLT-Nano-2512.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "Sibling variant of fun-asr-nano-2512: identical model.pt size (1.97 GB) and identical config.yaml architecture sections — same SenseVoiceEncoderSmall (50 enc + 20 tp blocks), same 2-layer audio adaptor (512 → 1024), same Qwen3-0.6B LLM, same 5-layer CTC head. The Stage 4 sibling-variant shortcut should apply: run validate.py against the new GGUF and expect exit 0 without re-implementing src/arch/funasr_nano/. Failure points if the shortcut fails are tokenizer/prompt template differences, not graph shape.",
+    "Encoder weights are SenseVoiceEncoderSmall and likely identical to fun-asr-nano-2512's encoder (both fork from FunAudioLLM/SenseVoiceSmall and config.yaml declares the encoder frozen during FunASRNano training). Stage 3 should sha256-compare each shared encoder tensor against fun-asr-nano-2512's GGUF and against sensevoice-small's GGUF to confirm.",
+    "Mixed-precision checkpoint: encoder tensors are likely F32, LLM tensors are BF16 (per llm.dtype=bf16). Per-tensor dtype must be preserved exactly at conversion time (CLAUDE.md policy #2) — converter must inspect model.pt entry-by-entry. The existing scripts/convert-funasr_nano.py already handles this for fun-asr-nano-2512; expected to apply unchanged.",
+    "Two tokenizers in the checkpoint: (a) Qwen3-0.6B BPE in Qwen3-0.6B/ subfolder for LLM-driven inference output, (b) multilingual.tiktoken (Whisper-style tiktoken) for the auxiliary CTC head. Inference produces text via the LLM; the CTC head is a training-time auxiliary loss with ctc_weight=1.0. Sibling intake noted Stage 2 must confirm whether CTC head is also consumed at inference — the answer for fun-asr-nano-2512 is no (LLM-only). Same expected here.",
+    "Audio token injection mechanism (where does the adaptor output get spliced into the LLM prompt?) is not documented in config.yaml. Sibling intake captured this at Stage 2; same mechanism expected.",
+    "LLM weights are BUNDLED INSIDE the parent model.pt (the Qwen3-0.6B/ subfolder ships only tokenizer files, no weights). Converter cannot lazily download Qwen3-0.6B from HF; it must extract LLM tensors from model.pt and rename them to llama.cpp-style dec.* / head.* tensor names. Same as sibling.",
+    "31-language coverage adds prompt-template surface area: FunASR's Python API takes `language=\"中文\"` (Chinese-name strings) for the language hint, not BCP-47 codes. The MLT model needs a 31-entry mapping from BCP-47 to the FunASR-internal Chinese-name string. Stage 2 must capture the exact mapping FunASR uses for the multilingual model — fun-asr-nano-2512 only needed zh/en/ja, so the existing prompt builder in src/arch/funasr_nano/model.cpp does NOT cover the MLT language set yet.",
+    "Training data scale is much smaller for MLT (\"hundreds of thousands of hours\" per README, vs Nano's \"tens of millions of hours\"). Per-language WER on languages they share (zh/en/ja) is expected to be worse than fun-asr-nano-2512. LibriSpeech test-clean as Stage 7 acceptance is still valid (English is one of the 31 supported languages), but the publisher publishes no upstream WER on test-clean specifically for the MLT variant — the gating must be ref-vs-cpp parity (same approach used for sensevoice-small).",
+    "Upstream README (shared with fun-asr-nano-2512) explicitly lists `Support returning timestamps`, `Support speaker diarization`, and `Support model training` as TODO items — confirming capabilities.timestamps/diarization/streaming are intentionally false. Capability validation table will SKIP these rows.",
+    "ITN (`itn=True`) handling expected to be identical to fun-asr-nano-2512: prompt-template-driven, currently hardcoded `use_itn=false` in src/arch/funasr_nano/model.cpp::run. Same follow-up applies (plumb through transcribe_funasr_nano_params { use_itn })."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.special_tokens",
+      "reason": "Qwen3 chat-template special token IDs (im_start, im_end, audio markers, language hint markers) need to be extracted from Qwen3-0.6B/tokenizer_config.json + the FunASR prompt template. Re-use Stage 2's path from fun-asr-nano-2512."
+    },
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "compute at converter time from canonical Qwen3-0.6B/tokenizer.json + multilingual.tiktoken"
+    },
+    {
+      "field": "capabilities.language_hint_mapping",
+      "reason": "31-language BCP-47 → FunASR-internal Chinese-name mapping must be captured at Stage 2 from FunASR's MLT prompt builder; not inferable from config.yaml"
+    },
+    {
+      "field": "upstream_benchmarks",
+      "reason": "publisher publishes no LibriSpeech-test-clean WER specifically for the MLT variant. Gating is ref-vs-cpp on the same manifest, mirroring sensevoice-small."
+    }
+  ]
+}

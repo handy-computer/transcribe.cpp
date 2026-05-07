@@ -149,6 +149,8 @@ set(TRANSCRIBE_FIXTURE_GENERATOR
 
 set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_parakeet.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_sensevoice.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_funasr_nano.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_unknown.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/corrupt_magic.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal.gguf

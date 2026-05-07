@@ -119,6 +119,14 @@ static void test_factories(void) {
     CHECK(rp.target_language    == NULL);
     CHECK(rp.strip_special_tags == true);
     CHECK(rp.whisper            == NULL);
+    CHECK(rp.sensevoice         == NULL);
+    CHECK(rp.funasr_nano        == NULL);
+
+    struct transcribe_sensevoice_params svp = transcribe_sensevoice_default_params();
+    CHECK(svp.use_itn == false);
+
+    struct transcribe_funasr_nano_params fnp = transcribe_funasr_nano_default_params();
+    CHECK(fnp.use_itn == false);
 
     struct transcribe_whisper_params wp = transcribe_whisper_default_params();
     CHECK(wp.initial_prompt           == NULL);

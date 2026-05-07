@@ -98,7 +98,13 @@ def main() -> int:
         sys.stdout.write(out)
         return 0
 
-    output = args.output or (REPO_ROOT / "models" / args.spec.stem / "README.md")
+    # Default output path uses the upstream-cased model dir (slug from
+    # hf_repo) so the README lands alongside the GGUFs in the same
+    # directory `hf upload` will publish. The kebab-cased spec stem is
+    # the internal handle; the filesystem dir mirrors upstream casing
+    # (matches the converter's output dir convention).
+    upstream_slug = spec["hf_repo"].rsplit("/", 1)[-1]
+    output = args.output or (REPO_ROOT / "models" / upstream_slug / "README.md")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(out)
     print(f"wrote {output}", file=sys.stderr)

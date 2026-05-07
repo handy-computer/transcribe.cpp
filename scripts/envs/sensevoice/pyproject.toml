@@ -1,0 +1,27 @@
+[project]
+name = "transcribe-sensevoice-env"
+version = "0.1.0"
+description = "Python env for SenseVoice reference dumps and conversion (FunASR)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    # Exact pin: SenseVoiceSmall ships only on FunASR; the class registry,
+    # state_dict layout, and `inference()` signature are framework-version
+    # specific, and per-tensor tolerances will be captured against this
+    # version. A silent bump can shift state_dict keys or hook points.
+    "funasr==1.3.1",
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    # FunASR's loader resolves checkpoints via either modelscope or HF Hub
+    # (hub="hf" on AutoModel). We use HF because the manifest pins an HF
+    # revision; modelscope is left as a transitive dep brought in by funasr.
+    "huggingface-hub>=0.30",
+    "soundfile>=0.12",
+    "librosa>=0.10",
+    "numpy>=1.26",
+    "gguf>=0.10",
+    "sentencepiece>=0.2",
+    "kaldiio>=2.18",
+    # FunASR's WavFrontend uses kaldifeat-style fbank from torchaudio;
+    # listed explicitly for clarity even though torchaudio brings the
+    # implementation.
+]

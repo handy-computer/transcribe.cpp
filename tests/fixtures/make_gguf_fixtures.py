@@ -1240,6 +1240,36 @@ def emit_fixtures(out_dir: Path) -> None:
         ),
     )
 
+    # Recognized SenseVoice arch; no tokenizer / hparam payload. The
+    # SenseVoice handler is reached, then rejects with
+    # TRANSCRIBE_ERR_GGUF because the rest of the contract is missing.
+    _write(
+        out_dir / "arch_sensevoice.gguf",
+        _build_header(
+            GGUF_MAGIC,
+            _string_kvs(
+                [
+                    ("general.architecture", "sensevoice"),
+                    ("stt.variant", "sensevoice-small"),
+                ]
+            ),
+        ),
+    )
+
+    # Same for FunASR-Nano (audio-llm arch).
+    _write(
+        out_dir / "arch_funasr_nano.gguf",
+        _build_header(
+            GGUF_MAGIC,
+            _string_kvs(
+                [
+                    ("general.architecture", "funasr_nano"),
+                    ("stt.variant", "fun-asr-nano-2512"),
+                ]
+            ),
+        ),
+    )
+
     # Architecture string the registry has never heard of.
     _write(
         out_dir / "arch_unknown.gguf",

@@ -90,6 +90,15 @@ const std::string & Tokenizer::token(int id) const {
     return tokens_[static_cast<size_t>(id)];
 }
 
+bool Tokenizer::is_control(int id) const {
+    // llama.cpp / scripts/lib/gguf_common.py convention.
+    constexpr int32_t k_token_type_control = 3;
+    if (id < 0 || static_cast<size_t>(id) >= token_type_.size()) {
+        return false;
+    }
+    return token_type_[static_cast<size_t>(id)] == k_token_type_control;
+}
+
 int Tokenizer::find(const std::string & piece) const {
     const auto it = piece_to_id_.find(piece);
     if (it != piece_to_id_.end()) {

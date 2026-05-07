@@ -1,0 +1,244 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "sensevoice",
+  "hf_repo": "FunAudioLLM/SenseVoiceSmall",
+  "hf_revision": "3eb3b4eeffc2f2dde6051b853983753db33e35c3",
+  "sources": {
+    "config_yaml": {
+      "kind": "hf_file",
+      "path": "config.yaml",
+      "status": "found",
+      "detail": "FunASR-style YAML config: encoder=SenseVoiceEncoderSmall, model=SenseVoiceSmall, frontend=WavFrontend, tokenizer=SentencepiecesTokenizer."
+    },
+    "configuration_json": {
+      "kind": "hf_file",
+      "path": "configuration.json",
+      "status": "found",
+      "detail": "FunASR loader manifest pointing at model.pt + config.yaml + chn_jpn_yue_eng_ko_spectok.bpe.model + am.mvn."
+    },
+    "spectok_bpe_model": {
+      "kind": "hf_file",
+      "path": "chn_jpn_yue_eng_ko_spectok.bpe.model",
+      "status": "found",
+      "detail": "SentencePiece BPE model. 25,055 pieces; sha256(canonical newline-joined pieces)=65fef64a04a68aea7ab10461d90964ee562b3b67e8ceb1f46e4ba47e7c3618bc."
+    },
+    "am_mvn": {
+      "kind": "hf_file",
+      "path": "am.mvn",
+      "status": "found",
+      "detail": "Kaldi-style mean-variance norm stats over 560 LFR features (= 80 mel x lfr_m=7 stack). <AddShift> + <Rescale> applied per feature."
+    },
+    "model_pt": {
+      "kind": "hf_file",
+      "path": "model.pt",
+      "status": "found",
+      "detail": "PyTorch pickle, 936,291,369 bytes. ~234M float32 params (936MB / 4 = 234M). Not safetensors; no header dtype distribution available."
+    },
+    "config_json": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "FunASR-native checkpoint; no HF Transformers config.json. config.yaml is the authoritative source."
+    },
+    "preprocessor_config": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "FunASR-native; frontend declared inside config.yaml under frontend_conf and am.mvn."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "FunASR-native; tokenizer is a SentencePiece .model file, not a HF tokenizers.json."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "Repo ships PyTorch pickle (model.pt), not safetensors. Dtype inferred from file size + FunASR convention."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+      "status": "found",
+      "detail": "README.md, README_zh.md, README_ja.md. Numerical benchmark scores published only as PNG images; no machine-readable WER/CER numbers."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/FunAudioLLM/SenseVoice (model.py SenseVoiceSmall + SenseVoiceEncoderSmall); FunASR toolkit at https://github.com/modelscope/FunASR (frontend.WavFrontend, tokenizer.SentencepiecesTokenizer)",
+      "status": "found",
+      "detail": "Authoritative class definitions. Defaults in standalone model.py are overridden by config.yaml values (e.g. num_blocks=50, tp_blocks=20)."
+    }
+  },
+  "variants": [
+    {
+      "name": "sensevoice-small",
+      "memory_gb": 0.94,
+      "files": [
+        "config.yaml",
+        "configuration.json",
+        "chn_jpn_yue_eng_ko_spectok.bpe.model",
+        "am.mvn",
+        "model.pt"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-ctc"
+    ],
+    "key_fields": {
+      "encoder": "SenseVoiceEncoderSmall",
+      "model": "SenseVoiceSmall",
+      "tokenizer": "SentencepiecesTokenizer",
+      "frontend": "WavFrontend",
+      "output_size": 512,
+      "attention_heads": 4,
+      "linear_units": 2048,
+      "num_blocks": 50,
+      "tp_blocks": 20,
+      "kernel_size": 11,
+      "selfattention_layer_type": "sanm",
+      "pos_enc_class": "SinusoidalPositionEncoder",
+      "input_layer": "pe",
+      "normalize_before": true,
+      "sanm_shfit": 0,
+      "sos": 1,
+      "eos": 2,
+      "ignore_id": -1,
+      "lfr_m": 7,
+      "lfr_n": 6,
+      "vocab_size_from_tokenizer": 25055
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "model.pt is 936,291,369 bytes; 936,291,369 / 4 ≈ 234M params (F32). Matches model card claim of 'similar number of parameters to Whisper-Small (~244M)'. FunASR's standard checkpoint format is float32; SenseVoiceSmall.from_pretrained does not cast. To be re-verified at Stage 2 by inspecting state_dict tensor dtypes.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hamming",
+    "normalization": "per_feature",
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": null,
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 25055,
+    "special_tokens": {
+      "unk": 0,
+      "bos": 1,
+      "eos": 2,
+      "lang_zh": 24884,
+      "lang_en": 24885,
+      "lang_yue": 24888,
+      "lang_ja": 24892,
+      "lang_ko": 24896,
+      "lang_nospeech": 24992,
+      "event_speech": 24993,
+      "event_bgm": 24995,
+      "event_unk": 25019,
+      "emotion_happy": 25001,
+      "emotion_sad": 25002,
+      "emotion_angry": 25003,
+      "emotion_neutral": 25004,
+      "withitn": 25016,
+      "woitn": 25017
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": "65fef64a04a68aea7ab10461d90964ee562b3b67e8ceb1f46e4ba47e7c3618bc"
+  },
+  "capabilities": {
+    "languages": ["zh", "yue", "en", "ja", "ko"],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": null,
+      "score_unit": null,
+      "source": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+      "notes": "Model card states SenseVoice was compared against Whisper on LibriSpeech but publishes the numerical scores only as a PNG (image/asr_results1.png). No machine-readable WER reported."
+    },
+    {
+      "dataset": "AISHELL-1 test",
+      "language": "zh",
+      "metric": "cer",
+      "score": null,
+      "score_unit": null,
+      "source": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+      "notes": "Model card cites AISHELL-1 in the benchmark figure but publishes the number only as a PNG (image/asr_results1.png). Listed here so the dataset is visible; numerical value not reported."
+    },
+    {
+      "dataset": "Common Voice",
+      "language": null,
+      "metric": "wer",
+      "score": null,
+      "score_unit": null,
+      "source": "https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+      "notes": "Cited in benchmark figure (image/asr_results2.png); numbers are image-only on the model card."
+    }
+  ],
+  "reference_framework": "author_repo_funasr",
+  "reference_rationale": "FunASR is the published entry path: the model card's primary inference snippet uses `from funasr import AutoModel` against `FunAudioLLM/SenseVoiceSmall`, and the alternate direct path uses `from model import SenseVoiceSmall` (the SenseVoice repo's model.py, which itself depends on FunASR for its building blocks: SANM attention, WavFrontend, SinusoidalPositionEncoder, kaldifeat fbank, the SentencepiecesTokenizer wrapper, and the CTC head). Hugging Face Transformers does not ship SenseVoice; there is no `trust_remote_code` shim because the HF repo carries no `config.json` / modeling_*.py. There is no NeMo or Espnet equivalent. FunASR is therefore the canonical instrumentable reference; its `Model.inference` and `WavFrontend.forward` are the call sites we will hook for tensor dumps in Stage 2.",
+  "architecture_pattern": "encoder-ctc",
+  "known_risks": [
+    "FunASR-native checkpoint, not HF Transformers. Loader path is `SenseVoiceSmall.from_pretrained(model='FunAudioLLM/SenseVoiceSmall', hub='hf')` (or `funasr.AutoModel`). The reference env must install funasr (and the SenseVoice repo's model.py, which is not on PyPI), not transformers. State_dict keys come from the FunASR class hierarchy and will need explicit mapping in the converter.",
+    "Frontend is FunASR `WavFrontend`, not torchaudio mel-spectrogram. It uses kaldifeat / torchaudio.compliance.kaldi `fbank` semantics: window='hamming' (frame_length=25 ms = 400 samples, frame_shift=10 ms = 160 samples), HTK-style mel filterbank, per-feature CMVN read from am.mvn, and a low-frame-rate (LFR) stacking step that concatenates lfr_m=7 consecutive 80-bin mels with stride lfr_n=6 to produce 560-d features at 60 ms frame period before the encoder. Whisper-style hann_periodic + slaney mels + log-mel compression do NOT apply. Center/padding/dither/mel_filterbank_norm fields are left null in this intake — confirm them by reading the kaldifeat fbank invocation in funasr/frontends/wav_frontend.py at Stage 2.",
+    "Encoder is the SAN-M (Self-Attention Network with Memory) block from FunASR, not a standard MHA conformer. Each layer combines MHA with a depthwise-FSMN memory branch (kernel_size=11). Two-tier depth: `encoders` (num_blocks=50) followed by `tp_encoders` (tp_blocks=20) — the 'tp' tier processes only the prefix (language/event/emotion/textnorm) embedding region in the standalone model.py implementation. Replicating both tiers and their masking is non-trivial.",
+    "Generation contract is a 4-token prepended embedding prefix (language, event, emotion, textnorm) added to the front of the encoder input *before* the first SAN-M block. These are not vocabulary tokens passed through an LM-head decoder — they are direct embeddings indexed by `lid_dict`/`textnorm_dict`/`emo_dict`. Vocab IDs (e.g. <|en|>=24885) are how the *output* of the CTC head emits language/event/emotion labels; the *input* prefix uses a separate small Embedding(7+6+2, input_size). Confusing the two will break decoding.",
+    "Output is a single CTC head over the 25,055-token SentencePiece vocab. Decoding is non-autoregressive greedy/beam CTC; there is no decoder, no cross-attention, and no autoregressive prefix. Whisper-style suppress_tokens / forced_decoder_ids are not applicable. The CTC blank id is 0 (<unk>).",
+    "Direct inference is capped at 30 seconds of audio (model card explicit). Long-form inference in the demo uses an external `fsmn-vad` model to chunk audio before SenseVoice; the chunker is a separate FunASR model and is out of scope for this port. We must either match the 30 s contract or document chunking as an integration responsibility, not a SenseVoice capability.",
+    "Languages on the HF model-card YAML (`en, zh, ja, ko`) disagree with the model-card body and the language-token vocabulary, both of which include Cantonese (`yue`). The 5-language list `[zh, yue, en, ja, ko]` is the authoritative one (sourced from the language-token IDs 24884/24885/24888/24892/24896). The README YAML omission is an upstream metadata bug, not a capability gap.",
+    "License is `model-license` (https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE), not Apache-2.0/MIT. Confirm redistribution terms before publishing converted GGUFs to handy-computer/* on the Hub.",
+    "model.pt is a PyTorch pickle, not safetensors. Loading requires `torch.load(..., map_location='cpu')` with `weights_only=False` semantics for FunASR's class registry. Header-only dtype inspection is not possible; dtype must be confirmed at oracle time by walking the loaded state_dict.",
+    "Publisher does not report numerical WER. Benchmark scores on the model card live in PNG figures only. Stage 7 will need to run our own LibriSpeech / AISHELL / Common Voice eval and treat the absence of a publisher number as 'no upstream baseline to gate against' rather than a parity target."
+  ],
+  "intake_gaps": [
+    {
+      "field": "frontend.center",
+      "reason": "FunASR WavFrontend uses kaldifeat fbank, which has snip_edges semantics rather than torchaudio's center=True/False. Cannot be mapped 1:1 onto the schema enum until the call site is read at Stage 2."
+    },
+    {
+      "field": "frontend.padding_mode",
+      "reason": "Same as frontend.center — kaldifeat fbank does not use a torch-style padding mode."
+    },
+    {
+      "field": "frontend.mel_filterbank_norm",
+      "reason": "Kaldi-style fbank (likely htk-equivalent) but the schema's slaney/htk classification needs verification against torchaudio.compliance.kaldi.fbank parameters."
+    },
+    {
+      "field": "frontend.dither",
+      "reason": "kaldifeat fbank default dither=1.0 (training); inference value is typically forced to 0.0 in funasr/frontends/wav_frontend.py but this needs confirmation from the source."
+    },
+    {
+      "field": "dtype.expected",
+      "reason": "PyTorch pickle exposes no header dtype. 'float32' is inferred from file size and FunASR convention; re-verify by walking the loaded state_dict at Stage 2."
+    },
+    {
+      "field": "upstream_benchmarks.score",
+      "reason": "Publisher publishes WER/CER numbers only as PNG figures (image/asr_results1.png, asr_results2.png). Three benchmark rows are listed with score=null so the dataset names remain visible."
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+// arch/funasr_nano/decoder.h - Qwen3 LM prefill + step graphs.
+//
+// Pruned fork of arch/qwen3_asr/decoder.h. Same Qwen3 block: pre-LN
+// RMSNorm, GQA, per-head Q/K-RMSNorm, NeoX RoPE @ freq_base=1e6, SwiGLU
+// MLP, tied lm_head. Audio injection via three-way concat
+// [prefix | adaptor_out[:fake_token_len] | suffix].
+
+#pragma once
+
+#include "funasr_nano.h"
+#include "weights.h"
+
+#include "ggml.h"
+
+struct ggml_context;
+struct ggml_cgraph;
+struct ggml_tensor;
+
+namespace transcribe::funasr_nano {
+
+struct DecoderDumps {
+    ggml_tensor * token_emb       = nullptr;
+    ggml_tensor * audio_injected  = nullptr;
+    ggml_tensor * block_0_out     = nullptr;
+    ggml_tensor * block_last_out  = nullptr;
+    ggml_tensor * out_before_head = nullptr;
+    ggml_tensor * logits_raw      = nullptr;
+};
+
+struct PrefillBuild {
+    ggml_tensor * input_ids_in = nullptr;  // [T_prompt] i32
+    ggml_tensor * audio_in     = nullptr;  // [hidden, T_audio] f32 (slice of adaptor_out)
+    ggml_tensor * positions_in = nullptr;  // [T_prompt] i32
+    ggml_tensor * mask_in      = nullptr;  // [T_prompt, T_prompt] f16
+    ggml_tensor * out          = nullptr;  // [vocab]
+    DecoderDumps  dumps {};
+    ggml_cgraph * graph        = nullptr;
+
+    int T_prompt   = 0;
+    int T_audio    = 0;
+    int prefix_len = 0;
+    int suffix_len = 0;
+};
+
+PrefillBuild build_prefill_graph(ggml_context *             ctx,
+                                 const FunAsrNanoWeights &  weights,
+                                 const FunAsrNanoHParams &  hp,
+                                 KvCache &                  kv_cache,
+                                 int                        T_prompt,
+                                 int                        T_audio,
+                                 int                        prefix_len,
+                                 int                        suffix_len,
+                                 bool                       use_flash,
+                                 bool                       slice_last);
+
+struct StepBuild {
+    ggml_tensor * input_id_in = nullptr;  // [1] i32
+    ggml_tensor * position_in = nullptr;  // [1] i32
+    ggml_tensor * kv_idx_in   = nullptr;  // [1] i64
+    ggml_tensor * mask_in     = nullptr;  // [max_n_kv, 1] f16
+    ggml_tensor * out         = nullptr;  // [1] i32 — argmax
+    // Pre-argmax logits, exposed for tensor-validation dumps. The
+    // graph keeps both alive; reading `logits` requires
+    // ggml_backend_tensor_get since it lives on the device.
+    ggml_tensor * logits      = nullptr;  // [vocab] f32
+    ggml_cgraph * graph       = nullptr;
+
+    int max_n_kv = 0;
+};
+
+StepBuild build_step_graph(ggml_context *             ctx,
+                           const FunAsrNanoWeights &  weights,
+                           const FunAsrNanoHParams &  hp,
+                           KvCache &                  kv_cache,
+                           int                        max_n_kv,
+                           bool                       use_flash);
+
+} // namespace transcribe::funasr_nano

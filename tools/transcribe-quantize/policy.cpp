@@ -116,6 +116,28 @@ Bucket classify_tensor(const std::string & name) {
     if (name == "frontend.mel_filterbank" || name == "frontend.window") {
         return Bucket::Norm;
     }
+    // SenseVoice: per-feature CMVN shift/scale (1D, d_input). Applied
+    // additively/multiplicatively to the LFR-stacked mel frame; loader
+    // requires F32, and the tensors are too small (560 elements) to
+    // benefit from quantization.
+    if (name == "frontend.cmvn.shift" || name == "frontend.cmvn.scale") {
+        return Bucket::Norm;
+    }
+    // SenseVoice: encoder prefix-token embedding (16 × d_input = 16×560)
+    // looked up via ggml_get_rows for the [lid, event, emo, textnorm]
+    // prepend. Loader requires F32; the table is ~35 KB total so
+    // quantization saves nothing.
+    if (name == "enc.embed.weight") {
+        return Bucket::Norm;
+    }
+    // SenseVoice: trailing LayerNorms after the encoder stack and after
+    // the tp_encoder stack. Don't carry the `norm_` prefix the generic
+    // rule looks for, and the loader requires F32.
+    if (ends_with(name, ".after_norm.weight") ||
+        ends_with(name, ".tp_norm.weight"))
+    {
+        return Bucket::Norm;
+    }
     // Moonshine Streaming: learned scalar inside the asinh frontend
     // (`asinh(exp(log_k) * x)`). [1]-element F32 — smaller than every
     // quant block size, and precision-sensitive (it controls the
@@ -139,6 +161,13 @@ Bucket classify_tensor(const std::string & name) {
     // ".conv." (with dots on both sides) distinguishes these from
     // norm_conv.weight which we already routed above.
     if (contains(name, ".conv.") && ends_with(name, ".weight")) {
+        return Bucket::Conv;
+    }
+    // SenseVoice FSMN: depthwise 1D conv inside the SAN-M attention
+    // block (kernel=11, groups=d_model). Named "...attn.fsmn.weight",
+    // doesn't carry the ".conv." substring, but loader treats it as a
+    // conv (GET_CONV → F32/F16 only).
+    if (ends_with(name, ".attn.fsmn.weight")) {
         return Bucket::Conv;
     }
     return Bucket::Linear;

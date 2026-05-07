@@ -245,16 +245,32 @@ def _config_dtype(config: dict | None) -> str | None:
 
 # -------- GGUF discovery (matches validate.py convention) --------
 
-def find_gguf(repo_root: Path, family: str, variant: str | None) -> Path | None:
-    """Prefer BF16 > F32 > F16 > first match under models/<slug>/ where slug
-    starts with family (matches scripts/validate.py behavior)."""
+def find_gguf(
+    repo_root: Path,
+    family: str,
+    variant: str | None,
+    hf_repo: str | None = None,
+) -> Path | None:
+    """Prefer BF16 > F32 > F16 > first match. Discovery, in order:
+
+      1. If `hf_repo` is provided, try `models/<upstream-slug>/` first
+         (e.g. `models/SenseVoiceSmall/`). This matches validate.py's
+         convention and the converter's output dir for variants whose
+         filesystem name preserves upstream HF casing.
+      2. If `variant` is provided (and step 1 missed), try
+         `models/<variant>/` (kebab-cased fallback for legacy layouts).
+      3. Otherwise, scan `models/<family>*/` (legacy family-prefix fallback).
+    """
     models_dir = repo_root / "models"
     if not models_dir.is_dir():
         return None
-    if variant:
+    candidates: list[Path] = []
+    if hf_repo:
+        upstream_slug = hf_repo.rsplit("/", 1)[-1]
+        candidates = list((models_dir / upstream_slug).glob("*.gguf"))
+    if not candidates and variant:
         candidates = list((models_dir / variant).glob("*.gguf"))
-    else:
-        candidates = []
+    if not candidates:
         for d in sorted(models_dir.glob(f"{family}*/")):
             candidates.extend(d.glob("*.gguf"))
     def rank(p: Path) -> int:
@@ -592,7 +608,9 @@ def run_gate(repo_root: Path, family: str, variant: str | None, gate: Gate,
 
     gguf_kvs: dict[str, Any] | None = None
     if gate in ("B", "D"):
-        gguf_path = gguf_override or find_gguf(repo_root, family, variant)
+        gguf_path = gguf_override or find_gguf(
+            repo_root, family, variant, hf_repo=declared.get("hf_repo")
+        )
         if not gguf_path:
             raise SystemExit(
                 f"error: gate {gate} requires a GGUF but none found under "
