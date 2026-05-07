@@ -104,6 +104,17 @@ Fun-ASR-Nano on the same hardware; the gap is from per-step LLM
 generation cost (different decoded transcript lengths between the two
 variants).
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  | 1.14 s (10×)   | 1.03 s (11×)   |
+| Vulkan  | dots (35.3s) | 4.48 s (8×)    | 3.92 s (9×)    |
+| CPU     | jfk (11.0s)  | 2.35 s (5×)    | 1.84 s (6×)    |
+| CPU     | dots (35.3s) | 8.60 s (4×)    | 6.97 s (5×)    |
+
+Fedora 43, transcribe.cpp `8635bd1`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash
@@ -111,7 +122,7 @@ uv run scripts/bench/run.py \
   --models Fun-ASR-MLT-Nano-2512 \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
-  --backends metal,cpu \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name fun-asr-mlt-nano-2512-publication
 ```

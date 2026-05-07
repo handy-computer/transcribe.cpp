@@ -95,6 +95,17 @@ above (2 decimal places).
 
 macOS 26.4.1, transcribe.cpp `f094d28`.
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  329 ms (33×)  |  332 ms (33×)  |
+| Vulkan  | dots (35.3s) | 1.11 s (32×)   | 1.12 s (31×)   |
+| CPU     | jfk (11.0s)  |  687 ms (16×)  |  590 ms (19×)  |
+| CPU     | dots (35.3s) | 2.31 s (15×)   | 2.03 s (17×)   |
+
+Fedora 43, transcribe.cpp `8635bd1`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash
@@ -102,7 +113,7 @@ uv run scripts/bench/run.py \
   --models SenseVoiceSmall \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
-  --backends metal,cpu \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name sensevoice-small-publication
 ```

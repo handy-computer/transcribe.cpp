@@ -85,6 +85,17 @@ above (2 decimal places).
 
 macOS 26.4.1, transcribe.cpp `f094d28`.
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  887 ms (12×)  |  825 ms (13×)  |
+| Vulkan  | dots (35.3s) | 3.74 s (9×)    | 2.95 s (12×)   |
+| CPU     | jfk (11.0s)  | 1.48 s (7×)    | 1.15 s (10×)   |
+| CPU     | dots (35.3s) | 5.54 s (6×)    | 4.52 s (8×)    |
+
+Fedora 43, transcribe.cpp `8635bd1`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash
@@ -92,7 +103,7 @@ uv run scripts/bench/run.py \
   --models Fun-ASR-Nano-2512 \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
-  --backends metal,cpu \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name fun-asr-nano-2512-publication
 ```
