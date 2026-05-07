@@ -77,6 +77,8 @@ bool file_exists(const std::string & path) {
 bool fixtures_present() {
     static const char * const required[] = {
         "arch_parakeet.gguf",
+        "arch_sensevoice.gguf",
+        "arch_funasr_nano.gguf",
         "arch_unknown.gguf",
         "corrupt_magic.gguf",
     };
@@ -199,9 +201,15 @@ int main() {
     // payload. The Parakeet handler now requires tokenizer.ggml.* and
     // surfaces the missing payload as TRANSCRIBE_ERR_GGUF — the loader
     // dispatched correctly, the family handler then rejected the file.
-    check_load("arch_parakeet.gguf", TRANSCRIBE_ERR_GGUF);
-    check_load("arch_unknown.gguf",  TRANSCRIBE_ERR_UNSUPPORTED_ARCH);
-    check_load("corrupt_magic.gguf", TRANSCRIBE_ERR_GGUF);
+    check_load("arch_parakeet.gguf",   TRANSCRIBE_ERR_GGUF);
+    // Same shape for sensevoice / funasr_nano: the arch is in the
+    // dispatch table, the handler runs, then rejects on the missing
+    // hparam / tensor payload. Distinguishes "registered family but
+    // bad GGUF" from "unknown architecture".
+    check_load("arch_sensevoice.gguf",  TRANSCRIBE_ERR_GGUF);
+    check_load("arch_funasr_nano.gguf", TRANSCRIBE_ERR_GGUF);
+    check_load("arch_unknown.gguf",    TRANSCRIBE_ERR_UNSUPPORTED_ARCH);
+    check_load("corrupt_magic.gguf",   TRANSCRIBE_ERR_GGUF);
 
     if (g_failures > 0) {
         std::fprintf(stderr, "loader_smoke: %d failures\n", g_failures);

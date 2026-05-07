@@ -91,8 +91,8 @@ Quantize (run once per target preset; see Stage 5 for the full matrix):
 
 ```bash
 build/bin/transcribe-quantize \
-  models/sensevoice-small/sensevoice-small-F32.gguf \
-  models/sensevoice-small/sensevoice-small-Q8_0.gguf \
+  models/SenseVoiceSmall/SenseVoiceSmall-F32.gguf \
+  models/SenseVoiceSmall/SenseVoiceSmall-Q8_0.gguf \
   --quant Q8_0
 ```
 
@@ -100,7 +100,7 @@ Bench (Stage 6 publication run):
 
 ```bash
 uv run scripts/bench/run.py \
-  --models sensevoice-small \
+  --models SenseVoiceSmall \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
   --backends metal,cpu \
@@ -122,7 +122,7 @@ uv run scripts/wer/score.py reports/wer/sensevoice-small-REF.test-clean.jsonl
 # transcribe.cpp ports (loop over the shipped quant matrix)
 for PRESET in F32 F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
   uv run scripts/wer/run.py \
-    --model models/sensevoice-small/sensevoice-small-${PRESET}.gguf \
+    --model models/SenseVoiceSmall/SenseVoiceSmall-${PRESET}.gguf \
     --manifest samples/wer/test-clean.manifest.jsonl \
     --out      reports/wer/sensevoice-small-${PRESET}.test-clean.jsonl
   uv run scripts/wer/score.py reports/wer/sensevoice-small-${PRESET}.test-clean.jsonl
@@ -193,10 +193,10 @@ each command. Allowed statuses:
 
 | Capability | Mode | Command / test | Expected observable | Status |
 |------------|------|----------------|---------------------|--------|
-| Transcribe | explicit language hint (en) | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS |
-| Transcribe | explicit language hint (zh) | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf --language zh samples/zh.wav` | non-empty plausible Mandarin transcript | PASS — `开放时间早上九点至下午五点` |
+| Transcribe | explicit language hint (en) | `build/bin/transcribe-cli -m models/SenseVoiceSmall/SenseVoiceSmall-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS |
+| Transcribe | explicit language hint (zh) | `build/bin/transcribe-cli -m models/SenseVoiceSmall/SenseVoiceSmall-F32.gguf --language zh samples/zh.wav` | non-empty plausible Mandarin transcript | PASS — `开放时间早上九点至下午五点` |
 | Transcribe | explicit language hint (ja, ko, yue) | `build/bin/transcribe-cli -m … --language <ja|ko|yue> samples/<ja|ko|yue>.wav` | non-empty plausible transcript in the requested language | PASS |
-| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/sensevoice-small/sensevoice-small-F32.gguf samples/jfk.wav` | non-empty plausible transcript on the auto-detect path | PASS |
+| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/SenseVoiceSmall/SenseVoiceSmall-F32.gguf samples/jfk.wav` | non-empty plausible transcript on the auto-detect path | PASS |
 | Language detection | LID emitted via raw CTC tokens | `build/bin/transcribe-cli --raw-tokens -m … samples/jfk.wav` | language label `<\|en\|>` / `<\|zh\|>` / etc. present in the transcript text field | PASS — `<\|en\|>` emitted on jfk.wav, `<\|zh\|>` on zh.wav, etc. |
 | Translate | n/a | not advertised by upstream | n/a | SKIP — not advertised |
 | Segment timestamps | n/a | non-AR CTC has no segment-timestamp head | n/a | SKIP — not advertised |

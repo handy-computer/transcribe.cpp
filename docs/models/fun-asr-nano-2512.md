@@ -14,8 +14,9 @@ regional Mandarin accents. The model takes a 16 kHz mono WAV and produces
 a transcript. Not a streaming model, no translation, no built-in long-form
 chunking, no timestamps.
 
-ITN (inverse text normalization — digits, capitalization, punctuation) is
-supported by the model.
+ITN (inverse text normalization — digits, capitalization, punctuation)
+is supported by the model. Pass `--itn` on the CLI, or set
+`transcribe_funasr_nano_params { use_itn = true }` via the library API.
 
 For multilingual coverage beyond zh/en/ja, see the sibling
 [Fun-ASR-MLT-Nano](fun-asr-mlt-nano-2512.md) (31 languages).
@@ -61,8 +62,14 @@ build/bin/transcribe-cli \
 ```
 
 Pass `--language zh` / `ja` (or omit for auto-detection) for the other
-supported languages. If your audio is not already 16 kHz mono WAV,
-convert it first:
+supported languages. Add `--itn` to render digits, capitalization, and
+punctuation in formal form:
+
+```bash
+build/bin/transcribe-cli --itn -m … samples/jfk.wav
+```
+
+If your audio is not already 16 kHz mono WAV, convert it first:
 
 ```bash
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav

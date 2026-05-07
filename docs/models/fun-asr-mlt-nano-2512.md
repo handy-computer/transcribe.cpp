@@ -25,8 +25,9 @@ streaming model, no translation, no built-in long-form chunking, no
 timestamps. The README explicitly lists timestamps, speaker
 diarization, and training as upstream TODOs.
 
-ITN (inverse text normalization — digits, capitalization, punctuation) is
-supported by the model.
+ITN (inverse text normalization — digits, capitalization, punctuation)
+is supported by the model. Pass `--itn` on the CLI, or set
+`transcribe_funasr_nano_params { use_itn = true }` via the library API.
 
 For Mandarin-only / dialect-heavy use, the regular
 [Fun-ASR-Nano](fun-asr-nano-2512.md) was trained on a much larger
@@ -77,8 +78,14 @@ build/bin/transcribe-cli \
 ```
 
 Pass `--language ko` / `vi` / `th` / etc. for any of the 31 supported
-languages, or omit for auto-detection. If your audio is not already
-16 kHz mono WAV, convert it first:
+languages, or omit for auto-detection. Add `--itn` to render digits,
+capitalization, and punctuation in formal form:
+
+```bash
+build/bin/transcribe-cli --itn -m … samples/jfk.wav
+```
+
+If your audio is not already 16 kHz mono WAV, convert it first:
 
 ```bash
 ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav

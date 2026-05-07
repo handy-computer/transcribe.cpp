@@ -79,7 +79,10 @@ summary: |
   bundled Qwen3-0.6B LLM); trained on a smaller multilingual corpus
   ("hundreds of thousands of hours" per the model card, vs Nano's
   "tens of millions"). Takes a 16 kHz mono WAV and emits text. Not
-  streaming, no translation, no timestamps.
+  streaming, no translation, no timestamps. ITN (inverse text
+  normalization) is supported by the model and exposed via the
+  `--itn` CLI flag and `transcribe_funasr_nano_params { use_itn }`
+  in the library API.
 
 default_quant_index: 2  # Q8_0
 

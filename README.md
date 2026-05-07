@@ -14,8 +14,10 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | Whisper | 12 variants (`tiny` through `large-v3-turbo`, plus `.en` siblings) | [docs/models/whisper.md](docs/models/whisper.md) |
 | Moonshine | `moonshine-tiny`, `moonshine-base` | [docs/models/moonshine.md](docs/models/moonshine.md) |
 | Moonshine Streaming | `moonshine-streaming-{tiny,small,medium}` | [docs/models/moonshine-streaming.md](docs/models/moonshine-streaming.md) |
+| SenseVoice | `sensevoice-small` | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
+| FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano-2512.md](docs/models/fun-asr-nano-2512.md) |
 
-More families planned (Canary, SenseVoice, GigaAM).
+More families planned (Canary, GigaAM).
 
 ## Build
 

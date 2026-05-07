@@ -8,8 +8,8 @@ English, Japanese, and Korean.
 ## What it's for
 
 Offline multilingual speech-to-text in zh / yue / en / ja / ko. The model takes
-a 16 kHz mono WAV (capped at **30 seconds per call**) and produces a transcript. 
-It is not a streaming model and does not translate. 
+a 16 kHz mono WAV (capped at **30 seconds per call**) and produces a transcript.
+It is not a streaming model and does not translate.
 Long-form audio is the caller's responsibility.
 
 The same CTC head also emits language ID, simple emotion labels (`<|HAPPY|>`,
@@ -21,10 +21,9 @@ default; pass `--raw-tokens` to keep them, and `--itn` to enable ITN.
 See FunAudioLLM's [model card](https://huggingface.co/FunAudioLLM/SenseVoiceSmall)
 for training data, intended use, and upstream evaluation methodology.
 
-Licensed `model-license` (FunASR's
-[MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE). Ported from upstream commit
-[`3eb3b4e`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall/commit/3eb3b4eeffc2f2dde6051b853983753db33e35c3),
-pinned 2026-05-06.
+Licensed under the **FunASR Model Open Source License Agreement** —
+the legacy "model-license" form
+([MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)).
 
 ## Download
 
@@ -88,12 +87,12 @@ above (2 decimal places).
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |    44 ms (251×) |    45 ms (242×) |
-| Metal   | dots (35.3s) |   115 ms (307×) |   112 ms (316×) |
-| CPU     | jfk (11.0s)  |   210 ms (52×)  |   213 ms (52×)  |
-| CPU     | dots (35.3s) |   698 ms (51×)  |   727 ms (49×)  |
+| Metal   | jfk (11.0s)  |    42 ms (260×) |    44 ms (250×) |
+| Metal   | dots (35.3s) |   111 ms (319×) |   137 ms (258×) |
+| CPU     | jfk (11.0s)  |   208 ms (53×)  |   213 ms (52×)  |
+| CPU     | dots (35.3s) |   700 ms (50×)  |   727 ms (49×)  |
 
-macOS 26.4.1, transcribe.cpp `f094d28`.
+macOS 26.4.1, transcribe.cpp `811fe2a`.
 
 ### AMD Ryzen 7 PRO 4750U
 

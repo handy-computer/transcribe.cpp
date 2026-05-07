@@ -45,8 +45,10 @@ summary: |
   a 2-layer audio adaptor (512 → 1024), and a bundled Qwen3-0.6B LLM
   (28 layers, 16/8 GQA, BF16) that produces the transcript autoregressively.
   Takes a 16 kHz mono WAV and emits text. Not a streaming model, no
-  translation, no built-in long-form chunking, no timestamps. ITN is
-  exposed at the library API but not yet plumbed through the CLI.
+  translation, no built-in long-form chunking, no timestamps. ITN
+  (inverse text normalization) is supported by the model and exposed
+  via the `--itn` CLI flag and `transcribe_funasr_nano_params { use_itn }`
+  in the library API.
 
 default_quant_index: 2  # Q8_0
 

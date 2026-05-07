@@ -713,10 +713,10 @@ transcribe_status run(
         compute_fake_token_len(T_lfr, hp.adaptor_use_low_frame_rate);
 
     const char * lang = (params != nullptr) ? params->language : nullptr;
-    bool use_itn = false;  // CLI doesn't yet expose the flag; library
-                           // callers wire it through params->funasr_nano
-                           // when that struct exists.
-    (void)use_itn;
+    const bool use_itn =
+        (params != nullptr && params->funasr_nano != nullptr)
+            ? params->funasr_nano->use_itn
+            : false;
 
     std::vector<int32_t> prompt_ids;
     int fbank_beg = 0;
