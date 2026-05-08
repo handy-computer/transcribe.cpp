@@ -90,17 +90,37 @@ CLI flags specific to canary:
 
 ## Performance
 
-Bench numbers will be added after the public release. Note that the
-24-layer decoder makes this the slowest canary variant for decode-bound
-workloads — for the same audio, expect ~3–4× the wall time of
-canary-1b-flash on the same backend.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
+decimal places).
+
+The 24-layer decoder makes this the slowest canary variant for decode-bound
+workloads — roughly 1.5× the wall time of canary-1b-flash on the same
+backend, and the GPU win over CPU is smaller here than on the *flash
+variants because the autoregressive decoder pass dominates and a
+batch-1 / single-token forward is too small to amortize Vulkan dispatch
+overhead.
+
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |          Q8_0 |         Q4_K_M |
+| ------- | ------------ | ------------: | -------------: |
+| Vulkan  | jfk (11.0s)  | 1.14 s (9.7×) | 1.02 s (10.8×) |
+| Vulkan  | dots (35.3s) | 5.04 s (7.0×) |  4.32 s (8.2×) |
+| CPU     | jfk (11.0s)  | 1.71 s (6.4×) |  1.24 s (8.9×) |
+| CPU     | dots (35.3s) | 7.59 s (4.7×) |  5.97 s (5.9×) |
+
+Fedora Linux 43, transcribe.cpp `0f42b37`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
+Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
   --models canary-1b \
   --quants q8_0,q4_k_m \
-  --samples jfk \
-  --backends metal,cpu \
+  --samples jfk,dots \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name canary-1b-publication
 ```

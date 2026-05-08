@@ -97,6 +97,18 @@ decimal places).
 
 macOS 26.4.1, transcribe.cpp `0f42b37`.
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Vulkan  | jfk (11.0s)  | 327.1 ms (33.6×) | 314.3 ms (35.0×) |
+| Vulkan  | dots (35.3s) |   1.28 s (27.7×) |   1.20 s (29.5×) |
+| CPU     | jfk (11.0s)  | 454.3 ms (24.2×) | 370.5 ms (29.7×) |
+| CPU     | dots (35.3s) |   1.92 s (18.4×) |   1.63 s (21.7×) |
+
+Fedora Linux 43, transcribe.cpp `0f42b37`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash
@@ -104,7 +116,7 @@ uv run scripts/bench/run.py \
   --models canary-180m-flash \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
-  --backends metal,cpu \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name canary-180m-flash-publication
 ```
