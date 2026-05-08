@@ -1,6 +1,6 @@
 # Canary
 
-Status: research
+Status: shipped (Stage 7 complete; bench numbers pending)
 
 ## Identity
 
@@ -58,41 +58,75 @@ All four are Stage 1 skeletons (identity-only, `_skeleton: true`); Stage 2 (`por
 | --- | --- |
 | Intakes | `reports/porting/canary/<variant>/intake.json` |
 | Preflight Gate A | `reports/porting/canary/<variant>/preflight-gate-A.json` |
-| Forward map | `reports/porting/canary/forward-map.md` *(Stage 2)* |
-| Tolerances | `tests/tolerances/canary.json` *(Stage 2 provisional, Stage 4 final)* |
-| Converter reports | `reports/convert/<variant>-<refdtype>.json` *(Stage 3)* |
-| Reference dump root | `build/validate/canary/<variant>/` *(Stage 2)* |
+| Forward map | `reports/porting/canary/forward-map.md` |
+| Tolerances | `tests/tolerances/canary.json` |
+| Converter reports | `reports/convert/<variant>-F32.json` |
+| Reference dump root | `build/validate/canary/<variant>/` |
+| WER reports | `reports/wer/<variant>-<preset>.librispeech-test-clean.{jsonl,score.json}` |
+| WER summaries | `reports/wer/<variant>.librispeech-test-clean.summary.md` |
+| User-facing model cards | `docs/models/<variant>.md` |
+| HF README specs | `scripts/hf_cards/<variant>.yaml` |
+| HF README rendered | `models/<variant>/README.md` |
 
 ## Commands
 
-Reference run:
+Reference dump (per variant — encoder + decode):
 
 ```bash
-TODO  # filled at Stage 2 by porting-2-oracle (dump_reference_canary_nemo.py)
-```
+uv run --project scripts/envs/canary \
+  scripts/dump_reference_canary_nemo.py encoder \
+    --model nvidia/<variant> \
+    --audio samples/jfk.wav \
+    --out build/validate/canary/<variant>/jfk/encoder/ref
 
-Reference dumps:
-
-```bash
-TODO  # Stage 2
+uv run --project scripts/envs/canary \
+  scripts/dump_reference_canary_nemo.py decode \
+    --model nvidia/<variant> \
+    --audio samples/jfk.wav \
+    --out build/validate/canary/<variant>/jfk/decode/ref
 ```
 
 Conversion:
 
 ```bash
-TODO  # Stage 3 — uv run --project scripts/envs/canary scripts/convert-canary.py nvidia/<variant>
+uv run --project scripts/envs/canary \
+  scripts/convert-canary.py nvidia/<variant> --repo-id nvidia/<variant>
+```
+
+Quantization (produces F16, Q8_0, Q6_K, Q5_K_M, Q4_K_M):
+
+```bash
+uv run scripts/quantize-all.py models/<variant>/<variant>-F32.gguf
 ```
 
 Validation:
 
 ```bash
-TODO  # Stage 4 — uv run scripts/validate.py all --family canary --variant <variant>
+uv run scripts/validate.py all --family canary --variant <variant>
 ```
 
-Benchmarks:
+WER:
 
 ```bash
-TODO  # Stage 6 — scripts/bench/run.py
+uv run scripts/wer/run.py \
+  --model models/<variant>/<variant>-F32.gguf \
+  --manifest samples/wer/test-clean.manifest.jsonl \
+  --out reports/wer/<variant>-F32.librispeech-test-clean.jsonl
+uv run scripts/wer/score.py reports/wer/<variant>-F32.librispeech-test-clean.jsonl
+```
+
+Benchmarks (deferred until after the public HF release — easier to
+download a single GGUF on each target machine than to copy 25 GB of
+mixed quants):
+
+```bash
+uv run scripts/bench/run.py \
+  --models <variant> \
+  --quants q8_0,q4_k_m \
+  --samples jfk \
+  --backends metal,cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name <variant>-publication
 ```
 
 ## Architecture summary
@@ -200,3 +234,45 @@ flagged in the row notes.
 - **Stage 4 frontend parity**: canary uses the production `transcribe::MelFrontend` directly — there is no env-var ref-mel injection path on this family. Frontend parity is exercised inside the standard `validate.py compare` flow via the `enc.mel.in` tensor. Observed drift on `samples/jfk.wav` (180m-flash, F32, CPU, 2026-05-07): `max_abs=5.19, mean_abs=1.6e-3`. Identical mechanism as parakeet — fp64 STFT in C++ vs fp32 STFT in NeMo, plus a single-frame pad-zeroing difference at the trailing mel frame (`t=T_mel-1`, where NeMo masks beyond the valid signal length and the C++ side computes the partial frame). Both effects are documented in the family tolerance file's `_comment` block; the absolute drift is below the parakeet-family tolerance (`max_abs=10.0`) and the downstream encoder dampens the edge perturbation by the final per-block LayerNorm.
 - **Stage 4 missing-bias bug (FIXED)**: the first WER pass on canary-180m-flash returned 19.96% on test-clean.512 (vs upstream 1.87%) with a long tail of "what what what…" loop hallucinations. Root cause was NOT numerical drift: the `CanaryBlock` weight catalog and the `to_view(BlockView)` projection were copied from parakeet (bias-free FFN/attn linears) without re-reading the GGUF tensor list. NeMo's `ConformerEncoder` always emits biases on every Linear (FF1/FF2 linear1/linear2, attention Q/K/V/out — the converter exports them all under `enc.blocks.*.ff*.linear*.bias` and `enc.blocks.*.attn.linear_*.bias`), but the loader silently dropped them and the `use_bias=False` KV the converter wrote happened to make the gap look "intentional." Across 17 layers the missing biases compounded into mean drift that reached `1.5e1` at intermediate blocks (vs `1.4e-1` post-fix) and the decoder cascade hit `15.8` mean drift at the final FFN (vs `1.2` post-fix), big enough to flip the top-1 logit on harder utterances. After loading the biases, drift falls to fp32-level on every gate tensor and the LibriSpeech transcripts return to upstream-quality output. The lesson: do not propagate parakeet's bias-free assumption to a new conformer family without verifying tensor-by-tensor against the GGUF — `stt.canary.encoder.use_bias` was a misread of an unrelated config field; truth lives in the tensor catalog.
 - **Stage 4 mid-generation tensor (DEFERRED)**: per Stage 4 spec, autoregressive families should dump a `dec.logits_raw.gen<N>` (N >= 8) tensor on both the C++ and reference sides to gate step-graph correctness past the prompt pass. Neither side does this yet for canary; correctness past the first generated token is currently inferred from matching transcripts. Add to both `dump_reference_canary_nemo.py` (capture decoder logits at step 8) and the C++ `model.cpp` step loop in a follow-up.
+
+## Release artifacts
+
+| Variant | License | HF target | User card | HF spec |
+|---|---|---|---|---|
+| canary-180m-flash | CC-BY-4.0 | `handy-computer/canary-180m-flash-gguf` | [docs/models/canary-180m-flash.md](../../models/canary-180m-flash.md) | [scripts/hf_cards/canary-180m-flash.yaml](../../../scripts/hf_cards/canary-180m-flash.yaml) |
+| canary-1b-flash | CC-BY-4.0 | `handy-computer/canary-1b-flash-gguf` | [docs/models/canary-1b-flash.md](../../models/canary-1b-flash.md) | [scripts/hf_cards/canary-1b-flash.yaml](../../../scripts/hf_cards/canary-1b-flash.yaml) |
+| canary-1b-v2 | CC-BY-4.0 | `handy-computer/canary-1b-v2-gguf` | [docs/models/canary-1b-v2.md](../../models/canary-1b-v2.md) | [scripts/hf_cards/canary-1b-v2.yaml](../../../scripts/hf_cards/canary-1b-v2.yaml) |
+| canary-1b | **CC-BY-NC-4.0** | `handy-computer/canary-1b-gguf` | [docs/models/canary-1b.md](../../models/canary-1b.md) *(pending — WER sweep in flight)* | [scripts/hf_cards/canary-1b.yaml](../../../scripts/hf_cards/canary-1b.yaml) *(pending)* |
+
+Note that the converter writes the per-variant license string into
+`general.license` and a permalink into `general.license.link`. canary-1b
+is the only family member under a non-commercial license; downstream
+tooling that reads the GGUF KV can rely on this distinction.
+
+## Release WER (LibriSpeech test-clean, full 2620 utt)
+
+F32 ref-dtype gate enforced (|Δ| ≤ 1pp); quants reported, not gated.
+Per-variant tables under `reports/wer/<variant>.librispeech-test-clean.summary.md`.
+
+| Variant | F32 | F16 | Q8_0 | Q6_K | Q5_K_M | Q4_K_M | Upstream | Δ vs upstream |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| canary-180m-flash | 1.94% | 1.94% | 1.93% | 1.93% | 1.90% | 1.93% | 1.87% | +0.07pp |
+| canary-1b-flash   | 1.62% | 1.62% | 1.62% | 1.65% | 1.64% | 1.59% | 1.48% | +0.14pp |
+| canary-1b-v2      | 1.92% | 1.92% | 1.91% | 1.94% | 1.93% | 1.91% | 2.18% | **−0.26pp** |
+| canary-1b         | 1.55% | 1.55% | 1.55% | 1.57% | TBD   | TBD   | 1.48% | +0.07pp |
+
+Same-wav NeMo reference comparison (where measured): canary-180m-flash
+F32 = 1.94% port vs 1.93% NeMo on the identical 2620 wavs — one
+substitution out of ~27k reference words.
+
+## Release status
+
+- Stage 1–5 complete for all four variants.
+- Stage 6 (bench): deferred. Will run after the public HF release —
+  one GGUF download per machine is cheaper than copying the matrix
+  around.
+- Stage 7 (WER): complete for canary-180m-flash, canary-1b-flash,
+  canary-1b-v2; canary-1b in flight (Q5_K_M + Q4_K_M still running).
+- Stage 8: HF YAMLs + READMEs + user-facing cards drafted for the three
+  Stage-7-complete variants. canary-1b assets follow once the WER
+  sweep finishes. Upload is a manual `hf upload` step per variant.

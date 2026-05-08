@@ -1,0 +1,102 @@
+# Spec for the HF README of handy-computer/canary-1b-v2-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: nvidia/canary-1b-v2
+target_repo: handy-computer/canary-1b-v2-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/canary-1b-v2.md
+
+upstream_commit: 87bc526
+pin_date: 2026-05-08
+
+validation:
+  reference: NeMo
+  commit: db53eda
+  date: 2026-05-08
+
+license: cc-by-4.0
+license_display: CC-BY-4.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - bg
+  - hr
+  - cs
+  - da
+  - nl
+  - en
+  - et
+  - fi
+  - fr
+  - de
+  - el
+  - hu
+  - it
+  - lv
+  - lt
+  - mt
+  - pl
+  - pt
+  - ro
+  - sk
+  - sl
+  - es
+  - sv
+  - ru
+  - uk
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - canary
+  - multitask-aed
+  - encoder-decoder
+  - multilingual
+  - translation
+
+summary: |
+  Offline multilingual speech-to-text and translation across 25 European
+  languages. A 978M-parameter multitask AED with a 32-layer FastConformer
+  encoder and an 8-layer Transformer decoder. Supports automatic speech
+  recognition for any of the 25 supported languages, plus translation
+  between supported language pairs (per the upstream model card). Takes
+  a 16 kHz mono WAV and produces a transcript. Not a streaming model;
+  word and segment timestamps from the upstream model are not exposed in
+  the v1 port. Single-SP tokenizer (`lang_codes = ["all"]`), distinct
+  from the aggregate-of-multi-SP tokenizers in the other canary variants.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances)
+    with greedy decoding and no external LM. F32 reference baseline: 1.92%.
+    NVIDIA's self-reported number on the upstream model card is 2.18%;
+    our F32 port comes in slightly under the upstream-reported number
+    (Δ −0.26pp) and is well inside the Stage 7 ref-dtype gate.
+
+quants:
+  - name: F32
+    filename: canary-1b-v2-F32.gguf
+    size: 3.7 GB
+    wer: 1.92%
+  - name: F16
+    filename: canary-1b-v2-F16.gguf
+    size: 1.8 GB
+    wer: 1.92%
+  - name: Q8_0
+    filename: canary-1b-v2-Q8_0.gguf
+    size: 1.1 GB
+    wer: 1.91%
+  - name: Q6_K
+    filename: canary-1b-v2-Q6_K.gguf
+    size: 889 MB
+    wer: 1.94%
+  - name: Q5_K_M
+    filename: canary-1b-v2-Q5_K_M.gguf
+    size: 798 MB
+    wer: 1.93%
+  - name: Q4_K_M
+    filename: canary-1b-v2-Q4_K_M.gguf
+    size: 701 MB
+    wer: 1.91%
