@@ -79,14 +79,28 @@ CLI flags specific to canary:
 
 ## Performance
 
-Bench numbers will be added after the public release; the harness lives
-at `scripts/bench/run.py`. Reproduction:
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
+decimal places).
+
+### Apple M4 Max
+
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  | 118.9 ms (92.5×) | 113.6 ms (96.9×) |
+| Metal   | dots (35.3s) | 414.8 ms (85.2×) | 390.2 ms (90.5×) |
+| CPU     | jfk (11.0s)  | 518.3 ms (21.2×) | 430.1 ms (25.6×) |
+| CPU     | dots (35.3s) |   1.79 s (19.7×) |   1.51 s (23.4×) |
+
+macOS 26.4.1, transcribe.cpp `0f42b37`.
+
+Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
   --models canary-1b-flash \
   --quants q8_0,q4_k_m \
-  --samples jfk \
+  --samples jfk,dots \
   --backends metal,cpu \
   --iters 3 --warmup 1 \
   --name canary-1b-flash-publication
