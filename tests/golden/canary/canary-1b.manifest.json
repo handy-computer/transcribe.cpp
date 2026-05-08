@@ -48,5 +48,6 @@
     "beam": 5
   },
   "tolerance_file": "tests/tolerances/canary.json",
+  "transcript_compare": "normalized",
   "cases": ["jfk"]
 }

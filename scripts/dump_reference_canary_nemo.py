@@ -445,6 +445,12 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
     print(f"audio: {audio_path.name} samples={pcm.size} sr={sr}")
 
+    # --language overrides source/target only if they were left at default ("en").
+    if args.language and args.source_lang == "en":
+        args.source_lang = args.language
+    if args.language and args.target_lang == "en":
+        args.target_lang = args.language
+
     multitask_extra = {
         "source_lang": args.source_lang,
         "target_lang": args.target_lang,
@@ -608,6 +614,15 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
         type=int,
         default=1,
         help="Torch intra-op threads for deterministic dumps (default: 1)",
+    )
+    # validate.py passes --language; for canary's multitask AED a single
+    # language flag is interpreted as ASR (source_lang == target_lang ==
+    # <language>). Per-task overrides via --source-lang / --target-lang
+    # on the decode subcommand still take precedence.
+    p.add_argument(
+        "--language",
+        default=None,
+        help="Shorthand for --source-lang and --target-lang (ASR mode).",
     )
 
 

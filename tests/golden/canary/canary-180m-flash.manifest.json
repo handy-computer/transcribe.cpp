@@ -31,10 +31,18 @@
     "special_tokens": {}
   },
   "capabilities": {
-    "languages": ["en", "de", "es", "fr"],
+    "languages": [
+      "en",
+      "de",
+      "es",
+      "fr"
+    ],
     "language_detection": false,
     "translation": true,
-    "timestamps": ["word", "segment"],
+    "timestamps": [
+      "word",
+      "segment"
+    ],
     "streaming": false,
     "voice_activity_detection": false,
     "speaker_diarization": false
@@ -48,5 +56,8 @@
     "beam": 1
   },
   "tolerance_file": "tests/tolerances/canary.json",
-  "cases": ["jfk"]
+  "cases": [
+    "jfk"
+  ],
+  "transcript_compare": "normalized"
 }

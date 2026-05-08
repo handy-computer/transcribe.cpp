@@ -185,7 +185,11 @@ def _extract_aggregate(tk) -> dict:
 def _extract_bpe(tk) -> dict:
     """CanaryBPETokenizer (canary-1b-v2): a single SentencePiece model
     where every special token (BOS, EOS, language tags, task tags,
-    timestamp tags) is baked into the SP vocabulary as a CONTROL piece.
+    timestamp tags) is baked into the SP vocabulary. Specials are stored
+    as USER_DEFINED pieces in canary-1b-v2 (`sp.IsControl()` returns
+    False), so we identify them structurally by their `<|...|>` piece
+    shape rather than by SP-level type flags. The 0-th piece (often
+    `<unk>`) and explicit `<pad>` keep their standard tags.
     No per-language routing — all text-side encoding goes through the
     one SP. We surface a single sub-tokenizer entry ("all") so the KV
     schema stays uniform across variants."""
@@ -201,9 +205,12 @@ def _extract_bpe(tk) -> dict:
     for i in range(vocab_size):
         piece = sp.IdToPiece(i)
         score = float(sp.GetScore(i))
+        is_special_piece = (
+            piece.startswith("<|") and piece.endswith("|>")
+        ) or piece in ("<pad>", "<unk>")
         if sp.IsUnknown(i):
             ttype = TOKEN_TYPE_UNKNOWN
-        elif sp.IsControl(i):
+        elif sp.IsControl(i) or is_special_piece:
             ttype = TOKEN_TYPE_CONTROL
             specials[piece] = i
         else:
@@ -279,7 +286,13 @@ def read_hparams(config: dict) -> dict:
         "enc_subsampling_factor":   int(enc["subsampling_factor"]),
         "enc_subsampling_channels": int(enc["subsampling_conv_channels"]),
         "enc_pos_emb_max_len":      int(enc["pos_emb_max_len"]),
-        "enc_use_bias":             bool(enc.get("use_bias", False)),
+        # NeMo's ConformerEncoder uses biases on every Linear (FFN +
+        # attention Q/K/V/out) regardless of any cfg.use_bias key — that
+        # config field, when present, refers to the depthwise-conv module
+        # in some configurations, not to the FFN/attn linears. Hard-coded
+        # True so the GGUF KV reflects what's actually in the .bias
+        # tensors (which the converter emits unconditionally below).
+        "enc_use_bias":             True,
 
         "dec_n_layers":             int(tdec["num_layers"]),
         "dec_d_model":              int(tdec["hidden_size"]),
@@ -560,9 +573,12 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
     writer.add_bool  ("stt.capability.timestamps",  has_timestamps)
 
     # ----- tokenizer.ggml.* -----
-    # We use a custom "canary" tokenizer label since the pieces are an
-    # aggregate over multiple SP sub-vocabs, not a single SPM.
-    writer.add_string("tokenizer.ggml.model",     "canary")
+    # Use "unigram" so the C++ tokenizer's SentencePiece decode path
+    # picks up the pieces directly. The aggregate-over-multi-SP nature
+    # of canary's tokenizer is preserved separately under
+    # stt.canary.tokenizer.{lang_codes,lang_offsets,lang_sizes} for any
+    # future encode() implementation to consume.
+    writer.add_string("tokenizer.ggml.model",     "unigram")
     writer.add_array ("tokenizer.ggml.tokens",     tok["tokens"])
     writer.add_array ("tokenizer.ggml.scores",     tok["scores"])
     writer.add_array ("tokenizer.ggml.token_type", tok["types"])
@@ -579,6 +595,12 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
     writer.add_array ("stt.canary.tokenizer.lang_codes",   tok["codes"])
     writer.add_array ("stt.canary.tokenizer.lang_offsets", tok["offsets"])
     writer.add_array ("stt.canary.tokenizer.lang_sizes",   tok["sizes"])
+    # Single-SP (CanaryBPETokenizer) tokenizers render an empty
+    # decodercontext slot as a leading whitespace marker (`▁`). Aggregate
+    # CanaryTokenizers skip the empty slot entirely. The C++ side uses
+    # this flag to decide whether to prepend `▁` to the canary2 prompt.
+    writer.add_bool  ("stt.canary.tokenizer.single_sp",
+                      tok["codes"] == ["all"])
     writer.add_string("stt.canary.tokenizer.prompt_format", profile["prompt_format"])
 
     # ----- stt.canary.special.* (named special-token IDs) -----
@@ -600,6 +622,10 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
         "<|spkchange|>",
         "<|audioseparator|>",
         "<pad>",
+        # canary-1 task tokens (canary2 doesn't use these — task is
+        # implicit from src_lang vs tgt_lang). No-op when absent.
+        "<|transcribe|>",
+        "<|translate|>",
     ]
     for name in named_specials:
         if name in tok["specials"]:

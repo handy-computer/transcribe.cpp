@@ -88,6 +88,7 @@ struct cli_args {
     std::string wav_path;
     std::string model_path;
     std::string language;
+    std::string target_language; // --target-language: target lang for translation
     std::string batch_file; // --batch: one wav path per line
     bool        translate = false;
     bool        quiet     = false;
@@ -111,6 +112,10 @@ struct cli_args {
     bool        use_itn                      = false; // --itn
     bool        itn_set                      = false;
     bool        keep_special_tags            = false; // --raw-tokens
+
+    // Canary family knobs. Ignored by non-Canary families.
+    bool        canary_pnc                   = true;  // default: punctuation+caps on
+    bool        canary_pnc_set               = false; // --pnc / --no-pnc set this
 };
 
 void print_usage(const char * argv0) {
@@ -121,6 +126,7 @@ void print_usage(const char * argv0) {
         "  -m, --model PATH      GGUF model file\n"
         "  -l, --language ISO    BCP-47-ish language hint (e.g. en, de)\n"
         "  -t, --translate       set task to TRANSLATE\n"
+        "  --target-language ISO target language for translation (e.g. de, es, fr)\n"
         "  -q, --quiet           suppress library log output\n"
         "  -r, --repeat N        run N times per file (benchmark)\n"
         "  --threads N           CPU threads (default: all cores)\n"
@@ -133,6 +139,8 @@ void print_usage(const char * argv0) {
         "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
         "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
         "  --itn                 (sensevoice/funasr-nano) enable inverse text normalization\n"
+        "  --pnc                 (canary) emit punctuation and capitalization (default)\n"
+        "  --no-pnc              (canary) emit lowercase de-punctuated text\n"
         "  --raw-tokens          keep <|...|> control tokens in output text\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
@@ -160,6 +168,10 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             const char * v = take_value(a.c_str());
             if (!v) return false;
             out.language = v;
+        } else if (a == "--target-language") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.target_language = v;
         } else if (a == "-t" || a == "--translate") {
             out.translate = true;
         } else if (a == "-q" || a == "--quiet") {
@@ -241,6 +253,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
         } else if (a == "--itn") {
             out.use_itn = true;
             out.itn_set = true;
+        } else if (a == "--pnc") {
+            out.canary_pnc     = true;
+            out.canary_pnc_set = true;
+        } else if (a == "--no-pnc") {
+            out.canary_pnc     = false;
+            out.canary_pnc_set = true;
         } else if (a == "--raw-tokens") {
             out.keep_special_tags = true;
         } else if (!a.empty() && a[0] == '-') {
@@ -367,6 +385,7 @@ int main(int argc, char ** argv) {
         struct transcribe_params rp = transcribe_default_params();
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
+        if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
         rp.timestamps = args.timestamps;
 
         // Whisper extension. Allocated outside rp's scope so its bytes
@@ -389,6 +408,13 @@ int main(int argc, char ** argv) {
             rp.sensevoice  = &svp;
             rp.funasr_nano = &fnp;
         }
+
+        struct transcribe_canary_params cnp = transcribe_canary_default_params();
+        if (args.canary_pnc_set) {
+            cnp.pnc   = args.canary_pnc;
+            rp.canary = &cnp;
+        }
+
         if (args.keep_special_tags) {
             rp.strip_special_tags = false;
         }
@@ -512,6 +538,7 @@ int main(int argc, char ** argv) {
         struct transcribe_params rp = transcribe_default_params();
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
+        if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
         rp.timestamps = args.timestamps;
 
         struct transcribe_whisper_params wp = transcribe_whisper_default_params();
@@ -532,6 +559,13 @@ int main(int argc, char ** argv) {
             rp.sensevoice  = &svp;
             rp.funasr_nano = &fnp;
         }
+
+        struct transcribe_canary_params cnp = transcribe_canary_default_params();
+        if (args.canary_pnc_set) {
+            cnp.pnc   = args.canary_pnc;
+            rp.canary = &cnp;
+        }
+
         if (args.keep_special_tags) {
             rp.strip_special_tags = false;
         }
