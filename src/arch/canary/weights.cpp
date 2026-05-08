@@ -1,8 +1,10 @@
 // arch/canary/weights.cpp - read_canary_hparams + build_canary_weights.
 //
 // Pattern follows parakeet/cohere weights.cpp. Differences:
-//   - encoder linears are bias-FREE (parakeet shape); only conv module
-//     and norm layers carry biases
+//   - encoder shape mirrors parakeet's FastConformer, but every linear
+//     (Q/K/V/out, both macaron FFs, attention-pos projection, conv
+//     pointwise pair) carries a bias. Parakeet is bias-free; canary is
+//     NOT. See the encoder-block loader below for the full bias set.
 //   - decoder tensor names use canary's scheme: dec.layer.{i}.norm{1,2,3}
 //     and dec.layer.{i}.{self_attn,cross_attn,ffn}.{q,k,v,o,up,down}
 //   - LM head is UNTIED: read dec.head.weight + dec.head.bias as
@@ -324,7 +326,13 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
     GET_LIN (weights.pre_encode.out_w,   "enc.pre_encode.out.weight", pre_encode_in, d_enc);
     GET_F32 (weights.pre_encode.out_b,   "enc.pre_encode.out.bias", d_enc);
 
-    // ----- encoder blocks (bias-free linears) -----
+    // ----- encoder blocks -----
+    // Every linear in the canary encoder block carries a bias term —
+    // both macaron FFs, Q/K/V/out, attention-pos projection, and the
+    // conv pointwise pair. This differs from parakeet (bias-free
+    // linears) and is load-bearing: a previous comment claimed
+    // "bias-free" and that mismatch hid a real loader drift; do NOT
+    // re-introduce that wording without checking the GGUF.
     weights.blocks.assign(hp.enc_n_layers, CanaryBlock{});
     for (int i = 0; i < hp.enc_n_layers; ++i) {
         auto & b = weights.blocks[i];

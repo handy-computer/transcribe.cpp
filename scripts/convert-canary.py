@@ -92,21 +92,32 @@ VARIANT_PROFILES: dict[str, dict[str, Any]] = {
         "version":        "v1",
         "size_label":     "1B",
         "prompt_format":  "canary",
+        # canary-1b is the only family member under a non-commercial
+        # license. Surface it in general.license so downstream tooling
+        # (and humans inspecting the GGUF) cannot miss the distinction.
+        "license":        "CC-BY-NC-4.0",
+        "license_link":   "https://creativecommons.org/licenses/by-nc/4.0/",
     },
     "canary-1b-v2": {
         "version":        "v2",
         "size_label":     "1B",
         "prompt_format":  "canary2",
+        "license":        "CC-BY-4.0",
+        "license_link":   "https://creativecommons.org/licenses/by/4.0/",
     },
     "canary-1b-flash": {
         "version":        "1b-flash",
         "size_label":     "1B",
         "prompt_format":  "canary2",
+        "license":        "CC-BY-4.0",
+        "license_link":   "https://creativecommons.org/licenses/by/4.0/",
     },
     "canary-180m-flash": {
         "version":        "180m-flash",
         "size_label":     "180M",
         "prompt_format":  "canary2",
+        "license":        "CC-BY-4.0",
+        "license_link":   "https://creativecommons.org/licenses/by/4.0/",
     },
 }
 
@@ -558,11 +569,13 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
     writer = GGUFWriter(str(out_path), "canary")
 
     # ----- general.* -----
-    writer.add_string("general.basename",   "canary")
-    writer.add_string("general.size_label", profile["size_label"])
-    writer.add_string("general.version",    profile["version"])
-    writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",  languages)
+    writer.add_string("general.basename",     "canary")
+    writer.add_string("general.size_label",   profile["size_label"])
+    writer.add_string("general.version",      profile["version"])
+    writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
+    writer.add_array ("general.languages",    languages)
+    writer.add_string("general.license",      profile["license"])
+    writer.add_string("general.license.link", profile["license_link"])
 
     # ----- stt.variant + capability KV -----
     writer.add_string("stt.variant", variant)

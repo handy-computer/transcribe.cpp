@@ -1,8 +1,10 @@
 // arch/canary/weights.h - Canary tensor catalog and per-instance weight slots.
 //
-// Canary's encoder is a FastConformer (parakeet shape: bias-free linears).
-// Its decoder is an autoregressive Transformer (cohere shape, but with
-// distinct tensor names and an UNTIED LM head).
+// Canary's encoder is a FastConformer in the parakeet shape but with
+// biases on every linear (Q/K/V/out, both macaron FFs, attention-pos
+// projection, conv pointwise pair) — unlike parakeet, which is
+// bias-free. Its decoder is an autoregressive Transformer (cohere
+// shape, but with distinct tensor names and an UNTIED LM head).
 //
 // 180m-flash uniquely has an encoder->decoder projection between the
 // final encoder block and the decoder cross-attention K/V source

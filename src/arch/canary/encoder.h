@@ -1,9 +1,12 @@
 // arch/canary/encoder.h - Canary FastConformer encoder graph builder.
 //
-// Encoder shape mirrors parakeet (bias-FREE linears throughout). Only
-// the optional encoder->decoder projection is canary-specific
-// (180m-flash only — every other variant has enc_d_model == dec_d_model
-// and skips it).
+// Encoder shape mirrors parakeet's FastConformer, but every linear
+// (Q/K/V/out, both macaron FFs, attention-pos projection, conv
+// pointwise pair) carries a bias term — the parakeet shape is
+// bias-FREE, canary's is NOT. See weights.cpp for the full bias
+// catalog. Only the optional encoder->decoder projection is
+// canary-specific (180m-flash only — every other variant has
+// enc_d_model == dec_d_model and skips it).
 
 #pragma once
 

@@ -1091,6 +1091,41 @@ transcribe_status run(
             generated_ids.push_back(next_token);
         }
 
+        // Commit accumulated generated_ids as the run's segment + full
+        // text. Called both on normal loop exit and on abort so the
+        // public contract (partial result on TRANSCRIBE_ERR_ABORTED)
+        // holds. Mirrors the result-shape rationale below: cohere
+        // advertises max_timestamp_kind == NONE so we expose a single
+        // text-only segment with zeroed timings and no token/word
+        // substructure.
+        auto commit_result = [&]() {
+            cc->t_decode_us = ggml_time_us() - t_dec_start;
+
+            if (generated_ids.empty()) return;
+
+            const transcribe::Tokenizer & tok = cm->tok;
+
+            std::string full = tok.decode(generated_ids.data(),
+                                          static_cast<int>(generated_ids.size()));
+            if (!full.empty() && full.front() == ' ') {
+                full.erase(full.begin());
+            }
+
+            transcribe_context::SegmentEntry seg;
+            seg.t0_ms       = 0;
+            seg.t1_ms       = 0;
+            seg.first_token = 0;
+            seg.n_tokens    = 0;
+            seg.first_word  = 0;
+            seg.n_words     = 0;
+            seg.text        = full;
+
+            cc->segments.push_back(std::move(seg));
+            cc->full_text   = std::move(full);
+            cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+            cc->has_result  = true;
+        };
+
         // --- Step 4: Autoregressive step passes ----------------------
         //
         // Optimizations vs. naive per-step rebuild:
@@ -1137,6 +1172,14 @@ transcribe_status run(
         for (int step = 1; step < max_tokens && next_token != eos_id;
              ++step)
         {
+            // Per-token abort poll. Contract: transcribe.h advertises
+            // polling "between decode steps (after each token)". Any
+            // tokens already in generated_ids ship as partial output.
+            if (cc->poll_abort()) {
+                commit_result();
+                return TRANSCRIBE_ERR_ABORTED;
+            }
+
             if (n_past + 1 > cc->kv_cache.n_ctx) {
                 std::fprintf(stderr,
                              "cohere run: KV cache full at n_past=%d, "
@@ -1205,8 +1248,6 @@ transcribe_status run(
             }
         }
 
-        cc->t_decode_us = ggml_time_us() - t_dec_start;
-
         // Report per-phase step-loop breakdown so we can see whether
         // CPU overhead (ctx+build, alloc) or GPU compute dominates.
         // Debug-gated: only emit when TRANSCRIBE_DUMP_DIR is set. The
@@ -1263,33 +1304,7 @@ transcribe_status run(
         // caller enumerate token_text / token_t0_ms for a model
         // that is not supposed to expose alignment data. That
         // undercut the NONE contract. Drop them.
-        if (!generated_ids.empty()) {
-            const transcribe::Tokenizer & tok = cm->tok;
-
-            // Full text.
-            std::string full = tok.decode(generated_ids.data(),
-                                          static_cast<int>(generated_ids.size()));
-            if (!full.empty() && full.front() == ' ') {
-                full.erase(full.begin());
-            }
-
-            // Single segment, text-only. first/n pairs are all
-            // zero because this family exposes neither word nor
-            // token substructure.
-            transcribe_context::SegmentEntry seg;
-            seg.t0_ms       = 0;
-            seg.t1_ms       = 0;
-            seg.first_token = 0;
-            seg.n_tokens    = 0;
-            seg.first_word  = 0;
-            seg.n_words     = 0;
-            seg.text        = full;
-
-            cc->segments.push_back(std::move(seg));
-            cc->full_text   = std::move(full);
-            cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-            cc->has_result  = true;
-        }
+        commit_result();
     } // end Step 3 block
 
     return TRANSCRIBE_OK;

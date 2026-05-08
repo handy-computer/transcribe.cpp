@@ -6,8 +6,10 @@
 // with 4-slot or 5-slot multitask prompt).
 //
 // Modeled on src/arch/cohere/cohere.h. Differences from cohere:
-//   - encoder linears are bias-FREE (use_bias=False); shape mirrors
-//     parakeet rather than cohere
+//   - encoder shape mirrors parakeet's FastConformer, but every linear
+//     (Q/K/V/out, both macaron FFs, attention-pos projection, conv
+//     pointwise pair) carries a bias term. Parakeet is bias-free;
+//     canary is NOT. See weights.cpp for the full bias catalog.
 //   - decoder is structurally identical to cohere's but tensor names
 //     differ (dec.layer.{i}.norm{1,2,3} / {self_attn,cross_attn,ffn}.{q,k,v,o,up,down})
 //   - LM head is UNTIED (explicit dec.head.{weight,bias})

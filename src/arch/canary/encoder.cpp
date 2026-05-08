@@ -1,9 +1,11 @@
 // arch/canary/encoder.cpp - Canary FastConformer encoder graph builder.
 //
-// Glue over transcribe::conformer. Encoder linears are bias-FREE
-// (parakeet shape) — the BlockView FFN/attn bias slots stay null. The
-// conv module retains its biases. The optional encoder->decoder
-// projection is canary-specific and only fires for variants where
+// Glue over transcribe::conformer. Encoder shape mirrors parakeet's
+// FastConformer, but every linear (Q/K/V/out, both macaron FFs, the
+// attention-pos projection, conv pointwise pair) carries a bias. Each
+// BlockView bias slot is threaded through from the loader — see the
+// per-block wiring below. The optional encoder->decoder projection is
+// canary-specific and only fires for variants where
 // stt.canary.decoder.encoder_decoder_proj=true (180m-flash today).
 
 #include "encoder.h"

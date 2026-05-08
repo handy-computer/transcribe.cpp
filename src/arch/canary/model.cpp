@@ -1,12 +1,14 @@
 // arch/canary/model.cpp - Canary multitask AED family handler.
 //
 // Load / init_context / run lifecycle for the four canary variants
-// (180m-flash, 1b-flash, 1b-v2, 1b). Encoder is FastConformer
-// (parakeet-shape, bias-free linears). Decoder is an autoregressive
-// Transformer (cohere-shape, but with canary-specific tensor names and
-// an UNTIED LM head). The multitask prompt is a 4-slot or 5-slot
-// positional sequence read from the GGUF's stt.canary.special.* /
-// stt.canary.tokenizer.prompt_format KV.
+// (180m-flash, 1b-flash, 1b-v2, 1b). Encoder is FastConformer in the
+// parakeet shape, but unlike parakeet every linear (Q/K/V/out, both
+// macaron FFs, attention-pos projection, conv pointwise pair) carries
+// a bias term — see weights.cpp for the full set. Decoder is an
+// autoregressive Transformer (cohere-shape, but with canary-specific
+// tensor names and an UNTIED LM head). The multitask prompt is a
+// 4-slot or 5-slot positional sequence read from the GGUF's
+// stt.canary.special.* / stt.canary.tokenizer.prompt_format KV.
 
 #include "canary.h"
 
@@ -1016,6 +1018,55 @@ transcribe_status run(
 
         int n_past = prompt_len;
 
+        // Commit accumulated generated_ids as the run's segment + full
+        // text. Called both on normal loop exit and on abort so the
+        // public contract (partial result on TRANSCRIBE_ERR_ABORTED)
+        // holds.
+        auto commit_result = [&]() {
+            cc->t_decode_us = ggml_time_us() - t_dec_start;
+
+            if (generated_ids.empty()) return;
+
+            const transcribe::Tokenizer & tok = cm->tok;
+
+            // strip_special_tags (default true): canary's vocab carries
+            // language/task/PNC control tokens at CONTROL type. They
+            // shouldn't appear after the prompt is consumed, but the
+            // strip is defensive — and only applied when the caller
+            // wants clean text. --raw-tokens / strip_special_tags=false
+            // exposes whatever the decoder emitted.
+            const bool strip =
+                (params == nullptr) ? true : params->strip_special_tags;
+            std::vector<int> text_ids;
+            if (strip) {
+                text_ids.reserve(generated_ids.size());
+                for (int id : generated_ids) {
+                    if (tok.is_control(id)) continue;
+                    text_ids.push_back(id);
+                }
+            } else {
+                text_ids.assign(generated_ids.begin(), generated_ids.end());
+            }
+
+            std::string full = tok.decode(text_ids.data(),
+                                          static_cast<int>(text_ids.size()));
+            if (!full.empty() && full.front() == ' ') full.erase(full.begin());
+
+            transcribe_context::SegmentEntry seg;
+            seg.t0_ms       = 0;
+            seg.t1_ms       = 0;
+            seg.first_token = 0;
+            seg.n_tokens    = 0;
+            seg.first_word  = 0;
+            seg.n_words     = 0;
+            seg.text        = full;
+
+            cc->segments.push_back(std::move(seg));
+            cc->full_text   = std::move(full);
+            cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+            cc->has_result  = true;
+        };
+
         // Reserve the worst-case step graph so alloc_graph doesn't grow.
         {
             if (new_compute_ctx(4 * 1024 * 1024)) {
@@ -1032,6 +1083,14 @@ transcribe_status run(
         }
 
         for (int step = 1; step < max_tokens && next_token != eos_id; ++step) {
+            // Per-token abort poll. Contract: transcribe.h advertises
+            // polling "between decode steps (after each token)". Any
+            // tokens already in generated_ids ship as partial output.
+            if (cc->poll_abort()) {
+                commit_result();
+                return TRANSCRIBE_ERR_ABORTED;
+            }
+
             if (n_past + 1 > cc->kv_cache.n_ctx) {
                 std::fprintf(stderr,
                              "canary run: KV cache full at n_past=%d\n", n_past);
@@ -1072,40 +1131,7 @@ transcribe_status run(
             if (next_token != eos_id) generated_ids.push_back(next_token);
         }
 
-        cc->t_decode_us = ggml_time_us() - t_dec_start;
-
-        if (!generated_ids.empty()) {
-            const transcribe::Tokenizer & tok = cm->tok;
-
-            // Filter out any task / language / special tokens that may
-            // leak into the output (canary's vocab includes them at
-            // CONTROL type — they shouldn't occur after the prompt is
-            // consumed, but we strip defensively).
-            std::vector<int> text_ids;
-            text_ids.reserve(generated_ids.size());
-            for (int id : generated_ids) {
-                if (tok.is_control(id)) continue;
-                text_ids.push_back(id);
-            }
-
-            std::string full = tok.decode(text_ids.data(),
-                                          static_cast<int>(text_ids.size()));
-            if (!full.empty() && full.front() == ' ') full.erase(full.begin());
-
-            transcribe_context::SegmentEntry seg;
-            seg.t0_ms       = 0;
-            seg.t1_ms       = 0;
-            seg.first_token = 0;
-            seg.n_tokens    = 0;
-            seg.first_word  = 0;
-            seg.n_words     = 0;
-            seg.text        = full;
-
-            cc->segments.push_back(std::move(seg));
-            cc->full_text   = std::move(full);
-            cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
-            cc->has_result  = true;
-        }
+        commit_result();
     }
 
     return TRANSCRIBE_OK;
