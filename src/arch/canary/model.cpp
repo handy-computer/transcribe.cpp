@@ -1067,8 +1067,6 @@ transcribe_status run(
             cc->has_result  = true;
         };
 
-        const bool prof_enabled = std::getenv("TRANSCRIBE_DECODE_PROFILE") != nullptr;
-
         // Two decoder loop variants; pick by primary backend kind.
         //
         //   GPU (Vulkan/Metal/CUDA/SYCL): build_step_graph — one static-
@@ -1102,7 +1100,6 @@ transcribe_status run(
             while (max_n_kv < prompt_len + max_tokens) max_n_kv *= 2;
             if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
 
-            const int64_t t_step_build_start = prof_enabled ? ggml_time_us() : 0;
             if (!new_compute_ctx(8 * 1024 * 1024)) {
                 std::fprintf(stderr, "canary run: new_compute_ctx failed (step)\n");
                 commit_result();
@@ -1123,8 +1120,6 @@ transcribe_status run(
                 commit_result();
                 return TRANSCRIBE_ERR_GGUF;
             }
-            const int64_t prof_build_once_us =
-                prof_enabled ? (ggml_time_us() - t_step_build_start) : 0;
 
             // Mask buffer: full max_n_kv span, reused host-side. Positions
             // already populated by the prompt pass [0, prompt_len) start
@@ -1134,9 +1129,6 @@ transcribe_status run(
             const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
             std::vector<ggml_fp16_t> step_mask(max_n_kv, mask_neg_inf);
             for (int p = 0; p < prompt_len; ++p) step_mask[p] = mask_zero;
-
-            int64_t prof_set_us = 0, prof_compute_us = 0, prof_get_us = 0;
-            int     prof_n_steps = 0;
 
             for (int step = 1; step < max_tokens && next_token != eos_id; ++step) {
                 if (cc->poll_abort()) {
@@ -1150,8 +1142,6 @@ transcribe_status run(
                     break;
                 }
 
-                const int64_t t0 = prof_enabled ? ggml_time_us() : 0;
-
                 int32_t token_val = next_token;
                 int32_t pos_val   = n_past;
                 int64_t kv_val    = n_past;
@@ -1164,15 +1154,12 @@ transcribe_status run(
                                         static_cast<size_t>(max_n_kv) *
                                         sizeof(ggml_fp16_t));
 
-                const int64_t t1 = prof_enabled ? ggml_time_us() : 0;
-
                 if (const ggml_status gs =
                         ggml_backend_sched_graph_compute(cc->sched, sb.graph);
                     gs != GGML_STATUS_SUCCESS)
                 {
                     break;
                 }
-                const int64_t t2 = prof_enabled ? ggml_time_us() : 0;
 
                 n_past += 1;
                 cc->kv_cache.n    = n_past;
@@ -1181,34 +1168,8 @@ transcribe_status run(
                 int32_t argmax_id = 0;
                 ggml_backend_tensor_get(sb.argmax_out, &argmax_id, 0, sizeof(int32_t));
                 next_token = argmax_id;
-                const int64_t t3 = prof_enabled ? ggml_time_us() : 0;
-
-                if (prof_enabled) {
-                    prof_set_us     += t1 - t0;
-                    prof_compute_us += t2 - t1;
-                    prof_get_us     += t3 - t2;
-                    prof_n_steps    += 1;
-                }
 
                 if (next_token != eos_id) generated_ids.push_back(next_token);
-            }
-
-            if (prof_enabled && prof_n_steps > 0) {
-                const int64_t per_tok_total =
-                    prof_set_us + prof_compute_us + prof_get_us;
-                std::fprintf(stderr,
-                    "canary decode profile [GPU] (n_steps=%d, max_n_kv=%d):\n"
-                    "  build_once  %7.2f ms (graph + sched_alloc, one-shot)\n"
-                    "  per-token   %7.2f ms total (%.0f us/tok)\n"
-                    "    tensor_set  %7.2f ms (%.0f us/tok)\n"
-                    "    compute     %7.2f ms (%.0f us/tok)\n"
-                    "    argmax_get  %7.2f ms (%.0f us/tok)\n",
-                    prof_n_steps, max_n_kv,
-                    prof_build_once_us / 1000.0,
-                    per_tok_total / 1000.0,    static_cast<double>(per_tok_total) / prof_n_steps,
-                    prof_set_us / 1000.0,      static_cast<double>(prof_set_us) / prof_n_steps,
-                    prof_compute_us / 1000.0,  static_cast<double>(prof_compute_us) / prof_n_steps,
-                    prof_get_us / 1000.0,      static_cast<double>(prof_get_us) / prof_n_steps);
             }
         } else {
             // ---------- Dynamic-graph step path (CPU) ----------
@@ -1226,10 +1187,6 @@ transcribe_status run(
                 }
             }
 
-            int64_t prof_ctx_us = 0, prof_build_us = 0, prof_alloc_us = 0;
-            int64_t prof_set_us = 0, prof_compute_us = 0, prof_get_us = 0;
-            int     prof_n_steps = 0;
-
             for (int step = 1; step < max_tokens && next_token != eos_id; ++step) {
                 if (cc->poll_abort()) {
                     commit_result();
@@ -1242,9 +1199,7 @@ transcribe_status run(
                     break;
                 }
 
-                const int64_t t0 = prof_enabled ? ggml_time_us() : 0;
                 if (!new_compute_ctx(4 * 1024 * 1024)) break;
-                const int64_t t1 = prof_enabled ? ggml_time_us() : 0;
 
                 DecoderBuild db_step = build_decoder_graph_kv(
                     cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
@@ -1252,17 +1207,14 @@ transcribe_status run(
                     /*skip_log_softmax=*/true,
                     cc->decoder_use_flash);
                 if (db_step.out == nullptr || db_step.graph == nullptr) break;
-                const int64_t t2 = prof_enabled ? ggml_time_us() : 0;
 
                 ggml_backend_sched_reset(cc->sched);
                 if (!ggml_backend_sched_alloc_graph(cc->sched, db_step.graph)) break;
-                const int64_t t3 = prof_enabled ? ggml_time_us() : 0;
 
                 int32_t token_id = next_token;
                 int32_t pos_id   = n_past;
                 ggml_backend_tensor_set(db_step.token_ids_in, &token_id, 0, sizeof(int32_t));
                 ggml_backend_tensor_set(db_step.pos_ids_in,   &pos_id,   0, sizeof(int32_t));
-                const int64_t t4 = prof_enabled ? ggml_time_us() : 0;
 
                 if (const ggml_status gs =
                         ggml_backend_sched_graph_compute(cc->sched, db_step.graph);
@@ -1270,7 +1222,6 @@ transcribe_status run(
                 {
                     break;
                 }
-                const int64_t t5 = prof_enabled ? ggml_time_us() : 0;
 
                 n_past += 1;
                 cc->kv_cache.n    = n_past;
@@ -1279,41 +1230,8 @@ transcribe_status run(
                 int32_t argmax_id = 0;
                 ggml_backend_tensor_get(db_step.argmax_out, &argmax_id, 0, sizeof(int32_t));
                 next_token = argmax_id;
-                const int64_t t6 = prof_enabled ? ggml_time_us() : 0;
-
-                if (prof_enabled) {
-                    prof_ctx_us     += t1 - t0;
-                    prof_build_us   += t2 - t1;
-                    prof_alloc_us   += t3 - t2;
-                    prof_set_us     += t4 - t3;
-                    prof_compute_us += t5 - t4;
-                    prof_get_us     += t6 - t5;
-                    prof_n_steps    += 1;
-                }
 
                 if (next_token != eos_id) generated_ids.push_back(next_token);
-            }
-
-            if (prof_enabled && prof_n_steps > 0) {
-                const int64_t total = prof_ctx_us + prof_build_us + prof_alloc_us +
-                                      prof_set_us + prof_compute_us + prof_get_us;
-                std::fprintf(stderr,
-                    "canary decode profile [CPU] (n_steps=%d):\n"
-                    "  total       %7.2f ms (%.0f us/tok)\n"
-                    "  ctx_init    %7.2f ms (%.0f us/tok)\n"
-                    "  graph_build %7.2f ms (%.0f us/tok)\n"
-                    "  sched_alloc %7.2f ms (%.0f us/tok)\n"
-                    "  tensor_set  %7.2f ms (%.0f us/tok)\n"
-                    "  compute     %7.2f ms (%.0f us/tok)\n"
-                    "  argmax_get  %7.2f ms (%.0f us/tok)\n",
-                    prof_n_steps,
-                    total / 1000.0,           static_cast<double>(total) / prof_n_steps,
-                    prof_ctx_us / 1000.0,     static_cast<double>(prof_ctx_us) / prof_n_steps,
-                    prof_build_us / 1000.0,   static_cast<double>(prof_build_us) / prof_n_steps,
-                    prof_alloc_us / 1000.0,   static_cast<double>(prof_alloc_us) / prof_n_steps,
-                    prof_set_us / 1000.0,     static_cast<double>(prof_set_us) / prof_n_steps,
-                    prof_compute_us / 1000.0, static_cast<double>(prof_compute_us) / prof_n_steps,
-                    prof_get_us / 1000.0,     static_cast<double>(prof_get_us) / prof_n_steps);
             }
         }
 
