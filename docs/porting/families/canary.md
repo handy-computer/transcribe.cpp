@@ -242,7 +242,7 @@ flagged in the row notes.
 | canary-180m-flash | CC-BY-4.0 | `handy-computer/canary-180m-flash-gguf` | [docs/models/canary-180m-flash.md](../../models/canary-180m-flash.md) | [scripts/hf_cards/canary-180m-flash.yaml](../../../scripts/hf_cards/canary-180m-flash.yaml) |
 | canary-1b-flash | CC-BY-4.0 | `handy-computer/canary-1b-flash-gguf` | [docs/models/canary-1b-flash.md](../../models/canary-1b-flash.md) | [scripts/hf_cards/canary-1b-flash.yaml](../../../scripts/hf_cards/canary-1b-flash.yaml) |
 | canary-1b-v2 | CC-BY-4.0 | `handy-computer/canary-1b-v2-gguf` | [docs/models/canary-1b-v2.md](../../models/canary-1b-v2.md) | [scripts/hf_cards/canary-1b-v2.yaml](../../../scripts/hf_cards/canary-1b-v2.yaml) |
-| canary-1b | **CC-BY-NC-4.0** | `handy-computer/canary-1b-gguf` | [docs/models/canary-1b.md](../../models/canary-1b.md) *(pending — WER sweep in flight)* | [scripts/hf_cards/canary-1b.yaml](../../../scripts/hf_cards/canary-1b.yaml) *(pending)* |
+| canary-1b | **CC-BY-NC-4.0** | `handy-computer/canary-1b-gguf` | [docs/models/canary-1b.md](../../models/canary-1b.md) | [scripts/hf_cards/canary-1b.yaml](../../../scripts/hf_cards/canary-1b.yaml) |
 
 Note that the converter writes the per-variant license string into
 `general.license` and a permalink into `general.license.link`. canary-1b
@@ -259,7 +259,7 @@ Per-variant tables under `reports/wer/<variant>.librispeech-test-clean.summary.m
 | canary-180m-flash | 1.94% | 1.94% | 1.93% | 1.93% | 1.90% | 1.93% | 1.87% | +0.07pp |
 | canary-1b-flash   | 1.62% | 1.62% | 1.62% | 1.65% | 1.64% | 1.59% | 1.48% | +0.14pp |
 | canary-1b-v2      | 1.92% | 1.92% | 1.91% | 1.94% | 1.93% | 1.91% | 2.18% | **−0.26pp** |
-| canary-1b         | 1.55% | 1.55% | 1.55% | 1.57% | TBD   | TBD   | 1.48% | +0.07pp |
+| canary-1b         | 1.55% | 1.55% | 1.55% | 1.57% | 1.57% | 1.55% | 1.48% | +0.07pp |
 
 Same-wav NeMo reference comparison (where measured): canary-180m-flash
 F32 = 1.94% port vs 1.93% NeMo on the identical 2620 wavs — one
@@ -271,8 +271,8 @@ substitution out of ~27k reference words.
 - Stage 6 (bench): deferred. Will run after the public HF release —
   one GGUF download per machine is cheaper than copying the matrix
   around.
-- Stage 7 (WER): complete for canary-180m-flash, canary-1b-flash,
-  canary-1b-v2; canary-1b in flight (Q5_K_M + Q4_K_M still running).
-- Stage 8: HF YAMLs + READMEs + user-facing cards drafted for the three
-  Stage-7-complete variants. canary-1b assets follow once the WER
-  sweep finishes. Upload is a manual `hf upload` step per variant.
+- Stage 7 (WER): complete for all four variants. F32 hard gate passes
+  on every variant (max delta vs upstream is +0.14pp on canary-1b-flash;
+  canary-1b-v2 sits 0.26pp *under* upstream).
+- Stage 8: HF YAMLs + READMEs + user-facing cards drafted for all four
+  variants. Uploads done via `hf upload` from the porting host.
