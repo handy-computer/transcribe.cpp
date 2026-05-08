@@ -87,12 +87,12 @@ decimal places).
 
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 118.9 ms (92.5×) | 113.6 ms (96.9×) |
-| Metal   | dots (35.3s) | 414.8 ms (85.2×) | 390.2 ms (90.5×) |
+| Metal   | jfk (11.0s)  | 106.6 ms (103.2×) | 111.3 ms (98.8×) |
+| Metal   | dots (35.3s) | 368.6 ms (95.9×)  | 349.2 ms (101.2×) |
 | CPU     | jfk (11.0s)  | 518.3 ms (21.2×) | 430.1 ms (25.6×) |
 | CPU     | dots (35.3s) |   1.79 s (19.7×) |   1.51 s (23.4×) |
 
-macOS 26.4.1, transcribe.cpp `0f42b37`.
+macOS 26.4.1, transcribe.cpp `19b3b87`.
 
 ### AMD Ryzen 7 PRO 4750U
 
