@@ -114,14 +114,14 @@ macOS 26.4.1, transcribe.cpp `23c2ee6`.
 
 ### AMD Ryzen 7 PRO 4750U
 
-| Backend | Sample       |          Q8_0 |         Q4_K_M |
-| ------- | ------------ | ------------: | -------------: |
-| Vulkan  | jfk (11.0s)  | 1.14 s (9.7×) | 1.02 s (10.8×) |
-| Vulkan  | dots (35.3s) | 5.04 s (7.0×) |  4.32 s (8.2×) |
-| CPU     | jfk (11.0s)  | 1.71 s (6.4×) |  1.24 s (8.9×) |
-| CPU     | dots (35.3s) | 7.59 s (4.7×) |  5.97 s (5.9×) |
+| Backend | Sample       |           Q8_0 |           Q4_K_M |
+| ------- | ------------ | -------------: | ---------------: |
+| Vulkan  | jfk (11.0s)  | 1.07 s (10.2×) | 923.4 ms (11.9×) |
+| Vulkan  | dots (35.3s) |  4.63 s (7.6×) |    3.87 s (9.1×) |
+| CPU     | jfk (11.0s)  |  1.71 s (6.4×) |    1.24 s (8.9×) |
+| CPU     | dots (35.3s) |  7.59 s (4.7×) |    5.97 s (5.9×) |
 
-Fedora Linux 43, transcribe.cpp `0f42b37`. Vulkan device: `AMD Radeon
+Fedora Linux 43, transcribe.cpp `4d44530`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:
