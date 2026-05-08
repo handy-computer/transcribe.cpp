@@ -101,6 +101,17 @@ variants because the autoregressive decoder pass dominates and a
 batch-1 / single-token forward is too small to amortize Vulkan dispatch
 overhead.
 
+### Apple M4 Max
+
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  | 241.1 ms (45.6×) | 230.1 ms (47.8×) |
+| Metal   | dots (35.3s) |   1.18 s (29.9×) |   1.15 s (30.8×) |
+| CPU     | jfk (11.0s)  | 511.1 ms (21.5×) | 426.2 ms (25.8×) |
+| CPU     | dots (35.3s) |   2.05 s (17.3×) |   1.72 s (20.6×) |
+
+macOS 26.4.1, transcribe.cpp `23c2ee6`.
+
 ### AMD Ryzen 7 PRO 4750U
 
 | Backend | Sample       |          Q8_0 |         Q4_K_M |
