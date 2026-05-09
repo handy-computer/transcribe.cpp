@@ -179,3 +179,36 @@ overrides; non-NeMo families are unaffected.
   unified, ctc) are not locked at intake time; they are read from the
   archive during Stage 3 convert. Each intake's `intake_gaps`
   enumerates this.
+
+## Stage 3 conversion notes
+
+Per-variant decisions surfaced during Stage 3 (`porting-3-convert`).
+
+### `parakeet-tdt-1.1b`
+
+- **VARIANT_PROFILES dispatch** — keying by `decoder.vocab_size` was
+  ambiguous (`tdt-0.6b-v2` and `tdt-1.1b` both ship a 1024-token SPM).
+  Re-keyed by output slug; `expected_vocab_size` is asserted at
+  convert time. `general.size_label = "1.1B"`, `general.version = "v1"`
+  (the upstream repo carries no version suffix).
+- **Encoder `use_bias` resolution from state_dict** — NeMo's
+  `model.cfg.encoder` for tdt-1.1b *omits* `use_bias`, while the
+  `ConformerEncoder` constructor default is `True`. Trusting the
+  YAML (with `.get(..., False)`) silently dropped 462 bias tensors.
+  The converter now probes `encoder.layers.0.feed_forward1.linear1.bias`
+  in the state_dict and treats that as authoritative; v2/v3 still
+  resolve to `False` (they have zero linear/conv biases). The new
+  `ENCODER_BLOCK_BIAS_TABLE` walks 11 bias tensors per layer when
+  `use_bias=True`.
+- **Preflight tokenizer alignment** — RNNT/TDT GGUFs pad the
+  tokenizer table by one for the blank/start-state token (lives in
+  the predictor embed but not in the upstream SPM). Intakes declare
+  the SPM-only vocab. `scripts/preflight.py` now backs the blank out
+  of the GGUF count when `tokenizer.ggml.blank_token_id == len-1`,
+  so the comparison stays apples-to-apples.
+- **Stage 4 follow-ups** — the C++ encoder builder rejects
+  `(num_mels=80, subsampling_factor=8)` ("only 8/128 implemented");
+  it also does not consume the new `enc.blocks.{i}.*.bias` tensors
+  even when `stt.parakeet.encoder.use_bias=true` is read. Both are
+  Stage 4 (`porting-4-cpp`) work; the GGUF carries the data Stage 4
+  will need.

@@ -42,11 +42,13 @@ transcribe::parakeet::read_parakeet_hparams):
 
   general.architecture = "parakeet"
   general.basename     = "parakeet-tdt"
-  general.size_label   = "0.6B"
-  general.version      = "v2" or "v3"
-  general.languages    = [...]                 (1 entry for v2, 25 for v3)
-  stt.variant          = "tdt-0.6b-v2" or "tdt-0.6b-v3"
-  stt.capability.lang_detect = true            (v3 only; absent for v2)
+  general.size_label   = profile["size_label"]   (e.g. "0.6B" or "1.1B")
+  general.version      = profile["version"]      (e.g. "v2", "v3", or "v1")
+  general.languages    = [...]                 (1 entry for English-only,
+                                                 25 for v3 multilingual)
+  stt.variant          = profile["variant"]      (e.g. "tdt-0.6b-v2",
+                                                 "tdt-0.6b-v3", "tdt-1.1b")
+  stt.capability.lang_detect = true            (v3 only; absent otherwise)
   tokenizer.ggml.model = "bpe"
   tokenizer.ggml.tokens / scores / token_type / *_token_id  (the standard set)
   stt.parakeet.encoder.{n_layers,d_model,n_heads,d_ff,conv_kernel,
@@ -97,8 +99,12 @@ REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
 #
 # Each variant entry carries the bits the converter cannot derive from
 # the state_dict or model.cfg: the variant string, the language list
-# (NeMo's config doesn't carry it cleanly), and the capability flags.
-# Auto-detected by decoder.vocab_size.
+# (NeMo's config doesn't carry it cleanly), the size label, and the
+# capability flags. Profiles are keyed by the model slug (HF repo
+# basename or output-directory name); vocab_size alone cannot
+# distinguish e.g. tdt-0.6b-v2 from tdt-1.1b — both ship with a
+# 1024-token SPM. expected_vocab_size is cross-checked against the
+# loaded model so a slug/profile mismatch fails fast.
 
 # v3 multilingual: 25 European languages, BCP-47 short codes. List
 # matches the NVIDIA model card for nvidia/parakeet-tdt-0.6b-v3.
@@ -110,20 +116,34 @@ V3_LANGUAGES = [
     "sk", "sl", "es", "sv", "uk",
 ]
 
-VARIANT_PROFILES: dict[int, dict] = {
+VARIANT_PROFILES: dict[str, dict] = {
     # v2: 0.6B English-only TDT.
-    1024: {
+    "parakeet-tdt-0.6b-v2": {
         "variant": "tdt-0.6b-v2",
         "version": "v2",
+        "size_label": "0.6B",
+        "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
     },
     # v3: 0.6B multilingual TDT.
-    8192: {
+    "parakeet-tdt-0.6b-v3": {
         "variant": "tdt-0.6b-v3",
         "version": "v3",
+        "size_label": "0.6B",
+        "expected_vocab_size": 8192,
         "languages": V3_LANGUAGES,
         "lang_detect": True,
+    },
+    # 1.1B English-only TDT. Predates the v2/v3 split; the upstream
+    # repo carries no version suffix, so general.version is "v1".
+    "parakeet-tdt-1.1b": {
+        "variant": "tdt-1.1b",
+        "version": "v1",
+        "size_label": "1.1B",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
     },
 }
 
@@ -300,7 +320,13 @@ def read_hparams(config: dict) -> dict:
         "enc_subsampling_factor":   int(enc["subsampling_factor"]),
         "enc_subsampling_channels": int(enc["subsampling_conv_channels"]),
         "enc_pos_emb_max_len":      int(enc["pos_emb_max_len"]),
-        "enc_use_bias":             bool(enc.get("use_bias", False)),
+        # use_bias is resolved from the state_dict in convert() — NeMo's
+        # YAML omits the key on some checkpoints (tdt-1.1b) while the
+        # constructor default is True, and on others (tdt-0.6b-v2/v3)
+        # it is set explicitly to False. Trusting the YAML alone
+        # silently drops 462 bias tensors on tdt-1.1b, so resolution
+        # waits until the state_dict is in hand. Set to None here.
+        "enc_use_bias":             None,
 
         "pred_hidden":   int(pred["pred_hidden"]),
         "pred_n_layers": int(pred["pred_rnn_layers"]),
@@ -379,6 +405,26 @@ ENCODER_BLOCK_TABLE: list[tuple[str, str]] = [
 ]
 
 
+# Conformer biases that are emitted only when enc_use_bias=true.
+# v2/v3 have use_bias=false so this table is skipped; tdt-1.1b carries
+# all of these. Layer-norm gammas/biases and the BN affine params live
+# in ENCODER_BLOCK_TABLE because they are present regardless of the
+# linear/conv use_bias flag.
+ENCODER_BLOCK_BIAS_TABLE: list[tuple[str, str]] = [
+    ("feed_forward1.linear1.bias",   "ff1.linear1.bias"),
+    ("feed_forward1.linear2.bias",   "ff1.linear2.bias"),
+    ("self_attn.linear_q.bias",      "attn.linear_q.bias"),
+    ("self_attn.linear_k.bias",      "attn.linear_k.bias"),
+    ("self_attn.linear_v.bias",      "attn.linear_v.bias"),
+    ("self_attn.linear_out.bias",    "attn.linear_out.bias"),
+    ("conv.pointwise_conv1.bias",    "conv.pointwise1.bias"),
+    ("conv.depthwise_conv.bias",     "conv.depthwise.bias"),
+    ("conv.pointwise_conv2.bias",    "conv.pointwise2.bias"),
+    ("feed_forward2.linear1.bias",   "ff2.linear1.bias"),
+    ("feed_forward2.linear2.bias",   "ff2.linear2.bias"),
+]
+
+
 PRE_ENCODE_TABLE: list[tuple[str, str]] = [
     ("encoder.pre_encode.conv.0.weight", "enc.pre_encode.conv.0.weight"),
     ("encoder.pre_encode.conv.0.bias",   "enc.pre_encode.conv.0.bias"),
@@ -452,6 +498,20 @@ def convert(model_spec: str, out_path: Path) -> None:
 
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
+    # The output slug is the canonical variant key. main() always sets
+    # out_path = models/<slug>/<slug>-<REFDTYPE>.gguf, so the slug is
+    # the parent directory name. Vocab_size alone is not unique across
+    # the parakeet TDT family (0.6b-v2 and 1.1b both ship 1024 SPM
+    # tokens), hence the slug-based dispatch.
+    slug = out_path.parent.name
+    if slug not in VARIANT_PROFILES:
+        raise ValueError(
+            f"unknown parakeet variant slug: {slug!r}; "
+            f"known variants: {sorted(VARIANT_PROFILES)}"
+        )
+    profile = VARIANT_PROFILES[slug]
+    print(f"Variant: {profile['variant']}")
+
     model = load_nemo_model(model_spec)
 
     config = OmegaConf.to_container(model.cfg, resolve=True)
@@ -460,13 +520,13 @@ def convert(model_spec: str, out_path: Path) -> None:
     raw_vocab_size = hp["pred_vocab"] - 1
     print(f"Detected raw vocab_size = {raw_vocab_size}")
 
-    if raw_vocab_size not in VARIANT_PROFILES:
+    if raw_vocab_size != profile["expected_vocab_size"]:
         raise ValueError(
-            f"unknown parakeet variant: vocab_size={raw_vocab_size}; "
-            f"known variants: {sorted(VARIANT_PROFILES)}"
+            f"vocab_size mismatch for {slug}: model carries "
+            f"{raw_vocab_size}, profile expects "
+            f"{profile['expected_vocab_size']}. The slug picked the "
+            f"wrong profile, or the model is not what its name claims."
         )
-    profile = VARIANT_PROFILES[raw_vocab_size]
-    print(f"Variant: {profile['variant']}")
 
     # Re-load the SPM model from its serialized proto so we get a plain
     # sentencepiece.SentencePieceProcessor with the canonical method
@@ -488,12 +548,30 @@ def convert(model_spec: str, out_path: Path) -> None:
     sd = model.state_dict()
     sd_keys = set(sd.keys())
 
+    # Resolve enc_use_bias from the state_dict. The presence of
+    # encoder.layers.0.feed_forward1.linear1.bias is authoritative; the
+    # YAML default is unreliable across checkpoints. We also assert
+    # the answer is consistent (every layer in the same state) so a
+    # mid-stack discrepancy fails fast rather than producing a
+    # half-biased GGUF.
+    bias_present = [
+        f"encoder.layers.{i}.feed_forward1.linear1.bias" in sd_keys
+        for i in range(hp["enc_n_layers"])
+    ]
+    if any(bias_present) and not all(bias_present):
+        raise ValueError(
+            f"inconsistent encoder use_bias across layers: "
+            f"{sum(bias_present)}/{hp['enc_n_layers']} layers carry biases"
+        )
+    hp["enc_use_bias"] = bool(bias_present[0])
+    print(f"Encoder use_bias: {hp['enc_use_bias']}")
+
     print(f"Writing GGUF to {out_path}")
     writer = GGUFWriter(str(out_path), "parakeet")
 
     # ----- general.* metadata -----
     writer.add_string("general.basename",   "parakeet-tdt")
-    writer.add_string("general.size_label", "0.6B")
+    writer.add_string("general.size_label", profile["size_label"])
     writer.add_string("general.version",    profile["version"])
     writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
     writer.add_array ("general.languages",  profile["languages"])
@@ -602,6 +680,12 @@ def convert(model_spec: str, out_path: Path) -> None:
                 f"encoder.layers.{i}.{suffix_nemo}",
                 f"enc.blocks.{i}.{suffix_gguf}",
             )
+        if hp["enc_use_bias"]:
+            for suffix_nemo, suffix_gguf in ENCODER_BLOCK_BIAS_TABLE:
+                add(
+                    f"encoder.layers.{i}.{suffix_nemo}",
+                    f"enc.blocks.{i}.{suffix_gguf}",
+                )
 
     # predictor: embed + n_lstm_layers * (Wx, Wh, bias).
     add("decoder.prediction.embed.weight", "pred.embed.weight")
@@ -624,9 +708,12 @@ def convert(model_spec: str, out_path: Path) -> None:
     for nemo_name, gguf_name in JOINT_TABLE:
         add(nemo_name, gguf_name)
 
+    per_layer_tensors = len(ENCODER_BLOCK_TABLE) + (
+        len(ENCODER_BLOCK_BIAS_TABLE) if hp["enc_use_bias"] else 0
+    )
     expected = (
         len(PRE_ENCODE_TABLE)
-        + hp["enc_n_layers"] * len(ENCODER_BLOCK_TABLE)
+        + hp["enc_n_layers"] * per_layer_tensors
         + 1                                         # pred.embed
         + hp["pred_n_layers"] * 3                   # pred.lstm.{Wx,Wh,bias}
         + len(JOINT_TABLE)

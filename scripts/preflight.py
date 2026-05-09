@@ -584,9 +584,26 @@ def check_tokenizer(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
     if gguf_kvs:
         tokens_field = gguf.get("tokenizer.ggml.tokens")
         vocab_len = tokens_field.get("length") if isinstance(tokens_field, dict) else None
+        # RNNT/TDT converters pad the tokenizer table by one for the
+        # blank/start-state token that lives in the predictor embed but
+        # not in the upstream SPM. Intakes declare the SPM-only vocab,
+        # so back the blank out of the count when the converter has
+        # written tokenizer.ggml.blank_token_id at the end of the
+        # table. This keeps the comparison apples-to-apples.
+        blank_id = gguf.get("tokenizer.ggml.blank_token_id")
+        if (
+            isinstance(blank_id, int)
+            and isinstance(vocab_len, int)
+            and blank_id == vocab_len - 1
+        ):
+            vocab_size_for_compare = vocab_len - 1
+        else:
+            vocab_size_for_compare = vocab_len
         sources["gguf"] = {
             "type": gguf.get("tokenizer.ggml.model"),
-            "vocab_size": vocab_len,
+            "vocab_size": vocab_size_for_compare,
+            "tokens_length": vocab_len,
+            "blank_id": blank_id,
             "bos": gguf.get("tokenizer.ggml.bos_token_id"),
             "eos": gguf.get("tokenizer.ggml.eos_token_id"),
             "pad": gguf.get("tokenizer.ggml.padding_token_id")
