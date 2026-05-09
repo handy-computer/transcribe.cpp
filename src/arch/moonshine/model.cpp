@@ -230,9 +230,12 @@ transcribe_status init_context(
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
-    // See MoonshineContext for why decoder FA is off by default.
+    // See MoonshineContext for why decoder FA is Metal-only-off.
+    auto * cm = static_cast<MoonshineModel *>(model);
+    const bool is_metal =
+        (cm->plan.primary_kind == transcribe::BackendKind::Metal);
     cc->encoder_use_flash = true;
-    cc->decoder_use_flash = false;
+    cc->decoder_use_flash = !is_metal;
     transcribe::flash::apply_env_overrides(
         cc->encoder_use_flash, cc->decoder_use_flash);
 
