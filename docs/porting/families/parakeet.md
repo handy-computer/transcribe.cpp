@@ -212,3 +212,92 @@ Per-variant decisions surfaced during Stage 3 (`porting-3-convert`).
   even when `stt.parakeet.encoder.use_bias=true` is read. Both are
   Stage 4 (`porting-4-cpp`) work; the GGUF carries the data Stage 4
   will need.
+
+### `parakeet-rnnt-0.6b`, `parakeet-rnnt-1.1b`, `parakeet-unified-en-0.6b`
+
+- **Predictor / joint hparams resolved at convert time, not from cfg
+  alone** — NeMo serializes these YAMLs with empty `prednet={}` /
+  `jointnet={}` after instantiation (the constructed module carries
+  the values; the cfg dump does not). The new
+  `resolve_runtime_hparams()` step in the converter prefers the live
+  `model.joint` instance attrs (`joint_hidden`, `activation`,
+  `num_extra_outputs`) and falls back to state_dict shapes for the
+  predictor (`pred_hidden = embed.shape[1]`, `pred_n_layers` = count
+  of `dec_rnn.lstm.weight_ih_l<i>`).
+- **TDT durations made optional** — pure RNNT variants have no
+  `decoding.durations`. The converter writes `stt.parakeet.tdt.*`
+  only when durations are present; an asserted invariant
+  (`num_extra_outputs == len(durations)`) fails fast on a malformed
+  TDT checkpoint. v2/v3/tdt-1.1b paths unchanged (durations are
+  present and match).
+- **`general.basename`** — now per-profile (`profile.get("basename",
+  "parakeet-tdt")`). RNNT-class variants emit `"parakeet-rnnt"`;
+  TDT variants keep `"parakeet-tdt"` via the default. Pure
+  descriptive metadata; the loader does not gate on it.
+- **unified-en archive load** — NeMo 2.7.x's `ConformerEncoder` does
+  not accept the streaming kwarg `att_chunk_context_size` that
+  unified-en's YAML carries, so `ASRModel.from_pretrained()` fails.
+  The converter now falls back to a direct .nemo archive read
+  (model_config.yaml + model_weights.ckpt + SPM tokenizer.model)
+  via `_DirectNemoArchive`, which exposes only the surface
+  `convert()` consumes. Streaming KVs are not emitted; per the
+  family-level decision, v1 transcribe.cpp targets offline only.
+- **Stage 4 follow-ups (RNNT)** — the C++ loader's
+  `read_parakeet_hparams` requires `stt.parakeet.tdt.durations`,
+  so the loader-open smoke fails at "gguf load error" for all 3
+  RNNT GGUFs. Stage 4 will need to either (a) make the durations
+  KV optional and branch on a head-kind discriminator, or (b)
+  introduce `stt.parakeet.head_kind = "rnnt"|"tdt"` and let the
+  family handler dispatch. The 1.1b geometry caveat from the TDT
+  round (`num_mels=80, subsampling_factor=8`) applies equally to
+  rnnt-1.1b.
+
+### `parakeet-ctc-0.6b`, `parakeet-ctc-1.1b`
+
+- **Head-kind discriminator KV introduced** —
+  `stt.parakeet.head_kind` is now written by every variant
+  (`"tdt"` / `"rnnt"` / `"ctc"`). Stage 4's loader should treat the
+  key as optional with default `"tdt"` for backwards compat with
+  v2/v3 GGUFs already in circulation.
+- **CTC head tensors** — the entire CTC head is a single 1×1 conv:
+  `decoder.decoder_layers.0.weight` (`(vocab+1, d_model, 1)`) and
+  `decoder.decoder_layers.0.bias` (`(vocab+1,)`). Flattened in the
+  GGUF to `head.ctc.weight` / `head.ctc.bias`. No predictor, no
+  joint, no LSTM — `convert()` branches on `head_kind == "ctc"` and
+  walks `CTC_HEAD_TABLE` instead of the predictor + joint walks.
+- **`stt.parakeet.predictor.*` and `stt.parakeet.joint.*` skipped
+  for CTC** — there is no predictor or joint to describe. CTC
+  GGUFs carry only the encoder hparams + frontend + head_kind.
+- **`cfg.decoder.num_classes` vs `vocab_size`** —
+  ConvASRDecoder names the SPM vocab `num_classes`; RNNTDecoder
+  uses `vocab_size`. `read_hparams` now falls back from the
+  former to the latter so a single read works across head kinds.
+- **Stage 4 follow-ups (CTC)** — the C++ loader currently always
+  reads `stt.parakeet.predictor.hidden` etc., so loader-open fails
+  on CTC GGUFs at "predictor.hidden missing". Stage 4 must gate
+  predictor/joint/tdt reads on `stt.parakeet.head_kind`. Geometry
+  caveat (80 mels, sub=8) applies to both CTC variants.
+
+### `parakeet-tdt_ctc-110m`, `parakeet-tdt_ctc-1.1b`
+
+- **Hybrid → TDT-only at runtime** — per Open-decisions #1, the
+  hybrid checkpoints ship as TDT-only and the auxiliary CTC head is
+  silently dropped. The pure `ctc-*` variants cover the CTC path,
+  so duplicating the head wastes ~vocab×d floats per file.
+  Implementation: profile carries `head_kind="tdt"` so the converter
+  walks the standard TDT path (predictor + joint + durations); a
+  separate `drop_aux_ctc` flag (derived from `"tdt_ctc" in slug`)
+  adds `ctc_decoder.*` to the expected-unused prefix list so the
+  unconsumed-key check stays meaningful.
+- **Direct .nemo load for tdt_ctc-1.1b** — NeMo's `restore_from()`
+  extracts the full ~4.4 GB tar to a temp dir before reading, which
+  doubles transient disk usage. The 1.1b convert blew the disk budget
+  on a system that already had the family in `models/`. New profile
+  flag `prefer_direct_load=True` short-circuits NeMo's class
+  instantiation when a cached `.nemo` is present and routes through
+  `_DirectNemoArchive`. The 110m hybrid keeps the standard NeMo path
+  (small enough to extract).
+- **Stage 4 follow-ups (tdt_ctc)** — the GGUFs load cleanly through
+  the existing TDT KV path; runtime fails at the same `(num_mels=80,
+  subsampling_factor=8)` geometry as tdt-1.1b. No new Stage-4 work
+  beyond what the TDT round already required.
