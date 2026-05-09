@@ -1,9 +1,11 @@
 {
   "_comment": [
-    "Parakeet TDT per-tensor tolerances for compare_tensors.py.",
+    "Parakeet per-tensor tolerances for compare_tensors.py.",
     "",
-    "Reference: NeMo (nvidia/parakeet-tdt-0.6b-v2) running f32 inference.",
-    "C++: ggml CPU f32 compute, weights stored as f32 in GGUF.",
+    "ENTRIES BELOW THE BLANK LINE: finalized for parakeet-tdt-0.6b-v2/v3",
+    "(Stage 4 calibrated against observed C++ drift). Reference: NeMo",
+    "(nvidia/parakeet-tdt-0.6b-v2/v3) running f32 inference; C++: ggml CPU",
+    "f32 compute, weights stored as f32 in GGUF.",
     "",
     "Dominant divergence source: STFT precision. C++ uses fp64 STFT,",
     "NeMo uses fp32. This produces ~5 max_abs in the mel, which the",
@@ -18,24 +20,108 @@
     "state at step 0) and match to fp32 round-off (~1e-7).",
     "",
     "dec.joint.0 amplifies the encoder drift through the joint",
-    "projection (~70 max_abs on values ~1e3)."
+    "projection (~70 max_abs on values ~1e3).",
+    "",
+    "ENTRIES MARKED _provisional: true: added by Stage 2 oracle for the",
+    "8 new parakeet variants (ctc-0.6b/1.1b, rnnt-0.6b/1.1b, tdt-1.1b,",
+    "tdt_ctc-110m/1.1b, unified-en-0.6b). Magnitude-aware provisional",
+    "values: max_abs = max(1e-4 * p99_abs, 1e-6); mean_abs =",
+    "max(1e-5 * rms, 1e-6); p99_abs and rms taken as the max across all",
+    "variants and cases where the tensor appears. Stage 4 finalizes",
+    "these against observed C++ drift per port. Do NOT ship a model",
+    "while _provisional entries remain.",
+    "",
+    "NOTE on per-variant scoping: this file is keyed flat by tensor",
+    "name, not by variant. The 14 finalized entries above will be the",
+    "starting tolerances for the 8 new variants too. Most are loose",
+    "enough; LSTM/embed entries are tight (1e-6) because LSTM start",
+    "state is computed from zeros and matches to fp32 round-off",
+    "regardless of variant."
   ],
-
-  "enc.mel.in":            {"max_abs": 10.0,   "mean_abs": 0.01},
-  "enc.pos_emb":           {"max_abs": 5e-4,   "mean_abs": 1e-5},
-  "enc.pre_encode.out":    {"max_abs": 1000.0,  "mean_abs": 5.0},
-
-  "enc.block.0.out":       {"max_abs": 50.0,    "mean_abs": 0.1},
-  "enc.block.12.out":      {"max_abs": 50.0,    "mean_abs": 0.2},
-  "enc.block.23.out":      {"max_abs": 0.1,     "mean_abs": 0.005},
-
-  "enc.final":             {"max_abs": 0.1,     "mean_abs": 0.005},
-
-  "dec.enc_out":           {"max_abs": 0.1,     "mean_abs": 0.005},
-  "dec.embed.0":           {"max_abs": 1e-6,    "mean_abs": 1e-7},
-  "dec.lstm.0.h.0":        {"max_abs": 1e-6,    "mean_abs": 1e-7},
-  "dec.lstm.0.c.0":        {"max_abs": 1e-6,    "mean_abs": 1e-7},
-  "dec.lstm.1.h.0":        {"max_abs": 1e-6,    "mean_abs": 1e-7},
-  "dec.lstm.1.c.0":        {"max_abs": 1e-6,    "mean_abs": 1e-7},
-  "dec.joint.0":           {"max_abs": 100.0,   "mean_abs": 100.0}
+  "enc.mel.in": {
+    "max_abs": 10.0,
+    "mean_abs": 0.01
+  },
+  "enc.pos_emb": {
+    "max_abs": 0.0005,
+    "mean_abs": 1e-05
+  },
+  "enc.pre_encode.out": {
+    "max_abs": 1000.0,
+    "mean_abs": 5.0
+  },
+  "enc.block.0.out": {
+    "max_abs": 50.0,
+    "mean_abs": 0.1
+  },
+  "enc.block.12.out": {
+    "max_abs": 50.0,
+    "mean_abs": 0.2
+  },
+  "enc.block.23.out": {
+    "max_abs": 0.1,
+    "mean_abs": 0.005
+  },
+  "enc.final": {
+    "max_abs": 0.1,
+    "mean_abs": 0.005
+  },
+  "dec.enc_out": {
+    "max_abs": 0.1,
+    "mean_abs": 0.005
+  },
+  "dec.embed.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "dec.lstm.0.h.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "dec.lstm.0.c.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "dec.lstm.1.h.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "dec.lstm.1.c.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-07
+  },
+  "dec.joint.0": {
+    "max_abs": 100.0,
+    "mean_abs": 100.0
+  },
+  "dec.ctc.logprobs": {
+    "max_abs": 0.002898049221038824,
+    "mean_abs": 0.0001950278393505783,
+    "_provisional": true
+  },
+  "dec.ctc.logprobs.0": {
+    "max_abs": 0.002507630729675293,
+    "mean_abs": 0.00017024127340014656,
+    "_provisional": true
+  },
+  "enc.block.16.out": {
+    "max_abs": 0.0001692522418498991,
+    "mean_abs": 5.474438555296499e-06,
+    "_provisional": true
+  },
+  "enc.block.21.out": {
+    "max_abs": 0.0017458982887267906,
+    "mean_abs": 4.5758235104010036e-05,
+    "_provisional": true
+  },
+  "enc.block.41.out": {
+    "max_abs": 0.0002289222216606131,
+    "mean_abs": 7.16573490942346e-06,
+    "_provisional": true
+  },
+  "enc.block.8.out": {
+    "max_abs": 0.003812128429412824,
+    "mean_abs": 9.894622372940888e-05,
+    "_provisional": true
+  }
 }

@@ -6,7 +6,49 @@
     "hf_repo": "nvidia/parakeet-tdt_ctc-110m",
     "hf_revision": "431a349f3051ab85c22b9b7a2741b5fe77065665"
   },
+  "reference": {
+    "kind": "nemo",
+    "source": "https://github.com/NVIDIA-NeMo/NeMo",
+    "revision": "v2.7.2",
+    "entrypoint": "scripts/dump_reference_parakeet_nemo.py"
+  },
   "expected_dtype": "float32",
   "dtype_source": "manual",
-  "_skeleton": true
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    }
+  },
+  "capabilities": {
+    "languages": [
+      "en"
+    ],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word",
+      "segment"
+    ],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/parakeet.json",
+  "cases": [
+    "jfk"
+  ]
 }
