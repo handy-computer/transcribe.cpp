@@ -82,12 +82,12 @@ uv run scripts/bench/run.py \
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  6.27 s (1.8×)  |  6.56 s (1.7×)  |
-| Vulkan  | dots (35.3s) |  15.15 s (2.3×) |  14.96 s (2.4×) |
+| Vulkan  | jfk (11.0s)  |  6.26 s (1.8×)  |  6.13 s (1.8×)  |
+| Vulkan  | dots (35.3s) |  14.41 s (2.5×) |  13.72 s (2.6×) |
 | CPU     | jfk (11.0s)  |  26.18 s (0.4×) |  19.83 s (0.6×) |
 | CPU     | dots (35.3s) |  55.64 s (0.6×) |  43.98 s (0.8×) |
 
-Fedora 43, transcribe.cpp `01127e6`. Vulkan device: `AMD Radeon
+Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:
