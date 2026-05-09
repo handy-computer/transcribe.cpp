@@ -265,6 +265,108 @@ ggml_tensor * mha_self_cached(
     return o;
 }
 
+// Self-attention for the static-topology step graph. KV cache writes
+// go through ggml_set_rows at runtime row index `kv_idx`; reads span
+// the full [0, max_n_kv) window with `mask` gating valid positions.
+// n_tokens is implicitly 1.
+ggml_tensor * mha_self_step(
+    ggml_context * ctx,
+    ggml_cgraph *  gf,
+    ggml_tensor *  x,
+    CohereKvCache & kv_cache,
+    ggml_tensor *  mask,
+    ggml_tensor *  kv_idx,
+    ggml_tensor *  q_w, ggml_tensor * q_b,
+    ggml_tensor *  k_w, ggml_tensor * k_b,
+    ggml_tensor *  v_w, ggml_tensor * v_b,
+    ggml_tensor *  out_w, ggml_tensor * out_b,
+    int            n_heads,
+    int            hidden,
+    int            il,
+    int            max_n_kv,
+    bool           use_flash)
+{
+    const int head_dim = hidden / n_heads;
+    const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
+    const int n_ctx    = kv_cache.n_ctx;
+
+    ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
+    if (q_b != nullptr) Qcur = ggml_add(ctx, Qcur, q_b);
+
+    ggml_tensor * Kcur = ggml_mul_mat(ctx, k_w, x);
+    if (k_b != nullptr) Kcur = ggml_add(ctx, Kcur, k_b);
+
+    ggml_tensor * Vcur = ggml_mul_mat(ctx, v_w, x);
+    if (v_b != nullptr) Vcur = ggml_add(ctx, Vcur, v_b);
+
+    ggml_tensor * Q = ggml_reshape_3d(ctx, Qcur, head_dim, n_heads, /*n_tokens=*/1);
+    Q = ggml_permute(ctx, Q, 0, 2, 1, 3);
+
+    // KV cache write via ggml_set_rows. Static topology — only kv_idx's
+    // value changes per step. Per-layer view spans [hidden, n_ctx], and
+    // we write a single [hidden, 1] row at the kv_idx position.
+    {
+        const size_t k_elem = ggml_element_size(kv_cache.self_k);
+        const size_t v_elem = ggml_element_size(kv_cache.self_v);
+        const size_t layer_off_k = k_elem * static_cast<size_t>(
+            static_cast<int64_t>(il) * n_ctx * hidden);
+        const size_t layer_off_v = v_elem * static_cast<size_t>(
+            static_cast<int64_t>(il) * n_ctx * hidden);
+
+        ggml_tensor * k_layer = ggml_view_2d(
+            ctx, kv_cache.self_k,
+            hidden, n_ctx,
+            k_elem * hidden, layer_off_k);
+        ggml_tensor * v_layer = ggml_view_2d(
+            ctx, kv_cache.self_v,
+            hidden, n_ctx,
+            v_elem * hidden, layer_off_v);
+
+        ggml_tensor * K_row = ggml_reshape_2d(ctx, Kcur, hidden, 1);
+        ggml_tensor * V_row = ggml_reshape_2d(ctx, Vcur, hidden, 1);
+
+        ggml_build_forward_expand(
+            gf, ggml_set_rows(ctx, k_layer, K_row, kv_idx));
+        ggml_build_forward_expand(
+            gf, ggml_set_rows(ctx, v_layer, V_row, kv_idx));
+    }
+
+    // Static read across [0, max_n_kv); mask zeros valid positions and
+    // -inf's the rest, so flash-attn ignores empty/future slots. Costs
+    // some bandwidth at low n_past — caller picks max_n_kv to bound it.
+    ggml_tensor * K = ggml_view_3d(ctx, kv_cache.self_k,
+        head_dim, max_n_kv, n_heads,
+        ggml_element_size(kv_cache.self_k) * hidden,
+        ggml_element_size(kv_cache.self_k) * head_dim,
+        ggml_element_size(kv_cache.self_k) * static_cast<size_t>(
+            static_cast<int64_t>(il) * n_ctx * hidden));
+
+    ggml_tensor * V = ggml_view_3d(ctx, kv_cache.self_v,
+        head_dim, max_n_kv, n_heads,
+        ggml_element_size(kv_cache.self_v) * hidden,
+        ggml_element_size(kv_cache.self_v) * head_dim,
+        ggml_element_size(kv_cache.self_v) * static_cast<size_t>(
+            static_cast<int64_t>(il) * n_ctx * hidden));
+
+    ggml_tensor * o;
+    if (use_flash) {
+        o = ggml_flash_attn_ext(ctx, Q, K, V, mask, scale, 0.0f, 0.0f);
+        o = ggml_reshape_2d(ctx, o, hidden, 1);
+    } else {
+        ggml_tensor * kq = ggml_mul_mat(ctx, K, Q);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask, scale, 0.0f);
+        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, V, 1, 0, 2, 3));
+        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        o = ggml_permute(ctx, o, 0, 2, 1, 3);
+        o = ggml_cont(ctx, o);
+        o = ggml_reshape_2d(ctx, o, hidden, 1);
+    }
+
+    o = ggml_mul_mat(ctx, out_w, o);
+    if (out_b != nullptr) o = ggml_add(ctx, o, out_b);
+    return o;
+}
+
 // Multi-head cross-attention reading from pre-computed KV cache.
 //
 // x:        [hidden, n_tokens] -- query input
@@ -774,6 +876,128 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     }
 
     return db;
+}
+
+// ---------------------------------------------------------------------------
+// Static-topology single-token step graph (GPU dispatch path).
+// ---------------------------------------------------------------------------
+
+StepBuild build_step_graph(ggml_context *         ctx,
+                           const CohereWeights &  w,
+                           const CohereHParams &  hp,
+                           CohereKvCache &        kv_cache,
+                           int                    max_n_kv,
+                           int                    T_enc,
+                           bool                   use_flash)
+{
+    StepBuild sb {};
+    sb.max_n_kv = max_n_kv;
+
+    if (ctx == nullptr || max_n_kv <= 0 || T_enc <= 0) {
+        std::fprintf(stderr,
+                     "cohere step: invalid arg (max_n_kv=%d, T_enc=%d)\n",
+                     max_n_kv, T_enc);
+        return sb;
+    }
+    if (max_n_kv > kv_cache.n_ctx) {
+        std::fprintf(stderr,
+                     "cohere step: max_n_kv=%d exceeds kv_cache.n_ctx=%d\n",
+                     max_n_kv, kv_cache.n_ctx);
+        return sb;
+    }
+
+    const int64_t hidden  = hp.dec_hidden;
+    const int     n_heads = hp.dec_n_heads;
+
+    sb.token_id_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_set_name(sb.token_id_in, "step.token_id");
+    ggml_set_input(sb.token_id_in);
+
+    sb.pos_id_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_set_name(sb.pos_id_in, "step.pos_id");
+    ggml_set_input(sb.pos_id_in);
+
+    sb.kv_idx_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+    ggml_set_name(sb.kv_idx_in, "step.kv_idx");
+    ggml_set_input(sb.kv_idx_in);
+
+    sb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, max_n_kv, 1);
+    ggml_set_name(sb.mask_in, "step.mask");
+    ggml_set_input(sb.mask_in);
+
+    sb.graph = ggml_new_graph_custom(ctx, 8192, false);
+    if (sb.graph == nullptr) {
+        std::fprintf(stderr, "cohere step: ggml_new_graph_custom failed\n");
+        return sb;
+    }
+
+    ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_embed.token_w, sb.token_id_in);
+    ggml_tensor * pos_emb = ggml_get_rows(ctx, w.dec_embed.pos_enc, sb.pos_id_in);
+    ggml_tensor * x = ggml_add(ctx, tok_emb, pos_emb);
+    x = layer_norm(ctx, x, w.dec_embed.norm_w, w.dec_embed.norm_b);
+
+    for (int i = 0; i < hp.dec_n_layers; ++i) {
+        const auto & blk = w.dec_blocks[i];
+
+        // Pre-LN self-attention with set_rows-based KV write.
+        {
+            ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm_self_w, blk.norm_self_b);
+            ggml_tensor * self_out = mha_self_step(
+                ctx, sb.graph, x_norm, kv_cache, sb.mask_in, sb.kv_idx_in,
+                blk.self_q_w, blk.self_q_b,
+                blk.self_k_w, blk.self_k_b,
+                blk.self_v_w, blk.self_v_b,
+                blk.self_out_w, blk.self_out_b,
+                n_heads, static_cast<int>(hidden),
+                i, max_n_kv,
+                use_flash);
+            x = ggml_add(ctx, x, self_out);
+        }
+
+        // Pre-LN cross-attention. Unchanged from prompt path: cross_k/v
+        // are pre-populated full T_enc, no n_past dependency.
+        {
+            ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm_cross_w, blk.norm_cross_b);
+            ggml_tensor * cross_out = mha_cross_cached(
+                ctx, x_norm, kv_cache,
+                blk.cross_q_w, blk.cross_q_b,
+                blk.cross_out_w, blk.cross_out_b,
+                n_heads, static_cast<int>(hidden),
+                i, T_enc,
+                use_flash);
+            x = ggml_add(ctx, x, cross_out);
+        }
+
+        // Pre-LN FFN.
+        {
+            ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm_ff_w, blk.norm_ff_b);
+            ggml_tensor * ff = ggml_mul_mat(ctx, blk.ff_in_w, x_norm);
+            if (blk.ff_in_b != nullptr) ff = ggml_add(ctx, ff, blk.ff_in_b);
+            if (hp.dec_activation == "relu") {
+                ff = ggml_relu(ctx, ff);
+            } else {
+                ff = ggml_silu(ctx, ff);
+            }
+            ff = ggml_mul_mat(ctx, blk.ff_out_w, ff);
+            if (blk.ff_out_b != nullptr) ff = ggml_add(ctx, ff, blk.ff_out_b);
+            x = ggml_add(ctx, x, ff);
+        }
+    }
+
+    x = layer_norm(ctx, x, w.dec_final.norm_w, w.dec_final.norm_b);
+
+    // Tied LM head: token embedding transposed.
+    ggml_tensor * logits = ggml_mul_mat(ctx, w.dec_embed.token_w, x);
+    if (w.head.bias != nullptr) {
+        logits = ggml_add(ctx, logits, w.head.bias);
+    }
+
+    sb.argmax_out = ggml_argmax(ctx, logits);
+    ggml_set_name(sb.argmax_out, "step.argmax");
+    ggml_set_output(sb.argmax_out);
+    ggml_build_forward_expand(sb.graph, sb.argmax_out);
+
+    return sb;
 }
 
 } // namespace transcribe::cohere

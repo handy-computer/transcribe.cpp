@@ -1128,24 +1128,121 @@ transcribe_status run(
 
         // --- Step 4: Autoregressive step passes ----------------------
         //
-        // Optimizations vs. naive per-step rebuild:
-        //   1. Pre-reserve the scheduler with a worst-case graph so
-        //      alloc_graph never needs to grow internal buffers.
-        //   2. Pre-allocate logits host buffer once.
-        //   3. Skip log_softmax (argmax is invariant to monotonic
-        //      transforms, saving softmax + log over 16K vocab).
+        // Two decoder loop variants; pick by primary backend kind.
+        //
+        //   GPU (Vulkan/Metal/CUDA/SYCL): build_step_graph — one static-
+        //     topology graph for the whole utterance. KV writes go via
+        //     ggml_set_rows at runtime kv_idx; flash-attn reads a fixed
+        //     max_n_kv window with a runtime mask. Removes per-step
+        //     graph_build + sched_alloc, which dominate dispatch overhead
+        //     on GPUs.
+        //
+        //   CPU (incl. accelerator host-memory backends): build_decoder_
+        //     graph_kv per step — n_kv grows with n_past, attention only
+        //     reads the populated prefix. CPU has no dispatch overhead
+        //     to amortize, so the static-graph bandwidth tax (reading
+        //     max_n_kv KV slots when avg n_past is small) is a net loss.
+        //
+        // The prompt pass uses build_decoder_graph_kv on both paths
+        // (already executed above) — only the per-token loop branches.
         int n_past = prompt_len;
 
-        // (Logits readback buffer no longer needed -- argmax runs on GPU.)
+        const bool primary_is_gpu =
+            cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
+            cm->plan.primary_kind != transcribe::BackendKind::Accel &&
+            cm->plan.primary_kind != transcribe::BackendKind::Unknown;
 
-        // Reserve scheduler buffers with a worst-case single-token
-        // graph (maximum n_past = n_ctx - 1). This ensures that
-        // alloc_graph during the loop never triggers reallocation.
-        {
-            if (!new_compute_ctx(4 * 1024 * 1024)) {
+        if (primary_is_gpu) {
+            // ---------- Static-graph step path (GPU) ----------
+            // max_n_kv: pad to next power of two with a 1024 floor.
+            // Vulkan/Metal flash-attn dispatches faster on pow2 ne[1];
+            // the slight bandwidth cost is amortized by removing
+            // per-step graph_build + sched_alloc.
+            int max_n_kv = 1024;
+            while (max_n_kv < prompt_len + max_tokens) max_n_kv *= 2;
+            if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
+
+            if (!new_compute_ctx(8 * 1024 * 1024)) {
                 std::fprintf(stderr,
-                             "cohere run: ggml_init for sched reserve failed\n");
-            } else {
+                             "cohere run: new_compute_ctx failed (step)\n");
+                commit_result();
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            StepBuild sb = build_step_graph(
+                cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
+                max_n_kv, T_enc, cc->decoder_use_flash);
+            if (sb.graph == nullptr || sb.argmax_out == nullptr) {
+                std::fprintf(stderr,
+                             "cohere run: build_step_graph failed\n");
+                commit_result();
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            ggml_backend_sched_reset(cc->sched);
+            if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+                std::fprintf(stderr,
+                             "cohere run: sched_alloc_graph failed (step)\n");
+                commit_result();
+                return TRANSCRIBE_ERR_GGUF;
+            }
+
+            // Mask buffer: full max_n_kv span, reused host-side. Positions
+            // already populated by the prompt pass [0, prompt_len) start
+            // attendable; remaining slots are -inf until each step flips
+            // its newly-written position to attendable.
+            const ggml_fp16_t mask_zero    = ggml_fp32_to_fp16(0.0f);
+            const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
+            std::vector<ggml_fp16_t> step_mask(max_n_kv, mask_neg_inf);
+            for (int p = 0; p < prompt_len; ++p) step_mask[p] = mask_zero;
+
+            for (int step = 1; step < max_tokens && next_token != eos_id;
+                 ++step)
+            {
+                if (cc->poll_abort()) {
+                    commit_result();
+                    return TRANSCRIBE_ERR_ABORTED;
+                }
+                if (n_past + 1 > max_n_kv) {
+                    std::fprintf(stderr,
+                                 "cohere run: hit max_n_kv=%d at n_past=%d\n",
+                                 max_n_kv, n_past);
+                    break;
+                }
+
+                int32_t token_val = next_token;
+                int32_t pos_val   = n_past;
+                int64_t kv_val    = n_past;
+                ggml_backend_tensor_set(sb.token_id_in, &token_val, 0, sizeof(int32_t));
+                ggml_backend_tensor_set(sb.pos_id_in,   &pos_val,   0, sizeof(int32_t));
+                ggml_backend_tensor_set(sb.kv_idx_in,   &kv_val,    0, sizeof(int64_t));
+
+                step_mask[n_past] = mask_zero;
+                ggml_backend_tensor_set(sb.mask_in, step_mask.data(), 0,
+                                        static_cast<size_t>(max_n_kv) *
+                                        sizeof(ggml_fp16_t));
+
+                if (const ggml_status gs =
+                        ggml_backend_sched_graph_compute(cc->sched, sb.graph);
+                    gs != GGML_STATUS_SUCCESS)
+                {
+                    break;
+                }
+
+                n_past += 1;
+                cc->kv_cache.n    = n_past;
+                cc->kv_cache.head = n_past;
+
+                int32_t argmax_id = 0;
+                ggml_backend_tensor_get(sb.argmax_out, &argmax_id, 0, sizeof(int32_t));
+                next_token = argmax_id;
+
+                if (next_token != eos_id) generated_ids.push_back(next_token);
+            }
+        } else {
+            // ---------- Dynamic-graph step path (CPU) ----------
+            // Reserve scheduler buffers with a worst-case single-token
+            // graph (maximum n_past = n_ctx - 1). This ensures that
+            // alloc_graph during the loop never triggers reallocation.
+            if (new_compute_ctx(4 * 1024 * 1024)) {
                 const int worst_n_past = cc->kv_cache.n_ctx - 1;
                 DecoderBuild db_reserve = build_decoder_graph_kv(
                     cc->compute_ctx, cm->weights, cm->hparams,
@@ -1157,130 +1254,64 @@ transcribe_status run(
                     ggml_backend_sched_reserve(cc->sched, db_reserve.graph);
                 }
             }
-        }
 
-        // Per-phase timing accumulators for the step loop. Enabled
-        // whenever stderr is available; overhead is a handful of
-        // ggml_time_us() calls per step.
-        int64_t t_step_ctx     = 0;  // ggml_init + build_decoder_graph_kv
-        int64_t t_step_alloc   = 0;  // sched_reset + alloc_graph
-        int64_t t_step_upload  = 0;  // token_id/pos_id tensor_set
-        int64_t t_step_compute = 0;  // graph_compute
-        int64_t t_step_readback = 0; // tensor_get (argmax)
-        int     n_steps        = 0;
-
-        for (int step = 1; step < max_tokens && next_token != eos_id;
-             ++step)
-        {
-            // Per-token abort poll. Contract: transcribe.h advertises
-            // polling "between decode steps (after each token)". Any
-            // tokens already in generated_ids ship as partial output.
-            if (cc->poll_abort()) {
-                commit_result();
-                return TRANSCRIBE_ERR_ABORTED;
-            }
-
-            if (n_past + 1 > cc->kv_cache.n_ctx) {
-                std::fprintf(stderr,
-                             "cohere run: KV cache full at n_past=%d, "
-                             "n_ctx=%d\n", n_past, cc->kv_cache.n_ctx);
-                break;
-            }
-
-            const int64_t t_ctx_start = ggml_time_us();
-            if (!new_compute_ctx(4 * 1024 * 1024)) break;
-
-            // Single-token step graph (no log_softmax -- argmax is
-            // invariant to monotonic transforms).
-            DecoderBuild db_step = build_decoder_graph_kv(
-                cc->compute_ctx, cm->weights, cm->hparams,
-                cc->kv_cache,
-                /*n_tokens=*/1, n_past, T_enc,
-                /*skip_log_softmax=*/true,
-                cc->decoder_use_flash);
-            if (db_step.out == nullptr || db_step.graph == nullptr) break;
-            t_step_ctx += ggml_time_us() - t_ctx_start;
-
-            const int64_t t_alloc_start = ggml_time_us();
-            ggml_backend_sched_reset(cc->sched);
-            if (!ggml_backend_sched_alloc_graph(cc->sched, db_step.graph))
-                break;
-            t_step_alloc += ggml_time_us() - t_alloc_start;
-
-            // Upload the single new token.
-            const int64_t t_upload_start = ggml_time_us();
-            int32_t token_id = next_token;
-            int32_t pos_id   = n_past;
-            ggml_backend_tensor_set(db_step.token_ids_in,
-                                    &token_id, 0, sizeof(int32_t));
-            ggml_backend_tensor_set(db_step.pos_ids_in,
-                                    &pos_id, 0, sizeof(int32_t));
-            t_step_upload += ggml_time_us() - t_upload_start;
-
-            const int64_t t_compute_start = ggml_time_us();
-            if (const ggml_status gs =
-                    ggml_backend_sched_graph_compute(cc->sched,
-                                                     db_step.graph);
-                gs != GGML_STATUS_SUCCESS)
+            for (int step = 1; step < max_tokens && next_token != eos_id;
+                 ++step)
             {
-                break;
+                if (cc->poll_abort()) {
+                    commit_result();
+                    return TRANSCRIBE_ERR_ABORTED;
+                }
+
+                if (n_past + 1 > cc->kv_cache.n_ctx) {
+                    std::fprintf(stderr,
+                                 "cohere run: KV cache full at n_past=%d, "
+                                 "n_ctx=%d\n", n_past, cc->kv_cache.n_ctx);
+                    break;
+                }
+
+                if (!new_compute_ctx(4 * 1024 * 1024)) break;
+
+                DecoderBuild db_step = build_decoder_graph_kv(
+                    cc->compute_ctx, cm->weights, cm->hparams,
+                    cc->kv_cache,
+                    /*n_tokens=*/1, n_past, T_enc,
+                    /*skip_log_softmax=*/true,
+                    cc->decoder_use_flash);
+                if (db_step.out == nullptr || db_step.graph == nullptr) break;
+
+                ggml_backend_sched_reset(cc->sched);
+                if (!ggml_backend_sched_alloc_graph(cc->sched, db_step.graph))
+                    break;
+
+                int32_t token_id = next_token;
+                int32_t pos_id   = n_past;
+                ggml_backend_tensor_set(db_step.token_ids_in,
+                                        &token_id, 0, sizeof(int32_t));
+                ggml_backend_tensor_set(db_step.pos_ids_in,
+                                        &pos_id, 0, sizeof(int32_t));
+
+                if (const ggml_status gs =
+                        ggml_backend_sched_graph_compute(cc->sched,
+                                                         db_step.graph);
+                    gs != GGML_STATUS_SUCCESS)
+                {
+                    break;
+                }
+
+                n_past += 1;
+                cc->kv_cache.n    = n_past;
+                cc->kv_cache.head = n_past;
+
+                int32_t argmax_id = 0;
+                ggml_backend_tensor_get(db_step.argmax_out, &argmax_id,
+                                        0, sizeof(int32_t));
+                next_token = argmax_id;
+
+                if (next_token != eos_id) {
+                    generated_ids.push_back(next_token);
+                }
             }
-            t_step_compute += ggml_time_us() - t_compute_start;
-
-            // Update cache state.
-            n_past += 1;
-            cc->kv_cache.n    = n_past;
-            cc->kv_cache.head = n_past;
-
-            // Read argmax result (single int32 from GPU, avoiding
-            // full vocab_size logits readback + host-side argmax).
-            const int64_t t_readback_start = ggml_time_us();
-            int32_t argmax_id = 0;
-            ggml_backend_tensor_get(db_step.argmax_out, &argmax_id,
-                                    0, sizeof(int32_t));
-            t_step_readback += ggml_time_us() - t_readback_start;
-
-            next_token = argmax_id;
-            ++n_steps;
-
-            if (next_token != eos_id) {
-                generated_ids.push_back(next_token);
-            }
-        }
-
-        // Report per-phase step-loop breakdown so we can see whether
-        // CPU overhead (ctx+build, alloc) or GPU compute dominates.
-        // Debug-gated: only emit when TRANSCRIBE_DUMP_DIR is set. The
-        // step-loop timing breakdown is useful during Cohere bringup
-        // and perf work but would be noise in normal transcription
-        // runs. debug::enabled() keys on the same env var as the
-        // tensor-dump hooks, so "I want to see everything" is a single
-        // toggle.
-        if (n_steps > 0 && transcribe::debug::enabled()) {
-            const int64_t t_known =
-                t_step_ctx + t_step_alloc + t_step_upload +
-                t_step_compute + t_step_readback;
-            std::fprintf(stderr,
-                "cohere step loop: %d steps, %.2f ms total, %.1f tok/s\n"
-                "  per-step avg: %.0f us "
-                "(ctx+build %.0f | alloc %.0f | upload %.0f | compute %.0f | readback %.0f)\n"
-                "  per-step totals (ms): "
-                "ctx+build %.2f | alloc %.2f | upload %.2f | compute %.2f | readback %.2f | accounted %.2f\n",
-                n_steps,
-                t_known / 1000.0,
-                n_steps * 1e6 / static_cast<double>(t_known),
-                static_cast<double>(t_known) / n_steps,
-                static_cast<double>(t_step_ctx) / n_steps,
-                static_cast<double>(t_step_alloc) / n_steps,
-                static_cast<double>(t_step_upload) / n_steps,
-                static_cast<double>(t_step_compute) / n_steps,
-                static_cast<double>(t_step_readback) / n_steps,
-                t_step_ctx / 1000.0,
-                t_step_alloc / 1000.0,
-                t_step_upload / 1000.0,
-                t_step_compute / 1000.0,
-                t_step_readback / 1000.0,
-                t_known / 1000.0);
         }
 
         // Build result hierarchy. Cohere advertises

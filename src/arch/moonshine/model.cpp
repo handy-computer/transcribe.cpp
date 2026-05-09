@@ -582,27 +582,123 @@ transcribe_status run(
     }
 
     // Step loop.
+    //
+    // Two variants:
+    //   GPU (Vulkan/Metal/CUDA/SYCL): build_step_graph — one static-
+    //     topology graph for the whole utterance. KV writes via
+    //     ggml_set_rows at runtime kv_idx; flash-attn reads a fixed
+    //     max_n_kv window with a runtime mask. Removes per-step
+    //     graph_build + sched_alloc.
+    //   CPU (or debug, which needs the mid-gen dump path): per-step
+    //     run_step with build_decoder_graph_kv.
     constexpr int k_mid_gen_step = 20;
-    while (next_token != eos && n_past < max_pos) {
-        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+    const bool primary_is_gpu =
+        cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
+        cm->plan.primary_kind != transcribe::BackendKind::Accel &&
+        cm->plan.primary_kind != transcribe::BackendKind::Unknown;
+    const bool use_step_graph = primary_is_gpu &&
+                                !transcribe::debug::enabled();
 
-        // The mid-generation dump fires when the cache holds 20 tokens
-        // (= prompt + 19 generated, so this step predicts the 21st
-        // token = generated_ids[19]) — matching the reference dumper's
-        // gen_step_n=20 contract.
-        const bool is_mid_gen = (n_past == k_mid_gen_step);
-        const char * dump_name = is_mid_gen ? "dec.logits_raw.gen20" : nullptr;
+    if (use_step_graph) {
+        // ---------- Static-graph step path (GPU) ----------
+        // max_n_kv: pad max_pos to next power of two (no fixed floor —
+        // moonshine's max_pos is ~194, so a 1024 floor would waste 5×
+        // attention bandwidth per step).
+        int max_n_kv = 64;
+        while (max_n_kv < max_pos) max_n_kv *= 2;
+        if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
 
-        if (auto st = run_step(/*n_tokens=*/1, /*n_past=*/n_past,
-                               /*token_id_first=*/next_token,
-                               /*dump_prompt=*/false,
-                               /*mid_gen_dump_name=*/dump_name);
-            st != TRANSCRIBE_OK)
-        {
-            return st;
+        if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
+            std::fprintf(stderr,
+                         "moonshine run: ensure_compute_ctx failed (step)\n");
+            return TRANSCRIBE_ERR_GGUF;
         }
-        if (next_token != eos) {
-            generated_ids.push_back(next_token);
+        StepBuild sb = build_step_graph(
+            cc->compute_ctx, cm->weights, hp, cc->kv_cache,
+            max_n_kv, T_enc, cc->decoder_use_flash);
+        if (sb.graph == nullptr || sb.argmax_out == nullptr) {
+            std::fprintf(stderr,
+                         "moonshine run: build_step_graph failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+            std::fprintf(stderr,
+                         "moonshine run: sched_alloc_graph failed (step)\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        // Mask buffer: [0, n_past) populated by the prompt pass start
+        // attendable; remaining slots -inf until each step flips its
+        // newly-written position to attendable.
+        const ggml_fp16_t mask_zero    = ggml_fp32_to_fp16(0.0f);
+        const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
+        std::vector<ggml_fp16_t> step_mask(max_n_kv, mask_neg_inf);
+        for (int p = 0; p < n_past; ++p) step_mask[p] = mask_zero;
+
+        while (next_token != eos && n_past < max_pos) {
+            if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+            if (n_past + 1 > max_n_kv) {
+                std::fprintf(stderr,
+                             "moonshine run: hit max_n_kv=%d at n_past=%d\n",
+                             max_n_kv, n_past);
+                break;
+            }
+
+            int32_t token_val = next_token;
+            int32_t pos_val   = n_past;
+            int64_t kv_val    = n_past;
+            ggml_backend_tensor_set(sb.token_id_in, &token_val, 0, sizeof(int32_t));
+            ggml_backend_tensor_set(sb.pos_id_in,   &pos_val,   0, sizeof(int32_t));
+            ggml_backend_tensor_set(sb.kv_idx_in,   &kv_val,    0, sizeof(int64_t));
+
+            step_mask[n_past] = mask_zero;
+            ggml_backend_tensor_set(sb.mask_in, step_mask.data(), 0,
+                                    static_cast<size_t>(max_n_kv) *
+                                    sizeof(ggml_fp16_t));
+
+            if (ggml_backend_sched_graph_compute(cc->sched, sb.graph)
+                != GGML_STATUS_SUCCESS)
+            {
+                std::fprintf(stderr,
+                             "moonshine run: step compute failed (n_past=%d)\n",
+                             n_past);
+                break;
+            }
+
+            n_past += 1;
+            cc->kv_cache.n    = n_past;
+            cc->kv_cache.head = n_past;
+
+            int32_t argmax_id = 0;
+            ggml_backend_tensor_get(sb.argmax_out, &argmax_id, 0, sizeof(int32_t));
+            next_token = argmax_id;
+
+            if (next_token != eos) generated_ids.push_back(next_token);
+        }
+    } else {
+        // ---------- Dynamic-graph step path (CPU / debug) ----------
+        while (next_token != eos && n_past < max_pos) {
+            if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+
+            // The mid-generation dump fires when the cache holds 20 tokens
+            // (= prompt + 19 generated, so this step predicts the 21st
+            // token = generated_ids[19]) — matching the reference dumper's
+            // gen_step_n=20 contract.
+            const bool is_mid_gen = (n_past == k_mid_gen_step);
+            const char * dump_name = is_mid_gen ? "dec.logits_raw.gen20" : nullptr;
+
+            if (auto st = run_step(/*n_tokens=*/1, /*n_past=*/n_past,
+                                   /*token_id_first=*/next_token,
+                                   /*dump_prompt=*/false,
+                                   /*mid_gen_dump_name=*/dump_name);
+                st != TRANSCRIBE_OK)
+            {
+                return st;
+            }
+            if (next_token != eos) {
+                generated_ids.push_back(next_token);
+            }
         }
     }
 
