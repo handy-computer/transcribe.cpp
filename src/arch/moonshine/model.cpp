@@ -667,7 +667,7 @@ transcribe_status run(
                 std::fprintf(stderr,
                              "moonshine run: step compute failed (n_past=%d)\n",
                              n_past);
-                break;
+                return TRANSCRIBE_ERR_GGUF;
             }
 
             n_past += 1;

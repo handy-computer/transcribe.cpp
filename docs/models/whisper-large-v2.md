@@ -59,12 +59,12 @@ model size grows; the encoder is only run once per 30-second window.
 
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 493.2 ms (22.3×) | 499.6 ms (22.0×) |
-| Metal   | dots (35.3s) |   1.46 s (24.1×) |   1.40 s (25.2×) |
+| Metal   | jfk (11.0s)  | 508.0 ms (21.7×) | 498.3 ms (22.1×) |
+| Metal   | dots (35.3s) |   1.37 s (25.7×) |   1.33 s (26.5×) |
 | CPU     | jfk (11.0s)  |    9.66 s (1.1×) |    7.46 s (1.5×) |
 | CPU     | dots (35.3s) |   19.72 s (1.8×) |   15.43 s (2.3×) |
 
-macOS 26.4.1, transcribe.cpp `4d2270e`.
+macOS 26.4.1, transcribe.cpp `e0fa0f6`.
 
 Benchmark reproduction:
 
