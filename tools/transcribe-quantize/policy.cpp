@@ -95,6 +95,16 @@ Bucket classify_tensor(const std::string & name) {
     {
         return Bucket::Norm;
     }
+    // Canary decoder layer norms: dec.layer.<N>.norm{1,2,3}.weight —
+    // numbered (no underscore), so the generic "norm_" rule misses them.
+    // Also dec.norm.weight (final post-decoder layer norm).
+    if (ends_with(name, ".norm1.weight") ||
+        ends_with(name, ".norm2.weight") ||
+        ends_with(name, ".norm3.weight") ||
+        name == "dec.norm.weight")
+    {
+        return Bucket::Norm;
+    }
     // Per-head positional biases — added directly to fp32 q via ggml_add
     // inside rel_pos_mhsa.
     if (ends_with(name, ".pos_bias_u") || ends_with(name, ".pos_bias_v")) {

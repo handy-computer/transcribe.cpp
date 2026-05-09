@@ -1,0 +1,165 @@
+# Canary 1B
+
+NVIDIA's [`nvidia/canary-1b`](https://huggingface.co/nvidia/canary-1b)
+ported to transcribe.cpp. A 1B-parameter multitask AED with a 24-layer
+FastConformer encoder and a 24-layer Transformer decoder — the original
+canary release.
+
+> **License: CC-BY-NC-4.0 (non-commercial only).** This is the only
+> canary variant under a non-commercial license. Every shipped GGUF
+> carries `general.license: CC-BY-NC-4.0` in its KV metadata so
+> downstream tooling can detect this without re-reading the model card.
+
+## What it's for
+
+Offline multilingual speech-to-text and translation. The model takes a
+16 kHz mono WAV and produces a transcript. Supports:
+
+- **ASR** in English, German, Spanish, and French.
+- **Translation** between supported pairs.
+
+See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b)
+for training data, intended use, and upstream evaluation methodology.
+
+Ported from upstream commit
+[`1698acf`](https://huggingface.co/nvidia/canary-1b/commit/1698acf1700ed316ffce1cb42d79437c7e360cfa),
+pinned 2026-05-08.
+
+## Download
+
+| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+| --- | --- | ---: | ---: |
+| F32    | [canary-1b-F32.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F32.gguf)       | 3.8 GB | 1.55% |
+| F16    | [canary-1b-F16.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-F16.gguf)       | 1.9 GB | 1.55% |
+| Q8_0   | [canary-1b-Q8_0.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q8_0.gguf)     | 1.1 GB | 1.55% |
+| Q6_K   | [canary-1b-Q6_K.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q6_K.gguf)     | 891 MB | 1.57% |
+| Q5_K_M | [canary-1b-Q5_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q5_K_M.gguf) | 799 MB | 1.57% |
+| Q4_K_M | [canary-1b-Q4_K_M.gguf](https://huggingface.co/handy-computer/canary-1b-gguf/resolve/main/canary-1b-Q4_K_M.gguf) | 696 MB | 1.55% |
+
+WER is measured on the full LibriSpeech test-clean split (2620 utterances)
+with greedy decoding and no external LM. F32 reference baseline: 1.55%.
+NVIDIA's self-reported number on the upstream model card is 1.48%.
+Likely this is due to differences in how we score WER based on the results
+we have from Canary 180m.
+
+## Quick Start
+
+```bash
+cmake -B build
+cmake --build build
+
+# ASR (English)
+build/bin/transcribe-cli \
+  -m models/canary-1b/canary-1b-Q8_0.gguf \
+  -l en \
+  samples/jfk.wav
+
+# Translation (English audio → German text)
+build/bin/transcribe-cli \
+  -m models/canary-1b/canary-1b-Q8_0.gguf \
+  --task translate \
+  -l en --target-language de \
+  samples/jfk.wav
+```
+
+If your audio is not already 16 kHz mono WAV, convert it first:
+
+```bash
+ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
+```
+
+CLI flags specific to canary:
+
+- `--pnc` / `--no-pnc` — punctuation & capitalization (default on).
+- `-l <code>` — source language code (`en`, `de`, `es`, `fr`).
+- `--task translate` + `--target-language <code>` — switch to translation
+  mode. canary-1 uses an explicit `<|translate|>` task token (the
+  canary2 variants infer translate from src ≠ tgt instead).
+
+## Performance
+
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
+decimal places).
+
+The 24-layer decoder makes this the slowest canary variant for decode-bound
+workloads — roughly 1.5× the wall time of canary-1b-flash on the same
+backend, and the GPU win over CPU is smaller here than on the *flash
+variants because the autoregressive decoder pass dominates and a
+batch-1 / single-token forward is too small to amortize Vulkan dispatch
+overhead.
+
+### Apple M4 Max
+
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  | 216.0 ms (50.9×) | 198.1 ms (55.5×) |
+| Metal   | dots (35.3s) |   1.03 s (34.2×) | 937.2 ms (37.7×) |
+| CPU     | jfk (11.0s)  | 511.1 ms (21.5×) | 426.2 ms (25.8×) |
+| CPU     | dots (35.3s) |   2.05 s (17.3×) |   1.72 s (20.6×) |
+
+macOS 26.4.1, transcribe.cpp `19b3b87`.
+
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |           Q8_0 |           Q4_K_M |
+| ------- | ------------ | -------------: | ---------------: |
+| Vulkan  | jfk (11.0s)  | 1.07 s (10.2×) | 923.4 ms (11.9×) |
+| Vulkan  | dots (35.3s) |  4.63 s (7.6×) |    3.87 s (9.1×) |
+| CPU     | jfk (11.0s)  |  1.71 s (6.4×) |    1.24 s (8.9×) |
+| CPU     | dots (35.3s) |  7.59 s (4.7×) |    5.97 s (5.9×) |
+
+Fedora Linux 43, transcribe.cpp `4d44530`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models canary-1b \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends metal,cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name canary-1b-publication
+```
+
+## Numerical Validation
+
+transcribe.cpp is validated tensor-by-tensor against NeMo on
+`samples/jfk.wav`. All checkpointed tensors fall within family
+tolerance and the F32 transcript matches the NeMo reference. Last
+validated at commit
+[`db53eda`](https://github.com/handy-computer/transcribe.cpp/tree/db53eda).
+
+| Field | Value |
+| --- | --- |
+| Reference | NeMo, `nvidia/canary-1b` |
+| Dump script | `scripts/dump_reference_canary_nemo.py` |
+| Manifest | `tests/golden/canary/canary-1b.manifest.json` |
+| Tolerances | `tests/tolerances/canary.json` |
+| Command | `uv run scripts/validate.py all --family canary --variant canary-1b` |
+
+For the full porting writeup, see
+[`docs/porting/families/canary.md`](../porting/families/canary.md).
+
+## Reproduction
+
+### Convert
+
+```bash
+uv run --project scripts/envs/canary \
+  scripts/convert-canary.py nvidia/canary-1b --repo-id nvidia/canary-1b
+```
+
+### Quantize
+
+```bash
+uv run scripts/quantize-all.py models/canary-1b/canary-1b-F32.gguf
+```
+
+### Validate
+
+```bash
+uv run scripts/validate.py all --family canary --variant canary-1b
+```

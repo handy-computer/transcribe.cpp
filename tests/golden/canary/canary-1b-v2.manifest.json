@@ -1,0 +1,84 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "canary",
+  "variant": "canary-1b-v2",
+  "source_model": {
+    "hf_repo": "nvidia/canary-1b-v2",
+    "hf_revision": "87bc52657add533cd0156b3fc1aef027280754bf"
+  },
+  "reference": {
+    "kind": "nemo",
+    "source": "https://github.com/NVIDIA-NeMo/NeMo",
+    "revision": "v2.7.2",
+    "entrypoint": "scripts/dump_reference_canary_nemo.py"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "sentencepiece",
+    "vocab_size": 16384,
+    "special_tokens": {}
+  },
+  "capabilities": {
+    "languages": [
+      "bg",
+      "hr",
+      "cs",
+      "da",
+      "nl",
+      "en",
+      "et",
+      "fi",
+      "fr",
+      "de",
+      "el",
+      "hu",
+      "it",
+      "lv",
+      "lt",
+      "mt",
+      "pl",
+      "pt",
+      "ro",
+      "sk",
+      "sl",
+      "es",
+      "sv",
+      "ru",
+      "uk"
+    ],
+    "language_detection": false,
+    "translation": true,
+    "timestamps": [
+      "word",
+      "segment"
+    ],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "multitask_default": {
+    "source_lang": "en",
+    "target_lang": "en",
+    "task": "asr",
+    "pnc": "yes",
+    "toggle_timestamps": "no",
+    "beam": 1
+  },
+  "tolerance_file": "tests/tolerances/canary.json",
+  "cases": [
+    "jfk"
+  ],
+  "transcript_compare": "normalized"
+}

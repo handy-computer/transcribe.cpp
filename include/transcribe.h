@@ -361,6 +361,7 @@ TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_param
 struct transcribe_whisper_params;
 struct transcribe_sensevoice_params;
 struct transcribe_funasr_nano_params;
+struct transcribe_canary_params;
 
 struct transcribe_params {
     transcribe_task           task;
@@ -388,6 +389,7 @@ struct transcribe_params {
     const struct transcribe_whisper_params *     whisper;
     const struct transcribe_sensevoice_params *  sensevoice;
     const struct transcribe_funasr_nano_params * funasr_nano;
+    const struct transcribe_canary_params *      canary;
 };
 
 TRANSCRIBE_API struct transcribe_params transcribe_default_params(void);
@@ -575,6 +577,33 @@ struct transcribe_funasr_nano_params {
 
 TRANSCRIBE_API struct transcribe_funasr_nano_params
     transcribe_funasr_nano_default_params(void);
+
+/* ----------------------------------------------------------------------- */
+/* Canary-specific params                                                  */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Canary-family run knobs. Reached via transcribe_params::canary.
+ * A NULL pointer selects transcribe_canary_default_params() values.
+ *
+ * pnc = true (default): the multitask prompt's pnc slot is set to
+ *   <|pnc|>, and the AED emits text with punctuation and standard
+ *   capitalization. This is the regime under which the upstream model
+ *   card WER numbers are reported.
+ *
+ * pnc = false: the prompt slot is set to <|nopnc|>, and the AED emits
+ *   lowercase, de-punctuated text — useful for downstream pipelines
+ *   that re-punctuate or that need verbatim-style output.
+ *
+ * The pnc/nopnc tokens are positional in the multitask prompt; flipping
+ * this changes one token id at the prompt-build site, nothing else.
+ */
+struct transcribe_canary_params {
+    bool pnc;
+};
+
+TRANSCRIBE_API struct transcribe_canary_params
+    transcribe_canary_default_params(void);
 
 /* ----------------------------------------------------------------------- */
 /* Whisper decoding trace                                                  */

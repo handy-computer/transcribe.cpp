@@ -187,6 +187,7 @@ extern "C" struct transcribe_params transcribe_default_params(void) {
     p.whisper            = nullptr;
     p.sensevoice         = nullptr;
     p.funasr_nano        = nullptr;
+    p.canary             = nullptr;
     return p;
 }
 
@@ -203,6 +204,14 @@ transcribe_funasr_nano_default_params(void)
 {
     struct transcribe_funasr_nano_params p = {};
     p.use_itn = false;
+    return p;
+}
+
+extern "C" struct transcribe_canary_params
+transcribe_canary_default_params(void)
+{
+    struct transcribe_canary_params p = {};
+    p.pnc = true;
     return p;
 }
 
