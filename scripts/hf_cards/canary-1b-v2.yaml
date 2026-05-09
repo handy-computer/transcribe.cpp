@@ -61,8 +61,7 @@ summary: |
   between supported language pairs (per the upstream model card). Takes
   a 16 kHz mono WAV and produces a transcript. Not a streaming model;
   word and segment timestamps from the upstream model are not exposed in
-  the v1 port. Single-SP tokenizer (`lang_codes = ["all"]`), distinct
-  from the aggregate-of-multi-SP tokenizers in the other canary variants.
+  the v1 port.
 
 default_quant_index: 2  # Q8_0
 
@@ -73,7 +72,7 @@ wer:
     with greedy decoding and no external LM. F32 reference baseline: 1.92%.
     NVIDIA's self-reported number on the upstream model card is 2.18%;
     our F32 port comes in slightly under the upstream-reported number
-    (Δ −0.26pp) and is well inside the Stage 7 ref-dtype gate.
+    (Δ −0.26pp) and is likely down to scoring differences.
 
 quants:
   - name: F32

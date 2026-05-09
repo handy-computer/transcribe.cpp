@@ -40,12 +40,7 @@ with greedy decoding and no external LM. F32 reference baseline: 1.94%.
 On the same wavs, NeMo's reference run produces 1.93% — one substitution
 difference out of ~27k reference words — so the F32 port matches the
 reference framework at the noise floor. NVIDIA's self-reported number on
-the upstream model card is 1.87%; the small gap is consistent with
-LibriSpeech version / setup differences and is well inside the Stage 7
-ref-dtype gate (|Δ| ≤ 1pp).
-
-Quants are all within ~0.04pp of the F32 baseline; the WER hierarchy is
-flat for this model. Q8_0 and Q4_K_M are both safe choices.
+the upstream model card is 1.87%
 
 ## Quick Start
 

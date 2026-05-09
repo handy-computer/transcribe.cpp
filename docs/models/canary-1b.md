@@ -18,17 +18,6 @@ Offline multilingual speech-to-text and translation. The model takes a
 - **ASR** in English, German, Spanish, and French.
 - **Translation** between supported pairs.
 
-Architecturally distinct from the rest of the canary family:
-
-- **24+24** layers (deepest decoder in the family). Per-token decode
-  latency is ~3–4× the flash variants on the same backend; the
-  flash/180m-flash variants have a shallow 4-layer decoder.
-- Uses the **canary-1 prompt format** (4 slots: source-lang,
-  target-lang, taskname, pnc). The flash variants and canary-1b-v2 use
-  the 5-slot **canary2** format that adds a `<toggle_timestamps>` slot.
-- No timestamps (the upstream model does not advertise word/segment
-  timestamps; the flash and v2 variants do, via a side aligner).
-
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b)
 for training data, intended use, and upstream evaluation methodology.
 
@@ -49,10 +38,9 @@ pinned 2026-05-08.
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.55%.
-NVIDIA's self-reported number on the upstream model card is 1.48%; the
-small gap is well inside the Stage 7 ref-dtype gate (|Δ| ≤ 1pp). Quants
-are exceptionally flat — every preset is within ~0.02pp of F32, the
-tightest cluster of any canary variant.
+NVIDIA's self-reported number on the upstream model card is 1.48%.
+Likely this is due to differences in how we score WER based on the results
+we have from Canary 180m.
 
 ## Quick Start
 

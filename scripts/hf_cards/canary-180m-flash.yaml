@@ -52,9 +52,7 @@ wer:
     On the same wavs, NeMo's reference run produces 1.93% (one substitution
     difference out of ~27k reference words), so the F32 port matches the
     reference framework at the noise floor. NVIDIA's self-reported number
-    on the upstream model card is 1.87%; the small gap is consistent with
-    LibriSpeech version / setup differences and is well inside the
-    Stage 7 ref-dtype gate (|Δ| ≤ 1pp).
+    on the upstream model card is 1.87%.
 
 quants:
   - name: F32

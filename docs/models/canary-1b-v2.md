@@ -26,11 +26,6 @@ variants (180m-flash, 1b-flash) cover only English/German/Spanish/French.
 Not a streaming model. Word and segment timestamps from the upstream
 model are not exposed in the v1 port.
 
-Architecturally distinct from the other canary variants in that v2 uses
-a single SentencePiece tokenizer (`lang_codes = ["all"]`) instead of an
-aggregate of per-language SP models — relevant if you ever need to
-inspect or extend the tokenizer.
-
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-v2)
 for training data, intended use, and upstream evaluation methodology.
 
@@ -52,11 +47,8 @@ pinned 2026-05-08.
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.92%.
 NVIDIA's self-reported number on the upstream model card is 2.18%; our
-F32 port comes in slightly under upstream (Δ −0.26pp) and is well inside
-the Stage 7 ref-dtype gate. Quants are all within ~0.03pp of the F32
-baseline. WER on the other 24 languages has not been measured by this
-port; the LibriSpeech number is English-only and is not a comprehensive
-multilingual benchmark.
+F32 port comes in slightly under upstream (Δ −0.26pp) and is likely
+down to scoring differences.
 
 ## Quick Start
 

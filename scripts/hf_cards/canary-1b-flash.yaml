@@ -47,8 +47,7 @@ wer:
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances)
     with greedy decoding and no external LM. F32 reference baseline: 1.62%.
-    NVIDIA's self-reported number on the upstream model card is 1.48%;
-    the small gap is well inside the Stage 7 ref-dtype gate (|Δ| ≤ 1pp).
+    NVIDIA's self-reported number on the upstream model card is 1.48%.
 
 quants:
   - name: F32

@@ -44,9 +44,7 @@ summary: |
   Transformer decoder — the original canary release. Supports automatic
   speech recognition in English, German, Spanish, and French, and
   translation between supported pairs. Takes a 16 kHz mono WAV and
-  produces a transcript. Not a streaming model; this variant has no
-  timestamp output. Uses the older 4-slot multitask prompt format
-  (canary-1) — the flash variants and v2 use the 5-slot canary2 format.
+  produces a transcript. Not a streaming model.
   **License: CC-BY-NC-4.0 (non-commercial only)** — the only canary
   variant under a non-commercial license.
 
@@ -58,9 +56,8 @@ wer:
     WER measured on the full LibriSpeech test-clean split (2620 utterances)
     with greedy decoding and no external LM. F32 reference baseline: 1.55%.
     NVIDIA's self-reported number on the upstream model card is 1.48%;
-    the small gap is well inside the Stage 7 ref-dtype gate (|Δ| ≤ 1pp).
-    Quants are exceptionally flat for this variant — every preset
-    is within ~0.02pp of the F32 baseline.
+    likely this is due to differences in how we score WER, based on the
+    results we have from canary-180m-flash.
 
 quants:
   - name: F32

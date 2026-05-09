@@ -13,13 +13,6 @@ Offline multilingual speech-to-text and translation. The model takes a
   hint).
 - **Translation** from English to German, Spanish, or French.
 
-Higher accuracy than canary-180m-flash at ~5× the model size; both share
-the same prompt format and the same shallow 4-layer decoder, so
-per-token decode latency is similar — the cost is in the encoder.
-
-Not a streaming model. Word and segment timestamps are upstream-experimental
-and not exposed in the v1 port.
-
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-flash)
 for training data, intended use, and upstream evaluation methodology.
 
@@ -40,9 +33,7 @@ pinned 2026-05-08.
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)
 with greedy decoding and no external LM. F32 reference baseline: 1.62%.
-NVIDIA's self-reported number on the upstream model card is 1.48%; the
-small gap is well inside the Stage 7 ref-dtype gate (|Δ| ≤ 1pp). Quants
-are all within ~0.05pp of the F32 baseline.
+NVIDIA's self-reported number on the upstream model card is 1.48%
 
 ## Quick Start
 
