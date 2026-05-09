@@ -59,12 +59,12 @@ is only run once per 30-second window.
 
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 302.3 ms (36.4×)  | 285.6 ms (38.5×)  |
-| Metal   | dots (35.3s) |   941.3 ms (37.5×) |   878.1 ms (40.2×) |
+| Metal   | jfk (11.0s)  | 280.0 ms (39.3×)  | 270.9 ms (40.6×)  |
+| Metal   | dots (35.3s) |   802.5 ms (44.0×) |   759.2 ms (46.5×) |
 | CPU     | jfk (11.0s)  |     4.75 s (2.3×) |     3.90 s (2.8×) |
 | CPU     | dots (35.3s) |     9.62 s (3.7×) |     7.93 s (4.5×) |
 
-macOS 26.4.1, transcribe.cpp `e6a8a27`.
+macOS 26.4.1, transcribe.cpp `e0fa0f6`.
 
 Benchmark reproduction:
 

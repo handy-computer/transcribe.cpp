@@ -63,12 +63,12 @@ above (2 decimal places).
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  160 ms (69×)  |  161 ms (68×)  |
-| Metal   | dots (35.3s) |  525 ms (67×)  |  513 ms (69×)  |
+| Metal   | jfk (11.0s)  |  150 ms (74×)  |  154 ms (71×)  |
+| Metal   | dots (35.3s) |  491 ms (72×)  |  465 ms (76×)  |
 | CPU     | jfk (11.0s)  | 1.21 s (9×)    | 1.05 s (11×)   |
 | CPU     | dots (35.3s) | 4.13 s (9×)    | 3.49 s (10×)   |
 
-macOS 26.3.1, transcribe.cpp `3912397`.
+macOS 26.4.1, transcribe.cpp `e0fa0f6`.
 
 ### AMD Ryzen 7 4750U Pro
 

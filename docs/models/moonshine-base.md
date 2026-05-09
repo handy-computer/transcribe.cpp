@@ -72,12 +72,12 @@ with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above
 
 | Backend | Sample       |         Q8_0 |
 | ------- | ------------ | -----------: |
-| Metal   | jfk (11.0s)  | 168 ms (65×)  |
-| Metal   | dots (35.3s) | 1.43 s (25×)  |
-| CPU     | jfk (11.0s)  |  96 ms (114×) |
-| CPU     | dots (35.3s) | 719 ms (49×)  |
+| Metal   | jfk (11.0s)  |  96 ms (115×) |
+| Metal   | dots (35.3s) | 811 ms (44×)  |
+| CPU     | jfk (11.0s)  |  98 ms (112×) |
+| CPU     | dots (35.3s) | 721 ms (49×)  |
 
-macOS 26.4.1, transcribe.cpp `0d312ce`.
+macOS 26.4.1, transcribe.cpp `e0fa0f6`.
 
 ### AMD Ryzen 7 4750U Pro
 
