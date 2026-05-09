@@ -145,7 +145,7 @@ struct StepBuild {
     ggml_tensor * pos_id_in      = nullptr;  // i32 [1]
     ggml_tensor * kv_idx_in      = nullptr;  // i64 [1]
     ggml_tensor * mask_in        = nullptr;  // f16 [max_n_kv, 1]
-    ggml_tensor * cross_mask_in  = nullptr;  // f16 [T_enc_pad, 1], may be null
+    ggml_tensor * cross_mask_in  = nullptr;  // f32 [T_enc_pad, 1], may be null
     ggml_tensor * logits_out     = nullptr;  // f32 [vocab, 1] raw logits
     int           max_n_kv       = 0;
     ggml_cgraph * graph          = nullptr;

@@ -1224,7 +1224,11 @@ transcribe_status run(
                         ggml_backend_sched_graph_compute(cc->sched, sb.graph);
                     gs != GGML_STATUS_SUCCESS)
                 {
-                    break;
+                    std::fprintf(stderr,
+                                 "cohere run: step compute failed (%d, n_past=%d)\n",
+                                 static_cast<int>(gs), n_past);
+                    commit_result();
+                    return TRANSCRIBE_ERR_GGUF;
                 }
 
                 n_past += 1;
