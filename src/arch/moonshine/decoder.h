@@ -86,4 +86,34 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           compute_ctx,
                                     bool                     skip_log_softmax = false,
                                     bool                     use_flash        = true);
 
+// Static-topology single-token decoder graph. Built once per utterance
+// after the prompt pass and reused for every step in the autoregressive
+// loop. Independent of n_past:
+//   - KV cache writes go through ggml_set_rows with kv_idx_in as the
+//     runtime row index (post-RoPE K / unrotated V).
+//   - Self-attn K/V reads span the full [0, max_n_kv) window; mask_in
+//     gates which positions are valid each step.
+//   - RoPE position and KV write index come from pos_id_in / kv_idx_in
+//     so the graph topology never changes.
+//
+// Caller pre-allocates the graph + sched once and only updates the
+// runtime inputs (token_id_in, pos_id_in, kv_idx_in, mask_in) per step.
+struct StepBuild {
+    ggml_tensor * token_id_in = nullptr;  // i32 [1]
+    ggml_tensor * pos_id_in   = nullptr;  // i32 [1]
+    ggml_tensor * kv_idx_in   = nullptr;  // i64 [1]
+    ggml_tensor * mask_in     = nullptr;  // f16 [max_n_kv, 1]
+    ggml_tensor * argmax_out  = nullptr;  // i32 [1]
+    int           max_n_kv    = 0;
+    ggml_cgraph * graph       = nullptr;
+};
+
+StepBuild build_step_graph(ggml_context *           compute_ctx,
+                           const MoonshineWeights & weights,
+                           const MoonshineHParams & hp,
+                           MoonshineKvCache &       kv_cache,
+                           int                      max_n_kv,
+                           int                      T_enc,
+                           bool                     use_flash = true);
+
 } // namespace transcribe::moonshine

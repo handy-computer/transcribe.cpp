@@ -58,12 +58,12 @@ model size grows; the encoder is only run once per 30-second window.
 
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
 | ------- | ------------ | ---------------: | ---------------: |
-| Metal   | jfk (11.0s)  | 516.9 ms (21.3×) | 511.9 ms (21.5×) |
-| Metal   | dots (35.3s) |   1.49 s (23.8×) |   1.45 s (24.3×) |
+| Metal   | jfk (11.0s)  | 508.6 ms (21.6×) | 517.0 ms (21.3×) |
+| Metal   | dots (35.3s) |   1.38 s (25.7×) |   1.35 s (26.1×) |
 | CPU     | jfk (11.0s)  |    9.68 s (1.1×) |    7.48 s (1.5×) |
 | CPU     | dots (35.3s) |   19.86 s (1.8×) |   15.45 s (2.3×) |
 
-macOS 26.4.1, transcribe.cpp `4d2270e`.
+macOS 26.4.1, transcribe.cpp `e0fa0f6`.
 
 Benchmark reproduction:
 
@@ -81,12 +81,12 @@ uv run scripts/bench/run.py \
 
 | Backend | Sample       |            Q8_0 |          Q4_K_M |
 | ------- | ------------ | --------------: | --------------: |
-| Vulkan  | jfk (11.0s)  |  6.40 s (1.7×)  |  6.46 s (1.7×)  |
-| Vulkan  | dots (35.3s) |  15.17 s (2.3×) |  14.94 s (2.4×) |
+| Vulkan  | jfk (11.0s)  |  6.30 s (1.7×)  |  6.07 s (1.8×)  |
+| Vulkan  | dots (35.3s) |  14.42 s (2.5×) |  13.75 s (2.6×) |
 | CPU     | jfk (11.0s)  |  25.59 s (0.4×) |  19.96 s (0.6×) |
 | CPU     | dots (35.3s) |  53.80 s (0.7×) |  43.18 s (0.8×) |
 
-Fedora 43, transcribe.cpp `01127e6`. Vulkan device: `AMD Radeon
+Fedora 43, transcribe.cpp `e0fa0f6`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:

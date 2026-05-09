@@ -126,4 +126,37 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         compute_ctx,
                                     bool                   skip_log_softmax = false,
                                     bool                   use_flash        = true);
 
+// Static-topology single-token decoder graph. Built once per tier
+// after the prompt pass and reused for every step in the tier's
+// autoregressive loop. Independent of n_past:
+//   - KV cache writes go through ggml_set_rows with kv_idx_in as the
+//     runtime row index (instead of ggml_cpy at a build-time-baked
+//     view offset).
+//   - Self-attn K/V reads span the full [0, max_n_kv) window; mask_in
+//     gates which positions are valid each step.
+//
+// Logits-out variant: the graph emits raw pre-softmax logits, not an
+// in-graph argmax. Whisper's host loop needs full logits for the
+// suppress_tokens / timestamp-rule masks and temperature sampling, so
+// the in-graph argmax shortcut from canary/cohere/moonshine doesn't
+// apply.
+struct StepBuild {
+    ggml_tensor * token_id_in    = nullptr;  // i32 [1]
+    ggml_tensor * pos_id_in      = nullptr;  // i32 [1]
+    ggml_tensor * kv_idx_in      = nullptr;  // i64 [1]
+    ggml_tensor * mask_in        = nullptr;  // f16 [max_n_kv, 1]
+    ggml_tensor * cross_mask_in  = nullptr;  // f32 [T_enc_pad, 1], may be null
+    ggml_tensor * logits_out     = nullptr;  // f32 [vocab, 1] raw logits
+    int           max_n_kv       = 0;
+    ggml_cgraph * graph          = nullptr;
+};
+
+StepBuild build_step_graph(ggml_context *         compute_ctx,
+                           const WhisperWeights & weights,
+                           const WhisperHParams & hp,
+                           WhisperKvCache &       kv_cache,
+                           int                    max_n_kv,
+                           int                    T_enc,
+                           bool                   use_flash = true);
+
 } // namespace transcribe::whisper

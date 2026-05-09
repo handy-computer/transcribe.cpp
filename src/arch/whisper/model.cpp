@@ -2215,7 +2215,79 @@ transcribe_status whisper_run(
             }
 
             // ---- Step loop (n_tokens=1) -------------------------------
+            //
+            // Two variants:
+            //   GPU (Vulkan/Metal/CUDA/SYCL): build_step_graph — one
+            //     static-topology graph per tier. KV writes via
+            //     ggml_set_rows at runtime kv_idx; flash-attn reads a
+            //     fixed max_n_kv window with a runtime mask. Removes
+            //     per-step graph_build + sched_alloc.
+            //   CPU (or debug, which needs the gen20 dump path): per-
+            //     step build_decoder_graph_kv with a dynamic n_kv.
             int n_past = seq_len;
+            const bool primary_is_gpu =
+                cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
+                cm->plan.primary_kind != transcribe::BackendKind::Accel &&
+                cm->plan.primary_kind != transcribe::BackendKind::Unknown;
+            const bool use_step_graph = primary_is_gpu &&
+                                        !transcribe::debug::enabled();
+
+            // Sized to fit prompt + max generated tail, padded to next
+            // pow2. For whisper this is typically 256 or 512 (cap is
+            // n_ctx_decoder=448).
+            int max_n_kv = 256;
+            while (max_n_kv < seq_len + k_max_new_tokens) max_n_kv *= 2;
+            if (max_n_kv > static_cast<int>(n_ctx_decoder)) {
+                max_n_kv = static_cast<int>(n_ctx_decoder);
+            }
+
+            // Step graph + persistent host buffers, only valid on
+            // use_step_graph path. Built lazily inside the loop on
+            // first use to keep the dynamic-graph fallback unaffected.
+            StepBuild sb {};
+            std::vector<ggml_fp16_t> step_mask;
+            std::vector<float>       step_cross_mask;
+            const ggml_fp16_t mask_zero    = ggml_fp32_to_fp16(0.0f);
+            const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
+
+            if (use_step_graph) {
+                if (!new_compute_ctx(8 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+                sb = build_step_graph(
+                    cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
+                    max_n_kv, T_enc_local, cc->decoder_use_flash);
+                if (sb.graph == nullptr || sb.logits_out == nullptr) {
+                    std::fprintf(stderr,
+                                 "whisper run: build_step_graph failed\n");
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                ggml_backend_sched_reset(cc->sched);
+                if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+                    std::fprintf(stderr,
+                                 "whisper run: sched_alloc_graph failed (step)\n");
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+
+                // Self-attn mask: [0, seq_len) populated by prompt pass
+                // are attendable; [seq_len, max_n_kv) start as -inf.
+                step_mask.assign(max_n_kv, mask_neg_inf);
+                for (int p = 0; p < seq_len; ++p) step_mask[p] = mask_zero;
+
+                // Cross mask is invariant across steps within a chunk —
+                // upload once and reuse.
+                if (sb.cross_mask_in != nullptr) {
+                    const int n_kv_cross =
+                        static_cast<int>(sb.cross_mask_in->ne[0]);
+                    step_cross_mask.assign(
+                        static_cast<size_t>(n_kv_cross), 0.0f);
+                    for (int k = T_enc_local; k < n_kv_cross; ++k) {
+                        step_cross_mask[static_cast<size_t>(k)] = -1e9f;
+                    }
+                    ggml_backend_tensor_set(
+                        sb.cross_mask_in, step_cross_mask.data(),
+                        0, step_cross_mask.size() * sizeof(float));
+                }
+            }
+
             for (int step = 0; step < k_max_new_tokens; ++step) {
                 if (next_id == eos_id) {
                     tier_hit_eos = true;
@@ -2228,96 +2300,133 @@ transcribe_status whisper_run(
                 consume_generated_token(next_id);
 
                 if (n_past + 1 > static_cast<int>(n_ctx_decoder)) break;
-
-                const int64_t t_step_build_start = ggml_time_us();
-                if (!new_compute_ctx(4 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
-                const int kv_pad = kv_pad_self_attn(
-                    cm->plan.primary_kind, cc->decoder_use_flash);
-                DecoderBuild step_db = build_decoder_graph_kv(
-                    cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
-                    /*n_tokens=*/1, /*n_past=*/n_past, T_enc_local,
-                    /*kv_pad=*/kv_pad,
-                    /*skip_log_softmax=*/true, cc->decoder_use_flash);
-                if (step_db.out == nullptr) return TRANSCRIBE_ERR_GGUF;
-                cc->perf.step_build.add(ggml_time_us() - t_step_build_start);
-
-                const int64_t t_step_alloc_start = ggml_time_us();
-                ggml_backend_sched_reset(cc->sched);
-                if (!ggml_backend_sched_alloc_graph(cc->sched, step_db.graph)) {
-                    return TRANSCRIBE_ERR_GGUF;
+                if (use_step_graph && n_past + 1 > max_n_kv) {
+                    std::fprintf(stderr,
+                                 "whisper run: hit max_n_kv=%d at n_past=%d\n",
+                                 max_n_kv, n_past);
+                    break;
                 }
 
-                int32_t tok = next_id;
-                int32_t pos = n_past;
-                ggml_backend_tensor_set(step_db.token_ids_in, &tok, 0, sizeof(int32_t));
-                ggml_tensor * pos_in = ggml_graph_get_tensor(step_db.graph, "dec.pos_ids");
-                ggml_backend_tensor_set(pos_in, &pos, 0, sizeof(int32_t));
-
-                // Padded step: build the trailing-padding mask. The
-                // valid range [0, n_past+1) is 0; trailing slots are
-                // -inf so the FA op ignores stale K/V values left in
-                // the cache from previous tiers / chunks.
-                if (step_db.causal_mask_in != nullptr) {
-                    const int n_kv_mask =
-                        static_cast<int>(step_db.causal_mask_in->ne[0]);
-                    std::vector<float> mask(
-                        static_cast<size_t>(n_kv_mask), 0.0f);
-                    const int n_valid = n_past + 1;
-                    for (int k = n_valid; k < n_kv_mask; ++k) {
-                        mask[static_cast<size_t>(k)] = -1e9f;
-                    }
-                    ggml_backend_tensor_set(
-                        step_db.causal_mask_in, mask.data(),
-                        0, mask.size() * sizeof(float));
-                }
-
-                if (step_db.cross_mask_in != nullptr) {
-                    // Cross mask shape [T_enc_pad, 1]. Same shape
-                    // every step within a chunk; could be hoisted out
-                    // of the step loop later, but T_enc_pad is small
-                    // (1536 floats) so the upload is negligible.
-                    const int n_kv_cross =
-                        static_cast<int>(step_db.cross_mask_in->ne[0]);
-                    std::vector<float> mask(
-                        static_cast<size_t>(n_kv_cross), 0.0f);
-                    for (int k = T_enc_local; k < n_kv_cross; ++k) {
-                        mask[static_cast<size_t>(k)] = -1e9f;
-                    }
-                    ggml_backend_tensor_set(
-                        step_db.cross_mask_in, mask.data(),
-                        0, mask.size() * sizeof(float));
-                }
-                cc->perf.step_alloc.add(ggml_time_us() - t_step_alloc_start);
-
-                const int64_t t_step_compute_start = ggml_time_us();
-                if (const ggml_status gs = ggml_backend_sched_graph_compute(
-                        cc->sched, step_db.graph);
-                    gs != GGML_STATUS_SUCCESS)
-                {
-                    return TRANSCRIBE_ERR_GGUF;
-                }
-                cc->perf.step_compute.add(ggml_time_us() - t_step_compute_start);
-
-                n_past += 1;
-                cc->kv_cache.n    = n_past;
-                cc->kv_cache.head = n_past;
-
-                // Mid-generation dump: step 19's logits exercise the
-                // n_past>0 KV read/write path the prompt-pass dump
-                // cannot reach. Captured on tier 0 of the first chunk
-                // only (tolerance references were generated at T=0).
-                if (step == 19) {
-                    tier_try_dump("dec.logits_raw.gen20", step_db.out,
-                                  "decoder.logits_raw.gen20");
-                }
-
-                // step graph emits pre-softmax logits (sample-invariant
-                // when T=0, so tolerance paths still produce the same
-                // token sequence).
                 const size_t row_bytes = static_cast<size_t>(vocab_size) * sizeof(float);
-                const int64_t t_step_tget_start = ggml_time_us();
-                ggml_backend_tensor_get(step_db.out, last_logits.data(), 0, row_bytes);
-                cc->perf.step_tensor_get.add(ggml_time_us() - t_step_tget_start);
+
+                if (use_step_graph) {
+                    const int64_t t_step_alloc_start = ggml_time_us();
+                    int32_t tok      = next_id;
+                    int32_t pos_val  = n_past;
+                    int64_t kv_val   = n_past;
+                    ggml_backend_tensor_set(sb.token_id_in, &tok,     0, sizeof(int32_t));
+                    ggml_backend_tensor_set(sb.pos_id_in,   &pos_val, 0, sizeof(int32_t));
+                    ggml_backend_tensor_set(sb.kv_idx_in,   &kv_val,  0, sizeof(int64_t));
+
+                    step_mask[n_past] = mask_zero;
+                    ggml_backend_tensor_set(
+                        sb.mask_in, step_mask.data(),
+                        0, static_cast<size_t>(max_n_kv) * sizeof(ggml_fp16_t));
+                    cc->perf.step_alloc.add(
+                        ggml_time_us() - t_step_alloc_start);
+
+                    const int64_t t_step_compute_start = ggml_time_us();
+                    if (const ggml_status gs = ggml_backend_sched_graph_compute(
+                            cc->sched, sb.graph);
+                        gs != GGML_STATUS_SUCCESS)
+                    {
+                        return TRANSCRIBE_ERR_GGUF;
+                    }
+                    cc->perf.step_compute.add(
+                        ggml_time_us() - t_step_compute_start);
+
+                    n_past += 1;
+                    cc->kv_cache.n    = n_past;
+                    cc->kv_cache.head = n_past;
+
+                    const int64_t t_step_tget_start = ggml_time_us();
+                    ggml_backend_tensor_get(sb.logits_out, last_logits.data(),
+                                            0, row_bytes);
+                    cc->perf.step_tensor_get.add(
+                        ggml_time_us() - t_step_tget_start);
+                } else {
+                    const int64_t t_step_build_start = ggml_time_us();
+                    if (!new_compute_ctx(4 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+                    const int kv_pad = kv_pad_self_attn(
+                        cm->plan.primary_kind, cc->decoder_use_flash);
+                    DecoderBuild step_db = build_decoder_graph_kv(
+                        cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
+                        /*n_tokens=*/1, /*n_past=*/n_past, T_enc_local,
+                        /*kv_pad=*/kv_pad,
+                        /*skip_log_softmax=*/true, cc->decoder_use_flash);
+                    if (step_db.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+                    cc->perf.step_build.add(ggml_time_us() - t_step_build_start);
+
+                    const int64_t t_step_alloc_start = ggml_time_us();
+                    ggml_backend_sched_reset(cc->sched);
+                    if (!ggml_backend_sched_alloc_graph(cc->sched, step_db.graph)) {
+                        return TRANSCRIBE_ERR_GGUF;
+                    }
+
+                    int32_t tok = next_id;
+                    int32_t pos = n_past;
+                    ggml_backend_tensor_set(step_db.token_ids_in, &tok, 0, sizeof(int32_t));
+                    ggml_tensor * pos_in = ggml_graph_get_tensor(step_db.graph, "dec.pos_ids");
+                    ggml_backend_tensor_set(pos_in, &pos, 0, sizeof(int32_t));
+
+                    // Padded step: build the trailing-padding mask. The
+                    // valid range [0, n_past+1) is 0; trailing slots are
+                    // -inf so the FA op ignores stale K/V values left in
+                    // the cache from previous tiers / chunks.
+                    if (step_db.causal_mask_in != nullptr) {
+                        const int n_kv_mask =
+                            static_cast<int>(step_db.causal_mask_in->ne[0]);
+                        std::vector<float> mask(
+                            static_cast<size_t>(n_kv_mask), 0.0f);
+                        const int n_valid = n_past + 1;
+                        for (int k = n_valid; k < n_kv_mask; ++k) {
+                            mask[static_cast<size_t>(k)] = -1e9f;
+                        }
+                        ggml_backend_tensor_set(
+                            step_db.causal_mask_in, mask.data(),
+                            0, mask.size() * sizeof(float));
+                    }
+
+                    if (step_db.cross_mask_in != nullptr) {
+                        const int n_kv_cross =
+                            static_cast<int>(step_db.cross_mask_in->ne[0]);
+                        std::vector<float> mask(
+                            static_cast<size_t>(n_kv_cross), 0.0f);
+                        for (int k = T_enc_local; k < n_kv_cross; ++k) {
+                            mask[static_cast<size_t>(k)] = -1e9f;
+                        }
+                        ggml_backend_tensor_set(
+                            step_db.cross_mask_in, mask.data(),
+                            0, mask.size() * sizeof(float));
+                    }
+                    cc->perf.step_alloc.add(ggml_time_us() - t_step_alloc_start);
+
+                    const int64_t t_step_compute_start = ggml_time_us();
+                    if (const ggml_status gs = ggml_backend_sched_graph_compute(
+                            cc->sched, step_db.graph);
+                        gs != GGML_STATUS_SUCCESS)
+                    {
+                        return TRANSCRIBE_ERR_GGUF;
+                    }
+                    cc->perf.step_compute.add(ggml_time_us() - t_step_compute_start);
+
+                    n_past += 1;
+                    cc->kv_cache.n    = n_past;
+                    cc->kv_cache.head = n_past;
+
+                    // Mid-generation dump: step 19's logits exercise the
+                    // n_past>0 KV read/write path the prompt-pass dump
+                    // cannot reach. Captured on tier 0 of the first chunk
+                    // only (tolerance references were generated at T=0).
+                    if (step == 19) {
+                        tier_try_dump("dec.logits_raw.gen20", step_db.out,
+                                      "decoder.logits_raw.gen20");
+                    }
+
+                    const int64_t t_step_tget_start = ggml_time_us();
+                    ggml_backend_tensor_get(step_db.out, last_logits.data(), 0, row_bytes);
+                    cc->perf.step_tensor_get.add(ggml_time_us() - t_step_tget_start);
+                }
 
                 const int64_t t_step_cpu_start = ggml_time_us();
                 const int64_t t_step_suppress_start = ggml_time_us();

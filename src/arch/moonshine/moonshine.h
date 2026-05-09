@@ -124,9 +124,24 @@ struct MoonshineContext final : public transcribe_context {
 
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
-    // Flash-attention. head_dim_padded for tiny is 40, which has good
-    // backend support; default both stages on. TRANSCRIBE_NO_FLASH /
-    // TRANSCRIBE_FORCE_FLASH env overrides apply per the shared policy.
+    // Flash-attention defaults — finalized per-backend in init_context.
+    //
+    // Encoder: ON everywhere. The encoder runs as one big graph with
+    // nq=T_enc, and both shipped variants benefit from FA there (tiny
+    // especially — ~2x encoder speedup on long audio).
+    //
+    // Decoder: ON everywhere except Metal. Vulkan/RADV measures ~15%
+    // faster on decode_ms with FA on (jfk q8_0: tiny 112→98 ms,
+    // base 165→143 ms). Metal is the outlier: moonshine-base's
+    // head_dim_padded=56 is NOT in Metal's supported FA head-size set
+    // ({32,40,48,64,72,80,96,...}), so the FA op spills per-step to CPU
+    // and is ~2x SLOWER than the explicit kq->softmax->v·kq path; tiny's
+    // head_dim_padded=40 IS supported on Metal but only via the tile
+    // kernel (vec needs head_dim%32==0), roughly a wash. Net: keep
+    // decoder FA off on Metal until either (a) we re-pad head_dim to
+    // 64 to enable the FA vec kernel, or (b) ggml Metal grows support
+    // for these head sizes. TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH
+    // still apply on top.
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 

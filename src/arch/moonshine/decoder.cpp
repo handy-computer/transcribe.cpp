@@ -264,6 +264,133 @@ ggml_tensor * mha_self_cached(ggml_context *           ctx,
     return o;
 }
 
+// Self-attention for the static-topology step graph. KV cache writes
+// go through ggml_set_rows at runtime row index `kv_idx`; reads span
+// the full [0, max_n_kv) window with `mask` gating valid positions.
+// n_tokens is implicitly 1.
+//
+// Partial RoPE: the new Q's RoPE is computed at runtime position
+// `pos_ids` ([1] i32). The cache stores K already-rotated at its
+// original position, so only the new K row needs rotation here.
+ggml_tensor * mha_self_step(ggml_context *           ctx,
+                            ggml_cgraph *            gf,
+                            ggml_tensor *            x,
+                            MoonshineKvCache &       kv_cache,
+                            ggml_tensor *            pos_ids,
+                            ggml_tensor *            kv_idx,
+                            ggml_tensor *            mask,
+                            ggml_tensor *            q_w,
+                            ggml_tensor *            k_w,
+                            ggml_tensor *            v_w,
+                            ggml_tensor *            out_w,
+                            const MoonshineHParams & hp,
+                            int                      n_heads,
+                            int                      d_model,
+                            int                      il,
+                            int                      max_n_kv,
+                            bool                     use_flash)
+{
+    const int   head_dim     = d_model / n_heads;
+    const int   head_dim_pad = hp.dec_head_dim_padded();
+    const int   head_dim_rot = hp.dec_head_dim_rot();
+    const int   pad          = head_dim_pad - head_dim;
+    const int   n_ctx        = kv_cache.n_ctx;
+    const float scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+    // Q, K, V projections (bias-less).
+    ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
+    ggml_tensor * Kcur = ggml_mul_mat(ctx, k_w, x);
+    ggml_tensor * Vcur = ggml_mul_mat(ctx, v_w, x);
+
+    // Reshape to [head_dim, n_heads, 1, 1]. RoPE expects ne[2]==pos_count.
+    Qcur = ggml_reshape_4d(ctx, Qcur, head_dim, n_heads, 1, 1);
+    Kcur = ggml_reshape_4d(ctx, Kcur, head_dim, n_heads, 1, 1);
+
+    ggml_tensor * Q_rope = apply_partial_rope(ctx, Qcur, pos_ids, hp, head_dim_rot);
+    ggml_tensor * K_rope = apply_partial_rope(ctx, Kcur, pos_ids, hp, head_dim_rot);
+
+    // Q for attention: [head_dim, 1, n_heads, 1]
+    ggml_tensor * Q_unpad = ggml_cont(ctx, ggml_permute(ctx, Q_rope, 0, 2, 1, 3));
+
+    // KV cache write via ggml_set_rows. Per-layer view spans [d_model, n_ctx];
+    // we write one [d_model, 1] row at the kv_idx position. K_rope is the
+    // post-RoPE K; V is the unrotated projection.
+    {
+        const size_t k_elem = ggml_element_size(kv_cache.self_k);
+        const size_t v_elem = ggml_element_size(kv_cache.self_v);
+        const size_t layer_off_k = k_elem * static_cast<size_t>(
+            static_cast<int64_t>(il) * n_ctx * d_model);
+        const size_t layer_off_v = v_elem * static_cast<size_t>(
+            static_cast<int64_t>(il) * n_ctx * d_model);
+
+        ggml_tensor * k_layer = ggml_view_2d(
+            ctx, kv_cache.self_k,
+            d_model, n_ctx,
+            k_elem * d_model, layer_off_k);
+        ggml_tensor * v_layer = ggml_view_2d(
+            ctx, kv_cache.self_v,
+            d_model, n_ctx,
+            v_elem * d_model, layer_off_v);
+
+        // K_rope is [head_dim, n_heads, 1, 1] contiguous → reshape to [d_model, 1].
+        ggml_tensor * K_row = ggml_reshape_2d(ctx, ggml_cont(ctx, K_rope),
+                                              d_model, 1);
+        ggml_tensor * V_row = ggml_reshape_2d(ctx, Vcur, d_model, 1);
+
+        ggml_build_forward_expand(
+            gf, ggml_set_rows(ctx, k_layer, K_row, kv_idx));
+        ggml_build_forward_expand(
+            gf, ggml_set_rows(ctx, v_layer, V_row, kv_idx));
+    }
+
+    // Static read across [0, max_n_kv); mask zeros valid positions and
+    // -inf's the rest, so flash-attn ignores empty/future slots.
+    const size_t k_elem = ggml_element_size(kv_cache.self_k);
+    ggml_tensor * K = ggml_view_3d(
+        ctx, kv_cache.self_k,
+        head_dim, max_n_kv, n_heads,
+        k_elem * d_model,
+        k_elem * head_dim,
+        k_elem * static_cast<size_t>(
+            static_cast<int64_t>(il) * n_ctx * d_model));
+
+    const size_t v_elem = ggml_element_size(kv_cache.self_v);
+    ggml_tensor * V = ggml_view_3d(
+        ctx, kv_cache.self_v,
+        head_dim, max_n_kv, n_heads,
+        v_elem * d_model,
+        v_elem * head_dim,
+        v_elem * static_cast<size_t>(
+            static_cast<int64_t>(il) * n_ctx * d_model));
+
+    // Pad head_dim on Q, K, V before attention (HF behavior).
+    ggml_tensor * Q   = pad_head_dim(ctx, Q_unpad, pad);
+    ggml_tensor * K_p = pad_head_dim(ctx, ggml_cont(ctx, K), pad);
+    ggml_tensor * V_p = pad_head_dim(ctx, ggml_cont(ctx, V), pad);
+
+    ggml_tensor * o;
+    if (use_flash) {
+        o = ggml_flash_attn_ext(ctx, Q, K_p, V_p, mask, scale, 0.0f, 0.0f);
+        o = ggml_permute(ctx, o, 0, 2, 1, 3);
+        o = ggml_cont(ctx, o);
+    } else {
+        ggml_tensor * kq      = ggml_mul_mat(ctx, K_p, Q);
+        ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask, scale, 0.0f);
+        ggml_tensor * v_t     = ggml_cont(ctx, ggml_permute(ctx, V_p, 1, 0, 2, 3));
+        o = ggml_mul_mat(ctx, v_t, kq_soft);
+    }
+
+    if (pad > 0) {
+        o = unpad_head_dim(ctx, o, head_dim, pad);
+        o = ggml_cont(ctx, o);
+    }
+    o = ggml_permute(ctx, o, 0, 2, 1, 3);
+    o = ggml_cont(ctx, o);
+    o = ggml_reshape_2d(ctx, o, d_model, 1);
+    o = ggml_mul_mat(ctx, out_w, o);
+    return o;
+}
+
 // Cross-attention reading the pre-populated cross KV cache. No RoPE on
 // either side. Same head_dim padding policy as self-attn.
 ggml_tensor * mha_cross_cached(ggml_context *           ctx,
@@ -592,6 +719,109 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
     }
 
     return db;
+}
+
+// ---------------------------------------------------------------------------
+// Static-topology single-token step graph (GPU dispatch path).
+// ---------------------------------------------------------------------------
+
+StepBuild build_step_graph(ggml_context *           ctx,
+                           const MoonshineWeights & w,
+                           const MoonshineHParams & hp,
+                           MoonshineKvCache &       kv_cache,
+                           int                      max_n_kv,
+                           int                      T_enc,
+                           bool                     use_flash)
+{
+    StepBuild sb {};
+    sb.max_n_kv = max_n_kv;
+
+    if (ctx == nullptr || max_n_kv <= 0 || T_enc <= 0) {
+        std::fprintf(stderr,
+                     "moonshine step: invalid arg (max_n_kv=%d, T_enc=%d)\n",
+                     max_n_kv, T_enc);
+        return sb;
+    }
+    if (max_n_kv > kv_cache.n_ctx) {
+        std::fprintf(stderr,
+                     "moonshine step: max_n_kv=%d exceeds kv_cache.n_ctx=%d\n",
+                     max_n_kv, kv_cache.n_ctx);
+        return sb;
+    }
+
+    const int d_model = hp.dec_d_model;
+    const int n_heads = hp.dec_n_heads;
+
+    sb.token_id_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_set_name(sb.token_id_in, "step.token_id");
+    ggml_set_input(sb.token_id_in);
+
+    sb.pos_id_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    ggml_set_name(sb.pos_id_in, "step.pos_id");
+    ggml_set_input(sb.pos_id_in);
+
+    sb.kv_idx_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, 1);
+    ggml_set_name(sb.kv_idx_in, "step.kv_idx");
+    ggml_set_input(sb.kv_idx_in);
+
+    sb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, max_n_kv, 1);
+    ggml_set_name(sb.mask_in, "step.mask");
+    ggml_set_input(sb.mask_in);
+
+    sb.graph = ggml_new_graph_custom(ctx, 8192, false);
+    if (sb.graph == nullptr) {
+        std::fprintf(stderr, "moonshine step: ggml_new_graph_custom failed\n");
+        return sb;
+    }
+
+    // Token embedding (no additive positional embedding).
+    ggml_tensor * x = ggml_get_rows(ctx, w.dec_top.token_embd_w, sb.token_id_in);
+
+    const int n_blocks = static_cast<int>(w.dec_blocks.size());
+    for (int i = 0; i < n_blocks; ++i) {
+        const auto & b = w.dec_blocks[i];
+
+        // Self-attn (pre-LN, partial RoPE, set_rows-based KV write).
+        {
+            ggml_tensor * y = layer_norm(ctx, x, b.norm_self_w, /*beta=*/nullptr);
+            y = mha_self_step(
+                ctx, sb.graph, y, kv_cache, sb.pos_id_in, sb.kv_idx_in, sb.mask_in,
+                b.self_q_w, b.self_k_w, b.self_v_w, b.self_out_w,
+                hp, n_heads, d_model,
+                i, max_n_kv, use_flash);
+            x = ggml_add(ctx, x, y);
+        }
+        // Cross-attn (pre-LN, no RoPE, reads pre-populated cache).
+        {
+            ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, /*beta=*/nullptr);
+            y = mha_cross_cached(
+                ctx, y, kv_cache,
+                b.cross_q_w, b.cross_out_w,
+                hp, n_heads, d_model, i, T_enc, use_flash);
+            x = ggml_add(ctx, x, y);
+        }
+        // SwiGLU MLP (pre-LN).
+        {
+            ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, /*beta=*/nullptr);
+            y = ffn_decoder_swiglu(ctx, y,
+                                   b.ffn_fc1_w, b.ffn_fc1_b,
+                                   b.ffn_fc2_w, b.ffn_fc2_b,
+                                   hp.dec_ffn_dim);
+            x = ggml_add(ctx, x, y);
+        }
+    }
+
+    x = layer_norm(ctx, x, w.dec_top.final_norm_w, /*beta=*/nullptr);
+
+    // Tied lm_head.
+    ggml_tensor * logits = ggml_mul_mat(ctx, w.dec_top.token_embd_w, x);
+
+    sb.argmax_out = ggml_argmax(ctx, logits);
+    ggml_set_name(sb.argmax_out, "step.argmax");
+    ggml_set_output(sb.argmax_out);
+    ggml_build_forward_expand(sb.graph, sb.argmax_out);
+
+    return sb;
 }
 
 } // namespace transcribe::moonshine
