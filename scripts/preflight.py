@@ -5,6 +5,7 @@
 #   "huggingface-hub>=0.24",
 #   "safetensors>=0.4",
 #   "gguf>=0.10",
+#   "pyyaml>=6.0",
 # ]
 # ///
 """preflight.py - cross-source consistency checks for a model port.
@@ -42,11 +43,12 @@ import datetime as dt
 import glob
 import json
 import sys
+import tarfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, HfFileSystem, hf_hub_download
 from huggingface_hub.errors import HfHubHTTPError
 
 
@@ -131,7 +133,7 @@ def load_declared_state(repo_root: Path, family: str, variant: str | None) -> di
     """Prefer intake.json if it exists; otherwise fall back to the golden manifest.
 
     Returns a normalized dict with: hf_repo, hf_revision, expected_dtype,
-    frontend, tokenizer, source ("intake" or "manifest").
+    frontend, tokenizer, reference_framework, source ("intake" or "manifest").
     """
     intake = _find_intake(repo_root, family, variant)
     if intake:
@@ -143,6 +145,7 @@ def load_declared_state(repo_root: Path, family: str, variant: str | None) -> di
             "frontend": data.get("frontend", {}),
             "tokenizer": data.get("tokenizer", {}),
             "capabilities": data.get("capabilities", {}),
+            "reference_framework": data.get("reference_framework"),
             "source": f"intake:{intake.relative_to(repo_root)}",
         }
 
@@ -159,6 +162,7 @@ def load_declared_state(repo_root: Path, family: str, variant: str | None) -> di
             "frontend": data.get("frontend", {}),
             "tokenizer": data.get("tokenizer_summary", {}),
             "capabilities": data.get("capabilities", {}),
+            "reference_framework": data.get("reference", {}).get("kind") if isinstance(data.get("reference"), dict) else None,
             "source": f"manifest:{manifest.relative_to(repo_root)}",
         }
 
@@ -211,8 +215,20 @@ def _load_json_from_hf(repo: str, revision: str | None, filename: str) -> dict |
         return json.load(f)
 
 
-def load_reference_state(hf_repo: str, hf_revision: str | None) -> dict[str, Any]:
-    """Pull config.json, preprocessor, and tokenizer info from the source HF repo."""
+def load_reference_state(
+    hf_repo: str,
+    hf_revision: str | None,
+    reference_framework: str | None = None,
+) -> dict[str, Any]:
+    """Pull config.json, preprocessor, and tokenizer info from the source HF repo.
+
+    When reference_framework=="nemo" and a .nemo file is in the repo siblings,
+    prefer the .nemo's model_config.yaml for the preprocessor block and mark
+    the reference as nemo-authoritative so the dtype check skips HF
+    config.json's torch_dtype (NeMo training metadata that often disagrees
+    with storage). The .nemo's state_dict dtype is the ground truth at
+    Stage 3 convert; Gate B compares against the GGUF.
+    """
     config = _load_json_from_hf(hf_repo, hf_revision, "config.json")
     pre = (
         _load_json_from_hf(hf_repo, hf_revision, "preprocessor_config.json")
@@ -220,12 +236,100 @@ def load_reference_state(hf_repo: str, hf_revision: str | None) -> dict[str, Any
     )
     tok_cfg = _load_json_from_hf(hf_repo, hf_revision, "tokenizer_config.json")
     gen_cfg = _load_json_from_hf(hf_repo, hf_revision, "generation_config.json")
+
+    nemo_authoritative = False
+    nemo_source: str | None = None
+    if reference_framework == "nemo":
+        nemo_filename = _find_nemo_sibling(hf_repo, hf_revision)
+        if nemo_filename:
+            nemo_cfg = _load_nemo_model_config(hf_repo, hf_revision, nemo_filename)
+            if nemo_cfg is not None:
+                nemo_pre = _nemo_preprocessor_to_pre(nemo_cfg)
+                if nemo_pre:
+                    pre = nemo_pre  # NeMo's model_config.yaml is canonical for the family
+                nemo_authoritative = True
+                nemo_source = nemo_filename
+
     return {
         "config": config,
         "preprocessor": pre,
         "tokenizer_config": tok_cfg,
         "generation_config": gen_cfg,
+        "nemo_authoritative": nemo_authoritative,
+        "nemo_source": nemo_source,
     }
+
+
+def _find_nemo_sibling(hf_repo: str, hf_revision: str | None) -> str | None:
+    """Return the first `.nemo` filename in the repo siblings, or None."""
+    try:
+        info = HfApi().model_info(hf_repo, revision=hf_revision)
+    except HfHubHTTPError:
+        return None
+    for sib in info.siblings or []:
+        name = getattr(sib, "rfilename", None) or ""
+        if name.endswith(".nemo"):
+            return name
+    return None
+
+
+def _load_nemo_model_config(hf_repo: str, hf_revision: str | None, nemo_filename: str) -> dict | None:
+    """Stream the .nemo tar from HF and pull out model_config.yaml without
+    downloading the full archive. NeMo .nemo files are uncompressed tars and
+    typically place model_config.yaml first, so this is cheap."""
+    import yaml  # imported lazily so a missing pyyaml does not break non-NeMo flows
+
+    rev = hf_revision or "main"
+    fs_path = f"{hf_repo}@{rev}/{nemo_filename}"
+    try:
+        fs = HfFileSystem()
+        with fs.open(fs_path, "rb") as f:
+            # streaming mode: tarfile reads forward only and stops when we break
+            with tarfile.open(fileobj=f, mode="r|") as tar:
+                for member in tar:
+                    base = Path(member.name).name
+                    if base == "model_config.yaml":
+                        extracted = tar.extractfile(member)
+                        if extracted is None:
+                            return None
+                        return yaml.safe_load(extracted.read())
+    except (HfHubHTTPError, tarfile.TarError, OSError):
+        return None
+    return None
+
+
+def _nemo_preprocessor_to_pre(model_config: dict) -> dict | None:
+    """Translate NeMo's model.cfg.preprocessor block into the same shape that
+    `_frontend_from_preprocessor` already understands (the HF preprocessor_config
+    shape). Returns None if the preprocessor block is missing."""
+    if not isinstance(model_config, dict):
+        return None
+    block = (model_config.get("preprocessor")
+             or model_config.get("model", {}).get("preprocessor"))
+    if not isinstance(block, dict):
+        return None
+    out: dict[str, Any] = {}
+    if "sample_rate" in block:
+        out["sampling_rate"] = block["sample_rate"]
+    # NeMo: `features` is the mel filterbank size.
+    if "features" in block:
+        out["feature_size"] = block["features"]
+    if "n_fft" in block:
+        out["n_fft"] = block["n_fft"]
+    if "window_size" in block:
+        out["window_size"] = block["window_size"]
+    if "window_stride" in block:
+        out["window_stride"] = block["window_stride"]
+    if "window" in block:
+        out["window_function"] = block["window"]
+    if "normalize" in block:
+        out["normalize"] = block["normalize"]
+    # NeMo writes "preemph"; HF preprocessors write "preemphasis".
+    if "preemph" in block:
+        out["preemphasis"] = block["preemph"]
+    if "dither" in block:
+        out["dither"] = block["dither"]
+    return out or None
 
 
 def _config_dtype(config: dict | None) -> str | None:
@@ -287,17 +391,24 @@ def find_gguf(
 def check_dtype(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
     decl_dtype = declared.get("expected_dtype")
     cfg_dtype = _config_dtype(reference.get("config"))
+    nemo_authoritative = bool(reference.get("nemo_authoritative"))
     gguf_ftype = gguf_kvs.get("general.file_type") if gguf_kvs else None
     gguf_dtype = _gguf_file_type_to_str(gguf_ftype) if gguf_ftype is not None else None
 
     sources: dict[str, Any] = {"declared": decl_dtype, "reference_config": cfg_dtype}
+    if nemo_authoritative:
+        sources["nemo_authoritative"] = True
+        sources["nemo_source"] = reference.get("nemo_source")
     if gguf_kvs:
         sources["gguf_file_type"] = gguf_ftype
         sources["gguf_dtype"] = gguf_dtype
 
     n_decl = _norm_dtype(decl_dtype) if decl_dtype else None
-    n_ref = _norm_dtype(cfg_dtype) if cfg_dtype else None
     n_gguf = _norm_dtype(gguf_dtype) if gguf_dtype else None
+    # When NeMo is authoritative for this variant, HF config.json's torch_dtype
+    # is training/optimizer metadata, not storage — skip the comparison.
+    # Storage dtype is verified at Gate B against the converted GGUF.
+    n_ref = None if nemo_authoritative else (_norm_dtype(cfg_dtype) if cfg_dtype else None)
 
     # Hard fail: declared vs GGUF disagree. The GGUF is what the C++ loader will see.
     if n_decl and n_gguf and n_decl != n_gguf:
@@ -309,8 +420,10 @@ def check_dtype(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
                            f"declared dtype '{decl_dtype}' does not match reference config '{cfg_dtype}'")
     # Warn: no cross-source to compare against.
     if not n_ref and not n_gguf:
-        return CheckResult("dtype_consistency", gate, "warn", sources,
-                           "no reference or GGUF dtype to cross-check declared value")
+        detail = "no reference or GGUF dtype to cross-check declared value"
+        if nemo_authoritative:
+            detail += " (HF config.json torch_dtype skipped: NeMo .nemo is authoritative)"
+        return CheckResult("dtype_consistency", gate, "warn", sources, detail)
     return CheckResult("dtype_consistency", gate, "pass", sources)
 
 
@@ -604,7 +717,11 @@ def run_gate(repo_root: Path, family: str, variant: str | None, gate: Gate,
     declared = load_declared_state(repo_root, family, variant)
     declared["family"] = family
 
-    reference = load_reference_state(declared["hf_repo"], declared.get("hf_revision"))
+    reference = load_reference_state(
+        declared["hf_repo"],
+        declared.get("hf_revision"),
+        reference_framework=declared.get("reference_framework"),
+    )
 
     gguf_kvs: dict[str, Any] | None = None
     if gate in ("B", "D"):

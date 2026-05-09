@@ -1,0 +1,172 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/parakeet-tdt_ctc-110m",
+  "hf_revision": "431a349f3051ab85c22b9b7a2741b5fe77065665",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo .nemo archive only."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "missing",
+      "detail": "Inside .nemo as model.cfg.preprocessor. Small FastConformer typically uses n_mels=80."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "SentencePiece BPE inside .nemo, vocab_size=1024 with PnC chars in vocab."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "PyTorch state_dict inside .nemo"
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/parakeet-tdt_ctc-110m",
+      "status": "found",
+      "detail": "PnC support, dual TDT/CTC decoding, per-set WER. Smallest variant in the family — useful as fast development workhorse."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "scripts/convert-parakeet.py, src/arch/parakeet/",
+      "status": "found",
+      "detail": "Existing TDT path applies; encoder dims will be smaller (S-class FastConformer)."
+    }
+  },
+  "variants": [
+    {
+      "name": "parakeet-tdt_ctc-110m",
+      "memory_gb": 0.5,
+      "files": ["parakeet-tdt_ctc-110m.nemo"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-transducer"],
+    "key_fields": {
+      "architectures": ["EncDecHybridRNNTCTCBPEModel"],
+      "model_type": "parakeet_tdt_ctc",
+      "encoder.type": "FastConformer (S/Small config)",
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.self_attention_model": "rel_pos",
+      "decoder.type": "RNNTDecoder (predictor)",
+      "joint.type": "TDTJoint",
+      "joint.durations": [0, 1, 2, 3, 4],
+      "joint.num_extra_outputs": 5,
+      "ctc_decoder.type": "ConvASRDecoder",
+      "tokenizer.vocab_size": 1024,
+      "tokenizer.has_punctuation_capitalization": true
+    },
+    "varying_across_variants": [
+      "encoder.n_layers",
+      "encoder.d_model"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo, PyTorch state_dict at float32 by convention.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["token", "word", "segment"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.4,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-tdt_ctc-110m",
+      "notes": "WER computed against PnC-stripped, lower-cased reference."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 5.2,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-tdt_ctc-110m",
+      "notes": null
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "Same NeMo argument as the rest of the family. The 110M is the smallest variant and a natural fast-iteration target for porting validation.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Smallest variant in the family — encoder dims significantly different from the 0.6B port (likely fewer layers, smaller d_model). Lock from .nemo model_config.yaml at convert time.",
+    "Hybrid TDT + CTC head sharing the encoder; same disposition decision as tdt_ctc-1.1b — ship TDT only by default.",
+    "PnC in vocab: WER eval requires lowercasing + punct-strip. Same as tdt_ctc-1.1b.",
+    "Standard parakeet TDT risks (joint duration, dw_striding mask, rel_pos shift, preemph ordering, per-feature norm, blank id).",
+    "n_mels likely 80 (Small FastConformer convention) but confirm at convert time."
+  ],
+  "intake_gaps": [
+    {
+      "field": "config.key_fields (encoder dims)",
+      "reason": "Smaller variant — different layer/dim counts than 0.6B. Lock at convert time from model_config.yaml."
+    },
+    {
+      "field": "frontend.n_mels",
+      "reason": "Assumed 80; confirm from .nemo at convert time."
+    },
+    {
+      "field": "ctc_head_disposition",
+      "reason": "Same decision as tdt_ctc-1.1b: ship TDT only or expose both heads."
+    },
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at convert time."
+    }
+  ]
+}

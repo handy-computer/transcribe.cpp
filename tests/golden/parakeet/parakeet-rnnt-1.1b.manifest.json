@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "parakeet-rnnt-1.1b",
+  "source_model": {
+    "hf_repo": "nvidia/parakeet-rnnt-1.1b",
+    "hf_revision": "a07b19e98a26c1873a3f2622c446a4a1ca6316cb"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}

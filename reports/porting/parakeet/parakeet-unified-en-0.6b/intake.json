@@ -1,0 +1,182 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/parakeet-unified-en-0.6b",
+  "hf_revision": "d4ac9928f3bf238223ff0779c06b8149bf8ac4e1",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo .nemo archive only."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "missing",
+      "detail": "Inside .nemo. n_mels likely 128 (newer 0.6B FastConformer matching v2 era), but confirm at convert time."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "SentencePiece BPE inside .nemo. PnC chars present in vocab."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "PyTorch state_dict inside .nemo"
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/parakeet-unified-en-0.6b",
+      "status": "found",
+      "detail": "Unified offline+streaming RNN-T with shared parameters. Trained jointly with mode-consistency regularization. PnC support. Streaming latency configurable 160ms-2080ms."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "scripts/convert-parakeet.py, src/arch/parakeet/",
+      "status": "found",
+      "detail": "Encoder dims expected to match FastConformer-Large 0.6B family. Only the joint differs from TDT (RNN-T, no duration head). Streaming-specific weights (Dynamic Chunked Conv) shared with offline path per model card."
+    }
+  },
+  "variants": [
+    {
+      "name": "parakeet-unified-en-0.6b",
+      "memory_gb": 2.5,
+      "files": ["parakeet-unified-en-0.6b.nemo"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-transducer"],
+    "key_fields": {
+      "architectures": ["EncDecRNNTBPEModel"],
+      "model_type": "parakeet_rnnt_unified",
+      "encoder.type": "Unified FastConformer (offline + streaming, shared weights)",
+      "encoder.n_layers": 24,
+      "encoder.subsampling": "dw_striding (non-causal in offline mode)",
+      "encoder.subsampling_factor": 8,
+      "encoder.self_attention_model": "rel_pos with chunked masking option",
+      "encoder.streaming.left_context": "5.6s (default)",
+      "encoder.streaming.right_context_range": "0-2080ms in 80ms steps",
+      "encoder.streaming.dynamic_chunked_conv": true,
+      "decoder.type": "RNNTDecoder (predictor)",
+      "joint.type": "RNNTJoint",
+      "joint.durations": null,
+      "joint.num_extra_outputs": 0,
+      "tokenizer.vocab_size": 1024,
+      "tokenizer.has_punctuation_capitalization": true
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo, PyTorch state_dict at float32 by family convention.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["token", "word"],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean (offline)",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.63,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-unified-en-0.6b",
+      "notes": "Offline / full-context inference. WER scored against PnC-stripped, lower-cased reference."
+    },
+    {
+      "dataset": "LibriSpeech test-other (offline)",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.11,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-unified-en-0.6b",
+      "notes": "Offline / full-context inference."
+    },
+    {
+      "dataset": "Open ASR Leaderboard (8-set average, offline)",
+      "language": "en",
+      "metric": "wer",
+      "score": 5.91,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-unified-en-0.6b",
+      "notes": "Offline. Streaming variants on the same set: 6.29 at 1.12s latency, 8.44 at 160ms latency. v1 transcribe.cpp port targets the offline number only."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NVIDIA NeMo first-party framework. The unified offline+streaming training recipe is NeMo-specific (mode-consistency regularization loss + Dynamic Chunked Convolutions); only NeMo can authoritatively dump per-mode encoder intermediates.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "STREAMING IS PUNTED FOR v1 PORT. The model card states all encoder, predictor, and joint parameters are shared between offline and streaming modes — mode is selected at inference via attention masks and Dynamic Chunked Convolutions. The transcribe.cpp v1 port targets OFFLINE MODE ONLY (full-context attention, non-causal convolutions). Streaming can be added later without re-converting weights.",
+    "Dynamic Chunked Convolutions: model card claims weights are vanilla 1-D depthwise (shared with offline). At Stage 3 convert time, verify there are no streaming-specific shape quirks (mask-aware param packing, cached state buffers stored as weights). Cheap to detect, expensive to debug if missed.",
+    "Plain RNN-T joint (no duration head). Same as parakeet-rnnt-* — needs a config-driven branch in the existing TDT joint to skip duration.",
+    "PnC in vocab: WER eval requires lowercasing + punct-stripping. Same as tdt_ctc-* variants.",
+    "FastConformer-Large 0.6B encoder: dims expected identical to v2 (24L/d=1024/8h), but the unified variant adds chunked-attention parameters (left/right context buffers as state, not weights). Confirm at convert time.",
+    "Best-in-class WER for the 0.6B size (1.63 / 3.11) — strong candidate to ship as the headline 0.6B English RNN-T."
+  ],
+  "intake_gaps": [
+    {
+      "field": "config.key_fields (encoder dims, streaming params)",
+      "reason": "Exact n_layers, d_model, n_heads not on the model card. Lock from .nemo model_config.yaml at convert time. Streaming-specific keys (chunk sizes, left/right context buffers) need cataloging at convert time even though offline-only is shipped."
+    },
+    {
+      "field": "frontend.n_mels",
+      "reason": "Stated as 128 (newer 0.6B convention matching v2/v3) but unverified — the unified-en model is newer than the rnnt-0.6b but predates v2/v3 in some respects. Confirm from .nemo at convert time."
+    },
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at convert time."
+    },
+    {
+      "field": "streaming_disposition",
+      "reason": "v1 port ships offline-only. The streaming half of the model lives in the .nemo weights (as masks/state, per the card) but is not exercised. Document as a future Stage 4+ extension."
+    }
+  ]
+}
