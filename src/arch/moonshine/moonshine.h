@@ -124,11 +124,26 @@ struct MoonshineContext final : public transcribe_context {
 
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
-    // Flash-attention. head_dim_padded for tiny is 40, which has good
-    // backend support; default both stages on. TRANSCRIBE_NO_FLASH /
-    // TRANSCRIBE_FORCE_FLASH env overrides apply per the shared policy.
+    // Flash-attention defaults.
+    //
+    // Encoder: ON. The encoder runs as one big graph with nq=T_enc, and
+    // both shipped variants benefit from FA there (tiny especially —
+    // ~2x encoder speedup on long audio).
+    //
+    // Decoder: OFF. The decoder step graph has nq=1 per token, so any
+    // FA op that doesn't dispatch on the primary GPU backend has to
+    // spill per-step to CPU — catastrophic. moonshine-base's
+    // head_dim_padded=56 is NOT in Metal's supported FA head-size set
+    // ({32,40,48,64,72,80,96,...}), so FA-on is ~2x SLOWER than the
+    // explicit kq->softmax->v·kq path on the decoder. tiny's
+    // head_dim_padded=40 IS supported but only via the tile kernel
+    // (vec needs head_dim%32==0), which is roughly a wash with the
+    // explicit path for nq=1. Net: keep decoder FA off until either
+    // (a) we re-pad head_dim to 64 to enable the FA vec kernel, or
+    // (b) we add per-backend per-stage FA dispatch detection.
+    // TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH still apply.
     bool encoder_use_flash = true;
-    bool decoder_use_flash = true;
+    bool decoder_use_flash = false;
 
     MoonshineContext() = default;
     ~MoonshineContext() override;
