@@ -1,0 +1,66 @@
+# Spec for the HF README of handy-computer/parakeet-ctc-1.1b-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: nvidia/parakeet-ctc-1.1b
+target_repo: handy-computer/parakeet-ctc-1.1b-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-ctc-1.1b.md
+
+upstream_commit: a707e81
+pin_date: 2026-05-10
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: NeMo
+  commit: 2f7a6d2
+  date: 2026-05-10
+
+license: cc-by-4.0
+license_display: CC-BY-4.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - ctc
+
+summary: |
+  Offline English speech-to-text with greedy CTC decoding. A 1.1B-parameter FastConformer-XL encoder with a linear CTC head. Output is lowercase, no punctuation. Not a streaming model and does not translate.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline: 1.85%. NVIDIA's self-reported number on the same split is 1.83%.
+
+quants:
+  - name: F32
+    filename: parakeet-ctc-1.1b-F32.gguf
+    size: 4.25 GB
+    wer: 1.85%
+  - name: F16
+    filename: parakeet-ctc-1.1b-F16.gguf
+    size: 2.13 GB
+    wer: 1.85%
+  - name: Q8_0
+    filename: parakeet-ctc-1.1b-Q8_0.gguf
+    size: 1.26 GB
+    wer: 1.85%
+  - name: Q6_K
+    filename: parakeet-ctc-1.1b-Q6_K.gguf
+    size: 1.04 GB
+    wer: 1.85%
+  - name: Q5_K_M
+    filename: parakeet-ctc-1.1b-Q5_K_M.gguf
+    size: 929 MB
+    wer: 1.84%
+  - name: Q4_K_M
+    filename: parakeet-ctc-1.1b-Q4_K_M.gguf
+    size: 818 MB
+    wer: 1.90%

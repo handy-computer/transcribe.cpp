@@ -24,16 +24,14 @@ pinned 2026-05-09.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | parakeet-tdt_ctc-110m-F32.gguf    | 457 MB | — |
-| Q8_0   | parakeet-tdt_ctc-110m-Q8_0.gguf   | 135 MB | — |
-| Q4_K_M | parakeet-tdt_ctc-110m-Q4_K_M.gguf | 90 MB  | — |
+| F32    | [parakeet-tdt_ctc-110m-F32.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/main/parakeet-tdt_ctc-110m-F32.gguf) | 457 MB |                        2.43% |
+| F16    | [parakeet-tdt_ctc-110m-F16.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/main/parakeet-tdt_ctc-110m-F16.gguf) | 229 MB |                        2.43% |
+| Q8_0   | [parakeet-tdt_ctc-110m-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/main/parakeet-tdt_ctc-110m-Q8_0.gguf) | 135 MB |                        2.43% |
+| Q6_K   | [parakeet-tdt_ctc-110m-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/main/parakeet-tdt_ctc-110m-Q6_K.gguf) | 112 MB |                        2.44% |
+| Q5_K_M | [parakeet-tdt_ctc-110m-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/main/parakeet-tdt_ctc-110m-Q5_K_M.gguf) | 101 MB |                        2.47% |
+| Q4_K_M | [parakeet-tdt_ctc-110m-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt_ctc-110m-gguf/resolve/main/parakeet-tdt_ctc-110m-Q4_K_M.gguf) |  90 MB |                        2.53% |
 
-WER will be measured on the full LibriSpeech test-clean split (2620
-utterances) with greedy TDT decoding and no external LM. NVIDIA reports
-2.4% WER on the same split (from the
-[HF model card](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m)).
-Per-quant numbers will be filled in once the reference-machine WER sweep
-completes.
+WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT decoding and no external LM. F32 reference baseline: 2.43%. NVIDIA's self-reported number on the same split is 2.40% (from the [HF model card](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m)).
 
 ## Quick Start
 

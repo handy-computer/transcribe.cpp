@@ -27,16 +27,14 @@ pinned 2026-05-09.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | parakeet-ctc-0.6b-F32.gguf    | 2.44 GB | — |
-| Q8_0   | parakeet-ctc-0.6b-Q8_0.gguf   | 722 MB  | — |
-| Q4_K_M | parakeet-ctc-0.6b-Q4_K_M.gguf | 469 MB  | — |
+| F32    | [parakeet-ctc-0.6b-F32.gguf](https://huggingface.co/handy-computer/parakeet-ctc-0.6b-gguf/resolve/main/parakeet-ctc-0.6b-F32.gguf) | 2.44 GB |                        1.87% |
+| F16    | [parakeet-ctc-0.6b-F16.gguf](https://huggingface.co/handy-computer/parakeet-ctc-0.6b-gguf/resolve/main/parakeet-ctc-0.6b-F16.gguf) | 1.22 GB |                        1.87% |
+| Q8_0   | [parakeet-ctc-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-ctc-0.6b-gguf/resolve/main/parakeet-ctc-0.6b-Q8_0.gguf) |  722 MB |                        1.87% |
+| Q6_K   | [parakeet-ctc-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-ctc-0.6b-gguf/resolve/main/parakeet-ctc-0.6b-Q6_K.gguf) |  594 MB |                        1.84% |
+| Q5_K_M | [parakeet-ctc-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-ctc-0.6b-gguf/resolve/main/parakeet-ctc-0.6b-Q5_K_M.gguf) |  533 MB |                        1.87% |
+| Q4_K_M | [parakeet-ctc-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-ctc-0.6b-gguf/resolve/main/parakeet-ctc-0.6b-Q4_K_M.gguf) |  469 MB |                        1.90% |
 
-WER will be measured on the full LibriSpeech test-clean split (2620
-utterances) with greedy CTC decoding and no external LM. NVIDIA reports
-1.87% WER on the same split (from the
-[HF model card](https://huggingface.co/nvidia/parakeet-ctc-0.6b)).
-Per-quant numbers will be filled in once the reference-machine WER sweep
-completes.
+WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline: 1.87%. NVIDIA's self-reported number on the same split is 1.87% (from the [HF model card](https://huggingface.co/nvidia/parakeet-ctc-0.6b)).
 
 ## Quick Start
 

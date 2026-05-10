@@ -24,16 +24,14 @@ pinned 2026-05-09.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean, offline) |
 | --- | --- | ---: | ---: |
-| F32    | parakeet-unified-en-0.6b-F32.gguf    | 2.47 GB | — |
-| Q8_0   | parakeet-unified-en-0.6b-Q8_0.gguf   | 731 MB  | — |
-| Q4_K_M | parakeet-unified-en-0.6b-Q4_K_M.gguf | 477 MB  | — |
+| F32    | [parakeet-unified-en-0.6b-F32.gguf](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-F32.gguf) | 2.47 GB |                                 1.59% |
+| F16    | [parakeet-unified-en-0.6b-F16.gguf](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-F16.gguf) | 1.24 GB |                                 1.59% |
+| Q8_0   | [parakeet-unified-en-0.6b-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-Q8_0.gguf) |  731 MB |                                 1.60% |
+| Q6_K   | [parakeet-unified-en-0.6b-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-Q6_K.gguf) |  602 MB |                                 1.61% |
+| Q5_K_M | [parakeet-unified-en-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-Q5_K_M.gguf) |  541 MB |                                 1.58% |
+| Q4_K_M | [parakeet-unified-en-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-Q4_K_M.gguf) |  477 MB |                                 1.62% |
 
-WER will be measured on the full LibriSpeech test-clean split (2620
-utterances) with greedy RNN-T decoding and no external LM, in offline
-mode. NVIDIA reports 1.63% offline WER on the same split (from the
-[HF model card](https://huggingface.co/nvidia/parakeet-unified-en-0.6b)).
-Per-quant numbers will be filled in once the reference-machine WER sweep
-completes.
+WER is measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding and no external LM. F32 reference baseline: 1.59%. NVIDIA's self-reported number on the same split is 1.63% (from the [HF model card](https://huggingface.co/nvidia/parakeet-unified-en-0.6b)).
 
 ## Quick Start
 

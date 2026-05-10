@@ -26,7 +26,7 @@ pinned 2026-04-15.
 | F16    | [parakeet-tdt-0.6b-v2-F16.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v2-gguf/resolve/main/parakeet-tdt-0.6b-v2-F16.gguf)       | 1.24 GB | 1.68% |
 | Q8_0   | [parakeet-tdt-0.6b-v2-Q8_0.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v2-gguf/resolve/main/parakeet-tdt-0.6b-v2-Q8_0.gguf)     | 730 MB  | 1.69% |
 | Q6_K   | [parakeet-tdt-0.6b-v2-Q6_K.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v2-gguf/resolve/main/parakeet-tdt-0.6b-v2-Q6_K.gguf)     | 608 MB  | 1.70% |
-| Q5_K_M | [parakeet-tdt-0.6b-v2-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v2-gguf/resolve/main/parakeet-tdt-0.6b-v2-Q5_K_M.gguf) | 547 MB  | 1.69% |
+| Q5_K_M | [parakeet-tdt-0.6b-v2-Q5_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v2-gguf/resolve/main/parakeet-tdt-0.6b-v2-Q5_K_M.gguf) | 547 MB  | 1.70% |
 | Q4_K_M | [parakeet-tdt-0.6b-v2-Q4_K_M.gguf](https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v2-gguf/resolve/main/parakeet-tdt-0.6b-v2-Q4_K_M.gguf) | 483 MB  | 1.72% |
 
 WER is measured on the full LibriSpeech test-clean split (2620 utterances)

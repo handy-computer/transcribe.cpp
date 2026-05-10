@@ -1,0 +1,67 @@
+# Spec for the HF README of handy-computer/parakeet-tdt_ctc-110m-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: nvidia/parakeet-tdt_ctc-110m
+target_repo: handy-computer/parakeet-tdt_ctc-110m-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/parakeet-tdt_ctc-110m.md
+
+upstream_commit: 431a349
+pin_date: 2026-05-10
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: NeMo
+  commit: 2f7a6d2
+  date: 2026-05-10
+
+license: cc-by-4.0
+license_display: CC-BY-4.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - rnnt
+  - tdt
+
+summary: |
+  Offline English speech-to-text with punctuation and capitalization. A 110M-parameter FastConformer encoder with a TDT/RNNT transducer decoder (the auxiliary CTC head from the upstream hybrid checkpoint is dropped at convert time). Not a streaming model and does not translate.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy TDT/RNN-T transducer decoding and no external LM. F32 reference baseline: 2.43%. NVIDIA's self-reported number on the same split is 2.40%.
+
+quants:
+  - name: F32
+    filename: parakeet-tdt_ctc-110m-F32.gguf
+    size: 457 MB
+    wer: 2.43%
+  - name: F16
+    filename: parakeet-tdt_ctc-110m-F16.gguf
+    size: 229 MB
+    wer: 2.43%
+  - name: Q8_0
+    filename: parakeet-tdt_ctc-110m-Q8_0.gguf
+    size: 135 MB
+    wer: 2.43%
+  - name: Q6_K
+    filename: parakeet-tdt_ctc-110m-Q6_K.gguf
+    size: 112 MB
+    wer: 2.44%
+  - name: Q5_K_M
+    filename: parakeet-tdt_ctc-110m-Q5_K_M.gguf
+    size: 101 MB
+    wer: 2.47%
+  - name: Q4_K_M
+    filename: parakeet-tdt_ctc-110m-Q4_K_M.gguf
+    size: 90 MB
+    wer: 2.53%
