@@ -1,6 +1,6 @@
 ---
 name: porting-4-cpp
-description: Brings up the C++ implementation for a new model family at the reference dtype, finalizes per-tensor tolerances from observed drift, runs the family-doc Capability Validation table commands, and ends with a 512-utterance subset WER sanity vs the reference framework. Use after porting-3-convert has produced the reference-dtype GGUF. Input: intake.json, manifest, dump_coverage.json, provisional tolerances, reference-dtype GGUF, family forward-map.md, family doc Capability Validation table. Output: src/arch/<family>/* source, family-level reports/porting/<family>/forward-map.md, finalized tests/tolerances/<family>.json (no _provisional flags, _comment block explaining drift sources), validate.py all green at ref dtype, Capability Validation table updated with PASS/SKIP/ACCEPTED-GAP per row, and Stage 4 subset WER within 0.005 of reference. Quant generation is Stage 5, not here.
+description: Brings up the C++ implementation for a new model family at the reference dtype, finalizes per-tensor tolerances from observed drift, runs the family-doc Capability Validation table commands, and ends with a 512-utterance subset WER sanity vs the reference framework. Use after porting-3-convert has produced the reference-dtype GGUF. Input: intake.json, manifest, dump_coverage.json, provisional tolerances, reference-dtype GGUF, family forward-map.md, family doc Capability Validation table. Output: src/arch/<family>/* source, family-level reports/porting/<family>/forward-map.md, finalized tests/tolerances/<family>.json (no _provisional flags, _comment block explaining drift sources), validate.py all green at ref dtype, Capability Validation table updated with PASS/SKIP/ACCEPTED-GAP per row, and Stage 4 subset WER no more than reference WER + 0.01 on the same 512-row subset. Quant generation is Stage 5, not here.
 ---
 
 # porting-4-cpp
@@ -330,9 +330,15 @@ uv run scripts/wer/score.py reports/wer/<variant>-<REFDTYPE>.<dataset>-512.jsonl
 Run the reference framework on the same subset file (per-family driver)
 and record the resulting WER alongside the C++ score.
 
-**Hard gate**: `abs(cpp_wer - ref_wer) <= 0.005` on the same subset
-file. Both runners must score against the exact same `.512.manifest.jsonl`
-path; reporting the path + utterance count in sign-off is enough — no
+Simple rule:
+
+- Reference WER on the 512-row subset: `3.59`
+- Max allowed C++ WER on the same 512-row subset: `3.60`
+- `3.60` passes
+- `3.61` is too high and must be investigated
+
+Both runners must score against the exact same `.512.manifest.jsonl`
+path. Reporting the path + utterance count in sign-off is enough — no
 SHA enforcement.
 
 If the dataset has fewer than 512 utterances, the subset is the full
@@ -355,7 +361,7 @@ Report:
   frontend exists).
 - Capability Validation table outcome: per-row PASS / SKIP /
   ACCEPTED-GAP, with the family-doc path so the user can read it.
-- Subset WER C++ vs reference and the |delta|.
+- Subset WER: reference WER, C++ WER, max allowed C++ WER, and pass/blocked.
 
 **Do not commit.** Quant generation and CLI smokes are Stage 5
 (`porting-5-quants`).
@@ -380,9 +386,9 @@ Report:
 - The family-doc Capability Validation table has every row updated to
   PASS, SKIP — not exposed by runtime, or ACCEPTED GAP — `<reason>`.
   No row remains TODO.
-- Stage 4 subset WER vs reference on the same 512-row subset file is
-  within 0.005 absolute. Sign-off names the subset path and utterance
-  count.
+- Stage 4 subset WER uses the same 512-row subset file for C++ and the
+  reference framework. C++ WER is no more than reference WER + 0.01.
+  Sign-off names the subset path and utterance count.
 - No quantized GGUFs are produced here (Stage 5 owns that).
 
 ## Pointers (read, not execute)

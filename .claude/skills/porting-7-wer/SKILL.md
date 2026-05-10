@@ -1,6 +1,6 @@
 ---
 name: porting-7-wer
-description: Full release WER sweep for a ported variant. Scores the full acceptance manifest declared in intake.upstream_benchmarks across the reference dtype and every shipped quant, enforces the ref-dtype hard gate of ±0.01 absolute vs. the upstream score, and surfaces quant WERs as documentation only (not gated). Use after porting-6-bench. Distinct from the Stage 4 subset WER sanity — Stage 7 is the user-facing quality artifact, not a parity check against the reference framework. Output: reports/wer/<variant>-<preset>.<dataset>.score.json per shipped preset, reports/wer/<variant>.<dataset>.summary.md, and a ship-gate decision.
+description: Full release WER sweep for a ported variant. Scores the full acceptance manifest declared in intake.upstream_benchmarks across the reference dtype and every shipped quant. Simple rule: if upstream WER is 3.59, the ref-dtype C++ WER must be 3.60 or lower. Anything higher blocks release until explained with extra testing. Quant WERs are documentation only, not gated. Use after porting-6-bench. Output: reports/wer/<variant>-<preset>.<dataset>.score.json per shipped preset, reports/wer/<variant>.<dataset>.summary.md, and a ship-gate decision.
 ---
 
 # porting-7-wer
@@ -9,9 +9,16 @@ Stage 7 of the porting pipeline. The acceptance target is whatever the
 intake captured in `upstream_benchmarks[0]` — LibriSpeech test-clean for
 English models, FLEURS / Common Voice / custom dataset for others, as
 the publisher reports. Produces WER scores with bootstrap CIs for every
-shipped preset and enforces the ref-dtype hard gate. If the gate fails,
-the skill does not loosen tolerances or waive the test — it stops and
-sends the port back to Stage 4.
+shipped preset and applies one simple rule:
+
+**C++ WER must be no more than upstream WER + 0.01 WER points.**
+
+Example: if upstream WER is `3.59`, the highest allowed C++ WER is
+`3.60`. `3.60` passes. `3.61` does not pass.
+
+If C++ is higher than the allowed number, the skill does not loosen
+tolerances or waive the test. It stops release sign-off until extra
+testing explains the gap.
 
 Quant WER is **reported, not gated**. The user decides per-quant whether
 to ship based on the summary table. There is no automatic quant WER
@@ -38,7 +45,7 @@ reported number for the user-facing model card.
 WER progress:
 - [ ] Step 1: Ensure acceptance manifest
 - [ ] Step 2: Score the reference-dtype model
-- [ ] Step 3: Enforce the ref-dtype hard gate
+- [ ] Step 3: Check the ref-dtype WER limit
 - [ ] Step 4: Score each shipped quant
 - [ ] Step 5: Write the summary table
 - [ ] Step 6: Sign-off review
@@ -109,11 +116,25 @@ uv run scripts/wer/score.py reports/wer/<variant>-${REFDTYPE}.${DATASET}.jsonl
 `reports/wer/<variant>-<REFDTYPE>.<DATASET>.score.json` with `wer`,
 `wer_pct`, `wer_ci_lo`, `wer_ci_hi`, `n`, and per-utterance detail.
 
-### Step 3: Ref-dtype hard gate (execute)
+### Step 3: Ref-dtype WER limit (execute)
+
+Use WER as the percent number humans read in reports.
+
+Simple rule:
+
+- Upstream WER: `3.59`
+- Max allowed C++ WER: `3.60`
+- `3.60` passes
+- `3.61` is too high and must be investigated
 
 ```python
 # uv run python -c '...'
 import json, sys
+from decimal import Decimal, ROUND_HALF_UP
+
+def wer_number(x):
+    return Decimal(str(x * 100.0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
 family = "<family>"; variant = "<variant>"; refdtype = "<REFDTYPE>"; dataset = "<DATASET>"
 intake = json.load(open(f"reports/porting/{family}/{variant}/intake.json"))
 target = intake["upstream_benchmarks"][0]["score"]
@@ -121,25 +142,41 @@ target = intake["upstream_benchmarks"][0]["score"]
 unit = intake["upstream_benchmarks"][0].get("score_unit", "ratio")
 target_ratio = target / 100.0 if unit == "percent" else target
 observed = json.load(open(f"reports/wer/{variant}-{refdtype}.{dataset}.score.json"))["wer"]
-delta = observed - target_ratio
-print(f"upstream={target_ratio:.4f} observed={observed:.4f} delta={delta:+.4f}")
-ok = abs(delta) <= 0.01
+upstream_wer = wer_number(target_ratio)
+cpp_wer = wer_number(observed)
+max_allowed_wer = upstream_wer + Decimal("0.01")
+over_by = cpp_wer - max_allowed_wer
+print(f"upstream={upstream_wer} cpp={cpp_wer} max_allowed={max_allowed_wer} over_by={over_by:+}")
+ok = cpp_wer <= max_allowed_wer
 sys.exit(0 if ok else 1)
 ```
 
-**If the gate fails (|delta| > 0.01)**, halt. Do NOT score the quants,
-do NOT write the summary table, do NOT loosen anything. The failure
-almost always means a numerical issue in Stage 4 that the tolerance
-gates did not catch. Options:
+Round WER to two decimals before comparing. The number printed in the
+report is the number used for the pass/fail decision.
 
-1. Return to `porting-4-cpp` and investigate. Widening
-   `dump_coverage.json` (the contract tensor set) is a common fix — the
-   drift hid in a tensor the tolerances did not cover.
-2. If the user is certain the upstream number is wrong (rare), this
-   requires a maintainer decision to override and is captured as a note
-   in the family doc.
+**If C++ WER is higher than `upstream WER + 0.01`**, stop release
+sign-off. Do NOT loosen anything. Do NOT accept it without a written
+reason backed by extra testing.
 
-**If the gate passes**, proceed.
+The job is simple: prove whether the C++ implementation is wrong.
+
+Required investigation:
+
+1. Run the same audio list through C++ and the reference framework.
+2. Compare WER and the worst transcript differences.
+3. If C++ and the reference do not match, dump tensors around the likely
+   bad layer/component and compare them.
+4. Add missing tensors to `dump_coverage.json` if the current tensor
+   checks missed the problem.
+5. If C++ matches the reference but both are worse than upstream,
+   document the dataset version, text normalization, decoding settings,
+   and why the upstream number is not directly comparable.
+
+Proceed only when the higher WER is explained, reviewed, and written in
+the WER summary or family doc. Higher WER without evidence is a release
+blocker.
+
+**If C++ WER is at or below `upstream WER + 0.01`**, proceed.
 
 ### Step 4: Score each shipped quant (execute)
 
@@ -157,14 +194,15 @@ for PRESET in F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
 done
 ```
 
-Quant WER is reported, not gated. A quant that regresses noticeably vs.
-the reference is surfaced in the summary but does not block ship — the
-user decides per-quant whether to ship.
+Quant WER is reported, not gated. Still flag any quant that is more than
+`0.01` worse than the ref-dtype model. Simple rule: if ref-dtype WER is
+`3.59`, then quant WER `3.60` is okay and quant WER `3.61` must be
+called out for review. The user decides per-quant whether to ship.
 
 ### Step 5: Summary table (execute)
 
 Write a markdown table at `reports/wer/<variant>.<dataset>.summary.md`
-with columns `| Preset | WER | 95% CI | n | Δ vs upstream |` and one row
+with columns `| Preset | WER | Max allowed WER | 95% CI | n | Over allowed |` and one row
 per scored preset. Stage 8 (`porting-8-ship`) consumes this into the
 model card.
 
@@ -172,11 +210,12 @@ model card.
 
 Report:
 - Manifest path and utterance count.
-- Ref-dtype gate status (pass/fail, observed, target, delta).
+- Ref-dtype status: upstream WER, C++ WER, max allowed WER, pass/blocked,
+  and any required justification.
 - Path to every produced `.score.json`.
 - Path to the summary markdown.
-- Any quant that regressed beyond ~0.5% absolute vs. the reference (flag
-  for user attention; not a gate).
+- Any quant that is more than `0.01` worse than the ref-dtype WER. Example:
+  if ref-dtype WER is `3.59`, then quant WER `3.61` must be flagged.
 
 **Do not commit.** WER outputs under `reports/wer/` are local generated
 artifacts, ignored by `.gitignore`. The summary tables and per-quant
@@ -187,7 +226,7 @@ WER cells are what ships in-repo via Stage 8.
 - `reports/wer/<variant>-<PRESET>.<dataset>.score.json` for every
   shipped preset.
 - `reports/wer/<variant>.<dataset>.summary.md` table.
-- Ref-dtype hard gate status is known and reported.
+- Ref-dtype status is known and reported as plain WER numbers.
 - Sign-off names the manifest path and utterance count so consumers can
   verify which dataset was scored.
 - Quant WER is documented but not gated; user decides per-quant.

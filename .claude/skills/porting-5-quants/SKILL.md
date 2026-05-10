@@ -13,7 +13,7 @@ the C++ runtime. WER for quants is Stage 7's release sweep, not here.
 
 - `porting-4-cpp` complete: `validate.py all` green at ref dtype, the
   family-doc Capability Validation table is fully resolved (no TODO
-  rows), and subset WER vs reference is within 0.005.
+  rows), and subset C++ WER is no more than reference WER + 0.01.
 - `models/<variant>/<variant>-<REFDTYPE>.gguf` exists, where REFDTYPE is
   the intake's `dtype.expected` mapped to the GGUF preset suffix.
 - `build/bin/transcribe-cli` and `build/bin/transcribe-quantize` are
