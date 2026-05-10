@@ -57,7 +57,18 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
 with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
-above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
+above (2 decimal places). 
+
+### Apple M4 Max
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  |   58 ms (191×) |   59 ms (185×) |
+| Metal   | dots (35.3s) |  143 ms (246×) |  145 ms (244×) |
+| CPU     | jfk (11.0s)  |  356 ms (31×)  |  298 ms (37×)  |
+| CPU     | dots (35.3s) | 1.19 s (30×)   | 1.00 s (35×)   |
+
+macOS 26.4.1, transcribe.cpp `a6c097e`.
 
 ### AMD Ryzen 7 4750U Pro
 
@@ -78,7 +89,7 @@ uv run scripts/bench/run.py \
   --models parakeet-ctc-0.6b \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
-  --backends cpu,vulkan \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name parakeet-ctc-0.6b-publication
 ```

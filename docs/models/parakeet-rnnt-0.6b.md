@@ -60,6 +60,17 @@ Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
 with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
 above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
 
+### Apple M4 Max
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  |   85 ms (130×) |   86 ms (128×) |
+| Metal   | dots (35.3s) |  258 ms (137×) |  264 ms (134×) |
+| CPU     | jfk (11.0s)  |  382 ms (29×)  |  325 ms (34×)  |
+| CPU     | dots (35.3s) | 1.30 s (27×)   | 1.11 s (32×)   |
+
+macOS 26.4.1, transcribe.cpp `a6c097e`.
+
 ### AMD Ryzen 7 4750U Pro
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
@@ -79,7 +90,7 @@ uv run scripts/bench/run.py \
   --models parakeet-rnnt-0.6b \
   --quants q8_0,q4_k_m \
   --samples jfk,dots \
-  --backends cpu,vulkan \
+  --backends metal,cpu,vulkan \
   --iters 3 --warmup 1 \
   --name parakeet-rnnt-0.6b-publication
 ```
