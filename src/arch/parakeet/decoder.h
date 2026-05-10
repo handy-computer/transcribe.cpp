@@ -81,16 +81,40 @@ struct HostJoint {
     std::vector<float> out_b;    // [joint_n]
 };
 
+// CTC head mirror. NeMo's `decoder.decoder_layers.0` is a 1×1 Conv1d
+// projecting d_enc -> n_classes (= vocab + 1 blank). Stored row-major
+// [n_classes, d_enc] so per-frame logits = W @ enc_t + b. The host
+// decode path runs entirely on fp32 (same `read_tensor_to_f32` as the
+// predictor/joint mirrors), so any of the GET_LIN-allowed source
+// types are safe.
+struct HostCtcHead {
+    int                 n_classes = 0; // == vocab + 1
+    int                 blank_id  = 0; // NeMo convention: blank lives at n_classes - 1
+    int                 d_enc     = 0;
+    std::vector<float>  weight;        // [n_classes, d_enc]
+    std::vector<float>  bias;          // [n_classes]
+};
+
+// Decoder head selector. Mirrors ParakeetHParams::HeadKind so the
+// host decoder can dispatch without depending on weights.h. Stays in
+// sync via the assignment in build_host_decoder_weights.
+enum class HostHeadKind { TDT, RNNT, CTC };
+
 // Bundle of everything the decoder needs at run time. Built once at
 // load() time and stored on ParakeetModel; const-after-construction
-// and shared across every context derived from the model.
+// and shared across every context derived from the model. For
+// head_kind=CTC the predictor + joint mirrors stay empty; for
+// head_kind=RNNT the tdt_durations vector is empty and only blank/non-blank
+// symbol-cap logic from `tdt_max_symbols` is reused.
 struct HostDecoderWeights {
-    HostPredictor          predictor;
-    HostJoint              joint;
-    std::vector<int32_t>   tdt_durations;
-    int                    tdt_max_symbols = 0;
-    int                    blank_id        = 0; // == pred_vocab - 1
-    int                    n_vocab         = 0; // == pred_vocab - 1; the SP vocab size
+    HostHeadKind           head_kind        = HostHeadKind::TDT;
+    HostPredictor          predictor;        // empty for CTC
+    HostJoint              joint;            // empty for CTC
+    HostCtcHead            ctc_head;         // empty for TDT/RNNT
+    std::vector<int32_t>   tdt_durations;    // empty for RNNT/CTC
+    int                    tdt_max_symbols  = 0;
+    int                    blank_id         = 0; // unified: TDT/RNNT == pred_vocab - 1; CTC == ctc_head.blank_id
+    int                    n_vocab          = 0; // raw SP vocab size (excludes blank)
 };
 
 // Build host mirrors from a loaded ParakeetModel. Reads tensor bytes
@@ -163,6 +187,37 @@ struct TdtToken {
 // d_enc matches the joint mirror, etc.) is enforced by the family
 // driver before this is called.
 transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
+                                    const float *              enc_out,
+                                    int                        T_enc,
+                                    int                        d_enc,
+                                    std::vector<TdtToken> &    out_tokens);
+
+// Run RNNT greedy decode end-to-end. Same predictor + joint code as TDT,
+// but the joint emits `vocab+1` logits (no duration extras) and the
+// step rule is "blank → advance one frame, non-blank → emit + stay,
+// capped by tdt_max_symbols". Per-emit `duration_frames` is fixed at 1
+// — the public token timestamps approximate the reference's
+// (encoder-frame indexed) emission.
+//
+// Same input/output contract as decode_tdt_greedy. Reuses the same
+// TdtToken result type so the model.cpp result-builder can stay
+// head-agnostic.
+transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
+                                     const float *              enc_out,
+                                     int                        T_enc,
+                                     int                        d_enc,
+                                     std::vector<TdtToken> &    out_tokens);
+
+// Run CTC greedy decode end-to-end. Per-frame: logits = W @ enc[t] + b,
+// argmax. The collapse rule is "drop adjacent duplicates, then drop
+// blanks" — standard CTC greedy (see e.g. NeMo's GreedyCTCInfer).
+// `step_at_emit` is the encoder-frame index of the (post-collapse)
+// emission; `duration_frames` is set to 1 for compatibility with the
+// public token timestamps.
+//
+// Same TdtToken result type as the transducer paths so model.cpp can
+// build the public result hierarchy uniformly.
+transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
                                     const float *              enc_out,
                                     int                        T_enc,
                                     int                        d_enc,

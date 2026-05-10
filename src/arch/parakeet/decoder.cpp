@@ -132,7 +132,59 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
     const ParakeetHParams &  hp = model.hparams;
     const ParakeetWeights &  w  = model.weights;
 
-    // ----- Predictor mirror -----
+    // Head-kind dispatch. CTC skips predictor/joint entirely; RNNT and
+    // TDT share the predictor + joint mirror code below.
+    switch (hp.head_kind) {
+        case HeadKind::TDT:  out.head_kind = HostHeadKind::TDT;  break;
+        case HeadKind::RNNT: out.head_kind = HostHeadKind::RNNT; break;
+        case HeadKind::CTC:  out.head_kind = HostHeadKind::CTC;  break;
+    }
+
+    if (hp.head_kind == HeadKind::CTC) {
+        // ----- CTC head mirror -----
+        //
+        // Source weight has ggml ne [1, d_model, n_classes] (PyTorch
+        // [n_classes, d_model, 1] flat). The bytes are already laid out
+        // exactly the way the host decoder wants to consume them
+        // (row-major [n_classes, d_model]); read_tensor_to_f32 just
+        // copies them into a flat fp32 vector. Bias is [n_classes].
+        out.ctc_head.n_classes = hp.head_ctc_n_classes;
+        out.ctc_head.blank_id  = hp.head_ctc_n_classes - 1; // NeMo convention
+        out.ctc_head.d_enc     = hp.enc_d_model;
+
+        if (!read_tensor_to_f32(w.ctc_head.weight, out.ctc_head.weight)) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (!read_tensor_to_f32(w.ctc_head.bias, out.ctc_head.bias)) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        const size_t expected_w =
+            static_cast<size_t>(out.ctc_head.n_classes) *
+            static_cast<size_t>(out.ctc_head.d_enc);
+        if (out.ctc_head.weight.size() != expected_w) {
+            std::fprintf(stderr,
+                         "parakeet decoder: head.ctc.weight size %zu "
+                         "!= n_classes*d_enc %zu\n",
+                         out.ctc_head.weight.size(), expected_w);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (static_cast<int>(out.ctc_head.bias.size()) != out.ctc_head.n_classes) {
+            std::fprintf(stderr,
+                         "parakeet decoder: head.ctc.bias size %zu "
+                         "!= n_classes %d\n",
+                         out.ctc_head.bias.size(), out.ctc_head.n_classes);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        out.tdt_durations.clear();
+        out.tdt_max_symbols = 0;
+        out.blank_id = out.ctc_head.blank_id;
+        out.n_vocab  = out.ctc_head.n_classes - 1;
+        return TRANSCRIBE_OK;
+    }
+
+    // ----- Predictor mirror (TDT, RNNT) -----
     out.predictor.pred_hidden = hp.pred_hidden;
     out.predictor.pred_vocab  = hp.pred_vocab;
 
@@ -447,6 +499,41 @@ void joint_step(const HostJoint &     j,
 
     linear(j.out_w.data(), scratch_summed.data(), j.out_b.data(),
            j.joint_n, j.joint_h, out_logits.data());
+
+    // Apply log_softmax over the full joint output (vocab+blank+durations
+    // for TDT, vocab+blank for RNNT) to match NeMo's CPU-inference
+    // representation of `joint_after_projection`. NeMo's RNNTJoint applies
+    // `log_softmax(dim=-1)` when running on CPU and `self.log_softmax`
+    // is None (the default), or when `self.log_softmax=True`. Applying
+    // it here:
+    //   - leaves token-argmax and duration-argmax invariant (subtracting
+    //     a constant from all elements of either sub-range preserves
+    //     argmax),
+    //   - leaves token_confidence invariant (it re-softmaxes the token
+    //     sub-range, which absorbs any uniform shift),
+    //   - lets `dec.joint.0` dump compare element-wise against NeMo's
+    //     reference dump (representation match — without this, our raw
+    //     logits sit ~+25 to +35 above NeMo's log-softmax-normalized
+    //     values, and the only flat tolerance that fits is 100/100,
+    //     which is loose enough to hide real numerical divergence).
+    //
+    // Cost: ~joint_n adds + 1 logsumexp. For joint_n=1030 that's ~2K
+    // ops per decode iter, negligible vs the joint_h × pred_hidden +
+    // joint_h × joint_n matmuls (~1.3M ops).
+    {
+        float max_v = out_logits[0];
+        for (int i = 1; i < j.joint_n; ++i) {
+            if (out_logits[i] > max_v) max_v = out_logits[i];
+        }
+        double sum = 0.0;
+        for (int i = 0; i < j.joint_n; ++i) {
+            sum += std::exp(static_cast<double>(out_logits[i] - max_v));
+        }
+        const float log_sum = static_cast<float>(std::log(sum)) + max_v;
+        for (int i = 0; i < j.joint_n; ++i) {
+            out_logits[i] -= log_sum;
+        }
+    }
 }
 
 // Argmax over a contiguous fp32 range. Returns the index of the
@@ -630,6 +717,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         const int decision   = argmax_range(duration_logits, n_dur);
         const int duration   = w.tdt_durations[static_cast<size_t>(decision)];
 
+
         // ----- Optional dump (first iteration only, for bring-up) -----
         //
         // Dumping every iteration would flood the dump dir on a long
@@ -729,6 +817,310 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
                      "logits or loop bug\n", max_iters);
         return TRANSCRIBE_ERR_BACKEND;
     }
+    return TRANSCRIBE_OK;
+}
+
+// ---------------------------------------------------------------------------
+// RNNT greedy decode
+// ---------------------------------------------------------------------------
+//
+// Same predictor + joint forward as TDT, but the joint emits exactly
+// `vocab+1` logits (no duration extras). Step rule:
+//
+//   per iteration:
+//     run predictor (one LSTM step)
+//     run joint -> token_logits[vocab+1]
+//     argmax -> pred_token
+//     if pred_token == blank:
+//         step += 1
+//         new_symbols = 0
+//     else:
+//         emit token, swap predictor state, last_token = pred_token
+//         new_symbols += 1
+//         if max_symbols and new_symbols >= max_symbols:
+//             step += 1; new_symbols = 0   # break out of stuck-on-frame loop
+//
+// Mirrors NeMo's `RNNTGreedyDecodeInfer.step_per_frame` (without
+// duration). Matches the reference dump points (`dec.embed.0`,
+// `dec.lstm.{layer}.{h,c}.0`, `dec.joint.0`) emitted on iter 1.
+
+transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
+                                     const float *              enc_out,
+                                     int                        T_enc,
+                                     int                        d_enc,
+                                     std::vector<TdtToken> &    out_tokens)
+{
+    if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (d_enc != w.joint.d_enc) {
+        std::fprintf(stderr,
+                     "parakeet decoder (rnnt): enc d_model mismatch (got %d, "
+                     "expected %d)\n", d_enc, w.joint.d_enc);
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const int n_layers     = static_cast<int>(w.predictor.lstm.size());
+    const int H            = w.predictor.pred_hidden;
+    const int n_token_cls  = w.predictor.pred_vocab; // == vocab + 1
+    const int blank_id     = w.blank_id;
+
+    LstmState state;
+    LstmState next_state;
+    state.reset(n_layers, H);
+    next_state.reset(n_layers, H);
+
+    // Precompute encoder projections for all T_enc frames (same as TDT).
+    const int joint_h = w.joint.joint_h;
+    std::vector<float> enc_proj_all(
+        static_cast<size_t>(T_enc) * static_cast<size_t>(joint_h));
+
+    const int64_t t_enc_proj_start = ggml_time_us();
+#if TRANSCRIBE_HAS_BLAS
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                T_enc, joint_h, d_enc,
+                1.0f, enc_out, d_enc,
+                w.joint.enc_w.data(), d_enc,
+                0.0f, enc_proj_all.data(), joint_h);
+#else
+    for (int t = 0; t < T_enc; ++t) {
+        const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
+        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        linear(w.joint.enc_w.data(), frame, nullptr, joint_h, d_enc, proj);
+    }
+#endif
+    for (int t = 0; t < T_enc; ++t) {
+        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        for (int j = 0; j < joint_h; ++j) {
+            proj[j] += w.joint.enc_b[static_cast<size_t>(j)];
+        }
+    }
+    const int64_t t_enc_proj_us = ggml_time_us() - t_enc_proj_start;
+
+    std::vector<float> scratch_x;
+    std::vector<float> scratch_gates;
+    std::vector<float> scratch_hh;
+    std::vector<float> scratch_pred_proj;
+    std::vector<float> scratch_summed;
+    std::vector<float> scratch_probs;
+    std::vector<float> logits;
+
+    int last_token  = -1;
+    int step        = 0;
+    int new_symbols = 0;
+
+    const int max_iters = 16 * T_enc + 1024;
+    int iter = 0;
+    int64_t t_pred_us = 0, t_joint_us = 0, t_conf_us = 0;
+
+    while (step < T_enc && iter < max_iters) {
+        ++iter;
+
+        const int64_t t0 = ggml_time_us();
+        const float * decoder_out = predictor_step(
+            w.predictor, last_token, state, next_state,
+            scratch_x, scratch_gates, scratch_hh);
+        const int64_t t1 = ggml_time_us();
+
+        const float * enc_proj =
+            enc_proj_all.data() + static_cast<size_t>(step) * static_cast<size_t>(joint_h);
+        joint_step(w.joint, enc_proj, decoder_out,
+                   scratch_pred_proj, scratch_summed,
+                   logits);
+        const int64_t t2 = ggml_time_us();
+        t_pred_us  += t1 - t0;
+        t_joint_us += t2 - t1;
+
+        // RNNT joint output is just `n_token_cls` floats (no duration extras).
+        const float * token_logits = logits.data();
+        const int pred_token = argmax_range(token_logits, n_token_cls);
+
+        if (iter == 1 && transcribe::debug::enabled()) {
+            const long long s_h = H;
+            transcribe::debug::dump_host_f32(
+                "dec.embed.0", scratch_x.data(), s_h, &s_h, 1,
+                "decoder.embed");
+            for (int layer = 0; layer < n_layers; ++layer) {
+                char name_h[64];
+                char name_c[64];
+                std::snprintf(name_h, sizeof(name_h), "dec.lstm.%d.h.0", layer);
+                std::snprintf(name_c, sizeof(name_c), "dec.lstm.%d.c.0", layer);
+                transcribe::debug::dump_host_f32(
+                    name_h, next_state.h[layer].data(), s_h, &s_h, 1,
+                    "decoder.lstm");
+                transcribe::debug::dump_host_f32(
+                    name_c, next_state.c[layer].data(), s_h, &s_h, 1,
+                    "decoder.lstm");
+            }
+            const long long s_n = w.joint.joint_n;
+            transcribe::debug::dump_host_f32(
+                "dec.joint.0", logits.data(), s_n, &s_n, 1,
+                "decoder.joint");
+        }
+
+        const bool is_blank = (pred_token == blank_id);
+        if (is_blank) {
+            step       += 1;
+            new_symbols = 0;
+        } else {
+            const int64_t tc0 = ggml_time_us();
+            const float p = token_confidence(token_logits, n_token_cls,
+                                             scratch_probs);
+            t_conf_us += ggml_time_us() - tc0;
+            TdtToken tok;
+            tok.id              = pred_token;
+            tok.p               = p;
+            tok.step_at_emit    = step;
+            tok.duration_frames = 1;
+            out_tokens.push_back(tok);
+
+            last_token = pred_token;
+            std::swap(state, next_state);
+
+            new_symbols += 1;
+            if (w.tdt_max_symbols > 0 && new_symbols >= w.tdt_max_symbols) {
+                step       += 1;
+                new_symbols = 0;
+            }
+        }
+    }
+
+    std::fprintf(stderr,
+                 "decoder (rnnt): %d iters, %d tokens, T_enc=%d  "
+                 "enc_proj=%.1f ms  pred=%.1f ms  joint=%.1f ms  conf=%.1f ms  "
+                 "total=%.1f ms\n",
+                 iter, static_cast<int>(out_tokens.size()), T_enc,
+                 t_enc_proj_us / 1000.0,
+                 t_pred_us  / 1000.0,
+                 t_joint_us / 1000.0,
+                 t_conf_us  / 1000.0,
+                 (t_enc_proj_us + t_pred_us + t_joint_us + t_conf_us) / 1000.0);
+
+    if (iter >= max_iters) {
+        std::fprintf(stderr,
+                     "parakeet decoder (rnnt): hit iteration cap (%d) — "
+                     "pathological logits or loop bug\n", max_iters);
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    return TRANSCRIBE_OK;
+}
+
+// ---------------------------------------------------------------------------
+// CTC greedy decode
+// ---------------------------------------------------------------------------
+//
+// Per-frame: logits[t] = W @ enc[t] + b   ->   log_softmax   ->   argmax.
+// Collapse: drop adjacent duplicates ("aaab" -> "ab"), then drop the
+// blank label. Standard CTC greedy (see NeMo GreedyCTCInfer).
+//
+// Dump points (gated on TRANSCRIBE_DUMP_DIR):
+//   - dec.ctc.logprobs   : full [T_enc, n_classes] log-softmax
+//   - dec.ctc.logprobs.0 : frame 0 of the same
+// These match the Stage 2 oracle's reference dumps.
+
+transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
+                                    const float *              enc_out,
+                                    int                        T_enc,
+                                    int                        d_enc,
+                                    std::vector<TdtToken> &    out_tokens)
+{
+    if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (d_enc != w.ctc_head.d_enc) {
+        std::fprintf(stderr,
+                     "parakeet decoder (ctc): enc d_model mismatch "
+                     "(got %d, expected %d)\n", d_enc, w.ctc_head.d_enc);
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const int n_classes = w.ctc_head.n_classes;
+    const int blank_id  = w.ctc_head.blank_id;
+
+    // Compute T_enc frames of logits: [T_enc, n_classes] = enc_out[T_enc, d_enc] @ W^T + b.
+    std::vector<float> logits_all(
+        static_cast<size_t>(T_enc) * static_cast<size_t>(n_classes));
+
+    const int64_t t_proj_start = ggml_time_us();
+#if TRANSCRIBE_HAS_BLAS
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                T_enc, n_classes, d_enc,
+                1.0f, enc_out, d_enc,
+                w.ctc_head.weight.data(), d_enc,
+                0.0f, logits_all.data(), n_classes);
+#else
+    for (int t = 0; t < T_enc; ++t) {
+        const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
+        float * row = logits_all.data() + static_cast<size_t>(t) * static_cast<size_t>(n_classes);
+        linear(w.ctc_head.weight.data(), frame, nullptr, n_classes, d_enc, row);
+    }
+#endif
+    for (int t = 0; t < T_enc; ++t) {
+        float * row = logits_all.data() + static_cast<size_t>(t) * static_cast<size_t>(n_classes);
+        for (int c = 0; c < n_classes; ++c) {
+            row[c] += w.ctc_head.bias[static_cast<size_t>(c)];
+        }
+    }
+    const int64_t t_proj_us = ggml_time_us() - t_proj_start;
+
+    // Per-frame log-softmax in place. The reference dumps log-probs,
+    // not raw logits.
+    for (int t = 0; t < T_enc; ++t) {
+        float * row = logits_all.data() + static_cast<size_t>(t) * static_cast<size_t>(n_classes);
+        float max_v = row[0];
+        for (int c = 1; c < n_classes; ++c) {
+            if (row[c] > max_v) max_v = row[c];
+        }
+        double sum = 0.0;
+        for (int c = 0; c < n_classes; ++c) {
+            sum += std::exp(static_cast<double>(row[c] - max_v));
+        }
+        const float log_sum = static_cast<float>(std::log(sum)) + max_v;
+        for (int c = 0; c < n_classes; ++c) {
+            row[c] -= log_sum;
+        }
+    }
+
+    // Optional dumps. Frame 0 is shape [n_classes]; full is
+    // [T_enc, n_classes] in row-major (== ggml ne fast-to-slow
+    // [n_classes, T_enc]).
+    if (transcribe::debug::enabled()) {
+        const long long s_n = n_classes;
+        transcribe::debug::dump_host_f32(
+            "dec.ctc.logprobs.0", logits_all.data(), s_n, &s_n, 1,
+            "decoder.ctc.logprobs.0");
+        const long long shape_full[2] = { T_enc, n_classes };
+        transcribe::debug::dump_host_f32(
+            "dec.ctc.logprobs", logits_all.data(),
+            static_cast<long long>(logits_all.size()),
+            shape_full, 2, "decoder.ctc.logprobs");
+    }
+
+    // Greedy collapse: drop runs of identical labels, then drop blanks.
+    // Per-emit `step_at_emit` is the encoder frame at which the label
+    // first changed; duration_frames = 1.
+    int prev_label = -1;
+    for (int t = 0; t < T_enc; ++t) {
+        const float * row = logits_all.data() + static_cast<size_t>(t) * static_cast<size_t>(n_classes);
+        const int label = argmax_range(row, n_classes);
+        if (label == prev_label) continue; // run-length collapse
+        prev_label = label;
+        if (label == blank_id) continue;
+        TdtToken tok;
+        tok.id              = label;
+        // CTC greedy confidence = exp(top log-prob); this is the
+        // model's own probability for the chosen label, in [0, 1].
+        tok.p               = std::exp(row[label]);
+        tok.step_at_emit    = t;
+        tok.duration_frames = 1;
+        out_tokens.push_back(tok);
+    }
+
+    std::fprintf(stderr,
+                 "decoder (ctc): T_enc=%d  proj=%.1f ms  emitted=%d\n",
+                 T_enc, t_proj_us / 1000.0,
+                 static_cast<int>(out_tokens.size()));
+
     return TRANSCRIBE_OK;
 }
 

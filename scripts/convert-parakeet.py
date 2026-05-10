@@ -550,6 +550,21 @@ def read_hparams(config: dict) -> dict:
         "enc_subsampling_factor":   int(enc["subsampling_factor"]),
         "enc_subsampling_channels": int(enc["subsampling_conv_channels"]),
         "enc_pos_emb_max_len":      int(enc["pos_emb_max_len"]),
+        # xscaling: NeMo's RelPositionalEncoding multiplies x by
+        # sqrt(d_model) before generating pos_emb when this flag is
+        # True. Default-to-True matches NeMo's `xscaling=True` default
+        # in ConformerEncoder.__init__. v2/v3/tdt-* explicitly set
+        # False; ctc-*/rnnt-*/unified-en explicitly set True. The C++
+        # loader treats this as required-with-default (default false
+        # for legacy GGUFs without the KV).
+        "enc_xscaling":             bool(enc.get("xscaling", True)),
+        # att_context_size: [-1, -1] = full attention. Local attention
+        # ([left, right] with non-negative values, e.g. [128, 128] for
+        # tdt_ctc-1.1b) restricts each query to keys within the band
+        # [q-left, q+right]. Drives both the pos_emb buffer size
+        # (left+right+1) and a band mask additive in attention.
+        "enc_att_context_left":     int(enc.get("att_context_size", [-1, -1])[0]),
+        "enc_att_context_right":    int(enc.get("att_context_size", [-1, -1])[1]),
         # use_bias is resolved from the state_dict in convert() — NeMo's
         # YAML omits the key on some checkpoints (tdt-1.1b) while the
         # constructor default is True, and on others (tdt-0.6b-v2/v3)
@@ -957,6 +972,9 @@ def convert(model_spec: str, out_path: Path) -> None:
     writer.add_uint32("stt.parakeet.encoder.subsampling_channels", hp["enc_subsampling_channels"])
     writer.add_uint32("stt.parakeet.encoder.pos_emb_max_len",      hp["enc_pos_emb_max_len"])
     writer.add_bool  ("stt.parakeet.encoder.use_bias",             hp["enc_use_bias"])
+    writer.add_bool  ("stt.parakeet.encoder.xscaling",             hp["enc_xscaling"])
+    writer.add_int32 ("stt.parakeet.encoder.att_context_left",     hp["enc_att_context_left"])
+    writer.add_int32 ("stt.parakeet.encoder.att_context_right",    hp["enc_att_context_right"])
 
     if head_kind != "ctc":
         writer.add_uint32("stt.parakeet.predictor.hidden",   hp["pred_hidden"])

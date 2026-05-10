@@ -120,14 +120,22 @@ def _patch_conformer_for_offline() -> None:
     intake explicitly punts streaming for v1: offline mode reuses the same
     weights via full-context attention, so dropping the streaming-only kwargs
     is safe for an offline reference dump.
+
+    The cfg also sets several boolean/scalar fields to None that
+    explicitly-pass-None breaks (`use_bias=None` -> `int * None` fail in
+    `d_ff = d_model * ff_expansion_factor`). Filter those out so the
+    constructor's named defaults take effect.
     """
+    import inspect
     import nemo.collections.asr.modules.conformer_encoder as ce
 
     if getattr(ce.ConformerEncoder, "_transcribe_offline_patched", False):
         return
 
     original_init = ce.ConformerEncoder.__init__
-    streaming_only = ("att_chunk_context_size", "streaming_loss_weight")
+    accepted = set(inspect.signature(original_init).parameters.keys())
+    streaming_only = ("att_chunk_context_size", "streaming_loss_weight",
+                      "att_chunk_size")
     offline_overrides = {
         "att_context_style": "regular",
         "conv_context_style": None,
@@ -135,6 +143,12 @@ def _patch_conformer_for_offline() -> None:
 
     def patched_init(self, *args, **kwargs):
         dropped = []
+        # Drop unknown kwargs (covers any future streaming-only key the
+        # constructor doesn't accept yet).
+        for k in list(kwargs.keys()):
+            if k not in accepted:
+                kwargs.pop(k)
+                dropped.append(f"unknown:{k}")
         for k in streaming_only:
             if k in kwargs:
                 kwargs.pop(k)
@@ -146,6 +160,16 @@ def _patch_conformer_for_offline() -> None:
                     kwargs.pop(k)
                 else:
                     kwargs[k] = fallback
+        # Filter None values for any kwarg whose default is not None and
+        # whose annotation is bool. Passing None for a bool kwarg
+        # propagates as a falsy value into the constructor body which
+        # then fails on math like `int * None`.
+        for name, param in inspect.signature(original_init).parameters.items():
+            if name == "self":
+                continue
+            if name in kwargs and kwargs[name] is None and param.default is not None:
+                kwargs.pop(name)
+                dropped.append(f"None->default:{name}")
         if dropped:
             print(f"[offline-patch] dropped/overrode encoder kwargs: {dropped}")
         return original_init(self, *args, **kwargs)
@@ -156,8 +180,7 @@ def _patch_conformer_for_offline() -> None:
 
 def load_model(args: argparse.Namespace):
     """Load a Parakeet model via NeMo. Architecture is inferred at runtime."""
-    if args.offline_only:
-        _patch_conformer_for_offline()
+    _patch_conformer_for_offline()
 
     from nemo.collections.asr.models import ASRModel
 
@@ -166,10 +189,40 @@ def load_model(args: argparse.Namespace):
 
     if local.exists():
         print(f"Loading Parakeet from local path: {local}")
-        model = ASRModel.restore_from(str(local), map_location="cpu")
+        try:
+            model = ASRModel.restore_from(str(local), map_location="cpu")
+        except TypeError as e:
+            if "abstract class" not in str(e):
+                raise
+            from nemo.collections.asr.models.rnnt_bpe_models import EncDecRNNTBPEModel
+            from nemo.collections.asr.models.ctc_bpe_models import EncDecCTCModelBPE
+            last = e
+            for cls in (EncDecRNNTBPEModel, EncDecCTCModelBPE):
+                try:
+                    model = cls.restore_from(str(local), map_location="cpu")
+                    break
+                except Exception as e2:
+                    last = e2
+            else:
+                raise last
     else:
         print(f"Loading Parakeet from HuggingFace: {model_id}")
-        model = ASRModel.from_pretrained(model_id, map_location="cpu")
+        try:
+            model = ASRModel.from_pretrained(model_id, map_location="cpu")
+        except TypeError as e:
+            if "abstract class" not in str(e):
+                raise
+            from nemo.collections.asr.models.rnnt_bpe_models import EncDecRNNTBPEModel
+            from nemo.collections.asr.models.ctc_bpe_models import EncDecCTCModelBPE
+            last = e
+            for cls in (EncDecRNNTBPEModel, EncDecCTCModelBPE):
+                try:
+                    model = cls.from_pretrained(model_id, map_location="cpu")
+                    break
+                except Exception as e2:
+                    last = e2
+            else:
+                raise last
 
     model.eval()
     return model
@@ -250,13 +303,36 @@ def select_blocks(model, requested: list[int] | None) -> list[int]:
 # Hook-based intermediate capture
 # ---------------------------------------------------------------------------
 
-def capture_intermediates(model, block_indices: list[int]):
+# Imported lazily inside capture_intermediates() / its wrapper. NeMo's
+# import surface is heavy and already paid for elsewhere; importing here
+# avoids a hard dep at module load time when the dumper is just resolving
+# CLI args.
+try:
+    from nemo.collections.asr.parts.submodules.multi_head_attention import (
+        RelPositionMultiHeadAttention,
+        RelPositionMultiHeadAttentionLongformer,
+    )
+except Exception:
+    RelPositionMultiHeadAttention = None  # type: ignore[assignment]
+    RelPositionMultiHeadAttentionLongformer = None  # type: ignore[assignment]
+
+def capture_intermediates(model, block_indices: list[int],
+                          sub_block_indices: list[int] | None = None):
     """Register forward hooks on key encoder sub-modules.
 
-    Returns (intermediates_dict, hook_handle_list).
+    For block indices in `sub_block_indices`, also wrap the layer's
+    forward to capture residual state after FF1, attn, conv, FF2 — the
+    same observer points exposed by the C++ BlockObserver. These are
+    saved under `enc.block.<i>.{ff1,attn,conv,ff2}` to match the C++
+    dump filenames.
+
+    Returns (intermediates_dict, hook_handle_list, restore_callbacks).
     """
+    import torch
+
     intermediates: dict[str, Any] = {}
     hooks = []
+    restore_cbs: list[Any] = []
 
     def _hook(name, extract_idx=0):
         def fn(_module, _input, output):
@@ -278,7 +354,66 @@ def capture_intermediates(model, block_indices: list[int]):
                 model.encoder.layers[i].register_forward_hook(_hook(f"enc.block.{i}.out"))
             )
 
-    return intermediates, hooks
+    # Sub-block capture: wrap each requested layer's forward so we can
+    # snapshot the running residual at the same points the C++ observer
+    # tags (after_ff1, after_attn, after_conv, after_ff2). The wrapper
+    # replicates the exact forward body — there is no other way to
+    # reach the residual variable mid-pass through a torch hook.
+    if sub_block_indices:
+        for idx in sub_block_indices:
+            if idx >= len(model.encoder.layers):
+                continue
+            layer = model.encoder.layers[idx]
+            original_forward = layer.forward
+
+            def make_wrapped(layer=layer, idx=idx, original_forward=original_forward):
+                def wrapped_forward(x, att_mask=None, pos_emb=None, pad_mask=None,
+                                    cache_last_channel=None, cache_last_time=None):
+                    residual = x
+                    x_n = layer.norm_feed_forward1(x)
+                    ff1 = layer.feed_forward1(x_n)
+                    residual = residual + layer.dropout(ff1) * layer.fc_factor
+                    intermediates[f"enc.block.{idx}.ff1"] = residual.detach().clone()
+
+                    x_n = layer.norm_self_att(residual)
+                    if isinstance(layer.self_attn, RelPositionMultiHeadAttention):
+                        attn_out = layer.self_attn(query=x_n, key=x_n, value=x_n,
+                                                   mask=att_mask, pos_emb=pos_emb,
+                                                   cache=cache_last_channel)
+                    elif isinstance(layer.self_attn, RelPositionMultiHeadAttentionLongformer):
+                        attn_out = layer.self_attn(query=x_n, key=x_n, value=x_n,
+                                                   pad_mask=pad_mask, pos_emb=pos_emb,
+                                                   cache=cache_last_channel)
+                    else:
+                        attn_out = layer.self_attn(query=x_n, key=x_n, value=x_n,
+                                                   mask=att_mask, cache=cache_last_channel)
+                    if cache_last_channel is not None:
+                        attn_out, cache_last_channel = attn_out
+                    residual = residual + layer.dropout(attn_out)
+                    intermediates[f"enc.block.{idx}.attn"] = residual.detach().clone()
+
+                    x_n = layer.norm_conv(residual)
+                    conv_out = layer.conv(x_n, pad_mask=pad_mask, cache=cache_last_time)
+                    if cache_last_time is not None:
+                        conv_out, cache_last_time = conv_out
+                    residual = residual + layer.dropout(conv_out)
+                    intermediates[f"enc.block.{idx}.conv"] = residual.detach().clone()
+
+                    x_n = layer.norm_feed_forward2(residual)
+                    ff2 = layer.feed_forward2(x_n)
+                    residual = residual + layer.dropout(ff2) * layer.fc_factor
+                    intermediates[f"enc.block.{idx}.ff2"] = residual.detach().clone()
+
+                    out = layer.norm_out(residual)
+                    if cache_last_channel is None:
+                        return out
+                    return out, cache_last_channel, cache_last_time
+                return wrapped_forward
+
+            layer.forward = make_wrapped()
+            restore_cbs.append((layer, original_forward))
+
+    return intermediates, hooks, restore_cbs
 
 
 def run_encoder_forward(model, audio_tensor, length_tensor):
@@ -373,8 +508,11 @@ def cmd_encoder(args: argparse.Namespace) -> int:
     length_tensor = torch.tensor([pcm.size], dtype=torch.long)
 
     block_indices = select_blocks(model, args.blocks)
-    print(f"dumping blocks: {block_indices}")
-    intermediates, hooks = capture_intermediates(model, block_indices)
+    sub_blocks = sorted(set(args.sub_blocks or []))
+    print(f"dumping blocks: {block_indices}  sub-blocks: {sub_blocks}")
+    intermediates, hooks, restore_cbs = capture_intermediates(
+        model, block_indices, sub_block_indices=sub_blocks,
+    )
 
     encoded, _encoded_len = run_encoder_forward(model, audio_tensor, length_tensor)
 
@@ -387,11 +525,22 @@ def cmd_encoder(args: argparse.Namespace) -> int:
         if key in intermediates:
             dump(key, intermediates[key], f"encoder.block{i}.out")
 
+    # Sub-block intermediates (matching C++ observer points). These get
+    # written under enc.block.<i>.{ff1,attn,conv,ff2} so compare_tensors
+    # picks them up by name without any extra plumbing.
+    for i in sub_blocks:
+        for tag in ("ff1", "attn", "conv", "ff2"):
+            key = f"enc.block.{i}.{tag}"
+            if key in intermediates:
+                dump(key, intermediates[key], f"encoder.block{i}.{tag}")
+
     enc_final = encoded.transpose(1, 2)  # (B, D, T) -> (B, T, D)
     dump("enc.final", enc_final, "encoder.final")
 
     for h in hooks:
         h.remove()
+    for layer, original_forward in restore_cbs:
+        layer.forward = original_forward
 
     return 0
 
@@ -563,6 +712,17 @@ def main() -> int:
         nargs="*",
         default=None,
         help="Block indices to dump. Default: {0, n_layers/2, n_layers-1} based on actual depth.",
+    )
+    ep.add_argument(
+        "--sub-blocks",
+        type=int,
+        nargs="*",
+        default=None,
+        help=(
+            "Block indices for which to ALSO dump sub-block intermediates "
+            "(after FF1, attn, conv, FF2). Matches the C++ BlockObserver "
+            "tags. Default: empty (no sub-block dumps)."
+        ),
     )
     ep.set_defaults(func=cmd_encoder)
 

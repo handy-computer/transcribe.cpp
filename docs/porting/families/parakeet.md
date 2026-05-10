@@ -99,17 +99,17 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 |---|---|---|---|---|---|
 | tdt-0.6b-v2 | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
 | tdt-0.6b-v3 | Transcribe | auto | `build/bin/transcribe-cli -m models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf samples/jfk.wav` | English transcript | PASS |
-| tdt-1.1b | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | TODO |
-| tdt_ctc-1.1b | Transcribe (TDT head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf --language en samples/jfk.wav` | English with PnC | TODO |
-| tdt_ctc-1.1b | Punctuation/casing | output | same as above | output contains capital letters and `,.?!` | TODO |
-| tdt_ctc-110m | Transcribe (TDT head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf --language en samples/jfk.wav` | English with PnC | TODO |
-| rnnt-1.1b | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | TODO |
-| rnnt-0.6b | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript | TODO |
-| unified-en-0.6b | Transcribe (offline) | explicit en | `build/bin/transcribe-cli -m models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf --language en samples/jfk.wav` | English with PnC | TODO |
+| tdt-1.1b | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
+| tdt_ctc-1.1b | Transcribe (TDT head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf --language en samples/jfk.wav` | English with PnC | PASS |
+| tdt_ctc-1.1b | Punctuation/casing | output | same as above | output contains capital letters and `,.?!` | PASS |
+| tdt_ctc-110m | Transcribe (TDT head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf --language en samples/jfk.wav` | English with PnC | PASS |
+| rnnt-1.1b | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
+| rnnt-0.6b | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
+| unified-en-0.6b | Transcribe (offline) | explicit en | `build/bin/transcribe-cli -m models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf --language en samples/jfk.wav` | English with PnC | PASS |
 | unified-en-0.6b | Streaming | streaming | n/a | n/a | `ACCEPTED GAP — streaming infra deferred to v2 port` |
-| ctc-1.1b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | TODO |
-| ctc-0.6b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript | TODO |
-| all variants | Word timestamps | only if exposed | TBD by Stage 4 runtime | TBD | TODO |
+| ctc-1.1b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
+| ctc-0.6b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
+| all variants | Word timestamps | only if exposed | `transcribe-cli --timestamps word -m <gguf> <wav>` (any variant) | per-word `t0_ms`/`t1_ms` in JSON output | PASS — derived host-side from emit-frame indices (TDT/RNNT) or per-frame argmax (CTC); same code path as the existing v2/v3 word-timestamp gate, no per-variant differences |
 
 ## Open decisions before Stage 3 (convert)
 
@@ -299,5 +299,13 @@ Per-variant decisions surfaced during Stage 3 (`porting-3-convert`).
   (small enough to extract).
 - **Stage 4 follow-ups (tdt_ctc)** — the GGUFs load cleanly through
   the existing TDT KV path; runtime fails at the same `(num_mels=80,
-  subsampling_factor=8)` geometry as tdt-1.1b. No new Stage-4 work
-  beyond what the TDT round already required.
+  subsampling_factor=8)` geometry as tdt-1.1b.
+- **Local attention on tdt_ctc-1.1b only** — uniquely among the 10
+  variants, tdt_ctc-1.1b uses NeMo's `LocalAttRelPositionalEncoding`
+  with `att_context_size=[128,128]`. The pos_emb buffer is sized
+  `[2W+1, d]` (257 instead of 2T-1) and attention is band-restricted
+  to ±128 frames per query. C++ honors this via two new GGUF KVs
+  (`stt.parakeet.encoder.att_context_{left,right}`, default `-1` =
+  full attention) and a -INF row pad on `matrix_bd` before `rel_shift`,
+  which moves out-of-band keys to -INF in the post-softmax scores.
+  Math is exact for any T (including T > 2W+1).

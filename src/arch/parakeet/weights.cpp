@@ -23,6 +23,7 @@
 #include "gguf.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 
@@ -55,46 +56,104 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.subsampling_channels", kFamilyTag, hp.enc_subsampling_channels); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.pos_emb_max_len", kFamilyTag,   hp.enc_pos_emb_max_len);   st != TRANSCRIBE_OK) return st;
 
-    // Optional. NeMo Parakeet has use_bias=false on every published
-    // variant we know about, so the default matches reality.
+    // Optional. NeMo Parakeet v2/v3 ship with use_bias=false; the
+    // 1.1B and rnnt/ctc variants ship with use_bias=true (11 biases per
+    // block). Default matches v2/v3 so legacy GGUFs without the KV stay
+    // on the bias-free path.
     if (auto st = read_optional_bool_kv(gguf, "stt.parakeet.encoder.use_bias", kFamilyTag, false, hp.enc_use_bias); st != TRANSCRIBE_OK) return st;
 
-    // Predictor.
-    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.hidden", kFamilyTag,   hp.pred_hidden);   st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.n_layers", kFamilyTag, hp.pred_n_layers); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.vocab", kFamilyTag,    hp.pred_vocab);    st != TRANSCRIBE_OK) return st;
+    // xscaling: NeMo's RelPositionalEncoding multiplies x by
+    // sqrt(d_model) before generating the pos_emb when this is true.
+    // v2/v3/tdt-* are False; ctc-*/rnnt-*/unified-en are True.
+    // Default to false so legacy GGUFs (which don't ship this KV)
+    // continue to work without scaling - they're all xscaling=False
+    // models in the current set.
+    if (auto st = read_optional_bool_kv(gguf, "stt.parakeet.encoder.xscaling", kFamilyTag, false, hp.enc_xscaling); st != TRANSCRIBE_OK) return st;
 
-    // Joint.
-    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.joint.hidden", kFamilyTag,            hp.joint_hidden);            st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_u32_kv(gguf, "stt.parakeet.joint.num_extra_outputs", kFamilyTag, hp.joint_num_extra_outputs); st != TRANSCRIBE_OK) return st;
-    if (auto st = read_required_string_kv(gguf, "stt.parakeet.joint.activation", kFamilyTag, hp.joint_activation);        st != TRANSCRIBE_OK) return st;
+    // Local attention window. Default -1/-1 = full attention; matches
+    // every variant except parakeet-tdt_ctc-1.1b, which sets [128, 128].
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_left",  kFamilyTag, -1, hp.enc_att_context_left);  st != TRANSCRIBE_OK) return st;
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_right", kFamilyTag, -1, hp.enc_att_context_right); st != TRANSCRIBE_OK) return st;
 
-    // TDT decoding parameters. `durations` is required (the decoder
-    // can't run without it); `max_symbols` is optional with a default
-    // matching every published v2/v3 config we've seen.
-    switch (read_int32_array_kv(gguf, "stt.parakeet.tdt.durations", hp.tdt_durations)) {
-        case KvResult::Ok:
-            break;
-        case KvResult::Absent:
-        case KvResult::BadType:
-            std::fprintf(stderr,
-                         "parakeet: required KV \"stt.parakeet.tdt.durations\" "
-                         "missing or wrong type\n");
-            return TRANSCRIBE_ERR_GGUF;
-    }
+    // Head kind dispatch. Optional KV with default "tdt" so legacy
+    // v2/v3 GGUFs (predate the KV) resolve to TDT, which is what they
+    // are. The 8 new variants all ship the KV explicitly.
     {
-        uint32_t max_sym = 10;
-        switch (read_uint32_kv(gguf, "stt.parakeet.tdt.max_symbols", max_sym)) {
+        std::string head_kind_str;
+        if (auto st = read_optional_string_kv(gguf, "stt.parakeet.head_kind",
+                                              kFamilyTag, "tdt", head_kind_str);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+        if (head_kind_str == "tdt") {
+            hp.head_kind = HeadKind::TDT;
+        } else if (head_kind_str == "rnnt") {
+            hp.head_kind = HeadKind::RNNT;
+        } else if (head_kind_str == "ctc") {
+            hp.head_kind = HeadKind::CTC;
+        } else {
+            std::fprintf(stderr,
+                         "parakeet: unsupported head_kind \"%s\" "
+                         "(allowed: tdt, rnnt, ctc)\n",
+                         head_kind_str.c_str());
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    if (hp.head_kind != HeadKind::CTC) {
+        // Predictor (TDT and RNNT only; CTC has no predictor).
+        if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.hidden", kFamilyTag,   hp.pred_hidden);   st != TRANSCRIBE_OK) return st;
+        if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.n_layers", kFamilyTag, hp.pred_n_layers); st != TRANSCRIBE_OK) return st;
+        if (auto st = read_required_u32_kv(gguf, "stt.parakeet.predictor.vocab", kFamilyTag,    hp.pred_vocab);    st != TRANSCRIBE_OK) return st;
+
+        // Joint (TDT and RNNT only).
+        if (auto st = read_required_u32_kv(gguf, "stt.parakeet.joint.hidden", kFamilyTag,            hp.joint_hidden);            st != TRANSCRIBE_OK) return st;
+        if (auto st = read_required_u32_kv(gguf, "stt.parakeet.joint.num_extra_outputs", kFamilyTag, hp.joint_num_extra_outputs); st != TRANSCRIBE_OK) return st;
+        if (auto st = read_required_string_kv(gguf, "stt.parakeet.joint.activation", kFamilyTag, hp.joint_activation);        st != TRANSCRIBE_OK) return st;
+    }
+
+    if (hp.head_kind == HeadKind::TDT) {
+        // TDT decoding parameters. `durations` is required (the decoder
+        // can't run without it); `max_symbols` is optional with a default
+        // matching every published v2/v3 config we've seen. RNNT does
+        // NOT carry these — its joint emits `vocab+1` (no extras) and
+        // the decode loop has no duration choice.
+        switch (read_int32_array_kv(gguf, "stt.parakeet.tdt.durations", hp.tdt_durations)) {
             case KvResult::Ok:
-            case KvResult::Absent:
-                hp.tdt_max_symbols = static_cast<int32_t>(max_sym);
                 break;
+            case KvResult::Absent:
             case KvResult::BadType:
                 std::fprintf(stderr,
-                             "parakeet: optional KV \"stt.parakeet.tdt.max_symbols\" "
-                             "has wrong type\n");
+                             "parakeet: required KV \"stt.parakeet.tdt.durations\" "
+                             "missing or wrong type (head_kind=tdt)\n");
                 return TRANSCRIBE_ERR_GGUF;
         }
+        {
+            uint32_t max_sym = 10;
+            switch (read_uint32_kv(gguf, "stt.parakeet.tdt.max_symbols", max_sym)) {
+                case KvResult::Ok:
+                case KvResult::Absent:
+                    hp.tdt_max_symbols = static_cast<int32_t>(max_sym);
+                    break;
+                case KvResult::BadType:
+                    std::fprintf(stderr,
+                                 "parakeet: optional KV \"stt.parakeet.tdt.max_symbols\" "
+                                 "has wrong type\n");
+                    return TRANSCRIBE_ERR_GGUF;
+            }
+        }
+    } else if (hp.head_kind == HeadKind::RNNT) {
+        // RNNT shares the predictor + joint code paths with TDT, but has
+        // no durations and the joint emits exactly `vocab+1` logits.
+        // Reuse `tdt_max_symbols` as the decode loop's per-frame stuck
+        // cap (NeMo's RNNTGreedyDecodeBatched uses the same constant).
+        hp.tdt_durations.clear();
+        hp.tdt_max_symbols = 10;
+    } else {
+        // CTC: no predictor, no joint, no durations.
+        hp.tdt_durations.clear();
+        hp.tdt_max_symbols = 0;
     }
 
     // Frontend. The full stt.frontend.* block PLAN.md declares as the
@@ -135,60 +194,72 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
-    if (hp.pred_hidden <= 0 || hp.pred_n_layers <= 0 || hp.pred_vocab <= 1) {
-        std::fprintf(stderr, "parakeet: predictor hparams must be positive\n");
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (hp.joint_hidden <= 0 || hp.joint_num_extra_outputs < 0) {
-        std::fprintf(stderr, "parakeet: joint hparams invalid\n");
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    // Joint activation allow-list. The C++ joint forward implements
-    // the same three the reference JointNetwork accepts; anything
-    // else is a converter mistake or a future model
-    // we haven't ported yet, and producing wrong logits silently is
-    // worse than failing loudly here.
-    if (hp.joint_activation != "relu" &&
-        hp.joint_activation != "sigmoid" &&
-        hp.joint_activation != "tanh")
-    {
-        std::fprintf(stderr,
-                     "parakeet: unsupported joint activation \"%s\" "
-                     "(only relu, sigmoid, tanh are implemented)\n",
-                     hp.joint_activation.c_str());
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    // TDT durations: must be non-empty, must match num_extra_outputs
-    // (each duration logit corresponds to one durations[i] choice),
-    // and every entry must be non-negative (negative jumps would
-    // walk backwards in time and break the decode loop's invariant).
-    // Zero is allowed and is the standard "stay on this frame, just
-    // emit a token without advancing" duration.
-    if (hp.tdt_durations.empty()) {
-        std::fprintf(stderr,
-                     "parakeet: stt.parakeet.tdt.durations must be non-empty\n");
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    if (static_cast<int32_t>(hp.tdt_durations.size()) != hp.joint_num_extra_outputs) {
-        std::fprintf(stderr,
-                     "parakeet: stt.parakeet.tdt.durations length (%zu) "
-                     "must equal joint.num_extra_outputs (%d)\n",
-                     hp.tdt_durations.size(), hp.joint_num_extra_outputs);
-        return TRANSCRIBE_ERR_GGUF;
-    }
-    for (int32_t d : hp.tdt_durations) {
-        if (d < 0) {
+    if (hp.head_kind != HeadKind::CTC) {
+        if (hp.pred_hidden <= 0 || hp.pred_n_layers <= 0 || hp.pred_vocab <= 1) {
+            std::fprintf(stderr, "parakeet: predictor hparams must be positive\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (hp.joint_hidden <= 0 || hp.joint_num_extra_outputs < 0) {
+            std::fprintf(stderr, "parakeet: joint hparams invalid\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        // Joint activation allow-list. The C++ joint forward implements
+        // the same three the reference JointNetwork accepts; anything
+        // else is a converter mistake or a future model we haven't
+        // ported yet, and producing wrong logits silently is worse than
+        // failing loudly here.
+        if (hp.joint_activation != "relu" &&
+            hp.joint_activation != "sigmoid" &&
+            hp.joint_activation != "tanh")
+        {
             std::fprintf(stderr,
-                         "parakeet: stt.parakeet.tdt.durations contains "
-                         "negative value %d\n", d);
+                         "parakeet: unsupported joint activation \"%s\" "
+                         "(only relu, sigmoid, tanh are implemented)\n",
+                         hp.joint_activation.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
     }
-    if (hp.tdt_max_symbols < 0) {
-        std::fprintf(stderr,
-                     "parakeet: stt.parakeet.tdt.max_symbols must be >= 0 "
-                     "(got %d)\n", hp.tdt_max_symbols);
-        return TRANSCRIBE_ERR_GGUF;
+    if (hp.head_kind == HeadKind::TDT) {
+        // TDT durations: must be non-empty, must match num_extra_outputs
+        // (each duration logit corresponds to one durations[i] choice),
+        // and every entry must be non-negative (negative jumps would
+        // walk backwards in time and break the decode loop's invariant).
+        // Zero is allowed and is the standard "stay on this frame, just
+        // emit a token without advancing" duration.
+        if (hp.tdt_durations.empty()) {
+            std::fprintf(stderr,
+                         "parakeet: stt.parakeet.tdt.durations must be non-empty (head_kind=tdt)\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        if (static_cast<int32_t>(hp.tdt_durations.size()) != hp.joint_num_extra_outputs) {
+            std::fprintf(stderr,
+                         "parakeet: stt.parakeet.tdt.durations length (%zu) "
+                         "must equal joint.num_extra_outputs (%d)\n",
+                         hp.tdt_durations.size(), hp.joint_num_extra_outputs);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        for (int32_t d : hp.tdt_durations) {
+            if (d < 0) {
+                std::fprintf(stderr,
+                             "parakeet: stt.parakeet.tdt.durations contains "
+                             "negative value %d\n", d);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+        }
+        if (hp.tdt_max_symbols < 0) {
+            std::fprintf(stderr,
+                         "parakeet: stt.parakeet.tdt.max_symbols must be >= 0 "
+                         "(got %d)\n", hp.tdt_max_symbols);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    } else if (hp.head_kind == HeadKind::RNNT) {
+        // RNNT joint emits exactly vocab+1 — no duration extras.
+        if (hp.joint_num_extra_outputs != 0) {
+            std::fprintf(stderr,
+                         "parakeet: head_kind=rnnt requires joint.num_extra_outputs=0 "
+                         "(got %d)\n", hp.joint_num_extra_outputs);
+            return TRANSCRIBE_ERR_GGUF;
+        }
     }
     if (hp.fe_num_mels <= 0 || hp.fe_sample_rate <= 0 ||
         hp.fe_n_fft <= 0 || hp.fe_win_length <= 0 || hp.fe_hop_length <= 0)
@@ -361,10 +432,10 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
     const int64_t n_heads  = hp.enc_n_heads;
     const int64_t head_dim = hp.enc_head_dim();
     const int64_t k        = hp.enc_conv_kernel;
-    const int64_t pred_h   = hp.pred_hidden;
-    const int64_t pred_v   = hp.pred_vocab;
-    const int64_t joint_h  = hp.joint_hidden;
-    const int64_t joint_n  = hp.joint_n_classes();
+    const int64_t pred_h   = hp.pred_hidden;       // 0 for CTC
+    const int64_t pred_v   = hp.pred_vocab;        // 0 for CTC
+    const int64_t joint_h  = hp.joint_hidden;      // 0 for CTC
+    const int64_t joint_n  = hp.joint_n_classes(); // meaningless for CTC; we read CTC head shape instead
 
     // The flattened "freq" axis going into pre_encode.out is
     // (subsampling_channels * (num_mels / subsampling_factor)). NeMo's
@@ -401,9 +472,11 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_LIN(b.ff1_lin1_w, lname("enc.blocks.%d.ff1.linear1.weight", i), d_model, d_ff);
         GET_LIN(b.ff1_lin2_w, lname("enc.blocks.%d.ff1.linear2.weight", i), d_ff,    d_model);
 
-        // Self-attention with relative position. Bias-free linears
-        // (use_bias=false on every Parakeet variant we know about);
-        // the per-head pos_bias_u/v live alongside.
+        // Self-attention with relative position. Linears can carry
+        // biases when `enc.use_bias=true` (1.1B / rnnt / ctc variants);
+        // v2/v3 ship without (Q/K/V/out + pos = bias-free). The
+        // per-head pos_bias_u/v live alongside regardless. NeMo's
+        // `linear_pos` is bias-free even when use_bias=true.
         GET_F32(b.norm_attn_w, lname("enc.blocks.%d.norm_attn.weight", i), d_model);
         GET_F32(b.norm_attn_b, lname("enc.blocks.%d.norm_attn.bias",   i), d_model);
         GET_LIN(b.attn_q_w,    lname("enc.blocks.%d.attn.linear_q.weight",   i), d_model, d_model);
@@ -439,35 +512,92 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         // Final per-block layer norm.
         GET_F32(b.norm_out_w, lname("enc.blocks.%d.norm_out.weight", i), d_model);
         GET_F32(b.norm_out_b, lname("enc.blocks.%d.norm_out.bias",   i), d_model);
+
+        // Optional encoder linear/conv biases. Loaded only when
+        // hp.enc_use_bias=true (1.1B FastConformer-XL, rnnt-*, ctc-*).
+        // The 11 names mirror the converter's ENCODER_BLOCK_BIAS_TABLE
+        // exactly. NeMo's `linear_pos` is bias-free even when
+        // use_bias=true so attn_pos has no bias slot.
+        if (hp.enc_use_bias) {
+            GET_F32(b.ff1_lin1_b,  lname("enc.blocks.%d.ff1.linear1.bias",      i), d_ff);
+            GET_F32(b.ff1_lin2_b,  lname("enc.blocks.%d.ff1.linear2.bias",      i), d_model);
+            GET_F32(b.attn_q_b,    lname("enc.blocks.%d.attn.linear_q.bias",    i), d_model);
+            GET_F32(b.attn_k_b,    lname("enc.blocks.%d.attn.linear_k.bias",    i), d_model);
+            GET_F32(b.attn_v_b,    lname("enc.blocks.%d.attn.linear_v.bias",    i), d_model);
+            GET_F32(b.attn_out_b,  lname("enc.blocks.%d.attn.linear_out.bias",  i), d_model);
+            GET_F32(b.conv_pw1_b,  lname("enc.blocks.%d.conv.pointwise1.bias", i), 2 * d_model);
+            GET_F32(b.conv_dw_b,   lname("enc.blocks.%d.conv.depthwise.bias",  i), d_model);
+            GET_F32(b.conv_pw2_b,  lname("enc.blocks.%d.conv.pointwise2.bias", i), d_model);
+            GET_F32(b.ff2_lin1_b,  lname("enc.blocks.%d.ff2.linear1.bias",      i), d_ff);
+            GET_F32(b.ff2_lin2_b,  lname("enc.blocks.%d.ff2.linear2.bias",      i), d_model);
+        }
     }
 
-    // ----- predictor -----
-    // The predictor + joint run on host CPU via decoder.cpp's
-    // hand-rolled fp32 linear(); the host weight mirror dequantizes
-    // through ggml_get_type_traits()->to_float on load, so any of the
-    // GET_LIN-allowed types are safe here.
-    GET_LIN(weights.predictor.embed_w, "pred.embed.weight", pred_h, pred_v);
+    if (hp.head_kind == HeadKind::CTC) {
+        // ----- CTC head -----
+        //
+        // Single 1×1 Conv1d projecting d_model -> vocab+1. NeMo's
+        // ConvASRDecoder stores it as `decoder.decoder_layers.0`; the
+        // converter flattens to `head.ctc.weight` /
+        // `head.ctc.bias`.
+        //
+        // Tensor shape in PyTorch is [vocab+1, d_model, 1]
+        // (out_channels, in_channels, kernel). In ggml ne (fast-to-slow)
+        // that's [1, d_model, vocab+1]. We don't know `vocab+1` from the
+        // hparams (CTC GGUFs ship neither predictor.vocab nor
+        // joint_n_classes), so peek at the raw tensor to capture the
+        // trailing dim, then run the standard find_tensor with a fully
+        // specified expected shape so the type+rank checks still fire.
+        ggml_tensor * ctc_peek = ggml_get_tensor(ctx_meta, "head.ctc.weight");
+        if (ctc_peek == nullptr) {
+            std::fprintf(stderr, "parakeet: missing tensor \"head.ctc.weight\"\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        const int64_t n_classes = ctc_peek->ne[2];
+        if (n_classes <= 1) {
+            std::fprintf(stderr,
+                         "parakeet: head.ctc.weight vocab+1 (=%lld) must be > 1\n",
+                         (long long)n_classes);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        GET_LIN(weights.ctc_head.weight, "head.ctc.weight", 1, d_model, n_classes);
+        GET_F32(weights.ctc_head.bias,   "head.ctc.bias",   n_classes);
+        // Stash the resolved vocab+1 into hp for downstream consumers.
+        // We're given a const &; we relax that on the way out via a
+        // const_cast — safe because read_parakeet_hparams /
+        // build_parakeet_weights are the single producer of hp and its
+        // only contract is "writable while loading".
+        const_cast<ParakeetHParams &>(hp).head_ctc_n_classes =
+            static_cast<int32_t>(n_classes);
+    } else {
+        // ----- predictor (TDT, RNNT) -----
+        // The predictor + joint run on host CPU via decoder.cpp's
+        // hand-rolled fp32 linear(); the host weight mirror dequantizes
+        // through ggml_get_type_traits()->to_float on load, so any of the
+        // GET_LIN-allowed types are safe here.
+        GET_LIN(weights.predictor.embed_w, "pred.embed.weight", pred_h, pred_v);
 
-    weights.predictor.lstm.assign(hp.pred_n_layers, ParakeetPredictor::LstmLayer{});
-    for (int i = 0; i < hp.pred_n_layers; ++i) {
-        auto & l = weights.predictor.lstm[i];
-        // Both Wx and Wh project from pred_hidden (NeMo's prednet uses
-        // a learned embedding of size pred_hidden; the embed table
-        // shape is [pred_vocab, pred_hidden]). The 4*hidden output
-        // dim is the concatenated (i, f, g, o) gates.
-        const int64_t gates = 4 * pred_h;
-        GET_LIN(l.Wx, lname("pred.lstm.%d.Wx",   i), pred_h, gates);
-        GET_LIN(l.Wh, lname("pred.lstm.%d.Wh",   i), pred_h, gates);
-        GET_F32(l.b,  lname("pred.lstm.%d.bias", i), gates);
+        weights.predictor.lstm.assign(hp.pred_n_layers, ParakeetPredictor::LstmLayer{});
+        for (int i = 0; i < hp.pred_n_layers; ++i) {
+            auto & l = weights.predictor.lstm[i];
+            // Both Wx and Wh project from pred_hidden (NeMo's prednet uses
+            // a learned embedding of size pred_hidden; the embed table
+            // shape is [pred_vocab, pred_hidden]). The 4*hidden output
+            // dim is the concatenated (i, f, g, o) gates.
+            const int64_t gates = 4 * pred_h;
+            GET_LIN(l.Wx, lname("pred.lstm.%d.Wx",   i), pred_h, gates);
+            GET_LIN(l.Wh, lname("pred.lstm.%d.Wh",   i), pred_h, gates);
+            GET_F32(l.b,  lname("pred.lstm.%d.bias", i), gates);
+        }
+
+        // ----- joint (TDT, RNNT) -----
+        GET_LIN(weights.joint.enc_w,  "joint.enc.weight", d_model, joint_h);
+        GET_F32(weights.joint.enc_b,  "joint.enc.bias", joint_h);
+        GET_LIN(weights.joint.pred_w, "joint.pred.weight", pred_h,  joint_h);
+        GET_F32(weights.joint.pred_b, "joint.pred.bias", joint_h);
+        GET_LIN(weights.joint.out_w,  "joint.out.weight", joint_h, joint_n);
+        GET_F32(weights.joint.out_b,  "joint.out.bias", joint_n);
     }
-
-    // ----- joint -----
-    GET_LIN(weights.joint.enc_w,  "joint.enc.weight", d_model, joint_h);
-    GET_F32(weights.joint.enc_b,  "joint.enc.bias", joint_h);
-    GET_LIN(weights.joint.pred_w, "joint.pred.weight", pred_h,  joint_h);
-    GET_F32(weights.joint.pred_b, "joint.pred.bias", joint_h);
-    GET_LIN(weights.joint.out_w,  "joint.out.weight", joint_h, joint_n);
-    GET_F32(weights.joint.out_b,  "joint.out.bias", joint_n);
 
     return TRANSCRIBE_OK;
 }
