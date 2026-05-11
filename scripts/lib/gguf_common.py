@@ -149,3 +149,38 @@ def encode_for_gguf(
         f"encode_for_gguf only accepts F32/F16/BF16; got {ggml_type!r}. "
         "Block-quantized types go through tools/transcribe-quantize."
     )
+
+
+# Canonical schema enum values for stt.frontend.normalize, matching
+# docs/porting/families/_intake-schema.json. Reference-framework cfgs
+# write idiosyncratic strings for these (NeMo: "NA" for "no
+# normalization", "per_feature", "all_features"; some frameworks use
+# null). canonicalize_normalize maps to our schema so the GGUF and the
+# intake declarations agree, and the C++ loader only branches on the
+# canonical set.
+_NORMALIZE_ALIASES = {
+    None:               "none",
+    "":                 "none",
+    "NA":               "none",   # NeMo "anything-else" / no-op sentinel
+    "none":             "none",
+    "None":             "none",
+    "per_feature":      "per_feature",
+    "all_features":     "global",
+    "global":           "global",
+    "per_utterance":    "per_utterance",
+}
+
+
+def canonicalize_normalize(raw) -> str:
+    """Map a reference-framework normalize value to the canonical enum
+    in our intake schema (per_feature / global / per_utterance / none).
+    Unknown values raise — Stage 3 should fail loudly rather than emit
+    a value the C++ loader will not recognise."""
+    key = raw if raw is None else str(raw)
+    if key in _NORMALIZE_ALIASES:
+        return _NORMALIZE_ALIASES[key]
+    raise ValueError(
+        f"unrecognised frontend normalize value {raw!r}; "
+        f"add an alias entry in scripts/lib/gguf_common.py "
+        f"or update the intake schema enum."
+    )

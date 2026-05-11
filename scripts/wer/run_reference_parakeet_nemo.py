@@ -48,6 +48,14 @@ def main() -> int:
                    help="Process only the first N utterances (0 = all).")
     p.add_argument("--batch-size", type=int, default=1,
                    help="NeMo transcribe() batch size.")
+    p.add_argument("--offline-only", action="store_true",
+                   help=(
+                       "Force att_context_style='regular'. Required only for "
+                       "parakeet-unified-en-0.6b (whose v1 port targets offline "
+                       "mode). Cache-aware streaming variants like "
+                       "nemotron-speech-streaming-en-0.6b must NOT pass this — "
+                       "their published WER assumes chunked_limited attention."
+                   ))
     args = p.parse_args()
 
     if not args.manifest.exists():
@@ -64,13 +72,14 @@ def main() -> int:
     # streaming-only kwargs in their .nemo cfg that NeMo 2.7.x's
     # ConformerEncoder.__init__ rejects, and other fields set to None
     # (use_bias=None, att_chunk_size=None) that explicitly-pass-None
-    # breaks. For OFFLINE inference these are inert — full-attention
-    # is what NeMo's forward uses when no streaming cache is supplied.
-    # We share the offline-init patch from the dump-reference script
-    # so the encoder bring-up and the WER runner agree on the fixups.
+    # breaks. Dropping those unrecognised / None-typed kwargs is always
+    # safe. The att_context_style override (--offline-only) is OPT-IN:
+    # only parakeet-unified-en-0.6b needs it. Cache-aware streaming
+    # models (nemotron-speech-streaming-en-0.6b and similar) must
+    # preserve their native chunked_limited style to score correct WER.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from dump_reference_parakeet_nemo import _patch_conformer_for_offline
-    _patch_conformer_for_offline()
+    _patch_conformer_for_offline(force_regular_att_style=args.offline_only)
 
     print(f"loading: {args.model}")
     t0 = time.monotonic()

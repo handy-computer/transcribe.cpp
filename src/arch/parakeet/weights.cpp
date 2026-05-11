@@ -71,9 +71,61 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     if (auto st = read_optional_bool_kv(gguf, "stt.parakeet.encoder.xscaling", kFamilyTag, false, hp.enc_xscaling); st != TRANSCRIBE_OK) return st;
 
     // Local attention window. Default -1/-1 = full attention; matches
-    // every variant except parakeet-tdt_ctc-1.1b, which sets [128, 128].
+    // every variant except parakeet-tdt_ctc-1.1b ([128, 128] regular
+    // local) and nemotron-speech-streaming-en-0.6b ([70, 13] chunked).
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_left",  kFamilyTag, -1, hp.enc_att_context_left);  st != TRANSCRIBE_OK) return st;
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_right", kFamilyTag, -1, hp.enc_att_context_right); st != TRANSCRIBE_OK) return st;
+
+    // Attention context style. Optional with default "regular" so legacy
+    // GGUFs (every variant before nemotron-speech-streaming-en-0.6b)
+    // stay on the existing local/full path.
+    {
+        std::string style;
+        if (auto st = read_optional_string_kv(gguf, "stt.parakeet.encoder.att_context_style",
+                                              kFamilyTag, "regular", style);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+        if (style == "regular") {
+            hp.enc_att_context_style = ParakeetHParams::AttContextStyle::Regular;
+        } else if (style == "chunked_limited") {
+            hp.enc_att_context_style = ParakeetHParams::AttContextStyle::ChunkedLimited;
+        } else {
+            std::fprintf(stderr,
+                         "parakeet: unsupported att_context_style \"%s\" "
+                         "(allowed: regular, chunked_limited)\n",
+                         style.c_str());
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    // Conv module: per-side depthwise padding and norm type. Both are
+    // optional with defaults that match the offline-Conformer config —
+    // -1 means "centred (k-1)/2"; "batch_norm" means the historic
+    // fused BN path with running_mean / running_var.
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.conv_context_left",  kFamilyTag, -1, hp.enc_conv_context_left);  st != TRANSCRIBE_OK) return st;
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.conv_context_right", kFamilyTag, -1, hp.enc_conv_context_right); st != TRANSCRIBE_OK) return st;
+    {
+        std::string norm_type;
+        if (auto st = read_optional_string_kv(gguf, "stt.parakeet.encoder.conv_norm_type",
+                                              kFamilyTag, "batch_norm", norm_type);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+        if (norm_type == "batch_norm") {
+            hp.enc_conv_norm_type = ParakeetHParams::ConvNormType::BatchNorm;
+        } else if (norm_type == "layer_norm") {
+            hp.enc_conv_norm_type = ParakeetHParams::ConvNormType::LayerNorm;
+        } else {
+            std::fprintf(stderr,
+                         "parakeet: unsupported conv_norm_type \"%s\" "
+                         "(allowed: batch_norm, layer_norm)\n",
+                         norm_type.c_str());
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
 
     // Head kind dispatch. Optional KV with default "tdt" so legacy
     // v2/v3 GGUFs (predate the KV) resolve to TDT, which is what they
@@ -317,15 +369,18 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Normalize: only NeMo's "per_feature" (unbiased per-mel-bin
-    // mean/std normalization) is implemented. NeMo also supports
-    // "all_features" and CMVN ("fixed_mean"/"fixed_std") but neither
-    // applies to Parakeet, and silently per-feature-normalizing a
-    // GGUF that asked for something else would be a confusing bug.
-    if (hp.fe_normalize != "per_feature") {
+    // Normalize: NeMo's "per_feature" (unbiased per-mel-bin mean/std)
+    // for offline Parakeet variants, and "none" for streaming variants
+    // (nemotron-speech-streaming-en-0.6b) whose feature normalisation
+    // is baked into training rather than applied at inference. NeMo
+    // also supports "all_features" and CMVN ("fixed_mean"/"fixed_std")
+    // but no published Parakeet variant uses them, and silently
+    // substituting per-feature on a GGUF that asked for something else
+    // would be a confusing bug.
+    if (hp.fe_normalize != "per_feature" && hp.fe_normalize != "none") {
         std::fprintf(stderr,
                      "parakeet: unsupported frontend normalize \"%s\" "
-                     "(only \"per_feature\" is implemented)\n",
+                     "(only \"per_feature\" and \"none\" are implemented)\n",
                      hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -438,10 +493,30 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
     const int64_t joint_n  = hp.joint_n_classes(); // meaningless for CTC; we read CTC head shape instead
 
     // The flattened "freq" axis going into pre_encode.out is
-    // (subsampling_channels * (num_mels / subsampling_factor)). NeMo's
-    // dw_striding subsamples on the spatial axis, ending up with that
-    // many features per time step.
-    const int64_t pre_encode_freq = channels * (hp.fe_num_mels / hp.enc_subsampling_factor);
+    // (subsampling_channels * F') where F' is the freq dim after the
+    // three stride-2 convs. Offline variants use symmetric (k-1)/2
+    // padding and end up at F' = n_mels / subsampling_factor (e.g.
+    // 128 → 64 → 32 → 16, then 256 * 16 = 4096). Cache-aware
+    // streaming variants (nemotron) use CausalConv2D with
+    // (left=k-1, right=stride-1) on both axes; for k=3 / s=2 / p=0
+    // the freq trail is 128 → 65 → 33 → 17, giving 256 * 17 = 4352.
+    // We compute the actual F' by tracing the three conv ops on the
+    // configured padding so a single formula handles both cases.
+    auto pre_encode_F_prime = [&]() {
+        const bool causal = (hp.enc_conv_context_left  >= 0 &&
+                             hp.enc_conv_context_right >= 0);
+        const int k = 3, s = 2;
+        // Total per-axis pad: (k-1)/2 + (k-1)/2 = k-1 = 2 for offline;
+        // (k-1) + (s-1) = 3 for causal.
+        const int total_pad = causal ? ((k - 1) + (s - 1))
+                                     : ((k - 1) / 2 + (k - 1) / 2);
+        int dim = hp.fe_num_mels;
+        for (int i = 0; i < 3; ++i) {
+            dim = ((dim + total_pad - k) / s) + 1;
+        }
+        return static_cast<int64_t>(dim);
+    };
+    const int64_t pre_encode_freq = channels * pre_encode_F_prime();
     const int64_t pre_encode_in   = pre_encode_freq;
 
     // ----- pre_encode -----
@@ -500,8 +575,10 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_CONV(b.conv_pw2_w,  lname("enc.blocks.%d.conv.pointwise2.weight", i), 1, d_model, d_model);
         GET_F32 (b.conv_bn_w,   lname("enc.blocks.%d.conv.bn.weight",       i), d_model);
         GET_F32 (b.conv_bn_b,   lname("enc.blocks.%d.conv.bn.bias",         i), d_model);
-        GET_F32 (b.conv_bn_rm,  lname("enc.blocks.%d.conv.bn.running_mean", i), d_model);
-        GET_F32 (b.conv_bn_rv,  lname("enc.blocks.%d.conv.bn.running_var",  i), d_model);
+        if (hp.enc_conv_norm_type == ParakeetHParams::ConvNormType::BatchNorm) {
+            GET_F32 (b.conv_bn_rm, lname("enc.blocks.%d.conv.bn.running_mean", i), d_model);
+            GET_F32 (b.conv_bn_rv, lname("enc.blocks.%d.conv.bn.running_var",  i), d_model);
+        }
 
         // Macaron FF2.
         GET_F32(b.norm_ff2_w, lname("enc.blocks.%d.norm_ff2.weight", i), d_model);

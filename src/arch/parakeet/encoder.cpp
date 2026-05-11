@@ -131,6 +131,14 @@ conf::BlockView to_view(const ParakeetBlock & b) {
     v.conv_pw2_b          = b.conv_pw2_b;
     v.conv_bn_fused_scale = b.conv_bn_fused_scale;
     v.conv_bn_fused_bias  = b.conv_bn_fused_bias;
+    // For the LayerNorm path (streaming variants) the GGUF stores the
+    // affine scale/bias under the same conv.bn.weight/bias tensor names
+    // (NeMo keeps the Python attribute named `batch_norm` even when the
+    // module is swapped to LayerNorm). Point conv_ln_* at the raw
+    // tensors; the conformer block only reads them when
+    // params.conv_norm_type == LayerNorm.
+    v.conv_ln_w           = b.conv_bn_w;
+    v.conv_ln_b           = b.conv_bn_b;
 
     // FF2.
     v.norm_ff2_w = b.norm_ff2_w;
@@ -271,6 +279,12 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
     policy.direct_dw_in_pre_encode = false;
+    // Cache-aware streaming variants set conv_context_{left,right} to
+    // explicit causal values; that flag also drives NeMo's
+    // ConvSubsampling to use CausalConv2D (left=k-1, right=stride-1
+    // pad on both spatial axes), so we mirror it here.
+    policy.causal_pre_encode = (hp.enc_conv_context_left  >= 0 &&
+                                hp.enc_conv_context_right >= 0);
 
     EncoderBuild eb {};
 
@@ -378,14 +392,19 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         // — slow-to-fast shape (numpy) is (pos_len, d_model),
         // matching the reference `enc.pos_emb` dump.
         //
-        // Local attention (enc_att_context_{left,right} >= 0) sizes
-        // pos_emb to (left + right + 1) instead of (2T-1) so the buffer
-        // covers exactly the attended relative-position range. Matches
-        // NeMo's LocalAttRelPositionalEncoding.pe shape, which is what
-        // the reference dumper captures for tdt_ctc-1.1b.
-        const bool is_local =
+        // Local attention (Regular style with both att_context_{left,right}
+        // >= 0) shortens pos_emb to (left+right+1) so the buffer covers
+        // exactly the attended relative-position range — matches NeMo's
+        // LocalAttRelPositionalEncoding. ChunkedLimited style keeps pos_emb
+        // at the full 2T-1 and uses a separate attention-position mask
+        // (built below).
+        const bool is_chunked =
+            (hp.enc_att_context_style ==
+                 ParakeetHParams::AttContextStyle::ChunkedLimited);
+        const bool is_local_pe =
+            (!is_chunked) &&
             (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
-        const int64_t pos_len = is_local
+        const int64_t pos_len = is_local_pe
             ? static_cast<int64_t>(hp.enc_att_context_left
                                    + hp.enc_att_context_right + 1)
             : (2 * T_enc - 1);
@@ -393,6 +412,18 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
                                            hp.enc_d_model, pos_len);
         ggml_set_name(eb.pos_emb_in, "pos_emb.in");
         ggml_set_input(eb.pos_emb_in);
+
+        // ChunkedLimited mask. [T_enc, T_enc, 1, 1] F32; the driver
+        // fills it host-side after the compute buffer is allocated.
+        // Broadcasts across heads inside rel_pos_mhsa.
+        ggml_tensor * chunked_mask_in = nullptr;
+        if (is_chunked) {
+            chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                                 T_enc, T_enc, 1, 1);
+            ggml_set_name(chunked_mask_in, "attn.chunked_mask.in");
+            ggml_set_input(chunked_mask_in);
+            eb.chunked_mask_in = chunked_mask_in;
+        }
 
         conf::BlockParams bparams {};
         bparams.d_model           = hp.enc_d_model;
@@ -403,6 +434,16 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         bparams.policy            = policy;
         bparams.att_context_left  = hp.enc_att_context_left;
         bparams.att_context_right = hp.enc_att_context_right;
+        bparams.att_context_style = is_chunked
+            ? conf::BlockParams::AttContextStyle::ChunkedLimited
+            : conf::BlockParams::AttContextStyle::Regular;
+        bparams.attn_chunked_mask = chunked_mask_in;
+        bparams.conv_context_left  = hp.enc_conv_context_left;
+        bparams.conv_context_right = hp.enc_conv_context_right;
+        bparams.conv_norm_type = (hp.enc_conv_norm_type
+                                  == ParakeetHParams::ConvNormType::LayerNorm)
+            ? conf::BlockParams::ConvNormType::LayerNorm
+            : conf::BlockParams::ConvNormType::BatchNorm;
 
         // Block 0: run through the shared helper with the dump
         // observer. The observer writes into eb.dumps; no sub-step

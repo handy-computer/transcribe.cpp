@@ -742,6 +742,38 @@ transcribe_status MelFrontend::compute(
     std::vector<float>().swap(padded_f32);
     std::vector<float>().swap(window_f32);
 
+    // ---- 5n. No-op normalize (NeMo "NA"/none) ----
+    // Emit raw log-mel as-is. The feature normalisation that streaming
+    // Conformer variants like nemotron-speech-streaming-en-0.6b apply
+    // is baked into training (mean/std absorbed into the encoder
+    // weights), so at inference we hand the encoder unnormalised
+    // log-mel exactly the way NeMo's `normalize_batch` falls through.
+    //
+    // NeMo's FilterbankFeatures.forward still masks frames beyond
+    // `get_seq_len(n_samples) = floor(n_samples / hop_length)` to
+    // `pad_value` (zero) — that runs after normalize regardless of
+    // normalize_type. The reflect-pad STFT here emits one extra frame
+    // (n_frames = floor(n_samples / hop) + 1), so the last frame is a
+    // padding artifact and we mirror NeMo by zeroing it. Without this
+    // the encoder sees a real log-mel value at the padding position
+    // and the resulting frame-level drift dominates the early
+    // pre_encode output (max_abs ~13 on that single frame).
+    if (cfg_.normalize == "none") {
+        out_mel = std::move(log_mel);
+        out_n_mels   = n_mels;
+        out_n_frames = n_frames;
+        const int valid = static_cast<int>(
+            n_samples / static_cast<size_t>(cfg_.hop_length));
+        for (int m = 0; m < n_mels; ++m) {
+            float * row =
+                out_mel.data() + static_cast<size_t>(m) * n_frames;
+            for (int t = valid; t < n_frames; ++t) {
+                row[t] = 0.0f;
+            }
+        }
+        return TRANSCRIBE_OK;
+    }
+
     // ---- 5a. Whisper-style per-utterance normalization ----
     // log_mel already holds log10(max(x, 1e-10)) values (the matmul step
     // wrote them directly). Find the global max, clamp to max - 8.0,

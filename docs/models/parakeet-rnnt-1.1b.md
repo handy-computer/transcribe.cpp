@@ -61,23 +61,23 @@ above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |  118 ms (93×)  |  121 ms (91×)  |
-| Metal   | dots (35.3s) |  334 ms (106×) |  334 ms (106×) |
-| CPU     | jfk (11.0s)  |  646 ms (17×)  |  533 ms (21×)  |
-| CPU     | dots (35.3s) | 2.26 s (16×)   | 1.86 s (19×)   |
+| Metal   | jfk (11.0s)  |  96 ms (114×) |  97 ms (114×) |
+| Metal   | dots (35.3s) | 258 ms (137×) | 265 ms (133×) |
+| CPU     | jfk (11.0s)  |  606 ms (18×) |  506 ms (22×) |
+| CPU     | dots (35.3s) |  2.05 s (17×) |  1.72 s (20×) |
 
-macOS 26.4.1, transcribe.cpp `a6c097e`.
+macOS 26.4.1, transcribe.cpp `12f1076`.
 
 ### AMD Ryzen 7 4750U Pro
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  1.69 s (7×)  |  1.68 s (7×)  |
-| Vulkan  | dots (35.3s) |  5.45 s (6×)  |  5.49 s (6×)  |
-| CPU     | jfk (11.0s)  |  2.52 s (4×)  |  2.23 s (5×)  |
-| CPU     | dots (35.3s) |  9.16 s (4×)  |  8.16 s (4×)  |
+| Vulkan  | jfk (11.0s)  |  1.02 s (11×) |  1.04 s (11×) |
+| Vulkan  | dots (35.3s) |  3.35 s (11×) |  3.31 s (11×) |
+| CPU     | jfk (11.0s)  |  1.93 s (6×)  |  1.58 s (7×)  |
+| CPU     | dots (35.3s) |  7.12 s (5×)  |  6.18 s (6×)  |
 
-Fedora 43, transcribe.cpp `57997dc`. Vulkan device: `AMD Radeon
+Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:

@@ -77,6 +77,7 @@ from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
     TOKEN_TYPE_UNUSED,
+    canonicalize_normalize,
     gguf_name,
     safe_id,
     slug_from_repo_id,
@@ -173,6 +174,10 @@ VARIANT_PROFILES: dict[str, dict] = {
     # 0.6B English unified offline+streaming RNNT. v1 transcribe.cpp
     # port targets OFFLINE only; streaming uses the same weights and
     # is deferred until streaming infra lands.
+    # offline_only=True forces enc_att_context_style="regular" in the
+    # emitted GGUF, overriding the cfg's "chunked_limited_with_rc"
+    # value (NeMo 2.7.2 doesn't recognise that style anyway; the
+    # dumper's --offline-only achieves the same at oracle time).
     "parakeet-unified-en-0.6b": {
         "variant": "unified-en-0.6b",
         "version": "v1",
@@ -182,6 +187,7 @@ VARIANT_PROFILES: dict[str, dict] = {
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "offline_only": True,
     },
     # 0.6B English CTC. No predictor, no joint — encoder feeds a
     # single 1x1 conv (decoder.decoder_layers.0) projecting d_model
@@ -235,6 +241,24 @@ VARIANT_PROFILES: dict[str, dict] = {
         "languages": ["en"],
         "lang_detect": False,
         "prefer_direct_load": True,
+    },
+    # 0.6B English cache-aware streaming RNNT. FastConformer encoder
+    # with att_context_style='chunked_limited' and causal depthwise
+    # convolutions. Brand-name "nemotron" but architecturally a parakeet
+    # variant (the HF tags include "Parakeet"). v1 port targets the
+    # 1.12s chunk inference setting (att_context_size=[70,13]); the
+    # other three latency settings + true streaming session API are
+    # deferred to a follow-up port pass. Reuses the rnnt head_kind so
+    # the existing predictor/joint code path applies.
+    "nemotron-speech-streaming-en-0.6b": {
+        "variant": "nemotron-speech-streaming-en-0.6b",
+        "version": "v1",
+        "size_label": "0.6B",
+        "basename": "parakeet-rnnt",
+        "head_kind": "rnnt",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
     },
 }
 
@@ -485,6 +509,61 @@ def _validate_durations(durations) -> list[int]:
     return out
 
 
+def _resolve_att_context_size(raw) -> tuple[int, int]:
+    """NeMo's att_context_size has two on-disk shapes:
+      - [L, R]: single setting (full attention -> [-1, -1]; local
+        attention -> e.g. [128, 128] on parakeet-tdt_ctc-1.1b)
+      - [[L1, R1], [L2, R2], ...]: training-time choices that the model
+        can run at inference time. Cache-aware streaming models
+        (nemotron-speech-streaming-en-0.6b) ship this shape, and the
+        FIRST entry is conventionally the highest-context / max-WER
+        setting — the one the model card's headline numbers cite.
+
+    Return the chosen (left, right) integers. Falls back to (-1, -1)
+    (full attention) when raw is None or malformed.
+    """
+    if raw is None:
+        return (-1, -1)
+    if not isinstance(raw, (list, tuple)) or len(raw) == 0:
+        return (-1, -1)
+    first = raw[0]
+    if isinstance(first, (list, tuple)):
+        if len(first) < 2:
+            return (-1, -1)
+        return (int(first[0]), int(first[1]))
+    if len(raw) < 2:
+        return (-1, -1)
+    return (int(raw[0]), int(raw[1]))
+
+
+def _resolve_conv_context_size(raw, kernel_size: int) -> tuple[int, int]:
+    """NeMo's conv_context_size accepts:
+      - 'causal'  -> [(k-1), 0]
+      - [L, R]    -> custom asymmetric padding (must satisfy L+R+1 == k)
+      - None      -> symmetric default [(k-1)//2, (k-1)//2]
+
+    Return (left, right) ints. For the None case we return the explicit
+    symmetric pair rather than a sentinel so the GGUF carries the
+    actual value the encoder will use — the loader does not need
+    extra branching to recover it.
+    """
+    if raw is None:
+        half = (kernel_size - 1) // 2
+        return (half, half)
+    if isinstance(raw, str):
+        if raw == "causal":
+            return (kernel_size - 1, 0)
+        raise ValueError(f"unsupported conv_context_size string {raw!r}")
+    if isinstance(raw, (list, tuple)) and len(raw) == 2:
+        left, right = int(raw[0]), int(raw[1])
+        if left + right + 1 != kernel_size:
+            raise ValueError(
+                f"conv_context_size {raw!r} does not sum to kernel_size {kernel_size}"
+            )
+        return (left, right)
+    raise ValueError(f"malformed conv_context_size {raw!r}")
+
+
 def read_hparams(config: dict) -> dict:
     """Pull every hparam the loader's read_parakeet_hparams() requires
     out of NeMo's cfg dict (model.cfg serialized via OmegaConf).
@@ -563,8 +642,39 @@ def read_hparams(config: dict) -> dict:
         # tdt_ctc-1.1b) restricts each query to keys within the band
         # [q-left, q+right]. Drives both the pos_emb buffer size
         # (left+right+1) and a band mask additive in attention.
-        "enc_att_context_left":     int(enc.get("att_context_size", [-1, -1])[0]),
-        "enc_att_context_right":    int(enc.get("att_context_size", [-1, -1])[1]),
+        #
+        # Cache-aware streaming models (nemotron-speech-streaming-en-0.6b)
+        # ship a LIST OF LISTS: training-time choices the model can
+        # operate at. _resolve_att_context_size picks the first entry —
+        # the highest-context, max-WER setting that the model card's
+        # published numbers correspond to.
+        "enc_att_context_left":     _resolve_att_context_size(enc.get("att_context_size"))[0],
+        "enc_att_context_right":    _resolve_att_context_size(enc.get("att_context_size"))[1],
+        # att_context_style: 'regular' (per-token sliding window, default
+        # for offline FastConformer) or 'chunked_limited' (chunk-based
+        # mask used by cache-aware streaming models). The masks are
+        # mathematically distinct and produce different outputs for the
+        # same att_context_size. Default 'regular' for variants without
+        # the field. NeMo's training-time default is also 'regular'.
+        "enc_att_context_style":    str(enc.get("att_context_style", "regular")),
+        # conv_norm_type: 'batch_norm' (default for original FastConformer)
+        # or 'layer_norm' (used by cache-aware streaming variants).
+        # Drives both tensor emission (BN has running_mean/var; LN does
+        # not) and the runtime norm op (BN uses learned affine over
+        # running stats; LN normalizes across channels per (batch, time)).
+        "enc_conv_norm_type":       str(enc.get("conv_norm_type", "batch_norm")),
+        # conv_context_size: NeMo accepts:
+        #   - 'causal'  → padding [(k-1), 0] (causal conv, no future)
+        #   - [L, R]    → custom asymmetric padding
+        #   - None      → symmetric [(k-1)//2, (k-1)//2]
+        # Resolve to a (left, right) pair here. -1 sentinel means "use
+        # the symmetric default at load time" (kept for legacy GGUFs
+        # written before this KV existed). Causal is used by cache-aware
+        # streaming models so the conv can be cached chunk-by-chunk.
+        "enc_conv_context_left":    _resolve_conv_context_size(
+            enc.get("conv_context_size"), int(enc["conv_kernel_size"]))[0],
+        "enc_conv_context_right":   _resolve_conv_context_size(
+            enc.get("conv_context_size"), int(enc["conv_kernel_size"]))[1],
         # use_bias is resolved from the state_dict in convert() — NeMo's
         # YAML omits the key on some checkpoints (tdt-1.1b) while the
         # constructor default is True, and on others (tdt-0.6b-v2/v3)
@@ -594,7 +704,7 @@ def read_hparams(config: dict) -> dict:
         "fe_win_length":   win_length,
         "fe_hop_length":   hop_length,
         "fe_window":       str(pre["window"]),
-        "fe_normalize":    str(pre["normalize"]),
+        "fe_normalize":    canonicalize_normalize(pre["normalize"]),
         "fe_dither":       float(pre["dither"]),
         "fe_pre_emphasis": 0.97,
         "fe_f_min":        0.0,
@@ -725,10 +835,13 @@ ENCODER_BLOCK_TABLE: list[tuple[str, str]] = [
     ("conv.pointwise_conv1.weight",     "conv.pointwise1.weight"),
     ("conv.depthwise_conv.weight",      "conv.depthwise.weight"),
     ("conv.pointwise_conv2.weight",     "conv.pointwise2.weight"),
+    # batch_norm vs layer_norm: NeMo stores the affine params under the
+    # same `batch_norm.{weight,bias}` keys regardless of conv_norm_type.
+    # running_mean / running_var are BN-only — LayerNorm checkpoints
+    # (nemotron-speech-streaming-en-0.6b) carry only weight + bias.
+    # The conditional running_* emission lives in convert() below.
     ("conv.batch_norm.weight",          "conv.bn.weight"),
     ("conv.batch_norm.bias",            "conv.bn.bias"),
-    ("conv.batch_norm.running_mean",    "conv.bn.running_mean"),
-    ("conv.batch_norm.running_var",     "conv.bn.running_var"),
 
     # Macaron FF2.
     ("norm_feed_forward2.weight",       "norm_ff2.weight"),
@@ -877,6 +990,34 @@ def convert(model_spec: str, out_path: Path) -> None:
     hp = read_hparams(config)
     resolve_runtime_hparams(hp, model, config, head_kind)
 
+    # Apply variant-profile-level offline-mode override. parakeet-unified-en-0.6b
+    # is the one ported variant whose v1 C++ deliberately targets offline /
+    # full-context inference; the cfg's att_context_style value
+    # ('chunked_limited_with_rc') is not a style the C++ implements. Emitting
+    # 'regular' here keeps the GGUF self-consistent with the v1 C++ behavior
+    # and mirrors what the dumper's --offline-only achieves at oracle time.
+    # Cache-aware streaming variants (e.g. nemotron-speech-streaming-en-0.6b)
+    # leave this flag unset so their native chunked_limited propagates.
+    if profile.get("offline_only"):
+        original_style = hp["enc_att_context_style"]
+        if original_style != "regular":
+            print(
+                f"[offline-only] variant profile forces "
+                f"att_context_style={original_style!r} -> 'regular'"
+            )
+            hp["enc_att_context_style"] = "regular"
+    # Reject unknown att_context_style values rather than emit them to GGUF
+    # and discover the mismatch at C++ load time. Stage 4 only implements
+    # 'regular' and 'chunked_limited'; new values need an explicit profile
+    # override or a Stage 4 extension.
+    if hp["enc_att_context_style"] not in ("regular", "chunked_limited"):
+        raise ValueError(
+            f"unsupported att_context_style={hp['enc_att_context_style']!r}; "
+            f"converter only emits 'regular' or 'chunked_limited' to GGUF. "
+            f"If this variant should run in offline mode, add "
+            f"'offline_only': True to its VARIANT_PROFILES entry."
+        )
+
     raw_vocab_size = hp["pred_vocab"] - 1
     print(f"Detected raw vocab_size = {raw_vocab_size}")
 
@@ -975,6 +1116,14 @@ def convert(model_spec: str, out_path: Path) -> None:
     writer.add_bool  ("stt.parakeet.encoder.xscaling",             hp["enc_xscaling"])
     writer.add_int32 ("stt.parakeet.encoder.att_context_left",     hp["enc_att_context_left"])
     writer.add_int32 ("stt.parakeet.encoder.att_context_right",    hp["enc_att_context_right"])
+    # New KVs added to support cache-aware streaming variants. Loader
+    # reads as optional-with-default: missing KV means the historical
+    # ('regular', symmetric conv) behavior the older parakeet variants
+    # were ported against.
+    writer.add_string("stt.parakeet.encoder.att_context_style",   hp["enc_att_context_style"])
+    writer.add_int32 ("stt.parakeet.encoder.conv_context_left",   hp["enc_conv_context_left"])
+    writer.add_int32 ("stt.parakeet.encoder.conv_context_right",  hp["enc_conv_context_right"])
+    writer.add_string("stt.parakeet.encoder.conv_norm_type",      hp["enc_conv_norm_type"])
 
     if head_kind != "ctc":
         writer.add_uint32("stt.parakeet.predictor.hidden",   hp["pred_hidden"])
@@ -1047,12 +1196,21 @@ def convert(model_spec: str, out_path: Path) -> None:
         add(nemo_name, gguf_name)
 
     # encoder layers
+    use_bn_running = (hp["enc_conv_norm_type"] == "batch_norm")
     for i in range(hp["enc_n_layers"]):
         for suffix_nemo, suffix_gguf in ENCODER_BLOCK_TABLE:
             add(
                 f"encoder.layers.{i}.{suffix_nemo}",
                 f"enc.blocks.{i}.{suffix_gguf}",
             )
+        # BN running stats only exist when conv_norm_type=batch_norm.
+        # LayerNorm checkpoints (nemotron-speech-streaming-en-0.6b)
+        # carry only the affine params already emitted above.
+        if use_bn_running:
+            add(f"encoder.layers.{i}.conv.batch_norm.running_mean",
+                f"enc.blocks.{i}.conv.bn.running_mean")
+            add(f"encoder.layers.{i}.conv.batch_norm.running_var",
+                f"enc.blocks.{i}.conv.bn.running_var")
         if hp["enc_use_bias"]:
             for suffix_nemo, suffix_gguf in ENCODER_BLOCK_BIAS_TABLE:
                 add(
@@ -1090,6 +1248,10 @@ def convert(model_spec: str, out_path: Path) -> None:
     per_layer_tensors = len(ENCODER_BLOCK_TABLE) + (
         len(ENCODER_BLOCK_BIAS_TABLE) if hp["enc_use_bias"] else 0
     )
+    # BN running_mean + running_var are emitted in the loop, not via
+    # ENCODER_BLOCK_TABLE, so account for them here for the count check.
+    if hp["enc_conv_norm_type"] == "batch_norm":
+        per_layer_tensors += 2
     if head_kind == "ctc":
         head_tensors = len(CTC_HEAD_TABLE)
     else:

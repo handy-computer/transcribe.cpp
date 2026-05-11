@@ -70,6 +70,10 @@ struct MelConfig {
     //                     max - 8.0, then (x + 4) / 4. Also drops the
     //                     trailing center-pad STFT frame so the output
     //                     has exactly `n_samples / hop_length` frames.
+    //   "none"          — emit raw log-mel as-is (NeMo's "NA"/no-op
+    //                     normalize; used by streaming-trained variants
+    //                     whose feature normalisation is baked into
+    //                     training rather than applied at inference).
     std::string normalize = "per_feature";
 
     // Optional checkpoint-provided mel filterbank [num_mels * (n_fft/2+1)]

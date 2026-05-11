@@ -112,14 +112,24 @@ def normalize_text(text: str) -> str:
 # NeMo model loading + arch detection
 # ---------------------------------------------------------------------------
 
-def _patch_conformer_for_offline() -> None:
+def _patch_conformer_for_offline(force_regular_att_style: bool = False) -> None:
     """Strip streaming-only ConformerEncoder kwargs before NeMo 2.7.2 instantiates.
 
     The unified-en variant carries Dynamic-Chunked-Convolution and chunked
-    attention config keys that newer NeMo recognises but 2.7.2 rejects. The
-    intake explicitly punts streaming for v1: offline mode reuses the same
-    weights via full-context attention, so dropping the streaming-only kwargs
-    is safe for an offline reference dump.
+    attention config keys that newer NeMo recognises but 2.7.2 rejects.
+    Dropping those rejected-but-inert kwargs is always safe.
+
+    `att_context_style` is the one kwarg whose override is NOT always safe.
+    Cache-aware streaming models (nemotron-speech-streaming-en-0.6b and
+    similar) are TRAINED with `att_context_style='chunked_limited'`; forcing
+    'regular' substitutes a different attention mask shape at inference,
+    which is a numerical-correctness issue. parakeet-unified-en-0.6b is the
+    one ported variant where forcing 'regular' is the right choice (its v1
+    C++ port explicitly targets offline / full-context mode and was
+    validated against regular-style reference tensors). Default is to
+    preserve the model's native style; pass `force_regular_att_style=True`
+    only when the caller is parakeet-unified-en-0.6b or another variant
+    whose port deliberately targets the offline-substitute mask.
 
     The cfg also sets several boolean/scalar fields to None that
     explicitly-pass-None breaks (`use_bias=None` -> `int * None` fail in
@@ -136,10 +146,11 @@ def _patch_conformer_for_offline() -> None:
     accepted = set(inspect.signature(original_init).parameters.keys())
     streaming_only = ("att_chunk_context_size", "streaming_loss_weight",
                       "att_chunk_size")
-    offline_overrides = {
-        "att_context_style": "regular",
+    offline_overrides: dict[str, Any] = {
         "conv_context_style": None,
     }
+    if force_regular_att_style:
+        offline_overrides["att_context_style"] = "regular"
 
     def patched_init(self, *args, **kwargs):
         dropped = []
@@ -180,7 +191,7 @@ def _patch_conformer_for_offline() -> None:
 
 def load_model(args: argparse.Namespace):
     """Load a Parakeet model via NeMo. Architecture is inferred at runtime."""
-    _patch_conformer_for_offline()
+    _patch_conformer_for_offline(force_regular_att_style=bool(getattr(args, "offline_only", False)))
 
     from nemo.collections.asr.models import ASRModel
 
@@ -686,9 +697,13 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
         "--offline-only",
         action="store_true",
         help=(
-            "Strip streaming-only encoder kwargs (att_chunk_context_size, "
-            "chunked_limited_with_rc, dcc) before instantiating ConformerEncoder. "
-            "Required for the parakeet-unified-en variant under NeMo 2.7.2."
+            "Force att_context_style='regular' (per-token sliding-window mask) "
+            "even when the model ships with 'chunked_limited'. Required for "
+            "parakeet-unified-en-0.6b, whose v1 C++ port deliberately targets "
+            "offline / full-context mode. DO NOT pass for cache-aware streaming "
+            "models like nemotron-speech-streaming-en-0.6b — those must run "
+            "with their native chunked_limited mask to reproduce published WER. "
+            "Default off: preserve the model's native att_context_style."
         ),
     )
 

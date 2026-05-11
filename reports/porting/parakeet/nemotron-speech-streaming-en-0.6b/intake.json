@@ -1,0 +1,205 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/nemotron-speech-streaming-en-0.6b",
+  "hf_revision": "ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo .nemo archive only. Values below derive from the model card (FastConformer-CacheAware-RNNT, 24 enc layers, 600M params) and from parity with the existing parakeet-rnnt and parakeet-unified intakes; lock at convert time from model_config.yaml inside the .nemo archive."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "missing",
+      "detail": "Inside .nemo (model.cfg.preprocessor, NeMo AudioToMelSpectrogramPreprocessor / FilterbankFeatures). Preflight Gate A streamed model_config.yaml from the .nemo and confirmed: n_mels=128, sample_rate=16000, hop_length=160, fft_size=512, win_length=400, window=hann, dither=1e-05, normalize=NA (NO per-feature normalization), preemphasis=null. This differs from all other parakeet variants which use normalize=per_feature + preemphasis=0.97 — consistent with cache-aware streaming where per-utterance feature stats are not available."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "SentencePiece BPE inside .nemo (tokenizer.model, tokenizer.vocab). PnC chars expected in vocab (model card: 'native support for punctuation and capitalization'). vocab_size assumed 1024 by parity with parakeet-unified-en-0.6b; verify at convert time."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "No fast-tokenizer JSON; SentencePiece proto only."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "RNN-T decoding config lives in the .nemo archive under model.cfg.decoding. att_context_size is the inference-time latency selector (see model card: [70,0] / [70,1] / [70,6] / [70,13])."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "PyTorch state_dict inside .nemo tarball, not safetensors."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+      "status": "found",
+      "detail": "Cache-Aware FastConformer-RNNT, 600M params, 24 encoder layers. 4 runtime-configurable latency settings via att_context_size: [70,0]=80ms / [70,1]=160ms / [70,6]=560ms / [70,13]=1120ms. Native PnC. WER scored with whisper-normalizer 0.1.12 against PnC-stripped, lowercased references. Headline WER table on the card publishes one number per (chunk-size, dataset) cell. Newer (March 2026) checkpoint on main branch — Jan 2026 checkpoint preserved on branch `nemotron-speech-streaming-jan2026`."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "scripts/convert-parakeet.py, src/arch/parakeet/, NeMo examples/asr/asr_cache_aware_streaming/speech_to_text_cache_aware_streaming_infer.py",
+      "status": "found",
+      "detail": "Existing parakeet converter and arch tree cover FastConformer encoder + RNN-T decoder. The cache-aware streaming attention mask and chunked-convolution layout are NEW relative to the offline parakeet variants; see NeMo upstream for the reference forward path with att_context_size."
+    }
+  },
+  "variants": [
+    {
+      "name": "nemotron-speech-streaming-en-0.6b",
+      "memory_gb": 2.5,
+      "files": ["nemotron-speech-streaming-en-0.6b.nemo"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-transducer"],
+    "key_fields": {
+      "architectures": ["EncDecRNNTBPEModel"],
+      "model_type": "parakeet_rnnt_cache_aware",
+      "encoder.type": "Cache-Aware FastConformer (sliding-window attention + chunked convolutions)",
+      "encoder.n_layers": 24,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 8,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.conv_kernel_size": 9,
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.self_attention_model": "rel_pos with cache-aware sliding-window masking",
+      "encoder.feat_in": 128,
+      "encoder.att_context_size.options": [[70, 0], [70, 1], [70, 6], [70, 13]],
+      "encoder.att_context_size.units": "80ms frames",
+      "encoder.att_context_size.v1_target": [70, 13],
+      "encoder.att_context_size.v1_target_rationale": "1.12s latency = 14 × 80ms — yields the headline WER (2.32 LibriSpeech test-clean) and gives the most attention context, the simplest target for v1 batch bring-up.",
+      "decoder.type": "RNNTDecoder (predictor)",
+      "decoder.pred_rnn_layers": 2,
+      "decoder.pred_hidden": 640,
+      "joint.type": "RNNTJoint",
+      "joint.durations": null,
+      "joint.num_extra_outputs": 0,
+      "tokenizer.vocab_size": 1024,
+      "tokenizer.has_punctuation_capitalization": true
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo archive ships the model as float32 PyTorch state_dict (no safetensors), consistent with all other parakeet-family variants in this repo.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["token", "word"],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean (1.12s chunk, w/o PnC)",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.32,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+      "notes": "att_context_size=[70,13]. WER scored with whisper-normalizer 0.1.12 (PnC stripped, lowercased). This is the headline acceptance number and the Stage 7 gate target for the v1 port."
+    },
+    {
+      "dataset": "LibriSpeech test-other (1.12s chunk, w/o PnC)",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.84,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+      "notes": "att_context_size=[70,13]. WER scored with whisper-normalizer 0.1.12."
+    },
+    {
+      "dataset": "Open ASR Leaderboard (8-set average, 1.12s chunk, w/o PnC)",
+      "language": "en",
+      "metric": "wer",
+      "score": 6.93,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+      "notes": "8-set average across AMI, Earnings22, Gigaspeech, LS-clean, LS-other, SPGI, TEDLIUM, VoxPopuli. Card also publishes averages at shorter latencies: 7.07 @ 0.56s, 7.67 @ 0.16s, 8.43 @ 0.08s — useful documentation context, not v1 gate targets."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NVIDIA NeMo first-party framework. Same rationale as the rest of the parakeet family: the HF repo ships only a `.nemo` tar archive consumable by `nemo.collections.asr.models.ASRModel.from_pretrained`; there is no Transformers modeling class. Cache-aware streaming forward path lives in NeMo's `asr_cache_aware_streaming` example (`speech_to_text_cache_aware_streaming_infer.py`) — that's the authoritative oracle for the sliding-window attention mask shape, cached-conv layout, and per-chunk vs. full-utterance behavior.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Cache-aware FastConformer attention with att_context_style='chunked_limited' and att_context_size=[70,13]. The encoder is TRAINED with the chunked_limited mask — frames are grouped into chunks of size R+1=14, and each chunk sees itself + floor(L/(R+1))=5 prior chunks. This is NOT the same shape as att_context_style='regular' (per-frame sliding window with the same [L,R]); the masks are mathematically distinct and produce different outputs. Stage 2 oracle preserves the model's native 'chunked_limited' (dumper run without --offline-only); Stage 4 C++ MUST implement the chunked mask shape, NOT the per-frame sliding window. This is the central architectural distinction vs the existing parakeet variants.",
+    "Chunked depthwise convolutions in the encoder. Cache-aware design replaces vanilla 1-D dw conv with per-chunk causal conv that maintains state across chunks. In batch (one-shot) mode the per-chunk state collapses to zero-init, but the kernel must still be applied in the chunked causal pattern, not as a non-causal conv. Failure mode: silent WER degradation at chunk boundaries.",
+    "Four runtime latency settings: att_context_size of [70,0]/[70,1]/[70,6]/[70,13] map to 80ms/160ms/560ms/1120ms chunks. v1 ships ONLY the 1.12s setting (best WER, longest right-context, simplest causal-mask shape). The other three settings stay as a documented gap until streaming support lands.",
+    "Streaming runtime (cache reuse across chunks) is OUT OF SCOPE for v1. v1 implements batch / one-shot forward only — the user pre-computes the entire utterance, applies the cache-aware sliding-window mask once, decodes RNN-T. A future port pass will add the streaming session API (per-chunk K/V cache, per-layer conv state, decoder state preservation). Stage 4 must not over-fit the C++ code to one-shot only — keep the mask and conv ops factored so streaming can layer on top without re-converting weights.",
+    "PnC in vocab. WER eval requires whisper-normalizer (0.1.12) pre-processing on BOTH hypothesis and reference: lowercase + punctuation strip + Unicode-NFC + number normalization. Same as parakeet-unified-en-0.6b. The Stage 7 WER scorer for this variant must match the published normalization or the gate number won't be comparable to the 2.32 target.",
+    "Plain RNN-T joint (no duration head). Identical to parakeet-rnnt-0.6b — the existing TDT joint code branches on `joint.durations is None` to skip the duration head.",
+    "Encoder dims assumed identical to FastConformer-Large 0.6B (24L / d=1024 / 8h / kernel=9 / subsampling=8). Lock from model_config.yaml at convert time. The 600M parameter count on the card is consistent with this shape plus the cache-aware buffers (which contribute negligible param count — they are state, not weights).",
+    "Frontend differs from all other parakeet variants: normalize=NA (no per-feature normalization) and preemphasis=null. Cache-aware streaming cannot compute per-utterance mean/var because the encoder consumes audio in chunks; the model is trained without that normalization step instead. Stage 3 converter MUST emit a GGUF KV signaling 'no frontend normalization' and Stage 4 C++ MUST skip the per-feature norm path that the existing parakeet code applies. A silent fall-through to per_feature normalization will degrade WER without changing shapes — a textbook structural-cfg-distinction failure mode.",
+    "Standard parakeet bring-up risks (dw_striding subsampling mask, rel_pos relative-shift trick, blank id at vocab_size) apply identically and are already handled by scripts/convert-parakeet.py and src/arch/parakeet/. Note: preemphasis=0.97 is NOT used here (vs every other parakeet variant) — converter and frontend code must respect the .nemo's preemphasis=null setting.",
+    "License: NVIDIA Open Model License (not Apache-2.0). Same as parakeet-unified-en-0.6b. Affects the HF model-card YAML at Stage 8; the existing scripts/hf_cards/ for parakeet-unified is the template."
+  ],
+  "intake_gaps": [
+    {
+      "field": "config.key_fields (encoder dims, cache-aware mask params)",
+      "reason": "Exact n_layers=24 / d_model=1024 / n_heads=8 / kernel=9 are stated by parity with FastConformer-Large 0.6B and the model card's '24 encoder layers' note; lock from .nemo model_config.yaml at convert time. Cache-aware-specific keys (att_context_size training-time setting, sliding-window mask precise shape, chunked-conv state buffer dims) need cataloging at convert time."
+    },
+    {
+      "field": "frontend.n_mels",
+      "reason": "Stated as 128 by parity with parakeet-unified-en-0.6b and the newer 0.6B FastConformer convention. Wrong value silently degrades WER; verify by reading model.cfg.preprocessor.features from the .nemo archive at convert time."
+    },
+    {
+      "field": "tokenizer.vocab_size",
+      "reason": "Assumed 1024 by parity with parakeet-unified-en-0.6b (which also carries PnC chars in a 1024-token SentencePiece vocab). Verify from tokenizer.vocab inside the .nemo archive at convert time. Mis-sized vocab silently corrupts the RNN-T joint output dim."
+    },
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "SentencePiece proto extracted from .nemo at convert time; SHA computed then."
+    },
+    {
+      "field": "variants[].memory_gb",
+      "reason": "Estimated 2.5 GB from F32 GGUF size by parity with other 0.6B parakeet variants; not measured against actual peak inference memory."
+    },
+    {
+      "field": "streaming_disposition",
+      "reason": "v1 ships batch / one-shot inference at att_context_size=[70,13] (1.12s, 2.32 LibriSpeech test-clean target). The other 3 latency settings (0.08s/0.16s/0.56s) and the full streaming session API are deferred to a follow-up port pass. Document as a future Stage 4+ extension; weights do not need re-converting to enable streaming later."
+    }
+  ]
+}

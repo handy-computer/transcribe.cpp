@@ -338,6 +338,22 @@ def cmd_ref(args: argparse.Namespace) -> int:
         if hf_revision and args.family == "qwen3_asr":
             common_args += ["--revision", str(hf_revision)]
 
+        # Forward any manifest-declared dumper args verbatim. Used today
+        # for parakeet-unified-en-0.6b, which needs --offline-only to
+        # force att_context_style='regular' (its v1 C++ port targets
+        # offline / full-context mode). Cache-aware streaming variants
+        # like nemotron-speech-streaming-en-0.6b deliberately omit this
+        # so their native chunked_limited style is preserved.
+        extra_dump_args = reference.get("dump_args") or []
+        if not isinstance(extra_dump_args, list) or not all(
+            isinstance(a, str) for a in extra_dump_args
+        ):
+            raise SystemExit(
+                f"error: manifest reference.dump_args must be a list of strings; "
+                f"got {extra_dump_args!r}"
+            )
+        common_args += list(extra_dump_args)
+
         # Run both encoder and decode subcommands. Some families dump
         # everything from decode (cohere); others split encoder and
         # decoder intermediates across subcommands (parakeet). Running

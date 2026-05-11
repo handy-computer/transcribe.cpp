@@ -60,11 +60,12 @@ field blocks Stage 6.
 ```
 Bench progress:
 - [ ] Step 1: Confirm full quant matrix present
-- [ ] Step 2: Confirm bench scope (publication default, optional widening)
-- [ ] Step 3: Capture publication baseline
-- [ ] Step 4: Validate schema completeness
-- [ ] Step 5: Iteration loop (human-driven, with validate gate per accept)
-- [ ] Step 6: Sign-off review
+- [ ] Step 2: Rebuild transcribe-bench
+- [ ] Step 3: Confirm bench scope (publication default, optional widening)
+- [ ] Step 4: Capture publication baseline
+- [ ] Step 5: Validate schema completeness
+- [ ] Step 6: Iteration loop (human-driven, with validate gate per accept)
+- [ ] Step 7: Sign-off review
 ```
 
 ### Step 1: Matrix presence (execute)
@@ -76,7 +77,21 @@ ls models/<variant>/<variant>-*.gguf
 Expect one file per preset in `REFERENCE_TIERS ∪ DERIVED_PRESETS` that
 the variant declared. Missing files → return to Stage 5.
 
-### Step 2: Bench scope (ask-point)
+### Step 2: Rebuild transcribe-bench (execute)
+
+```bash
+cmake --build build --target transcribe-bench
+```
+
+`transcribe-bench` is a separate cmake target. Stages 4 and 5 build
+`transcribe-cli` and `transcribe-quantize` respectively, but neither
+touches the bench binary, so it stays at whatever revision was last
+built (potentially pre-Stage-4 — i.e. before the C++ work that just
+landed for this variant). Skipping this step shows up as "binary
+failed (exit 1)" with a stale-loader error (e.g. unsupported KV value)
+on every cell. Always rebuild before capturing baseline.
+
+### Step 3: Bench scope (ask-point)
 
 **Publication scope (default, required for sign-off).** This is the
 matrix that ends up rendered in `docs/models/<variant>.md`:
@@ -95,7 +110,7 @@ widen for a one-off "good-to-know" sweep (more presets, more samples,
 larger iter counts). A widened sweep is exploratory and does not gate
 sign-off; sign-off is decided on the publication-scope cells.
 
-### Step 3: Baseline capture (execute)
+### Step 4: Baseline capture (execute)
 
 **Bench runs must be strictly serial** — never spawn concurrent
 `transcribe-bench` processes. Concurrent runs contend for CPU/GPU and
@@ -118,7 +133,7 @@ Record the file paths. The final on-doc bench at sign-off should re-run
 this command with `--name <variant>-publication` (matching the
 reproduction command rendered in `docs/models/<variant>.md`).
 
-### Step 4: Schema validation (execute)
+### Step 5: Schema validation (execute)
 
 For each report file, confirm every required field is present and
 surface any optional gaps:
@@ -147,7 +162,7 @@ for p in sys.argv[1:]:
 Any missing **required** field is a bench-harness regression — halt Stage
 6 sign-off. Absent **optional** fields are surfaced but do not block.
 
-### Step 5: Iteration loop (human-driven)
+### Step 6: Iteration loop (human-driven)
 
 For each optimization hypothesis the user has:
 
@@ -195,7 +210,7 @@ For each optimization hypothesis the user has:
 
 Repeat until the user is satisfied.
 
-### Step 6: Sign-off
+### Step 7: Sign-off
 
 Report:
 - Baseline reports and machine matrix covered.

@@ -1,17 +1,16 @@
 {
   "schema": "transcribe-golden-manifest-v1",
   "family": "parakeet",
-  "variant": "parakeet-unified-en-0.6b",
+  "variant": "nemotron-speech-streaming-en-0.6b",
   "source_model": {
-    "hf_repo": "nvidia/parakeet-unified-en-0.6b",
-    "hf_revision": "d4ac9928f3bf238223ff0779c06b8149bf8ac4e1"
+    "hf_repo": "nvidia/nemotron-speech-streaming-en-0.6b",
+    "hf_revision": "ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4"
   },
   "reference": {
     "kind": "nemo",
     "source": "https://github.com/NVIDIA-NeMo/NeMo",
     "revision": "v2.7.2",
-    "entrypoint": "scripts/dump_reference_parakeet_nemo.py",
-    "dump_args": ["--offline-only"]
+    "entrypoint": "scripts/dump_reference_parakeet_nemo.py"
   },
   "expected_dtype": "float32",
   "dtype_source": "manual",
@@ -22,8 +21,8 @@
     "fft_size": 512,
     "win_length": 400,
     "window": "hann_periodic",
-    "normalization": "per_feature",
-    "preemphasis": 0.97,
+    "normalization": "none",
+    "preemphasis": null,
     "dither": 1e-05
   },
   "tokenizer_summary": {
@@ -47,7 +46,7 @@
     "voice_activity_detection": false,
     "speaker_diarization": false
   },
-  "tolerance_file": "tests/tolerances/parakeet.json",
+  "tolerance_file": "tests/tolerances/nemotron-speech-streaming-en-0.6b.json",
   "cases": [
     "jfk"
   ]

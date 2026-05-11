@@ -319,14 +319,27 @@ bool detect_direct_pw(const char * backend) {
 // this helper by the block forward. By default, pointwise convs (k=1)
 // are direct mul_mats in [d_model, T] layout, avoiding im2col overhead.
 // Set TRANSCRIBE_CONV_NO_DIRECT_PW=1 to fall back to the im2col path.
-// BatchNorm uses precomputed fused scale + bias (2 ops instead of 4).
-ggml_tensor * conv_module(ggml_context *     ctx,
-                          ggml_tensor *      x,
-                          const BlockView &  b,
-                          int                conv_kernel,
-                          const ConvPolicy & policy)
+// BatchNorm uses precomputed fused scale + bias (2 ops instead of 4);
+// LayerNorm uses an unfused on-the-fly per-channel normalize plus
+// affine, with weights from BlockView::conv_ln_*.
+ggml_tensor * conv_module(ggml_context *      ctx,
+                          ggml_tensor *       x,
+                          const BlockView &   b,
+                          const BlockParams & params)
 {
-    const int     padding = (conv_kernel - 1) / 2;
+    const int          conv_kernel = params.conv_kernel;
+    const ConvPolicy & policy      = params.policy;
+
+    // Centred (k-1)/2 by default; (conv_context_left, conv_context_right)
+    // exactly when both are >= 0 (caller asked for causal or otherwise
+    // asymmetric padding).
+    int pad_left  = (conv_kernel - 1) / 2;
+    int pad_right = (conv_kernel - 1) / 2;
+    if (params.conv_context_left >= 0 && params.conv_context_right >= 0) {
+        pad_left  = params.conv_context_left;
+        pad_right = params.conv_context_right;
+    }
+
     const int64_t d_model = x->ne[0];
 
     if (policy.direct_pw) {
@@ -385,7 +398,30 @@ ggml_tensor * conv_module(ggml_context *     ctx,
         x = ggml_cont(ctx, x);
     }
 
-    // Depthwise conv: kernel size from hparams, groups=d_model.
+    // Depthwise conv: kernel size from hparams, groups=d_model. The
+    // ggml depthwise ops accept a single symmetric padding value on
+    // each axis; for asymmetric padding (causal: [k-1, 0]) we prepend
+    // / append zero-frames along the time axis explicitly and call the
+    // op with p0=0. At this point x has ne = [T, d_model, 1, 1] (the
+    // permute above moved T into ne[0]), so we concat along dim 0.
+    const bool symmetric_pad = (pad_left == pad_right);
+    if (!symmetric_pad) {
+        if (pad_left > 0) {
+            ggml_tensor * pad_l = ggml_new_tensor_4d(ctx, x->type,
+                                                     pad_left, x->ne[1],
+                                                     x->ne[2], x->ne[3]);
+            pad_l = ggml_fill(ctx, pad_l, 0.0f);
+            x = ggml_concat(ctx, pad_l, x, /*dim=*/0);
+        }
+        if (pad_right > 0) {
+            ggml_tensor * pad_r = ggml_new_tensor_4d(ctx, x->type,
+                                                     pad_right, x->ne[1],
+                                                     x->ne[2], x->ne[3]);
+            pad_r = ggml_fill(ctx, pad_r, 0.0f);
+            x = ggml_concat(ctx, x, pad_r, /*dim=*/0);
+        }
+    }
+    const int padding_op = symmetric_pad ? pad_left : 0;
     if (policy.direct_dw_in_block) {
         // Fused single-op depthwise conv (no im2col). Input is [T, d_model]
         // from the transpose above. Reshape to 4D [T, 1, d_model, 1] for
@@ -397,13 +433,13 @@ ggml_tensor * conv_module(ggml_context *     ctx,
                                              x->ne[0], 1, x->ne[1], 1);
         x = ggml_conv_2d_dw_direct(ctx, knl, data,
                                    /*s0=*/1, /*s1=*/1,
-                                   /*p0=*/padding, /*p1=*/0,
+                                   /*p0=*/padding_op, /*p1=*/0,
                                    /*d0=*/1, /*d1=*/1);
         // Output: [T_out, 1, d_model, 1] → [T, d_model].
         x = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[2]);
     } else {
         x = conv_1d_dw_f32(ctx, b.conv_dw_w, x,
-                           /*s=*/1, /*p=*/padding, /*d=*/1);
+                           /*s=*/1, /*p=*/padding_op, /*d=*/1);
     }
 
     // Add depthwise bias in [T, d_model] layout (nullable).
@@ -412,9 +448,23 @@ ggml_tensor * conv_module(ggml_context *     ctx,
         x = ggml_add(ctx, x, bias_r);
     }
 
-    // Fused BatchNorm (precomputed scale + bias).
-    x = fused_batch_norm(ctx, x,
-                         b.conv_bn_fused_scale, b.conv_bn_fused_bias);
+    // Post-depthwise normalisation: BN (fused mul + add) or LN
+    // (per-channel mean/std normalize + affine). Both produce the same
+    // [T, d_model] shape; the SiLU below is identical.
+    //
+    // At this point x has ne = [T, d_model, 1, 1]. NeMo's LayerNorm
+    // normalises over the feature axis (d_model), matching the
+    // `layer_norm` helper exactly when applied to a [T, d_model]
+    // tensor — but `layer_norm` reads ne[0] as the feature axis, so we
+    // permute to [d_model, T] first, apply, and permute back.
+    if (params.conv_norm_type == BlockParams::ConvNormType::LayerNorm) {
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+        x = layer_norm(ctx, x, b.conv_ln_w, b.conv_ln_b);
+        x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+    } else {
+        x = fused_batch_norm(ctx, x,
+                             b.conv_bn_fused_scale, b.conv_bn_fused_bias);
+    }
 
     // SiLU activation.
     x = ggml_silu(ctx, x);
@@ -465,29 +515,34 @@ ggml_tensor * conv_module(ggml_context *     ctx,
 //   flash_attn computes: softmax(q_u @ k^T * scale + mask) @ v
 //   We set mask = rel_shift(q_v @ p^T)[:T_k] * scale
 //   Which gives: softmax((q_u @ k^T + rel_pos_bias) * scale) @ v
-ggml_tensor * rel_pos_mhsa(ggml_context *    ctx,
-                           ggml_tensor *     x,
-                           ggml_tensor *     pos_emb,
-                           const BlockView & b,
-                           int               d_model,
-                           int               n_head,
-                           ggml_type         kv_type,
-                           bool              use_flash,
-                           int               att_context_left,
-                           int               att_context_right)
+ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
+                           ggml_tensor *       x,
+                           ggml_tensor *       pos_emb,
+                           const BlockView &   b,
+                           const BlockParams & params)
 {
+    const int     d_model  = params.d_model;
+    const int     n_head   = params.n_head;
+    const ggml_type kv_type  = params.kv_type;
+    const bool      use_flash = params.use_flash;
+    const int     att_context_left  = params.att_context_left;
+    const int     att_context_right = params.att_context_right;
     const int     head_dim = d_model / n_head;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T_q      = x->ne[1];
     const int64_t pos_len  = pos_emb->ne[1];
 
-    // Local-attention bookkeeping. With both window sides non-negative,
-    // pos_emb arrives at the smaller [left+right+1, d] length and
-    // matrix_bd needs zero/-inf padding to keep the rel_shift trick
-    // intact. Caller is responsible for sizing pos_emb to match.
-    const bool is_local = (att_context_left >= 0 && att_context_right >= 0);
-    const int  W_left   = is_local ? att_context_left  : 0;
-    const int  W_right  = is_local ? att_context_right : 0;
+    // Local-attention bookkeeping. With both window sides non-negative
+    // in the Regular style, pos_emb arrives at the smaller
+    // [left+right+1, d] length and matrix_bd needs zero/-inf padding to
+    // keep the rel_shift trick intact. ChunkedLimited keeps pos_emb at
+    // its full 2T-1 length and uses the external chunked mask instead.
+    const bool is_chunked =
+        (params.att_context_style == BlockParams::AttContextStyle::ChunkedLimited);
+    const bool is_local =
+        (!is_chunked) && (att_context_left >= 0 && att_context_right >= 0);
+    const int  W_left  = is_local ? att_context_left  : 0;
+    const int  W_right = is_local ? att_context_right : 0;
 
     // ----- Q, K, V, P projections ---------------------------------
     // Q, K, V may have bias (Cohere) or not (Parakeet). Pos projection
@@ -583,6 +638,15 @@ ggml_tensor * rel_pos_mhsa(ggml_context *    ctx,
     // which handles contiguous-rows inputs on both CPU and Metal.
     if (use_flash) {
         matrix_bd = ggml_cont(ctx, matrix_bd);
+    }
+
+    // ChunkedLimited mask. Caller provided a [T_q, T_q, 1, 1] F32
+    // tensor with 0 on allowed (q, k) pairs and -INF outside the
+    // [q_chunk - left_chunks, q_chunk] band. Broadcasts across n_head.
+    // -INF and 0 are scale-invariant so this can be added before the
+    // pre-scale that the flash path applies below.
+    if (is_chunked && params.attn_chunked_mask != nullptr) {
+        matrix_bd = ggml_add(ctx, matrix_bd, params.attn_chunked_mask);
     }
 
     ggml_tensor * o;
@@ -685,11 +749,7 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
     {
         ggml_tensor * x_norm = layer_norm(ctx, x,
                                           b.norm_attn_w, b.norm_attn_b);
-        ggml_tensor * attn_out = rel_pos_mhsa(ctx, x_norm, pos_emb, b,
-                                              params.d_model, params.n_head,
-                                              params.kv_type, params.use_flash,
-                                              params.att_context_left,
-                                              params.att_context_right);
+        ggml_tensor * attn_out = rel_pos_mhsa(ctx, x_norm, pos_emb, b, params);
         x = ggml_add(ctx, x, attn_out);
     }
     notify("after_attn", x);
@@ -698,9 +758,7 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
     {
         ggml_tensor * x_norm = layer_norm(ctx, x,
                                           b.norm_conv_w, b.norm_conv_b);
-        ggml_tensor * conv_out = conv_module(ctx, x_norm, b,
-                                             params.conv_kernel,
-                                             params.policy);
+        ggml_tensor * conv_out = conv_module(ctx, x_norm, b, params);
         x = ggml_add(ctx, x, conv_out);
     }
     notify("after_conv", x);
@@ -780,28 +838,70 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = ggml_cont(ctx, x);
     x = name_prefixed(x, name_prefix, "mel_t");
 
-    // conv0 (standard 2D conv: 1 in, channels out, k=3 s=2 p=1)
+    // Causal pre_encode: NeMo's CausalConv2D applies F.pad(left=k-1,
+    // right=stride-1, left=k-1, right=stride-1) on both spatial axes
+    // before the underlying conv (kernel=3, stride=2, padding=0). We
+    // replicate that with explicit zero pads on dim 0 (W = freq) and
+    // dim 1 (H = time), then call the conv with p=0. The op-side
+    // (k-1)/2 symmetric padding path is what every offline variant
+    // takes.
+    const bool causal_pe = policy.causal_pre_encode;
+    const int  pe_p_op   = causal_pe ? 0 : 1;
+    auto pad_causal = [&](ggml_tensor * t) {
+        if (!causal_pe) return t;
+        // For k=3 / s=2: left=2, right=1 on both axes. Pad as zero
+        // F32 leaves; ggml_fill writes the constant after compute-
+        // buffer alloc, identical to how rel_pos_mhsa zero-pads.
+        const int left = 2, right = 1;
+        auto make_pad = [&](int width_w, int width_h) {
+            ggml_tensor * p = ggml_new_tensor_4d(
+                ctx, t->type,
+                width_w > 0 ? width_w : t->ne[0],
+                width_h > 0 ? width_h : t->ne[1],
+                t->ne[2], t->ne[3]);
+            return ggml_fill(ctx, p, 0.0f);
+        };
+        // dim 0 (W = freq).
+        ggml_tensor * pad_l = make_pad(left, /*h=*/0);
+        t = ggml_concat(ctx, pad_l, t, /*dim=*/0);
+        ggml_tensor * pad_r = make_pad(right, /*h=*/0);
+        t = ggml_concat(ctx, t, pad_r, /*dim=*/0);
+        // dim 1 (H = time). At this point ne[0] grew by left+right.
+        ggml_tensor * pad_t = ggml_new_tensor_4d(
+            ctx, t->type, t->ne[0], left, t->ne[2], t->ne[3]);
+        pad_t = ggml_fill(ctx, pad_t, 0.0f);
+        t = ggml_concat(ctx, pad_t, t, /*dim=*/1);
+        ggml_tensor * pad_b = ggml_new_tensor_4d(
+            ctx, t->type, t->ne[0], right, t->ne[2], t->ne[3]);
+        pad_b = ggml_fill(ctx, pad_b, 0.0f);
+        t = ggml_concat(ctx, t, pad_b, /*dim=*/1);
+        return t;
+    };
+
+    // conv0 (standard 2D conv: 1 in, channels out, k=3 s=2)
+    x = pad_causal(x);
     x = ggml_conv_2d(ctx, pe.conv0_w, x,
                      /*s0=*/2, /*s1=*/2,
-                     /*p0=*/1, /*p1=*/1,
+                     /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                      /*d0=*/1, /*d1=*/1);
     x = add_conv_bias(ctx, x, pe.conv0_b);
     x = name_prefixed(x, name_prefix, "conv0");
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu0");
 
-    // conv2 (depthwise: channels -> channels, groups=channels, k=3 s=2 p=1)
+    // conv2 (depthwise: channels -> channels, groups=channels, k=3 s=2)
     // See conv_2d_dw_f32 above for the Metal backstory on why the
     // im2col path is used when direct_dw_in_pre_encode is false.
+    x = pad_causal(x);
     if (policy.direct_dw_in_pre_encode) {
         x = ggml_conv_2d_dw_direct(ctx, pe.conv2_w, x,
                                    /*s0=*/2, /*s1=*/2,
-                                   /*p0=*/1, /*p1=*/1,
+                                   /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                                    /*d0=*/1, /*d1=*/1);
     } else {
         x = conv_2d_dw_f32(ctx, pe.conv2_w, x,
                            /*s0=*/2, /*s1=*/2,
-                           /*p0=*/1, /*p1=*/1,
+                           /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                            /*d0=*/1, /*d1=*/1);
     }
     x = add_conv_bias(ctx, x, pe.conv2_b);
@@ -818,15 +918,16 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = name_prefixed(x, name_prefix, "relu3");
 
     // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
+    x = pad_causal(x);
     if (policy.direct_dw_in_pre_encode) {
         x = ggml_conv_2d_dw_direct(ctx, pe.conv5_w, x,
                                    /*s0=*/2, /*s1=*/2,
-                                   /*p0=*/1, /*p1=*/1,
+                                   /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                                    /*d0=*/1, /*d1=*/1);
     } else {
         x = conv_2d_dw_f32(ctx, pe.conv5_w, x,
                            /*s0=*/2, /*s1=*/2,
-                           /*p0=*/1, /*p1=*/1,
+                           /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                            /*d0=*/1, /*d1=*/1);
     }
     x = add_conv_bias(ctx, x, pe.conv5_b);

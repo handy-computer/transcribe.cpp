@@ -123,6 +123,14 @@ struct EncoderBuild {
     // because the FF1 sub-stage doesn't reference it.
     ggml_tensor * pos_emb_in = nullptr;
 
+    // ChunkedLimited attention mask, ne=[T_enc, T_enc, 1, 1] f32. Null
+    // for every variant on the regular / local-attention path; populated
+    // only when the hparams declare att_context_style="chunked_limited"
+    // (today: nemotron-speech-streaming-en-0.6b). Driver fills with 0
+    // on allowed (q, k) pairs and -INF outside, then ggml broadcasts
+    // across heads inside rel_pos_mhsa.
+    ggml_tensor * chunked_mask_in = nullptr;
+
     // Encoder forward output, ne=[d_model, T_enc, 1, 1] f32. Equal
     // to dumps.final_out; provided as a separate field so callers
     // that don't care about intermediates can ignore the dumps
