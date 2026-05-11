@@ -73,12 +73,12 @@ macOS 26.3.1, transcribe.cpp `3912397`.
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  546 ms (20×)  |  586 ms (19×)  |
-| Vulkan  | dots (35.3s) | 1.75 s (20×)   | 1.76 s (20×)   |
-| CPU     | jfk (11.0s)  | 1.19 s (9×)    | 1.04 s (11×)   |
-| CPU     | dots (35.3s) | 4.22 s (8×)    | 3.66 s (10×)   |
+| Vulkan  | jfk (11.0s)  |  673 ms (16×) |  685 ms (16×) |
+| Vulkan  | dots (35.3s) |  2.45 s (14×) |  2.44 s (14×) |
+| CPU     | jfk (11.0s)  |  1.23 s (9×)  |  1.05 s (10×) |
+| CPU     | dots (35.3s) |  4.75 s (7×)  |  4.14 s (9×)  |
 
-Fedora 43, transcribe.cpp `140ed3a`. Vulkan device: `AMD Radeon
+Fedora 43, transcribe.cpp `12f1076`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:
