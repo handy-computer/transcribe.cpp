@@ -542,10 +542,35 @@ def _frontend_from_preprocessor(pre: dict) -> dict[str, Any]:
         "fft_size": pre.get("n_fft"),
         "win_length": win_length,
         "window": pre.get("window_function") or pre.get("window"),
-        "normalization": pre.get("normalize") or pre.get("normalization"),
+        "normalization": _canonical_normalize_for_compare(
+            pre.get("normalize") or pre.get("normalization")
+        ),
         "preemphasis": pre.get("preemphasis"),
         "dither": pre.get("dither"),
     }
+
+
+def _canonical_normalize_for_compare(raw):
+    """Reduce a reference cfg normalize value to the same canonical
+    set the converter emits (per_feature / global / per_utterance / none).
+    Lets preflight compare the intake's declared value against a
+    framework-normalised reference value without spurious string-encoding
+    warnings (NeMo "NA" vs schema "none", etc.)."""
+    sys_path_added = False
+    try:
+        if "scripts" not in sys.path[0]:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            sys_path_added = True
+        from lib.gguf_common import canonicalize_normalize
+        try:
+            return canonicalize_normalize(raw)
+        except ValueError:
+            # Unknown value — leave it raw so the comparison surfaces the
+            # mismatch rather than silently masking it.
+            return raw
+    finally:
+        if sys_path_added:
+            sys.path.pop(0)
 
 
 def _compare_window(declared_window, other_window, other_name: str, warnings: list):
