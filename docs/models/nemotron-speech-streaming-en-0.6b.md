@@ -10,12 +10,12 @@ above (2 decimal places).
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |    94 ms (117×) |    95 ms (116×) |
-| Metal   | dots (35.3s) |   290 ms (122×) |   295 ms (120×) |
-| CPU     | jfk (11.0s)  |   347 ms (32×)  |   346 ms (32×)  |
-| CPU     | dots (35.3s) |  1.18 s (30×)   |  1.16 s (30×)   |
+| Metal   | jfk (11.0s)  |  73 ms (151×) |  73 ms (151×) |
+| Metal   | dots (35.3s) | 224 ms (158×) | 221 ms (160×) |
+| CPU     | jfk (11.0s)  |  329 ms (33×) |  330 ms (33×) |
+| CPU     | dots (35.3s) |  1.12 s (31×) |  1.12 s (31×) |
 
-macOS 26.4.1, transcribe.cpp `c2e7bf9`.
+macOS 26.4.1, transcribe.cpp `12f1076`.
 
 Benchmark reproduction:
 
