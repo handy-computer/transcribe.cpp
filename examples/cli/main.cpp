@@ -583,10 +583,10 @@ int main(int argc, char ** argv) {
             const char * text = transcribe_full_text(ctx);
             std::printf("text: %s\n", (text && *text) ? text : "(empty)");
 
+            const transcribe_timestamp_kind ret_kind =
+                transcribe_returned_timestamp_kind(ctx);
             const int n_seg = transcribe_n_segments(ctx);
-            if (n_seg > 0 &&
-                transcribe_returned_timestamp_kind(ctx) != TRANSCRIBE_TIMESTAMPS_NONE)
-            {
+            if (n_seg > 0 && ret_kind != TRANSCRIBE_TIMESTAMPS_NONE) {
                 std::printf("segments: %d\n", n_seg);
                 for (int i = 0; i < n_seg; ++i) {
                     const int64_t t0 = transcribe_segment_t0_ms(ctx, i);
@@ -595,6 +595,32 @@ int main(int argc, char ** argv) {
                     std::printf("  [%7.2f -> %7.2f] %s\n",
                                 t0 / 1000.0, t1 / 1000.0,
                                 (seg_text && *seg_text) ? seg_text : "");
+                }
+            }
+            if (ret_kind == TRANSCRIBE_TIMESTAMPS_WORD ||
+                ret_kind == TRANSCRIBE_TIMESTAMPS_TOKEN) {
+                const int n_wrd = transcribe_n_words(ctx);
+                std::printf("words: %d\n", n_wrd);
+                for (int i = 0; i < n_wrd; ++i) {
+                    const int64_t t0 = transcribe_word_t0_ms(ctx, i);
+                    const int64_t t1 = transcribe_word_t1_ms(ctx, i);
+                    const char *  wt = transcribe_word_text(ctx, i);
+                    std::printf("  [%7.2f -> %7.2f] %s\n",
+                                t0 / 1000.0, t1 / 1000.0,
+                                (wt && *wt) ? wt : "");
+                }
+            }
+            if (ret_kind == TRANSCRIBE_TIMESTAMPS_TOKEN) {
+                const int n_tok = transcribe_n_tokens(ctx);
+                std::printf("tokens: %d\n", n_tok);
+                for (int i = 0; i < n_tok; ++i) {
+                    const int64_t t0 = transcribe_token_t0_ms(ctx, i);
+                    const int64_t t1 = transcribe_token_t1_ms(ctx, i);
+                    const char *  tt = transcribe_token_text(ctx, i);
+                    const float   p  = transcribe_token_p(ctx, i);
+                    std::printf("  [%7.2f -> %7.2f] p=%.3f %s\n",
+                                t0 / 1000.0, t1 / 1000.0, p,
+                                (tt && *tt) ? tt : "");
                 }
             }
         }
