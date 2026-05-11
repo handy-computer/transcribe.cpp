@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "nemotron-speech-streaming-en-0.6b",
+  "source_model": {
+    "hf_repo": "nvidia/nemotron-speech-streaming-en-0.6b",
+    "hf_revision": "ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}
