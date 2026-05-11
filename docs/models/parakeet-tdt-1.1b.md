@@ -63,12 +63,12 @@ above (2 decimal places). Cells gated on `Tctl < 55°C` per backend.
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
 | ------- | ------------ | ------------: | ------------: |
-| Metal   | jfk (11.0s)  |   97 ms (113×) |  100 ms (110×) |
-| Metal   | dots (35.3s) |  259 ms (137×) |  258 ms (137×) |
-| CPU     | jfk (11.0s)  |  652 ms (17×)  |  528 ms (21×)  |
-| CPU     | dots (35.3s) | 2.26 s (16×)   | 1.87 s (19×)   |
+| Metal   | jfk (11.0s)  |  98 ms (112×) |  97 ms (113×) |
+| Metal   | dots (35.3s) | 254 ms (139×) | 255 ms (139×) |
+| CPU     | jfk (11.0s)  |  608 ms (18×) |  505 ms (22×) |
+| CPU     | dots (35.3s) |  2.04 s (17×) |  1.73 s (20×) |
 
-macOS 26.4.1, transcribe.cpp `a6c097e`.
+macOS 26.4.1, transcribe.cpp `12f1076`.
 
 ### AMD Ryzen 7 4750U Pro
 
