@@ -1,0 +1,174 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/parakeet-rnnt-1.1b",
+  "hf_revision": "a07b19e98a26c1873a3f2622c446a4a1ca6316cb",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo .nemo archive only."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "missing",
+      "detail": "Inside .nemo. n_mels=80 (XL FastConformer pre-128-mel era), confirmed at convert time."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "SentencePiece BPE inside .nemo, vocab_size=1024, no PnC."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "PyTorch state_dict inside .nemo"
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/parakeet-rnnt-1.1b",
+      "status": "found",
+      "detail": "Lowercase English ASR, no PnC, no streaming, per-set WER published"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "scripts/convert-parakeet.py, src/arch/parakeet/",
+      "status": "found",
+      "detail": "Existing TDT path provides encoder + predictor; the joint must be reduced from TDTJoint (token + duration) to RNNTJoint (token only). Existing capabilities.cpp's joint can be conditionalised on a config flag."
+    }
+  },
+  "variants": [
+    {
+      "name": "parakeet-rnnt-1.1b",
+      "memory_gb": 4.5,
+      "files": ["parakeet-rnnt-1.1b.nemo"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-transducer"],
+    "key_fields": {
+      "architectures": ["EncDecRNNTBPEModel"],
+      "model_type": "parakeet_rnnt",
+      "encoder.type": "FastConformer (XL config)",
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.self_attention_model": "rel_pos",
+      "decoder.type": "RNNTDecoder (predictor)",
+      "joint.type": "RNNTJoint",
+      "joint.durations": null,
+      "joint.num_extra_outputs": 0,
+      "tokenizer.vocab_size": 1024
+    },
+    "varying_across_variants": [
+      "encoder.n_layers",
+      "encoder.d_model"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo, PyTorch state_dict at float32.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["token", "word"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.46,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-rnnt-1.1b",
+      "notes": null
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.47,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-rnnt-1.1b",
+      "notes": null
+    },
+    {
+      "dataset": "Open ASR Leaderboard (8-set average)",
+      "language": "en",
+      "metric": "wer",
+      "score": 7.12,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-rnnt-1.1b",
+      "notes": "Mean across the standard 8 leaderboard sets as reported on card."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "First-party NeMo framework; same argument as the rest of the family. Plain RNN-T is the simpler cousin of TDT (no duration head); the existing TDT joint code can be reduced to RNN-T behavior under a config flag.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Plain RNN-T joint (no duration head). The existing parakeet C++ joint code is TDT-specific; needs a config-driven branch to skip the duration head. Most of the encoder + predictor code reuses 1:1.",
+    "Encoder dims (XL-class) different from the 0.6B port; lock from .nemo at convert time. n_mels likely 80 (XL-era convention).",
+    "Standard parakeet risks (FastConformer dw_striding, rel_pos attention, preemph ordering, per-feature norm, blank id at vocab_size) apply identically.",
+    "No PnC in vocab; lower-case only. WER eval against LibriSpeech is a direct comparison (no normalization needed)."
+  ],
+  "intake_gaps": [
+    {
+      "field": "config.key_fields (encoder dims)",
+      "reason": "Encoder dimensions for the 1.1B XL variant — read from .nemo model_config.yaml."
+    },
+    {
+      "field": "frontend.n_mels",
+      "reason": "Assumed 80; cross-check from .nemo."
+    },
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at convert time."
+    }
+  ]
+}

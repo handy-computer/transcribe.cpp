@@ -695,8 +695,11 @@ transcribe_status run(
     // allocated `eb.pos_emb_in` with ne=[d_model, pos_len, 1, 1]
     // (after it learned T_enc from pre_encode); we fill it here.
     //
-    // The values match the reference RelPositionalEncoding:
+    // Full attention (att_context_left == -1):
     //   positions[i] = (T_enc - 1) - i  for i in [0, 2*T_enc-1)
+    // Local attention (NeMo LocalAttRelPositionalEncoding):
+    //   positions[i] = W_left - i      for i in [0, W_left+W_right+1)
+    // In both cases the per-row sinusoid is identical:
     //   div_term[k]  = exp(2k * -ln(10000) / d_model)
     //   pe[i, 2k]    = sin(positions[i] * div_term[k])
     //   pe[i, 2k+1]  = cos(positions[i] * div_term[k])
@@ -707,8 +710,16 @@ transcribe_status run(
     if (eb.pos_emb_in != nullptr) {
         const int d_model = pm->hparams.enc_d_model;
         const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
-        // pos_len = 2*T_enc - 1, so T_enc = (pos_len + 1) / 2.
-        const int T_enc   = (pos_len + 1) / 2;
+
+        // Recover the position of "relative offset 0" inside the buffer.
+        // - Full attention: pos_len = 2*T_enc - 1, zero index = T_enc-1.
+        // - Local attention: pos_len = W_left + W_right + 1, zero index = W_left.
+        const bool is_local =
+            (pm->hparams.enc_att_context_left >= 0 &&
+             pm->hparams.enc_att_context_right >= 0);
+        const int zero_index = is_local
+            ? pm->hparams.enc_att_context_left
+            : (pos_len - 1) / 2;
 
         pc->pos_buf.assign(static_cast<size_t>(pos_len) * d_model, 0.0f);
 
@@ -722,7 +733,7 @@ transcribe_status run(
         }
 
         for (int i = 0; i < pos_len; ++i) {
-            const float pos = static_cast<float>((T_enc - 1) - i);
+            const float pos = static_cast<float>(zero_index - i);
             float * row = pc->pos_buf.data() + static_cast<size_t>(i) * d_model;
             for (int k = 0; k < d_model / 2; ++k) {
                 const float div = pc->pos_div_term[static_cast<size_t>(k)];
@@ -795,8 +806,50 @@ transcribe_status run(
     try_dump("enc.block.0.conv",     eb.dumps.block0_after_conv,"encoder.block0.conv");
     try_dump("enc.block.0.ff2",      eb.dumps.block0_after_ff2, "encoder.block0.ff2");
     try_dump("enc.block.0.out",      eb.dumps.block0_out,       "encoder.block0.out");
-    try_dump("enc.block.12.out",     eb.dumps.block12_out,      "encoder.block12.out");
-    try_dump("enc.block.23.out",     eb.dumps.block23_out,      "encoder.block23.out");
+    // Mid- and last-block spot-check dumps. File name encodes the
+    // actual block index (scales with n_layers): 0/12/23 for 24-layer,
+    // 0/21/41 for 42-layer, 0/8/16 for 17-layer. last_block_out
+    // aliases final_out (same ggml pointer); we dump it under the
+    // per-variant block name AND under "enc.final" so both validation
+    // entries find data.
+    if (eb.dumps.mid_block_out != nullptr && eb.dumps.mid_block_idx >= 0) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "enc.block.%d.out", eb.dumps.mid_block_idx);
+        transcribe::debug::dump_tensor(name, eb.dumps.mid_block_out,
+                                       "encoder.block.mid.out");
+    }
+    if (eb.dumps.last_block_out != nullptr && eb.dumps.last_block_idx >= 0) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "enc.block.%d.out", eb.dumps.last_block_idx);
+        transcribe::debug::dump_tensor(name, eb.dumps.last_block_out,
+                                       "encoder.block.last.out");
+    }
+    // Per-block dump for the layer-by-layer divergence bisect (gated
+    // by TRANSCRIBE_DUMP_ALL_BLOCKS env var; mark_tensor_for_dump was
+    // applied per-block in encoder.cpp's loop, so the data is
+    // preserved across the scheduler's compute. The block 0 / mid /
+    // last names are still emitted above; this just adds the
+    // remaining blocks under "enc.block.<i>.out" so they collide
+    // (overwrite) consistently with the named dumps.
+    if (std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr) {
+        for (size_t i = 0; i < eb.dumps.all_block_outs.size(); ++i) {
+            ggml_tensor * t = eb.dumps.all_block_outs[i];
+            if (t == nullptr) continue;
+            char name[64];
+            std::snprintf(name, sizeof(name), "enc.block.%zu.out", i);
+            transcribe::debug::dump_tensor(name, t,
+                                           "encoder.block.bisect");
+        }
+    }
+    // Sub-block intermediates for blocks listed in
+    // TRANSCRIBE_DUMP_SUB_BLOCKS. Each entry was populated by the
+    // sub-block observer (see encoder.cpp) at graph-build time and
+    // passed through the scheduler intact via mark_tensor_for_dump.
+    for (const auto & p : eb.dumps.sub_block_dumps) {
+        if (p.second == nullptr) continue;
+        transcribe::debug::dump_tensor(p.first.c_str(), p.second,
+                                       "encoder.block.subblock");
+    }
     try_dump("enc.final",            eb.dumps.final_out,        "encoder.final");
 
     // Stash the encoder output for the accuracy test (it reaches in
@@ -839,11 +892,23 @@ transcribe_status run(
 
     pc->raw_tokens.clear();
     const int64_t t_dec_start = ggml_time_us();
-    if (const transcribe_status st = decode_tdt_greedy(
-            pm->host_decoder, pc->enc_host.data(), T_enc, d_enc, pc->raw_tokens);
-        st != TRANSCRIBE_OK)
     {
-        return st;
+        transcribe_status st = TRANSCRIBE_OK;
+        switch (pm->host_decoder.head_kind) {
+            case HostHeadKind::TDT:
+                st = decode_tdt_greedy(pm->host_decoder, pc->enc_host.data(),
+                                       T_enc, d_enc, pc->raw_tokens);
+                break;
+            case HostHeadKind::RNNT:
+                st = decode_rnnt_greedy(pm->host_decoder, pc->enc_host.data(),
+                                        T_enc, d_enc, pc->raw_tokens);
+                break;
+            case HostHeadKind::CTC:
+                st = decode_ctc_greedy(pm->host_decoder, pc->enc_host.data(),
+                                       T_enc, d_enc, pc->raw_tokens);
+                break;
+        }
+        if (st != TRANSCRIBE_OK) return st;
     }
     pc->t_decode_us = ggml_time_us() - t_dec_start;
 

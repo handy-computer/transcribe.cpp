@@ -145,6 +145,12 @@ transcribe_status read_optional_string_kv(const gguf_context * gguf,
                                           const char *         default_value,
                                           std::string &        out);
 
+transcribe_status read_optional_int32_kv(const gguf_context * gguf,
+                                         const char *         key,
+                                         const char *         error_tag,
+                                         int32_t              default_value,
+                                         int32_t &            out);
+
 // ---------------------------------------------------------------------------
 // Post-load shared metadata
 // ---------------------------------------------------------------------------

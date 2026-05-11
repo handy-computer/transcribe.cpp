@@ -49,9 +49,12 @@
 
 #include "ggml.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace transcribe::parakeet {
 
@@ -96,44 +99,46 @@ conf::PreEncodeView to_view(const ParakeetPreEncode & pe) {
 conf::BlockView to_view(const ParakeetBlock & b) {
     conf::BlockView v;
 
-    // FF1 (no biases on the linear layers).
+    // FF1.
     v.norm_ff1_w = b.norm_ff1_w;
     v.norm_ff1_b = b.norm_ff1_b;
     v.ff1_lin1_w = b.ff1_lin1_w;
-    v.ff1_lin1_b = nullptr;
+    v.ff1_lin1_b = b.ff1_lin1_b; // null when use_bias=false
     v.ff1_lin2_w = b.ff1_lin2_w;
-    v.ff1_lin2_b = nullptr;
+    v.ff1_lin2_b = b.ff1_lin2_b;
 
-    // Self-attention (no biases on Q/K/V/out in Parakeet).
+    // Self-attention. Q/K/V/out can carry biases when use_bias=true
+    // (1.1B / rnnt / ctc variants); v2/v3 ship without. linear_pos is
+    // bias-free in NeMo regardless.
     v.norm_attn_w = b.norm_attn_w;
     v.norm_attn_b = b.norm_attn_b;
-    v.attn_q_w    = b.attn_q_w;   v.attn_q_b   = nullptr;
-    v.attn_k_w    = b.attn_k_w;   v.attn_k_b   = nullptr;
-    v.attn_v_w    = b.attn_v_w;   v.attn_v_b   = nullptr;
-    v.attn_out_w  = b.attn_out_w; v.attn_out_b = nullptr;
+    v.attn_q_w    = b.attn_q_w;   v.attn_q_b   = b.attn_q_b;
+    v.attn_k_w    = b.attn_k_w;   v.attn_k_b   = b.attn_k_b;
+    v.attn_v_w    = b.attn_v_w;   v.attn_v_b   = b.attn_v_b;
+    v.attn_out_w  = b.attn_out_w; v.attn_out_b = b.attn_out_b;
     v.attn_pos_w  = b.attn_pos_w;
     v.attn_pos_u  = b.attn_pos_u;
     v.attn_pos_v  = b.attn_pos_v;
 
-    // Conv module (no biases on pw1/dw/pw2 in Parakeet).
+    // Conv module.
     v.norm_conv_w         = b.norm_conv_w;
     v.norm_conv_b         = b.norm_conv_b;
     v.conv_pw1_w          = b.conv_pw1_w;
-    v.conv_pw1_b          = nullptr;
+    v.conv_pw1_b          = b.conv_pw1_b;
     v.conv_dw_w           = b.conv_dw_w;
-    v.conv_dw_b           = nullptr;
+    v.conv_dw_b           = b.conv_dw_b;
     v.conv_pw2_w          = b.conv_pw2_w;
-    v.conv_pw2_b          = nullptr;
+    v.conv_pw2_b          = b.conv_pw2_b;
     v.conv_bn_fused_scale = b.conv_bn_fused_scale;
     v.conv_bn_fused_bias  = b.conv_bn_fused_bias;
 
-    // FF2 (no biases).
+    // FF2.
     v.norm_ff2_w = b.norm_ff2_w;
     v.norm_ff2_b = b.norm_ff2_b;
     v.ff2_lin1_w = b.ff2_lin1_w;
-    v.ff2_lin1_b = nullptr;
+    v.ff2_lin1_b = b.ff2_lin1_b;
     v.ff2_lin2_w = b.ff2_lin2_w;
-    v.ff2_lin2_b = nullptr;
+    v.ff2_lin2_b = b.ff2_lin2_b;
 
     v.norm_out_w = b.norm_out_w;
     v.norm_out_b = b.norm_out_b;
@@ -187,6 +192,67 @@ void parakeet_block0_observer_cb(void *        user,
     }
 }
 
+// Generalized sub-block observer for blocks 1..N-1, gated by
+// TRANSCRIBE_DUMP_SUB_BLOCKS=<comma-separated indices>. Names tensors
+// `enc.block.<i>.{ff1,attn,conv,ff2,out}` (mapping the helper's "after_*"
+// tags to short names matching the reference dumper). The "out" tag
+// here corresponds to the post-norm-out tensor — i.e. block.<i>.out.
+struct SubBlockSink {
+    int            block_idx;
+    EncoderDumps * dumps;
+};
+
+void parakeet_subblock_observer_cb(void *        user,
+                                   const char *  tag,
+                                   ggml_tensor * t)
+{
+    auto * sink = static_cast<SubBlockSink *>(user);
+    if (sink == nullptr || sink->dumps == nullptr || t == nullptr) return;
+
+    const char * short_tag = tag;
+    if (std::strcmp(tag, "after_ff1") == 0)  short_tag = "ff1";
+    else if (std::strcmp(tag, "after_attn") == 0) short_tag = "attn";
+    else if (std::strcmp(tag, "after_conv") == 0) short_tag = "conv";
+    else if (std::strcmp(tag, "after_ff2") == 0)  short_tag = "ff2";
+    else if (std::strcmp(tag, "out") == 0) {
+        // Skip "out" — block.<i>.out is already covered by the
+        // mid_block_out / last_block_out / all_block_outs paths.
+        return;
+    }
+
+    char name_buf[64];
+    std::snprintf(name_buf, sizeof(name_buf), "enc.block.%d.%s",
+                  sink->block_idx, short_tag);
+    ggml_set_name(t, name_buf);
+    transcribe::debug::mark_tensor_for_dump(t);
+    sink->dumps->sub_block_dumps.emplace_back(std::string(name_buf), t);
+}
+
+// Parse "0,12,22,23" into a sorted unique vector of block indices.
+// Returns empty if the env var is unset or empty.
+std::vector<int> parse_sub_block_env(int n_layers)
+{
+    std::vector<int> out;
+    const char * raw = std::getenv("TRANSCRIBE_DUMP_SUB_BLOCKS");
+    if (raw == nullptr || *raw == '\0') return out;
+    const char * p = raw;
+    while (*p != '\0') {
+        // Skip leading separators.
+        while (*p == ',' || *p == ' ' || *p == '\t') ++p;
+        if (*p == '\0') break;
+        char * end = nullptr;
+        long v = std::strtol(p, &end, 10);
+        if (end == p) break;  // no progress — malformed
+        if (v >= 0 && v < n_layers) {
+            out.push_back(static_cast<int>(v));
+        }
+        p = end;
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 } // namespace
 
 EncoderBuild build_encoder_graph(ggml_context *          ctx,
@@ -216,17 +282,24 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         return eb;
     }
 
-    // Sub-stage 3a only supports the catalog's locked-in
-    // factor=8/n_mels=128 layout. The full encoder will assert this
-    // upstream in init_context once step 5 wires the run path; for
-    // now we re-check here so the encoder builder is self-contained
-    // for sub-stage validation.
-    if (hp.enc_subsampling_factor != 8 || hp.fe_num_mels != 128) {
+    // We support subsampling_factor=8 (every published Parakeet variant)
+    // and any n_mels divisible by the subsampling factor on the freq axis
+    // (3 stride-2 convs, kernel=3, padding=1). All current variants ship
+    // n_mels=80 or 128; both pass cleanly. If a future variant ships a
+    // factor != 8, build_pre_encode would need a structural rework, so
+    // we fail loudly here.
+    if (hp.enc_subsampling_factor != 8) {
         std::fprintf(stderr,
-                     "parakeet encoder: unsupported geometry "
-                     "subsampling_factor=%d num_mels=%d "
-                     "(only 8/128 implemented)\n",
-                     hp.enc_subsampling_factor, hp.fe_num_mels);
+                     "parakeet encoder: unsupported subsampling_factor=%d "
+                     "(only 8 implemented)\n",
+                     hp.enc_subsampling_factor);
+        return eb;
+    }
+    if (hp.fe_num_mels <= 0 || (hp.fe_num_mels % hp.enc_subsampling_factor) != 0) {
+        std::fprintf(stderr,
+                     "parakeet encoder: n_mels=%d not divisible by "
+                     "subsampling_factor=%d\n",
+                     hp.fe_num_mels, hp.enc_subsampling_factor);
         return eb;
     }
 
@@ -255,6 +328,34 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     eb.dumps.pre_encode_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
+    // ----- xscaling ---------------------------------------------------
+    //
+    // NeMo's RelPositionalEncoding.forward applies x = x * sqrt(d_model)
+    // when its `xscaling` flag is true. This multiplication happens AFTER
+    // pre_encode and BEFORE the first conformer block — i.e. it
+    // operates on the running residual, not just on the pos_emb input.
+    // ctc-0.6b/1.1b, rnnt-0.6b/1.1b, and unified-en-0.6b ship with
+    // xscaling=True; v2/v3 and the TDT/TDT_CTC variants ship with
+    // xscaling=False.
+    //
+    // The same shape comes out (the scale factor is applied uniformly
+    // along d_model). LayerNorms in every sub-block normalize the
+    // scale away when computing FF/attn/conv outputs, so the only
+    // place the scale matters is the residual carried between
+    // sub-blocks and the running residual into norm_out at the end of
+    // each block. Without this multiplication on a True-flagged model
+    // the residual is sqrt(d_model)x smaller, the corrections are the
+    // same magnitude (because they go through LN first), and the
+    // residual+correction mix is structurally different — the
+    // accumulated drift past 24 blocks is enough to produce empty
+    // transcripts on unified-en-0.6b and ~0.04% WER drift on ctc-0.6b
+    // / rnnt-0.6b before this fix landed.
+    if (hp.enc_xscaling) {
+        const float scale = std::sqrt(static_cast<float>(hp.enc_d_model));
+        x = ggml_scale(ctx, x, scale);
+        x = conf::named(x, "enc.pre_encode.xscaled");
+    }
+
     // ----- Conformer blocks -----------------------------------------
     //
     // Every block goes through conf::build_conformer_block — there is
@@ -276,19 +377,32 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         // compute buffer is allocated. ne = [d_model, pos_len, 1, 1]
         // — slow-to-fast shape (numpy) is (pos_len, d_model),
         // matching the reference `enc.pos_emb` dump.
-        const int64_t pos_len = 2 * T_enc - 1;
+        //
+        // Local attention (enc_att_context_{left,right} >= 0) sizes
+        // pos_emb to (left + right + 1) instead of (2T-1) so the buffer
+        // covers exactly the attended relative-position range. Matches
+        // NeMo's LocalAttRelPositionalEncoding.pe shape, which is what
+        // the reference dumper captures for tdt_ctc-1.1b.
+        const bool is_local =
+            (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
+        const int64_t pos_len = is_local
+            ? static_cast<int64_t>(hp.enc_att_context_left
+                                   + hp.enc_att_context_right + 1)
+            : (2 * T_enc - 1);
         eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
                                            hp.enc_d_model, pos_len);
         ggml_set_name(eb.pos_emb_in, "pos_emb.in");
         ggml_set_input(eb.pos_emb_in);
 
         conf::BlockParams bparams {};
-        bparams.d_model     = hp.enc_d_model;
-        bparams.n_head      = hp.enc_n_heads;
-        bparams.conv_kernel = hp.enc_conv_kernel;
-        bparams.kv_type     = kv_type;
-        bparams.use_flash   = true;
-        bparams.policy      = policy;
+        bparams.d_model           = hp.enc_d_model;
+        bparams.n_head            = hp.enc_n_heads;
+        bparams.conv_kernel       = hp.enc_conv_kernel;
+        bparams.kv_type           = kv_type;
+        bparams.use_flash         = true;
+        bparams.policy            = policy;
+        bparams.att_context_left  = hp.enc_att_context_left;
+        bparams.att_context_right = hp.enc_att_context_right;
 
         // Block 0: run through the shared helper with the dump
         // observer. The observer writes into eb.dumps; no sub-step
@@ -303,20 +417,73 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
                                             bparams, &obs);
         }
 
-        // Blocks 1..N-1: no observer. Name the final-LN outputs of
-        // the mid-encoder and last-block spot-check points so the
-        // dump harness finds them; every other block stays anonymous.
-        for (size_t i = 1; i < w.blocks.size(); ++i) {
-            x = conf::build_conformer_block(ctx, x, eb.pos_emb_in,
-                                            to_view(w.blocks[i]), bparams);
-            if (i == 12) {
-                x = conf::named(x, "enc.block.12.out");
-                eb.dumps.block12_out = x;
+        // Blocks 1..N-1: no observer. Mark the mid- and last-layer
+        // outputs for dump so the harness can spot-check them; every
+        // other block stays anonymous. Mid + last indices scale with
+        // n_layers so the dump points match the per-variant oracle
+        // (0/n_half/n-1). For 24-layer v2/v3 that's 0/12/23; for
+        // 42-layer 1.1B it's 0/21/41; for 17-layer tdt_ctc-110m it's
+        // 0/8/16. We only mark for dump here — the actual file name
+        // is synthesized in model.cpp from the saved layer index,
+        // because conf::named's trailing "enc.final" rename would
+        // otherwise clobber the last-block name in place.
+        const int n_layers   = static_cast<int>(w.blocks.size());
+        const int mid_layer  = n_layers / 2;
+        const int last_layer = n_layers - 1;
+        eb.dumps.mid_block_idx  = mid_layer;
+        eb.dumps.last_block_idx = last_layer;
+        eb.dumps.all_block_outs.assign(n_layers, nullptr);
+        eb.dumps.all_block_outs[0] = eb.dumps.block0_out;
+        // Per-block dump opt-in for the layer-by-layer divergence
+        // bisect. The reference dumper supports `--blocks 0,1,...,N-1`;
+        // setting TRANSCRIBE_DUMP_ALL_BLOCKS=1 makes the C++ side
+        // dump every block to enable a 1:1 frame-by-frame compare.
+        const bool dump_all_blocks =
+            std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr;
+        if (dump_all_blocks && eb.dumps.block0_out != nullptr) {
+            transcribe::debug::mark_tensor_for_dump(eb.dumps.block0_out);
+        }
+        // Sub-block observation gate. TRANSCRIBE_DUMP_SUB_BLOCKS=
+        // "12,22,23" installs the sub-block observer on each listed
+        // index >= 1 (block 0 already has its dedicated observer above).
+        // Stored in a local set for O(1) lookup in the loop.
+        const std::vector<int> sub_blocks = parse_sub_block_env(n_layers);
+        // Persistent sinks — one per requested block, kept alive for the
+        // duration of the encoder build. The observer pointer captures
+        // their address.
+        std::vector<SubBlockSink> sub_sinks;
+        sub_sinks.reserve(sub_blocks.size());
+        for (int idx : sub_blocks) sub_sinks.push_back(SubBlockSink{idx, &eb.dumps});
+        for (int i = 1; i < n_layers; ++i) {
+            // If this block is requested for sub-block dumping, install
+            // the generalized observer; otherwise run plain.
+            const auto it = std::lower_bound(sub_blocks.begin(),
+                                             sub_blocks.end(), i);
+            const bool with_obs =
+                (it != sub_blocks.end() && *it == i);
+            if (with_obs) {
+                const size_t sink_idx =
+                    static_cast<size_t>(it - sub_blocks.begin());
+                conf::BlockObserver obs {};
+                obs.on_point = parakeet_subblock_observer_cb;
+                obs.user     = &sub_sinks[sink_idx];
+                x = conf::build_conformer_block(ctx, x, eb.pos_emb_in,
+                                                to_view(w.blocks[i]),
+                                                bparams, &obs);
+            } else {
+                x = conf::build_conformer_block(ctx, x, eb.pos_emb_in,
+                                                to_view(w.blocks[i]), bparams);
+            }
+            eb.dumps.all_block_outs[i] = x;
+            if (dump_all_blocks) {
                 transcribe::debug::mark_tensor_for_dump(x);
             }
-            if (i == 23) {
-                x = conf::named(x, "enc.block.23.out");
-                eb.dumps.block23_out = x;
+            if (i == mid_layer) {
+                eb.dumps.mid_block_out = x;
+                transcribe::debug::mark_tensor_for_dump(x);
+            }
+            if (i == last_layer) {
+                eb.dumps.last_block_out = x;
                 transcribe::debug::mark_tensor_for_dump(x);
             }
         }

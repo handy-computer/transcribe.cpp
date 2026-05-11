@@ -121,10 +121,10 @@ requested stage.
       SKIP — not exposed by runtime, or ACCEPTED GAP — `<reason>`. No
       row remains TODO. Any advertised capability with no row at all is
       a FAIL — add it or downgrade the capability claim.
-- [ ] Stage 4 subset WER sanity passes: |cpp_wer - ref_wer| ≤ 0.005 on
-      the same 512-row subset file
-      (`samples/wer/<dataset>.512.manifest.jsonl`). Sign-off names the
-      subset path and utterance count — no SHA enforcement.
+- [ ] Stage 4 subset WER sanity passes on the same 512-row subset file
+      (`samples/wer/<dataset>.512.manifest.jsonl`). Simple rule: if
+      reference WER is `3.59`, C++ WER must be `3.60` or lower. Sign-off
+      names the subset path and utterance count — no SHA enforcement.
 - [ ] No quantized GGUFs were produced in Stage 4. They are a Stage 5
       concern.
 
@@ -155,13 +155,17 @@ requested stage.
 
 **Stage 7 — porting-7-wer**
 - [ ] `reports/wer/<variant>-<REFDTYPE>.<dataset>.score.json` exists.
-- [ ] Ref-dtype hard gate: `|observed_wer - upstream_target_ratio| <=
-      0.01`. Fail is a HARD finding that sends the port back to Stage 4.
+- [ ] Ref-dtype WER uses the plain limit: if upstream WER is `3.59`,
+      C++ WER must be `3.60` or lower. Higher WER blocks release unless
+      extra testing explains it: same audio list in C++ and reference,
+      transcript diff review, tensor dumps where C++ may be wrong, and a
+      reviewed written reason for accepting the higher WER.
 - [ ] One `.score.json` per shipped quant preset.
 - [ ] Every `.score.json` has `wer_ci_lo`, `wer_ci_hi`, `n` populated.
 - [ ] `reports/wer/<variant>.<dataset>.summary.md` exists.
-- [ ] No automatic gate is enforced on quant WER; the summary surfaces
-      large regressions for user attention only.
+- [ ] Quant WER is not an automatic gate, but every quant more than
+      `0.01` worse than the ref-dtype WER is flagged. Example: if
+      ref-dtype WER is `3.59`, then quant WER `3.61` must be flagged.
 
 **Stage 8 — porting-8-ship**
 - [ ] Pre-flight checklist (Stage 8 Step 1) green: every prior-stage

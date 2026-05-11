@@ -27,6 +27,10 @@
 
 #include "ggml.h" // ggml_type
 
+#include <string>
+#include <utility>
+#include <vector>
+
 struct ggml_context;
 struct ggml_tensor;
 struct ggml_cgraph;
@@ -76,14 +80,32 @@ struct EncoderDumps {
     ggml_tensor * block0_after_conv = nullptr;
     ggml_tensor * block0_after_ff2  = nullptr;
     ggml_tensor * block0_out        = nullptr;
-    // Spot-check blocks (3f). ne=[d_model, T_enc, 1, 1].
-    ggml_tensor * block12_out = nullptr;
-    ggml_tensor * block23_out = nullptr;
-    // Final encoder output (3f). ne=[d_model, T_enc, 1, 1].
-    // Currently == block23_out (the last block's norm_out is the
-    // encoder's exit point); kept as a separate field so phase 5's
-    // wiring isn't coupled to the block count.
+    // Spot-check blocks (3f). Mid- and last-layer outputs.
+    // Note: `last_block_out == final_out` — they alias the same tensor.
+    // Layer indices (mid_layer, last_layer) are needed to synthesize
+    // file names like "enc.block.21.out" because conf::named renames
+    // the tensor in place and the trailing "enc.final" rename
+    // overwrites the spot-check name.
+    ggml_tensor * mid_block_out  = nullptr;
+    ggml_tensor * last_block_out = nullptr;
+    int           mid_block_idx  = -1;
+    int           last_block_idx = -1;
+    // Final encoder output. Aliases last_block_out (same pointer).
     ggml_tensor * final_out = nullptr;
+
+    // All-block output handles for the layer-by-layer divergence bisect.
+    // Populated unconditionally; mark_tensor_for_dump is only called on
+    // each entry when TRANSCRIBE_DUMP_ALL_BLOCKS is set, so this costs
+    // only a vector allocation in the normal case.
+    std::vector<ggml_tensor *> all_block_outs;
+
+    // Sub-block intermediates for blocks listed in
+    // TRANSCRIBE_DUMP_SUB_BLOCKS. Each entry is (dump_name, tensor)
+    // where dump_name is the on-disk file stem
+    // (e.g. "enc.block.12.ff1"). Populated only when the env var is
+    // set; the dump pass in model.cpp iterates this and feeds each
+    // entry to transcribe::debug::dump_tensor.
+    std::vector<std::pair<std::string, ggml_tensor *>> sub_block_dumps;
 };
 
 struct EncoderBuild {

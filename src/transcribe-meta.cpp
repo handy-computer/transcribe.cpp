@@ -292,6 +292,29 @@ transcribe_status read_optional_string_kv(const gguf_context * gguf,
     return TRANSCRIBE_ERR_GGUF; // unreachable
 }
 
+transcribe_status read_optional_int32_kv(const gguf_context * gguf,
+                                         const char *         key,
+                                         const char *         error_tag,
+                                         int32_t              default_value,
+                                         int32_t &            out)
+{
+    int32_t tmp = default_value;
+    switch (read_int32_kv(gguf, key, tmp)) {
+        case KvResult::Absent:
+            out = default_value;
+            return TRANSCRIBE_OK;
+        case KvResult::Ok:
+            out = tmp;
+            return TRANSCRIBE_OK;
+        case KvResult::BadType:
+            std::fprintf(stderr,
+                         "%s: optional KV \"%s\" has wrong type\n",
+                         error_tag, key);
+            return TRANSCRIBE_ERR_GGUF;
+    }
+    return TRANSCRIBE_ERR_GGUF; // unreachable
+}
+
 // ---------------------------------------------------------------------------
 // Post-load shared metadata
 // ---------------------------------------------------------------------------

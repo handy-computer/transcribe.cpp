@@ -1,0 +1,167 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/parakeet-ctc-0.6b",
+  "hf_revision": "ad09ba1cc62743fbc9814de5d2016fca9096485a",
+  "sources": {
+    "nemo_archive": {
+      "kind": "hf_file",
+      "path": "parakeet-ctc-0.6b.nemo",
+      "status": "found",
+      "detail": "AUTHORITATIVE source for this variant. NeMo tar archive containing model_config.yaml + PyTorch state_dict. All dims, frontend, tokenizer, and dtype facts come from inside this archive (read at Stage 3 convert time), matching the rest of the parakeet family."
+    },
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "Present on the HF repo as auxiliary HF-Transformers metadata (ParakeetForCTC, model_type=parakeet_ctc, vocab_size=1025). config.torch_dtype=bfloat16 is MISLEADING — likely reflects training/optimizer dtype, not storage. Not used as the source of truth for this port; the .nemo archive is canonical."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found",
+      "detail": "Present on HF; values cross-checked against model.cfg.preprocessor inside the .nemo. n_mels=80, hop=160, fft=512, preemph=0.97."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found",
+      "detail": "vocab_sha256=16669f7671c1aa99e673cca14af2a9e9cf9ca814fdb671e2d476ef4133e484e1"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "Header-only floating dtype distribution: F32=950, I64=24. All floating tensors F32 — agrees with the .nemo state_dict and contradicts config.torch_dtype=bfloat16. The HF safetensors are not the conversion path; .nemo is."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/parakeet-ctc-0.6b",
+      "status": "found",
+      "detail": "Pure CTC, FastConformer-Large 0.6B encoder, lowercase English, per-set WER published"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "scripts/convert-parakeet.py, src/arch/parakeet/, src/arch/sensevoice/, src/arch/funasr_nano/",
+      "status": "found",
+      "detail": "Encoder shares structure with TDT-0.6B-v2 (FastConformer-Large 24L). CTC head is new for parakeet but covered by sensevoice/funasr_nano families."
+    }
+  },
+  "variants": [
+    {
+      "name": "parakeet-ctc-0.6b",
+      "memory_gb": 2.5,
+      "files": ["parakeet-ctc-0.6b.nemo"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-ctc"],
+    "key_fields": {
+      "architectures": ["ParakeetForCTC"],
+      "model_type": "parakeet_ctc",
+      "encoder.type": "FastConformer-Large",
+      "encoder.n_layers": 24,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 8,
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.self_attention_model": "rel_pos",
+      "ctc_head.type": "Linear (1024 -> 1025)",
+      "vocab_size": 1025,
+      "tokenizer.vocab_size": 1024
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "Authoritative source: PyTorch state_dict inside parakeet-ctc-0.6b.nemo, which is float32 (matches the rest of the parakeet family's convention). HF safetensors header (F32=950, I64=24) independently confirms F32 storage. The HF config.torch_dtype=bfloat16 field is misleading metadata — likely the training-time optimizer dtype — and is NOT the intake's source of truth. Project policy preserves storage dtype: ship F32 as reference dtype; BF16 produced in Stage 5 quant matrix.",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "I64": 24,
+        "F32": 950
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": "16669f7671c1aa99e673cca14af2a9e9cf9ca814fdb671e2d476ef4133e484e1"
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["token", "word"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.87,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-ctc-0.6b",
+      "notes": null
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.76,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-ctc-0.6b",
+      "notes": null
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NeMo first-party. ParakeetForCTC is also HF Transformers loadable, but NeMo's preprocessor + CTC decoding remain the authoritative parity reference. The 0.6B CTC variant is the natural first CTC port in this family — encoder dims match TDT-0.6B-v2 exactly; only the head differs.",
+  "architecture_pattern": "encoder-ctc",
+  "known_risks": [
+    "Conversion sources from the .nemo archive (matching the rest of the parakeet family), NOT from HF config.json + safetensors. The HF safetensors copy on the repo is parallel/redundant with the .nemo state_dict; we ignore it to keep one authoritative path.",
+    "HF config.torch_dtype=bfloat16 is misleading metadata (training/optimizer dtype, not storage). Storage (both .nemo state_dict and HF safetensors) is F32. Preflight is .nemo-aware and skips this field for NeMo families with a .nemo sibling — no false-positive FAIL.",
+    "First encoder-CTC port in parakeet — needs CTC linear head + greedy decode (collapse repeats, drop blanks). Cross-reference src/arch/sensevoice/ and src/arch/funasr_nano/ for existing CTC C++ code patterns.",
+    "Encoder dims confirmed identical to TDT-0.6B-v2 (24L/1024d/8h) — full encoder reuse.",
+    "n_mels=80 differs from v2/v3 (128). Encoder feat_in must reflect this. Source: model.cfg.preprocessor inside the .nemo (cross-checked against the parallel preprocessor_config.json on HF).",
+    "Standard parakeet risks: dw_striding mask, rel_pos attention, preemph=0.97, per-feature norm.",
+    "vocab_size=1025 (1024 SP + blank). CTC blank by convention is id 1024."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.special_tokens",
+      "reason": "blank=1024 declared by convention (last id of model output dim). If tokenizer_config or generation_config exposes a different blank id, prefer that."
+    }
+  ]
+}

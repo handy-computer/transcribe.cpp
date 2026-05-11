@@ -472,12 +472,22 @@ ggml_tensor * rel_pos_mhsa(ggml_context *    ctx,
                            int               d_model,
                            int               n_head,
                            ggml_type         kv_type,
-                           bool              use_flash)
+                           bool              use_flash,
+                           int               att_context_left,
+                           int               att_context_right)
 {
     const int     head_dim = d_model / n_head;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T_q      = x->ne[1];
     const int64_t pos_len  = pos_emb->ne[1];
+
+    // Local-attention bookkeeping. With both window sides non-negative,
+    // pos_emb arrives at the smaller [left+right+1, d] length and
+    // matrix_bd needs zero/-inf padding to keep the rel_shift trick
+    // intact. Caller is responsible for sizing pos_emb to match.
+    const bool is_local = (att_context_left >= 0 && att_context_right >= 0);
+    const int  W_left   = is_local ? att_context_left  : 0;
+    const int  W_right  = is_local ? att_context_right : 0;
 
     // ----- Q, K, V, P projections ---------------------------------
     // Q, K, V may have bias (Cohere) or not (Parakeet). Pos projection
@@ -517,6 +527,50 @@ ggml_tensor * rel_pos_mhsa(ggml_context *    ctx,
     // ----- Position mask / bias -----------------------------------
     // matrix_bd = rel_shift(q_v @ p^T), truncated to [T_q, T_q].
     ggml_tensor * matrix_bd = ggml_mul_mat(ctx, p, q_v);
+
+    // Local-attention pad/slice. The standard rel_shift trick assumes
+    // matrix_bd has shape [2T_q-1, T_q]: row r corresponds to relative
+    // offset (T_q-1-r). For local attention pos_emb is shorter
+    // ([W_left+W_right+1]) where row r corresponds to offset (W_left-r).
+    // Bring matrix_bd back to the [2T_q-1, T_q] shape by:
+    //   - prepending (T_q-1-W_left) rows of -INF (or slicing them off
+    //     when the audio is so short the window already covers it),
+    //   - appending  (T_q-1-W_right) rows of -INF (or slicing).
+    // After this, rel_shift + the existing T_q×T_q view land each
+    // out-of-window position at -INF, which softmax zeroes out. With
+    // both window sides == -1 (full attention) this block is skipped.
+    if (is_local) {
+        const int top_pad = static_cast<int>(T_q) - 1 - W_left;
+        if (top_pad > 0) {
+            ggml_tensor * top_template = ggml_new_tensor_4d(
+                ctx, GGML_TYPE_F32, top_pad, T_q, n_head, 1);
+            ggml_tensor * top = ggml_fill(ctx, top_template, -INFINITY);
+            matrix_bd = ggml_concat(ctx, top, matrix_bd, /*dim=*/0);
+        } else if (top_pad < 0) {
+            const int kept = static_cast<int>(matrix_bd->ne[0]) + top_pad;
+            matrix_bd = ggml_view_4d(ctx, matrix_bd,
+                                     kept, T_q, n_head, 1,
+                                     matrix_bd->nb[1], matrix_bd->nb[2],
+                                     matrix_bd->nb[3],
+                                     (-top_pad) * matrix_bd->nb[0]);
+            matrix_bd = ggml_cont(ctx, matrix_bd);
+        }
+        const int bot_pad = static_cast<int>(T_q) - 1 - W_right;
+        if (bot_pad > 0) {
+            ggml_tensor * bot_template = ggml_new_tensor_4d(
+                ctx, GGML_TYPE_F32, bot_pad, T_q, n_head, 1);
+            ggml_tensor * bot = ggml_fill(ctx, bot_template, -INFINITY);
+            matrix_bd = ggml_concat(ctx, matrix_bd, bot, /*dim=*/0);
+        } else if (bot_pad < 0) {
+            const int kept = static_cast<int>(matrix_bd->ne[0]) + bot_pad;
+            matrix_bd = ggml_view_4d(ctx, matrix_bd,
+                                     kept, T_q, n_head, 1,
+                                     matrix_bd->nb[1], matrix_bd->nb[2],
+                                     matrix_bd->nb[3], /*offset=*/0);
+            matrix_bd = ggml_cont(ctx, matrix_bd);
+        }
+    }
+
     matrix_bd = rel_shift(ctx, matrix_bd);
     matrix_bd = ggml_view_4d(ctx, matrix_bd,
                              T_q, T_q, n_head, 1,
@@ -633,7 +687,9 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
                                           b.norm_attn_w, b.norm_attn_b);
         ggml_tensor * attn_out = rel_pos_mhsa(ctx, x_norm, pos_emb, b,
                                               params.d_model, params.n_head,
-                                              params.kv_type, params.use_flash);
+                                              params.kv_type, params.use_flash,
+                                              params.att_context_left,
+                                              params.att_context_right);
         x = ggml_add(ctx, x, attn_out);
     }
     notify("after_attn", x);

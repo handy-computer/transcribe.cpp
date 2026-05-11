@@ -1,0 +1,1079 @@
+================ parakeet-ctc-0.6b ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F16.gguf (preset F16)
+input: 950 tensors
+plan: 1163.6 MB tensor data, 1179.9 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         950       2322.6
+              950       2322.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         684       4.6
+  f16         266       1159.0
+              950       1163.6 total (output)
+
+processed: 266 requantized, 684 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q8_0.gguf (preset Q8_0)
+input: 950 tensors
+plan: 688.7 MB tensor data, 705.1 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         950       2322.6
+              950       2322.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         684       4.6
+  f16         49        146.0
+  q8_0        217       538.2
+              950       688.7 total (output)
+
+processed: 266 requantized, 684 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q6_K.gguf (preset Q6_K)
+input: 950 tensors
+plan: 566.1 MB tensor data, 582.4 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         950       2322.6
+              950       2322.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         684       4.6
+  f16         49        146.0
+  q6_K        217       415.5
+              950       566.1 total (output)
+
+processed: 266 requantized, 684 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q5_K_M.gguf (preset Q5_K_M)
+input: 950 tensors
+plan: 507.8 MB tensor data, 524.1 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         950       2322.6
+              950       2322.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         684       4.6
+  f16         49        146.0
+  q8_0        24        25.5
+  q5_K        193       331.7
+              950       507.8 total (output)
+
+processed: 266 requantized, 684 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q4_K_M.gguf (preset Q4_K_M)
+input: 950 tensors
+plan: 447.5 MB tensor data, 463.8 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         950       2322.6
+              950       2322.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         684       4.6
+  f16         49        146.0
+  q8_0        24        25.5
+  q4_K        193       271.4
+              950       447.5 total (output)
+
+processed: 266 requantized, 684 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-Q4_K_M.gguf
+[parakeet-ctc-0.6b] rc=0
+================ parakeet-ctc-1.1b ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F16.gguf (preset F16)
+input: 1652 tensors
+plan: 2030.6 MB tensor data, 2047.2 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1652      4053.6
+              1652      4053.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1188      7.6
+  f16         464       2023.0
+              1652      2030.6 total (output)
+
+processed: 464 requantized, 1188 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q8_0.gguf (preset Q8_0)
+input: 1652 tensors
+plan: 1201.4 MB tensor data, 1218.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1652      4053.6
+              1652      4053.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1188      7.6
+  f16         85        254.0
+  q8_0        379       939.8
+              1652      1201.4 total (output)
+
+processed: 464 requantized, 1188 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q6_K.gguf (preset Q6_K)
+input: 1652 tensors
+plan: 987.2 MB tensor data, 1003.7 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1652      4053.6
+              1652      4053.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1188      7.6
+  f16         85        254.0
+  q6_K        379       725.6
+              1652      987.2 total (output)
+
+processed: 464 requantized, 1188 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q5_K_M.gguf (preset Q5_K_M)
+input: 1652 tensors
+plan: 885.4 MB tensor data, 902.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1652      4053.6
+              1652      4053.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1188      7.6
+  f16         85        254.0
+  q8_0        42        44.6
+  q5_K        337       579.2
+              1652      885.4 total (output)
+
+processed: 464 requantized, 1188 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q4_K_M.gguf (preset Q4_K_M)
+input: 1652 tensors
+plan: 780.1 MB tensor data, 796.7 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1652      4053.6
+              1652      4053.6 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1188      7.6
+  f16         85        254.0
+  q8_0        42        44.6
+  q4_K        337       473.9
+              1652      780.1 total (output)
+
+processed: 464 requantized, 1188 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-Q4_K_M.gguf
+[parakeet-ctc-1.1b] rc=0
+================ parakeet-rnnt-0.6b ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F16.gguf (preset F16)
+input: 961 tensors
+plan: 1178.6 MB tensor data, 1195.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2352.7
+              961       2352.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         273       1174.0
+              961       1178.6 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q8_0.gguf (preset Q8_0)
+input: 961 tensors
+plan: 695.8 MB tensor data, 712.1 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2352.7
+              961       2352.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         48        144.0
+  q8_0        225       547.2
+              961       695.8 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q6_K.gguf (preset Q6_K)
+input: 961 tensors
+plan: 573.0 MB tensor data, 589.3 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2352.7
+              961       2352.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         48        144.0
+  q8_0        7         8.4
+  q6_K        218       416.0
+              961       573.0 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q5_K_M.gguf (preset Q5_K_M)
+input: 961 tensors
+plan: 514.6 MB tensor data, 531.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2352.7
+              961       2352.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         48        144.0
+  q8_0        31        33.9
+  q5_K        194       332.1
+              961       514.6 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q4_K_M.gguf (preset Q4_K_M)
+input: 961 tensors
+plan: 454.2 MB tensor data, 470.6 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2352.7
+              961       2352.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         48        144.0
+  q8_0        31        33.9
+  q4_K        194       271.8
+              961       454.2 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-Q4_K_M.gguf
+[parakeet-rnnt-0.6b] rc=0
+================ parakeet-rnnt-1.1b ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F16.gguf (preset F16)
+input: 1663 tensors
+plan: 2045.7 MB tensor data, 2062.2 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         471       2038.0
+              1663      2045.7 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q8_0.gguf (preset Q8_0)
+input: 1663 tensors
+plan: 1208.4 MB tensor data, 1225.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        387       948.8
+              1663      1208.4 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q6_K.gguf (preset Q6_K)
+input: 1663 tensors
+plan: 994.1 MB tensor data, 1010.7 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        7         8.4
+  q6_K        380       726.1
+              1663      994.1 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q5_K_M.gguf (preset Q5_K_M)
+input: 1663 tensors
+plan: 892.3 MB tensor data, 908.9 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        49        53.0
+  q5_K        338       579.6
+              1663      892.3 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q4_K_M.gguf (preset Q4_K_M)
+input: 1663 tensors
+plan: 786.9 MB tensor data, 803.5 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        49        53.0
+  q4_K        338       474.3
+              1663      786.9 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-rnnt-1.1b/parakeet-rnnt-1.1b-Q4_K_M.gguf
+[parakeet-rnnt-1.1b] rc=0
+================ parakeet-tdt_ctc-1.1b ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F16.gguf (preset F16)
+input: 1663 tensors
+plan: 2045.7 MB tensor data, 2062.2 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         471       2038.0
+              1663      2045.7 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q8_0.gguf (preset Q8_0)
+input: 1663 tensors
+plan: 1208.5 MB tensor data, 1225.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        387       948.8
+              1663      1208.5 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q6_K.gguf (preset Q6_K)
+input: 1663 tensors
+plan: 994.1 MB tensor data, 1010.7 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        7         8.4
+  q6_K        380       726.1
+              1663      994.1 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q5_K_M.gguf (preset Q5_K_M)
+input: 1663 tensors
+plan: 892.3 MB tensor data, 908.9 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        49        53.0
+  q5_K        338       579.6
+              1663      892.3 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q4_K_M.gguf (preset Q4_K_M)
+input: 1663 tensors
+plan: 786.9 MB tensor data, 803.5 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        49        53.0
+  q4_K        338       474.3
+              1663      786.9 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-1.1b/parakeet-tdt_ctc-1.1b-Q4_K_M.gguf
+[parakeet-tdt_ctc-1.1b] rc=0
+================ parakeet-tdt_ctc-110m ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F16.gguf (preset F16)
+input: 685 tensors
+plan: 218.6 MB tensor data, 234.9 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         685       435.3
+              685       435.3 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         491       2.0
+  f16         194       216.7
+              685       218.6 total (output)
+
+processed: 194 requantized, 491 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q8_0.gguf (preset Q8_0)
+input: 685 tensors
+plan: 129.0 MB tensor data, 145.3 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         685       435.3
+              685       435.3 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         491       2.0
+  f16         34        25.5
+  q8_0        160       101.6
+              685       129.0 total (output)
+
+processed: 194 requantized, 491 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q6_K.gguf (preset Q6_K)
+input: 685 tensors
+plan: 107.0 MB tensor data, 123.3 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         685       435.3
+              685       435.3 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         491       2.0
+  f16         34        25.5
+  q8_0        5         5.1
+  q6_K        155       74.5
+              685       107.0 total (output)
+
+processed: 194 requantized, 491 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q5_K_M.gguf (preset Q5_K_M)
+input: 685 tensors
+plan: 96.6 MB tensor data, 112.8 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         685       435.3
+              685       435.3 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         491       2.0
+  f16         34        25.5
+  q8_0        22        9.6
+  q5_K        138       59.5
+              685       96.6 total (output)
+
+processed: 194 requantized, 491 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q4_K_M.gguf (preset Q4_K_M)
+input: 685 tensors
+plan: 85.8 MB tensor data, 102.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         685       435.3
+              685       435.3 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         491       2.0
+  f16         34        25.5
+  q8_0        22        9.6
+  q4_K        138       48.7
+              685       85.8 total (output)
+
+processed: 194 requantized, 491 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt_ctc-110m/parakeet-tdt_ctc-110m-Q4_K_M.gguf
+[parakeet-tdt_ctc-110m] rc=0
+================ parakeet-tdt-0.6b-v2 ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F16.gguf (preset F16)
+input: 697 tensors
+plan: 1179.9 MB tensor data, 1196.2 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2357.0
+              697       2357.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         273       1177.0
+              697       1179.9 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q8_0.gguf (preset Q8_0)
+input: 697 tensors
+plan: 695.7 MB tensor data, 712.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2357.0
+              697       2357.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         48        144.0
+  q8_0        225       548.8
+              697       695.7 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q6_K.gguf (preset Q6_K)
+input: 697 tensors
+plan: 572.5 MB tensor data, 588.8 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2357.0
+              697       2357.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         48        144.0
+  q8_0        7         8.4
+  q6_K        218       417.2
+              697       572.5 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q5_K_M.gguf (preset Q5_K_M)
+input: 697 tensors
+plan: 514.0 MB tensor data, 530.2 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2357.0
+              697       2357.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         48        144.0
+  q8_0        31        33.9
+  q5_K        194       333.2
+              697       514.0 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q4_K_M.gguf (preset Q4_K_M)
+input: 697 tensors
+plan: 453.4 MB tensor data, 469.6 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2357.0
+              697       2357.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         48        144.0
+  q8_0        31        33.9
+  q4_K        194       272.6
+              697       453.4 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q4_K_M.gguf
+[parakeet-tdt-0.6b-v2] rc=0
+================ parakeet-tdt-0.6b-v3 ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F16.gguf (preset F16)
+input: 697 tensors
+plan: 1197.5 MB tensor data, 1213.7 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2392.0
+              697       2392.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         273       1194.5
+              697       1197.5 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q8_0.gguf (preset Q8_0)
+input: 697 tensors
+plan: 705.0 MB tensor data, 721.3 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2392.0
+              697       2392.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         48        144.0
+  q8_0        225       558.1
+              697       705.0 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q6_K.gguf (preset Q6_K)
+input: 697 tensors
+plan: 581.9 MB tensor data, 598.1 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2392.0
+              697       2392.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         48        144.0
+  q8_0        7         17.7
+  q6_K        218       417.2
+              697       581.9 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q5_K_M.gguf (preset Q5_K_M)
+input: 697 tensors
+plan: 523.3 MB tensor data, 539.5 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2392.0
+              697       2392.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         48        144.0
+  q8_0        31        43.2
+  q5_K        194       333.2
+              697       523.3 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q4_K_M.gguf (preset Q4_K_M)
+input: 697 tensors
+plan: 462.7 MB tensor data, 479.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         697       2392.0
+              697       2392.0 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         424       2.9
+  f16         48        144.0
+  q8_0        31        43.2
+  q4_K        194       272.6
+              697       462.7 total (output)
+
+processed: 273 requantized, 424 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-0.6b-v3/parakeet-tdt-0.6b-v3-Q4_K_M.gguf
+[parakeet-tdt-0.6b-v3] rc=0
+================ parakeet-tdt-1.1b ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F16.gguf (preset F16)
+input: 1663 tensors
+plan: 2045.7 MB tensor data, 2062.2 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         471       2038.0
+              1663      2045.7 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q8_0.gguf (preset Q8_0)
+input: 1663 tensors
+plan: 1208.5 MB tensor data, 1225.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        387       948.8
+              1663      1208.5 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q6_K.gguf (preset Q6_K)
+input: 1663 tensors
+plan: 994.1 MB tensor data, 1010.7 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        7         8.4
+  q6_K        380       726.1
+              1663      994.1 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q5_K_M.gguf (preset Q5_K_M)
+input: 1663 tensors
+plan: 892.3 MB tensor data, 908.9 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        49        53.0
+  q5_K        338       579.6
+              1663      892.3 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q4_K_M.gguf (preset Q4_K_M)
+input: 1663 tensors
+plan: 786.9 MB tensor data, 803.5 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         1663      4083.7
+              1663      4083.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         1192      7.6
+  f16         84        252.0
+  q8_0        49        53.0
+  q4_K        338       474.3
+              1663      786.9 total (output)
+
+processed: 471 requantized, 1192 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-tdt-1.1b/parakeet-tdt-1.1b-Q4_K_M.gguf
+[parakeet-tdt-1.1b] rc=0
+================ parakeet-unified-en-0.6b ================
+Reading inline script metadata from `scripts/quantize-all.py`
+[quantize-all] F16: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F16.gguf --quant F16
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F16.gguf (preset F16)
+input: 961 tensors
+plan: 1181.6 MB tensor data, 1198.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2358.7
+              961       2358.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         273       1177.0
+              961       1181.6 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F16.gguf
+[quantize-all] Q8_0: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q8_0.gguf --quant Q8_0
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q8_0.gguf (preset Q8_0)
+input: 961 tensors
+plan: 697.4 MB tensor data, 713.7 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2358.7
+              961       2358.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         48        144.0
+  q8_0        225       548.8
+              961       697.4 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q8_0.gguf
+[quantize-all] Q6_K: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q6_K.gguf --quant Q6_K
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q6_K.gguf (preset Q6_K)
+input: 961 tensors
+plan: 574.2 MB tensor data, 590.5 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2358.7
+              961       2358.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         48        144.0
+  q8_0        7         8.4
+  q6_K        218       417.2
+              961       574.2 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q6_K.gguf
+[quantize-all] Q5_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q5_K_M.gguf --quant Q5_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q5_K_M.gguf (preset Q5_K_M)
+input: 961 tensors
+plan: 515.7 MB tensor data, 532.0 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2358.7
+              961       2358.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         48        144.0
+  q8_0        31        33.9
+  q5_K        194       333.2
+              961       515.7 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q5_K_M.gguf
+[quantize-all] Q4_K_M: build/bin/transcribe-quantize /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q4_K_M.gguf --quant Q4_K_M
+transcribe-quantize: /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf -> /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q4_K_M.gguf (preset Q4_K_M)
+input: 961 tensors
+plan: 455.1 MB tensor data, 471.4 MB context buffer
+
+input tensor types:
+  type        tensors   MB
+  f32         961       2358.7
+              961       2358.7 total (input)
+
+output tensor types:
+  type        tensors   MB
+  f32         688       4.6
+  f16         48        144.0
+  q8_0        31        33.9
+  q4_K        194       272.6
+              961       455.1 total (output)
+
+processed: 273 requantized, 688 copied
+done. wrote /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q4_K_M.gguf
+
+preset     status  detail
+---------- -----  ----------------------------------------
+F16        OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F16.gguf
+Q8_0       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q8_0.gguf
+Q6_K       OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q6_K.gguf
+Q5_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q5_K_M.gguf
+Q4_K_M     OK     /Users/cj/code/handy-computer/transcribe.cpp/models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q4_K_M.gguf
+[parakeet-unified-en-0.6b] rc=0
+ALL DONE

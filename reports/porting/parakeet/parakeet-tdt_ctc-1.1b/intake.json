@@ -1,0 +1,173 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/parakeet-tdt_ctc-1.1b",
+  "hf_revision": "675e78684c83ae21e2a8fb042726b66d91b9ba3d",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo .nemo archive only; values from model_config.yaml inside the archive."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "missing",
+      "detail": "Lives inside .nemo as model.cfg.preprocessor."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "SentencePiece BPE proto inside .nemo. vocab_size = 1024 with PnC chars in vocab."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "no fast-tokenizer JSON"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "TDT and CTC decoding configs both in .nemo model.cfg.decoding"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "no safetensors in this repo; PyTorch state_dict inside .nemo"
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b",
+      "status": "found",
+      "detail": "PnC support, dual TDT+CTC decoding (default TDT, switchable to CTC), per-set WER scores"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "scripts/convert-parakeet.py, src/arch/parakeet/",
+      "status": "found",
+      "detail": "Existing parakeet TDT path covers the TDT branch; the CTC head is not currently wired for this family but is covered by the parakeet-ctc-* variants in this same intake batch."
+    }
+  },
+  "variants": [
+    {
+      "name": "parakeet-tdt_ctc-1.1b",
+      "memory_gb": 4.5,
+      "files": ["parakeet-tdt_ctc-1.1b.nemo"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-transducer"],
+    "key_fields": {
+      "architectures": ["EncDecHybridRNNTCTCBPEModel"],
+      "model_type": "parakeet_tdt_ctc",
+      "encoder.type": "FastConformer (XL config)",
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.self_attention_model": "rel_pos",
+      "decoder.type": "RNNTDecoder (predictor)",
+      "joint.type": "TDTJoint",
+      "joint.durations": [0, 1, 2, 3, 4],
+      "joint.num_extra_outputs": 5,
+      "ctc_decoder.type": "ConvASRDecoder (linear over encoder output)",
+      "tokenizer.vocab_size": 1024,
+      "tokenizer.has_punctuation_capitalization": true
+    },
+    "varying_across_variants": [
+      "encoder.n_layers",
+      "encoder.d_model"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo archive; PyTorch state_dict at float32. Same convention as TDT-0.6B-v2.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["token", "word", "segment"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.82,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b",
+      "notes": "WER computed against PnC-stripped, lower-cased reference (model emits punctuation/casing; LS reference is lower-case)."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.67,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b",
+      "notes": null
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NeMo is the first-party framework for the Parakeet family. EncDecHybridRNNTCTCBPEModel is a NeMo-specific class that exposes both TDT and CTC heads at inference; only NeMo can authoritatively dump per-head intermediates for parity validation.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Hybrid TDT + auxiliary CTC head: model trains both heads on a shared encoder. NeMo defaults to TDT decoding; CTC decoding is selectable. Decision for this port: ship the TDT head only at runtime (the CTC variants below cover pure CTC). Convert MAY drop CTC head weights from the GGUF or include them as unused — TBD at Stage 3.",
+    "Punctuation + capitalization in vocabulary: the SentencePiece vocab includes uppercase letters, period, comma, question mark, etc. WER vs. LibriSpeech requires lowercasing + punctuation-stripping the model output before scoring; the upstream WER 1.82 was reported with this normalization.",
+    "Standard parakeet TDT risks inherited from v2: TDT joint duration off-by-one, FastConformer dw_striding mask consistency, rel_pos attention shift, preemph=0.97 ordering, per-feature normalization, blank id at vocab_size.",
+    "Encoder dims (n_layers, d_model, n_heads, feat_in) — confirm at convert time from .nemo model_config.yaml. n_mels assumed 80 (FastConformer-XL convention)."
+  ],
+  "intake_gaps": [
+    {
+      "field": "config.key_fields (encoder dims)",
+      "reason": "Encoder dimensions read from .nemo model_config.yaml at convert time."
+    },
+    {
+      "field": "frontend.n_mels",
+      "reason": "Assumed 80 from FastConformer convention; cross-check from model.cfg.preprocessor at convert time."
+    },
+    {
+      "field": "ctc_head_disposition",
+      "reason": "Decision pending: ship TDT head only, or expose both at runtime. Defer to Stage 3 conversion design."
+    },
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at convert time."
+    }
+  ]
+}

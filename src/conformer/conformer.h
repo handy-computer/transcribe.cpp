@@ -200,7 +200,8 @@ struct ConvPolicy {
 // and CPU prefer direct.
 bool detect_direct_pw(const char * backend);
 
-// Scalar knobs for the block forward. All fields required.
+// Scalar knobs for the block forward. All fields required except the
+// optional local-attention window (att_context_left / att_context_right).
 struct BlockParams {
     int        d_model;
     int        n_head;
@@ -208,6 +209,16 @@ struct BlockParams {
     ggml_type  kv_type;      // GGML_TYPE_COUNT = auto (f16 if quant, f32 if f32)
     bool       use_flash;    // false -> manual mul_mat + soft_max + mul_mat
     ConvPolicy policy;
+
+    // Local attention window. -1 / -1 = full attention (default).
+    // When both are non-negative, pos_emb is expected to have length
+    // (att_context_left + att_context_right + 1) and rel_pos_mhsa pads
+    // matrix_bd with -inf rows so positions outside the band become
+    // -inf in the attention scores after softmax. Matches NeMo's
+    // LocalAttRelPositionalEncoding exactly when T <= 2W+1, and
+    // remains correct (band-restricted) when T exceeds the window.
+    int att_context_left  = -1;
+    int att_context_right = -1;
 };
 
 // ===========================================================================
@@ -310,7 +321,10 @@ ggml_tensor * conv_module(ggml_context *    ctx,
 
 // Relative-position multi-head self-attention. Flash attention when
 // use_flash is true; manual mul_mat + soft_max_ext + mul_mat fallback
-// otherwise.
+// otherwise. `att_context_left` / `att_context_right` enable local
+// attention: when both >= 0, pos_emb is expected to have length
+// (left + right + 1) and the helper pads matrix_bd with -inf rows so
+// keys outside the band drop out of softmax.
 ggml_tensor * rel_pos_mhsa(ggml_context *    ctx,
                            ggml_tensor *     x,
                            ggml_tensor *     pos_emb,
@@ -318,7 +332,9 @@ ggml_tensor * rel_pos_mhsa(ggml_context *    ctx,
                            int               d_model,
                            int               n_head,
                            ggml_type         kv_type,
-                           bool              use_flash);
+                           bool              use_flash,
+                           int               att_context_left  = -1,
+                           int               att_context_right = -1);
 
 // ===========================================================================
 // Top-level block + pre-encode

@@ -42,11 +42,13 @@ transcribe::parakeet::read_parakeet_hparams):
 
   general.architecture = "parakeet"
   general.basename     = "parakeet-tdt"
-  general.size_label   = "0.6B"
-  general.version      = "v2" or "v3"
-  general.languages    = [...]                 (1 entry for v2, 25 for v3)
-  stt.variant          = "tdt-0.6b-v2" or "tdt-0.6b-v3"
-  stt.capability.lang_detect = true            (v3 only; absent for v2)
+  general.size_label   = profile["size_label"]   (e.g. "0.6B" or "1.1B")
+  general.version      = profile["version"]      (e.g. "v2", "v3", or "v1")
+  general.languages    = [...]                 (1 entry for English-only,
+                                                 25 for v3 multilingual)
+  stt.variant          = profile["variant"]      (e.g. "tdt-0.6b-v2",
+                                                 "tdt-0.6b-v3", "tdt-1.1b")
+  stt.capability.lang_detect = true            (v3 only; absent otherwise)
   tokenizer.ggml.model = "bpe"
   tokenizer.ggml.tokens / scores / token_type / *_token_id  (the standard set)
   stt.parakeet.encoder.{n_layers,d_model,n_heads,d_ff,conv_kernel,
@@ -97,8 +99,12 @@ REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
 #
 # Each variant entry carries the bits the converter cannot derive from
 # the state_dict or model.cfg: the variant string, the language list
-# (NeMo's config doesn't carry it cleanly), and the capability flags.
-# Auto-detected by decoder.vocab_size.
+# (NeMo's config doesn't carry it cleanly), the size label, and the
+# capability flags. Profiles are keyed by the model slug (HF repo
+# basename or output-directory name); vocab_size alone cannot
+# distinguish e.g. tdt-0.6b-v2 from tdt-1.1b — both ship with a
+# 1024-token SPM. expected_vocab_size is cross-checked against the
+# loaded model so a slug/profile mismatch fails fast.
 
 # v3 multilingual: 25 European languages, BCP-47 short codes. List
 # matches the NVIDIA model card for nvidia/parakeet-tdt-0.6b-v3.
@@ -110,20 +116,125 @@ V3_LANGUAGES = [
     "sk", "sl", "es", "sv", "uk",
 ]
 
-VARIANT_PROFILES: dict[int, dict] = {
+VARIANT_PROFILES: dict[str, dict] = {
     # v2: 0.6B English-only TDT.
-    1024: {
+    "parakeet-tdt-0.6b-v2": {
         "variant": "tdt-0.6b-v2",
         "version": "v2",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
     },
     # v3: 0.6B multilingual TDT.
-    8192: {
+    "parakeet-tdt-0.6b-v3": {
         "variant": "tdt-0.6b-v3",
         "version": "v3",
+        "size_label": "0.6B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 8192,
         "languages": V3_LANGUAGES,
         "lang_detect": True,
+    },
+    # 1.1B English-only TDT. Predates the v2/v3 split; the upstream
+    # repo carries no version suffix, so general.version is "v1".
+    "parakeet-tdt-1.1b": {
+        "variant": "tdt-1.1b",
+        "version": "v1",
+        "size_label": "1.1B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+    },
+    # 0.6B English RNNT. Pure transducer, no TDT durations head.
+    "parakeet-rnnt-0.6b": {
+        "variant": "rnnt-0.6b",
+        "version": "v1",
+        "size_label": "0.6B",
+        "basename": "parakeet-rnnt",
+        "head_kind": "rnnt",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+    },
+    # 1.1B English RNNT.
+    "parakeet-rnnt-1.1b": {
+        "variant": "rnnt-1.1b",
+        "version": "v1",
+        "size_label": "1.1B",
+        "basename": "parakeet-rnnt",
+        "head_kind": "rnnt",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+    },
+    # 0.6B English unified offline+streaming RNNT. v1 transcribe.cpp
+    # port targets OFFLINE only; streaming uses the same weights and
+    # is deferred until streaming infra lands.
+    "parakeet-unified-en-0.6b": {
+        "variant": "unified-en-0.6b",
+        "version": "v1",
+        "size_label": "0.6B",
+        "basename": "parakeet-rnnt",
+        "head_kind": "rnnt",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+    },
+    # 0.6B English CTC. No predictor, no joint — encoder feeds a
+    # single 1x1 conv (decoder.decoder_layers.0) projecting d_model
+    # to vocab+1.
+    "parakeet-ctc-0.6b": {
+        "variant": "ctc-0.6b",
+        "version": "v1",
+        "size_label": "0.6B",
+        "basename": "parakeet-ctc",
+        "head_kind": "ctc",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+    },
+    # 1.1B English CTC.
+    "parakeet-ctc-1.1b": {
+        "variant": "ctc-1.1b",
+        "version": "v1",
+        "size_label": "1.1B",
+        "basename": "parakeet-ctc",
+        "head_kind": "ctc",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+    },
+    # 110M English hybrid TDT+CTC. Shipped as TDT-only at runtime
+    # per the family-level Open-decisions #1 ("the pure ctc-* variants
+    # cover the CTC path; drop the hybrid's auxiliary CTC head"). The
+    # converter walks the TDT path and silently drops the
+    # `ctc_decoder.*` tensors. head_kind="tdt" keeps the loader on
+    # the existing (Stage 4) TDT codepath.
+    "parakeet-tdt_ctc-110m": {
+        "variant": "tdt_ctc-110m",
+        "version": "v1",
+        "size_label": "110M",
+        "head_kind": "tdt",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+    },
+    # 1.1B English hybrid TDT+CTC. Same TDT-only shipping decision.
+    # Marked `prefer_direct_load=True` so the converter bypasses
+    # NeMo's restore_from() extraction (~4.4 GB transient disk) and
+    # reads the cached .nemo archive in place.
+    "parakeet-tdt_ctc-1.1b": {
+        "variant": "tdt_ctc-1.1b",
+        "version": "v1",
+        "size_label": "1.1B",
+        "head_kind": "tdt",
+        "expected_vocab_size": 1024,
+        "languages": ["en"],
+        "lang_detect": False,
+        "prefer_direct_load": True,
     },
 }
 
@@ -133,23 +244,167 @@ VARIANT_PROFILES: dict[int, dict] = {
 # ---------------------------------------------------------------------------
 
 
-def load_nemo_model(model_spec: str):
-    """Load a Parakeet TDT model via NeMo.
+class _DirectNemoArchive:
+    """Lightweight stand-in for a constructed NeMo ASRModel, used when
+    NeMo's installed ConformerEncoder rejects streaming kwargs the
+    archive's YAML carries (parakeet-unified-en-0.6b's
+    `att_chunk_context_size` is one such case in NeMo 2.7.x). Exposes
+    only the surface the converter actually consumes:
 
-    Accepts either an HF model name (e.g. "nvidia/parakeet-tdt-0.6b-v2")
-    or a local path to a .nemo file / extracted directory.
+        .cfg                     — OmegaConf dict
+        .state_dict()            — torch tensor dict
+        .tokenizer.tokenizer     — sentencepiece-loaded SPM
+        .joint                   — None (resolve_runtime_hparams falls
+                                    back to state_dict shapes)
+        .eval()                  — no-op
+    """
+
+    def __init__(self, cfg, state_dict, sp_proto: bytes):
+        from omegaconf import OmegaConf
+        import sentencepiece as spm
+
+        self.cfg = OmegaConf.create(cfg)
+        self._sd = state_dict
+        sp = spm.SentencePieceProcessor()
+        sp.LoadFromSerializedProto(sp_proto)
+
+        class _TokWrap:
+            def __init__(self, sp):
+                self.tokenizer = _TokWrap._SerWrap(sp)
+
+            class _SerWrap:
+                def __init__(self, sp):
+                    self._sp = sp
+
+                def serialized_model_proto(self):
+                    return self._sp.serialized_model_proto()
+
+                # forward the SentencePiece surface used by extract_tokenizer
+                def __getattr__(self, name):
+                    return getattr(self._sp, name)
+
+        self.tokenizer = _TokWrap(sp)
+        self.joint = None  # resolve_runtime_hparams falls back to sd shapes
+
+    def state_dict(self):
+        return self._sd
+
+    def eval(self):
+        return self
+
+
+def _load_nemo_archive_directly(nemo_path: Path):
+    """Open a .nemo tar archive and pull out (cfg_dict, state_dict, sp_proto)
+    without instantiating any NeMo class. The .nemo layout is stable
+    across NeMo versions: model_config.yaml, model_weights.ckpt, and a
+    SPM model file with a hash prefix and `_tokenizer.model` suffix.
+    """
+    import tarfile, io
+    import yaml
+    import torch
+
+    with tarfile.open(nemo_path) as tf:
+        names = tf.getnames()
+
+        def _read(suffix: str) -> bytes:
+            for n in names:
+                if n.endswith(suffix):
+                    return tf.extractfile(n).read()
+            raise FileNotFoundError(f"{nemo_path}: missing entry ending with {suffix!r}")
+
+        cfg_bytes = _read("model_config.yaml")
+        cfg = yaml.safe_load(cfg_bytes)
+
+        sd_bytes = _read("model_weights.ckpt")
+        sd = torch.load(io.BytesIO(sd_bytes), map_location="cpu", weights_only=False)
+
+        # SPM model file. Skip vocab.txt / tokenizer.vocab; only the
+        # _tokenizer.model entry carries the SentencePiece proto.
+        sp_proto = None
+        for n in names:
+            if n.endswith("_tokenizer.model") or n.endswith("/tokenizer.model"):
+                sp_proto = tf.extractfile(n).read()
+                break
+        if sp_proto is None:
+            raise FileNotFoundError(f"{nemo_path}: no SPM tokenizer.model entry")
+
+    return cfg, sd, sp_proto
+
+
+def _find_cached_nemo(model_spec: str) -> Path | None:
+    """Locate a cached .nemo for an HF repo id, if any."""
+    if "/" not in model_spec or Path(model_spec).expanduser().exists():
+        return None
+    org_name = model_spec.replace("/", "--")
+    cache_root = (
+        Path.home() / ".cache" / "huggingface" / "hub"
+        / f"models--{org_name}" / "snapshots"
+    )
+    if not cache_root.exists():
+        return None
+    for snap in cache_root.iterdir():
+        for cand in snap.glob("*.nemo"):
+            return cand
+    return None
+
+
+def load_nemo_model(model_spec: str, prefer_direct: bool = False):
+    """Load a Parakeet model via NeMo, falling back to a direct
+    .nemo-archive read when NeMo's installed module catalog rejects
+    streaming-specific encoder kwargs (unified-en-0.6b) or NeMo's
+    extraction blows the disk budget on a large hybrid (tdt_ctc-1.1b).
+
+    Accepts either an HF model name or a local .nemo file / dir.
+
+    `prefer_direct=True` short-circuits NeMo's class instantiation
+    when a cached .nemo is already present. NeMo's restore_from
+    extracts the full archive to a temp dir before reading, which
+    transiently doubles disk usage; the direct path streams entries
+    out of the archive at near-zero transient cost.
     """
     from nemo.collections.asr.models import ASRModel
 
     local = Path(model_spec).expanduser()
+
+    if prefer_direct:
+        nemo_direct = local if (local.exists() and local.suffix == ".nemo") else _find_cached_nemo(model_spec)
+        if nemo_direct is not None and nemo_direct.exists():
+            print(f"Loading Parakeet directly from .nemo: {nemo_direct}")
+            cfg, sd, sp_proto = _load_nemo_archive_directly(nemo_direct)
+            return _DirectNemoArchive(cfg, sd, sp_proto)
+        # else fall through to NeMo path
+
+    nemo_path: Path | None = None
     if local.exists():
-        print(f"Loading Parakeet TDT from local path: {local}")
-        model = ASRModel.restore_from(str(local), map_location="cpu")
+        print(f"Loading Parakeet from local path: {local}")
+        try:
+            model = ASRModel.restore_from(str(local), map_location="cpu")
+            model.eval()
+            return model
+        except Exception as e:
+            print(f"  NeMo restore_from failed: {e}\n  falling back to direct archive read",
+                  file=sys.stderr)
+            nemo_path = local if local.suffix == ".nemo" else None
     else:
-        print(f"Loading Parakeet TDT from HuggingFace: {model_spec}")
-        model = ASRModel.from_pretrained(model_spec, map_location="cpu")
-    model.eval()
-    return model
+        print(f"Loading Parakeet from HuggingFace: {model_spec}")
+        try:
+            model = ASRModel.from_pretrained(model_spec, map_location="cpu")
+            model.eval()
+            return model
+        except Exception as e:
+            print(f"  NeMo from_pretrained failed: {e}\n  falling back to direct archive read",
+                  file=sys.stderr)
+            nemo_path = _find_cached_nemo(model_spec)
+
+    if nemo_path is None or not nemo_path.exists():
+        raise RuntimeError(
+            f"could not load {model_spec}: NeMo class instantiation failed "
+            f"and no cached .nemo archive was found"
+        )
+
+    print(f"  loading directly from .nemo: {nemo_path}")
+    cfg, sd, sp_proto = _load_nemo_archive_directly(nemo_path)
+    return _DirectNemoArchive(cfg, sd, sp_proto)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +492,12 @@ def read_hparams(config: dict) -> dict:
     etc.) are validated by the loader, not here — the converter is
     intentionally a thin pass-through.
 
+    Predictor, joint, and TDT-durations resolution lives in convert()
+    rather than here: the YAML cfg is sparse for the RNNT variants
+    (`prednet={}`, `jointnet={}`, no `decoding.durations`) and the
+    truth is on the live module / state_dict. read_hparams stays
+    cfg-only and structurally invariant.
+
     Frontend defaults: NeMo's preprocessor carries most fields
     directly, but a few that PLAN.md declares mandatory in
     stt.frontend.* are not in NeMo's config because NeMo defaults them
@@ -256,27 +517,16 @@ def read_hparams(config: dict) -> dict:
     enc  = config["encoder"]
     pre  = config["preprocessor"]
     dec  = config["decoder"]
-    pred = dec["prednet"]
-    joint = config["joint"]
-    decoding = config.get("decoding", {}) or {}
 
-    raw_durations = decoding.get("durations")
-    if raw_durations is None:
-        raise ValueError(
-            "config.decoding.durations missing — this converter only "
-            "handles TDT models that publish a duration list"
-        )
-    tdt_durations = _validate_durations(list(raw_durations))
-    if int(joint["num_extra_outputs"]) != len(tdt_durations):
-        raise ValueError(
-            f"joint.num_extra_outputs ({joint['num_extra_outputs']}) "
-            f"must equal len(decoding.durations) ({len(tdt_durations)})"
-        )
-
-    joint_activation = str(joint["jointnet"]["activation"]).lower()
-
-    greedy_cfg = decoding.get("greedy") or {}
-    tdt_max_symbols = int(greedy_cfg.get("max_symbols") or 10)
+    # CTC's cfg.decoder uses `num_classes` instead of `vocab_size`
+    # (ConvASRDecoder vs RNNTDecoder shapes). Both name the same
+    # quantity: the SPM vocab size, excluding the blank that the head
+    # output dim adds. Fall back rather than branch the read.
+    raw_vocab = dec.get("vocab_size")
+    if raw_vocab is None:
+        raw_vocab = dec.get("num_classes")
+    if raw_vocab is None:
+        raise ValueError("config.decoder has neither vocab_size nor num_classes")
 
     sample_rate   = int(pre["sample_rate"])
     window_size   = float(pre["window_size"])
@@ -300,18 +550,42 @@ def read_hparams(config: dict) -> dict:
         "enc_subsampling_factor":   int(enc["subsampling_factor"]),
         "enc_subsampling_channels": int(enc["subsampling_conv_channels"]),
         "enc_pos_emb_max_len":      int(enc["pos_emb_max_len"]),
-        "enc_use_bias":             bool(enc.get("use_bias", False)),
+        # xscaling: NeMo's RelPositionalEncoding multiplies x by
+        # sqrt(d_model) before generating pos_emb when this flag is
+        # True. Default-to-True matches NeMo's `xscaling=True` default
+        # in ConformerEncoder.__init__. v2/v3/tdt-* explicitly set
+        # False; ctc-*/rnnt-*/unified-en explicitly set True. The C++
+        # loader treats this as required-with-default (default false
+        # for legacy GGUFs without the KV).
+        "enc_xscaling":             bool(enc.get("xscaling", True)),
+        # att_context_size: [-1, -1] = full attention. Local attention
+        # ([left, right] with non-negative values, e.g. [128, 128] for
+        # tdt_ctc-1.1b) restricts each query to keys within the band
+        # [q-left, q+right]. Drives both the pos_emb buffer size
+        # (left+right+1) and a band mask additive in attention.
+        "enc_att_context_left":     int(enc.get("att_context_size", [-1, -1])[0]),
+        "enc_att_context_right":    int(enc.get("att_context_size", [-1, -1])[1]),
+        # use_bias is resolved from the state_dict in convert() — NeMo's
+        # YAML omits the key on some checkpoints (tdt-1.1b) while the
+        # constructor default is True, and on others (tdt-0.6b-v2/v3)
+        # it is set explicitly to False. Trusting the YAML alone
+        # silently drops 462 bias tensors on tdt-1.1b, so resolution
+        # waits until the state_dict is in hand. Set to None here.
+        "enc_use_bias":             None,
 
-        "pred_hidden":   int(pred["pred_hidden"]),
-        "pred_n_layers": int(pred["pred_rnn_layers"]),
-        "pred_vocab":    int(dec["vocab_size"]) + 1,
+        # Predictor / joint / tdt-durations are resolved in convert();
+        # see resolve_runtime_hparams() below. Set to None here so a
+        # caller that forgets the resolve step fails loudly.
+        "pred_hidden":              None,
+        "pred_n_layers":            None,
+        "pred_vocab":               int(raw_vocab) + 1,
 
-        "joint_hidden":            int(joint["jointnet"]["joint_hidden"]),
-        "joint_num_extra_outputs": int(joint["num_extra_outputs"]),
-        "joint_activation":        joint_activation,
+        "joint_hidden":             None,
+        "joint_num_extra_outputs":  None,
+        "joint_activation":         None,
 
-        "tdt_durations":    tdt_durations,
-        "tdt_max_symbols":  tdt_max_symbols,
+        "tdt_durations":            None,
+        "tdt_max_symbols":          None,
 
         "fe_type":         "mel",
         "fe_num_mels":     int(pre["features"]),
@@ -326,6 +600,95 @@ def read_hparams(config: dict) -> dict:
         "fe_f_min":        0.0,
         "fe_f_max":        float(sample_rate) / 2.0,
     }
+
+
+def resolve_runtime_hparams(hp: dict, model, config: dict, head_kind: str) -> None:
+    """Fill in predictor / joint / TDT fields on `hp` using the live
+    model and state_dict. The RNNT YAMLs (rnnt-0.6b/1.1b, unified-en)
+    carry empty `prednet={}` / `jointnet={}` and no
+    `decoding.durations`; the constructed module and state_dict are
+    the source of truth.
+
+    For CTC variants there is no predictor and no joint (the head is
+    a single 1x1 conv); the predictor/joint/tdt fields are left as
+    None and the corresponding KV writes are skipped in convert().
+
+    Mutates `hp` in place. Asserts cross-field invariants where they
+    apply (durations length matches num_extra_outputs for TDT models).
+    """
+    if head_kind == "ctc":
+        return
+
+    sd = model.state_dict()
+    dec = config["decoder"]
+    pred_cfg = dec.get("prednet") or {}
+    joint_cfg = config.get("joint") or {}
+    jointnet_cfg = joint_cfg.get("jointnet") or {}
+
+    # Predictor: pred_hidden = embed second dim; n_layers = number of
+    # weight_ih_l<i> tensors. Fall through to cfg if it carries values.
+    pred_hidden_cfg = pred_cfg.get("pred_hidden")
+    if pred_hidden_cfg is not None:
+        hp["pred_hidden"] = int(pred_hidden_cfg)
+    else:
+        embed = sd.get("decoder.prediction.embed.weight")
+        if embed is None:
+            raise KeyError("state_dict missing decoder.prediction.embed.weight")
+        hp["pred_hidden"] = int(embed.shape[1])
+
+    pred_n_layers_cfg = pred_cfg.get("pred_rnn_layers")
+    if pred_n_layers_cfg is not None:
+        hp["pred_n_layers"] = int(pred_n_layers_cfg)
+    else:
+        n = 0
+        while f"decoder.prediction.dec_rnn.lstm.weight_ih_l{n}" in sd:
+            n += 1
+        if n == 0:
+            raise KeyError("state_dict has no LSTM weight_ih_l<i> tensors")
+        hp["pred_n_layers"] = n
+
+    # Joint: prefer the live module's resolved attrs; fall back to cfg.
+    joint_module = getattr(model, "joint", None)
+
+    def _from_module_or_cfg(attr: str, cfg_key: str, default=None):
+        if joint_module is not None and hasattr(joint_module, attr):
+            v = getattr(joint_module, attr)
+            if v is not None and not callable(v):
+                return v
+        if cfg_key in jointnet_cfg and jointnet_cfg[cfg_key] is not None:
+            return jointnet_cfg[cfg_key]
+        if cfg_key in joint_cfg and joint_cfg[cfg_key] is not None:
+            return joint_cfg[cfg_key]
+        return default
+
+    hp["joint_hidden"] = int(_from_module_or_cfg("joint_hidden", "joint_hidden"))
+    hp["joint_activation"] = str(_from_module_or_cfg("activation", "activation")).lower()
+
+    num_extra = _from_module_or_cfg("num_extra_outputs", "num_extra_outputs", 0)
+    hp["joint_num_extra_outputs"] = int(num_extra)
+
+    # TDT durations (optional — pure RNNT has none).
+    decoding = config.get("decoding") or {}
+    raw_durations = decoding.get("durations")
+    if raw_durations is None:
+        hp["tdt_durations"] = None
+        hp["tdt_max_symbols"] = None
+        if hp["joint_num_extra_outputs"] != 0:
+            raise ValueError(
+                f"joint.num_extra_outputs={hp['joint_num_extra_outputs']} "
+                f"but decoding.durations missing — checkpoint looks like "
+                f"TDT without a duration list"
+            )
+    else:
+        durations = _validate_durations(list(raw_durations))
+        if hp["joint_num_extra_outputs"] != len(durations):
+            raise ValueError(
+                f"joint.num_extra_outputs ({hp['joint_num_extra_outputs']}) "
+                f"!= len(decoding.durations) ({len(durations)})"
+            )
+        hp["tdt_durations"] = durations
+        greedy_cfg = decoding.get("greedy") or {}
+        hp["tdt_max_symbols"] = int(greedy_cfg.get("max_symbols") or 10)
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +742,26 @@ ENCODER_BLOCK_TABLE: list[tuple[str, str]] = [
 ]
 
 
+# Conformer biases that are emitted only when enc_use_bias=true.
+# v2/v3 have use_bias=false so this table is skipped; tdt-1.1b carries
+# all of these. Layer-norm gammas/biases and the BN affine params live
+# in ENCODER_BLOCK_TABLE because they are present regardless of the
+# linear/conv use_bias flag.
+ENCODER_BLOCK_BIAS_TABLE: list[tuple[str, str]] = [
+    ("feed_forward1.linear1.bias",   "ff1.linear1.bias"),
+    ("feed_forward1.linear2.bias",   "ff1.linear2.bias"),
+    ("self_attn.linear_q.bias",      "attn.linear_q.bias"),
+    ("self_attn.linear_k.bias",      "attn.linear_k.bias"),
+    ("self_attn.linear_v.bias",      "attn.linear_v.bias"),
+    ("self_attn.linear_out.bias",    "attn.linear_out.bias"),
+    ("conv.pointwise_conv1.bias",    "conv.pointwise1.bias"),
+    ("conv.depthwise_conv.bias",     "conv.depthwise.bias"),
+    ("conv.pointwise_conv2.bias",    "conv.pointwise2.bias"),
+    ("feed_forward2.linear1.bias",   "ff2.linear1.bias"),
+    ("feed_forward2.linear2.bias",   "ff2.linear2.bias"),
+]
+
+
 PRE_ENCODE_TABLE: list[tuple[str, str]] = [
     ("encoder.pre_encode.conv.0.weight", "enc.pre_encode.conv.0.weight"),
     ("encoder.pre_encode.conv.0.bias",   "enc.pre_encode.conv.0.bias"),
@@ -405,22 +788,41 @@ JOINT_TABLE: list[tuple[str, str]] = [
 ]
 
 
+# CTC head: a single 1x1 conv (Conv1d, kernel_size=1) projecting
+# encoder d_model to vocab+1. NeMo names the module
+# `decoder.decoder_layers.0`; we flatten to `head.ctc.*` to match
+# the loader's eventual head dispatch (`stt.parakeet.head_kind=ctc`).
+CTC_HEAD_TABLE: list[tuple[str, str]] = [
+    ("decoder.decoder_layers.0.weight", "head.ctc.weight"),
+    ("decoder.decoder_layers.0.bias",   "head.ctc.bias"),
+]
+
+
 # NeMo state_dict contains buffers and preprocessor tables that the
 # loader computes itself at runtime. Skipping them silently keeps the
 # unused-key check meaningful for genuine misses.
-EXPECTED_UNUSED_PREFIXES = (
+EXPECTED_UNUSED_PREFIXES_BASE = (
     "preprocessor.",  # mel filterbank + Hann window — C++ recomputes
 )
 EXPECTED_UNUSED_SUFFIXES = (
     ".num_batches_tracked",  # BN bookkeeping counter (scalar int64)
 )
 
+# The hybrid tdt_ctc-* checkpoints carry an auxiliary CTC head
+# (`ctc_decoder.*`) alongside the full TDT path. Per the family-level
+# decision (Open-decisions #1), we ship the hybrids as TDT-only and
+# drop the CTC head — the pure ctc-* variants cover the CTC path.
+EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED = ("ctc_decoder.",)
 
-def is_expected_unused(key: str) -> bool:
-    return (
-        key.startswith(EXPECTED_UNUSED_PREFIXES)
-        or key.endswith(EXPECTED_UNUSED_SUFFIXES)
-    )
+
+def is_expected_unused(key: str, head_kind: str, drop_aux_ctc: bool) -> bool:
+    if key.startswith(EXPECTED_UNUSED_PREFIXES_BASE):
+        return True
+    if key.endswith(EXPECTED_UNUSED_SUFFIXES):
+        return True
+    if drop_aux_ctc and key.startswith(EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -452,21 +854,39 @@ def convert(model_spec: str, out_path: Path) -> None:
 
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
-    model = load_nemo_model(model_spec)
+    # The output slug is the canonical variant key. main() always sets
+    # out_path = models/<slug>/<slug>-<REFDTYPE>.gguf, so the slug is
+    # the parent directory name. Vocab_size alone is not unique across
+    # the parakeet TDT family (0.6b-v2 and 1.1b both ship 1024 SPM
+    # tokens), hence the slug-based dispatch.
+    slug = out_path.parent.name
+    if slug not in VARIANT_PROFILES:
+        raise ValueError(
+            f"unknown parakeet variant slug: {slug!r}; "
+            f"known variants: {sorted(VARIANT_PROFILES)}"
+        )
+    profile = VARIANT_PROFILES[slug]
+    head_kind = profile["head_kind"]
+    prefer_direct = bool(profile.get("prefer_direct_load", False))
+    drop_aux_ctc = "tdt_ctc" in slug  # hybrid checkpoints carry an aux CTC head we drop
+    print(f"Variant: {profile['variant']} (head_kind={head_kind})")
+
+    model = load_nemo_model(model_spec, prefer_direct=prefer_direct)
 
     config = OmegaConf.to_container(model.cfg, resolve=True)
     hp = read_hparams(config)
+    resolve_runtime_hparams(hp, model, config, head_kind)
 
     raw_vocab_size = hp["pred_vocab"] - 1
     print(f"Detected raw vocab_size = {raw_vocab_size}")
 
-    if raw_vocab_size not in VARIANT_PROFILES:
+    if raw_vocab_size != profile["expected_vocab_size"]:
         raise ValueError(
-            f"unknown parakeet variant: vocab_size={raw_vocab_size}; "
-            f"known variants: {sorted(VARIANT_PROFILES)}"
+            f"vocab_size mismatch for {slug}: model carries "
+            f"{raw_vocab_size}, profile expects "
+            f"{profile['expected_vocab_size']}. The slug picked the "
+            f"wrong profile, or the model is not what its name claims."
         )
-    profile = VARIANT_PROFILES[raw_vocab_size]
-    print(f"Variant: {profile['variant']}")
 
     # Re-load the SPM model from its serialized proto so we get a plain
     # sentencepiece.SentencePieceProcessor with the canonical method
@@ -488,12 +908,30 @@ def convert(model_spec: str, out_path: Path) -> None:
     sd = model.state_dict()
     sd_keys = set(sd.keys())
 
+    # Resolve enc_use_bias from the state_dict. The presence of
+    # encoder.layers.0.feed_forward1.linear1.bias is authoritative; the
+    # YAML default is unreliable across checkpoints. We also assert
+    # the answer is consistent (every layer in the same state) so a
+    # mid-stack discrepancy fails fast rather than producing a
+    # half-biased GGUF.
+    bias_present = [
+        f"encoder.layers.{i}.feed_forward1.linear1.bias" in sd_keys
+        for i in range(hp["enc_n_layers"])
+    ]
+    if any(bias_present) and not all(bias_present):
+        raise ValueError(
+            f"inconsistent encoder use_bias across layers: "
+            f"{sum(bias_present)}/{hp['enc_n_layers']} layers carry biases"
+        )
+    hp["enc_use_bias"] = bool(bias_present[0])
+    print(f"Encoder use_bias: {hp['enc_use_bias']}")
+
     print(f"Writing GGUF to {out_path}")
     writer = GGUFWriter(str(out_path), "parakeet")
 
     # ----- general.* metadata -----
-    writer.add_string("general.basename",   "parakeet-tdt")
-    writer.add_string("general.size_label", "0.6B")
+    writer.add_string("general.basename",   profile.get("basename", "parakeet-tdt"))
+    writer.add_string("general.size_label", profile["size_label"])
     writer.add_string("general.version",    profile["version"])
     writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
     writer.add_array ("general.languages",  profile["languages"])
@@ -502,6 +940,14 @@ def convert(model_spec: str, out_path: Path) -> None:
     writer.add_string("stt.variant", profile["variant"])
     if profile["lang_detect"]:
         writer.add_bool("stt.capability.lang_detect", True)
+
+    # Head discriminator. The C++ loader currently always reads TDT
+    # KV (durations etc.); Stage 4 will gate predictor/joint/tdt
+    # reads on this. Emit unconditionally so the GGUF carries the
+    # truth even before the loader uses it. New KV; loader treats
+    # absent as "tdt" for backwards compat with already-shipped
+    # v2/v3 GGUFs.
+    writer.add_string("stt.parakeet.head_kind", head_kind)
 
     # ----- tokenizer.ggml.* -----
     writer.add_string("tokenizer.ggml.model", "bpe")
@@ -526,20 +972,25 @@ def convert(model_spec: str, out_path: Path) -> None:
     writer.add_uint32("stt.parakeet.encoder.subsampling_channels", hp["enc_subsampling_channels"])
     writer.add_uint32("stt.parakeet.encoder.pos_emb_max_len",      hp["enc_pos_emb_max_len"])
     writer.add_bool  ("stt.parakeet.encoder.use_bias",             hp["enc_use_bias"])
+    writer.add_bool  ("stt.parakeet.encoder.xscaling",             hp["enc_xscaling"])
+    writer.add_int32 ("stt.parakeet.encoder.att_context_left",     hp["enc_att_context_left"])
+    writer.add_int32 ("stt.parakeet.encoder.att_context_right",    hp["enc_att_context_right"])
 
-    writer.add_uint32("stt.parakeet.predictor.hidden",   hp["pred_hidden"])
-    writer.add_uint32("stt.parakeet.predictor.n_layers", hp["pred_n_layers"])
-    writer.add_uint32("stt.parakeet.predictor.vocab",    hp["pred_vocab"])
+    if head_kind != "ctc":
+        writer.add_uint32("stt.parakeet.predictor.hidden",   hp["pred_hidden"])
+        writer.add_uint32("stt.parakeet.predictor.n_layers", hp["pred_n_layers"])
+        writer.add_uint32("stt.parakeet.predictor.vocab",    hp["pred_vocab"])
 
-    writer.add_uint32("stt.parakeet.joint.hidden",            hp["joint_hidden"])
-    writer.add_uint32("stt.parakeet.joint.num_extra_outputs", hp["joint_num_extra_outputs"])
-    writer.add_string("stt.parakeet.joint.activation",        hp["joint_activation"])
+        writer.add_uint32("stt.parakeet.joint.hidden",            hp["joint_hidden"])
+        writer.add_uint32("stt.parakeet.joint.num_extra_outputs", hp["joint_num_extra_outputs"])
+        writer.add_string("stt.parakeet.joint.activation",        hp["joint_activation"])
 
-    writer.add_array(
-        "stt.parakeet.tdt.durations",
-        [int(d) for d in hp["tdt_durations"]],
-    )
-    writer.add_uint32("stt.parakeet.tdt.max_symbols", hp["tdt_max_symbols"])
+        if hp["tdt_durations"] is not None:
+            writer.add_array(
+                "stt.parakeet.tdt.durations",
+                [int(d) for d in hp["tdt_durations"]],
+            )
+            writer.add_uint32("stt.parakeet.tdt.max_symbols", hp["tdt_max_symbols"])
 
     writer.add_string("stt.frontend.type",         hp["fe_type"])
     writer.add_uint32("stt.frontend.num_mels",     hp["fe_num_mels"])
@@ -602,34 +1053,55 @@ def convert(model_spec: str, out_path: Path) -> None:
                 f"encoder.layers.{i}.{suffix_nemo}",
                 f"enc.blocks.{i}.{suffix_gguf}",
             )
+        if hp["enc_use_bias"]:
+            for suffix_nemo, suffix_gguf in ENCODER_BLOCK_BIAS_TABLE:
+                add(
+                    f"encoder.layers.{i}.{suffix_nemo}",
+                    f"enc.blocks.{i}.{suffix_gguf}",
+                )
 
-    # predictor: embed + n_lstm_layers * (Wx, Wh, bias).
-    add("decoder.prediction.embed.weight", "pred.embed.weight")
-    for i in range(hp["pred_n_layers"]):
-        add(
-            f"decoder.prediction.dec_rnn.lstm.weight_ih_l{i}",
-            f"pred.lstm.{i}.Wx",
-        )
-        add(
-            f"decoder.prediction.dec_rnn.lstm.weight_hh_l{i}",
-            f"pred.lstm.{i}.Wh",
-        )
-        add_combined(
-            f"decoder.prediction.dec_rnn.lstm.bias_ih_l{i}",
-            f"decoder.prediction.dec_rnn.lstm.bias_hh_l{i}",
-            f"pred.lstm.{i}.bias",
-        )
+    if head_kind == "ctc":
+        # CTC: encoder feeds a single 1x1 conv directly. No predictor,
+        # no joint.
+        for nemo_name, gguf_name in CTC_HEAD_TABLE:
+            add(nemo_name, gguf_name)
+    else:
+        # predictor: embed + n_lstm_layers * (Wx, Wh, bias).
+        add("decoder.prediction.embed.weight", "pred.embed.weight")
+        for i in range(hp["pred_n_layers"]):
+            add(
+                f"decoder.prediction.dec_rnn.lstm.weight_ih_l{i}",
+                f"pred.lstm.{i}.Wx",
+            )
+            add(
+                f"decoder.prediction.dec_rnn.lstm.weight_hh_l{i}",
+                f"pred.lstm.{i}.Wh",
+            )
+            add_combined(
+                f"decoder.prediction.dec_rnn.lstm.bias_ih_l{i}",
+                f"decoder.prediction.dec_rnn.lstm.bias_hh_l{i}",
+                f"pred.lstm.{i}.bias",
+            )
 
-    # joint
-    for nemo_name, gguf_name in JOINT_TABLE:
-        add(nemo_name, gguf_name)
+        # joint
+        for nemo_name, gguf_name in JOINT_TABLE:
+            add(nemo_name, gguf_name)
 
+    per_layer_tensors = len(ENCODER_BLOCK_TABLE) + (
+        len(ENCODER_BLOCK_BIAS_TABLE) if hp["enc_use_bias"] else 0
+    )
+    if head_kind == "ctc":
+        head_tensors = len(CTC_HEAD_TABLE)
+    else:
+        head_tensors = (
+            1                                       # pred.embed
+            + hp["pred_n_layers"] * 3               # pred.lstm.{Wx,Wh,bias}
+            + len(JOINT_TABLE)
+        )
     expected = (
         len(PRE_ENCODE_TABLE)
-        + hp["enc_n_layers"] * len(ENCODER_BLOCK_TABLE)
-        + 1                                         # pred.embed
-        + hp["pred_n_layers"] * 3                   # pred.lstm.{Wx,Wh,bias}
-        + len(JOINT_TABLE)
+        + hp["enc_n_layers"] * per_layer_tensors
+        + head_tensors
     )
     if n_added != expected:
         raise RuntimeError(
@@ -638,7 +1110,7 @@ def convert(model_spec: str, out_path: Path) -> None:
     print(f"Added {n_added} tensors ({bytes_out / (1024 * 1024):.1f} MB)")
 
     unused = sorted(
-        k for k in (sd_keys - consumed) if not is_expected_unused(k)
+        k for k in (sd_keys - consumed) if not is_expected_unused(k, head_kind, drop_aux_ctc)
     )
     if unused:
         print(

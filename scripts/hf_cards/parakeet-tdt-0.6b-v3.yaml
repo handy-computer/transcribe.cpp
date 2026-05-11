@@ -90,8 +90,8 @@ quants:
   - name: Q5_K_M
     filename: parakeet-tdt-0.6b-v3-Q5_K_M.gguf
     size: 565 MB
-    wer: 1.93%
+    wer: 1.92%
   - name: Q4_K_M
     filename: parakeet-tdt-0.6b-v3-Q4_K_M.gguf
     size: 502 MB
-    wer: 1.99%
+    wer: 1.98%
