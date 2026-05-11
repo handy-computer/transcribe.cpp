@@ -1,0 +1,95 @@
+{
+  "_comment": [
+    "Nemotron-Speech-Streaming en-0.6b per-tensor tolerances for compare_tensors.py.",
+    "",
+    "Reference: NeMo 2.7.2 running fp32 inference via scripts/dump_reference_parakeet_nemo.py.",
+    "The dumper preserves the model's NATIVE att_context_style='chunked_limited' (no",
+    "--offline-only flag passed). This matches the cache-aware streaming attention mask",
+    "the model was trained with; it is the mode that yields the published 2.32% WER",
+    "on LibriSpeech test-clean at att_context_size=[70,13] (1.12s chunk).",
+    "",
+    "Tolerance derivation (Stage 2, provisional):",
+    "  max_abs  = max(1e-4 \u00d7 p99_abs, 1e-6)   # 0.01% of typical large value",
+    "  mean_abs = max(1e-5 \u00d7 rms,     1e-6)   # 0.001% of RMS energy",
+    "",
+    "These are PROVISIONAL \u2014 Stage 4 finalizes them against observed C++ drift.",
+    "Entries with _provisional: true make finalization-not-yet-run obvious.",
+    "Do NOT ship a model while _provisional entries remain.",
+    "",
+    "Why this variant gets its own tolerances file (not folded into parakeet.json):",
+    "the frontend has normalize=none + preemphasis=null, so enc.mel.in is raw log-mel",
+    "(min~-16, max~2.5 \u2014 un-centered). That cascades to large enc.pre_encode.out magnitudes",
+    "(O(1e3)) which would inflate the family-shared parakeet.json budgets for sibling",
+    "variants. Per-variant scoping keeps the family tolerances tight."
+  ],
+  "enc.block.0.out": {
+    "max_abs": 0.0028076977539062465,
+    "mean_abs": 8.328184373046172e-05,
+    "_provisional": true
+  },
+  "enc.block.12.out": {
+    "max_abs": 0.0033436017036437976,
+    "mean_abs": 7.366489624473478e-05,
+    "_provisional": true
+  },
+  "enc.block.23.out": {
+    "max_abs": 1.1155962347984312e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.final": {
+    "max_abs": 1.1155962347984312e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.mel.in": {
+    "max_abs": 0.001661121837615967,
+    "mean_abs": 0.00010128634779341219,
+    "_provisional": true
+  },
+  "enc.pos_emb": {
+    "max_abs": 9.999976158142091e-05,
+    "mean_abs": 7.071067828517533e-06,
+    "_provisional": true
+  },
+  "enc.pre_encode.out": {
+    "max_abs": 0.041945625762939254,
+    "mean_abs": 0.0012072990909146313,
+    "_provisional": true
+  },
+  "dec.embed.0": {
+    "max_abs": 1e-06,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "dec.enc_out": {
+    "max_abs": 1.1155962347984312e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "dec.joint.0": {
+    "max_abs": 0.005642211669921874,
+    "mean_abs": 0.00036001621928142906,
+    "_provisional": true
+  },
+  "dec.lstm.0.c.0": {
+    "max_abs": 7.913509929180147e-05,
+    "mean_abs": 3.0119205876403507e-06,
+    "_provisional": true
+  },
+  "dec.lstm.0.h.0": {
+    "max_abs": 4.309734627604485e-05,
+    "mean_abs": 1.5032045058912853e-06,
+    "_provisional": true
+  },
+  "dec.lstm.1.c.0": {
+    "max_abs": 8.174242275953294e-05,
+    "mean_abs": 3.5061469290625314e-06,
+    "_provisional": true
+  },
+  "dec.lstm.1.h.0": {
+    "max_abs": 3.808189156651498e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  }
+}
