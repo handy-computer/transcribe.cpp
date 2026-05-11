@@ -21,7 +21,7 @@ for training data, intended use, and upstream evaluation methodology.
 
 Licensed CC-BY-4.0. Ported from upstream commit
 [`ad09ba1`](https://huggingface.co/nvidia/parakeet-ctc-0.6b/commit/ad09ba1cc62743fbc9814de5d2016fca9096485a),
-pinned 2026-05-09.
+pinned 2026-05-10.
 
 ## Download
 

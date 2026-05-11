@@ -19,8 +19,8 @@ See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b)
 for training data, intended use, and upstream evaluation methodology.
 
 Licensed CC-BY-4.0. Ported from upstream commit
-[`675e786`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b/commit/675e7868),
-pinned 2026-05-09.
+[`675e786`](https://huggingface.co/nvidia/parakeet-tdt_ctc-1.1b/commit/675e786),
+pinned 2026-05-10.
 
 ## Download
 

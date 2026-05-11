@@ -7,13 +7,14 @@ via the 2026-05-09 intake batch (`ctc-0.6b`, `ctc-1.1b`, `rnnt-0.6b`,
 have completed Stages 1–8: intake, oracle dumps, conversion to F32 GGUF,
 C++ bring-up at the reference dtype, the full shipping quant matrix
 (F32 + F16 + Q8_0 + Q6_K + Q5_K_M + Q4_K_M), publication-grade performance
-benchmarks on the AMD Ryzen 7 PRO 4750U reference machine (thermally
-gated, see `reports/perf/amd-ryzen-7-pro-4750u-with-radeon-graphics/`),
-the full LibriSpeech test-clean WER sweep, and ship-ready model cards +
-HF YAML/READMEs. Apple M4 Max benchmarks for the new 8 are tracked
-separately and will be merged into the cards once the bench machine
-returns. Stage 7 family overview:
+benchmarks on Apple M4 Max and AMD Ryzen 7 PRO 4750U (numbers live in
+the per-variant model cards under `docs/models/<variant>.md`), the full
+LibriSpeech test-clean WER sweep, and ship-ready model cards + HF
+YAML/READMEs. Stage 7 family overview:
 [`reports/wer/parakeet-family.librispeech-test-clean.summary.md`](../../../reports/wer/parakeet-family.librispeech-test-clean.summary.md).
+Three variants (`tdt_ctc-110m`, `ctc-1.1b`, `tdt_ctc-1.1b`) miss the
+strict `upstream + 0.01pp` gate by 0.01–0.04pp but are ACCEPTED on
+CI-overlap grounds; see the family WER summary for rationale.
 
 ## Identity
 

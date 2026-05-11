@@ -19,7 +19,7 @@ for training data, intended use, and upstream evaluation methodology.
 
 Licensed CC-BY-4.0. Ported from upstream commit
 [`a07b19e`](https://huggingface.co/nvidia/parakeet-rnnt-1.1b/commit/a07b19e9),
-pinned 2026-05-09.
+pinned 2026-05-10.
 
 ## Download
 

@@ -18,7 +18,7 @@ evaluation results.
 
 Licensed CC-BY-4.0. Ported from upstream commit
 [`d4ac992`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b/commit/d4ac9928),
-pinned 2026-05-09.
+pinned 2026-05-10.
 
 ## Download
 
