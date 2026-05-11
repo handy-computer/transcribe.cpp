@@ -65,6 +65,7 @@
 #include <cstring>
 #include <fstream>
 #include <ios>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -377,6 +378,7 @@ transcribe_status load(
         cfg.pre_emphasis = m->hparams.fe_pre_emphasis;
         cfg.f_min        = m->hparams.fe_f_min;
         cfg.f_max        = m->hparams.fe_f_max;
+        cfg.normalize    = m->hparams.fe_normalize;
         m->mel.emplace(cfg);
     }
 
@@ -475,11 +477,18 @@ transcribe_status load(
     gguf_free(gguf_data);
 
     // Fuse BatchNorm parameters into scale + bias for the encoder
-    // graph. This replaces 4 elementwise ops per block with 2.
-    if (const transcribe_status st = fuse_batch_norm(*m);
-        st != TRANSCRIBE_OK)
+    // graph. This replaces 4 elementwise ops per block with 2. Skipped
+    // for streaming variants whose conv module uses LayerNorm (raw
+    // bn.weight / bn.bias travel through the graph as LN scale/bias,
+    // and there are no running stats to fuse against).
+    if (m->hparams.enc_conv_norm_type
+            == ParakeetHParams::ConvNormType::BatchNorm)
     {
-        return st;
+        if (const transcribe_status st = fuse_batch_norm(*m);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
     }
 
     // On CPU primary backend, dequantize conv pointwise weights back
@@ -712,12 +721,19 @@ transcribe_status run(
         const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
 
         // Recover the position of "relative offset 0" inside the buffer.
-        // - Full attention: pos_len = 2*T_enc - 1, zero index = T_enc-1.
-        // - Local attention: pos_len = W_left + W_right + 1, zero index = W_left.
-        const bool is_local =
+        // - Full attention / chunked_limited streaming: pos_len = 2*T_enc - 1,
+        //   zero index = T_enc - 1 (= (pos_len-1)/2).
+        // - Regular local attention: pos_len = W_left + W_right + 1,
+        //   zero index = W_left. Only applies to the Regular style — the
+        //   ChunkedLimited path always uses the full RelPositionalEncoding.
+        const bool is_chunked =
+            (pm->hparams.enc_att_context_style ==
+                 ParakeetHParams::AttContextStyle::ChunkedLimited);
+        const bool is_local_pe =
+            (!is_chunked) &&
             (pm->hparams.enc_att_context_left >= 0 &&
              pm->hparams.enc_att_context_right >= 0);
-        const int zero_index = is_local
+        const int zero_index = is_local_pe
             ? pm->hparams.enc_att_context_left
             : (pos_len - 1) / 2;
 
@@ -747,6 +763,47 @@ transcribe_status run(
 
         transcribe::debug::dump_tensor(
             "enc.pos_emb", eb.pos_emb_in, "encoder.pos_emb");
+    }
+
+    // ChunkedLimited attention mask (streaming variants). pos_emb above
+    // stays at the full 2T-1 length and rel_pos contributes its usual
+    // (q-k) bias; this mask adds 0 on (q, k) pairs whose chunk indices
+    // are in [q_chunk - left_chunks, q_chunk] and -INF elsewhere, so
+    // softmax zeroes everything outside the cache-aware band. NeMo
+    // semantics: chunk_size = att_context_right + 1, left_chunks =
+    // att_context_left / chunk_size.
+    if (eb.chunked_mask_in != nullptr) {
+        const int T_enc       = static_cast<int>(eb.chunked_mask_in->ne[0]);
+        const int chunk_size  = pm->hparams.enc_att_context_right + 1;
+        const int left_chunks = (chunk_size > 0)
+            ? (pm->hparams.enc_att_context_left / chunk_size)
+            : 0;
+
+        std::vector<float> mask_buf(
+            static_cast<size_t>(T_enc) * static_cast<size_t>(T_enc));
+        // ggml ne = [T_k, T_q, 1, 1], row-major in the host buffer is
+        // contiguous along T_k (ne[0]). Indexing: mask[q, k] lives at
+        // offset (q * T_enc + k).
+        for (int q = 0; q < T_enc; ++q) {
+            const int q_chunk = (chunk_size > 0) ? (q / chunk_size) : 0;
+            const int k_min_chunk =
+                (q_chunk - left_chunks > 0) ? (q_chunk - left_chunks) : 0;
+            const int k_min = k_min_chunk * chunk_size;
+            const int k_max = (q_chunk + 1) * chunk_size; // exclusive
+            float * row = mask_buf.data() + static_cast<size_t>(q) * T_enc;
+            for (int k = 0; k < T_enc; ++k) {
+                row[k] = (k >= k_min && k < k_max)
+                    ? 0.0f
+                    : -std::numeric_limits<float>::infinity();
+            }
+        }
+
+        ggml_backend_tensor_set(eb.chunked_mask_in, mask_buf.data(),
+                                0, mask_buf.size() * sizeof(float));
+        transcribe::debug::dump_tensor(
+            "enc.attn.chunked_mask",
+            eb.chunked_mask_in,
+            "encoder.attn.chunked_mask");
     }
 
     // ----- Set thread count on all backends --------------------------

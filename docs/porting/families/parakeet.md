@@ -118,8 +118,8 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 | rnnt-0.6b | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-rnnt-0.6b/parakeet-rnnt-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
 | unified-en-0.6b | Transcribe (offline) | explicit en | `build/bin/transcribe-cli -m models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf --language en samples/jfk.wav` | English with PnC | PASS |
 | unified-en-0.6b | Streaming | streaming | n/a | n/a | `ACCEPTED GAP — streaming infra deferred to v2 port` |
-| nemotron-speech-streaming-en-0.6b | Transcribe (offline / cache-aware att_context_size=[70,13], 1.12s chunk) | explicit en | `build/bin/transcribe-cli -m models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript with PnC | TODO |
-| nemotron-speech-streaming-en-0.6b | Punctuation/casing | output | same as above | output contains capital letters and `,.?!` | TODO |
+| nemotron-speech-streaming-en-0.6b | Transcribe (offline / cache-aware att_context_size=[70,13], 1.12s chunk) | explicit en | `build/bin/transcribe-cli -m models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript with PnC | PASS |
+| nemotron-speech-streaming-en-0.6b | Punctuation/casing | output | same as above | output contains capital letters and `,.?!` | PASS |
 | nemotron-speech-streaming-en-0.6b | Streaming (cache reuse across chunks) | streaming | n/a | n/a | `ACCEPTED GAP — v1 port ships batch / one-shot only; streaming session API deferred to follow-up port pass` |
 | nemotron-speech-streaming-en-0.6b | Other latency settings ([70,0]/[70,1]/[70,6] = 80/160/560ms chunks) | runtime-selectable att_context_size | n/a | n/a | `ACCEPTED GAP — v1 ships 1.12s chunk only; other settings deferred until streaming lands` |
 | ctc-1.1b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |

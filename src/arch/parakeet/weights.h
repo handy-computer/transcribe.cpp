@@ -97,14 +97,49 @@ struct ParakeetHParams {
     // legacy GGUFs without this KV (v2/v3 etc.) keep working unchanged.
     bool    enc_xscaling          = false;
     // Local attention window. -1 / -1 = full attention (the default for
-    // every variant except parakeet-tdt_ctc-1.1b, which sets [128, 128]).
-    // When non-negative, each query attends only to keys within
-    // [q-left, q+right]; positions outside that band are masked to -inf
-    // before softmax. Drives both the pos_emb buffer length
-    // (left+right+1 instead of 2*T-1) and the band mask added in
-    // attention.
+    // most variants). When non-negative, each query attends only to keys
+    // within an [left, right]-bounded set whose exact semantics depend
+    // on enc_att_context_style below.
+    //
+    // The two styles in use today:
+    //
+    //   AttContextStyle::Regular         — every other variant. When
+    //     both left/right are >= 0 (parakeet-tdt_ctc-1.1b sets
+    //     [128, 128]), pos_emb is shortened to (left+right+1) and the
+    //     band mask sits in matrix_bd via the existing pad/slice path,
+    //     matching NeMo's LocalAttRelPositionalEncoding.
+    //
+    //   AttContextStyle::ChunkedLimited  — nemotron-speech-streaming-en-0.6b
+    //     ([70, 13]). Full RelPositionalEncoding (pos_emb stays at
+    //     2T-1); a separate chunked mask is built host-side and added
+    //     to matrix_bd. chunk_size = right+1, left_chunks = left/chunk_size.
     int32_t enc_att_context_left  = -1;
     int32_t enc_att_context_right = -1;
+
+    // Self-attention context style (introduced by streaming variants).
+    // Resolved from stt.parakeet.encoder.att_context_style (string KV);
+    // optional, defaults to "regular" so every legacy GGUF stays on the
+    // existing path.
+    enum class AttContextStyle { Regular, ChunkedLimited };
+    AttContextStyle enc_att_context_style = AttContextStyle::Regular;
+
+    // Depthwise convolution context window inside the Conformer block.
+    // -1 / -1 = symmetric (kernel-1)/2 on both sides (every offline
+    // variant). NeMo's `conv_context_size = "causal"` emits
+    // [kernel-1, 0] (nemotron-speech-streaming-en-0.6b uses kernel=9,
+    // so [8, 0]) so the depthwise conv only consumes left-context.
+    int32_t enc_conv_context_left  = -1;
+    int32_t enc_conv_context_right = -1;
+
+    // Conv-module normalisation choice. NeMo's offline default is
+    // BatchNorm; streaming variants use LayerNorm to avoid stat
+    // brittleness across chunks. With LayerNorm the GGUF carries the
+    // same `conv.bn.weight` / `conv.bn.bias` tensor names but omits
+    // running_mean / running_var, and the conformer applies an
+    // unfused LayerNorm (compute per-channel mean/std at inference,
+    // then affine-transform with bn_w / bn_b).
+    enum class ConvNormType { BatchNorm, LayerNorm };
+    ConvNormType enc_conv_norm_type = ConvNormType::BatchNorm;
 
     // Predictor (RNN-T prediction network). TDT and RNNT only; zero for CTC.
     int32_t pred_hidden   = 0;

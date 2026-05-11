@@ -129,9 +129,18 @@ struct BlockView {
     ggml_tensor * conv_dw_b           = nullptr; // [d_model], nullable
     ggml_tensor * conv_pw2_w          = nullptr; // [1, d_model, d_model]
     ggml_tensor * conv_pw2_b          = nullptr; // [d_model], nullable
-    // Fused BN (computed at load time from the raw BN params).
+    // Post-depthwise normalisation. Exactly one pair is populated per
+    // block, depending on BlockParams::conv_norm_type.
+    //   BatchNorm path: conv_bn_fused_scale / conv_bn_fused_bias
+    //                   (precomputed at load from raw BN weight/bias +
+    //                   running_mean/var). Offline Conformer variants.
+    //   LayerNorm path: conv_ln_w / conv_ln_b (raw LN scale/bias; the
+    //                   per-channel mean/std is computed at inference).
+    //                   Streaming variants (nemotron-speech-streaming).
     ggml_tensor * conv_bn_fused_scale = nullptr; // [d_model]
     ggml_tensor * conv_bn_fused_bias  = nullptr; // [d_model]
+    ggml_tensor * conv_ln_w           = nullptr; // [d_model]
+    ggml_tensor * conv_ln_b           = nullptr; // [d_model]
 
     // Macaron FF2.
     ggml_tensor * norm_ff2_w = nullptr;
@@ -186,6 +195,17 @@ struct ConvPolicy {
     bool direct_pw                = true;
     bool direct_dw_in_block       = false;
     bool direct_dw_in_pre_encode  = false;
+
+    // Causal pre_encode convolutions. NeMo's cache-aware streaming
+    // (`is_causal=true`) swaps every Conv2d in ConvSubsampling for
+    // CausalConv2D, which applies `F.pad(left=k-1, right=stride-1)` on
+    // both spatial axes before calling the underlying conv with p=0.
+    // For k=3 / s=2 that is (left=2, right=1) per axis — different
+    // total padding from the offline (k-1)/2 symmetric path, and
+    // shifts both the freq output dim (e.g. 128 → 65 → 33 → 17
+    // instead of 64 → 32 → 16) and the time output dim. False on every
+    // offline Parakeet variant; true on nemotron-speech-streaming-en.
+    bool causal_pre_encode        = false;
 };
 
 // Pointwise conv dispatch auto-detect. Identical policy across
@@ -211,14 +231,49 @@ struct BlockParams {
     ConvPolicy policy;
 
     // Local attention window. -1 / -1 = full attention (default).
-    // When both are non-negative, pos_emb is expected to have length
-    // (att_context_left + att_context_right + 1) and rel_pos_mhsa pads
-    // matrix_bd with -inf rows so positions outside the band become
-    // -inf in the attention scores after softmax. Matches NeMo's
-    // LocalAttRelPositionalEncoding exactly when T <= 2W+1, and
-    // remains correct (band-restricted) when T exceeds the window.
+    // Semantics depend on att_context_style below.
     int att_context_left  = -1;
     int att_context_right = -1;
+
+    // Self-attention context style.
+    //
+    //   Regular         — when both att_context_left/right are >= 0,
+    //     pos_emb is expected to have length (left+right+1) and
+    //     rel_pos_mhsa pads matrix_bd with -inf rows so positions
+    //     outside the band become -inf in the attention scores after
+    //     softmax. Matches NeMo's LocalAttRelPositionalEncoding when
+    //     T <= 2W+1 and remains correct (band-restricted) when T
+    //     exceeds the window. Default for every offline variant.
+    //
+    //   ChunkedLimited  — pos_emb stays at the full 2T-1 length and
+    //     the caller supplies a precomputed F16 mask of shape
+    //     [T_k, T_q, 1, 1] in `attn_chunked_mask` that
+    //     rel_pos_mhsa adds onto matrix_bd before flash_attn. Chunk
+    //     size = right+1, left_chunks = left/chunk_size; the mask is
+    //     0 inside the allowed [q_chunk - left_chunks, q_chunk] band
+    //     and -INF elsewhere. NeMo cache-aware streaming.
+    enum class AttContextStyle { Regular, ChunkedLimited };
+    AttContextStyle att_context_style = AttContextStyle::Regular;
+
+    // Optional precomputed mask for ChunkedLimited. The caller builds
+    // this as a graph input shape [T_k, T_q, 1, 1] F16 (broadcasts
+    // across heads) and uploads the host-computed pattern after the
+    // compute buffer is allocated. Ignored for AttContextStyle::Regular.
+    ggml_tensor * attn_chunked_mask = nullptr;
+
+    // Depthwise conv padding. -1 / -1 means "centred (k-1)/2" on both
+    // sides (every offline variant). Otherwise the depthwise conv
+    // uses (conv_context_left, conv_context_right) directly. NeMo's
+    // `conv_context_size = "causal"` emits (kernel-1, 0).
+    int conv_context_left  = -1;
+    int conv_context_right = -1;
+
+    // Conv-module normalisation choice. BatchNorm uses fused scale +
+    // bias precomputed at load time (BlockView::conv_bn_fused_*).
+    // LayerNorm computes per-channel mean/std at inference and uses
+    // BlockView::conv_ln_* as the affine scale/bias.
+    enum class ConvNormType { BatchNorm, LayerNorm };
+    ConvNormType conv_norm_type = ConvNormType::BatchNorm;
 };
 
 // ===========================================================================
@@ -310,31 +365,34 @@ ggml_tensor * add_conv_bias(ggml_context * ctx,
 // Sub-blocks (exposed for families that hand-build a block)
 // ===========================================================================
 
-// Convolution sub-block: pointwise -> GLU -> depthwise -> BN -> SiLU
-// -> pointwise. Operates on post-LayerNorm input; the LN is applied
-// by the caller.
-ggml_tensor * conv_module(ggml_context *    ctx,
-                          ggml_tensor *     x,
-                          const BlockView & b,
-                          int               conv_kernel,
-                          const ConvPolicy & policy);
+// Convolution sub-block: pointwise -> GLU -> depthwise -> BN/LN ->
+// SiLU -> pointwise. Operates on post-LayerNorm input; the LN is
+// applied by the caller. Reads BlockParams::conv_context_{left,right}
+// (depthwise padding) and BlockParams::conv_norm_type (BN vs LN).
+ggml_tensor * conv_module(ggml_context *      ctx,
+                          ggml_tensor *       x,
+                          const BlockView &   b,
+                          const BlockParams & params);
 
 // Relative-position multi-head self-attention. Flash attention when
 // use_flash is true; manual mul_mat + soft_max_ext + mul_mat fallback
-// otherwise. `att_context_left` / `att_context_right` enable local
-// attention: when both >= 0, pos_emb is expected to have length
-// (left + right + 1) and the helper pads matrix_bd with -inf rows so
-// keys outside the band drop out of softmax.
-ggml_tensor * rel_pos_mhsa(ggml_context *    ctx,
-                           ggml_tensor *     x,
-                           ggml_tensor *     pos_emb,
-                           const BlockView & b,
-                           int               d_model,
-                           int               n_head,
-                           ggml_type         kv_type,
-                           bool              use_flash,
-                           int               att_context_left  = -1,
-                           int               att_context_right = -1);
+// otherwise. Reads attention-context fields from BlockParams:
+//
+//   Regular        + att_context_{left,right} >= 0 -> local sliding
+//     window. pos_emb has length (left+right+1); helper pads matrix_bd
+//     with -inf rows so keys outside the band drop out of softmax.
+//
+//   ChunkedLimited                                  -> caller supplies
+//     a precomputed [T_k, T_q] F16 mask in BlockParams::attn_chunked_mask
+//     and pos_emb has full 2T-1 length. The mask is added onto
+//     matrix_bd before flash_attn / soft_max_ext.
+//
+// Otherwise (Regular + att_context_* == -1) -> unrestricted attention.
+ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
+                           ggml_tensor *       x,
+                           ggml_tensor *       pos_emb,
+                           const BlockView &   b,
+                           const BlockParams & params);
 
 // ===========================================================================
 // Top-level block + pre-encode
