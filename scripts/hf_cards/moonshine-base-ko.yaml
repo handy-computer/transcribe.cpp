@@ -1,0 +1,66 @@
+# Spec for the HF README of handy-computer/moonshine-base-ko-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: UsefulSensors/moonshine-base-ko
+target_repo: handy-computer/moonshine-base-ko-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine.md
+
+upstream_commit: fff6035
+pin_date: 2026-05-12
+
+validation:
+  reference: transformers
+  commit: 2b36344
+  date: 2026-05-12
+
+license: mit
+license_display: MIT
+pipeline_tag: automatic-speech-recognition
+languages:
+  - ko
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - moonshine
+  - useful-sensors
+  - encoder-decoder
+
+summary: |
+  UsefulSensors' Moonshine base fine-tuned on Korean. Same
+  encoder-decoder transformer architecture as moonshine-base (62M
+  parameters): consumes 16 kHz raw PCM via a three-layer Conv1d stem (no
+  STFT, no mel filterbank) and emits transcript-only output. Single-language
+  (ko); no translation, no language detection, no timestamps.
+
+default_quant_index: 2  # Q8_0
+
+metric: CER
+wer:
+  source: FLEURS ko test
+  notes: |
+    CER measured on the FLEURS-ko test split (382
+    utterances) using the transcribe.cpp default decode (greedy,
+    num_beams=1, max_length=192 — matching the upstream generation_config).
+
+    UsefulSensors does not publish a per-language CER number
+    for this variant. As a comparable baseline we ran the Transformers F32
+    reference (`MoonshineForConditionalGeneration`, fp32 on MPS) on the
+    same manifest: **8.19% CER**. The C++ F32/F16 numbers
+    above match the reference within bootstrap-CI noise; Q8_0 introduces
+    a small additional drift from F16 (typically within 0.1pp).
+
+quants:
+  - name: F32
+    filename: moonshine-base-ko-F32.gguf
+    size: 236 MB
+    wer: 8.00%
+  - name: F16
+    filename: moonshine-base-ko-F16.gguf
+    size: 126 MB
+    wer: 8.00%
+  - name: Q8_0
+    filename: moonshine-base-ko-Q8_0.gguf
+    size: 74 MB
+    wer: 8.13%

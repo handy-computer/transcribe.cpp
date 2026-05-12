@@ -36,7 +36,7 @@ on {{ validation.date }}.
 
 ## Downloads
 
-| Quantization | Download | Size | WER ({{ wer.source }}) |
+| Quantization | Download | Size | {{ metric|default("WER") }} ({{ wer.source }}) |
 | --- | --- | ---: | ---: |
 {%- for q in quants %}
 | {{ q.name }} | [{{ q.filename }}](https://huggingface.co/{{ target_repo }}/resolve/main/{{ q.filename }}) | {{ q.size }} | {{ q.wer }} |

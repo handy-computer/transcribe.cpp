@@ -1,0 +1,66 @@
+# Spec for the HF README of handy-computer/moonshine-tiny-vi-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: UsefulSensors/moonshine-tiny-vi
+target_repo: handy-computer/moonshine-tiny-vi-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/moonshine.md
+
+upstream_commit: d4d20da
+pin_date: 2026-05-12
+
+validation:
+  reference: transformers
+  commit: 2b36344
+  date: 2026-05-12
+
+license: mit
+license_display: MIT
+pipeline_tag: automatic-speech-recognition
+languages:
+  - vi
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - moonshine
+  - useful-sensors
+  - encoder-decoder
+
+summary: |
+  UsefulSensors' Moonshine tiny fine-tuned on Vietnamese. Same
+  encoder-decoder transformer architecture as moonshine-tiny (27M
+  parameters): consumes 16 kHz raw PCM via a three-layer Conv1d stem (no
+  STFT, no mel filterbank) and emits transcript-only output. Single-language
+  (vi); no translation, no language detection, no timestamps.
+
+default_quant_index: 2  # Q8_0
+
+metric: WER
+wer:
+  source: FLEURS vi test
+  notes: |
+    WER measured on the FLEURS-vi test split (857
+    utterances) using the transcribe.cpp default decode (greedy,
+    num_beams=1, max_length=192 — matching the upstream generation_config).
+
+    UsefulSensors does not publish a per-language WER number
+    for this variant. As a comparable baseline we ran the Transformers F32
+    reference (`MoonshineForConditionalGeneration`, fp32 on MPS) on the
+    same manifest: **13.18% WER**. The C++ F32/F16 numbers
+    above match the reference within bootstrap-CI noise; Q8_0 introduces
+    a small additional drift from F16 (typically within 0.1pp).
+
+quants:
+  - name: F32
+    filename: moonshine-tiny-vi-F32.gguf
+    size: 105 MB
+    wer: 13.16%
+  - name: F16
+    filename: moonshine-tiny-vi-F16.gguf
+    size: 57 MB
+    wer: 13.17%
+  - name: Q8_0
+    filename: moonshine-tiny-vi-Q8_0.gguf
+    size: 34 MB
+    wer: 13.16%

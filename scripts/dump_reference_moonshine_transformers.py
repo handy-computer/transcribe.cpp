@@ -577,7 +577,9 @@ def cmd_wer(args: argparse.Namespace) -> int:
     import time
 
     configure_torch(args)
+    t_load = time.monotonic()
     processor, model = load_reference(args)
+    load_ms = round((time.monotonic() - t_load) * 1000, 1)
     tokenizer = processor.tokenizer
 
     manifest_path = resolve_path(args.manifest)
@@ -589,16 +591,26 @@ def cmd_wer(args: argparse.Namespace) -> int:
 
     with manifest_path.open() as f:
         rows = [json.loads(line) for line in f if line.strip()]
+    if getattr(args, "limit", 0):
+        rows = rows[: args.limit]
     print(f"manifest: {manifest_path.name} entries={len(rows)}")
+    if args.language:
+        print(f"language: {args.language} (recorded in header; no effect on generation)")
 
     import torch  # noqa: F401  (used inside generate_transcript)
 
     t0 = time.monotonic()
     written = 0
+    header = {
+        "type": "batch_header",
+        "kind": "moonshine-transformers-native",
+        "model": resolve_model(args.model)[0],
+        "load_ms": load_ms,
+    }
+    if args.language:
+        header["language"] = args.language
     with out_path.open("w") as out:
-        out.write(json.dumps({"type": "batch_header",
-                              "kind": "moonshine-transformers-native",
-                              "model": resolve_model(args.model)[0]}) + "\n")
+        out.write(json.dumps(header) + "\n")
         for i, row in enumerate(rows):
             audio_path = Path(row["audio"])
             if not audio_path.is_absolute():
@@ -607,6 +619,7 @@ def cmd_wer(args: argparse.Namespace) -> int:
             if sr != 16000:
                 print(f"skipping {row['id']}: sr={sr}", file=sys.stderr)
                 continue
+            t_utt = time.monotonic()
             inputs = frontend_inputs(processor, pcm, sr, args.device)
             with torch.inference_mode():
                 generated_ids = model.generate(
@@ -619,19 +632,22 @@ def cmd_wer(args: argparse.Namespace) -> int:
             ids = generated_ids[0].detach().cpu().tolist()
             ids = [t for t in ids if t not in (eos, decoder_start)]
             hyp = tokenizer.decode(ids, skip_special_tokens=True).strip()
+            latency_ms = round((time.monotonic() - t_utt) * 1000, 1)
             out.write(json.dumps({
                 "id": row["id"],
                 "ref_text": row["ref_text"],
                 "hyp_text": hyp,
                 "mel_ms": 0,
                 "encode_ms": 0,
-                "decode_ms": 0,
-            }) + "\n")
+                "decode_ms": latency_ms,
+                "latency_ms": latency_ms,
+            }, ensure_ascii=False) + "\n")
             written += 1
             if (i + 1) % 50 == 0 or i == len(rows) - 1:
                 rate = (i + 1) / (time.monotonic() - t0)
                 eta = (len(rows) - i - 1) / rate if rate > 0 else 0
-                print(f"  [{i+1}/{len(rows)}] {rate:.1f} utt/s  ETA {eta:.0f}s")
+                print(f"  [{i+1}/{len(rows)}] {rate:.1f} utt/s  ETA {eta:.0f}s",
+                      flush=True)
 
     print(f"done. {written} utterances in {time.monotonic() - t0:.1f}s")
     print(f"report: {out_path}")
@@ -650,13 +666,17 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
         default=1,
         help="Torch intra-op threads for deterministic dumps (default: 1)",
     )
-    # validate.py threads --language through every dumper. Moonshine is
-    # English-only and ignores it, but accept the flag so the shared
-    # invocation does not fail with "unrecognized arguments".
+    # The Moonshine architecture has no language hint tokens, so this
+    # flag does not affect generation. It is recorded in the WER report
+    # header so scripts/wer/score.py can auto-route the metric
+    # (WER vs CER) and the text normalizer for sibling variants like
+    # moonshine-tiny-zh / moonshine-base-ko.
     p.add_argument(
         "--language",
         default=None,
-        help="Ignored — moonshine is English-only with no language tokens.",
+        help="BCP-47 code recorded in the report header for downstream "
+             "score.py routing. Has no effect on generation (Moonshine "
+             "has no language tokens). Required for non-English variants.",
     )
 
 
@@ -713,11 +733,17 @@ def main() -> int:
                     help="Input manifest.jsonl with id/audio/ref_text per row")
     wp.add_argument("--out", required=True,
                     help="Output JSONL (matches scripts/wer/run.py format)")
-    wp.add_argument("--device", default="cpu", help="Torch device (default: cpu)")
+    wp.add_argument("--device", default="cpu",
+                    help="Torch device (default: cpu; pass 'mps' on Apple)")
     wp.add_argument("--torch-threads", type=int, default=1,
                     help="Torch intra-op threads (default: 1)")
     wp.add_argument("--max-new-tokens", type=int, default=192,
                     help="Max generated tokens per utterance (default: 192)")
+    wp.add_argument("--language", default=None,
+                    help="BCP-47 code recorded in the report header for "
+                         "score.py auto-routing. No effect on generation.")
+    wp.add_argument("--limit", type=int, default=0,
+                    help="Process only the first N utterances (0 = all).")
     wp.set_defaults(func=cmd_wer)
 
     args = p.parse_args()
