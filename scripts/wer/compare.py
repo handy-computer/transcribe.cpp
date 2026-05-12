@@ -60,28 +60,41 @@ def main() -> int:
         print("error: no score files", file=sys.stderr)
         return 2
 
-    baseline_wer = scores[0][1]["wer_pct"]
+    # Score files now write `error_rate_pct` as the canonical metric
+    # field (WER or CER, depending on the language). Older files only
+    # have `wer_pct`; fall back to those for backward compat. The
+    # `metric` field labels the column header (defaults to WER).
+    def rate_pct(rec: dict) -> float:
+        return rec.get("error_rate_pct", rec.get("wer_pct", 0.0))
+
+    def rate_ci(rec: dict, side: str) -> float:
+        key_new = f"error_rate_ci_{side}"
+        key_old = f"wer_ci_{side}"
+        return rec.get(key_new, rec.get(key_old, 0.0)) * 100
+
+    baseline_rate = rate_pct(scores[0][1])
+    metric_label = scores[0][1].get("metric", "wer").upper()
 
     # Header.
-    print(f"\n{'variant':12} {'WER%':>7} {'delta':>7} "
+    print(f"\n{'variant':12} {metric_label+'%':>7} {'delta':>7} "
           f"{'CI low':>8} {'CI high':>8} "
           f"{'lat_p50':>8} {'N':>6}")
     print("-" * 65)
 
     for family, s in scores:
-        wer_pct = s["wer_pct"]
-        ci_lo   = s.get("wer_ci_lo", 0) * 100
-        ci_hi   = s.get("wer_ci_hi", 0) * 100
+        rate = rate_pct(s)
+        ci_lo = rate_ci(s, "lo")
+        ci_hi = rate_ci(s, "hi")
         lat_p50 = s.get("latency_p50_ms", 0)
         n       = s.get("n", 0)
 
         if family == scores[0][0]:
             delta_str = "—"
         else:
-            delta = wer_pct - baseline_wer
+            delta = rate - baseline_rate
             delta_str = f"{delta:+.2f}"
 
-        print(f"{family:12} {wer_pct:7.2f} {delta_str:>7} "
+        print(f"{family:12} {rate:7.2f} {delta_str:>7} "
               f"{ci_lo:8.2f} {ci_hi:8.2f} "
               f"{lat_p50:8.0f} {n:6}")
 
