@@ -1,0 +1,75 @@
+# Spec for the HF README of handy-computer/nemotron-speech-streaming-en-0.6b-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: nvidia/nemotron-speech-streaming-en-0.6b
+target_repo: handy-computer/nemotron-speech-streaming-en-0.6b-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/nemotron-speech-streaming-en-0.6b.md
+
+upstream_commit: ef3bf40
+pin_date: 2026-05-11
+
+# Validation pin for the most recent upload. Updated on each release;
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: NeMo
+  commit: 12f1076
+  date: 2026-05-11
+
+# Upstream is the NVIDIA Open Model License (not a standard SPDX id), so
+# the HF `license` field gets `other` and `license_name` / `license_link`
+# carry the actual identifier + URL into the YAML frontmatter (HF prefers
+# this when license=other). `license_display` is the human-facing form
+# rendered in the README body.
+license: other
+license_name: nvidia-open-model-license
+license_link: https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/
+license_display: NVIDIA Open Model License
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - rnnt
+  - streaming
+  - cache-aware
+
+summary: |
+  Offline English speech-to-text with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with an RNN-T transducer decoder. Runs in offline mode. The encoder preserves the upstream att_context_size=[70, 13] (1.12s) cache-aware attention mask end-to-end. transcribe.cpp does not yet expose a streaming session API.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean, offline
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with greedy RNN-T decoding. F32 reference baseline: 2.31%. NVIDIA's self-reported number on the same split at att_context_size=[70, 13] (1.12s chunk, w/o PnC) is 2.32%.
+
+quants:
+  - name: F32
+    filename: nemotron-speech-streaming-en-0.6b-F32.gguf
+    size: 2.30 GB
+    wer: 2.31%
+  - name: F16
+    filename: nemotron-speech-streaming-en-0.6b-F16.gguf
+    size: 1.16 GB
+    wer: 2.31%
+  - name: Q8_0
+    filename: nemotron-speech-streaming-en-0.6b-Q8_0.gguf
+    size: 696 MB
+    wer: 2.31%
+  - name: Q6_K
+    filename: nemotron-speech-streaming-en-0.6b-Q6_K.gguf
+    size: 573 MB
+    wer: 2.29%
+  - name: Q5_K_M
+    filename: nemotron-speech-streaming-en-0.6b-Q5_K_M.gguf
+    size: 514 MB
+    wer: 2.34%
+  - name: Q4_K_M
+    filename: nemotron-speech-streaming-en-0.6b-Q4_K_M.gguf
+    size: 453 MB
+    wer: 2.38%

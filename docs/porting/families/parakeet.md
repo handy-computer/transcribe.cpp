@@ -324,3 +324,79 @@ Per-variant decisions surfaced during Stage 3 (`porting-3-convert`).
   full attention) and a -INF row pad on `matrix_bd` before `rel_shift`,
   which moves out-of-band keys to -INF in the post-softmax scores.
   Math is exact for any T (including T > 2W+1).
+
+### `nemotron-speech-streaming-en-0.6b`
+
+The first cache-aware streaming variant in the family. Same 24-layer /
+d_model=1024 / n_mels=128 / RNNT-head geometry as `parakeet-unified-en-0.6b`,
+but trained with chunked attention + causal conv + LayerNorm rather than
+full attention + symmetric conv + BatchNorm. v1 transcribe.cpp targets
+offline transcription only; the streaming session API is deferred. The
+chunked-attention mask, causal conv, and LayerNorm conv module are all
+preserved at inference so the offline transcript reproduces NeMo's
+published 2.32% LibriSpeech test-clean WER at `att_context_size=[70,13]`
+(1.12s chunk, w/o PnC).
+
+- **`att_context_style="chunked_limited"`** — NeMo cache-aware streaming
+  uses a fundamentally different attention mask from `tdt_ctc-1.1b`'s
+  `LocalAttRelPositionalEncoding`. The pos_emb buffer stays at the full
+  `2T-1` length (the rel-pos bias is unchanged from offline parakeet),
+  but an additive `[T_k, T_q]` mask is layered on `matrix_bd` before
+  flash-attn: chunks of `right+1 = 14` frames each see the prior
+  `left/(right+1) = 5` chunks. The mask is built host-side in
+  `model.cpp` from the resolved `(left, right)` hparams and uploaded as
+  a graph input that broadcasts across heads. The C++ loader reads
+  `stt.parakeet.encoder.att_context_style` as optional (default
+  `"regular"`) so every other variant keeps its existing semantics.
+
+- **Causal `CausalConv2D` pre_encode + `conv_context_size="causal"`
+  depthwise** — `is_causal=true` on the upstream model swaps every conv
+  in `ConvSubsampling` for `CausalConv2D` (asymmetric `F.pad(left=k-1,
+  right=stride-1)` on both spatial axes; for k=3 / s=2 that's
+  `(left=2, right=1)`), shifting both the freq output (128 → 65 → 33 →
+  17, so `pre_encode.out` is `(4352, 1024)` instead of `(4096, 1024)`)
+  and the time output. Same flag also retunes the Conformer block's
+  depthwise conv from centred `(k-1)/2` padding to `[k-1, 0]` (= 8/0
+  for k=9). New optional GGUF KVs:
+  `stt.parakeet.encoder.conv_context_{left,right}` (defaults `-1, -1` =
+  symmetric centred). C++ loader synthesises asymmetric pre/right zero
+  pads via `ggml_concat` before `ggml_conv_2d_dw_direct` (which only
+  takes a single symmetric padding value per axis).
+
+- **`conv_norm_type="layer_norm"`** — the Conformer block's post-depthwise
+  norm is LayerNorm rather than BatchNorm. NeMo keeps the Python
+  attribute named `batch_norm` even when the module is swapped, so the
+  GGUF carries the affine scale/bias under `enc.blocks.<i>.conv.bn.weight`
+  / `…bn.bias` for both variants — the converter only omits
+  `running_mean` / `running_var` when `conv_norm_type="layer_norm"`. The
+  loader reads `stt.parakeet.encoder.conv_norm_type` as optional
+  (default `"batch_norm"`), skips the load-time BN fusion when LN, and
+  the conformer block applies an unfused per-channel mean/std normalise
+  + affine instead of the fused mul+add.
+
+- **`fe_normalize="none"`** — NeMo's `preprocessor.normalize` is `"NA"`
+  on this model; `normalize_batch` falls through and emits raw log-mel.
+  Canonicalised to the schema enum `"none"` by
+  `gguf_common.canonicalize_normalize`. The C++ mel frontend gained a
+  new `none` branch that emits raw log-mel and applies NeMo's
+  seq_len-based masking (frames `>= n_samples / hop_length` zeroed to
+  match `FilterbankFeatures.forward`'s post-normalize mask). Loader
+  accepts `"per_feature"` and `"none"`.
+
+- **Stage 4 numerical regime / drift profile** — finalised tolerances
+  live in `tests/tolerances/nemotron-speech-streaming-en-0.6b.json`
+  (per-variant scope, *not* folded into the family file, so the looser
+  unnormalised-log-mel magnitudes don't widen sibling budgets). Drift
+  is concentrated on the first / last 1-2 frames of pre_encode + early
+  block outputs (CausalConv2D edge accumulation + reflect-pad STFT
+  summation-order differences); centre frames match below 1e-3 across
+  every layer, and the encoder's output norm + final LayerNorm collapse
+  the boundary noise back to typical 24-layer fp32 noise (max_abs ~4e-3
+  at `enc.final`).
+
+- **WER reproducibility** — F32 C++ scores **2.31%** on the full 2620-
+  utterance LibriSpeech test-clean (same whisper-normalizer used
+  upstream), under the upstream-reported 2.32%. F16 / Q8_0 / Q6_K stay
+  within ±0.02; Q5_K_M / Q4_K_M drift to 2.34% / 2.38% (still within
+  the bootstrap CI overlap with F32 but flagged per the Stage 7
+  "> ref + 0.01" rule).

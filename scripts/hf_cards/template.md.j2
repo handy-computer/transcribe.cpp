@@ -1,5 +1,11 @@
 ---
 license: {{ license }}
+{%- if license_name is defined %}
+license_name: {{ license_name }}
+{%- endif %}
+{%- if license_link is defined %}
+license_link: {{ license_link }}
+{%- endif %}
 base_model: {{ hf_repo }}
 base_model_relation: quantized
 library_name: transcribe.cpp
@@ -14,7 +20,7 @@ tags:
 {%- endfor %}
 ---
 
-# {{ hf_repo.split('/')[-1] }} — transcribe.cpp GGUF
+# {{ hf_repo.split('/')[-1] }}: transcribe.cpp GGUF
 
 GGUF conversions of [{{ hf_repo }}](https://huggingface.co/{{ hf_repo }}) for use
 with [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp).
