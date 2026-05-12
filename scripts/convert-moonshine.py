@@ -85,7 +85,9 @@ KV emitted:
     general.basename     = "moonshine"
     general.size_label   = derived from total params
     general.file_type    = ALL_F32
-    general.languages    = ["en"]
+    general.languages    = inferred from slug suffix (see _infer_languages),
+                           e.g. moonshine-tiny-vi → ["vi"], moonshine-tiny → ["en"].
+                           Override with --language.
 
     stt.variant = <slug>                    (e.g. "moonshine-tiny")
 
@@ -447,7 +449,35 @@ def compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+_KNOWN_SIZE_SUFFIXES = {"tiny", "base", "small", "medium", "large"}
+
+
+def _infer_languages(variant: str) -> list[str]:
+    """Derive general.languages from the variant slug.
+
+    UsefulSensors's published variants follow `moonshine[-streaming]-<size>[-<lang>]`:
+        moonshine-tiny             → ["en"]   (no language suffix)
+        moonshine-base             → ["en"]
+        moonshine-streaming-tiny   → ["en"]
+        moonshine-tiny-vi          → ["vi"]
+        moonshine-base-zh          → ["zh"]
+
+    A trailing token shorter than four characters that is not a known size
+    keyword is treated as a BCP-47 language code. Anything else defaults
+    to English. Callers can override via --language for variants whose
+    slug doesn't fit this convention.
+    """
+    parts = variant.lower().split("-")
+    if not parts:
+        return ["en"]
+    tail = parts[-1]
+    if tail in _KNOWN_SIZE_SUFFIXES or not tail.isalpha() or len(tail) > 3:
+        return ["en"]
+    return [tail]
+
+
+def convert(model_dir: Path, out_path: Path, variant: str,
+            languages: list[str] | None = None) -> None:
     config_path     = model_dir / "config.json"
     gen_config_path = model_dir / "generation_config.json"
     preproc_path    = model_dir / "preprocessor_config.json"
@@ -460,6 +490,10 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     REFERENCE_DTYPE_LABEL, REFERENCE_FILE_TYPE, REFERENCE_GGML_TYPE = \
         detect_reference_dtype(safetensors_path)
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
+
+    if languages is None:
+        languages = _infer_languages(variant)
+    print(f"Languages: {languages}")
 
     with config_path.open() as f:
         config = json.load(f)
@@ -507,7 +541,7 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer.add_string("general.basename",   "moonshine")
         writer.add_string("general.size_label", size_label)
         writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-        writer.add_array("general.languages",   ["en"])
+        writer.add_array("general.languages",   languages)
 
         # ---- stt.variant ----
         writer.add_string("stt.variant", variant)
@@ -724,6 +758,11 @@ def main(argv: list[str]) -> int:
                         "download to. Recommended for reproducibility.")
     p.add_argument("--variant", type=str, default=None,
                    help="stt.variant string (default: derived from slug)")
+    p.add_argument("--language", action="append", default=None,
+                   help="BCP-47 code(s) to write into general.languages. "
+                        "Repeat for multiple. Default: inferred from the "
+                        "variant slug (e.g. moonshine-tiny-vi → ['vi']; "
+                        "moonshine-tiny → ['en']).")
     args = p.parse_args(argv[1:])
 
     if _looks_like_repo_id(args.model):
@@ -765,7 +804,7 @@ def main(argv: list[str]) -> int:
                     break
             variant = stripped
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, languages=args.language)
     return 0
 
 

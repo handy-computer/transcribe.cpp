@@ -464,21 +464,38 @@ int main(int argc, char ** argv) {
                 ++n_fail;
             }
 
-            // Output.
+            // Output. When run_st != OK we still emit a JSON line so
+            // batch consumers see one record per input wav, but we tag
+            // it with the error string. Without this the wav-load error
+            // path (above) reports errors but transcribe_run failures
+            // (e.g. unsupported language) produce empty hyp_text with no
+            // error tag, so downstream tools count them as silent
+            // successes.
             if (args.batch_jsonl) {
                 struct transcribe_timings tm = transcribe_get_timings(ctx);
                 const std::string escaped  = json_escape(text);
                 const std::string segments = segments_json(ctx);
+                std::string err_field;
+                if (run_st != TRANSCRIBE_OK) {
+                    err_field = ",\"error\":\"";
+                    err_field += json_escape(transcribe_status_string(run_st));
+                    err_field += "\"";
+                }
                 std::printf("{\"file\":\"%s\",\"text\":\"%s\"%s,"
                             "\"mel_ms\":%.1f,\"encode_ms\":%.1f,"
-                            "\"decode_ms\":%.1f}\n",
+                            "\"decode_ms\":%.1f%s}\n",
                             wav.c_str(), escaped.c_str(),
                             segments.c_str(),
                             (double)tm.mel_ms, (double)tm.encode_ms,
-                            (double)tm.decode_ms);
+                            (double)tm.decode_ms,
+                            err_field.c_str());
             } else {
-                std::printf("[%zu/%zu] %s\n", i + 1, wav_paths.size(), wav.c_str());
-                std::printf("  text: %s\n", text);
+                std::printf("[%zu/%zu] %s", i + 1, wav_paths.size(), wav.c_str());
+                if (run_st != TRANSCRIBE_OK) {
+                    std::printf("  ERROR: %s\n", transcribe_status_string(run_st));
+                } else {
+                    std::printf("\n  text: %s\n", text);
+                }
             }
             std::fflush(stdout);
         }
@@ -582,6 +599,11 @@ int main(int argc, char ** argv) {
         if (run_st == TRANSCRIBE_OK) {
             const char * text = transcribe_full_text(ctx);
             std::printf("text: %s\n", (text && *text) ? text : "(empty)");
+
+            const char * dl = transcribe_detected_language(ctx);
+            if (dl && *dl) {
+                std::printf("detected-language: %s\n", dl);
+            }
 
             const transcribe_timestamp_kind ret_kind =
                 transcribe_returned_timestamp_kind(ctx);

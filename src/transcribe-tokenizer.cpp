@@ -136,10 +136,35 @@ namespace {
 
 // SentencePiece-convention decode: replace U+2581 with ASCII space
 // byte-for-byte. Common path for "unigram" / "bpe".
+//
+// Also handles SentencePiece byte-fallback tokens of the form "<0xHH>"
+// (six characters: '<', '0', 'x', two hex digits, '>'). When the source
+// vocabulary doesn't contain a glyph, SentencePiece emits one byte token
+// per UTF-8 byte and the detokenizer reassembles them. English-only
+// models never hit this path (ASCII is always in-vocab); non-English
+// variants of the same architecture do, on every character that needs
+// it (Vietnamese diacritics, all CJK, Cyrillic outside the base set,
+// etc.). Without this reassembly the model output contains literal
+// "<0xE1><0xBB><0x95>" instead of the intended Unicode character.
 std::string decode_sentencepiece(const std::vector<std::string> & tokens,
                                  const int *                       ids,
                                  int                               n)
 {
+    auto hex_nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+        if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+        return -1;
+    };
+    auto try_byte_fallback = [&](const std::string & p) -> int {
+        if (p.size() != 6) return -1;
+        if (p[0] != '<' || p[1] != '0' || p[2] != 'x' || p[5] != '>') return -1;
+        const int hi = hex_nibble(p[3]);
+        const int lo = hex_nibble(p[4]);
+        if (hi < 0 || lo < 0) return -1;
+        return (hi << 4) | lo;
+    };
+
     std::string out;
     out.reserve(static_cast<size_t>(n) * 4);
     for (int i = 0; i < n; ++i) {
@@ -148,6 +173,11 @@ std::string decode_sentencepiece(const std::vector<std::string> & tokens,
             continue;
         }
         const std::string & p = tokens[static_cast<size_t>(id)];
+        const int byte = try_byte_fallback(p);
+        if (byte >= 0) {
+            out.push_back(static_cast<char>(byte));
+            continue;
+        }
         size_t j = 0;
         while (j < p.size()) {
             if (j + k_sp_space_len <= p.size() &&

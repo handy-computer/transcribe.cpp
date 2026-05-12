@@ -750,6 +750,13 @@ extern "C" const char * transcribe_full_text(const struct transcribe_context * c
     return ctx->full_text.c_str();
 }
 
+extern "C" const char * transcribe_detected_language(const struct transcribe_context * ctx) {
+    if (ctx == nullptr || !ctx->has_result) {
+        return "";
+    }
+    return ctx->detected_language.c_str();
+}
+
 extern "C" transcribe_timestamp_kind
 transcribe_returned_timestamp_kind(const struct transcribe_context * ctx) {
     if (ctx == nullptr || !ctx->has_result) {

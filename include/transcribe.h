@@ -945,6 +945,24 @@ TRANSCRIBE_API int                        transcribe_n_segments(const struct tra
 TRANSCRIBE_API int                        transcribe_n_words(const struct transcribe_context * ctx);
 TRANSCRIBE_API int                        transcribe_n_tokens(const struct transcribe_context * ctx);
 
+/*
+ * The language the model itself predicted on the most recent run, as a
+ * short ISO code ("en", "zh", "yue", "ja", "ko", ...). Returns an empty
+ * string when:
+ *   - no successful run has happened on this context yet, or
+ *   - the caller passed an explicit `params->language` hint (the
+ *     library does not echo hints back through this field; callers
+ *     already know what they asked for), or
+ *   - the model does not support language detection (English-only
+ *     Whispers, families without an LID head), or
+ *   - the family's LID head produced a non-language sentinel for this
+ *     audio (e.g. SenseVoice's <|nospeech|>).
+ *
+ * Returned pointer is owned by the context and remains valid until the
+ * next transcribe_run() or transcribe_context_free() call.
+ */
+TRANSCRIBE_API const char *               transcribe_detected_language(const struct transcribe_context * ctx);
+
 /* ----------------------------------------------------------------------- */
 /* Result accessors - segment level                                        */
 /* ----------------------------------------------------------------------- */

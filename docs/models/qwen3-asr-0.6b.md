@@ -36,6 +36,12 @@ WER measured on LibriSpeech `test-clean` (2620 utterances), Whisper-style
 English text normalizer, jiwer 3.x, metal backend on Apple M4. Reproduce
 with `scripts/wer/run.py` + `scripts/wer/score.py`.
 
+**FLEURS-zh** (945 utterances) CER: 7.6% on the upstream `qwen_asr`
+reference, 7.64% on the Q8_0 port (95% CI [6.74%, 8.51%]); within
+bootstrap noise. Reproduce with
+`uv run scripts/wer/run.py --model … --dataset fleurs:zh`; reference run
+via `uv run --project scripts/envs/qwen3_asr scripts/wer/run_reference_qwen3_asr_author.py`.
+
 ## Quick Start
 
 ```bash

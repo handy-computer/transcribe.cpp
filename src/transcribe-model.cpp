@@ -27,6 +27,7 @@ void transcribe_context::clear_result() {
     words.clear();
     segments.clear();
     full_text.clear();
+    detected_language.clear();
     result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     has_result  = false;
 }
