@@ -1096,6 +1096,31 @@ transcribe_status run(
     // find() returns npos and transcript_text stays as raw_text.
     std::string transcript_text = raw_text;
     if (auto sep = raw_text.find("<asr_text>"); sep != std::string::npos) {
+        // Auto-detect path: the prefix carries the language name the
+        // model picked. Surface it as detected_language (reverse-map
+        // the human-readable name to its BCP-47 code via the same
+        // table encode_language_prefix uses), but only when the caller
+        // did NOT supply a hint — the public field's contract is "what
+        // the model told us," not "what we told the model."
+        if (lang_prefix_ptr == nullptr) {
+            constexpr const char k_prefix[] = "language ";
+            const size_t name_start = raw_text.find(k_prefix);
+            if (name_start != std::string::npos && name_start < sep) {
+                const size_t ns = name_start + (sizeof(k_prefix) - 1);
+                std::string name = raw_text.substr(ns, sep - ns);
+                while (!name.empty() && (name.back() == ' ' ||
+                       name.back() == '\t' || name.back() == '\n'))
+                {
+                    name.pop_back();
+                }
+                for (const auto & e : k_qwen3_asr_language_names) {
+                    if (name == e.pub_name) {
+                        cc->detected_language = e.bcp47;
+                        break;
+                    }
+                }
+            }
+        }
         transcript_text = raw_text.substr(sep + std::strlen("<asr_text>"));
     }
 

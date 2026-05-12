@@ -1558,14 +1558,26 @@ transcribe_status whisper_run(
                                     0, row_bytes);
 
             float best = -INFINITY;
-            for (int32_t id : cm->lang_token_ids) {
+            int best_index = -1;
+            for (size_t i = 0; i < cm->lang_token_ids.size(); ++i) {
+                const int32_t id = cm->lang_token_ids[i];
                 if (id >= 0 && id < static_cast<int>(vocab_size)) {
                     const float v = last_logits[static_cast<size_t>(id)];
                     if (v > best) {
                         best = v;
                         lang_token = id;
+                        best_index = static_cast<int>(i);
                     }
                 }
+            }
+            // Publish the detected ISO code only here, not in the
+            // user-hint branch above: this field's contract is "what the
+            // model told us when we asked it to pick," not "what the
+            // caller already knew."
+            if (best_index >= 0 &&
+                static_cast<size_t>(best_index) < cm->lang_codes.size())
+            {
+                cc->detected_language = cm->lang_codes[static_cast<size_t>(best_index)];
             }
         }
         if (is_multilingual && lang_token < 0) {

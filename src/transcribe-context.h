@@ -92,6 +92,13 @@ struct transcribe_context {
     std::vector<WordEntry>       words;
     std::vector<SegmentEntry>    segments;
     std::string                  full_text;
+    // ISO short code the model itself predicted on this run, populated
+    // only when the caller did NOT pass a language hint (auto/null) and
+    // the family actually ran a detection step. Empty string means
+    // "unknown" — either no detection ran (English-only model, user
+    // supplied a hint, family doesn't support LID) or detection produced
+    // a non-language sentinel (e.g. SenseVoice's <|nospeech|>).
+    std::string                  detected_language;
     transcribe_timestamp_kind    result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     bool                         has_result  = false;
 

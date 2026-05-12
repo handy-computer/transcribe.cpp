@@ -460,6 +460,33 @@ transcribe_status run(
     if (!cc->token_ids.empty()) {
         const transcribe::Tokenizer & tok = cm->tok;
 
+        // Detected language: SenseVoice's CTC head emits the resolved
+        // <|lang|> tag as the first non-blank token when the encoder
+        // received the <|auto|> prefix. Only surface it when the caller
+        // did NOT pass an explicit hint — the public field's contract
+        // is "what the model told us," not "what we told the model."
+        // <|nospeech|> and <|auto|> are intentionally not surfaced.
+        const bool user_supplied_lang =
+            lang != nullptr && lang[0] != '\0' &&
+            std::strcmp(lang, "auto") != 0;
+        if (!user_supplied_lang) {
+            const int first_id = cc->token_ids.front();
+            if (tok.is_control(first_id)) {
+                std::string s = tok.decode(&first_id, 1);
+                if (!s.empty() && s.front() == ' ') s.erase(s.begin());
+                if (s.size() >= 5 && s.front() == '<' && s.back() == '>' &&
+                    s[1] == '|' && s[s.size() - 2] == '|')
+                {
+                    const std::string code = s.substr(2, s.size() - 4);
+                    if (code == "zh" || code == "en" || code == "yue" ||
+                        code == "ja" || code == "ko")
+                    {
+                        cc->detected_language = code;
+                    }
+                }
+            }
+        }
+
         // Per-token text fragments (for the public token table). These
         // ALWAYS carry the raw piece — the per-token accessors expose
         // the unfiltered token stream so library callers can observe

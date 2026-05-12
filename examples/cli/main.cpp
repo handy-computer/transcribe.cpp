@@ -600,6 +600,11 @@ int main(int argc, char ** argv) {
             const char * text = transcribe_full_text(ctx);
             std::printf("text: %s\n", (text && *text) ? text : "(empty)");
 
+            const char * dl = transcribe_detected_language(ctx);
+            if (dl && *dl) {
+                std::printf("detected-language: %s\n", dl);
+            }
+
             const transcribe_timestamp_kind ret_kind =
                 transcribe_returned_timestamp_kind(ctx);
             const int n_seg = transcribe_n_segments(ctx);
