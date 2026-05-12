@@ -46,7 +46,11 @@ visible regression (+0.32 pp); F16 / Q8_0 / Q6_K / Q5_K_M are within
 bootstrap noise of F32.
 
 LibriSpeech is an English benchmark; SenseVoice's strongest case is
-Mandarin.
+Mandarin. **FLEURS-zh** (945 utterances) CER: 10.20% on our FunASR 1.3.1
+reference run, 10.11% on the Q8_0 port (95% CI [9.18%, 11.02%]); within
+bootstrap noise. Reproduce with
+`uv run scripts/wer/run.py --model … --dataset fleurs:zh`; reference run
+via `uv run --project scripts/envs/sensevoice scripts/wer/run_reference_sensevoice.py`.
 
 ## Quick Start
 

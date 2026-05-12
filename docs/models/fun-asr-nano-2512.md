@@ -47,7 +47,11 @@ port matches that baseline within -0.01 percentage-points; F16/Q8_0/Q6_K
 are numerically indistinguishable.
 
 LibriSpeech is an English benchmark; Fun-ASR-Nano's strongest case is
-Mandarin.
+Mandarin. **FLEURS-zh** (945 utterances) CER: 8.61% on our FunASR 1.3.1
+reference run, 8.59% on the Q8_0 port (95% CI [7.70%, 9.43%]); within
+bootstrap noise. Reproduce with
+`uv run scripts/wer/run.py --model … --dataset fleurs:zh`; reference run
+via `uv run --project scripts/envs/funasr_nano scripts/wer/run_reference_funasr_nano.py`.
 
 ## Quick Start
 
