@@ -53,20 +53,11 @@ WER progress:
 
 ### Step 1: Acceptance manifest (execute or ask-point)
 
-**Read the acceptance target from intake first.** The skill does not
-decide which dataset to score against — the intake does, via
-`upstream_benchmarks[0].{dataset, metric, score, score_unit}`. Normalize
-to a slug: lowercase, spaces → hyphens. `"LibriSpeech test-clean"` →
-`librispeech-test-clean`. Use that `<dataset>` slug in every subsequent
-path.
+Read the acceptance target from `upstream_benchmarks[0].{dataset, metric, score, score_unit}`. Slugify: lowercase, spaces → hyphens. `"LibriSpeech test-clean"` → `librispeech-test-clean`. Resolve to `$MANIFEST`; every later step uses `$MANIFEST`, never a reconstructed path. Confirm `metric` is `wer` or `cer`; anything else is out of scope.
 
-Resolve the path to a shell variable `MANIFEST` — every later step uses
-`$MANIFEST`, never a reconstructed path.
+`scripts/wer/ingest.py` is a subcommand dispatcher. Today: `librispeech` (auto-downloads from OpenSLR) and `fleurs` (per-language test split from `google/fleurs`). Adding a source means adding a subparser + adapter inside the same file, not a new script. If the intake's dataset isn't covered, extend `ingest.py` before running this step.
 
-**Case A: LibriSpeech test-clean.** Canonical is
-`samples/wer/librispeech-test-clean.manifest.jsonl`; accept
-`samples/wer/test-clean.manifest.jsonl` as a historical fallback (ingest's
-default output):
+**LibriSpeech.** Output is `samples/wer/librispeech-<split>.manifest.jsonl`; accept the legacy unprefixed `test-clean.manifest.jsonl` as a fallback:
 
 ```bash
 if   [ -f samples/wer/librispeech-test-clean.manifest.jsonl ]; then
@@ -74,24 +65,20 @@ if   [ -f samples/wer/librispeech-test-clean.manifest.jsonl ]; then
 elif [ -f samples/wer/test-clean.manifest.jsonl ]; then
     MANIFEST=samples/wer/test-clean.manifest.jsonl
 else
-    uv run scripts/wer/ingest.py --manifest samples/wer/librispeech-test-clean.manifest.jsonl
+    uv run scripts/wer/ingest.py librispeech
     MANIFEST=samples/wer/librispeech-test-clean.manifest.jsonl
 fi
 ```
 
-`ingest.py` needs the extracted LibriSpeech test-clean split at
-`samples/wer/raw/LibriSpeech/test-clean/`. Ask the user to place the
-archive there first; download is out of scope.
+**FLEURS.** BCP-47 short code maps to the FLEURS config inside `ingest.py`:
 
-**Case B: Any other dataset.** The skill does NOT assume LibriSpeech.
-Set `MANIFEST=samples/wer/<dataset>.manifest.jsonl` from the slugified
-intake name. If absent, ask the user to provide one or authorize an
-ingest adapter mirroring `scripts/wer/ingest.py`. Manifest shape:
-`{id, audio, ref_text}` per JSONL line. Do not silently fall back to
-LibriSpeech.
+```bash
+LANG=vi
+uv run scripts/wer/ingest.py fleurs --lang "$LANG"
+MANIFEST=samples/wer/fleurs-${LANG}.manifest.jsonl
+```
 
-Also confirm `upstream_benchmarks[0].metric == "wer"`. If the intake
-declared `cer`, `bleu`, or another metric, this skill does not apply.
+CER auto-routes for zh / yue / ja / ko / th via the manifest's `language` field. The score JSON populates `error_rate_pct` as the canonical metric; WER reports keep `wer_pct` aliases for backward compat.
 
 ### Step 2: Score the reference-dtype model (execute)
 
