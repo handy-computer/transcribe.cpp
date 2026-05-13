@@ -6,16 +6,16 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 
 | Family | Variants | Docs |
 | --- | --- | --- |
-| Parakeet | 10 variants: TDT, RNN-T, CTC, TDT+CTC (110M–1.1B) | [docs/porting/families/parakeet.md](docs/porting/families/parakeet.md) |
-| Canary | `canary-1b`, `canary-1b-v2`, `canary-1b-flash`, `canary-180m-flash` | [docs/porting/families/canary.md](docs/porting/families/canary.md) |
+| Parakeet | 10 variants: TDT, RNN-T, CTC, TDT+CTC (110M–1.1B) | [docs/models/parakeet.md](docs/models/parakeet.md) |
+| Canary | `canary-1b`, `canary-1b-v2`, `canary-1b-flash`, `canary-180m-flash` | [docs/models/canary.md](docs/models/canary.md) |
 | Whisper | 12 variants (`tiny` through `large-v3-turbo`, plus `.en` siblings) | [docs/models/whisper.md](docs/models/whisper.md) |
-| GigaAM | `gigaam-v3-{e2e-rnnt,e2e-ctc,rnnt,ctc}` | [docs/porting/families/gigaam.md](docs/porting/families/gigaam.md) |
+| GigaAM | `gigaam-v3-{e2e-rnnt,e2e-ctc,rnnt,ctc}` | [docs/models/gigaam.md](docs/models/gigaam.md) |
 | Moonshine | `moonshine-tiny`, `moonshine-base` | [docs/models/moonshine.md](docs/models/moonshine.md) |
 | Moonshine Streaming | `moonshine-streaming-{tiny,small,medium}` | [docs/models/moonshine-streaming.md](docs/models/moonshine-streaming.md) |
-| Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | [docs/porting/families/qwen3_asr.md](docs/porting/families/qwen3_asr.md) |
+| Qwen3-ASR | `qwen3-asr-0.6b`, `qwen3-asr-1.7b` | [docs/models/qwen3-asr.md](docs/models/qwen3-asr.md) |
 | Cohere Transcribe | `cohere-transcribe-03-2026` | [docs/models/cohere-transcribe-03-2026.md](docs/models/cohere-transcribe-03-2026.md) |
 | SenseVoice | `sensevoice-small` | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
-| FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/porting/families/funasr_nano.md](docs/porting/families/funasr_nano.md) |
+| FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
 | Nemotron Speech Streaming | `nemotron-speech-streaming-en-0.6b` | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
