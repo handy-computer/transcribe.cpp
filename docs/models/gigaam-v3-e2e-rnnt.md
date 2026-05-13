@@ -73,8 +73,30 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 ## Performance
 
-Bench reports are pending; this section will be filled in by Stage 6
-(`porting-6-bench`) once measurements land on reference machines.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup),
+with speedup over realtime in parentheses. Units: `ms` below 1 s, `s`
+above (2 decimal places).
+
+### Apple M4 Max
+
+| Backend | Sample     |         Q8_0 |       Q4_K_M |
+| ------- | ---------- | -----------: | -----------: |
+| Metal   | ru (4.5s)  |  51 ms (88×) |  51 ms (89×) |
+| CPU     | ru (4.5s)  | 177 ms (25×) | 172 ms (26×) |
+
+macOS 26.4.1, transcribe.cpp `ef55b52`.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models gigaam-v3-ctc,gigaam-v3-rnnt,gigaam-v3-e2e-ctc,gigaam-v3-e2e-rnnt \
+  --quants q8_0,q4_k_m \
+  --samples ru \
+  --backends metal,cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name gigaam-publication
+```
 
 ## Numerical Validation
 
