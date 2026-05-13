@@ -33,6 +33,8 @@ pretraining checkpoint) intentionally out of scope.
   encoder-output emission CLI, so `v3_ssl` has no user-observable
   capability here and is intentionally **out of scope** for this port.
 
+Canonical bench samples: `ru` (model is Russian-only; English `jfk`/`dots` would decode to garbage).
+
 ## References
 
 - Canonical reference: **author_repo_gigaam** — the [`gigaam`](https://github.com/salute-developers/GigaAM) PyPI package (MIT). Loader entrypoint: `gigaam.load_model("v3_e2e_rnnt")` (or `"v3_rnnt"`, `"v3_ctc"`, `"v3_e2e_ctc"`) → returns a `GigaAMASR` with `.transcribe(wav_file)` and `.transcribe_longform(wav_file)`.
