@@ -17,10 +17,10 @@ The encoder is shared across all four ported GigaAM-v3 variants but
 weights are per-variant fine-tuned (the encoder hidden state differs
 across heads). Variants in this family:
 
-- [`gigaam-v3-e2e-rnnt`](./gigaam-v3-e2e-rnnt.md) — RNN-T, cased+punctuated
-- [`gigaam-v3-e2e-ctc`](./gigaam-v3-e2e-ctc.md) — CTC, cased+punctuated
-- [`gigaam-v3-rnnt`](./gigaam-v3-rnnt.md) — RNN-T, lowercased no-punct
-- [`gigaam-v3-ctc`](./gigaam-v3-ctc.md) — CTC, lowercased no-punct
+- [`gigaam-v3-e2e-rnnt`](./gigaam-v3-e2e-rnnt.md): RNN-T, cased+punctuated
+- [`gigaam-v3-e2e-ctc`](./gigaam-v3-e2e-ctc.md): CTC, cased+punctuated
+- [`gigaam-v3-rnnt`](./gigaam-v3-rnnt.md): RNN-T, lowercased no-punct
+- [`gigaam-v3-ctc`](./gigaam-v3-ctc.md): CTC, lowercased no-punct
 
 See ai-sage's [model card](https://huggingface.co/ai-sage/GigaAM-v3)
 for training data, intended use, and upstream evaluation methodology.
@@ -46,7 +46,7 @@ greedy decoding and no external LM. F32 reference baseline: **8.08%**.
 Upstream (`gigaam` author package at `6e4b027c`) measured on the same
 manifest: **9.46%**. The 1.4 pp gap is the upstream package
 rejecting 5 long (>25 s) FLEURS utterances with
-`Too long wav file, use 'transcribe_longform' method.` — counted as
+`Too long wav file, use 'transcribe_longform' method.`, counted as
 100% deletion errors against upstream. On the 770-utterance subset both
 sides decode, C++ matches upstream **exactly** (`reports/wer/gigaam.fleurs-ru.summary.md`).
 

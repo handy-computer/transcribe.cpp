@@ -13,7 +13,7 @@ pin_date: 2026-05-12
 # ship empty README stubs); fetch the family card from main.
 upstream_card_commit: ec1dc1f
 
-# Validation pin for the most recent upload. Updated on each release —
+# Validation pin for the most recent upload. Updated on each release;
 # older HF revisions carry whatever value was current at their upload time.
 validation:
   reference: gigaam author package
@@ -43,7 +43,7 @@ default_quant_index: 2  # Q8_0
 wer:
   source: FLEURS ru
   notes: |
-    WER measured on the full FLEURS ru test split (775 utterances) with greedy decoding and no external LM. F32 reference baseline: 8.08%. Upstream `gigaam` author package measured on the same manifest: 9.46% — the 1.4 pp gap is upstream rejecting 5 long (>25 s) utterances with `Too long wav file, use 'transcribe_longform' method.` (counted as 100% deletion errors). On the 770-utt subset both sides decode, transcribe.cpp matches upstream exactly. ai-sage does not publish a FLEURS ru WER; this number is measured here.
+    WER measured on the full FLEURS ru test split (775 utterances) with greedy decoding and no external LM. F32 reference baseline: 8.08%. Upstream `gigaam` author package measured on the same manifest: 9.46%; the 1.4 pp gap is upstream rejecting 5 long (>25 s) utterances with `Too long wav file, use 'transcribe_longform' method.` (counted as 100% deletion errors). On the 770-utt subset both sides decode, transcribe.cpp matches upstream exactly. ai-sage does not publish a FLEURS ru WER; this number is measured here.
 
 quants:
   - name: F32
