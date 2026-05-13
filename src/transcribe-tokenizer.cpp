@@ -646,17 +646,28 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
     }
 
     // Accepted: "unigram"/"bpe" (SentencePiece flavors used by NeMo
-    // Parakeet and Cohere ASR) and "gpt2" (llama.cpp's tag for
-    // byte-level BPE, used by Qwen3-ASR and Whisper). Per-family
-    // encode/decode paths branch on model_. Recognized-but-unsupported
-    // strings surface as NOT_IMPLEMENTED so the caller can tell "the
-    // file is fine, the library is just not ready for this tokenizer"
-    // from "the file is broken."
-    if (model_ != "unigram" && model_ != "bpe" && model_ != "gpt2") {
+    // Parakeet and Cohere ASR), "gpt2" (llama.cpp's tag for
+    // byte-level BPE, used by Qwen3-ASR and Whisper), and "char"
+    // (charwise vocab where every id maps to its piece string verbatim;
+    // used by GigaAM's non-e2e variants). Per-family encode/decode
+    // paths branch on model_. Recognized-but-unsupported strings
+    // surface as NOT_IMPLEMENTED so the caller can tell "the file is
+    // fine, the library is just not ready for this tokenizer" from
+    // "the file is broken."
+    if (model_ != "unigram" && model_ != "bpe" && model_ != "gpt2" &&
+        model_ != "char")
+    {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
-    decode_mode_ = (model_ == "gpt2") ? DecodeMode::Gpt2ByteUnicode
-                                      : DecodeMode::SentencePiece;
+    if (model_ == "gpt2") {
+        decode_mode_ = DecodeMode::Gpt2ByteUnicode;
+    } else if (model_ == "char") {
+        // Charwise: piece strings are literal characters; concatenation
+        // is the entire decode. RawBytes mode does exactly that.
+        decode_mode_ = DecodeMode::RawBytes;
+    } else {
+        decode_mode_ = DecodeMode::SentencePiece;
+    }
 
     // Optional: pretokenizer flavor. Absent means "qwen2" (historical
     // default for the "gpt2" model tag on Qwen3-ASR GGUFs). Per-family

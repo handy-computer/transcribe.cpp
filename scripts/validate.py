@@ -168,18 +168,24 @@ def case_transcript_compare(manifest: dict[str, Any], case) -> str:
     return mode
 
 
-def find_gguf(repo: Path, family: str, slug: str | None = None) -> Path:
+def find_gguf(repo: Path, family: str, slug: str | None = None,
+              variant: str | None = None) -> Path:
     """Find a GGUF under models/.
 
     Discovery order:
-      1. If `slug` is provided (derived from the manifest's
+      1. If `variant` is provided and `models/<variant>/<variant>-<Q>.gguf`
+         exists, prefer it. This disambiguates families like gigaam where
+         multiple manifest variants share a single hf_repo (and therefore
+         a single hf-derived slug) but ship as separate per-variant GGUF
+         directories.
+      2. If `slug` is provided (derived from the manifest's
          source_model.hf_repo, e.g. "Qwen3-ASR-0.6B" from
          "Qwen/Qwen3-ASR-0.6B"), look for
          models/<slug>/<slug>-<QUANT>.gguf directly. This is the
          converter's output convention and is case-accurate — which
          matters for families whose HF slug does not case-fold to the
          family key (e.g. family="qwen3_asr", slug="Qwen3-ASR-0.6B").
-      2. Legacy fallback: scan models/*/ for any GGUF whose stem
+      3. Legacy fallback: scan models/*/ for any GGUF whose stem
          starts with `family`. Kept so older manifests (or manual
          layouts) still work.
 
@@ -193,17 +199,29 @@ def find_gguf(repo: Path, family: str, slug: str | None = None) -> Path:
 
     preferred_quants = ["BF16", "F32", "F16"]
 
-    # 1. Manifest-slug-driven lookup.
+    def lookup_in(name: str) -> Path | None:
+        variant_dir = model_root / name
+        if not variant_dir.is_dir():
+            return None
+        for quant in preferred_quants:
+            candidate = variant_dir / f"{name}-{quant}.gguf"
+            if candidate.exists():
+                return candidate
+        matches = sorted(variant_dir.glob(f"{name}-*.gguf"))
+        return matches[0] if matches else None
+
+    # 1. Manifest-variant-driven lookup (handles multi-variant families
+    # sharing a single hf_repo, e.g. gigaam).
+    if variant:
+        found = lookup_in(variant)
+        if found is not None:
+            return found
+
+    # 2. Manifest-slug-driven lookup.
     if slug:
-        variant_dir = model_root / slug
-        if variant_dir.is_dir():
-            for quant in preferred_quants:
-                candidate = variant_dir / f"{slug}-{quant}.gguf"
-                if candidate.exists():
-                    return candidate
-            matches = sorted(variant_dir.glob(f"{slug}-*.gguf"))
-            if matches:
-                return matches[0]
+        found = lookup_in(slug)
+        if found is not None:
+            return found
 
     # 2. Legacy family-prefix fallback.
     def for_family(paths: list[Path]) -> list[Path]:
@@ -376,7 +394,8 @@ def cmd_cpp(args: argparse.Namespace) -> int:
     variant = manifest["variant"]
     cli = find_cli(repo)
     slug = manifest_source_model(manifest).split("/", 1)[-1]
-    gguf = Path(args.gguf) if args.gguf else find_gguf(repo, args.family, slug)
+    gguf = Path(args.gguf) if args.gguf else find_gguf(
+        repo, args.family, slug, variant=variant)
 
     cases = manifest.get("cases", ["jfk"])
     for case in cases:
@@ -605,7 +624,8 @@ def cmd_mel(args: argparse.Namespace) -> int:
 
     cli = find_cli(repo)
     slug = manifest_source_model(manifest).split("/", 1)[-1]
-    gguf = Path(args.gguf) if getattr(args, "gguf", None) else find_gguf(repo, args.family, slug)
+    gguf = Path(args.gguf) if getattr(args, "gguf", None) else find_gguf(
+        repo, args.family, slug, variant=variant)
     compare_script = repo / "scripts" / "compare_tensors.py"
     cases = manifest.get("cases", ["jfk"])
     all_passed = True

@@ -76,6 +76,12 @@ add_library(transcribe
     arch/funasr_nano/encoder.cpp
     arch/funasr_nano/decoder.cpp
     arch/funasr_nano/adaptor.cpp
+    arch/gigaam/model.cpp
+    arch/gigaam/capabilities.cpp
+    arch/gigaam/weights.cpp
+    arch/gigaam/encoder.cpp
+    arch/gigaam/decoder.cpp
+    arch/gigaam/mel.cpp
 )
 
 target_include_directories(transcribe
