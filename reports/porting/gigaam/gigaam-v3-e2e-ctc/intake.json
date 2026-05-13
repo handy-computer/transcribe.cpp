@@ -1,0 +1,231 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "gigaam",
+  "hf_repo": "ai-sage/GigaAM-v3",
+  "hf_revision": "cec030b4c4f35d928e4a9044a3bdb29ebd499fac",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "Hydra-style config under cfg.model.cfg: same encoder + frontend as the other gigaam-v3 branches; head=CTCHead with feat_in=768, num_classes=257 (256 SentencePiece pieces + 1 blank). decoding=CTCGreedyDecoding with model_path=tokenizer.model. model_name=v3_e2e_ctc; model_class=ctc."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "Frontend declared inside config.json under cfg.model.cfg.preprocessor (n_mels=64, n_fft=320, hop=160, win=320, mel_scale=htk, mel_norm=null, center=false, SpecScaler log). Identical to all sibling branches."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "Author repo packages SentencePiece .model directly; no HF tokenizer_config.json."
+    },
+    "tokenizer_model": {
+      "kind": "hf_file",
+      "path": "tokenizer.model",
+      "status": "found",
+      "detail": "SentencePiece BPE model (240,941 bytes). num_classes=257 in config (256 vocab + 1 blank). Includes punctuation + Cyrillic casing tokens (e2e variant). DIFFERENT size and content from main/e2e_rnnt's 255 KB tokenizer.model — vocab budgets differ (e2e_rnnt=1024 pieces vs e2e_ctc=256 pieces). vocab_sha256 computed at Stage 2."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Not used; SentencePiece .model file is authoritative."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Decoding is CTC greedy; no HF generation_config."
+    },
+    "model_weights": {
+      "kind": "hf_file",
+      "path": "pytorch_model.bin",
+      "status": "found",
+      "detail": "PyTorch pickle, 442,405,251 bytes (~442 MB). ~110M params at float32. Smaller than e2e_rnnt (449 MB) because CTC head is a single linear projection (768 -> 257) vs RNN-T predictor+joint."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "Repo ships PyTorch pickle, not safetensors. Dtype inferred from author conventions (PyTorch float32)."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "status": "found",
+      "detail": "Single model card covers all 5 branches; e2e_ctc evaluated alongside ctc in evaluation.md."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/salute-developers/GigaAM (gigaam package: gigaam.load_model('v3_e2e_ctc')); modeling_gigaam.py on HF mirrors the same classes",
+      "status": "found",
+      "detail": "Author-first PyTorch implementation. License MIT. Same ConformerEncoder/CTCHead/FeatureExtractor classes as the e2e_rnnt variant; only the head wires differently."
+    }
+  },
+  "variants": [
+    {
+      "name": "gigaam-v3-e2e-ctc",
+      "memory_gb": 0.44,
+      "files": [
+        "config.json",
+        "modeling_gigaam.py",
+        "pytorch_model.bin",
+        "tokenizer.model"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-ctc"
+    ],
+    "key_fields": {
+      "model_type": "gigaam",
+      "model_class": "ctc",
+      "model_name": "v3_e2e_ctc",
+      "encoder.type": "ConformerEncoder",
+      "encoder.feat_in": 64,
+      "encoder.n_layers": 16,
+      "encoder.d_model": 768,
+      "encoder.n_heads": 16,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.self_attention_model": "rotary",
+      "encoder.pos_emb_max_len": 5000,
+      "encoder.subsampling": "conv1d",
+      "encoder.subs_kernel_size": 5,
+      "encoder.subsampling_factor": 4,
+      "encoder.conv_kernel_size": 5,
+      "encoder.conv_norm_type": "layer_norm",
+      "head.type": "CTCHead",
+      "head.feat_in": 768,
+      "head.num_classes": 257,
+      "decoding": "CTCGreedyDecoding",
+      "tokenizer.path": "tokenizer.model",
+      "tokenizer.vocab_size_plus_blank": 257
+    },
+    "varying_across_variants": [
+      "model_class",
+      "model_name",
+      "head.type",
+      "head.num_classes",
+      "tokenizer.model"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "pytorch_model.bin is 442 MB ≈ 110M params at F32. salute-developers/GigaAM PyTorch checkpoints are stored at F32 (author convention). Confirm at Stage 2 by inspecting state_dict dtypes.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "hop_length": 160,
+    "fft_size": 320,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": false,
+    "padding_mode": null,
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 256,
+    "special_tokens": {
+      "blank": 256
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["ru"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Open Datasets (aggregate)",
+      "language": "ru",
+      "metric": "wer",
+      "score": 3.0,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_CTC row from the model card WER table (5-domain summary). Same weights as e2e_ctc after stripping punctuation+casing for scoring."
+    },
+    {
+      "dataset": "Golos Farfield",
+      "language": "ru",
+      "metric": "wer",
+      "score": 4.5,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_CTC row from the model card WER table."
+    },
+    {
+      "dataset": "Natural Speech",
+      "language": "ru",
+      "metric": "wer",
+      "score": 7.8,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_CTC row from the model card WER table."
+    },
+    {
+      "dataset": "Callcenter",
+      "language": "ru",
+      "metric": "wer",
+      "score": 10.3,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_CTC row from the model card WER table."
+    },
+    {
+      "dataset": "Aggregate (11-set average)",
+      "language": "ru",
+      "metric": "wer",
+      "score": 9.1,
+      "score_unit": "percent",
+      "source": "https://github.com/salute-developers/GigaAM/blob/main/evaluation.md",
+      "notes": "V3_CTC macro-average WER over all 11 evaluation sets per evaluation.md."
+    }
+  ],
+  "reference_framework": "author_repo_gigaam",
+  "reference_rationale": "Same as the rest of the gigaam family: the `gigaam` PyPI package (https://github.com/salute-developers/GigaAM, MIT) is the canonical inference path. Load with `gigaam.load_model('v3_e2e_ctc')`. NeMo is NOT used. The HF `transformers` trust_remote_code path runs the same author code via modeling_gigaam.py.",
+  "architecture_pattern": "encoder-ctc",
+  "known_risks": [
+    "Encoder + frontend are expected IDENTICAL to gigaam-v3-e2e-rnnt (same Conformer dims, same FeatureExtractor config). Stage 3 must confirm encoder-tensor reuse before declaring shared GGUF tensors. Only the head differs.",
+    "CTCHead is a single `nn.Conv1d(768, num_classes=257, kernel_size=1)` followed by `log_softmax(-1)`. Blank id = num_classes - 1 = 256. CTCGreedyDecoding does argmax + collapse-repeats + filter-blanks; no LM, no beam search.",
+    "tokenizer.model is DIFFERENT from e2e_rnnt's: only 240,941 bytes (vs 255,026), 256 SP pieces (vs 1024). The e2e_ctc vocab is more compact because CTC needs a per-frame projection (smaller class count keeps softmax cheap) while e2e_rnnt's joint network is invoked per emission.",
+    "Rotary positional embeddings inside Conformer attention (self_attention_model=rotary, base=10000, max_len=5000) — same as e2e_rnnt; same element-ordering risk.",
+    "Conv1d subsampling (subsampling=conv1d, subs_kernel_size=5, factor=4, conv_norm_type=layer_norm) — same as e2e_rnnt.",
+    "Frontend SpecScaler log scaling, center=false, mel_scale=htk, mel_norm=null — same gotchas as e2e_rnnt.",
+    "e2e_ctc SentencePiece vocab embeds punctuation + Cyrillic casing inside its 256-piece budget. WER scoring must align: strip punct/case from both hypothesis and reference, or compare cased+punctuated.",
+    "Long-form (>25s) path is identical to other variants — transcribe_longform chains PyAnnote VAD. Out of scope for the C++ port at parity."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at Stage 2 after dumping the 256-piece SentencePiece vocab. Distinct from e2e_rnnt's 1024-piece vocab."
+    },
+    {
+      "field": "dtype.expected_f32_tensors",
+      "reason": "Filled at Stage 4 once we observe which norm/bias tensors must stay F32 for numerical match under non-F32 quant."
+    },
+    {
+      "field": "upstream_benchmarks.fleurs_ru",
+      "reason": "FLEURS ru WER is not published by upstream. Stage 7 will measure it ourselves by running `gigaam.load_model('v3_e2e_ctc').transcribe()` over `fleurs:ru` and use the measured number as the upstream anchor for the C++ ≤ upstream + 0.01pp gate."
+    }
+  ]
+}

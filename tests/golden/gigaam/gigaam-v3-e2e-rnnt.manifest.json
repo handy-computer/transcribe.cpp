@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "gigaam",
+  "variant": "gigaam-v3-e2e-rnnt",
+  "source_model": {
+    "hf_repo": "ai-sage/GigaAM-v3",
+    "hf_revision": "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}

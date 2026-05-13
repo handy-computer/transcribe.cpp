@@ -1,0 +1,239 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "gigaam",
+  "hf_repo": "ai-sage/GigaAM-v3",
+  "hf_revision": "c7f128b8accdd9624df905e5c2d7b7a48c27c0d8",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "Hydra-style config under cfg.model.cfg: same encoder + frontend as the other gigaam-v3 branches; head=RNNTHead with decoder.num_classes=34 and joint.num_classes=34 (33 chars + 1 blank). decoding=RNNTGreedyDecoding with INLINE character vocabulary (no tokenizer.model file). model_name=v3_rnnt; model_class=rnnt."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "Frontend declared inside config.json under cfg.model.cfg.preprocessor (n_mels=64, n_fft=320, hop=160, win=320, mel_scale=htk, mel_norm=null, center=false, SpecScaler log). Identical to all sibling branches."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "Charwise tokenizer; vocabulary is inline in config.json under cfg.model.cfg.decoding.vocabulary (33 strings: space + 32 lowercase Cyrillic letters а-я)."
+    },
+    "tokenizer_model": {
+      "kind": "hf_file",
+      "path": "tokenizer.model",
+      "status": "missing",
+      "detail": "Branch has NO tokenizer.model file — `Tokenizer.charwise=True` path. Vocab is the inline 33-entry list."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Not used."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Decoding is RNN-T greedy; no HF generation_config."
+    },
+    "model_weights": {
+      "kind": "hf_file",
+      "path": "pytorch_model.bin",
+      "status": "found",
+      "detail": "PyTorch pickle, 446,387,239 bytes (~446 MB). Smaller than e2e_rnnt's 449 MB because joint.num_classes=34 vs e2e_rnnt's 1025 (joint output projection is 320 -> 34 vs 320 -> 1025; predictor embedding is 34*320 vs 1025*320)."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "Repo ships PyTorch pickle, not safetensors."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "status": "found",
+      "detail": "Single model card covers all 5 branches; v3_rnnt = v3_e2e_rnnt after upstream's post-processing strips punctuation+casing — both score the same in evaluation.md."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/salute-developers/GigaAM (gigaam package: gigaam.load_model('v3_rnnt'))",
+      "status": "found",
+      "detail": "Author-first PyTorch implementation. License MIT. Same ConformerEncoder/RNNTHead/FeatureExtractor classes as e2e_rnnt; difference is num_classes (34 vs 1025) and Tokenizer.charwise path."
+    }
+  },
+  "variants": [
+    {
+      "name": "gigaam-v3-rnnt",
+      "memory_gb": 0.45,
+      "files": [
+        "config.json",
+        "modeling_gigaam.py",
+        "pytorch_model.bin"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-transducer"
+    ],
+    "key_fields": {
+      "model_type": "gigaam",
+      "model_class": "rnnt",
+      "model_name": "v3_rnnt",
+      "encoder.type": "ConformerEncoder",
+      "encoder.feat_in": 64,
+      "encoder.n_layers": 16,
+      "encoder.d_model": 768,
+      "encoder.n_heads": 16,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.self_attention_model": "rotary",
+      "encoder.pos_emb_max_len": 5000,
+      "encoder.subsampling": "conv1d",
+      "encoder.subs_kernel_size": 5,
+      "encoder.subsampling_factor": 4,
+      "encoder.conv_kernel_size": 5,
+      "encoder.conv_norm_type": "layer_norm",
+      "head.type": "RNNTHead",
+      "decoder.pred_hidden": 320,
+      "decoder.pred_rnn_layers": 1,
+      "decoder.num_classes": 34,
+      "joint.enc_hidden": 768,
+      "joint.pred_hidden": 320,
+      "joint.joint_hidden": 320,
+      "joint.num_classes": 34,
+      "decoding": "RNNTGreedyDecoding",
+      "tokenizer.kind": "charwise",
+      "tokenizer.vocab_size_plus_blank": 34,
+      "tokenizer.vocab_inline": "33 entries: space + 32 lowercase Cyrillic letters (а б в г д е ж з и й к л м н о п р с т у ф х ц ч ш щ ъ ы ь э ю я; no ё)"
+    },
+    "varying_across_variants": [
+      "model_class",
+      "model_name",
+      "head.type",
+      "head.num_classes",
+      "decoder.num_classes",
+      "joint.num_classes",
+      "tokenizer.kind",
+      "tokenizer.vocab_inline"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "pytorch_model.bin is 446 MB ≈ 111M params at F32. salute-developers/GigaAM PyTorch checkpoints are stored at F32.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "hop_length": 160,
+    "fft_size": 320,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": false,
+    "padding_mode": null,
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "other",
+    "vocab_size": 33,
+    "special_tokens": {
+      "blank": 33
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["ru"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Open Datasets (aggregate)",
+      "language": "ru",
+      "metric": "wer",
+      "score": 2.6,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_RNNT row from the model card 5-domain WER summary. Same architecture and weights structure as v3_rnnt branch (lowercased Russian, no punctuation)."
+    },
+    {
+      "dataset": "Golos Farfield",
+      "language": "ru",
+      "metric": "wer",
+      "score": 3.9,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_RNNT row from the model card."
+    },
+    {
+      "dataset": "Natural Speech",
+      "language": "ru",
+      "metric": "wer",
+      "score": 6.9,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_RNNT row from the model card."
+    },
+    {
+      "dataset": "Callcenter",
+      "language": "ru",
+      "metric": "wer",
+      "score": 9.5,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_RNNT row from the model card."
+    },
+    {
+      "dataset": "Aggregate (11-set average)",
+      "language": "ru",
+      "metric": "wer",
+      "score": 8.3,
+      "score_unit": "percent",
+      "source": "https://github.com/salute-developers/GigaAM/blob/main/evaluation.md",
+      "notes": "V3_RNNT macro-average WER over all 11 evaluation sets per evaluation.md."
+    }
+  ],
+  "reference_framework": "author_repo_gigaam",
+  "reference_rationale": "Same as the rest of the gigaam family: the `gigaam` PyPI package (MIT) is the canonical inference path. Load with `gigaam.load_model('v3_rnnt')`.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Encoder + frontend are expected IDENTICAL to gigaam-v3-e2e-rnnt. Stage 3 must confirm encoder-tensor reuse. Head differs only in num_classes (34 vs 1025).",
+    "Charwise tokenizer path: vocab is the inline 33-entry list inside config.json (`cfg.model.cfg.decoding.vocabulary`). NO tokenizer.model file. Detokenization is plain string join — `''.join(vocab[t] for t in tokens)`. Blank id = 33 = len(vocab). The convert script must read the inline vocab and emit it into the GGUF; the C++ loader must handle the charwise path distinctly from the SP path.",
+    "Vocabulary covers space + 32 lowercase Cyrillic letters (а б в г д е ж з и й к л м н о п р с т у ф х ц ч ш щ ъ ы ь э ю я). Note: NO `ё` — typical of Russian ASR vocabs that fold `ё` into `е`. NO English letters, NO digits, NO punctuation, NO casing. Model output is lowercased Russian only.",
+    "RNNTGreedyDecoding inner loop emits at most decoder_max_symbols steps per encoder frame; LSTM hidden state carries across frames. Same state-management risk as e2e_rnnt.",
+    "Rotary positional embeddings inside Conformer attention — same element-ordering risk as the other variants.",
+    "Conv1d subsampling, SpecScaler log scaling, center=false, mel_scale=htk, mel_norm=null — same gotchas as the sibling variants.",
+    "Stage 7 FLEURS ru gate: FLEURS references include casing + punctuation; v3_rnnt outputs lowercased no-punct Russian. WER scorer must strip punctuation, lowercase, and fold `ё→е` on the reference side to match the model's vocab before computing WER. Without that normalization, WER will be artificially inflated.",
+    "Long-form (>25s) path: same PyAnnote dependency — out of scope for the C++ port at parity."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at Stage 2 over the inline 33-entry charwise vocab. Detects vocab drift across the rnnt/ctc branches (these two are expected to share the same vocab list)."
+    },
+    {
+      "field": "dtype.expected_f32_tensors",
+      "reason": "Filled at Stage 4 once we observe which norm/bias tensors must stay F32 for numerical match under non-F32 quant."
+    },
+    {
+      "field": "upstream_benchmarks.fleurs_ru",
+      "reason": "FLEURS ru WER is not published by upstream. Stage 7 will measure it ourselves by running `gigaam.load_model('v3_rnnt').transcribe()` over `fleurs:ru` (with the lowercase + strip-punct + ё-fold reference normalization described in known_risks) and use the measured number as the upstream anchor."
+    }
+  ]
+}
