@@ -87,10 +87,16 @@ def main() -> int:
     args = ap.parse_args()
 
     spec = load_spec(args.spec)
+    # Most families pin the upstream card to the same SHA as the ported
+    # weights. Multi-branch upstream repos (gigaam) ship the family card
+    # only on `main` while per-variant branches have empty README stubs;
+    # `upstream_card_commit` lets a spec point the card-fetch at a
+    # different revision than `upstream_commit`.
+    card_commit = spec.get("upstream_card_commit", spec["upstream_commit"])
     upstream = (
         "_(upstream card not fetched — run without --skip-upstream to include it)_"
         if args.skip_upstream
-        else fetch_upstream_card(spec["hf_repo"], spec["upstream_commit"])
+        else fetch_upstream_card(spec["hf_repo"], card_commit)
     )
     out = render(spec, upstream)
 

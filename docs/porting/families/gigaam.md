@@ -1,6 +1,10 @@
 # GigaAM
 
-Status: research
+Status: ported — Stage 4 numerical validation green at ref dtype (F32),
+Stage 5 quant matrix shipped, Stage 7 FLEURS ru WER measured. All four
+ASR variants (`gigaam-v3-e2e-rnnt`, `gigaam-v3-rnnt`, `gigaam-v3-ctc`,
+`gigaam-v3-e2e-ctc`) ready for HF upload. `v3_ssl` (encoder-only HuBERT
+pretraining checkpoint) intentionally out of scope.
 
 ## Identity
 
@@ -37,57 +41,68 @@ Status: research
 
 ## Commands
 
-> Stage 2/3/4 will fill these. Skeletons below assume the per-family
-> env at `scripts/envs/gigaam/` (TODO) and the dump/convert script
-> names follow the family convention (e.g. `dump_reference_gigaam.py`,
-> `convert-gigaam.py`).
+Per-family Python env: `scripts/envs/gigaam/`. Replace `<variant>` with
+one of `gigaam-v3-e2e-rnnt`, `gigaam-v3-rnnt`, `gigaam-v3-ctc`,
+`gigaam-v3-e2e-ctc`, and `<variant-key>` with the matching
+`v3_e2e_rnnt` / `v3_rnnt` / `v3_ctc` / `v3_e2e_ctc`.
 
-Reference run:
+Reference run (sanity-check upstream weights on a Russian sample):
 
 ```bash
-TODO  # uv run --project scripts/envs/gigaam python -c "import gigaam; \
-      #   m = gigaam.load_model('v3_e2e_rnnt'); print(m.transcribe('<ru-sample>.wav'))"
-      # (use a Russian-language sample; samples/jfk.wav is English and will
-      #  produce a phonetic-Russian guess, not a meaningful validation.)
+uv run --project scripts/envs/gigaam python -c \
+  "import gigaam; m = gigaam.load_model('v3_e2e_rnnt', fp16_encoder=False, device='cpu'); print(m.transcribe('samples/ru.wav'))"
 ```
 
-Reference dumps:
+Reference dumps (per-stage tensor sidecars + transcript.json, used by
+`scripts/validate.py`):
 
 ```bash
-TODO  # uv run --project scripts/envs/gigaam scripts/dump_reference_gigaam.py \
-      #   --variant gigaam-v3-e2e-rnnt \
-      #   --manifest tests/golden/gigaam/gigaam-v3-e2e-rnnt.manifest.json
+uv run --project scripts/envs/gigaam scripts/dump_reference_gigaam_author.py decode \
+  --variant <variant-key> \
+  --audio samples/ru.wav \
+  --out build/validate/gigaam/<variant>/ru/ref
 ```
 
-Conversion:
+Conversion (writes the reference-dtype F32 GGUF):
 
 ```bash
-TODO  # uv run scripts/convert-gigaam.py \
-      #   --in $TRANSCRIBE_MODELS_DIR/gigaam-v3-e2e-rnnt \
-      #   --out models/gigaam-v3-e2e-rnnt/gigaam-v3-e2e-rnnt-f32.gguf
+uv run --project scripts/envs/gigaam scripts/convert-gigaam.py ai-sage/GigaAM-v3 \
+  --repo-id <variant> --variant-key <variant-key>
 ```
 
-Validation:
+Validation (tensor-by-tensor + transcript exact compare):
 
 ```bash
-TODO  # uv run scripts/validate.py all --family gigaam --variant gigaam-v3-e2e-rnnt
+uv run scripts/validate.py all --family gigaam --variant <variant>
 ```
 
-Benchmarks (Stage 7 acceptance — FLEURS ru):
+Quantize (Stage 5 derived presets F16/Q8_0/Q6_K/Q5_K_M/Q4_K_M):
 
 ```bash
-TODO  # 1) one-time corpus ingest
-      # uv run scripts/wer/ingest.py fleurs --lang ru
-      #
-      # 2) measure upstream baseline on FLEURS ru (gigaam package)
-      # uv run --project scripts/envs/gigaam scripts/wer/run_reference_gigaam_author.py \
-      #   --variant v3_e2e_rnnt \
-      #   --manifest samples/wer/fleurs-ru.manifest.jsonl
-      #
-      # 3) measure C++ port on the same manifest
-      # uv run scripts/wer/run.py \
-      #   --model models/gigaam-v3-e2e-rnnt/gigaam-v3-e2e-rnnt-f32.gguf \
-      #   --manifest samples/wer/fleurs-ru.manifest.jsonl
+uv run scripts/quantize-all.py models/<variant>/<variant>-F32.gguf
+```
+
+WER (FLEURS ru — acceptance dataset for the family; see Notes below):
+
+```bash
+# 1) one-time corpus ingest (skip if samples/wer/fleurs-ru.manifest.jsonl exists)
+uv run scripts/wer/ingest.py fleurs --lang ru
+
+# 2) measure upstream baseline on FLEURS ru (gigaam author package)
+uv run --project scripts/envs/gigaam scripts/wer/run_reference_gigaam_author.py \
+  --variant <variant-key> \
+  --manifest samples/wer/fleurs-ru.manifest.jsonl \
+  --out reports/wer/<variant>-REF.fleurs-ru.jsonl
+
+# 3) measure C++ port on the same manifest, ref dtype and every quant
+for PRESET in F32 F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
+  uv run scripts/wer/run.py \
+    --model models/<variant>/<variant>-${PRESET}.gguf \
+    --manifest samples/wer/fleurs-ru.manifest.jsonl \
+    --language ru \
+    --out reports/wer/<variant>-${PRESET}.fleurs-ru.jsonl
+  uv run scripts/wer/score.py reports/wer/<variant>-${PRESET}.fleurs-ru.jsonl --language ru
+done
 ```
 
 ## Capability Validation

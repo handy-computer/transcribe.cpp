@@ -1,0 +1,118 @@
+# GigaAM-v3 RNN-T (charwise)
+
+ai-sage's [`ai-sage/GigaAM-v3`](https://huggingface.co/ai-sage/GigaAM-v3)
+(rnnt branch) ported to transcribe.cpp. Same 16-layer Conformer encoder as `gigaam-v3-e2e-rnnt`, paired with an RNN-T transducer head fine-tuned on lowercased no-punctuation text. Charwise tokenizer (33 entries + blank) keeps the head tiny and the output normalized.
+
+## What it's for
+
+Offline Russian speech-to-text with greedy RNN-T decoding. Output is lowercased Russian with no punctuation; 33-entry character vocabulary (space + а–я).
+
+Decoder is greedy; no language model, no beam search. Short-form only
+(≤ 25 s per utterance; upstream `transcribe_longform` chunking via
+PyAnnote VAD is intentionally not ported). Token-level timestamps are
+emitted at the encoder frame rate (40 ms granularity); word- and
+segment-level timestamps are out of scope.
+
+The encoder is shared across all four ported GigaAM-v3 variants but
+weights are per-variant fine-tuned (the encoder hidden state differs
+across heads). Variants in this family:
+
+- [`gigaam-v3-e2e-rnnt`](./gigaam-v3-e2e-rnnt.md) — RNN-T, cased+punctuated
+- [`gigaam-v3-e2e-ctc`](./gigaam-v3-e2e-ctc.md) — CTC, cased+punctuated
+- [`gigaam-v3-rnnt`](./gigaam-v3-rnnt.md) — RNN-T, lowercased no-punct
+- [`gigaam-v3-ctc`](./gigaam-v3-ctc.md) — CTC, lowercased no-punct
+
+See ai-sage's [model card](https://huggingface.co/ai-sage/GigaAM-v3)
+for training data, intended use, and upstream evaluation methodology.
+
+Licensed MIT. Ported from upstream commit
+[`c7f128b`](https://huggingface.co/ai-sage/GigaAM-v3/commit/c7f128b8accdd9624df905e5c2d7b7a48c27c0d8),
+pinned 2026-05-12.
+
+## Download
+
+| Quantization | Download | Size | WER (FLEURS ru) |
+| --- | --- | ---: | ---: |
+| F32    | [gigaam-v3-rnnt-F32.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-F32.gguf) |  846 MB |   8.08% |
+| F16    | [gigaam-v3-rnnt-F16.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-F16.gguf) |  430 MB |   8.08% |
+| Q8_0   | [gigaam-v3-rnnt-Q8_0.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q8_0.gguf) |  260 MB |   8.08% |
+| Q6_K   | [gigaam-v3-rnnt-Q6_K.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q6_K.gguf) |  217 MB |   8.07% |
+| Q5_K_M | [gigaam-v3-rnnt-Q5_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q5_K_M.gguf) |  196 MB |   8.12% |
+| Q4_K_M | [gigaam-v3-rnnt-Q4_K_M.gguf](https://huggingface.co/handy-computer/gigaam-v3-rnnt-gguf/resolve/main/gigaam-v3-rnnt-Q4_K_M.gguf) |  175 MB |   8.12% |
+
+WER is measured on the full FLEURS ru test split (775 utterances) with
+greedy decoding and no external LM. F32 reference baseline: **8.08%**.
+
+Upstream (`gigaam` author package at `6e4b027c`) measured on the same
+manifest: **9.46%**. The 1.4 pp gap is the upstream package
+rejecting 5 long (>25 s) FLEURS utterances with
+`Too long wav file, use 'transcribe_longform' method.` — counted as
+100% deletion errors against upstream. On the 770-utterance subset both
+sides decode, C++ matches upstream **exactly** (`reports/wer/gigaam.fleurs-ru.summary.md`).
+
+ai-sage does not publish a FLEURS ru WER; this number is measured here
+for transparency.
+
+## Quick Start
+
+```bash
+cmake -B build
+cmake --build build
+
+build/bin/transcribe-cli \
+  -m models/gigaam-v3-rnnt/gigaam-v3-rnnt-Q8_0.gguf \
+  --language ru \
+  samples/ru.wav
+```
+
+If your audio is not already 16 kHz mono WAV, convert it first:
+
+```bash
+ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
+```
+
+## Performance
+
+Bench reports are pending; this section will be filled in by Stage 6
+(`porting-6-bench`) once measurements land on reference machines.
+
+## Numerical Validation
+
+transcribe.cpp is validated tensor-by-tensor against the upstream
+`gigaam` package on `samples/ru.wav` via `scripts/validate.py`,
+sharing the gigaam family tolerance file. The family-level forward map
+at [`reports/porting/gigaam/forward-map.md`](../../reports/porting/gigaam/forward-map.md)
+documents the per-stage divergence sources (fp32 STFT, depthwise conv1d
+reduction order, attention accumulation through 16 Conformer blocks).
+
+| Field | Value |
+| --- | --- |
+| Reference | `gigaam` package @ `6e4b027c`, `gigaam.load_model('v3_rnnt', fp16_encoder=False, device='cpu')` |
+| Dump script | `scripts/dump_reference_gigaam_author.py` |
+| Manifest | `tests/golden/gigaam/gigaam-v3-rnnt.manifest.json` |
+| Command | `uv run scripts/validate.py all --family gigaam --variant gigaam-v3-rnnt` |
+
+## Reproduction
+
+### Convert
+
+```bash
+uv run --project scripts/envs/gigaam \
+  scripts/convert-gigaam.py ai-sage/GigaAM-v3 \
+  --repo-id gigaam-v3-rnnt --variant-key v3_rnnt
+```
+
+### Quantize
+
+```bash
+build/bin/transcribe-quantize \
+  models/gigaam-v3-rnnt/gigaam-v3-rnnt-F32.gguf \
+  models/gigaam-v3-rnnt/gigaam-v3-rnnt-Q8_0.gguf \
+  --quant Q8_0
+```
+
+### Validate
+
+```bash
+uv run scripts/validate.py all --family gigaam --variant gigaam-v3-rnnt
+```
