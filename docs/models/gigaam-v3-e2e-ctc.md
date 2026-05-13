@@ -86,6 +86,16 @@ above (2 decimal places).
 
 macOS 26.4.1, transcribe.cpp `ef55b52`.
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample     |         Q8_0 |       Q4_K_M |
+| ------- | ---------- | -----------: | -----------: |
+| Vulkan  | ru (4.5s)  | 152 ms (30×) | 155 ms (29×) |
+| CPU     | ru (4.5s)  | 494 ms (9×)  | 397 ms (11×) |
+
+Fedora Linux 43, transcribe.cpp `ef55b52`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash
