@@ -270,8 +270,13 @@ transcribe_status build_gigaam_weights(ggml_context *        ctx_meta,
 
     // Head.
     if (hp.head_kind == HeadKind::RNNT) {
-        GET_F32_2D(weights.predictor.embed_w, "pred.embed.weight",
-                   hp.pred_hidden, hp.pred_vocab);
+        // pred.embed.weight is a token-id lookup table consumed by the
+        // host RNN-T decoder. The quantizer treats it as a linear-weight
+        // tile (TRANSCRIBE_QUANT_LINEAR_TYPES: F32/F16/Q*), so the loader
+        // must too. decoder.cpp's readback_f32 dequantizes once at load
+        // time via ggml type traits.
+        GET_LIN_W(weights.predictor.embed_w, "pred.embed.weight",
+                  hp.pred_hidden, hp.pred_vocab);
 
         weights.predictor.lstm.resize(hp.pred_n_layers);
         for (int i = 0; i < hp.pred_n_layers; ++i) {

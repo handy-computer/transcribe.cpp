@@ -31,9 +31,15 @@ namespace transcribe::gigaam {
 
 namespace {
 
-// Copy a ggml tensor's data into a host f32 vector. The tensor must be
-// fp32; assertion would be loud and clear if the converter ever switched
-// dtypes on us.
+// Copy a ggml tensor's data into a host f32 vector, dequantizing if
+// needed. F32 takes the fast path (single backend_tensor_get). F16,
+// BF16, and every Q* / IQ* preset register a to_float in ggml's
+// type-traits table; we stage the raw bytes off the backend and walk
+// to_float to produce fp32. Mirrors parakeet's read_tensor_to_f32.
+//
+// The host RNN-T / CTC greedy decoders compute in fp32 only, so this
+// runs exactly once at load time per quantized GGUF and the per-step
+// hot path pays nothing.
 void readback_f32(const ggml_tensor * t, std::vector<float> & out) {
     if (t == nullptr) {
         out.clear();
@@ -42,7 +48,24 @@ void readback_f32(const ggml_tensor * t, std::vector<float> & out) {
     const size_t n = static_cast<size_t>(ggml_nelements(t));
     out.assign(n, 0.0f);
     if (n == 0) return;
-    ggml_backend_tensor_get(t, out.data(), 0, n * sizeof(float));
+
+    if (t->type == GGML_TYPE_F32) {
+        ggml_backend_tensor_get(t, out.data(), 0, n * sizeof(float));
+        return;
+    }
+
+    const auto * tt = ggml_get_type_traits(t->type);
+    if (tt == nullptr || tt->to_float == nullptr) {
+        std::fprintf(stderr,
+                     "gigaam decoder: tensor \"%s\" type %s has no to_float\n",
+                     t->name, ggml_type_name(t->type));
+        out.clear();
+        return;
+    }
+    const size_t nbytes = ggml_nbytes(t);
+    std::vector<uint8_t> raw(nbytes);
+    ggml_backend_tensor_get(t, raw.data(), 0, nbytes);
+    tt->to_float(raw.data(), out.data(), static_cast<int64_t>(n));
 }
 
 inline float sigmoidf(float x) {
