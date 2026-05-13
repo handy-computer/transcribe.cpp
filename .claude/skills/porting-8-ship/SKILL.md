@@ -192,6 +192,9 @@ Report:
   ```
 - Remind the user to commit the docs/families/models/hf_cards changes
   manually before the upload.
+- If this port adds a new family (or new variants under an existing
+  family), remind the user to update the supported-models table in the
+  root `README.md` so the family/variants are listed.
 
 **Do not commit. Do not upload.** The upload is a human action because
 it publishes to a public registry.

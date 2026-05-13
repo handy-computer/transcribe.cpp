@@ -1,0 +1,232 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "gigaam",
+  "hf_repo": "ai-sage/GigaAM-v3",
+  "hf_revision": "15ef3b5a88da78f93134b3cb7f015c70aefa8946",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "Hydra-style config under cfg.model.cfg: same encoder + frontend as the other gigaam-v3 branches; head=CTCHead with feat_in=768, num_classes=34 (33 chars + 1 blank). decoding=CTCGreedyDecoding with INLINE character vocabulary (no tokenizer.model file). model_name=v3_ctc; model_class=ctc."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "Frontend declared inside config.json under cfg.model.cfg.preprocessor (n_mels=64, n_fft=320, hop=160, win=320, mel_scale=htk, mel_norm=null, center=false, SpecScaler log). Identical to all sibling branches."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "Charwise tokenizer; vocabulary is inline in config.json under cfg.model.cfg.decoding.vocabulary (33 strings: space + 32 lowercase Cyrillic letters а-я, no ё). IDENTICAL list to the rnnt branch — they share the lowercased-Russian-no-punct character vocab."
+    },
+    "tokenizer_model": {
+      "kind": "hf_file",
+      "path": "tokenizer.model",
+      "status": "missing",
+      "detail": "Branch has NO tokenizer.model file — `Tokenizer.charwise=True` path."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Not used."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Decoding is CTC greedy; no HF generation_config."
+    },
+    "model_weights": {
+      "kind": "hf_file",
+      "path": "pytorch_model.bin",
+      "status": "found",
+      "detail": "PyTorch pickle, 441,719,299 bytes (~441 MB). Smallest of the five branches because (a) CTC head is a single Conv1d projection vs RNN-T's predictor+joint, (b) num_classes=34 keeps the projection narrow."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "Repo ships PyTorch pickle, not safetensors."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "status": "found",
+      "detail": "Single model card covers all 5 branches; v3_ctc evaluated alongside v3_e2e_ctc in evaluation.md (both score the same after upstream post-processing)."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/salute-developers/GigaAM (gigaam package: gigaam.load_model('v3_ctc'))",
+      "status": "found",
+      "detail": "Author-first PyTorch implementation. License MIT."
+    }
+  },
+  "variants": [
+    {
+      "name": "gigaam-v3-ctc",
+      "memory_gb": 0.44,
+      "files": [
+        "config.json",
+        "modeling_gigaam.py",
+        "pytorch_model.bin"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-ctc"
+    ],
+    "key_fields": {
+      "model_type": "gigaam",
+      "model_class": "ctc",
+      "model_name": "v3_ctc",
+      "encoder.type": "ConformerEncoder",
+      "encoder.feat_in": 64,
+      "encoder.n_layers": 16,
+      "encoder.d_model": 768,
+      "encoder.n_heads": 16,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.self_attention_model": "rotary",
+      "encoder.pos_emb_max_len": 5000,
+      "encoder.subsampling": "conv1d",
+      "encoder.subs_kernel_size": 5,
+      "encoder.subsampling_factor": 4,
+      "encoder.conv_kernel_size": 5,
+      "encoder.conv_norm_type": "layer_norm",
+      "head.type": "CTCHead",
+      "head.feat_in": 768,
+      "head.num_classes": 34,
+      "decoding": "CTCGreedyDecoding",
+      "tokenizer.kind": "charwise",
+      "tokenizer.vocab_size_plus_blank": 34,
+      "tokenizer.vocab_inline": "33 entries: space + 32 lowercase Cyrillic letters (а б в г д е ж з и й к л м н о п р с т у ф х ц ч ш щ ъ ы ь э ю я; no ё). Identical to the rnnt branch."
+    },
+    "varying_across_variants": [
+      "model_class",
+      "model_name",
+      "head.type",
+      "head.num_classes",
+      "tokenizer.kind",
+      "tokenizer.vocab_inline"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "pytorch_model.bin is 441 MB ≈ 110M params at F32. salute-developers/GigaAM PyTorch checkpoints are stored at F32.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "hop_length": 160,
+    "fft_size": 320,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": false,
+    "padding_mode": null,
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "other",
+    "vocab_size": 33,
+    "special_tokens": {
+      "blank": 33
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["ru"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Open Datasets (aggregate)",
+      "language": "ru",
+      "metric": "wer",
+      "score": 3.0,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_CTC row from the model card 5-domain WER summary."
+    },
+    {
+      "dataset": "Golos Farfield",
+      "language": "ru",
+      "metric": "wer",
+      "score": 4.5,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_CTC row from the model card."
+    },
+    {
+      "dataset": "Natural Speech",
+      "language": "ru",
+      "metric": "wer",
+      "score": 7.8,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_CTC row from the model card."
+    },
+    {
+      "dataset": "Callcenter",
+      "language": "ru",
+      "metric": "wer",
+      "score": 10.3,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_CTC row from the model card."
+    },
+    {
+      "dataset": "Aggregate (11-set average)",
+      "language": "ru",
+      "metric": "wer",
+      "score": 9.1,
+      "score_unit": "percent",
+      "source": "https://github.com/salute-developers/GigaAM/blob/main/evaluation.md",
+      "notes": "V3_CTC macro-average WER over all 11 evaluation sets per evaluation.md."
+    }
+  ],
+  "reference_framework": "author_repo_gigaam",
+  "reference_rationale": "Same as the rest of the gigaam family: the `gigaam` PyPI package (MIT) is the canonical inference path. Load with `gigaam.load_model('v3_ctc')`.",
+  "architecture_pattern": "encoder-ctc",
+  "known_risks": [
+    "Encoder + frontend are expected IDENTICAL to gigaam-v3-e2e-rnnt and gigaam-v3-rnnt. Stage 3 must confirm encoder-tensor reuse. Only the head differs.",
+    "CTCHead is `nn.Conv1d(768, num_classes=34, kernel_size=1)` + `log_softmax(-1)`. Blank id = 33 = num_classes - 1.",
+    "Charwise tokenizer path identical to gigaam-v3-rnnt: vocab list inline in config.json, NO tokenizer.model. Detokenization is plain string join. The convert script must read the inline vocab and emit it into the GGUF; reuse the same charwise loader path as gigaam-v3-rnnt.",
+    "Vocab: 33 entries — space + 32 lowercase Cyrillic letters (а-я, no ё). Lowercased Russian only, no English, no digits, no punctuation, no casing.",
+    "Rotary positional embeddings inside Conformer attention — same risk as siblings.",
+    "Conv1d subsampling, SpecScaler log, center=false, mel_scale=htk, mel_norm=null — same gotchas.",
+    "Stage 7 FLEURS ru gate: same text-norm requirement as gigaam-v3-rnnt — strip punct, lowercase, fold ё→е on the FLEURS reference before WER computation.",
+    "Long-form (>25s): out of scope for C++ parity (PyAnnote dependency)."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at Stage 2. Expected to MATCH gigaam-v3-rnnt's vocab_sha256 (same lowercased-Russian charwise vocab) — confirms vocab reuse across the two non-e2e branches."
+    },
+    {
+      "field": "dtype.expected_f32_tensors",
+      "reason": "Filled at Stage 4."
+    },
+    {
+      "field": "upstream_benchmarks.fleurs_ru",
+      "reason": "FLEURS ru WER is not published by upstream. Stage 7 will measure it ourselves by running `gigaam.load_model('v3_ctc').transcribe()` over `fleurs:ru` and use the measured number as the upstream anchor."
+    }
+  ]
+}

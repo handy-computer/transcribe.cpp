@@ -1,0 +1,32 @@
+[project]
+name = "transcribe-gigaam-env"
+version = "0.1.0"
+description = "Python env for GigaAM reference dumps and conversion (author repo)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    # Pin to a specific GitHub commit on salute-developers/GigaAM main.
+    # Rationale: the PyPI release (gigaam==0.1.0, 2024) predates GigaAM-v3
+    # and only registers v1/v2 model names (`_MODEL_HASHES` is missing
+    # v3_e2e_rnnt, v3_rnnt, v3_ctc, v3_e2e_ctc, v3_ssl). v3 support landed
+    # on main but has not yet been published to PyPI. We pin to a commit
+    # SHA so the reference behavior is reproducible.
+    #
+    # Commit chosen: 6e4b027c6fb554e09e8b9059b757a175295ab879 (main, 2026-04-15)
+    # — "Fine-tuning, batched rnnt, fp16 onnx #67". First commit on main
+    # that ships all five v3 variants in `_MODEL_HASHES`.
+    "gigaam[torch] @ git+https://github.com/salute-developers/GigaAM@6e4b027c6fb554e09e8b9059b757a175295ab879",
+    # gigaam's `requires` declares `torch>=2.6` / `torchaudio>=2.6` at
+    # HEAD; let resolution pick the latest compatible wheels for the
+    # local Python.
+    # Audio I/O. gigaam uses ffmpeg subprocess for load_audio; the
+    # dumper reads with soundfile directly so the bytes match what
+    # the C++ port will read at convert time.
+    "soundfile>=0.12",
+    # numpy is unpinned in gigaam HEAD; clamp to the modern range our
+    # ref_dump helper expects.
+    "numpy>=1.26,<3",
+    # HF hub for revision-pinned downloads when needed.
+    "huggingface-hub>=0.30",
+    # Conversion-side helpers (Stage 3 reuses this env).
+    "gguf>=0.10",
+]

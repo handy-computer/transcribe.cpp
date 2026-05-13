@@ -1,0 +1,241 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "gigaam",
+  "hf_repo": "ai-sage/GigaAM-v3",
+  "hf_revision": "ec1dc1f01d0d627ab2c0d3acc1e235702300d95e",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "Hydra-style config under cfg.model.cfg: preprocessor (FeatureExtractor), encoder (ConformerEncoder), head (RNNTHead), decoding (RNNTGreedyDecoding). model_name=v3_e2e_rnnt; model_class=rnnt. Branches ssl/ctc/rnnt/e2e_ctc/e2e_rnnt swap head + tokenizer; main == e2e_rnnt."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "Frontend declared inside config.json under cfg.model.cfg.preprocessor (n_mels=64, n_fft=320, hop=160, win=320, mel_scale=htk, mel_norm=null, center=false, SpecScaler log)."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "Author repo packages SentencePiece .model directly; no HF tokenizer_config.json."
+    },
+    "tokenizer_model": {
+      "kind": "hf_file",
+      "path": "tokenizer.model",
+      "status": "found",
+      "detail": "SentencePiece BPE model (255 kB). num_classes=1025 in config (vocab=1024 + 1 blank). Vocab content differs across branches: e2e_* branches include punctuation/capitalization tokens; ssl/ctc/rnnt are lowercased no-punct Russian."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Not used; SentencePiece .model file is authoritative."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Decoding is RNN-T greedy; no HF generation_config."
+    },
+    "model_weights": {
+      "kind": "hf_file",
+      "path": "pytorch_model.bin",
+      "status": "found",
+      "detail": "PyTorch pickle, 449 MB. ~112M params at float32 (449e6 / 4) — Conformer 16L/768d + RNN-T 1L LSTM 320h. No safetensors."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "Repo ships PyTorch pickle, not safetensors. Dtype inferred from author conventions (PyTorch float32)."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "status": "found",
+      "detail": "Russian-first ASR (with English in card metadata). WER aggregated over 11 test sets in evaluation.md; main branch is the v3_e2e_rnnt variant."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/salute-developers/GigaAM (gigaam package: gigaam.load_model('v3_e2e_rnnt')); modeling_gigaam.py on HF mirrors the same classes (ConformerEncoder, RNNTHead, CTCHead, FeatureExtractor, RNNTGreedyDecoding, CTCGreedyDecoding)",
+      "status": "found",
+      "detail": "Author-first PyTorch implementation. License MIT. InterSpeech 2025 paper arXiv:2506.01192. transcribe() rejects >25s audio; transcribe_longform() chains PyAnnote VAD segmentation (out-of-scope for transcribe.cpp parity)."
+    }
+  },
+  "variants": [
+    {
+      "name": "gigaam-v3-e2e-rnnt",
+      "memory_gb": 0.45,
+      "files": [
+        "config.json",
+        "modeling_gigaam.py",
+        "pytorch_model.bin",
+        "tokenizer.model"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-transducer"
+    ],
+    "key_fields": {
+      "model_type": "gigaam",
+      "model_class": "rnnt",
+      "model_name": "v3_e2e_rnnt",
+      "encoder.type": "ConformerEncoder",
+      "encoder.feat_in": 64,
+      "encoder.n_layers": 16,
+      "encoder.d_model": 768,
+      "encoder.n_heads": 16,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.self_attention_model": "rotary",
+      "encoder.pos_emb_max_len": 5000,
+      "encoder.subsampling": "conv1d",
+      "encoder.subs_kernel_size": 5,
+      "encoder.subsampling_factor": 4,
+      "encoder.conv_kernel_size": 5,
+      "encoder.conv_norm_type": "layer_norm",
+      "head.type": "RNNTHead",
+      "decoder.pred_hidden": 320,
+      "decoder.pred_rnn_layers": 1,
+      "joint.enc_hidden": 768,
+      "joint.pred_hidden": 320,
+      "joint.joint_hidden": 320,
+      "joint.num_classes": 1025,
+      "decoding": "RNNTGreedyDecoding",
+      "tokenizer.path": "tokenizer.model",
+      "tokenizer.vocab_size_plus_blank": 1025
+    },
+    "varying_across_variants": [
+      "model_class",
+      "model_name",
+      "head.type",
+      "joint.num_classes",
+      "tokenizer.model"
+    ]
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "pytorch_model.bin is 449 MB ≈ 112M params at F32, consistent with Conformer 16L/d=768 + RNN-T 1L LSTM. salute-developers/GigaAM PyTorch checkpoints are stored at F32 (author convention; no torch.save dtype cast). Confirm at Stage 2 by inspecting state_dict dtypes.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 64,
+    "hop_length": 160,
+    "fft_size": 320,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": null,
+    "center": false,
+    "padding_mode": null,
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 1024,
+    "special_tokens": {
+      "blank": 1024
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["ru"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "Golos Farfield",
+      "language": "ru",
+      "metric": "wer",
+      "score": 3.9,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_RNNT row from the model card WER table (5-domain summary). Same weights as main / v3_e2e_rnnt after post-processing strips punctuation+casing."
+    },
+    {
+      "dataset": "Natural Speech",
+      "language": "ru",
+      "metric": "wer",
+      "score": 6.9,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_RNNT row from the model card WER table."
+    },
+    {
+      "dataset": "Callcenter",
+      "language": "ru",
+      "metric": "wer",
+      "score": 9.5,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_RNNT row from the model card WER table."
+    },
+    {
+      "dataset": "Open Datasets (aggregate)",
+      "language": "ru",
+      "metric": "wer",
+      "score": 2.6,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/ai-sage/GigaAM-v3",
+      "notes": "V3_RNNT averaged across the 'Open Datasets' bucket on the model card. Composition: Golos Crowd + Russian LibriSpeech + Mozilla Common Voice 19 + OpenSTT phone calls/youtube/audiobooks per evaluation.md."
+    },
+    {
+      "dataset": "Aggregate (11-set average)",
+      "language": "ru",
+      "metric": "wer",
+      "score": 8.4,
+      "score_unit": "percent",
+      "source": "https://github.com/salute-developers/GigaAM/blob/main/evaluation.md",
+      "notes": "V3_RNNT macro-average WER over all 11 evaluation sets."
+    }
+  ],
+  "reference_framework": "author_repo_gigaam",
+  "reference_rationale": "GigaAM is an author-first release from Sber/ai-sage. The canonical inference path is the `gigaam` PyPI package (https://github.com/salute-developers/GigaAM, MIT) and the mirrored modeling_gigaam.py on the HF repo. NeMo is NOT used: GigaAM has its own ConformerEncoder + RNNTHead/CTCHead classes wired through omegaconf/Hydra. HuggingFace Transformers exposes the model via trust_remote_code shimming the same classes, so even the 'transformers' path is really running author code. Pick the gigaam package as the instrumented reference and pin a release tag in scripts/envs/gigaam/.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "Multi-branch HF repo: main == v3_e2e_rnnt (this variant). Family scope covers all five sibling branches as separate variants — `gigaam-v3-ssl` (encoder-only HuBERT-CTC pretraining), `gigaam-v3-ctc`, `gigaam-v3-rnnt` (lowercased Russian, no punctuation), `gigaam-v3-e2e-ctc`, `gigaam-v3-e2e-rnnt` (this). Each branch swaps head + tokenizer.model; encoder weights are likely shared but must be confirmed at convert time before declaring weight reuse. Stage 1 intake for the other four variants will be opened separately.",
+    "Rotary positional embeddings inside Conformer attention (self_attention_model=rotary, base=10000, max_len=5000). Unusual for Conformer (rel_pos is the parakeet/nemo norm). The implementation in modeling_gigaam.py uses a [cos; sin] stacked PE tensor and a custom rtt_half rotation — must reproduce element ordering exactly or scores silently drift.",
+    "Conv1d subsampling (subsampling=conv1d, subs_kernel_size=5, factor=4) — not the conv2d default in the class signature. log2(4)=2 stride-2 conv layers along the time axis with conv_channels=768 and conv_norm_type=layer_norm. Different from parakeet's dw_striding and from the default conv2d path inside the same class.",
+    "Frontend uses SpecScaler log scaling: y = log(clamp(mel, 1e-9, 1e9)). NOT log10, not dB scaling. center=false in torchaudio.MelSpectrogram changes frame count vs center=true frameworks. mel_scale=htk and mel_norm=null (no Slaney normalization). Three mismatches a default-aware implementation will get wrong silently.",
+    "RNNTGreedyDecoding inner loop emits at most decoder_max_symbols steps per encoder frame, with LSTM hidden state carried across frames. Blank id = vocab_size (1024). State management must match exactly to reproduce token boundaries.",
+    "e2e_rnnt SentencePiece vocab (main branch) embeds punctuation + Cyrillic casing tokens inside the 1024-piece vocab — there is no separate punctuation/normalization post-processor in the modeling code. Non-e2e branches likely have a different lowercased Russian-only vocab with the same vocab size budget. tokenizer.model is per-branch; vocab_sha256 needs to be locked at Stage 2.",
+    "Long-form (>25s) path in modeling_gigaam.py.transcribe() raises; transcribe_longform() chains a PyAnnote VAD pipeline + per-segment forward. PyAnnote is a heavyweight external dependency; transcribe.cpp will not reproduce this path at parity. Long-form parity is OUT OF SCOPE for the first port — short-form (≤25s) only.",
+    "Russian-primary acceptance: HF tag declares ['ru', 'en'] but the training corpus is 700k hours of Russian speech and all model-card benchmarks are Russian. LibriSpeech test-clean is NOT a valid acceptance dataset. Stage 7 acceptance dataset: FLEURS ru (`fleurs:ru` / `ru_ru` per scripts/wer/ingest.py:96) — already supported by transcribe.cpp's WER infra. GigaAM upstream does NOT publish FLEURS ru WER; Stage 7 will measure the upstream `gigaam.load_model('v3_e2e_rnnt').transcribe()` baseline on FLEURS ru ourselves and apply the standard ref-dtype gate (C++ ≤ upstream + 0.01pp) against that measured baseline. Punctuation+casing stripping in the WER scorer is required (e2e_rnnt emits cased+punctuated text; FLEURS references are typically cased; align text-norm both sides).",
+    "Encoder is Conformer-style with macaron-FF, MHSA, ConvModule, FF, plus pre-LayerNorm — match the residual halving (0.5 * ff(x)) and convolution module ordering exactly. conv_kernel_size=5 (depthwise) is notable.",
+    "Word/token timestamps are NOT exposed by the HF modeling code (transcribe returns a plain string; transcribe_longform returns VAD-derived segment boundaries, not model-emitted timings). The gigaam package exposes `word_timestamps=True` derived from RNN-T emission offsets — capability gap is between gigaam package and HF code, not between HF code and the C++ port."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Computed at Stage 2 after downloading tokenizer.model and dumping the 1024-piece SentencePiece vocab. Needed to detect silent vocab drift across the 5 branches."
+    },
+    {
+      "field": "dtype.expected_f32_tensors",
+      "reason": "Filled at Stage 4 once we observe which norm/bias tensors must stay F32 for numerical match under non-F32 quant."
+    },
+    {
+      "field": "variants",
+      "reason": "Only `gigaam-v3-e2e-rnnt` (main branch) is enumerated here. The four sibling branches (`gigaam-v3-ssl`, `gigaam-v3-ctc`, `gigaam-v3-rnnt`, `gigaam-v3-e2e-ctc`) are in-scope for the gigaam family but each gets its own Stage 1 intake — re-run `/porting-1-intake` per variant. The encoder is expected identical across all five branches; only the head + tokenizer.model + decoder vocabulary change."
+    },
+    {
+      "field": "upstream_benchmarks.fleurs_ru",
+      "reason": "FLEURS ru WER is not published by upstream. Stage 7 will measure it ourselves by running `gigaam.load_model('v3_e2e_rnnt').transcribe()` over `fleurs:ru` and use the measured number as the upstream anchor for the C++ ≤ upstream + 0.01pp gate."
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+# Spec for the HF README of handy-computer/gigaam-v3-ctc-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: ai-sage/GigaAM-v3
+target_repo: handy-computer/gigaam-v3-ctc-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/gigaam-v3-ctc.md
+
+# Upstream branch: ctc. Each gigaam-v3 variant lives on its own
+# HF branch; the SHA below pins this variant's branch revision.
+upstream_commit: 15ef3b5
+pin_date: 2026-05-12
+# Upstream README lives only on the main branch (per-variant branches
+# ship empty README stubs); fetch the family card from main.
+upstream_card_commit: ec1dc1f
+
+# Validation pin for the most recent upload. Updated on each release;
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: gigaam author package
+  commit: 42b96d9
+  date: 2026-05-12
+
+license: mit
+license_display: MIT
+pipeline_tag: automatic-speech-recognition
+languages:
+  - ru
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - gigaam
+  - conformer
+  - ctc
+  - russian
+
+summary: |
+  Offline Russian speech-to-text with greedy CTC decoding. 16-layer Conformer encoder with a 1×1 Conv1d CTC head. Output is lowercased Russian, no punctuation; 33-entry character vocabulary.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: FLEURS ru
+  notes: |
+    WER measured on the full FLEURS ru test split (775 utterances) with greedy decoding and no external LM. F32 reference baseline: 8.42%. Upstream `gigaam` author package measured on the same manifest: 9.81%; the 1.4 pp gap is upstream rejecting 5 long (>25 s) utterances with `Too long wav file, use 'transcribe_longform' method.` (counted as 100% deletion errors). On the 770-utt subset both sides decode, transcribe.cpp matches upstream exactly. ai-sage does not publish a FLEURS ru WER; this number is measured here.
+
+quants:
+  - name: F32
+    filename: gigaam-v3-ctc-F32.gguf
+    size: 842 MB
+    wer: 8.42%
+  - name: F16
+    filename: gigaam-v3-ctc-F16.gguf
+    size: 428 MB
+    wer: 8.42%
+  - name: Q8_0
+    filename: gigaam-v3-ctc-Q8_0.gguf
+    size: 259 MB
+    wer: 8.40%
+  - name: Q6_K
+    filename: gigaam-v3-ctc-Q6_K.gguf
+    size: 216 MB
+    wer: 8.38%
+  - name: Q5_K_M
+    filename: gigaam-v3-ctc-Q5_K_M.gguf
+    size: 195 MB
+    wer: 8.29%
+  - name: Q4_K_M
+    filename: gigaam-v3-ctc-Q4_K_M.gguf
+    size: 174 MB
+    wer: 8.42%

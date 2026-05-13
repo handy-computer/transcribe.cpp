@@ -1,0 +1,133 @@
+{
+  "_comment": [
+    "GigaAM per-tensor tolerances for compare_tensors.py.",
+    "",
+    "CORRECTNESS REGIME",
+    "- Reference: salute-developers/GigaAM @ 6e4b027c (author repo)",
+    "  loaded via gigaam.load_model(..., fp16_encoder=False, device='cpu').",
+    "  Dumper: scripts/dump_reference_gigaam_author.py.",
+    "- C++: ggml CPU fp32 compute, weights stored as F32 in GGUF.",
+    "- KV cache dtype: not applicable (RNN-T / CTC heads, no attention KV).",
+    "- Mel frontend: family-local C++ MelFrontend at center=false, htk mel,",
+    "  no slaney norm, log(clamp(x, 1e-9, 1e9)) scaling. The HTK filterbank",
+    "  and periodic Hann window are baked into the GGUF by the converter",
+    "  (frontend.mel_filterbank, frontend.window) and copied verbatim into",
+    "  the C++ frontend at load time; recomputing them in fp64 drifts at",
+    "  high-frequency mel bins, so we use the bit-identical baked buffers.",
+    "- Backend / threading: --backend cpu --threads 1 (deterministic).",
+    "",
+    "ENTRY SOURCING (finalized)",
+    "- Recipe: max_abs   = max(1.5 × worst_observed_max_abs,  1e-6)",
+    "          mean_abs  = max(1.5 × worst_observed_mean_abs, 1e-6)",
+    "  where 'worst' is the largest C++-vs-reference drift across all four",
+    "  shipped variants (gigaam-v3-e2e-rnnt, -rnnt, -e2e-ctc, -ctc) on the",
+    "  Stage 4 ru.wav contract case under the regime above.",
+    "- The 1.5× headroom absorbs run-to-run reduction-order noise without",
+    "  hiding structural regressions.",
+    "- Observed drift is ~5–25× tighter than the Stage 2 magnitude-aware",
+    "  provisional budgets (1e-4 × p99_abs), so finalization tightens every",
+    "  entry rather than keeping the provisional ceiling.",
+    "",
+    "DRIFT SOURCES (named)",
+    "- frontend.mel.out: mixed-radix FFT accumulation order vs torchaudio's",
+    "  rfft, plus fp32 mel-filterbank multiply-add (worst at high-freq bins",
+    "  with low power, where log() amplifies small absolute differences).",
+    "- enc.subsample.out: depthwise/pointwise conv1d reduction order in",
+    "  ggml-cpu vs torch Conv1d. Concentrated at the boundary frames",
+    "  (causal-padding seam under center=false), spread evenly elsewhere.",
+    "- enc.block.*: post-attention SDPA + GLU + layer-norm accumulation",
+    "  noise compounds across 16 conformer blocks. Drift shrinks from",
+    "  block 0 to block 15 because each LayerNorm renormalizes the",
+    "  residual stream.",
+    "- ctc.logits.raw / ctc.log_probs: 1×1 conv head adds one matvec of",
+    "  d_model=768 floats, magnitude-bounded by enc.out drift.",
+    "",
+    "NO _provisional FLAGS REMAIN. Sign-off: 2026-05-12, ref-dtype",
+    "validate.py all green for all four shipped variants; transcripts",
+    "compare exact against gigaam author-repo dumps on samples/ru.wav."
+  ],
+  "frontend.mel.out": {
+    "max_abs": 3.6e-04,
+    "mean_abs": 1.4e-06,
+    "_seen_in": [
+      "gigaam-v3-ctc",
+      "gigaam-v3-e2e-ctc",
+      "gigaam-v3-e2e-rnnt",
+      "gigaam-v3-rnnt"
+    ]
+  },
+  "enc.subsample.out": {
+    "max_abs": 1.5e-03,
+    "mean_abs": 1.2e-05,
+    "_seen_in": [
+      "gigaam-v3-ctc",
+      "gigaam-v3-e2e-ctc",
+      "gigaam-v3-e2e-rnnt",
+      "gigaam-v3-rnnt"
+    ]
+  },
+  "enc.block.0.out": {
+    "max_abs": 2.0e-04,
+    "mean_abs": 2.3e-06,
+    "_seen_in": [
+      "gigaam-v3-ctc",
+      "gigaam-v3-e2e-ctc",
+      "gigaam-v3-e2e-rnnt",
+      "gigaam-v3-rnnt"
+    ]
+  },
+  "enc.block.7.out": {
+    "max_abs": 3.7e-05,
+    "mean_abs": 1.6e-06,
+    "_seen_in": [
+      "gigaam-v3-ctc",
+      "gigaam-v3-e2e-ctc",
+      "gigaam-v3-e2e-rnnt",
+      "gigaam-v3-rnnt"
+    ]
+  },
+  "enc.block.15.out": {
+    "max_abs": 2.6e-05,
+    "mean_abs": 1.0e-06,
+    "_seen_in": [
+      "gigaam-v3-ctc",
+      "gigaam-v3-e2e-ctc",
+      "gigaam-v3-e2e-rnnt",
+      "gigaam-v3-rnnt"
+    ]
+  },
+  "enc.out": {
+    "max_abs": 2.6e-05,
+    "mean_abs": 1.0e-06,
+    "_seen_in": [
+      "gigaam-v3-ctc",
+      "gigaam-v3-e2e-ctc",
+      "gigaam-v3-e2e-rnnt",
+      "gigaam-v3-rnnt"
+    ]
+  },
+  "rnnt.encoded": {
+    "max_abs": 5.6e-06,
+    "mean_abs": 1.0e-06,
+    "_seen_in": [
+      "gigaam-v3-e2e-rnnt",
+      "gigaam-v3-rnnt"
+    ]
+  },
+  "ctc.logits.raw": {
+    "max_abs": 2.9e-04,
+    "mean_abs": 4.6e-06,
+    "_seen_in": [
+      "gigaam-v3-ctc",
+      "gigaam-v3-e2e-ctc"
+    ]
+  },
+  "ctc.log_probs": {
+    "max_abs": 5.4e-04,
+    "mean_abs": 9.2e-06,
+    "_seen_in": [
+      "gigaam-v3-ctc",
+      "gigaam-v3-e2e-ctc"
+    ]
+  }
+}
