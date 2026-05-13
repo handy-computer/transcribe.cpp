@@ -21,6 +21,14 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
+#if TRANSCRIBE_HAS_BLAS
+#  ifdef __APPLE__
+#    include <Accelerate/Accelerate.h>
+#  else
+#    include <cblas.h>
+#  endif
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -172,16 +180,16 @@ static void lstm_step(const float * x,
     }
 }
 
-// One joint forward pass for batch=1:
-//   enc_proj  = enc_w @ f_t  + enc_b           [joint_hidden]
+// One joint forward pass for batch=1, using a precomputed encoder
+// projection (enc_proj = enc_w @ f_t + enc_b, hoisted out of the time
+// loop in `decode_rnnt_greedy`):
 //   pred_proj = pred_w @ g_t + pred_b          [joint_hidden]
 //   logits    = out_w @ relu(enc_proj + pred_proj) + out_b   [n_classes]
 //
 // Returns the argmax token id.
 static int joint_argmax(const HostDecoderWeights & h,
-                        const float *              f_t,    // [enc_d_model]
-                        const float *              g_t,    // [pred_hidden]
-                        int                        enc_d,
+                        const float *              enc_proj, // [joint_h]
+                        const float *              g_t,      // [pred_hidden]
                         int                        pred_d,
                         int                        joint_h,
                         int                        n_classes,
@@ -191,19 +199,13 @@ static int joint_argmax(const HostDecoderWeights & h,
     scratch_join.assign(joint_h, 0.0f);
     scratch_logits.assign(n_classes, 0.0f);
 
-    // enc_proj.
-    matvec_add(h.joint_enc_w.data(),
-               h.joint_enc_b.data(),
-               f_t, joint_h, enc_d,
-               scratch_join.data());
-    // pred_proj added in place + ReLU fused.
-    std::vector<float> pj(joint_h, 0.0f);
+    // pred_proj into scratch_join, then fuse `+ enc_proj` and ReLU.
     matvec_add(h.joint_pred_w.data(),
                h.joint_pred_b.data(),
                g_t, joint_h, pred_d,
-               pj.data());
+               scratch_join.data());
     for (int i = 0; i < joint_h; ++i) {
-        float v = scratch_join[i] + pj[i];
+        float v = scratch_join[i] + enc_proj[i];
         scratch_join[i] = v > 0.0f ? v : 0.0f;
     }
     // logits = out_w @ relu + out_b. The reference applies log_softmax
@@ -248,53 +250,81 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & host,
     const int n_class  = hp.joint_n_classes;
     const int blank_id = n_class - 1;
 
+    // Precompute encoder projection for every frame in one BLAS sgemm
+    // (or a fallback loop). The joint's enc_w @ f_t + enc_b is independent
+    // of decode state, so hoisting it out of the inner loop eliminates
+    // O(iters) redundant matvecs and gives BLAS a single large matrix.
+    std::vector<float> enc_proj_all(
+        static_cast<size_t>(T_enc) * static_cast<size_t>(joint_h));
+#if TRANSCRIBE_HAS_BLAS
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                T_enc, joint_h, enc_d,
+                1.0f, encoded, enc_d,
+                host.joint_enc_w.data(), enc_d,
+                0.0f, enc_proj_all.data(), joint_h);
+#else
+    for (int t = 0; t < T_enc; ++t) {
+        const float * frame = encoded + static_cast<size_t>(t) * enc_d;
+        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * joint_h;
+        matvec_add(host.joint_enc_w.data(), nullptr, frame, joint_h, enc_d, proj);
+    }
+#endif
+    for (int t = 0; t < T_enc; ++t) {
+        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * joint_h;
+        for (int j = 0; j < joint_h; ++j) proj[j] += host.joint_enc_b[j];
+    }
+
     std::vector<float> h_cur(H, 0.0f);
     std::vector<float> c_cur(H, 0.0f);
     std::vector<float> h_next(H, 0.0f);
     std::vector<float> c_next(H, 0.0f);
     std::vector<float> gates(4 * H, 0.0f);
     std::vector<float> pred_in(H, 0.0f);   // embed lookup output
-    std::vector<float> pred_out(H, 0.0f);  // LSTM output
     std::vector<float> jh(joint_h, 0.0f);
     std::vector<float> logits(n_class, 0.0f);
 
     bool fresh = true; // first step uses zero input + zero state (reference predict(None, None))
 
+    // Predictor-dirty cache: on a blank emission `(prev_token, h_cur, c_cur)`
+    // are unchanged, so the next LSTM step would deterministically produce
+    // the same `h_next`. Skip the unroll and reuse `h_next`; recompute on
+    // emit (where state and last_token change). Bit-exact with the
+    // unconditional path.
+    bool predictor_dirty = true;
+
     for (int t = 0; t < T_enc; ++t) {
-        const float * f_t = encoded + static_cast<size_t>(t) * enc_d;
+        const float * enc_proj = enc_proj_all.data() +
+                                 static_cast<size_t>(t) * joint_h;
 
         int sym_count = 0;
         for (;;) {
-            // Predictor input.
-            if (fresh) {
-                // Zero embedding, zero state.
-                std::fill(pred_in.begin(), pred_in.end(), 0.0f);
-            } else {
-                // Embed the previously emitted token.
-                const int prev = out_tokens.back();
-                std::memcpy(pred_in.data(),
-                            host.pred_embed.data() +
-                                static_cast<size_t>(prev) * H,
-                            H * sizeof(float));
+            if (predictor_dirty) {
+                if (fresh) {
+                    std::fill(pred_in.begin(), pred_in.end(), 0.0f);
+                } else {
+                    const int prev = out_tokens.back();
+                    std::memcpy(pred_in.data(),
+                                host.pred_embed.data() +
+                                    static_cast<size_t>(prev) * H,
+                                H * sizeof(float));
+                }
+                lstm_step(pred_in.data(),
+                          h_cur.data(), c_cur.data(),
+                          host.lstm_Wx[0].data(),
+                          host.lstm_Wh[0].data(),
+                          host.lstm_b[0].data(),
+                          H,
+                          h_next.data(), c_next.data(),
+                          gates.data());
+                predictor_dirty = false;
             }
 
-            // LSTM step (1 layer; multi-layer would chain pred_in / pred_out).
-            lstm_step(pred_in.data(),
-                      h_cur.data(), c_cur.data(),
-                      host.lstm_Wx[0].data(),
-                      host.lstm_Wh[0].data(),
-                      host.lstm_b[0].data(),
-                      H,
-                      h_next.data(), c_next.data(),
-                      gates.data());
-            pred_out = h_next; // LSTM output = h_next for the last layer
-
-            const int tok = joint_argmax(host, f_t, pred_out.data(),
-                                          enc_d, H, joint_h, n_class,
+            const int tok = joint_argmax(host, enc_proj, h_next.data(),
+                                          H, joint_h, n_class,
                                           jh, logits);
 
             if (tok == blank_id) {
-                // Advance time. Do NOT commit state.
+                // Advance time. Do NOT commit state. Predictor stays clean.
                 break;
             }
             // Emit token; commit state.
@@ -303,6 +333,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & host,
             h_cur = h_next;
             c_cur = c_next;
             fresh = false;
+            predictor_dirty = true;
             ++sym_count;
             if (max_symbols_per_step > 0 && sym_count >= max_symbols_per_step) {
                 break;
