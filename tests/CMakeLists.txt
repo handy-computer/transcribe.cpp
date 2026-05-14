@@ -172,6 +172,7 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/corrupt_magic.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf)
 
@@ -265,6 +266,33 @@ if(TRANSCRIBE_UV)
 
     add_test(NAME transcribe_tokenizer_smoke COMMAND transcribe_tokenizer_smoke)
     set_tests_properties(transcribe_tokenizer_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # -------------------------------------------------------------------------
+    # Streaming capability gate against a real loaded model (Phase 3)
+    # -------------------------------------------------------------------------
+    #
+    # Uses two parakeet fixtures (default capability + KV-override) to
+    # pin (a) supports_streaming reads correctly from both family default
+    # and stt.capability.streaming KV, and (b) transcribe_stream_begin
+    # returns NOT_IMPLEMENTED in both cases — once on the capability
+    # gate, once on the dispatcher's hook-set check. Public-API only
+    # (no internal-header reach).
+    add_executable(transcribe_stream_capability_unit
+        stream_capability_unit.cpp)
+
+    target_link_libraries(transcribe_stream_capability_unit PRIVATE transcribe)
+
+    target_compile_definitions(transcribe_stream_capability_unit PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_stream_capability_unit)
+
+    add_dependencies(transcribe_stream_capability_unit fixtures)
+
+    add_test(NAME transcribe_stream_capability_unit
+        COMMAND transcribe_stream_capability_unit)
+    set_tests_properties(transcribe_stream_capability_unit PROPERTIES
         SKIP_RETURN_CODE 77)
 endif()
 

@@ -66,6 +66,21 @@ Six fixtures are emitted:
                               KV — proves the v2 / v3 split is fully
                               KV-driven and shares the same code path.
 
+  tokenizer_minimal_streaming.gguf
+                           -- structurally identical to
+                              tokenizer_minimal.gguf except:
+                                stt.variant            = "tdt-0.6b-stream-toy"
+                                stt.capability.streaming = true
+                              The parakeet family has no streaming
+                              hooks wired today, so this fixture pins
+                              the "capability KV says yes but hooks
+                              are missing" path: caps.supports_streaming
+                              reads true at the model surface, and
+                              transcribe_stream_begin still returns
+                              NOT_IMPLEMENTED because the dispatcher
+                              also checks that all three required
+                              hooks (begin/feed/finalize) are wired.
+
   arch_cohere_minimal.gguf -- a structurally complete minimal Cohere ASR
                               model: cohere_asr arch, stt.variant
                               "cohere-asr-toy", full tokenizer payload
@@ -463,6 +478,33 @@ def _parakeet_hparams_kv() -> list[bytes]:
 # Index list of (name, ne) pairs in the canonical order. The C++
 # parakeet_smoke test relies on the index of a few specific tensors so
 # it can assert exact first-element values via _f32_seq above.
+def _parakeet_pre_encode_F_prime(n_mels: int) -> int:
+    """Mirror of src/arch/parakeet/weights.cpp's pre_encode_F_prime
+    lambda. The pre-encode subsampling stack is three stride-2 / k=3
+    convs; the loader traces them on the configured padding so the
+    flattened (channels × F') feed into the pre_encode.out linear
+    matches both offline and cache-aware variants.
+
+    Offline parakeet (and the toy fixture here) has no causal context
+    KV, so the loader's offline branch applies: total per-axis pad =
+    (k-1)/2 + (k-1)/2 = 2 for k=3. The cache-aware (nemotron) branch
+    uses (k-1) + (s-1) = 3; no fixture in this generator emits that
+    KV today.
+
+    For real parakeet sizes (n_mels=128) the offline trace produces
+    F' = 16, matching the old `n_mels // subs` shortcut. For toy
+    sizes (n_mels=4) the trace produces F' = 1 while the shortcut
+    gives 2 — that divergence is why this function exists.
+    """
+    k = 3
+    s = 2
+    total_pad = (k - 1) // 2 + (k - 1) // 2  # offline padding
+    dim = n_mels
+    for _ in range(3):
+        dim = ((dim + total_pad - k) // s) + 1
+    return dim
+
+
 def _parakeet_tensor_descriptors() -> list[tuple[str, list[int]]]:
     hp = PARAKEET_HP
     d_model      = hp["enc_d_model"]
@@ -473,7 +515,7 @@ def _parakeet_tensor_descriptors() -> list[tuple[str, list[int]]]:
     channels     = hp["enc_subsampling_channels"]
     n_mels       = hp["fe_num_mels"]
     subs         = hp["enc_subsampling_factor"]
-    pre_in       = channels * (n_mels // subs)
+    pre_in       = channels * _parakeet_pre_encode_F_prime(n_mels)
     n_layers     = hp["enc_n_layers"]
     pred_h       = hp["pred_hidden"]
     pred_v       = hp["pred_vocab"]
@@ -1350,6 +1392,29 @@ def emit_fixtures(out_dir: Path) -> None:
                     "general.languages",
                     ["en", "de", "fr", "es"],
                 ),
+                *tokenizer_kv,
+                *parakeet_hparams_kv,
+            ],
+            parakeet_tensors,
+        ),
+    )
+
+    # Streaming-capability variant. Same toy vocabulary, same hparams,
+    # same tensor catalog as v2 — but adds stt.capability.streaming = true
+    # to flip caps.supports_streaming on at the model surface. The
+    # parakeet family has no streaming hooks wired, so this fixture
+    # exists specifically to exercise the dispatcher's "all three
+    # required hooks (begin/feed/finalize) must be present" guard:
+    # capability KV says yes, transcribe_stream_begin still returns
+    # NOT_IMPLEMENTED.
+    _write(
+        out_dir / "tokenizer_minimal_streaming.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "parakeet"),
+                _pack_kv_string("stt.variant", "tdt-0.6b-stream-toy"),
+                _pack_kv_bool("stt.capability.streaming", True),
                 *tokenizer_kv,
                 *parakeet_hparams_kv,
             ],
