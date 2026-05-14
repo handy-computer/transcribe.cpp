@@ -686,6 +686,18 @@ struct transcribe_capabilities {
     bool                      supports_temperature_fallback;
     bool                      supports_long_form;
     bool                      supports_cancellation;
+
+    /*
+     * Streaming timing hints. Consumer-facing advisories: callers may use
+     * them to size their audio capture chunks or display latency budgets,
+     * but transcribe_stream_feed accepts arbitrary sample counts and
+     * buffers internally. Zero means "unsupported or unknown" — a family
+     * that advertises supports_streaming may legitimately leave one or
+     * both fields zero if the value is not a fixed property of the model.
+     * supports_streaming remains the hard capability gate.
+     */
+    int32_t                   streaming_lookahead_ms;
+    int32_t                   streaming_chunk_ms;
 };
 
 TRANSCRIBE_API const struct transcribe_capabilities *
@@ -836,6 +848,251 @@ TRANSCRIBE_API void transcribe_set_abort_callback(
  * transcribe_run. Returns false if ctx is NULL.
  */
 TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_context * ctx);
+
+/* ----------------------------------------------------------------------- */
+/* Streaming                                                               */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Streaming is a mode on transcribe_context, not a separate handle. A
+ * context is in exactly one of four lifecycle states at any time, and
+ * the result accessors (transcribe_full_text, segments, words, tokens)
+ * return the current cumulative snapshot of the active stream.
+ *
+ * Result snapshot semantics during an active stream:
+ *
+ *   result = committed prefix + tentative suffix
+ *
+ * The committed-count accessors (transcribe_stream_n_committed_*)
+ * identify the stable prefix; everything past the boundary may be
+ * replaced on the next feed/finalize call. Consumers MUST NOT cache
+ * text, timestamps, probabilities, or indices at or beyond the
+ * committed-count boundary across calls.
+ *
+ * Cancellation reuses the existing context abort callback. The
+ * callback is polled at chunk boundaries and decode-step boundaries
+ * during feed/finalize; on cancellation the active call returns
+ * TRANSCRIBE_ERR_ABORTED, partial results remain readable, and the
+ * stream transitions to FAILED (transcribe_was_aborted distinguishes
+ * caller cancellation from other terminal statuses).
+ *
+ * Multiple concurrent streams: use the existing model/context
+ * threading model. Create multiple contexts from one loaded model,
+ * then run at most one stream per context. The model is shared and
+ * read-only; each context owns its own stream state.
+ *
+ * v1 explicitly limits stream params to family-specific extension
+ * pointers. Generic latency / partial-output knobs will be added when
+ * a shipped family implements them with clear semantics.
+ */
+
+enum transcribe_stream_state {
+    TRANSCRIBE_STREAM_IDLE     = 0,
+    TRANSCRIBE_STREAM_ACTIVE   = 1,
+    TRANSCRIBE_STREAM_FINISHED = 2,
+    TRANSCRIBE_STREAM_FAILED   = 3,
+};
+
+/*
+ * Family-specific streaming extensions. Defined per-family alongside
+ * the corresponding run-params extension. NULL selects the family
+ * default. Only consulted by the matching family; others ignore.
+ */
+struct transcribe_parakeet_stream_params;
+
+struct transcribe_stream_params {
+    const struct transcribe_parakeet_stream_params * parakeet;
+};
+
+/*
+ * Optional per-call change metadata returned by feed/finalize.
+ *
+ *   result_changed     The context result was modified by this call.
+ *                      Inspect the accessors after the call to read
+ *                      the new snapshot.
+ *   is_final           True only on the finalize call's update.
+ *   revision           Monotonic counter that increments whenever the
+ *                      context result changes (mirrors
+ *                      transcribe_stream_revision(ctx) after the call
+ *                      returns).
+ *   input_received_ms  Total audio received by the stream since begin.
+ *   audio_committed_ms Audio whose result is committed (corresponds
+ *                      to the committed-prefix boundary).
+ *   buffered_ms        Audio still buffered inside the family's
+ *                      streaming state (frontend carry +
+ *                      lookahead/right-context requirement). Caller
+ *                      may use this as a "drain" hint.
+ *
+ * update is nullable. Passing NULL means the caller will inspect the
+ * context directly (revision + committed-count accessors). Audio
+ * cursor fields are only available via this struct.
+ */
+struct transcribe_stream_update {
+    bool    result_changed;
+    bool    is_final;
+    int32_t revision;
+    int64_t input_received_ms;
+    int64_t audio_committed_ms;
+    int64_t buffered_ms;
+};
+
+TRANSCRIBE_API struct transcribe_stream_params
+    transcribe_stream_default_params(void);
+
+/*
+ * Begin a streaming run on ctx.
+ *
+ * run_params and stream_params MUST be non-null (callers obtain
+ * defaults from transcribe_default_params() and
+ * transcribe_stream_default_params()).
+ *
+ * On success the context transitions IDLE/FINISHED/FAILED -> ACTIVE
+ * and every result-visible field is cleared: text, segments, words,
+ * tokens, detected language, stream revision, committed counts,
+ * audio cursors, timings, was_aborted, and last stream status. The
+ * installed abort callback, the loaded model, and any reusable
+ * stream buffers held by the family are preserved.
+ *
+ * Returns:
+ *   TRANSCRIBE_ERR_INVALID_ARG       NULL arg, ctx in ACTIVE state,
+ *                                    or out-of-range enum in run_params.
+ *   TRANSCRIBE_ERR_NOT_IMPLEMENTED   Model has no streaming hooks or
+ *                                    capabilities advertise
+ *                                    supports_streaming == false.
+ *                                    All three of stream_begin /
+ *                                    stream_feed / stream_finalize must
+ *                                    be wired for begin to succeed;
+ *                                    stream_reset is optional.
+ *   TRANSCRIBE_ERR_UNSUPPORTED_TASK  TRANSCRIBE_TASK_TRANSLATE; v1
+ *                                    streaming is transcribe-only.
+ *   TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS
+ *                                    Requested granularity finer than
+ *                                    the model's max_timestamp_kind.
+ *   TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE
+ *                                    run_params->language not in the
+ *                                    model's declared language list.
+ *
+ * Failure semantics split at the family hook boundary:
+ *
+ *   Pre-hook failures (every status above) leave the context's
+ *   lifecycle state untouched — the call returns without entering
+ *   ACTIVE and without clearing the previous result snapshot.
+ *
+ *   Family-hook failures (any non-OK status returned by the family's
+ *   stream_begin hook after the dispatcher has already cleared the
+ *   snapshot and entered ACTIVE) transition the stream to FAILED and
+ *   preserve the status in transcribe_stream_last_status. The result
+ *   snapshot in this case is whatever the hook wrote before failing —
+ *   typically empty.
+ */
+TRANSCRIBE_API transcribe_status transcribe_stream_begin(
+    struct transcribe_context *              ctx,
+    const struct transcribe_params *         run_params,
+    const struct transcribe_stream_params *  stream_params);
+
+/*
+ * Feed PCM into the active stream. 16 kHz mono float32, same as
+ * transcribe_run.
+ *
+ * pcm must be non-null and n_samples must be strictly greater than
+ * zero. Polling the stream without supplying audio is unsupported —
+ * use the stream accessors (transcribe_stream_revision,
+ * transcribe_stream_n_committed_*, transcribe_stream_last_status,
+ * transcribe_stream_get_state) to inspect state without progressing
+ * the stream.
+ *
+ * update is nullable; when non-null the dispatcher zero-initializes
+ * it before calling the family hook, so callers may rely on a clean
+ * struct even on early-return error paths.
+ *
+ * Returns TRANSCRIBE_ERR_INVALID_ARG when ctx is NULL, when state
+ * is not ACTIVE, or on malformed input. A terminal non-OK status
+ * from the family hook transitions the stream to FAILED and is
+ * preserved in transcribe_stream_last_status. TRANSCRIBE_ERR_ABORTED
+ * is a terminal status; transcribe_was_aborted distinguishes it from
+ * other failures.
+ */
+TRANSCRIBE_API transcribe_status transcribe_stream_feed(
+    struct transcribe_context *        ctx,
+    const float *                      pcm,
+    int                                n_samples,
+    struct transcribe_stream_update *  update);
+
+/*
+ * Signal end of input. Flushes buffered audio, satisfies right-
+ * context / lookahead requirements, and emits remaining text.
+ *
+ * On success the context transitions ACTIVE -> FINISHED. On a
+ * terminal non-OK status the context transitions to FAILED and the
+ * status is preserved in transcribe_stream_last_status.
+ *
+ * Returns TRANSCRIBE_ERR_INVALID_ARG when ctx is NULL or state is
+ * not ACTIVE.
+ */
+TRANSCRIBE_API transcribe_status transcribe_stream_finalize(
+    struct transcribe_context *        ctx,
+    struct transcribe_stream_update *  update);
+
+/*
+ * Abandon the current stream without finalizing.
+ *
+ * Always returns the context to IDLE and clears every result-visible
+ * field, every stream-snapshot counter, last_status, and the family's
+ * per-utterance streaming state. Allocated stream buffers held by the
+ * family are preserved for reuse — full memory release is
+ * transcribe_context_free.
+ *
+ * Reset from IDLE clears any stale result/snapshot from a previous
+ * stream or run. Reset from FINISHED or FAILED clears the surviving
+ * result text and snapshot counters as well.
+ *
+ * No-op if ctx is NULL.
+ */
+TRANSCRIBE_API void transcribe_stream_reset(
+    struct transcribe_context * ctx);
+
+/*
+ * Current stream lifecycle state. Returns TRANSCRIBE_STREAM_IDLE if
+ * ctx is NULL.
+ */
+TRANSCRIBE_API enum transcribe_stream_state
+    transcribe_stream_get_state(const struct transcribe_context * ctx);
+
+/*
+ * Monotonic revision counter. Increments whenever the context result
+ * changes during streaming. Reset to 0 by begin / reset / run.
+ * Returns 0 if ctx is NULL.
+ */
+TRANSCRIBE_API int transcribe_stream_revision(
+    const struct transcribe_context * ctx);
+
+/*
+ * Committed-prefix counts. tokens[0 .. n_committed_tokens) is the
+ * stable prefix; everything beyond may be replaced on the next
+ * feed/finalize. The same holds for words and segments. Families
+ * that only emit on finalize set committed counts equal to the
+ * total counts on the finalize call.
+ *
+ * Return 0 if ctx is NULL.
+ */
+TRANSCRIBE_API int transcribe_stream_n_committed_segments(
+    const struct transcribe_context * ctx);
+TRANSCRIBE_API int transcribe_stream_n_committed_words(
+    const struct transcribe_context * ctx);
+TRANSCRIBE_API int transcribe_stream_n_committed_tokens(
+    const struct transcribe_context * ctx);
+
+/*
+ * Last terminal status of the stream. Preserves the failing status
+ * after a feed/finalize call transitioned the stream to FAILED, so
+ * the caller can inspect it after the fact. Reset to TRANSCRIBE_OK
+ * by begin / reset / run.
+ *
+ * Returns TRANSCRIBE_OK if ctx is NULL or no terminal status has
+ * been recorded on the current stream.
+ */
+TRANSCRIBE_API transcribe_status transcribe_stream_last_status(
+    const struct transcribe_context * ctx);
 
 /* ----------------------------------------------------------------------- */
 /* Tokenization                                                            */

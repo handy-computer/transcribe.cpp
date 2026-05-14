@@ -74,6 +74,62 @@ struct Arch {
         const float *                          pcm,
         int                                    n_samples,
         const transcribe_params *              params);
+
+    // Optional streaming hooks. stream_begin / stream_feed /
+    // stream_finalize form a required triple: a family that wants to
+    // support streaming MUST wire all three. The dispatcher checks
+    // the triple at begin time and returns NOT_IMPLEMENTED if any of
+    // them is NULL (a partially-wired family must never let a caller
+    // enter ACTIVE and then get stuck on the next call). stream_reset
+    // is optional — when NULL, transcribe_stream_reset still wipes
+    // dispatcher-owned state and runs the clear_result path, which
+    // is sufficient when a family doesn't need to release per-
+    // utterance buffers explicitly.
+    //
+    // Hook responsibilities:
+    //
+    //   stream_begin: install per-utterance state on the derived
+    //     context. The central dispatcher has already validated
+    //     params, cleared the result snapshot, and set ctx->stream_state
+    //     to ACTIVE. On non-OK return the dispatcher transitions to
+    //     FAILED and preserves the status in stream_last_status.
+    //
+    //   stream_feed: consume the PCM (n_samples may be 0) and update
+    //     the result vectors / committed counts / audio cursors on
+    //     ctx in place. When update is non-null, fill it with the
+    //     family's per-call change metadata; the dispatcher has
+    //     already zero-initialized it. Poll ctx->poll_abort() at
+    //     chunk and decode-step boundaries; if it fires, return
+    //     TRANSCRIBE_ERR_ABORTED (the dispatcher will transition to
+    //     FAILED and record the status, and transcribe_was_aborted
+    //     will distinguish abort from other failures).
+    //
+    //   stream_finalize: flush buffered audio, satisfy lookahead,
+    //     emit remaining text, mark all output as committed. The
+    //     dispatcher transitions to FINISHED on TRANSCRIBE_OK and
+    //     FAILED otherwise.
+    //
+    //   stream_reset: release the family's per-utterance state and
+    //     buffered audio contents (keeping allocated buffers for
+    //     reuse). The dispatcher clears the result snapshot and
+    //     forces stream_state back to IDLE around this call.
+    transcribe_status (*stream_begin)(
+        struct transcribe_context *            ctx,
+        const transcribe_params *              run_params,
+        const transcribe_stream_params *       stream_params);
+
+    transcribe_status (*stream_feed)(
+        struct transcribe_context *            ctx,
+        const float *                          pcm,
+        int                                    n_samples,
+        transcribe_stream_update *             update);
+
+    transcribe_status (*stream_finalize)(
+        struct transcribe_context *            ctx,
+        transcribe_stream_update *             update);
+
+    void (*stream_reset)(
+        struct transcribe_context *            ctx);
 };
 
 // Look up an architecture by name. Returns nullptr if no registered

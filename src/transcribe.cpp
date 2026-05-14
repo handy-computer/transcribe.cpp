@@ -99,6 +99,59 @@ int timestamp_rank(transcribe_timestamp_kind k) {
     return -1;
 }
 
+// Shared run-params validation used by transcribe_run and
+// transcribe_stream_begin. Both call sites have already validated
+// that ctx, ctx->model, and params are non-null. The translate-task
+// rejection differs between the two (run mirrors supports_translate,
+// streaming-begin rejects unconditionally in v1), so each caller
+// applies its own translate check before reaching this helper.
+transcribe_status validate_run_params_common(
+    const transcribe_context * ctx,
+    const transcribe_params *  params)
+{
+    switch (params->task) {
+        case TRANSCRIBE_TASK_TRANSCRIBE:
+        case TRANSCRIBE_TASK_TRANSLATE:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    switch (params->timestamps) {
+        case TRANSCRIBE_TIMESTAMPS_NONE:
+        case TRANSCRIBE_TIMESTAMPS_AUTO:
+        case TRANSCRIBE_TIMESTAMPS_SEGMENT:
+        case TRANSCRIBE_TIMESTAMPS_WORD:
+        case TRANSCRIBE_TIMESTAMPS_TOKEN:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (params->timestamps != TRANSCRIBE_TIMESTAMPS_AUTO) {
+        const int req_rank = timestamp_rank(params->timestamps);
+        const int max_rank = timestamp_rank(ctx->model->caps.max_timestamp_kind);
+        if (req_rank > max_rank) {
+            return TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS;
+        }
+    }
+    if (params->language != nullptr &&
+        ctx->model->caps.n_languages > 0 &&
+        ctx->model->caps.languages != nullptr)
+    {
+        bool found = false;
+        for (int i = 0; i < ctx->model->caps.n_languages; ++i) {
+            const char * entry = ctx->model->caps.languages[i];
+            if (entry != nullptr && std::strcmp(entry, params->language) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -212,6 +265,14 @@ transcribe_canary_default_params(void)
 {
     struct transcribe_canary_params p = {};
     p.pnc = true;
+    return p;
+}
+
+extern "C" struct transcribe_stream_params
+transcribe_stream_default_params(void)
+{
+    struct transcribe_stream_params p = {};
+    p.parakeet = nullptr;
     return p;
 }
 
@@ -410,6 +471,230 @@ extern "C" bool transcribe_was_aborted(const struct transcribe_context * ctx) {
     return ctx->was_aborted;
 }
 
+// ---------------------------------------------------------------------------
+// Streaming dispatcher
+// ---------------------------------------------------------------------------
+//
+// State transitions are managed entirely here; per-family hooks see
+// stream_state == ACTIVE on entry to begin/feed/finalize and never
+// observe transitions themselves. Hooks own the per-utterance result
+// data on the context and may freely mutate tokens/words/segments,
+// committed counts, audio cursors, and stream_revision; the
+// dispatcher owns lifecycle state and last_status.
+//
+// The result snapshot and lifecycle state are deliberately separate.
+// clear_result() (called by both begin and transcribe_run) wipes the
+// snapshot but never touches stream_state, so a future caller that
+// wants to "rewind to a fresh result without restarting the stream"
+// has a path. The streaming dispatcher is currently the only caller
+// that drives stream_state.
+
+extern "C" transcribe_status transcribe_stream_begin(
+    struct transcribe_context *              ctx,
+    const struct transcribe_params *         run_params,
+    const struct transcribe_stream_params *  stream_params)
+{
+    if (ctx == nullptr || run_params == nullptr || stream_params == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (ctx->stream_state == TRANSCRIBE_STREAM_ACTIVE) {
+        // Caller must finalize or reset before starting a new stream.
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (ctx->model == nullptr || ctx->model->arch == nullptr) {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+    // Capability gate: the model must advertise streaming AND the
+    // family must wire the full required hook set. begin / feed /
+    // finalize come as a triple — a partially-wired family that
+    // accepts begin would otherwise let the caller enter ACTIVE and
+    // then get stuck on NOT_IMPLEMENTED at the first feed. stream_reset
+    // remains optional; the dispatcher's clear_result + state wipe is
+    // sufficient when a family does not need to release per-utterance
+    // buffers explicitly.
+    if (!ctx->model->caps.supports_streaming                ||
+        ctx->model->arch->stream_begin    == nullptr        ||
+        ctx->model->arch->stream_feed     == nullptr        ||
+        ctx->model->arch->stream_finalize == nullptr)
+    {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+
+    if (const transcribe_status st = validate_run_params_common(ctx, run_params);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+
+    // v1 rejects TRANSLATE unconditionally for streaming. A future
+    // family that supports streaming translate would loosen this in
+    // its stream_begin hook, but the central dispatcher refuses
+    // upfront so partially-wired callers fail fast.
+    if (run_params->task == TRANSCRIBE_TASK_TRANSLATE) {
+        return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
+    }
+
+    // All checks pass — clear the previous snapshot and hand off.
+    ctx->clear_result();
+    ctx->t_mel_us    = 0;
+    ctx->t_encode_us = 0;
+    ctx->t_decode_us = 0;
+    ctx->was_aborted = false;
+    ctx->stream_state = TRANSCRIBE_STREAM_ACTIVE;
+
+    const transcribe_status st = ctx->model->arch->stream_begin(
+        ctx, run_params, stream_params);
+    if (st != TRANSCRIBE_OK) {
+        // Family hook rejected the begin (config it does not understand,
+        // memory allocation failure, etc.). Roll lifecycle back to
+        // FAILED so the caller can read last_status; leave the cleared
+        // result snapshot in place.
+        ctx->stream_state      = TRANSCRIBE_STREAM_FAILED;
+        ctx->stream_last_status = st;
+    }
+    return st;
+}
+
+extern "C" transcribe_status transcribe_stream_feed(
+    struct transcribe_context *        ctx,
+    const float *                      pcm,
+    int                                n_samples,
+    struct transcribe_stream_update *  update)
+{
+    if (update != nullptr) {
+        *update = transcribe_stream_update{};
+    }
+    if (ctx == nullptr || pcm == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    // Zero-length feed is rejected: feed exists to consume audio,
+    // and callers that just want to inspect state use the stream
+    // accessors. n_samples < 0 is plain garbage.
+    if (n_samples <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (ctx->stream_state != TRANSCRIBE_STREAM_ACTIVE) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    // begin already confirmed model/arch/hook; we re-check defensively
+    // so a malformed context (never happens in practice from a real
+    // begin) does not deref a null function pointer.
+    if (ctx->model == nullptr || ctx->model->arch == nullptr ||
+        ctx->model->arch->stream_feed == nullptr)
+    {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+
+    const transcribe_status st = ctx->model->arch->stream_feed(
+        ctx, pcm, n_samples, update);
+    if (st != TRANSCRIBE_OK) {
+        ctx->stream_state       = TRANSCRIBE_STREAM_FAILED;
+        ctx->stream_last_status = st;
+    }
+    return st;
+}
+
+extern "C" transcribe_status transcribe_stream_finalize(
+    struct transcribe_context *        ctx,
+    struct transcribe_stream_update *  update)
+{
+    if (update != nullptr) {
+        *update = transcribe_stream_update{};
+    }
+    if (ctx == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (ctx->stream_state != TRANSCRIBE_STREAM_ACTIVE) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (ctx->model == nullptr || ctx->model->arch == nullptr ||
+        ctx->model->arch->stream_finalize == nullptr)
+    {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+
+    const transcribe_status st = ctx->model->arch->stream_finalize(ctx, update);
+    if (update != nullptr) {
+        // Force is_final true regardless of family hook return; the
+        // marker describes the call site, not the result. Set after
+        // the hook so the family cannot accidentally clear it.
+        update->is_final = true;
+    }
+    if (st != TRANSCRIBE_OK) {
+        ctx->stream_state       = TRANSCRIBE_STREAM_FAILED;
+        ctx->stream_last_status = st;
+        return st;
+    }
+    ctx->stream_state = TRANSCRIBE_STREAM_FINISHED;
+    return TRANSCRIBE_OK;
+}
+
+extern "C" void transcribe_stream_reset(struct transcribe_context * ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
+    // Family hook releases per-utterance state and clears any buffered
+    // audio contents while keeping the allocations. A family without
+    // streaming just has no hook installed; reset becomes a pure
+    // dispatcher state wipe.
+    if (ctx->model != nullptr && ctx->model->arch != nullptr &&
+        ctx->model->arch->stream_reset != nullptr)
+    {
+        ctx->model->arch->stream_reset(ctx);
+    }
+    ctx->clear_result();
+    ctx->stream_state = TRANSCRIBE_STREAM_IDLE;
+    // was_aborted is per-stream; reset re-arms it the same way begin
+    // does so a caller that resets after an abort starts clean.
+    ctx->was_aborted  = false;
+}
+
+extern "C" enum transcribe_stream_state
+transcribe_stream_get_state(const struct transcribe_context * ctx)
+{
+    if (ctx == nullptr) {
+        return TRANSCRIBE_STREAM_IDLE;
+    }
+    return ctx->stream_state;
+}
+
+extern "C" int transcribe_stream_revision(const struct transcribe_context * ctx) {
+    if (ctx == nullptr) {
+        return 0;
+    }
+    return ctx->stream_revision;
+}
+
+extern "C" int transcribe_stream_n_committed_segments(
+    const struct transcribe_context * ctx)
+{
+    if (ctx == nullptr) return 0;
+    return ctx->n_committed_segments;
+}
+
+extern "C" int transcribe_stream_n_committed_words(
+    const struct transcribe_context * ctx)
+{
+    if (ctx == nullptr) return 0;
+    return ctx->n_committed_words;
+}
+
+extern "C" int transcribe_stream_n_committed_tokens(
+    const struct transcribe_context * ctx)
+{
+    if (ctx == nullptr) return 0;
+    return ctx->n_committed_tokens;
+}
+
+extern "C" transcribe_status transcribe_stream_last_status(
+    const struct transcribe_context * ctx)
+{
+    if (ctx == nullptr) {
+        return TRANSCRIBE_OK;
+    }
+    return ctx->stream_last_status;
+}
+
 // Whisper-specific decoding trace accessors. The storage lives on
 // WhisperContext; we downcast via the model's arch name rather than
 // RTTI so non-RTTI builds keep working. Non-Whisper contexts and
@@ -469,6 +754,13 @@ extern "C" transcribe_status transcribe_run(
     if (n_samples < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    // A run cannot replace an active stream's results — that would
+    // strand the in-flight stream's per-family state. Caller must
+    // finalize or reset first. FINISHED and FAILED both fall through;
+    // the run path below resets stream_state to IDLE.
+    if (ctx->stream_state == TRANSCRIBE_STREAM_ACTIVE) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
 
     // Result-replacement contract: everything past this point either
     // succeeds and writes a fresh result, or fails and leaves the
@@ -488,6 +780,11 @@ extern "C" transcribe_status transcribe_run(
     ctx->t_encode_us = 0;
     ctx->t_decode_us = 0;
     ctx->was_aborted = false;
+    // Force stream_state to IDLE: clear_result deliberately preserves
+    // lifecycle state, but a well-formed transcribe_run subsumes any
+    // prior FINISHED/FAILED stream — after a one-shot run the context
+    // is no longer meaningfully in a streaming lifecycle.
+    ctx->stream_state = TRANSCRIBE_STREAM_IDLE;
 
     if (ctx->model == nullptr || ctx->model->arch == nullptr ||
         ctx->model->arch->run == nullptr)
@@ -503,83 +800,23 @@ extern "C" transcribe_status transcribe_run(
     // handling for TRANSLATE — continues to live inside the family's
     // run() handler.
     //
-    // Out-of-range enum values are handled separately from
-    // capability-mediated rejections so the caller can distinguish
-    // "you passed garbage" (ERR_INVALID_ARG) from "this model doesn't
-    // support that legitimate request" (ERR_UNSUPPORTED_TASK).
-    switch (params->task) {
-        case TRANSCRIBE_TASK_TRANSCRIBE:
-        case TRANSCRIBE_TASK_TRANSLATE:
-            break;
-        default:
-            return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-    switch (params->timestamps) {
-        case TRANSCRIBE_TIMESTAMPS_NONE:
-        case TRANSCRIBE_TIMESTAMPS_AUTO:
-        case TRANSCRIBE_TIMESTAMPS_SEGMENT:
-        case TRANSCRIBE_TIMESTAMPS_WORD:
-        case TRANSCRIBE_TIMESTAMPS_TOKEN:
-            break;
-        default:
-            return TRANSCRIBE_ERR_INVALID_ARG;
+    if (const transcribe_status st = validate_run_params_common(ctx, params);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
     }
 
     // Reject TRANSLATE for models that don't declare support. The
     // capability is set per-arch in apply_family_invariants and may
     // be overridden by stt.capability.* KV. Models that DO support
     // translate may still validate target_language inside their own
-    // run() handler against the model-specific language list.
+    // run() handler against the model-specific language list. This
+    // check runs after enum-range validation in the shared helper so
+    // a garbage task value still reports as ERR_INVALID_ARG.
     if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
         !ctx->model->caps.supports_translate)
     {
         return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
-    }
-
-    // Reject a timestamp granularity finer than the model can
-    // produce. AUTO passes through unconditionally — the per-family
-    // run() handler resolves AUTO to its own max_timestamp_kind when
-    // it assembles the result. A non-AUTO request is treated as a
-    // ceiling: the handler may emit the requested granularity or
-    // coarser, never finer.
-    //
-    // Advertising NONE and then fabricating a zero-timed WordEntry
-    // was the bug that motivated the ceiling check — if a family
-    // says it can't produce word alignments, the dispatcher holds
-    // it to that contract.
-    if (params->timestamps != TRANSCRIBE_TIMESTAMPS_AUTO) {
-        const int req_rank = timestamp_rank(params->timestamps);
-        const int max_rank = timestamp_rank(ctx->model->caps.max_timestamp_kind);
-        if (req_rank > max_rank) {
-            return TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS;
-        }
-    }
-
-    // Reject a caller-supplied source language that the model does
-    // not declare. A NULL language means "use family default or
-    // auto-detect"; that's always accepted at dispatch level. When
-    // n_languages == 0 the model's language list is "information
-    // gap, not a claim" (see transcribe-meta.cpp read_languages_kv)
-    // and we cannot validate, so we defer to the family handler.
-    //
-    // Per-family run() handlers may still reject a language for
-    // tokenizer-vocabulary reasons, but they no longer need to
-    // replicate this metadata walk.
-    if (params->language != nullptr &&
-        ctx->model->caps.n_languages > 0 &&
-        ctx->model->caps.languages != nullptr)
-    {
-        bool found = false;
-        for (int i = 0; i < ctx->model->caps.n_languages; ++i) {
-            const char * entry = ctx->model->caps.languages[i];
-            if (entry != nullptr && std::strcmp(entry, params->language) == 0) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
-        }
     }
 
     return ctx->model->arch->run(ctx, pcm, n_samples, params);

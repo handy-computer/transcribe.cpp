@@ -740,10 +740,14 @@ transcribe_status run(
 } // namespace
 
 extern const Arch arch = {
-    /* .name         = */ "moonshine",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name            = */ "moonshine",
+    /* .load            = */ load,
+    /* .init_context    = */ init_context,
+    /* .run             = */ run,
+    /* .stream_begin    = */ nullptr,
+    /* .stream_feed     = */ nullptr,
+    /* .stream_finalize = */ nullptr,
+    /* .stream_reset    = */ nullptr,
 };
 
 } // namespace transcribe::moonshine

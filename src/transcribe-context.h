@@ -126,6 +126,31 @@ struct transcribe_context {
         return false;
     }
 
+    // -----------------------------------------------------------------
+    // Streaming state.
+    //
+    // Lifecycle (stream_state) is separated from result snapshot so
+    // that clear_result() — which is called by both transcribe_run and
+    // transcribe_stream_begin — can wipe per-call data without churning
+    // the IDLE/ACTIVE/FINISHED/FAILED state machine. The dispatcher
+    // manages stream_state explicitly at begin/feed/finalize/reset.
+    //
+    // The snapshot fields below (revision, committed counts,
+    // last_status, audio cursors) ARE cleared by clear_result so that
+    // a fresh transcribe_run starts with zeroed streaming bookkeeping
+    // and a streaming caller does not see stale counters across runs.
+    //
+    // Audio cursors are us-precision; the public stream_update struct
+    // exposes them as ms.
+    transcribe_stream_state      stream_state          = TRANSCRIBE_STREAM_IDLE;
+    int32_t                      stream_revision      = 0;
+    int                          n_committed_segments = 0;
+    int                          n_committed_words    = 0;
+    int                          n_committed_tokens   = 0;
+    transcribe_status            stream_last_status   = TRANSCRIBE_OK;
+    int64_t                      stream_audio_input_us     = 0;
+    int64_t                      stream_audio_committed_us = 0;
+
     void clear_result();
 
     transcribe_context() = default;

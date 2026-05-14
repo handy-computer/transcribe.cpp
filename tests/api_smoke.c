@@ -353,6 +353,50 @@ static void test_result_accessors_null(void) {
     CHECK(transcribe_token_word_index(ctx, 0) == 0);
 }
 
+static void test_stream_factory(void) {
+    /* The streaming factory must return zeroed extension pointers
+     * regardless of which families are linked in. */
+    struct transcribe_stream_params sp = transcribe_stream_default_params();
+    CHECK(sp.parakeet == NULL);
+}
+
+static void test_stream_state_values(void) {
+    /* The state enum values are part of the public ABI — pin them. */
+    CHECK(TRANSCRIBE_STREAM_IDLE     == 0);
+    CHECK(TRANSCRIBE_STREAM_ACTIVE   == 1);
+    CHECK(TRANSCRIBE_STREAM_FINISHED == 2);
+    CHECK(TRANSCRIBE_STREAM_FAILED   == 3);
+}
+
+static void test_stream_accessors_null(void) {
+    const struct transcribe_context * ctx = NULL;
+    /* Every streaming accessor is safe to call on NULL and returns the
+     * documented sentinel. */
+    CHECK(transcribe_stream_get_state(ctx)             == TRANSCRIBE_STREAM_IDLE);
+    CHECK(transcribe_stream_revision(ctx)              == 0);
+    CHECK(transcribe_stream_n_committed_segments(ctx)  == 0);
+    CHECK(transcribe_stream_n_committed_words(ctx)     == 0);
+    CHECK(transcribe_stream_n_committed_tokens(ctx)    == 0);
+    CHECK(transcribe_stream_last_status(ctx)           == TRANSCRIBE_OK);
+}
+
+static void test_stream_entries_null(void) {
+    /* NULL ctx into every entry point: begin/feed/finalize report
+     * INVALID_ARG; reset is a no-op. */
+    struct transcribe_params        rp = transcribe_default_params();
+    struct transcribe_stream_params sp = transcribe_stream_default_params();
+    float                           pcm[1] = { 0.0f };
+
+    CHECK(transcribe_stream_begin(NULL, &rp, &sp)
+          == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_feed(NULL, pcm, 1, NULL)
+          == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_finalize(NULL, NULL)
+          == TRANSCRIBE_ERR_INVALID_ARG);
+    /* reset is void; calling it on NULL must not crash. */
+    transcribe_stream_reset(NULL);
+}
+
 int main(void) {
     test_status_string();
     test_log_level_values();
@@ -367,6 +411,10 @@ int main(void) {
     test_tokenize_null();
     test_abort_callback_null();
     test_whisper_chunk_trace_null();
+    test_stream_factory();
+    test_stream_state_values();
+    test_stream_accessors_null();
+    test_stream_entries_null();
 
     if (g_failures > 0) {
         fprintf(stderr, "api_smoke: %d failures\n", g_failures);

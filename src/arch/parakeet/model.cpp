@@ -1189,10 +1189,14 @@ transcribe_status run(
 // namespace-scope `const` object has internal linkage in C++ and the
 // forward declaration in transcribe-arch.cpp would not resolve.
 extern const Arch arch = {
-    /* .name         = */ "parakeet",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name            = */ "parakeet",
+    /* .load            = */ load,
+    /* .init_context    = */ init_context,
+    /* .run             = */ run,
+    /* .stream_begin    = */ nullptr,
+    /* .stream_feed     = */ nullptr,
+    /* .stream_finalize = */ nullptr,
+    /* .stream_reset    = */ nullptr,
 };
 
 } // namespace transcribe::parakeet

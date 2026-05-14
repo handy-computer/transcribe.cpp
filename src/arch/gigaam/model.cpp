@@ -464,10 +464,14 @@ transcribe_status run(transcribe_context *      ctx,
 } // namespace
 
 const Arch arch = {
-    /*.name         =*/ "gigaam",
-    /*.load         =*/ load,
-    /*.init_context =*/ init_context,
-    /*.run          =*/ run,
+    /*.name            =*/ "gigaam",
+    /*.load            =*/ load,
+    /*.init_context    =*/ init_context,
+    /*.run             =*/ run,
+    /*.stream_begin    =*/ nullptr,
+    /*.stream_feed     =*/ nullptr,
+    /*.stream_finalize =*/ nullptr,
+    /*.stream_reset    =*/ nullptr,
 };
 
 } // namespace transcribe::gigaam

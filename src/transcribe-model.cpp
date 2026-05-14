@@ -30,6 +30,18 @@ void transcribe_context::clear_result() {
     detected_language.clear();
     result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     has_result  = false;
+
+    // Stream snapshot — lifecycle (stream_state) is NOT touched here;
+    // the streaming dispatcher manages IDLE/ACTIVE/FINISHED/FAILED
+    // explicitly. Everything else is per-utterance bookkeeping that
+    // belongs with the result it describes.
+    stream_revision           = 0;
+    n_committed_segments      = 0;
+    n_committed_words         = 0;
+    n_committed_tokens        = 0;
+    stream_last_status        = TRANSCRIBE_OK;
+    stream_audio_input_us     = 0;
+    stream_audio_committed_us = 0;
 }
 
 void transcribe_model::set_languages(std::vector<std::string> langs) {

@@ -141,6 +141,23 @@ add_test(NAME transcribe_run_dispatch_unit
     COMMAND transcribe_run_dispatch_unit)
 
 # -----------------------------------------------------------------------------
+# Dispatcher-level streaming entry-point behavior
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_stream_dispatch_unit
+    stream_dispatch_unit.cpp)
+
+target_link_libraries(transcribe_stream_dispatch_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_stream_dispatch_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_stream_dispatch_unit)
+
+add_test(NAME transcribe_stream_dispatch_unit
+    COMMAND transcribe_stream_dispatch_unit)
+
+# -----------------------------------------------------------------------------
 # Synthetic GGUF fixtures (for the loader smoke test)
 # -----------------------------------------------------------------------------
 
