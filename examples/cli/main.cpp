@@ -22,6 +22,7 @@
 #include "transcribe.h"
 #include "wav.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -116,6 +117,13 @@ struct cli_args {
     // Canary family knobs. Ignored by non-Canary families.
     bool        canary_pnc                   = true;  // default: punctuation+caps on
     bool        canary_pnc_set               = false; // --pnc / --no-pnc set this
+
+    // Streaming demo: when > 0, the single-file path feeds the WAV
+    // through transcribe_stream_begin/feed/finalize in fixed-size
+    // ms-aligned chunks instead of one transcribe_run call. Requires
+    // the loaded model to advertise supports_streaming. Set by
+    // --stream-chunk-ms N.
+    int         stream_chunk_ms              = 0;
 };
 
 void print_usage(const char * argv0) {
@@ -142,6 +150,9 @@ void print_usage(const char * argv0) {
         "  --pnc                 (canary) emit punctuation and capitalization (default)\n"
         "  --no-pnc              (canary) emit lowercase de-punctuated text\n"
         "  --raw-tokens          keep <|...|> control tokens in output text\n"
+        "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
+        "                        N-ms PCM slices; requires model to advertise\n"
+        "                        supports_streaming\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
 }
@@ -261,6 +272,15 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             out.canary_pnc_set = true;
         } else if (a == "--raw-tokens") {
             out.keep_special_tags = true;
+        } else if (a == "--stream-chunk-ms") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.stream_chunk_ms = std::atoi(v);
+            if (out.stream_chunk_ms <= 0) {
+                std::fprintf(stderr,
+                             "error: --stream-chunk-ms must be > 0\n");
+                return false;
+            }
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -278,6 +298,16 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
     }
     if (!out.wav_path.empty() && !out.batch_file.empty()) {
         std::fprintf(stderr, "error: cannot combine positional audio.wav with --batch\n");
+        return false;
+    }
+    if (out.stream_chunk_ms > 0 && !out.batch_file.empty()) {
+        std::fprintf(stderr,
+                     "error: --stream-chunk-ms is single-file only\n");
+        return false;
+    }
+    if (out.stream_chunk_ms > 0 && out.repeat > 1) {
+        std::fprintf(stderr,
+                     "error: --stream-chunk-ms cannot be combined with --repeat\n");
         return false;
     }
     return true;
@@ -587,13 +617,88 @@ int main(int argc, char ** argv) {
             rp.strip_special_tags = false;
         }
 
-        // --repeat N runs transcribe_run() N times for steady-state
-        // perf measurements.
+        // Streaming demo: drive transcribe_stream_begin/feed/finalize
+        // with fixed-size PCM chunks. Phase 4a's stream-of-whole
+        // moonshine_streaming reports result_changed only at
+        // finalize, so per-feed lines mostly just show progress; a
+        // future real-incremental streaming family would print
+        // partial transcripts as result_changed flips.
         transcribe_status run_st = TRANSCRIBE_OK;
-        for (int r = 0; r < args.repeat; ++r) {
-            run_st = transcribe_run(
-                ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
-            if (run_st != TRANSCRIBE_OK) break;
+        if (args.stream_chunk_ms > 0) {
+            const transcribe_capabilities * caps =
+                transcribe_model_capabilities(model);
+            if (caps == nullptr || !caps->supports_streaming) {
+                std::fprintf(stderr,
+                             "stream: model does not advertise "
+                             "supports_streaming; use a streaming-capable "
+                             "model or drop --stream-chunk-ms\n");
+                transcribe_context_free(ctx);
+                transcribe_model_free(model);
+                return EXIT_FAILURE;
+            }
+
+            const int chunk_samples =
+                std::max(1, args.stream_chunk_ms * 16000 / 1000);
+            std::printf("stream: chunk=%d ms (%d samples)\n",
+                        args.stream_chunk_ms, chunk_samples);
+
+            struct transcribe_stream_params sp =
+                transcribe_stream_default_params();
+            run_st = transcribe_stream_begin(ctx, &rp, &sp);
+            if (run_st != TRANSCRIBE_OK) {
+                std::fprintf(stderr,
+                             "stream_begin: %s\n",
+                             transcribe_status_string(run_st));
+            } else {
+                size_t pos = 0;
+                int    feed_n = 0;
+                while (pos < pcm.size()) {
+                    const size_t take = std::min<size_t>(
+                        static_cast<size_t>(chunk_samples),
+                        pcm.size() - pos);
+                    struct transcribe_stream_update upd = {};
+                    run_st = transcribe_stream_feed(
+                        ctx, pcm.data() + pos,
+                        static_cast<int>(take), &upd);
+                    if (run_st != TRANSCRIBE_OK) {
+                        std::fprintf(stderr,
+                                     "stream_feed[%d]: %s\n",
+                                     feed_n,
+                                     transcribe_status_string(run_st));
+                        break;
+                    }
+                    pos += take;
+                    std::printf("  feed[%2d]: input=%lld ms buffered=%lld ms",
+                                feed_n,
+                                (long long)upd.input_received_ms,
+                                (long long)upd.buffered_ms);
+                    if (upd.result_changed) {
+                        const char * partial = transcribe_full_text(ctx);
+                        std::printf("  partial=\"%s\"",
+                                    (partial && *partial) ? partial : "");
+                    }
+                    std::printf("\n");
+                    ++feed_n;
+                }
+                if (run_st == TRANSCRIBE_OK) {
+                    struct transcribe_stream_update fin_upd = {};
+                    run_st = transcribe_stream_finalize(ctx, &fin_upd);
+                    std::printf("  finalize: status=%s "
+                                "revision=%d input=%lld ms committed=%lld ms\n",
+                                transcribe_status_string(run_st),
+                                fin_upd.revision,
+                                (long long)fin_upd.input_received_ms,
+                                (long long)fin_upd.audio_committed_ms);
+                }
+            }
+        } else {
+            // --repeat N runs transcribe_run() N times for steady-state
+            // perf measurements.
+            for (int r = 0; r < args.repeat; ++r) {
+                run_st = transcribe_run(
+                    ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+                if (run_st != TRANSCRIBE_OK) break;
+            }
         }
         std::printf("run: %s\n", transcribe_status_string(run_st));
         if (run_st == TRANSCRIBE_OK) {

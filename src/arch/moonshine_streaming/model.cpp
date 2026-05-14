@@ -303,26 +303,52 @@ std::vector<float> right_pad_pcm(const float * pcm, int n_samples, int frame_len
     return out;
 }
 
-transcribe_status run(
-    transcribe_context *      ctx,
-    const float *             pcm,
-    int                       n_samples,
-    const transcribe_params * params)
+// Internal inference helper. Assumes cc/cm are non-null and the
+// scheduler plan is populated; callers (run() and stream_finalize)
+// validate that up front. n_samples must be > 0; pcm must be non-null.
+//
+// Does NOT call ctx->clear_result(); callers handle result-snapshot
+// management. (The public dispatcher and the family run() entry
+// each clear once before reaching here; stream_finalize relies on
+// the dispatcher's clear at stream_begin time and does not re-clear.)
+//
+// Mutates the result vectors and timings on cc.
+//
+// Phase 5 decision — run/stream parity:
+//
+//   The streaming proposal asks transcribe_run to use the same
+//   "inference path of record" as the streaming entries for
+//   streaming-capable families. For moonshine_streaming, that path is
+//   the body of this helper — the GGML graph that lifts PCM to a
+//   transcript. run() and stream_finalize are siblings that both
+//   forward here; neither owns the inference, the helper does.
+//
+//   We deliberately do NOT route run() through stream_begin /
+//   stream_feed / stream_finalize at the public-hook level. That
+//   alternative would force a memcpy of the whole PCM into
+//   stream_pcm_buffer and would bump streaming snapshot fields
+//   (stream_revision, n_committed_*) as a side effect of every
+//   one-shot run, which is observable through the public stream
+//   accessors. Sharing the helper instead preserves the existing
+//   one-shot semantics while giving the streaming-of-whole path
+//   guaranteed-by-construction parity.
+//
+//   When real incremental streaming lands (Phase 4b+), the streaming
+//   path will diverge from this helper and a stream-vs-batch parity
+//   test will become meaningful. Until then there is nothing to
+//   compare empirically — both paths are this function.
+static transcribe_status run_one_shot_inner(
+    MoonshineStreamingContext * cc,
+    MoonshineStreamingModel *   cm,
+    const float *               pcm,
+    int                         n_samples,
+    const transcribe_params *   params)
 {
     (void)params;
 
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
-    auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
-    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
     if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
 
     transcribe::debug::init();
-    cc->clear_result();
 
     const auto & hp = cm->hparams;
 
@@ -689,6 +715,183 @@ transcribe_status run(
     return TRANSCRIBE_OK;
 }
 
+// One-shot entry point. Validates ctx/cm, clears the previous result
+// snapshot, then forwards to the shared inference helper. The
+// streaming hooks reuse the same helper so a finalize on the
+// accumulated buffer produces identical results to a direct run() of
+// the same audio — that's the "batch path parity" target in the
+// proposal's validation guidance.
+transcribe_status run(
+    transcribe_context *      ctx,
+    const float *             pcm,
+    int                       n_samples,
+    const transcribe_params * params)
+{
+    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    cc->clear_result();
+    return run_one_shot_inner(cc, cm, pcm, n_samples, params);
+}
+
+// ---------------------------------------------------------------------------
+// Streaming hooks (Phase 4a: stream-of-whole)
+// ---------------------------------------------------------------------------
+//
+// Phase 4a buffers the entire stream in stream_pcm_buffer and runs
+// the existing one-shot inference path at finalize. This makes the
+// streaming API observable end-to-end and trivially parity-equivalent
+// to transcribe_run on the same audio. Real incremental encoder/
+// decoder work is Phase 4b.
+//
+// The dispatcher handles the IDLE/ACTIVE/FINISHED/FAILED lifecycle
+// and the result snapshot counters (revision, committed counts,
+// audio cursors). Family hooks own the per-utterance audio scratch.
+
+constexpr int64_t k_sample_rate_hz = 16000;
+
+static int64_t samples_to_us(int64_t n_samples) {
+    return (n_samples * 1000000) / k_sample_rate_hz;
+}
+
+static int64_t us_to_ms(int64_t us) {
+    return us / 1000;
+}
+
+transcribe_status stream_begin(
+    transcribe_context *              ctx,
+    const transcribe_params *         run_params,
+    const transcribe_stream_params *  stream_params)
+{
+    (void)stream_params; // no moonshine_streaming-specific knobs in v1
+    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Reset per-utterance audio buffer (keep capacity for reuse) and
+    // snapshot the run params for finalize. The dispatcher already
+    // cleared the result snapshot, audio cursors, and committed
+    // counts; we only own the family-specific state.
+    cc->stream_pcm_buffer.clear();
+    cc->stream_run_params = *run_params;
+
+    // Reset KV cache state for a fresh utterance. The cache buffer
+    // (if any) survives — only the per-utterance bookkeeping flips.
+    cc->kv_cache.n               = 0;
+    cc->kv_cache.head            = 0;
+    cc->kv_cache.cross_populated = false;
+
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status stream_feed(
+    transcribe_context *        ctx,
+    const float *               pcm,
+    int                         n_samples,
+    transcribe_stream_update *  update)
+{
+    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+
+    // Append samples and bump the input cursor.
+    cc->stream_pcm_buffer.insert(
+        cc->stream_pcm_buffer.end(), pcm, pcm + n_samples);
+    cc->stream_audio_input_us += samples_to_us(n_samples);
+
+    if (update != nullptr) {
+        // stream-of-whole: nothing is committed until finalize, so
+        // result_changed stays false and committed_ms stays at the
+        // (unchanged) committed cursor.
+        update->result_changed     = false;
+        update->revision           = cc->stream_revision;
+        update->input_received_ms  = us_to_ms(cc->stream_audio_input_us);
+        update->audio_committed_ms = us_to_ms(cc->stream_audio_committed_us);
+        update->buffered_ms        =
+            us_to_ms(cc->stream_audio_input_us - cc->stream_audio_committed_us);
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status stream_finalize(
+    transcribe_context *        ctx,
+    transcribe_stream_update *  update)
+{
+    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Empty buffer: nothing to transcribe. Mark the (empty) result as
+    // final and bump revision so the caller sees the stream
+    // closed cleanly.
+    if (cc->stream_pcm_buffer.empty()) {
+        cc->stream_audio_committed_us = cc->stream_audio_input_us;
+        cc->stream_revision += 1;
+        if (update != nullptr) {
+            update->result_changed     = false;
+            update->revision           = cc->stream_revision;
+            update->input_received_ms  = us_to_ms(cc->stream_audio_input_us);
+            update->audio_committed_ms = us_to_ms(cc->stream_audio_committed_us);
+            update->buffered_ms        = 0;
+        }
+        return TRANSCRIBE_OK;
+    }
+
+    const transcribe_status st = run_one_shot_inner(
+        cc, cm,
+        cc->stream_pcm_buffer.data(),
+        static_cast<int>(cc->stream_pcm_buffer.size()),
+        &cc->stream_run_params);
+
+    if (st != TRANSCRIBE_OK) {
+        // Hook returned non-OK — dispatcher will transition to FAILED.
+        // Leave audio cursors as-is; the partial result the helper
+        // wrote (if any) remains readable on the context.
+        if (update != nullptr) {
+            update->result_changed     = cc->has_result;
+            update->revision           = cc->stream_revision;
+            update->input_received_ms  = us_to_ms(cc->stream_audio_input_us);
+            update->audio_committed_ms = us_to_ms(cc->stream_audio_committed_us);
+            update->buffered_ms        =
+                us_to_ms(cc->stream_audio_input_us - cc->stream_audio_committed_us);
+        }
+        return st;
+    }
+
+    // Success: everything is committed.
+    cc->stream_audio_committed_us = cc->stream_audio_input_us;
+    cc->n_committed_tokens        = static_cast<int>(cc->tokens.size());
+    cc->n_committed_words         = static_cast<int>(cc->words.size());
+    cc->n_committed_segments      = static_cast<int>(cc->segments.size());
+    cc->stream_revision          += 1;
+
+    if (update != nullptr) {
+        update->result_changed     = cc->has_result;
+        update->revision           = cc->stream_revision;
+        update->input_received_ms  = us_to_ms(cc->stream_audio_input_us);
+        update->audio_committed_ms = us_to_ms(cc->stream_audio_committed_us);
+        update->buffered_ms        = 0;
+    }
+    return TRANSCRIBE_OK;
+}
+
+void stream_reset(transcribe_context * ctx) {
+    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    // Drop the buffered audio contents but keep the allocation for
+    // the next stream. KV cache state is reset on the next begin;
+    // doing it here too would be defensive but redundant.
+    cc->stream_pcm_buffer.clear();
+}
+
 } // namespace
 
 extern const Arch arch = {
@@ -696,10 +899,10 @@ extern const Arch arch = {
     /* .load            = */ load,
     /* .init_context    = */ init_context,
     /* .run             = */ run,
-    /* .stream_begin    = */ nullptr,
-    /* .stream_feed     = */ nullptr,
-    /* .stream_finalize = */ nullptr,
-    /* .stream_reset    = */ nullptr,
+    /* .stream_begin    = */ stream_begin,
+    /* .stream_feed     = */ stream_feed,
+    /* .stream_finalize = */ stream_finalize,
+    /* .stream_reset    = */ stream_reset,
 };
 
 } // namespace transcribe::moonshine_streaming

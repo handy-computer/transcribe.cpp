@@ -10,7 +10,8 @@
 //     applied exactly once per session, mirroring the reference dumper's
 //     `apply_adapter()` helper. Cross-KV precompute reads from this
 //     buffer, not the encoder output directly.
-//   - No streaming session yet: Stage 4 ships one-shot transcribe only.
+//   - Phase 4a exposes the streaming ABI as stream-of-whole:
+//     feed buffers PCM and finalize runs the one-shot inference path.
 
 #pragma once
 
@@ -125,6 +126,27 @@ struct MoonshineStreamingContext final : public transcribe_context {
 
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
+
+    // ---- streaming-of-whole state ----
+    //
+    // Phase 4a moonshine_streaming exposes the streaming API surface but
+    // does the actual inference on the full accumulated PCM at finalize
+    // time (stream-of-whole). The buffer below is the per-utterance
+    // audio scratch space; the params snapshot pins the run options
+    // chosen at begin so feed/finalize call into the one-shot helper
+    // with the exact configuration the caller asked for.
+    //
+    // Lifecycle:
+    //   stream_begin:    stream_pcm_buffer.clear(); stream_run_params = *run_params;
+    //   stream_feed:     append samples
+    //   stream_finalize: drain buffer through run_one_shot_inner()
+    //   stream_reset:    stream_pcm_buffer.clear() (keep capacity)
+    //
+    // These fields are NOT touched by clear_result; the dispatcher
+    // wipes lifecycle-agnostic snapshot state there, and the family
+    // owns its per-utterance audio scratch.
+    std::vector<float>   stream_pcm_buffer;
+    transcribe_params    stream_run_params {};
 
     MoonshineStreamingContext() = default;
     ~MoonshineStreamingContext() override;

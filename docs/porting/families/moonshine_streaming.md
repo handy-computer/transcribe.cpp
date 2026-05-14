@@ -185,9 +185,14 @@ uv run scripts/wer/score.py reports/wer/moonshine-streaming-tiny-REF.test-clean.
 - Translation: no.
 - Timestamps: none (no timestamp tokens in vocab; model card does not
   advertise).
-- **Streaming: yes** (advertised). The current C++ runtime does NOT yet
-  expose a streaming surface — the first port will validate one-shot
-  numerics and ship the streaming session API as a follow-up.
+- **Streaming: yes** (advertised). Phase 4a of the streaming API
+  proposal exposes a *stream-of-whole* implementation: `stream_begin`
+  buffers PCM, `stream_finalize` runs the existing one-shot inference
+  path on the accumulated buffer. The streaming dispatcher, lifecycle
+  state machine, and result-snapshot accessors all work; only the
+  inference itself is non-incremental. Real incremental encoder /
+  decoder is Phase 4b+ and keeps the same `supports_streaming` flag.
+  See "Streaming validation strategy" below.
 - VAD / diarization: no.
 
 ## Upstream benchmarks (from model card, Open ASR results table)
@@ -215,13 +220,13 @@ Highlights:
 2. Novel encoder: ergodic (no pos-enc on self-attn) + sliding-window
    attention. Existing causal mask helpers will not cover the
    (L=16, R=4) lookahead pattern — need a new ggml mask shape.
-3. Streaming runtime contract: chunked encoder feeding with persistent
-   encoder state. The current `transcribe-cli` and `transcribe-bench`
-   have no streaming surface. Stage 4 scope decision: validate one-shot
-   numerics first, build streaming session API as follow-up. The
-   reference itself is one-shot today (model card: "the current
+3. Streaming runtime contract: Phase 4a exposes the public streaming
+   session API and CLI smoke path as stream-of-whole. Real chunked
+   encoder feeding with persistent encoder state is still Phase 4b+.
+   The reference itself is one-shot today (model card: "the current
    Transformers code path does not yet implement fully efficient
-   streaming") — option (a) is the natural Stage-4 scope.
+   streaming"), so Phase 4a validates the stream-of-whole path against
+   the existing one-shot numerics.
 4. Adapter layer is new (not present in moonshine). Need to enumerate
    its ops at Stage 2 from the transformers source.
 5. Frontend is novel (50 Hz time-domain + CMVN + 2 causal stride-2 convs).
@@ -253,7 +258,50 @@ each command. Allowed statuses:
 |------------|------|----------------|---------------------|--------|
 | Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS |
 | Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf samples/jfk.wav` | non-empty plausible transcript (English-only model — auto path is the same as explicit `en`) | PASS |
-| Streaming | chunked / real-time decode | streaming session API not implemented in transcribe-cli at Stage 4 (the HF reference is also one-shot today) | partial transcripts emitted as audio is fed in chunks | SKIP — not exposed by runtime |
+| Streaming | chunked feed, finalize at end (Phase 4a stream-of-whole) | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --stream-chunk-ms 500 samples/jfk.wav` | per-feed progress lines (`feed[i]: input=... ms buffered=... ms`), then a single `finalize:` line, then the final transcript. result_changed flips only at finalize for stream-of-whole — partial transcripts mid-stream are a Phase 4b feature. | PASS (Phase 4a) |
+
+## Streaming validation strategy
+
+Phase 4a wires the streaming session API to moonshine_streaming as
+*stream-of-whole*: `stream_begin` snapshots the run params and clears
+the family's audio scratch; `stream_feed` appends PCM to the scratch
+buffer; `stream_finalize` invokes the same internal helper that
+`transcribe_run` invokes (`run_one_shot_inner` in
+`src/arch/moonshine_streaming/model.cpp`). Both entry points are
+siblings of that helper — neither owns the inference. See the
+"run/stream parity" comment block in model.cpp for why we chose
+sibling-sharing over `run()` literally delegating through the public
+stream hooks.
+
+This gives the streaming-vs-batch parity the proposal asks for
+*by construction* for Phase 4a:
+
+1. **Upstream streaming reference**: the HF transformers code path is
+   not fully streaming today (see the model card note and intake risk
+   #3), so there is no upstream streaming reference to compare against.
+   The streaming proposal's first validation tier (streaming whole vs
+   upstream streaming) does not apply.
+2. **Streaming whole vs upstream one-shot**: the existing WER smoke
+   for moonshine_streaming runs the C++ one-shot path against the
+   upstream HF one-shot transcripts. Because the streaming-of-whole
+   path shares the inference helper, that same WER number certifies
+   stream-of-whole equally — anyone with the checkpoint downloaded
+   can confirm with `--stream-chunk-ms 500` on the same sample.
+3. **Optimized one-shot vs stream-path parity**: not applicable at
+   Phase 4a — there is only one inference path. This tier becomes
+   meaningful when Phase 4b introduces a real incremental encoder /
+   decoder; at that point an empirical parity test belongs alongside
+   the WER smoke.
+
+Phase 4b items to revisit when real incremental streaming lands:
+
+- Per-feed `result_changed = true` partial transcripts (today only
+  finalize flips this).
+- `streaming_lookahead_ms` / `streaming_chunk_ms` capability hints
+  (today both 0 — "unsupported or unknown").
+- Empirical stream-vs-batch WER parity smoke (matched-text or
+  matched-token-id assertion) using the same fixture audio the
+  current run() smoke uses.
 
 ## Notes
 

@@ -17,11 +17,20 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // text-only segment with zeroed timings (same policy as moonshine).
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
-    // Streaming session API is post-port (Stage 4 ships one-shot).
+    // Stream-of-whole streaming wired in Phase 4a: stream_begin
+    // buffers PCM, stream_finalize drains the buffer through the
+    // one-shot inference path. Real incremental encoder/decoder
+    // (Phase 4b+) keeps the same capability flag.
+    caps.supports_streaming            = true;
     caps.supports_initial_prompt       = false;
     caps.supports_temperature_fallback = false;
     caps.supports_long_form            = false;
     caps.supports_cancellation         = true;
+    // Stream-of-whole has no fixed lookahead window or chunk hint:
+    // the family accepts arbitrary feed sizes and only does work at
+    // finalize. The two timing hints stay at the documented
+    // "unsupported or unknown" sentinel (0) until real incremental
+    // streaming provides concrete values.
 }
 
 } // namespace transcribe::moonshine_streaming
