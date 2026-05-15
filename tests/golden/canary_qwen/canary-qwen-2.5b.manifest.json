@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "canary_qwen",
+  "variant": "canary-qwen-2.5b",
+  "source_model": {
+    "hf_repo": "nvidia/canary-qwen-2.5b",
+    "hf_revision": "b1469e1bba1cfe140205529c79c434ca47180960"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "_skeleton": true
+}

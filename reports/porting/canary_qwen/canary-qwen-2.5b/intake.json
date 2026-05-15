@@ -1,0 +1,299 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "canary_qwen",
+  "hf_repo": "nvidia/canary-qwen-2.5b",
+  "hf_revision": "b1469e1bba1cfe140205529c79c434ca47180960",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found",
+      "detail": "config.json on the HF repo is the SALM training config (NeMo speechlm2). It is NOT an HF Transformers config: it has no architectures/model_type fields. It declares perception.preprocessor (AudioToMelSpectrogramPreprocessor), perception.encoder (ConformerEncoder/FastConformer 32-layer d_model=1024), perception.modality_adapter (IdentityConnector), perception.output_dim=2048, audio_locator_tag='<|audioplaceholder|>', pretrained_asr='nvidia/canary-1b-flash', pretrained_llm='Qwen/Qwen3-1.7B', and the LoRA recipe (r=128, alpha=256, target_modules=[q_proj,v_proj]). torch_dtype=bfloat16."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "missing",
+      "detail": "no separate preprocessor file on HF; the FastConformer mel preprocessor cfg is embedded in config.json under perception.preprocessor (AudioToMelSpectrogramPreprocessor: features=128, sample_rate=16000, window_size=0.025, window_stride=0.01, n_fft=512, window=hann, normalize=per_feature, log=True, dither=1e-5, pad_to=0)."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "no tokenizer files on the HF repo; SALM inherits the Qwen3-1.7B tokenizer (BPE; vocab_size=151936, pad=<|endoftext|>=151643, eos=<|im_end|>=151645, no bos). The audio_locator_tag '<|audioplaceholder|>' is added as a special token at SALM training time; its concrete ID will be pinned at Stage 2 from the SALM checkpoint's added_tokens. Converter must pull tokenizer + chat_template from Qwen/Qwen3-1.7B and add the audio placeholder token."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "Qwen3 ships vocab.json + merges.txt only; no fast-tokenizer JSON. Converter rebuilds BPE ranks from merges.txt (same recipe as the qwen3_asr family port)."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "no generation_config.json on HF; the model card example uses model.generate(max_new_tokens=128) with greedy decoding. Stage 4 default decoding: greedy."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution: BF16=1686, I64=32. Single 5.12 GB model.safetensors covers everything: Qwen3-1.7B LM, FastConformer encoder, perception projection, embed_tokens, and merged LoRA-A/B pairs (q_proj, v_proj on 28 LM layers)."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/canary-qwen-2.5b",
+      "status": "found",
+      "detail": "Open ASR Leaderboard mean WER 5.63% (greedy) on 8 English test sets, NeMo v2.5.0+. Model is English-only; encoder is multilingual but model only trained for English ASR. Capabilities: PnC yes, dual-mode (ASR + LLM-only) yes, translation/timestamps/streaming/VAD/diarization/language-detection no."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "https://github.com/NVIDIA/NeMo (nemo.collections.speechlm2.models.SALM and nemo.collections.speechlm2.modules.perception.AudioPerceptionModule)",
+      "status": "found",
+      "detail": "SALM is NeMo's Speech-Augmented Language Model: encoder (FastConformer/ConformerEncoder) -> modality_adapter (IdentityConnector here) -> projection (encoder d_model=1024 -> output_dim=2048 to match Qwen3-1.7B hidden_size=2048) -> scatter into LM input_embeds at positions where input_ids == audio_locator_tag id. LM is Qwen3-1.7B with frozen base + LoRA (r=128 alpha=256) on q_proj/v_proj only. Reference: examples/speechlm2/salm_train.py, conf/salm.yaml."
+    },
+    "sibling_canary_intake": {
+      "kind": "manual",
+      "path": "reports/porting/canary/canary-1b-flash/intake.json",
+      "status": "found",
+      "detail": "Canary-1B-Flash port already in repo. The encoder block (FastConformer 32-layer d_model=1024) and the mel preprocessor are SHARED with canary-qwen-2.5b's pretrained_asr starting point. Encoder forward-map and tolerances from canary-1b-flash are reusable."
+    },
+    "sibling_qwen3_asr_intake": {
+      "kind": "manual",
+      "path": "reports/porting/qwen3_asr/qwen3-asr-1.7b/intake.json",
+      "status": "found",
+      "detail": "Qwen3-ASR-1.7B port already in repo. Audio-LLM pattern (audio embeddings scattered into LM input_embeds at audio-token positions) is shared. Qwen3 LM idioms (Q/K RMSNorm per head, GQA, RoPE, tied word embeddings, BPE tokenizer rebuild from merges.txt) are reusable. Encoder differs (Qwen3-ASR uses a Whisper-style chunked encoder; canary-qwen uses FastConformer). The audio-llm injection plumbing is the same shape."
+    }
+  },
+  "variants": [
+    {
+      "name": "canary-qwen-2.5b",
+      "memory_gb": 5.12,
+      "files": ["config.json", "model.safetensors"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["audio-llm"],
+    "key_fields": {
+      "salm_config_kind": "nemo.speechlm2 training config (no architectures/model_type)",
+      "audio_locator_tag": "<|audioplaceholder|>",
+      "pretrained_asr": "nvidia/canary-1b-flash",
+      "pretrained_llm": "Qwen/Qwen3-1.7B",
+      "perception.encoder.type": "ConformerEncoder",
+      "perception.encoder.alias": "FastConformer",
+      "perception.encoder.n_layers": 32,
+      "perception.encoder.d_model": 1024,
+      "perception.encoder.n_heads": 8,
+      "perception.encoder.ff_expansion_factor": 4,
+      "perception.encoder.ffn_dim": 4096,
+      "perception.encoder.feat_in": 128,
+      "perception.encoder.subsampling": "dw_striding",
+      "perception.encoder.subsampling_factor": 8,
+      "perception.encoder.subsampling_conv_channels": 256,
+      "perception.encoder.conv_kernel_size": 9,
+      "perception.encoder.conv_norm_type": "batch_norm",
+      "perception.encoder.self_attention_model": "rel_pos",
+      "perception.encoder.untie_biases": true,
+      "perception.encoder.xscaling": false,
+      "perception.encoder.pos_emb_max_len": 5000,
+      "perception.encoder.att_context_size": [-1, -1],
+      "perception.modality_adapter.type": "IdentityConnector",
+      "perception.modality_adapter.d_model": 1024,
+      "perception.output_dim": 2048,
+      "lm.family": "qwen3",
+      "lm.hidden_size": 2048,
+      "lm.num_hidden_layers": 28,
+      "lm.num_attention_heads": 16,
+      "lm.num_key_value_heads": 8,
+      "lm.head_dim": 128,
+      "lm.intermediate_size": 6144,
+      "lm.rope_theta": 1000000,
+      "lm.max_position_embeddings": 40960,
+      "lm.tie_word_embeddings": true,
+      "lm.vocab_size": 151936,
+      "lora.r": 128,
+      "lora.alpha": 256,
+      "lora.dropout": 0.01,
+      "lora.target_modules": ["q_proj", "v_proj"],
+      "lora.task_type": "CAUSAL_LM",
+      "freeze_params": ["^llm\\..+$", "^embed_tokens\\..+$"],
+      "prevent_freeze_params": ["^.+\\.lora_.+$"],
+      "prompt_format": "qwen",
+      "max_audio_seconds": 40,
+      "max_total_tokens": 1024
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "config",
+    "evidence": "config.torch_dtype=bfloat16 and safetensors header BF16=1686, I64=32 (zero non-BF16 floating tensors). Per project policy 2 the converter preserves storage dtype, so the first accuracy GGUF will be canary-qwen-2.5b-BF16.gguf.",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 1686,
+        "I64": 32
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 151936,
+    "special_tokens": {
+      "pad": 151643,
+      "eos": 151645
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.60,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b",
+      "notes": "Open ASR Leaderboard, NeMo v2.5.0, greedy decoding, whisper-normalizer v0.1.12"
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.10,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b",
+      "notes": "Open ASR Leaderboard"
+    },
+    {
+      "dataset": "AMI",
+      "language": "en",
+      "metric": "wer",
+      "score": 10.18,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b"
+    },
+    {
+      "dataset": "GigaSpeech",
+      "language": "en",
+      "metric": "wer",
+      "score": 9.41,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b"
+    },
+    {
+      "dataset": "Earnings22",
+      "language": "en",
+      "metric": "wer",
+      "score": 10.42,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b"
+    },
+    {
+      "dataset": "SPGISpeech",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.90,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b"
+    },
+    {
+      "dataset": "TEDLIUM v3",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.72,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b"
+    },
+    {
+      "dataset": "VoxPopuli (en)",
+      "language": "en",
+      "metric": "wer",
+      "score": 5.66,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b"
+    },
+    {
+      "dataset": "Open ASR Leaderboard mean (8 English test sets)",
+      "language": "en",
+      "metric": "wer",
+      "score": 5.63,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/canary-qwen-2.5b",
+      "notes": "average across AMI/GigaSpeech/LibriSpeech-clean/LibriSpeech-other/Earnings22/SPGISpeech/TEDLIUM/VoxPopuli; RTFx 418.28"
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NVIDIA NeMo (>=2.5.0) is the only canonical implementation. The SALM class lives at `nemo.collections.speechlm2.models.SALM` with config schema in `examples/speechlm2/conf/salm.yaml`. There is no HF Transformers shim in this repo: the on-disk config.json is the NeMo SALM training config (no `architectures` / `model_type`), and the model.safetensors is loaded by NeMo's SALM.from_pretrained, not by transformers.AutoModel. The audio_locator_tag, the LoRA recipe on Qwen3-1.7B, and the perception module's encoder->projection->scatter glue are all NeMo-side. Transformers is not a viable reference here. The author repo is NVIDIA/NeMo itself.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "audio-LLM injection: AudioPerceptionModule output (encoder d_model=1024 -> internal projection -> output_dim=2048) is scattered into Qwen3-1.7B input_embeds at positions where input_ids == audio_locator_tag id. Same shape as qwen3_asr / qwen2_audio. Mismatch in the scatter index or the projection dim silently shifts the LM context with no shape error.",
+    "audio_locator_tag '<|audioplaceholder|>' is an added special token, not in upstream Qwen3-1.7B tokenizer. Its ID is decided when SALM training adds it. Stage 2 must pin the exact ID from the model checkpoint (the SALM training adds it to the tokenizer's added_tokens before saving).",
+    "LoRA on q_proj/v_proj only (r=128, alpha=256, on all 28 Qwen3 layers). Converter must MERGE LoRA A/B into the base q_proj/v_proj weights at convert time -- the safetensors file actually stores the trained model post-merge OR keeps base + lora_A + lora_B separately. Inspect tensor names at Stage 3 and merge if needed; loader/runtime should not need a runtime LoRA path.",
+    "Qwen3 LM uses Q/K RMSNorm per head (norm applied along head_dim, not hidden_size). Already documented in the qwen3_asr port; reuse that op.",
+    "Qwen3 LM uses GQA (16 Q heads / 8 KV heads, head_dim=128). Standard GQA pattern, but verify head_dim=128 matches the safetensors layout for q/k/v projections.",
+    "Qwen3 LM uses standard 1D RoPE (rope_theta=1e6, max_position_embeddings=40960). SALM does NOT need the interleaved multimodal RoPE that qwen3_asr requires -- audio is injected as embeddings into a 1D position grid, so the standard 1D RoPE applies. Confirm by reading speechlm2.models.SALM.forward at Stage 2.",
+    "Qwen3 LM tie_word_embeddings=true. Converter should omit lm_head and rely on llama.cpp-style TENSOR_DUPLICATED fallback to token_embd, same as qwen3_asr.",
+    "FastConformer encoder is byte-for-byte the same architecture as canary-1b-flash and parakeet (32 layers, d_model=1024, n_heads=8, ff_expansion=4 -> ffn_dim=4096, conv_kernel=9, dw_striding subsampling factor=8, rel_pos with untie_biases=true, xscaling=false). The pretrained_asr field declares it was initialized FROM nvidia/canary-1b-flash. Reuse the parakeet/canary encoder code path. Encoder weight dtype here is BF16 (vs F32 in canary-1b-flash safetensors); tolerances must be retuned at Stage 4.",
+    "Relative-position attention (rel_pos) with untied biases. ggml has no first-class rel_pos op. Existing parakeet/canary port materializes the relative-shift host-side per layer; reuse that.",
+    "Subsampling factor 8 -> 12.5 frames/s -> 80 ms per encoder output frame. Frame count must round consistently with NeMo's get_seq_len; mismatches surface as edge-of-utterance hallucinations.",
+    "AudioToMelSpectrogramPreprocessor with dither=1e-5 in the config (training default). For inference the dither MUST be 0.0 to make Stage 2 oracle dumps deterministic and Stage 4 numerical comparisons reproducible. Override at oracle dump time.",
+    "Per-feature normalization (mean/std across time, per mel band). Same as canary-1b-flash; existing op reusable.",
+    "Preemph=0.97 BEFORE windowing/STFT (NeMo default). Same as canary-1b-flash; same risk: skipping the preemph silently shifts spectral tilt and degrades WER without changing shape.",
+    "FastConformer encoder has a final layer norm BEFORE the perception projection. Verify at Stage 2 whether the projection from d_model=1024 to output_dim=2048 lives inside AudioPerceptionModule (an nn.Linear) or inside the modality_adapter. config declares modality_adapter as IdentityConnector, so the projection is in AudioPerceptionModule.proj.",
+    "Cross-attention is NOT used. The audio frames are scattered as input embeddings into the Qwen3 LM context, then standard self-attention runs over the joint sequence. Padding mask propagation: encoder input_lengths -> after subsampling factor 8 -> audio frame count; that count must match the number of audio_locator_tag positions in the LM input_ids before the scatter.",
+    "max_total_tokens=1024 (prompt + audio frames + response) and max_audio_seconds=40. With 12.5 frames/s, 40 s of audio = 500 audio frames; that leaves 524 tokens for prompt + response. Long-form audio (>40 s) is out of scope for the v1 port; first port is single-utterance up to 40 s.",
+    "Distribution: HF safetensors only; no .nemo archive on the HF repo (unlike canary-1b-flash). Tokenizer must be pulled from Qwen/Qwen3-1.7B at convert time. The SALM checkpoint is self-contained for weights but NOT for tokenizer.",
+    "LLM mode (model.llm.disable_adapter() + text-only QA on transcript) is out of scope for transcribe-cli. transcribe.cpp targets ASR only; the dual-mode is documented in the family doc but the C++ runtime ships the ASR path only.",
+    "Greedy decoding (max_new_tokens=128) is the model card example. First port uses greedy; this matches the upstream-reported 5.63% mean WER. Beam search is not required to hit the gate."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.special_tokens.audio_placeholder",
+      "reason": "the audio_locator_tag '<|audioplaceholder|>' is added by SALM training; its concrete token ID lives in the SALM checkpoint's added_tokens (likely 151669 or in the 151665+ range after Qwen3's existing added tokens). Stage 2 will pin the exact ID by inspecting the loaded SALM tokenizer."
+    },
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "SHA of the Qwen3 BPE vocab (vocab.json + merges.txt + the audio_placeholder added token) will be computed during conversion; depends on whether SALM also adds other special tokens (e.g. role markers). Stage 3 records it."
+    },
+    {
+      "field": "tokenizer.special_tokens.bos",
+      "reason": "Qwen3 has no bos_token set in tokenizer_config (bos=null). SALM may inject <|im_start|> as a chat-format prefix instead; Stage 2 will check whether SALM's prompt format relies on a BOS id."
+    },
+    {
+      "field": "perception.projection.shape",
+      "reason": "the projection from encoder d_model=1024 to perception.output_dim=2048 lives in AudioPerceptionModule.proj per NeMo source, but the exact tensor name(s) and whether it is a single nn.Linear or Linear+activation+Linear must be confirmed by reading speechlm2.modules.perception.AudioPerceptionModule.__init__ at Stage 2."
+    },
+    {
+      "field": "lora_storage_layout",
+      "reason": "checkpoint may store LoRA pairs separately (q_proj.base + q_proj.lora_A + q_proj.lora_B) or pre-merged into q_proj. Converter must inspect tensor names at Stage 3 and either pass-through the merged tensor or run the merge. Affects which weights end up in the GGUF."
+    },
+    {
+      "field": "frontend.dither",
+      "reason": "config declares dither=1e-5 (NeMo training default). For inference and Stage 2 oracle dumps we must override to 0.0 to keep numerics deterministic; this matches canary-1b-flash. Recorded as 0.0 above; intake.py will WARN that this differs from the on-disk config -- accept the WARN."
+    }
+  ]
+}
