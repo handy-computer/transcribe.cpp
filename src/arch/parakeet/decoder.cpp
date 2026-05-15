@@ -1042,6 +1042,170 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 }
 
 // ---------------------------------------------------------------------------
+// RNNT greedy decode — streaming
+// ---------------------------------------------------------------------------
+//
+// Same algorithm as decode_rnnt_greedy but with externally-managed
+// LSTM state (state_io) and previous token (last_token_io). The
+// chunk's encoder frames are decoded in stream-wide coordinates
+// (step_at_emit = frame_offset + local_step). No timing log.
+transcribe_status decode_rnnt_greedy_streaming(
+    const HostDecoderWeights & w,
+    const float *              enc_out,
+    int                        T_enc_new,
+    int                        d_enc,
+    LstmState &                state_io,
+    int &                      last_token_io,
+    int                        frame_offset,
+    std::vector<TdtToken> &    out_tokens)
+{
+    if (enc_out == nullptr || T_enc_new <= 0 || d_enc <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (d_enc != w.joint.d_enc) {
+        std::fprintf(stderr,
+                     "parakeet decoder (rnnt-stream): enc d_model mismatch "
+                     "(got %d, expected %d)\n", d_enc, w.joint.d_enc);
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const int n_layers     = static_cast<int>(w.predictor.lstm.size());
+    const int H            = w.predictor.pred_hidden;
+    const int n_token_cls  = w.predictor.pred_vocab;
+    const int blank_id     = w.blank_id;
+
+    // Validate state_io shape; reset if degenerate (paranoid guard).
+    if (static_cast<int>(state_io.h.size()) != n_layers ||
+        static_cast<int>(state_io.c.size()) != n_layers)
+    {
+        state_io.reset(n_layers, H);
+        last_token_io = -1;
+    }
+    for (int l = 0; l < n_layers; ++l) {
+        if (static_cast<int>(state_io.h[l].size()) != H ||
+            static_cast<int>(state_io.c[l].size()) != H)
+        {
+            state_io.reset(n_layers, H);
+            last_token_io = -1;
+            break;
+        }
+    }
+
+    // Precompute encoder projections for this chunk only.
+    const int joint_h = w.joint.joint_h;
+    std::vector<float> enc_proj_all(
+        static_cast<size_t>(T_enc_new) * static_cast<size_t>(joint_h));
+
+#if TRANSCRIBE_HAS_BLAS
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                T_enc_new, joint_h, d_enc,
+                1.0f, enc_out, d_enc,
+                w.joint.enc_w.data(), d_enc,
+                0.0f, enc_proj_all.data(), joint_h);
+#else
+    for (int t = 0; t < T_enc_new; ++t) {
+        const float * frame = enc_out +
+            static_cast<size_t>(t) * static_cast<size_t>(d_enc);
+        float * proj = enc_proj_all.data() +
+            static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        linear(w.joint.enc_w.data(), frame, nullptr, joint_h, d_enc, proj);
+    }
+#endif
+    for (int t = 0; t < T_enc_new; ++t) {
+        float * proj = enc_proj_all.data() +
+            static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        for (int j = 0; j < joint_h; ++j) {
+            proj[j] += w.joint.enc_b[static_cast<size_t>(j)];
+        }
+    }
+
+    // Working state. We mutate `state` and `next_state`; on return we
+    // copy `state` (the COMMITTED state after the last non-blank
+    // emission, or unchanged for an all-blank chunk) back into
+    // state_io. last_token is committed similarly.
+    LstmState state     = state_io;
+    LstmState next_state;
+    next_state.reset(n_layers, H);
+
+    std::vector<float> scratch_x;
+    std::vector<float> scratch_gates;
+    std::vector<float> scratch_hh;
+    std::vector<float> scratch_pred_proj;
+    std::vector<float> scratch_summed;
+    std::vector<float> scratch_probs;
+    std::vector<float> logits;
+
+    int last_token  = last_token_io;
+    int step        = 0;
+    int new_symbols = 0;
+
+    const int max_iters = 16 * T_enc_new + 1024;
+    int iter = 0;
+
+    bool predictor_dirty = true;
+
+    while (step < T_enc_new && iter < max_iters) {
+        ++iter;
+
+        const float * decoder_out;
+        if (predictor_dirty) {
+            decoder_out = predictor_step(
+                w.predictor, last_token, state, next_state,
+                scratch_x, scratch_gates, scratch_hh);
+            predictor_dirty = false;
+        } else {
+            decoder_out = next_state.h.back().data();
+        }
+
+        const float * enc_proj = enc_proj_all.data() +
+            static_cast<size_t>(step) * static_cast<size_t>(joint_h);
+        joint_step(w.joint, enc_proj, decoder_out,
+                   scratch_pred_proj, scratch_summed, logits);
+
+        const float * token_logits = logits.data();
+        const int pred_token = argmax_range(token_logits, n_token_cls);
+
+        const bool is_blank = (pred_token == blank_id);
+        if (is_blank) {
+            step       += 1;
+            new_symbols = 0;
+        } else {
+            const float p = token_confidence(token_logits, n_token_cls,
+                                             scratch_probs);
+            TdtToken tok;
+            tok.id              = pred_token;
+            tok.p               = p;
+            tok.step_at_emit    = frame_offset + step;
+            tok.duration_frames = 1;
+            out_tokens.push_back(tok);
+
+            last_token = pred_token;
+            std::swap(state, next_state);
+            predictor_dirty = true;
+
+            new_symbols += 1;
+            if (w.tdt_max_symbols > 0 && new_symbols >= w.tdt_max_symbols) {
+                step       += 1;
+                new_symbols = 0;
+            }
+        }
+    }
+
+    if (iter >= max_iters) {
+        std::fprintf(stderr,
+                     "parakeet decoder (rnnt-stream): hit iteration cap (%d)\n",
+                     max_iters);
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+
+    // Commit final state. After the loop, `state` is the post-last-
+    // non-blank state (the predictor's "current" since the last emit).
+    state_io      = std::move(state);
+    last_token_io = last_token;
+    return TRANSCRIBE_OK;
+}
+
+// ---------------------------------------------------------------------------
 // CTC greedy decode
 // ---------------------------------------------------------------------------
 //

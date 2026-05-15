@@ -132,6 +132,137 @@ struct ParakeetModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
+// Per-context streaming encoder state. Allocated lazily on the first
+// stream_begin for ChunkedLimited variants. Mirrors NeMo's
+// cache_last_channel + cache_last_time + cache_last_channel_len tuple
+// returned by get_initial_cache_state. Layout cheat sheet:
+//
+//   cache_last_channel  [d_model, T_cache, n_layer] f32
+//     Per-layer post-attn-LN input cache. Concat-prepended to x_norm
+//     before Q/K/V projection in the streaming MHSA path. NeMo stores
+//     the pre-projection tensor (not split K/V), so a single per-layer
+//     slot suffices.
+//
+//   cache_last_time     [k_minus_1, d_model, n_layer] f32
+//     Per-layer post-pw1+GLU conv-module input cache. Replaces the
+//     zero-pad on the left of the depthwise conv in the streaming
+//     conv_module path.
+//
+//   cache_last_channel_len   scalar
+//     Valid-frame count in cache_last_channel (0..T_cache). Drives
+//     the streaming-mask offset so unfilled prefix rows are masked
+//     out until the cache fills.
+//
+//   mel_history             [n_mels, mel_hist_frames] f32 row-major
+//     Last N mel frames of the previous chunk, prepended to the next
+//     chunk's mel feed so the (non-causal) dw_striding subsample has
+//     correct left context (NeMo's pre_encode_cache_size mechanism).
+//
+//   pcm_remainder           variable-length f32
+//     PCM tail samples (< hop_length) from the previous feed; carried
+//     so the mel frontend operates on full hop-aligned frames.
+//
+// Sizes for nemotron-speech-streaming-en-0.6b at att_context_size=[70,13]:
+//   T_cache         = 70           (att_context_left)
+//   k_minus_1       = 8            (conv_kernel - 1)
+//   mel_hist_frames = 9            (subsampling_factor + 1)
+//   n_layer         = 24, d_model = 1024
+//   Total cache buffer ~7.5 MB.
+struct ParakeetStreamingCaches {
+    ggml_context *        ctx    = nullptr;
+    ggml_backend_buffer_t buffer = nullptr;
+
+    // Per-layer cache tensors. Shapes:
+    //   last_channel[i] = ne[d_model, T_cache, 1, 1]
+    //   last_time[i]    = ne[k_minus_1, d_model, 1, 1]
+    std::vector<ggml_tensor *> last_channel;
+    std::vector<ggml_tensor *> last_time;
+
+    int32_t channel_len = 0;
+
+    // Host-side carries. mel_history is row-major [n_mels, mel_hist_frames]
+    // matching MelFrontend's output. Sized at init; the contents
+    // are zeroed on each fresh stream_begin and rotate in-place per
+    // chunk.
+    std::vector<float> mel_history;
+    int                mel_hist_frames = 0;
+
+    std::vector<float> pcm_remainder;
+
+    // Absolute mel-frame cursor across the whole stream — used to
+    // anchor token / segment timestamps to original-audio time even
+    // when chunks vary in size. Counts mel frames consumed (i.e. fed
+    // to the encoder, minus history prepend).
+    int64_t mel_frames_consumed = 0;
+
+    // Streaming geometry for the active stream. Resolved at
+    // stream_begin from ParakeetHParams + the caller-selected
+    // att_context_right (transcribe_parakeet_stream_params). All four
+    // fields are constant across chunks within one stream; they
+    // change only when stream_begin is called again with a different
+    // att_context_right selection.
+    //
+    //   att_context_right: chosen R from the model's training menu
+    //                      (default = enc_att_context_right).
+    //   att_context_left:  matching L (currently always the model
+    //                      default; multi-L selection isn't in the API).
+    //
+    //   First-chunk and subsequent-chunk geometry differ. NeMo's
+    //   setup_streaming_params packs the (first, subsequent) pair into
+    //   `streaming_cfg.chunk_size` and `shift_size`; we mirror that
+    //   with parallel fields below. The driver in stream_feed picks
+    //   the right pair based on the (now-tracked) is_first_chunk flag.
+    //
+    //   For nemotron-speech-streaming-en-0.6b at att_context_right=13:
+    //     chunk_size_first      = 105  (sampling_frames_first + 8*R)
+    //     chunk_size_subsequent = 112  (subsampling_factor * (1 + R))
+    //     mel_fed_first         = 105  (no pre_encode_cache prepend)
+    //     mel_fed_subsequent    = 121  (9 cache + 112 new)
+    //     drop_extra_first      = 0
+    //     drop_extra_subsequent = 2
+    int att_context_right            = 0;
+    int att_context_left             = 0;
+    int chunk_size_first             = 0;
+    int chunk_size_subsequent        = 0;
+    int mel_fed_first                = 0;
+    int mel_fed_subsequent           = 0;
+    int drop_extra_first             = 0;
+    int drop_extra_subsequent        = 0;
+    // Whether the next emit_streaming_chunk call is the FIRST in this
+    // stream. Flips to false after the first chunk is processed.
+    bool is_first_chunk              = true;
+
+    // Per-stream chunk counter (== "step_num" in NeMo's
+    // perform_streaming reference). Resets to 0 on stream_begin, then
+    // increments once per emit_streaming_chunk. Used for indexing dump
+    // filenames against the Python reference dumps when
+    // TRANSCRIBE_DUMP_DIR is set.
+    int chunk_step              = 0;
+
+    bool initialized = false;
+};
+
+// Per-context streaming RNN-T decoder state. The offline path
+// allocates LstmState locally; for streaming we own the state on the
+// context so it carries across stream_feed calls. Reset on each
+// stream_begin to a fresh "start of sequence" state.
+struct ParakeetStreamingDecoderState {
+    // LSTM (h, c) per layer + scratch buffers. Sized once on
+    // stream_begin from host_decoder.predictor.n_layers /
+    // pred_hidden.
+    LstmState lstm_state;
+
+    // Last emitted non-blank token id; the predictor input. Starts at
+    // a sentinel (-1) meaning "predictor seeded with SOS embedding".
+    int32_t prev_token_id = -1;
+
+    // Absolute encoder-frame offset for converting per-chunk
+    // step_at_emit indices into stream-wide frame indices.
+    int64_t frame_offset = 0;
+
+    bool initialized = false;
+};
+
 // Concrete context. Owns a per-call compute context and a persistent
 // multi-backend scheduler that dispatches encoder graph ops to the
 // best available backend (GPU for matmuls, BLAS for CPU matmuls,
@@ -172,6 +303,41 @@ struct ParakeetContext final : public transcribe_context {
 
     // KV type for flash attention, resolved from the context params.
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
+
+    // ---- streaming-of-whole state (Phase 4a) ----
+    //
+    // Parakeet exposes the streaming API surface for cache-aware
+    // streaming variants (today: nemotron-speech-streaming-en-0.6b,
+    // which has enc_att_context_style=ChunkedLimited). Phase 4a is a
+    // stream-of-whole stub: feed appends PCM, finalize runs the
+    // existing one-shot inference helper on the accumulated buffer.
+    // This makes the dispatcher / lifecycle / result-snapshot path
+    // observable end-to-end and trivially parity-equivalent to
+    // transcribe_run on the same audio; real per-chunk encoder
+    // feeding (cache_last_channel / cache_last_time / RNNT predictor
+    // carry) is Phase 4b.
+    //
+    // Lifecycle:
+    //   stream_begin:    stream_pcm_buffer.clear(); stream_run_params = *run_params;
+    //   stream_feed:     append samples
+    //   stream_finalize: drain buffer through run_one_shot_inner()
+    //   stream_reset:    stream_pcm_buffer.clear() (keep capacity)
+    //
+    // These fields are NOT touched by clear_result; the dispatcher
+    // wipes lifecycle-agnostic snapshot state there, and the family
+    // owns its per-utterance audio scratch.
+    std::vector<float>   stream_pcm_buffer;
+    transcribe_params    stream_run_params {};
+
+    // ---- M2 incremental streaming state (cache-aware) ----
+    //
+    // Allocated on the first stream_begin for ChunkedLimited variants
+    // (today: nemotron-speech-streaming-en-0.6b). Zeroed at each
+    // stream_begin so each utterance starts from a clean cache.
+    // Persists across feed/finalize within an utterance; freed in the
+    // context destructor.
+    ParakeetStreamingCaches        stream_caches;
+    ParakeetStreamingDecoderState  stream_dec_state;
 
     ParakeetContext() = default;
     ~ParakeetContext() override;

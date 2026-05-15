@@ -276,6 +276,14 @@ transcribe_stream_default_params(void)
     return p;
 }
 
+extern "C" struct transcribe_parakeet_stream_params
+transcribe_parakeet_stream_default_params(void)
+{
+    struct transcribe_parakeet_stream_params p = {};
+    p.att_context_right = -1; // use model default
+    return p;
+}
+
 extern "C" struct transcribe_whisper_params transcribe_whisper_default_params(void) {
     struct transcribe_whisper_params p = {};
     p.initial_prompt           = nullptr;

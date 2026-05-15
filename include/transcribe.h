@@ -695,9 +695,18 @@ struct transcribe_capabilities {
      * that advertises supports_streaming may legitimately leave one or
      * both fields zero if the value is not a fixed property of the model.
      * supports_streaming remains the hard capability gate.
+     *
+     * For multi-lookahead models (e.g. nemotron-speech-streaming-en-0.6b),
+     * streaming_lookahead_ms reports the default setting's lookahead and
+     * streaming_lookahead_ms_min reports the fastest setting available.
+     * When the two differ the caller can pick a lower-latency setting via
+     * the family-specific stream params extension (parakeet:
+     * att_context_right). When the model has only one setting the two
+     * fields are equal.
      */
     int32_t                   streaming_lookahead_ms;
     int32_t                   streaming_chunk_ms;
+    int32_t                   streaming_lookahead_ms_min;
 };
 
 TRANSCRIBE_API const struct transcribe_capabilities *
@@ -897,12 +906,41 @@ enum transcribe_stream_state {
  * Family-specific streaming extensions. Defined per-family alongside
  * the corresponding run-params extension. NULL selects the family
  * default. Only consulted by the matching family; others ignore.
+ *
+ * Parakeet streaming:
+ *
+ *   att_context_right
+ *
+ *     Right-context (lookahead) selector in encoder frames. The
+ *     cache-aware streaming variants (e.g. nemotron-speech-streaming-en-0.6b)
+ *     are trained on a menu of (left, right) pairs simultaneously —
+ *     the user picks one at inference time to trade latency for
+ *     accuracy. nemotron's published menu is right ∈ {13, 6, 1, 0},
+ *     corresponding to lookahead of {1040, 480, 80, 0} ms at the 80ms
+ *     encoder frame rate.
+ *
+ *     -1 (default): use the model's default setting (first entry of
+ *     att_context_size_choices = max-accuracy / max-latency).
+ *     >=0: select the corresponding (left, att_context_right) entry
+ *     from the model's training menu. transcribe_stream_begin returns
+ *     TRANSCRIBE_ERR_INVALID_ARG if the requested right is not in the
+ *     menu.
+ *
+ *     Inspect transcribe_capabilities::streaming_lookahead_ms to see
+ *     the default's lookahead in milliseconds, and
+ *     transcribe_capabilities::streaming_lookahead_ms_min to see the
+ *     fastest setting the model supports.
  */
-struct transcribe_parakeet_stream_params;
+struct transcribe_parakeet_stream_params {
+    int32_t att_context_right;
+};
 
 struct transcribe_stream_params {
     const struct transcribe_parakeet_stream_params * parakeet;
 };
+
+TRANSCRIBE_API struct transcribe_parakeet_stream_params
+    transcribe_parakeet_stream_default_params(void);
 
 /*
  * Optional per-call change metadata returned by feed/finalize.

@@ -536,6 +536,34 @@ def _resolve_att_context_size(raw) -> tuple[int, int]:
     return (int(raw[0]), int(raw[1]))
 
 
+def _resolve_att_context_size_choices(raw) -> list[tuple[int, int]]:
+    """Return the full multi-lookahead menu for streaming models.
+
+    Cache-aware streaming checkpoints ship att_context_size as a list of
+    lists like [[70,13],[70,6],[70,1],[70,0]] — every (L, R) pair the
+    model was trained against and can be run at inference time. Offline
+    checkpoints ship a single [L, R] pair; this function returns a
+    one-element list in that case so the loader sees a uniform shape.
+
+    Falls back to an empty list when raw is None or malformed (the
+    loader treats empty as "use enc_att_context_left/right only").
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, (list, tuple)) or len(raw) == 0:
+        return []
+    first = raw[0]
+    if isinstance(first, (list, tuple)):
+        out: list[tuple[int, int]] = []
+        for entry in raw:
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                out.append((int(entry[0]), int(entry[1])))
+        return out
+    if len(raw) >= 2:
+        return [(int(raw[0]), int(raw[1]))]
+    return []
+
+
 def _resolve_conv_context_size(raw, kernel_size: int) -> tuple[int, int]:
     """NeMo's conv_context_size accepts:
       - 'causal'  -> [(k-1), 0]
@@ -650,6 +678,11 @@ def read_hparams(config: dict) -> dict:
         # published numbers correspond to.
         "enc_att_context_left":     _resolve_att_context_size(enc.get("att_context_size"))[0],
         "enc_att_context_right":    _resolve_att_context_size(enc.get("att_context_size"))[1],
+        # Full multi-lookahead menu (cache-aware streaming variants only;
+        # offline variants emit a single-element list which the loader
+        # collapses to "no menu" / use att_context_left/right). Encoded
+        # as a flat int32 array [L0, R0, L1, R1, ...] in the GGUF.
+        "enc_att_context_size_choices": _resolve_att_context_size_choices(enc.get("att_context_size")),
         # att_context_style: 'regular' (per-token sliding window, default
         # for offline FastConformer) or 'chunked_limited' (chunk-based
         # mask used by cache-aware streaming models). The masks are
@@ -697,6 +730,20 @@ def read_hparams(config: dict) -> dict:
         "tdt_durations":            None,
         "tdt_max_symbols":          None,
 
+        # Streaming-encoder pre-encode cache constants. These come from
+        # the LIVE model's encoder.streaming_cfg, populated by
+        # ConformerEncoder.setup_streaming_params() at construction.
+        # Values are independent of the chosen att_context_size (they're
+        # properties of the conv-subsampling stack), so we read them
+        # once in resolve_runtime_hparams() rather than parameterizing.
+        # Offline / non-streaming models leave these None; the loader
+        # treats absent KVs as "non-streaming model".
+        "enc_stream_pre_encode_cache_size":   None,  # mel frames (e.g. 9 on nemotron)
+        "enc_stream_drop_extra_pre_encoded":  None,  # encoder frames (e.g. 2 on nemotron)
+        "enc_stream_sampling_frames_first":   None,  # mel frames per first-chunk
+                                                     # output from ConvSubsampling
+                                                     # (1 for FastConformer's 2-stride-2)
+
         "fe_type":         "mel",
         "fe_num_mels":     int(pre["features"]),
         "fe_sample_rate":  sample_rate,
@@ -726,6 +773,42 @@ def resolve_runtime_hparams(hp: dict, model, config: dict, head_kind: str) -> No
     Mutates `hp` in place. Asserts cross-field invariants where they
     apply (durations length matches num_extra_outputs for TDT models).
     """
+    # Streaming-encoder constants. setup_streaming_params() runs in
+    # ConformerEncoder.__init__, so model.encoder.streaming_cfg is
+    # always populated. We only emit these to the GGUF when the encoder
+    # is actually chunked_limited — offline encoders carry a
+    # streaming_cfg too (NeMo populates it unconditionally) but the
+    # values are meaningless. The att_context_style gate is checked
+    # later in convert(), after offline_only overrides.
+    enc_cfg = getattr(model.encoder, "streaming_cfg", None)
+    if enc_cfg is not None:
+        # pre_encode_cache_size is a list [a, b] when the ConvSubsampling
+        # stack has 2 conv layers, or a scalar otherwise. The "right"
+        # entry (index 1 / scalar) is the history-frame count we need
+        # to carry across chunks. drop_extra_pre_encoded is always a
+        # scalar (encoder frames dropped post-subsample on non-first
+        # chunks). Match conformer_encoder.py:1068-1076 exactly.
+        pec = enc_cfg.pre_encode_cache_size
+        if isinstance(pec, (list, tuple)):
+            hp["enc_stream_pre_encode_cache_size"] = int(pec[1]) if len(pec) >= 2 else int(pec[0])
+        else:
+            hp["enc_stream_pre_encode_cache_size"] = int(pec)
+        hp["enc_stream_drop_extra_pre_encoded"] = int(enc_cfg.drop_extra_pre_encoded)
+        # ConvSubsampling sampling_frames: NeMo's get_sampling_frames()
+        # returns [first_chunk_output_frames, steady_state_output_frames]
+        # for stack with 2+ stride-2 convs. For FastConformer's standard
+        # 2-stride-2 stack [a, b] = [1, 8] (i.e. first call produces 1
+        # frame, subsequent calls produce 8 frames). The "first" value
+        # drives the first-chunk size formula chunk_size_first =
+        # sampling_frames_first + subsampling_factor * lookahead.
+        sf_func = getattr(model.encoder.pre_encode, "get_sampling_frames", None)
+        if sf_func is not None:
+            sf = sf_func()
+            if isinstance(sf, (list, tuple)):
+                hp["enc_stream_sampling_frames_first"] = int(sf[0])
+            else:
+                hp["enc_stream_sampling_frames_first"] = int(sf)
+
     if head_kind == "ctc":
         return
 
@@ -1124,6 +1207,40 @@ def convert(model_spec: str, out_path: Path) -> None:
     writer.add_int32 ("stt.parakeet.encoder.conv_context_left",   hp["enc_conv_context_left"])
     writer.add_int32 ("stt.parakeet.encoder.conv_context_right",  hp["enc_conv_context_right"])
     writer.add_string("stt.parakeet.encoder.conv_norm_type",      hp["enc_conv_norm_type"])
+    # Multi-lookahead training menu. Emitted only when the encoder is
+    # cache-aware streaming (att_context_style=='chunked_limited') and
+    # the checkpoint trained against more than one (L, R) pair. The
+    # flat int32 layout [L0,R0,L1,R1,...] is read pair-wise by the
+    # loader; index 0 is the default (max-context / max-accuracy)
+    # setting, matching NeMo's att_context_size[0] convention.
+    choices = hp.get("enc_att_context_size_choices") or []
+    if hp["enc_att_context_style"] == "chunked_limited" and len(choices) >= 1:
+        flat: list[int] = []
+        for (l, r) in choices:
+            flat.extend([int(l), int(r)])
+        writer.add_array("stt.parakeet.encoder.att_context_size_choices", flat)
+    # Streaming-encoder pre-encode cache constants. Emitted only for
+    # cache-aware streaming variants; offline variants skip the KVs
+    # (loader treats absent as "non-streaming model"). The C++ loader
+    # uses these to size the mel-history prepend and the post-subsample
+    # drop, replacing the file-scope constants that the M2 port baked
+    # in for nemotron-speech-streaming-en-0.6b.
+    if (hp["enc_att_context_style"] == "chunked_limited"
+            and hp.get("enc_stream_pre_encode_cache_size") is not None
+            and hp.get("enc_stream_drop_extra_pre_encoded") is not None):
+        writer.add_int32(
+            "stt.parakeet.encoder.streaming.pre_encode_cache_size",
+            int(hp["enc_stream_pre_encode_cache_size"]),
+        )
+        writer.add_int32(
+            "stt.parakeet.encoder.streaming.drop_extra_pre_encoded",
+            int(hp["enc_stream_drop_extra_pre_encoded"]),
+        )
+        if hp.get("enc_stream_sampling_frames_first") is not None:
+            writer.add_int32(
+                "stt.parakeet.encoder.streaming.sampling_frames_first",
+                int(hp["enc_stream_sampling_frames_first"]),
+            )
 
     if head_kind != "ctc":
         writer.add_uint32("stt.parakeet.predictor.hidden",   hp["pred_hidden"])

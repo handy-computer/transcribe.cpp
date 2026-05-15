@@ -124,6 +124,12 @@ struct cli_args {
     // the loaded model to advertise supports_streaming. Set by
     // --stream-chunk-ms N.
     int         stream_chunk_ms              = 0;
+    // Parakeet streaming: pick a right-context (lookahead) setting
+    // from the model's training menu. -1 = model default (max
+    // accuracy / max latency); 0/1/6/13 select the published
+    // nemotron-speech-streaming-en-0.6b settings. Set by
+    // --stream-att-right N. Ignored when stream_chunk_ms == 0.
+    int         stream_att_right             = -1;
 };
 
 void print_usage(const char * argv0) {
@@ -153,6 +159,10 @@ void print_usage(const char * argv0) {
         "  --stream-chunk-ms N   single-file: drive the streaming API by feeding\n"
         "                        N-ms PCM slices; requires model to advertise\n"
         "                        supports_streaming\n"
+        "  --stream-att-right R  (parakeet streaming) pick the right-context\n"
+        "                        setting from the model's training menu;\n"
+        "                        nemotron-speech-streaming-en-0.6b accepts\n"
+        "                        R in {0,1,6,13}; default = model's first choice\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
 }
@@ -281,6 +291,15 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                              "error: --stream-chunk-ms must be > 0\n");
                 return false;
             }
+        } else if (a == "--stream-att-right") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.stream_att_right = std::atoi(v);
+            if (out.stream_att_right < 0) {
+                std::fprintf(stderr,
+                             "error: --stream-att-right must be >= 0\n");
+                return false;
+            }
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -298,11 +317,6 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
     }
     if (!out.wav_path.empty() && !out.batch_file.empty()) {
         std::fprintf(stderr, "error: cannot combine positional audio.wav with --batch\n");
-        return false;
-    }
-    if (out.stream_chunk_ms > 0 && !out.batch_file.empty()) {
-        std::fprintf(stderr,
-                     "error: --stream-chunk-ms is single-file only\n");
         return false;
     }
     if (out.stream_chunk_ms > 0 && out.repeat > 1) {
@@ -481,9 +495,44 @@ int main(int argc, char ** argv) {
                 continue;
             }
 
-            // Run.
-            transcribe_status run_st = transcribe_run(
-                ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+            // Run. When --stream-chunk-ms > 0, drive the streaming API
+            // for this utterance (begin/feed/finalize) so the WER
+            // harness can measure cache-aware streaming output.
+            transcribe_status run_st = TRANSCRIBE_OK;
+            if (args.stream_chunk_ms > 0) {
+                struct transcribe_stream_params sp =
+                    transcribe_stream_default_params();
+                struct transcribe_parakeet_stream_params pkt_sp =
+                    transcribe_parakeet_stream_default_params();
+                if (args.stream_att_right >= 0) {
+                    pkt_sp.att_context_right = args.stream_att_right;
+                    sp.parakeet = &pkt_sp;
+                }
+                run_st = transcribe_stream_begin(ctx, &rp, &sp);
+                if (run_st == TRANSCRIBE_OK) {
+                    const int chunk_samples =
+                        std::max(1, args.stream_chunk_ms * 16000 / 1000);
+                    size_t pos = 0;
+                    while (pos < pcm.size()) {
+                        const size_t take = std::min<size_t>(
+                            static_cast<size_t>(chunk_samples),
+                            pcm.size() - pos);
+                        struct transcribe_stream_update upd = {};
+                        run_st = transcribe_stream_feed(
+                            ctx, pcm.data() + pos,
+                            static_cast<int>(take), &upd);
+                        if (run_st != TRANSCRIBE_OK) break;
+                        pos += take;
+                    }
+                    if (run_st == TRANSCRIBE_OK) {
+                        struct transcribe_stream_update fin_upd = {};
+                        run_st = transcribe_stream_finalize(ctx, &fin_upd);
+                    }
+                }
+            } else {
+                run_st = transcribe_run(
+                    ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+            }
 
             const char * text = "";
             if (run_st == TRANSCRIBE_OK) {
@@ -644,6 +693,23 @@ int main(int argc, char ** argv) {
 
             struct transcribe_stream_params sp =
                 transcribe_stream_default_params();
+            struct transcribe_parakeet_stream_params pkt_sp =
+                transcribe_parakeet_stream_default_params();
+            if (args.stream_att_right >= 0) {
+                pkt_sp.att_context_right = args.stream_att_right;
+                sp.parakeet = &pkt_sp;
+                std::printf("stream: att_context_right=%d\n",
+                            args.stream_att_right);
+            }
+            // Print the streaming capability hints so users see what
+            // the model offers before the first feed.
+            if (caps != nullptr) {
+                std::printf(
+                    "stream: caps chunk_ms=%d lookahead_ms=%d lookahead_ms_min=%d\n",
+                    caps->streaming_chunk_ms,
+                    caps->streaming_lookahead_ms,
+                    caps->streaming_lookahead_ms_min);
+            }
             run_st = transcribe_stream_begin(ctx, &rp, &sp);
             if (run_st != TRANSCRIBE_OK) {
                 std::fprintf(stderr,

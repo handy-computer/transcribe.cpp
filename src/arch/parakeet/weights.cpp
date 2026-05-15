@@ -76,6 +76,55 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_left",  kFamilyTag, -1, hp.enc_att_context_left);  st != TRANSCRIBE_OK) return st;
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_right", kFamilyTag, -1, hp.enc_att_context_right); st != TRANSCRIBE_OK) return st;
 
+    // Multi-lookahead training menu (cache-aware streaming models). Flat
+    // int32 array [L0,R0,L1,R1,...]; index 0 must equal (att_context_left,
+    // att_context_right). Optional — absent for offline GGUFs, in which
+    // case we synthesize a one-element list from the scalar fields so
+    // call sites read uniformly.
+    {
+        std::vector<int32_t> flat;
+        switch (read_int32_array_kv(gguf, "stt.parakeet.encoder.att_context_size_choices", flat)) {
+            case KvResult::Ok:
+                if (flat.empty() || (flat.size() % 2) != 0) {
+                    std::fprintf(stderr,
+                                 "parakeet: stt.parakeet.encoder.att_context_size_choices "
+                                 "has odd length %zu (expected pairs)\n", flat.size());
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                hp.enc_att_context_size_choices.clear();
+                hp.enc_att_context_size_choices.reserve(flat.size() / 2);
+                for (size_t i = 0; i + 1 < flat.size(); i += 2) {
+                    hp.enc_att_context_size_choices.emplace_back(flat[i], flat[i + 1]);
+                }
+                if (hp.enc_att_context_size_choices.front().first  != hp.enc_att_context_left ||
+                    hp.enc_att_context_size_choices.front().second != hp.enc_att_context_right)
+                {
+                    std::fprintf(stderr,
+                                 "parakeet: att_context_size_choices[0] = (%d, %d) "
+                                 "but att_context_left/right = (%d, %d); "
+                                 "GGUF is inconsistent\n",
+                                 hp.enc_att_context_size_choices.front().first,
+                                 hp.enc_att_context_size_choices.front().second,
+                                 hp.enc_att_context_left, hp.enc_att_context_right);
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                break;
+            case KvResult::Absent:
+                // Synthesize from the scalar fields. For full-attention
+                // GGUFs (-1, -1) this still produces a one-element list;
+                // streaming code paths gate on att_context_style anyway.
+                hp.enc_att_context_size_choices.clear();
+                hp.enc_att_context_size_choices.emplace_back(
+                    hp.enc_att_context_left, hp.enc_att_context_right);
+                break;
+            case KvResult::BadType:
+                std::fprintf(stderr,
+                             "parakeet: stt.parakeet.encoder.att_context_size_choices "
+                             "has wrong type (expected int32 array)\n");
+                return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
     // Attention context style. Optional with default "regular" so legacy
     // GGUFs (every variant before nemotron-speech-streaming-en-0.6b)
     // stay on the existing local/full path.
@@ -125,6 +174,28 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                          norm_type.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
+    }
+
+    // Cache-aware streaming pre-encode constants. Optional — both KVs
+    // are emitted only by streaming-trained variants. Default 0 (means
+    // "non-streaming"); the streaming code paths gate on both > 0.
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.streaming.pre_encode_cache_size",
+                                         kFamilyTag, 0, hp.enc_stream_pre_encode_cache_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.streaming.drop_extra_pre_encoded",
+                                         kFamilyTag, 0, hp.enc_stream_drop_extra_pre_encoded);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.streaming.sampling_frames_first",
+                                         kFamilyTag, 0, hp.enc_stream_sampling_frames_first);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
     }
 
     // Head kind dispatch. Optional KV with default "tdt" so legacy

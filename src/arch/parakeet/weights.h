@@ -53,6 +53,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct gguf_context;
@@ -116,6 +117,22 @@ struct ParakeetHParams {
     int32_t enc_att_context_left  = -1;
     int32_t enc_att_context_right = -1;
 
+    // Multi-lookahead training menu for cache-aware streaming models.
+    // nemotron-speech-streaming-en-0.6b is trained on four (L, R) pairs
+    // simultaneously (att_context_probs = [0.25, 0.25, 0.25, 0.25] over
+    // [[70,13],[70,6],[70,1],[70,0]]) and the caller picks at inference
+    // time via transcribe_parakeet_stream_params::att_context_right.
+    //
+    // Encoded as a flat GGUF int32 array [L0,R0,L1,R1,...] under the KV
+    // stt.parakeet.encoder.att_context_size_choices. Index 0 is the
+    // default (max-context / max-accuracy) setting, matching NeMo's
+    // att_context_size[0] convention; it always equals
+    // (enc_att_context_left, enc_att_context_right). Empty for offline
+    // variants — the loader synthesizes a single-element list from the
+    // scalar fields above when no choices KV is present, so call sites
+    // can read uniformly.
+    std::vector<std::pair<int32_t, int32_t>> enc_att_context_size_choices;
+
     // Self-attention context style (introduced by streaming variants).
     // Resolved from stt.parakeet.encoder.att_context_style (string KV);
     // optional, defaults to "regular" so every legacy GGUF stays on the
@@ -140,6 +157,33 @@ struct ParakeetHParams {
     // then affine-transform with bn_w / bn_b).
     enum class ConvNormType { BatchNorm, LayerNorm };
     ConvNormType enc_conv_norm_type = ConvNormType::BatchNorm;
+
+    // Cache-aware streaming pre-encode constants. Populated from the
+    // optional KVs:
+    //   stt.parakeet.encoder.streaming.pre_encode_cache_size  (int32)
+    //   stt.parakeet.encoder.streaming.drop_extra_pre_encoded (int32)
+    // Both are properties of the ConvSubsampling stack — independent of
+    // the chosen att_context_size — so they're read once and reused
+    // across all latency settings.
+    //
+    // enc_stream_pre_encode_cache_size: number of mel-history frames the
+    //   streaming encoder must prepend to each non-first chunk to fill
+    //   the conv-subsample receptive field (9 on nemotron).
+    // enc_stream_drop_extra_pre_encoded: number of encoder frames
+    //   discarded after the subsample stack on each non-first chunk to
+    //   align with the cache boundary (2 on nemotron).
+    //
+    // Zero when absent from the GGUF (offline variants); the streaming
+    // code paths gate on both > 0.
+    int32_t enc_stream_pre_encode_cache_size  = 0;
+    int32_t enc_stream_drop_extra_pre_encoded = 0;
+    // ConvSubsampling's "first-chunk output frames" — used to compute
+    // chunk_size_first = sampling_frames_first + subsampling_factor * R.
+    // FastConformer's 2-stride-2 stack ships sampling_frames=[1, 8];
+    // we capture the first entry (1). Defaults to subsampling_factor
+    // when absent (matches the steady-state value, i.e. legacy GGUFs
+    // collapse to "no first-chunk special case").
+    int32_t enc_stream_sampling_frames_first  = 0;
 
     // Predictor (RNN-T prediction network). TDT and RNNT only; zero for CTC.
     int32_t pred_hidden   = 0;

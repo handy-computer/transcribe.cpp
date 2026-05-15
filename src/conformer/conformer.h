@@ -274,6 +274,62 @@ struct BlockParams {
     // BlockView::conv_ln_* as the affine scale/bias.
     enum class ConvNormType { BatchNorm, LayerNorm };
     ConvNormType conv_norm_type = ConvNormType::BatchNorm;
+
+    // ---- Streaming (cache-aware) inputs/outputs ----
+    //
+    // All four pointers are nullptr in offline mode and the block
+    // runs the existing graph topology. When non-null, the block
+    // runs the streaming path:
+    //
+    //   streaming_channel_in   per-layer cache_last_channel tensor
+    //     from the previous chunk (persistent backend buffer). Shape
+    //     [d_model, T_cache, 1, 1]. Concat-prepended onto the post-
+    //     attn-LN x before Q/K/V projection ("virtual T" approach):
+    //     the block runs attention on T_virtual = T_cache + T_q_new
+    //     positions and slices the output to the last T_q_new rows.
+    //
+    //   streaming_channel_out  output tensor (allocated by the caller
+    //     in the per-call compute_ctx) that rel_pos_mhsa fills via
+    //     ggml_cpy with the tail of x_norm (size T_q_new, the new
+    //     cache slot per NeMo's q_keep_size = T_new rule with
+    //     cache_drop_size = 0). After graph_compute, the driver
+    //     rotates this into the persistent cache buffer.
+    //
+    //   streaming_time_in      per-layer cache_last_time tensor from
+    //     the previous chunk. Shape [k_minus_1, d_model, 1, 1].
+    //     Replaces the zero left-pad in the depthwise conv (the
+    //     causal pad on streaming variants is (k-1, 0); the k-1 left
+    //     frames are now the previous chunk's post-pw1+GLU tail).
+    //
+    //   streaming_time_out     output tensor (compute_ctx) that
+    //     conv_module fills with the last k_minus_1 frames of the
+    //     post-pw1+GLU input (which becomes the next chunk's left
+    //     pad).
+    //
+    // The pos_emb tensor (passed separately to rel_pos_mhsa) and the
+    // attn_chunked_mask (above) are sized for the virtual T when
+    // streaming, not the offline T_enc. The caller is responsible for
+    // building them at the correct size.
+    ggml_tensor * streaming_channel_in  = nullptr;
+    ggml_tensor * streaming_channel_out = nullptr;
+    ggml_tensor * streaming_time_in     = nullptr;
+    ggml_tensor * streaming_time_out    = nullptr;
+
+    // When streaming, the number of new (post-pre-encode) encoder
+    // frames being produced this call. Used to:
+    //   - slice rel_pos_mhsa's attention output back to the new rows
+    //   - decide the source slice for streaming_channel_out / _time_out
+    // Ignored in offline mode (streaming_channel_in == nullptr).
+    int streaming_T_q_new = 0;
+
+    // Graph the helpers use to forward-expand their cache-write cpy
+    // nodes. The streaming cache outputs are SIDE outputs (not
+    // reachable from the encoder's `out` tensor), so they have to be
+    // added to the graph explicitly. The caller sets this to the
+    // graph it'll later run on; the helpers do
+    // ggml_build_forward_expand(streaming_graph, cpy_node) when they
+    // emit a cache write. Required when streaming_*_out is non-null.
+    ggml_cgraph * streaming_graph = nullptr;
 };
 
 // ===========================================================================

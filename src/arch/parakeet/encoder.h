@@ -169,4 +169,56 @@ EncoderBuild build_encoder_graph(ggml_context *          compute_ctx,
                                  ggml_type               kv_type = GGML_TYPE_COUNT,
                                  const char *            backend_name = "");
 
+// Per-layer streaming cache I/O for the streaming encoder graph.
+// The inputs are persistent backend tensors (allocated outside the
+// per-call compute_ctx) holding the previous chunk's caches; the
+// outputs are fresh tensors created inside compute_ctx that the graph
+// fills via ggml_cpy and the driver reads back into the persistent
+// caches after graph_compute. Both vectors are sized to n_layers.
+struct StreamingEncoderCacheIO {
+    // Inputs (from persistent backend buffer; one tensor per layer).
+    std::vector<ggml_tensor *> channel_in;
+    std::vector<ggml_tensor *> time_in;
+    // Outputs (fresh in compute_ctx; per-layer). Filled in by
+    // build_encoder_graph_streaming so the caller can copy back.
+    std::vector<ggml_tensor *> channel_out;
+    std::vector<ggml_tensor *> time_out;
+};
+
+// Build a cache-aware streaming encoder graph. Same overall topology
+// as build_encoder_graph but:
+//
+//   - The mel input is a chunk (chunk_size mel frames), typically
+//     112 for nemotron-streaming subsequent chunks (= 9 history
+//     prepend + 103 new).
+//   - After pre_encode, the first `drop_extra_pre_encoded` encoder
+//     frames are sliced off (NeMo's mechanism to align the overlap
+//     after the 8× subsample).
+//   - The per-block self-attention runs on T_virtual =
+//     T_cache + T_q_new positions (via prepend of cache_last_channel)
+//     and the output is sliced back to the last T_q_new rows.
+//   - The per-block conv module replaces its zero left-pad with the
+//     previous chunk's cache_last_time.
+//   - Each block emits two cache writes (channel + time) via
+//     ggml_cpy into fresh tensors that the driver reads back.
+//
+// pos_emb and chunked_mask are sized for T_virtual (the caller is
+// responsible for filling them; this builder only allocates the
+// input handles). The encoder output `eb.out` has ne = [d_model,
+// T_q_new, 1, 1] (the new-chunk frames only).
+//
+// `cache_io.channel_in` and `cache_io.time_in` MUST be pre-populated
+// with per-layer tensor handles from the persistent cache buffer.
+// `cache_io.channel_out` and `cache_io.time_out` are populated by
+// this function.
+EncoderBuild build_encoder_graph_streaming(
+    ggml_context *          compute_ctx,
+    const ParakeetWeights & weights,
+    const ParakeetHParams & hp,
+    int                     n_mel_chunk_frames,
+    int                     drop_extra_pre_encoded,
+    StreamingEncoderCacheIO & cache_io,
+    ggml_type               kv_type = GGML_TYPE_COUNT,
+    const char *            backend_name = "");
+
 } // namespace transcribe::parakeet

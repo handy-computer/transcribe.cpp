@@ -11,19 +11,23 @@
 //      hint fields are zero-initialized, and transcribe_stream_begin
 //      returns NOT_IMPLEMENTED on the capability gate.
 //
-//   2. The KV-override path with NO HOOKS WIRED (capability KV says
-//      streaming=true, family has no stream_begin/feed/finalize hooks):
-//      caps.supports_streaming reads true (the KV path works), but
-//      transcribe_stream_begin still returns NOT_IMPLEMENTED because
-//      the dispatcher independently checks the required hook triple.
-//      This guards against the failure mode where a future family
-//      flips the capability flag and forgets to wire the hooks.
+//   2. The KV-override path against a NON-STREAMING VARIANT (capability
+//      KV says streaming=true, but the variant's encoder hparams are
+//      not ChunkedLimited). Caps.supports_streaming reads true (the KV
+//      path works), the dispatcher transitions into ACTIVE and calls
+//      the family's stream_begin hook, and the hook itself rejects
+//      with NOT_IMPLEMENTED because the parakeet family only supports
+//      streaming for cache-aware ChunkedLimited variants (today:
+//      nemotron-speech-streaming-en-0.6b). The dispatcher then
+//      transitions the stream to FAILED and preserves the status in
+//      stream_last_status. This guards against the failure mode where
+//      a future converter flips the capability flag on a variant whose
+//      compute graph cannot actually stream.
 //
-// Both cases share the parakeet family, which advertises
-// supports_streaming=false by default and has no streaming hooks
-// wired today. The two GGUF fixtures differ only in the capability
-// KV; everything else (tokenizer, hparams, weight catalog) is
-// identical so the test isolates capability behavior cleanly.
+// Both cases share the parakeet family. The two GGUF fixtures differ
+// only in the capability KV; everything else (tokenizer, hparams,
+// weight catalog) is identical so the test isolates capability
+// behavior cleanly.
 
 #include "transcribe.h"
 
@@ -139,12 +143,15 @@ void test_supports_streaming_false() {
 }
 
 // Capability-KV-override fixture: stt.capability.streaming=true flips
-// the capability flag on, but the parakeet family still has no
-// stream_begin/feed/finalize hooks wired. The dispatcher's hook-set
-// check catches this and still returns NOT_IMPLEMENTED. Pins the
-// "capability KV alone is not enough" guard introduced in Phase 1's
-// review pass.
-void test_supports_streaming_true_no_hooks() {
+// the capability flag on, and the parakeet family now wires the
+// stream_begin/feed/finalize hooks. The dispatcher passes the cap
+// gate and the hook-triple gate, transitions to ACTIVE, then calls
+// stream_begin — which itself rejects with NOT_IMPLEMENTED because
+// the toy fixture is not a ChunkedLimited variant. The dispatcher
+// records the failing status and transitions the stream to FAILED.
+// Pins the "capability KV alone is not enough; the family's compute
+// graph must actually support streaming" guard.
+void test_supports_streaming_true_variant_offline() {
     struct transcribe_model *   model = nullptr;
     struct transcribe_context * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal_streaming.gguf", &model, &ctx)) return;
@@ -165,11 +172,14 @@ void test_supports_streaming_true_no_hooks() {
     transcribe_params         rp = transcribe_default_params();
     const transcribe_status   st = transcribe_stream_begin(ctx, &rp, &sp);
 
-    // The hook-set check should still reject: caps says yes, but
-    // parakeet has no stream_* hooks installed.
+    // Family-level rejection: caps says yes, the dispatcher's gates
+    // pass, but the parakeet stream_begin hook refuses because the
+    // toy fixture's encoder is Regular (full attention), not
+    // ChunkedLimited. Post-hook rejection → state is FAILED and the
+    // status is preserved on the context.
     CHECK(st == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
-    CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_IDLE);
-    CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_OK);
+    CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_FAILED);
+    CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
 
     transcribe_context_free(ctx);
     transcribe_model_free(model);
@@ -226,7 +236,7 @@ void test_run_after_failed_begin_does_not_get_stuck() {
 
 int main() {
     test_supports_streaming_false();
-    test_supports_streaming_true_no_hooks();
+    test_supports_streaming_true_variant_offline();
     test_run_after_failed_begin_does_not_get_stuck();
 
     if (g_failures > 0) {

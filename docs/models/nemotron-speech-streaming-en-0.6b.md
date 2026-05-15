@@ -9,9 +9,20 @@ FastConformer encoder with an RNN-T transducer decoder.
 English speech-to-text with greedy RNN-T decoding. Outputs cased,
 punctuated transcripts. Token- and word-level timestamps are available.
 
-This port runs the model in **offline** mode. The encoder preserves the
-upstream `att_context_size=[70, 13]` (1.12s) cache-aware attention mask
-end-to-end. Currently transcribe.cpp has no streaming support.
+This port runs the model in both **offline** and **cache-aware streaming**
+modes:
+
+- Offline (`transcribe_run`): the full audio is consumed in one pass.
+  The encoder preserves the upstream `att_context_size=[70, 13]` (1.12s)
+  cache-aware attention mask end-to-end.
+- Streaming (`transcribe_stream_{begin,feed,finalize}` /
+  `transcribe-cli --stream-chunk-ms N`): incremental PCM feeds drive
+  per-chunk encoder forward passes with `cache_last_channel` /
+  `cache_last_time` carried across calls, and an LSTM-state-carrying
+  RNN-T greedy decoder. All four latency settings from the upstream
+  multi-lookahead training menu are selectable via
+  `--stream-att-right R ∈ {0, 1, 6, 13}` (lookahead 0 / 80 / 480 /
+  1040 ms respectively). Default = `13` (max accuracy).
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b)
 for training data, intended use, streaming methodology, and the full
@@ -119,14 +130,129 @@ pre-encode, and LayerNorm conv module.
 | Manifest | `tests/golden/parakeet/nemotron-speech-streaming-en-0.6b.manifest.json` |
 | Command | `uv run scripts/validate.py all --family parakeet --variant nemotron-speech-streaming-en-0.6b` |
 
+## Streaming parity
+
+Validated against NeMo's `transcribe_simulate_cache_aware_streaming`
+reference via `scripts/validate_streaming.py`:
+
+| `--stream-att-right` | Lookahead | First-chunk delay | jfk.wav vs NeMo | whole-earth.wav (84s) vs NeMo |
+| --- | --- | --- | --- | --- |
+| 13 (default) | 1040 ms | 1.12 s | byte-equal | byte-equal |
+| 6            |  480 ms | 0.56 s | byte-equal | (not measured) |
+| 1            |   80 ms | 0.16 s | 1 char (extra trailing period) | (not measured) |
+| 0            |    0 ms | 0.08 s | 1 char (extra trailing period) | (not measured) |
+
+The R∈{1, 0} difference is because our `stream_finalize` emits a final
+partial-chunk that produces the closing punctuation; NeMo's last call
+at those settings has so few mel frames the closing token doesn't
+score above blank. Both outputs are valid.
+
+### Transcript WER (LibriSpeech test-clean 512)
+
+End-to-end WER measured against the NeMo reference on the same
+512-utterance test-clean subset the offline parakeet family uses for
+its WER gate. The cpp side runs on Metal (F32 and Q8_0) — the common
+macOS deployment path. Gate: `|cpp_WER − ref_WER| ≤ 0.5%` absolute per
+R, the same threshold every other shipped parakeet variant clears.
+
+| Variant | R | Lookahead | WER% | Δ vs ref | 95% CI | lat_p50 (ms) | Gate |
+| --- | ---: | ---: | ---: | ---: | --- | ---: | :---: |
+| REF      | 13 | 1040 ms | 1.67 | —     | [1.38, 2.02] |  718 | — |
+| cpp-F32  | 13 | 1040 ms | 1.68 | +0.01 | [1.38, 2.03] |  231 | PASS |
+| cpp-Q8_0 | 13 | 1040 ms | 1.66 | −0.01 | [1.37, 2.01] |  206 | PASS |
+| REF      |  6 |  480 ms | 1.68 | —     | [1.36, 2.07] | 1477 | — |
+| cpp-F32  |  6 |  480 ms | 1.70 | +0.02 | [1.37, 2.09] |  436 | PASS |
+| cpp-Q8_0 |  6 |  480 ms | 1.68 | +0.00 | [1.37, 2.05] |  406 | PASS |
+| REF      |  1 |   80 ms | 1.90 | —     | [1.57, 2.29] | 4507 | — |
+| cpp-F32  |  1 |   80 ms | 1.83 | −0.07 | [1.51, 2.21] | 1437 | PASS |
+| cpp-Q8_0 |  1 |   80 ms | 1.83 | −0.07 | [1.50, 2.22] | 1428 | PASS |
+| REF      |  0 |    0 ms | 1.96 | —     | [1.62, 2.35] | 5107 | — |
+| cpp-F32  |  0 |    0 ms | 1.85 | −0.11 | [1.54, 2.23] | 2830 | PASS |
+| cpp-Q8_0 |  0 |    0 ms | 1.85 | −0.11 | [1.53, 2.24] | 2809 | PASS |
+
+All 8 cpp/ref pairs PASS with max |Δ| = 0.11% — comfortably inside the
+95% CI on 512 utterances (±0.5% at typical 1–3% WER). Q8_0 is
+statistically indistinguishable from F32 at every R (Δ between Q8 and
+F32 ≤ 0.02%): the streaming path does not introduce additional quant
+degradation beyond what the offline parakeet WER gate already covers.
+
+Reference is NeMo's `conformer_stream_step` per chunk on CPU/fp32
+(`scripts/wer/run_reference_parakeet_streaming_nemo.py`); cpp side is
+`build/bin/transcribe-cli --stream-chunk-ms 500 --stream-att-right R`
+on Metal. Test plan: [`docs/plans/nemotron-streaming-wer-plan.md`](../plans/nemotron-streaming-wer-plan.md).
+Reproduce / refresh the table from score sidecars:
+
+```bash
+uv run scripts/wer/streaming_table.py \
+    --reports-dir reports/wer --gate 0.5 --markdown
+```
+
+### Per-tensor parity (numerical validation)
+
+`tests/tolerances/nemotron-speech-streaming-en-0.6b.streaming.json`
+pins per-kind tolerances calibrated to CPU 1-thread observed drift via
+the `/porting-2-oracle` Stage 4 recipe: `max_abs = max(1.5 × observed,
+max(1e-4 × p99_abs, 1e-6))`. With these tolerances and
+`--backend cpu --threads 1`, the harness reports
+**3554/3554 streaming-tensor pairs in tolerance across R ∈ {0, 1, 6, 13}**
+on jfk.wav.
+
+Drift profile (observed, CPU 1-thread, R=13):
+
+| Tensor kind | p99_abs | rms | observed max_abs | observed rel | budget |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `mel_in` | 16.6 | 11.7 | 0.81 | 4.9% | 1.21 |
+| `cache_lc_in/out` | 0.18 | 0.066 | 7.1e-3 | 3.9% | 0.011 |
+| `cache_lt_in/out` | 18 | 3.81 | 0.22 | 1.2% | 0.33 |
+| `enc_out` | 0.24 | 0.090 | 6.5e-3 | 2.7% | 9.7e-3 |
+| `channel_len` | 70 | 70 | 0 | 0% | 7e-3 |
+
+Apples-to-apples vs the **offline** path on the same model:
+
+| Extraction point | Offline drift (max_abs / rel) | Streaming chunk-0 drift |
+| --- | --- | --- |
+| post-block-0 (`enc.block.0.out`) | 0.41 / 1.40% | n/a (no equiv. dump) |
+| post-block-12 (`enc.block.12.out`) | 0.42 / 1.23% | n/a |
+| post-block-23 (`enc.block.23.out`) | 7.2e-3 / 3.32% | n/a |
+| post-encoder (`dec.enc_out`) | 7.2e-3 / 3.32% | `enc_out` mid-stream max 1.9e-3 / 0.79% |
+
+Streaming drift is **tighter than offline** at the post-encoder
+extraction point (chunked_limited attention sums over fewer keys per
+query than full attention, so per-matmul reduction-order noise
+accumulates less). Stage 2 provisional tolerances
+(`max(1e-4 × p99_abs, 1e-6)`) — intentionally aggressive to catch
+algorithm bugs, not be passable for any nontrivial encoder — are
+exceeded on 107/150 streaming tensors at CPU 1-thread, vs 8/14 on the
+offline path: the same family-wide float-noise regime. The
+[regular parakeet family tolerance file](../../tests/tolerances/parakeet.json)
+allows 50× max_abs at `enc.block.0.out` and 3.7 at `enc.final` — our
+streaming sits inside that envelope by orders of magnitude.
+
+Metal contributes an additional ~18 tensor failures at Stage 2
+provisional thresholds (125 vs 107 over budget on R=13), but
+transcripts stay byte-equal end-to-end. Metal-specific tolerances
+would be a separate widening.
+
+Reproduce: `uv run --project scripts/envs/parakeet
+scripts/validate_streaming.py --hf-model
+nvidia/nemotron-speech-streaming-en-0.6b --gguf <F32>.gguf --audio
+samples/jfk.wav --out build/validate_streaming/nemotron/jfk --right 13
+6 1 0`.
+
+### Note on mel right-edge timing
+
+To match NeMo's mel-on-full-audio reference behavior, the C++ side
+delays each chunk emission by a small right-edge margin
+(`ceil((n_fft/2) / hop_length)` mel frames — 2 frames = 20 ms on the
+nemotron preprocessor's `n_fft=512` / `hop=160`). Without this, our
+per-feed mel recomputation produces reflect-padded values for the last
+few mel frames of each chunk, which never matches the reference's
+full-audio mel. The margin is "true" lookahead in the cache-aware
+streaming sense and is independent of the `att_context_right`-driven
+encoder lookahead.
+
 ## Known limitations
 
-- Streaming decoding is not exposed by transcribe.cpp. The model runs
-  in offline mode only; the chunked-attention mask
-  (`att_context_size=[70, 13]`) is preserved at inference so the
-  transcript matches NVIDIA's published offline behavior, but the
-  incremental-chunk session API and the lower-latency presets
-  (`[70,6]`/`[70,1]`/`[70,0]`) are not yet implemented.
 - Multilingual transcription is not supported. The model is
   English-only by training.
 
