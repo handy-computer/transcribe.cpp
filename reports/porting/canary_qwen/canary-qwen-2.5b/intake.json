@@ -155,7 +155,8 @@
     "vocab_size": 151936,
     "special_tokens": {
       "pad": 151643,
-      "eos": 151645
+      "eos": 151645,
+      "audio_locator": 151669
     },
     "has_language_tokens": false,
     "vocab_sha256": null
@@ -273,7 +274,7 @@
   "intake_gaps": [
     {
       "field": "tokenizer.special_tokens.audio_placeholder",
-      "reason": "the audio_locator_tag '<|audioplaceholder|>' is added by SALM training; its concrete token ID lives in the SALM checkpoint's added_tokens (likely 151669 or in the 151665+ range after Qwen3's existing added tokens). Stage 2 will pin the exact ID by inspecting the loaded SALM tokenizer."
+      "reason": "RESOLVED at Stage 2 — model.tokenizer.text_to_ids('<|audioplaceholder|>') == [151669] (NeMo 2.7.3, nvidia/canary-qwen-2.5b @ b1469e1bba1cfe140205529c79c434ca47180960). Recorded in tokenizer.special_tokens.audio_locator above and in tests/golden/canary_qwen/canary-qwen-2.5b.manifest.json."
     },
     {
       "field": "tokenizer.vocab_sha256",
