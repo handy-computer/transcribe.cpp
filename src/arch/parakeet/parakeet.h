@@ -195,6 +195,14 @@ struct ParakeetStreamingCaches {
     // to the encoder, minus history prepend).
     int64_t mel_frames_consumed = 0;
 
+    // Absolute sample index of stream_pcm_buffer[0]. The buffer is a
+    // sliding window: after each emit, prefix samples no longer needed
+    // by any unemitted frame's STFT window are trimmed (hop-aligned).
+    // Bounded per-feed mel cost: O(new audio) instead of O(total).
+    // Always a multiple of hop_length so mel-frame indexing translates
+    // cleanly between absolute and buffer-relative.
+    int64_t pcm_start_sample = 0;
+
     // Streaming geometry for the active stream. Resolved at
     // stream_begin from ParakeetHParams + the caller-selected
     // att_context_right (transcribe_parakeet_stream_params). All four

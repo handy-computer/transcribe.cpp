@@ -389,6 +389,7 @@ void zero_streaming_caches(ParakeetContext * pc) {
     }
     pc->stream_caches.channel_len         = 0;
     pc->stream_caches.mel_frames_consumed = 0;
+    pc->stream_caches.pcm_start_sample    = 0;
     std::fill(pc->stream_caches.mel_history.begin(),
               pc->stream_caches.mel_history.end(), 0.0f);
     pc->stream_caches.pcm_remainder.clear();
@@ -1769,21 +1770,19 @@ transcribe_status emit_streaming_chunk(
 
     // Rotate per-layer caches: cache_out → persistent cache_in. Both
     // tensors live on the model's primary backend, so a backend-side
-    // copy avoids host roundtripping. Guard against scheduler having
-    // pruned cache_out tensors (happens on R < 13 because the conv-time
-    // cache write copies `conv_kernel - 1 = 8` frames but smaller R
-    // produces fewer enc frames per chunk — see the conv_module
-    // cache_next logic in conformer/conformer.cpp; FIXME for R<13).
+    // copy avoids host roundtripping. The null check is defense in
+    // depth — every supported R produces a fully-allocated cache_out
+    // (the conv_module cache_next logic in conformer/conformer.cpp
+    // covers T_q_new < pad_left explicitly), so reaching this branch
+    // indicates a builder bug.
     for (int i = 0; i < n_layers; ++i) {
         if (cache_io.channel_out[i] == nullptr || cache_io.channel_out[i]->buffer == nullptr ||
             cache_io.time_out[i]    == nullptr || cache_io.time_out[i]->buffer    == nullptr)
         {
             std::fprintf(stderr,
                 "parakeet stream: cache_out unallocated at layer %d "
-                "(att_context_right=%d may be smaller than supported; "
-                "only R=%d is fully validated today)\n",
-                i, pc->stream_caches.att_context_right,
-                pm->hparams.enc_att_context_right);
+                "(att_context_right=%d) — builder bug\n",
+                i, pc->stream_caches.att_context_right);
             return TRANSCRIBE_ERR_BACKEND;
         }
         ggml_backend_tensor_copy(cache_io.channel_out[i],
@@ -2034,12 +2033,20 @@ transcribe_status stream_feed(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Recompute mel from the full accumulated PCM buffer. Mel is
-    // cheap (~0.7 ms on M4 Max for 11 s) compared to the encoder, and
-    // recomputing each call avoids managing per-frame PCM/mel state.
-    // For very long streams the cost is O(N) in buffer length per
-    // call; M2 will optimise this if needed (currently nemotron
-    // streams up to ~80 s of audio before max_position_embeddings).
+    // Recompute mel from the (sliding) accumulated PCM buffer.
+    //
+    // The buffer is trimmed after each emit to retain only the prefix
+    // samples that future mel frames will still need (the STFT window
+    // of the next-unemitted frame extends back by `n_fft/2` samples).
+    // That keeps mel cost bounded per feed regardless of stream length.
+    //
+    // pcm_start_sample is the absolute sample index of buffer[0] and
+    // is always hop-aligned, so the absolute → buffer-relative
+    // mel-frame translation is the integer pcm_start_sample / hop.
+    // The first few buffer-relative mel frames (where the STFT window
+    // would extend left of buffer[0]) are reflect-pad-contaminated
+    // garbage; they correspond to already-emitted absolute frames and
+    // are never read.
     const int64_t t_mel_start = ggml_time_us();
     int mel_n_mels   = 0;
     int mel_n_frames = 0;
@@ -2076,11 +2083,17 @@ transcribe_status stream_feed(
     const int pre_encode_cache_size = pm->hparams.enc_stream_pre_encode_cache_size > 0
         ? pm->hparams.enc_stream_pre_encode_cache_size
         : pm->hparams.enc_subsampling_factor + 1;
+    // pcm_start_frame is the absolute mel-frame index of buffer-relative
+    // frame 0. Hop-aligned trim keeps this an integer.
+    const int hop = pm->hparams.fe_hop_length;
+    const int64_t pcm_start_frame =
+        pc->stream_caches.pcm_start_sample / hop;
     while (true) {
         if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
 
         const int64_t consumed = pc->stream_caches.mel_frames_consumed;
-        const int64_t avail    = static_cast<int64_t>(mel_n_frames);
+        const int64_t avail    = pcm_start_frame +
+                                 static_cast<int64_t>(mel_n_frames);
         const bool    is_first = pc->stream_caches.is_first_chunk;
 
         const int chunk_advance = is_first
@@ -2119,9 +2132,12 @@ transcribe_status stream_feed(
             static_cast<size_t>(mel_fed));
 
         // mel_buf layout: row-major [n_mels, mel_n_frames]; entry
-        // [m, t] at offset (m * mel_n_frames + t).
-        auto mel_at = [&](int m, int t) -> float {
-            return pc->mel_buf[static_cast<size_t>(m) * mel_n_frames + t];
+        // for absolute frame `abs_t` at offset
+        // (m * mel_n_frames + (abs_t - pcm_start_frame)).
+        auto mel_at = [&](int m, int64_t abs_t) -> float {
+            const int64_t rel = abs_t - pcm_start_frame;
+            return pc->mel_buf[static_cast<size_t>(m) * mel_n_frames +
+                               static_cast<size_t>(rel)];
         };
 
         for (int m = 0; m < mel_n_mels; ++m) {
@@ -2134,12 +2150,12 @@ transcribe_status stream_feed(
                 const int64_t frame_idx = consumed - prepend_frames + h;
                 const float val = (frame_idx < 0)
                     ? 0.0f
-                    : mel_at(m, static_cast<int>(frame_idx));
+                    : mel_at(m, frame_idx);
                 chunk[static_cast<size_t>(m) * mel_fed + h] = val;
             }
             // New frames: [consumed, consumed + chunk_advance).
             for (int n = 0; n < chunk_advance; ++n) {
-                const float val = mel_at(m, static_cast<int>(consumed + n));
+                const float val = mel_at(m, consumed + n);
                 chunk[static_cast<size_t>(m) * mel_fed +
                       prepend_frames + n] = val;
             }
@@ -2173,6 +2189,50 @@ transcribe_status stream_feed(
         pc->n_committed_words    = 0;
         pc->n_committed_segments = 0;
         pc->stream_revision     += 1;
+    }
+
+    // Trim already-consumed PCM. The next chunk's mel_at() reads back
+    // by `prepend_max` frames (the pre-encode-cache history) AND each
+    // mel-frame STFT window extends another `pad = n_fft/2` samples
+    // left of its center. Keep both margins or the prepend frames'
+    // windows reflect-pad against a truncated buffer start, silently
+    // corrupting the pre-encode-cache input on every subsequent chunk
+    // (observed as deletions at chunk boundaries in WER).
+    // Round the drop down to a hop boundary to keep pcm_start_sample
+    // aligned with mel-frame index 0.
+    //
+    // First-feed safety: with mel_frames_consumed == 0 the target
+    // keep_from is negative, the drop_aligned guard rejects it, and
+    // the buffer stays intact.
+    {
+        const int pad = pm->hparams.fe_n_fft / 2;
+        const int prepend_max =
+            pc->stream_caches.mel_fed_subsequent -
+            pc->stream_caches.chunk_size_subsequent;
+        const int64_t earliest_frame_needed =
+            pc->stream_caches.mel_frames_consumed -
+            static_cast<int64_t>(prepend_max);
+        const int64_t earliest_sample_needed =
+            earliest_frame_needed * static_cast<int64_t>(hop);
+        const int64_t keep_from =
+            earliest_sample_needed - static_cast<int64_t>(pad);
+        if (keep_from > pc->stream_caches.pcm_start_sample) {
+            const int64_t drop_raw =
+                keep_from - pc->stream_caches.pcm_start_sample;
+            const int64_t drop_aligned =
+                (drop_raw / static_cast<int64_t>(hop)) *
+                static_cast<int64_t>(hop);
+            if (drop_aligned > 0 &&
+                drop_aligned <=
+                static_cast<int64_t>(pc->stream_pcm_buffer.size()))
+            {
+                pc->stream_pcm_buffer.erase(
+                    pc->stream_pcm_buffer.begin(),
+                    pc->stream_pcm_buffer.begin() +
+                        static_cast<ptrdiff_t>(drop_aligned));
+                pc->stream_caches.pcm_start_sample += drop_aligned;
+            }
+        }
     }
 
     // Audio "committed" cursor tracks the amount of audio we've fully
@@ -2232,9 +2292,13 @@ transcribe_status stream_finalize(
         }
 
         if (mst == TRANSCRIBE_OK) {
+            const int hop = pm->hparams.fe_hop_length;
+            const int64_t pcm_start_frame =
+                pc->stream_caches.pcm_start_sample / hop;
             const int64_t consumed = pc->stream_caches.mel_frames_consumed;
-            const int64_t remaining =
-                static_cast<int64_t>(mel_n_frames) - consumed;
+            const int64_t avail    = pcm_start_frame +
+                                     static_cast<int64_t>(mel_n_frames);
+            const int64_t remaining = avail - consumed;
             if (remaining > 0) {
                 const bool is_first = pc->stream_caches.is_first_chunk;
                 const int drop_extra = is_first
@@ -2261,20 +2325,23 @@ transcribe_status stream_finalize(
                     static_cast<size_t>(mel_n_mels) *
                     static_cast<size_t>(mel_fed),
                     0.0f);
-                auto mel_at = [&](int m, int t) -> float {
-                    return pc->mel_buf[static_cast<size_t>(m) * mel_n_frames + t];
+                // mel_buf indexed by ABSOLUTE frame; translate to the
+                // buffer-relative offset via pcm_start_frame.
+                auto mel_at = [&](int m, int64_t abs_t) -> float {
+                    const int64_t rel = abs_t - pcm_start_frame;
+                    return pc->mel_buf[static_cast<size_t>(m) * mel_n_frames +
+                                       static_cast<size_t>(rel)];
                 };
                 for (int m = 0; m < mel_n_mels; ++m) {
                     for (int h = 0; h < prepend_frames; ++h) {
                         const int64_t frame_idx = consumed - prepend_frames + h;
                         const float val = (frame_idx < 0)
                             ? 0.0f
-                            : mel_at(m, static_cast<int>(frame_idx));
+                            : mel_at(m, frame_idx);
                         chunk[static_cast<size_t>(m) * mel_fed + h] = val;
                     }
                     for (int n = 0; n < new_take; ++n) {
-                        const float val = mel_at(m,
-                            static_cast<int>(consumed + n));
+                        const float val = mel_at(m, consumed + n);
                         chunk[static_cast<size_t>(m) * mel_fed +
                               prepend_frames + n] = val;
                     }

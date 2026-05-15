@@ -948,7 +948,9 @@ TRANSCRIBE_API struct transcribe_parakeet_stream_params
  *   result_changed     The context result was modified by this call.
  *                      Inspect the accessors after the call to read
  *                      the new snapshot.
- *   is_final           True only on the finalize call's update.
+ *   is_final           True only on the finalize call's update. Set
+ *                      by the dispatcher after the family hook
+ *                      returns; family hooks cannot override.
  *   revision           Monotonic counter that increments whenever the
  *                      context result changes (mirrors
  *                      transcribe_stream_revision(ctx) after the call
