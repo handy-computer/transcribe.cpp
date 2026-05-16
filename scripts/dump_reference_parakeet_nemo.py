@@ -154,16 +154,25 @@ def _patch_conformer_for_offline(force_regular_att_style: bool = False) -> None:
 
     def patched_init(self, *args, **kwargs):
         dropped = []
-        # Drop unknown kwargs (covers any future streaming-only key the
-        # constructor doesn't accept yet).
+        # Drop unknown kwargs (covers any streaming-only key the
+        # constructor doesn't accept — e.g. NeMo 2.7.x rejects
+        # `att_chunk_context_size` while upstream main accepts it).
         for k in list(kwargs.keys()):
             if k not in accepted:
                 kwargs.pop(k)
                 dropped.append(f"unknown:{k}")
-        for k in streaming_only:
-            if k in kwargs:
-                kwargs.pop(k)
-                dropped.append(k)
+        # Belt-and-suspenders: when we're forcing the encoder to
+        # regular-style for the unified-en offline port, drop the
+        # streaming kwargs even if the constructor would accept them.
+        # The regular path doesn't read these and dropping makes the
+        # downstream `set_default_att_context_size` no-op explicit.
+        # We do NOT drop them when the caller wants the model's native
+        # streaming style (chunked_limited / chunked_limited_with_rc).
+        if force_regular_att_style:
+            for k in streaming_only:
+                if k in kwargs:
+                    kwargs.pop(k)
+                    dropped.append(k)
         for k, fallback in offline_overrides.items():
             if k in kwargs and kwargs[k] not in (None, "regular"):
                 dropped.append(f"{k}={kwargs[k]!r}->{fallback!r}")
@@ -859,6 +868,285 @@ def cmd_streaming(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_buffered_streaming(args: argparse.Namespace) -> int:
+    """Dump per-chunk BUFFERED streaming intermediates for unified models.
+
+    Mirrors NeMo's reference inference loop at
+    `examples/asr/asr_chunked_inference/rnnt/speech_to_text_streaming_infer_rnnt.py`
+    (lines 397-447). The model's encoder is reconfigured to
+    `chunked_limited_with_rc` with a runtime-selected (L, C, R) tuple
+    via `set_default_att_context_size`; each chunk re-runs the FULL
+    encoder over a sliding [left | chunk | right] PCM window; the
+    RNN-T greedy-batch label-looping decoder runs over just the chunk
+    frames with state carried across chunks.
+
+    --left-secs / --chunk-secs / --right-secs select the (L, C, R)
+    tuple in seconds (default: 5.6 / 1.04 / 1.04 — the model card's
+    "best accuracy" row for parakeet-unified-en-0.6b).
+
+    For each step we dump:
+
+      stream.chunk.<step>.audio_in    PCM window fed to the encoder
+                                      this chunk (left+chunk+right
+                                      samples; trailing zeros on the
+                                      final chunk).
+      stream.chunk.<step>.enc_out     encoder output frames AFTER
+                                      slicing off the `left` frames
+                                      (covers chunk+right except on
+                                      the final chunk where it covers
+                                      the remaining tail).
+      stream.chunk.<step>.tokens      cumulative emitted-token-id list
+                                      after this chunk.
+
+    Plus `transcript.json` with the final text and `stream_history.json`
+    with per-chunk text + the resolved geometry (so the harness can
+    cross-check).
+    """
+    configure_torch(args)
+    import torch
+
+    model = load_model(args)
+    arch = detect_arch(model)
+    audio_path = resolve_path(args.audio)
+    out_dir = resolve_path(args.out)
+    pcm, sr = load_audio(audio_path)
+
+    if sr != 16000:
+        print(f"error: audio sample rate is {sr}, expected 16000", file=sys.stderr)
+        return 1
+
+    enc_style = getattr(model.encoder, "att_context_style", "regular")
+    if enc_style != "chunked_limited_with_rc":
+        print(
+            f"error: model att_context_style={enc_style!r}; "
+            f"buffered_streaming requires chunked_limited_with_rc",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Mirror the reference script's deterministic preprocessor setup
+    # (speech_to_text_streaming_infer_rnnt.py lines 207-208 and 277-278).
+    # Dither defaults to 1e-05 which would inject per-run noise; the
+    # parity harness needs byte-stable mel features. pad_to=0 is also
+    # what the reference uses so the mel time axis is exactly
+    # n_samples/hop without trailing zero-padded frames.
+    try:
+        model.preprocessor.featurizer.dither = 0.0
+        model.preprocessor.featurizer.pad_to = 0
+    except AttributeError:
+        pass
+
+    # Resolve geometry. NeMo's preprocessor frame stride is 10ms; the
+    # encoder subsamples ×8, so each encoder frame represents
+    # frame_stride_sec * subsampling_factor = 0.08s (80ms) of audio.
+    feature_stride_sec = float(model.cfg.preprocessor["window_stride"])
+    features_per_sec = 1.0 / feature_stride_sec
+    encoder_subsampling_factor = int(model.encoder.subsampling_factor)
+    # NeMo's `make_divisible_by` rounding ensures the audio-sample count
+    # is a multiple of the subsampling factor; the (hop, subsample) pair
+    # always satisfies this for parakeet.
+    features_frame2audio_samples = (
+        int(sr * feature_stride_sec) // encoder_subsampling_factor
+    ) * encoder_subsampling_factor
+    encoder_frame2audio_samples = features_frame2audio_samples * encoder_subsampling_factor
+
+    left_frames  = int(args.left_secs  * features_per_sec / encoder_subsampling_factor)
+    chunk_frames = int(args.chunk_secs * features_per_sec / encoder_subsampling_factor)
+    right_frames = int(args.right_secs * features_per_sec / encoder_subsampling_factor)
+    if chunk_frames < 1:
+        print(f"error: chunk_secs={args.chunk_secs} resolves to {chunk_frames} encoder frames; must be >= 1",
+              file=sys.stderr)
+        return 1
+
+    samples_left  = left_frames  * encoder_frame2audio_samples
+    samples_chunk = chunk_frames * encoder_frame2audio_samples
+    samples_right = right_frames * encoder_frame2audio_samples
+
+    # Apply the runtime (L, C, R) to the encoder. This both swaps the
+    # default att_context_size and triggers setup_streaming_params() —
+    # buffered streaming does not actually use streaming_cfg (no cache
+    # carry), but the chunked-attention mask shape is controlled by
+    # att_context_size at forward time.
+    model.encoder.set_default_att_context_size(
+        att_context_size=[left_frames, chunk_frames, right_frames]
+    )
+
+    # Configure the decoding pipeline. The reference script requires
+    # greedy_batch + loop_labels=True; we mirror that.
+    from omegaconf import OmegaConf, open_dict
+    import copy
+    decoding_cfg = copy.deepcopy(model.cfg.decoding) if hasattr(model.cfg, "decoding") else OmegaConf.create({})
+    with open_dict(decoding_cfg):
+        decoding_cfg.strategy = "greedy_batch"
+        if "greedy" not in decoding_cfg:
+            decoding_cfg.greedy = OmegaConf.create({})
+        decoding_cfg.greedy.loop_labels = True
+        decoding_cfg.greedy.use_cuda_graph_decoder = False
+        decoding_cfg.greedy.preserve_alignments = False
+        decoding_cfg.tdt_include_token_duration = False
+        decoding_cfg.fused_batch_size = -1
+        if "beam" in decoding_cfg:
+            decoding_cfg.beam.return_best_hypothesis = True
+    model.change_decoding_strategy(decoding_cfg)
+
+    # The TDT decode driver exposed by NeMo for buffered streaming.
+    decoding_computer = model.decoding.decoding.decoding_computer
+
+    source = make_source(
+        args=args, audio_path=audio_path, n_samples=pcm.size, sample_rate=sr, arch=arch
+    )
+    source["buffered_streaming"] = {
+        "att_context_size": [left_frames, chunk_frames, right_frames],
+        "left_secs":  float(args.left_secs),
+        "chunk_secs": float(args.chunk_secs),
+        "right_secs": float(args.right_secs),
+        "encoder_frame2audio_samples": int(encoder_frame2audio_samples),
+        "samples_left":  int(samples_left),
+        "samples_chunk": int(samples_chunk),
+        "samples_right": int(samples_right),
+    }
+    print(
+        f"buffered streaming: (L,C,R)_frames=[{left_frames}, {chunk_frames}, {right_frames}] "
+        f"= [{samples_left}, {samples_chunk}, {samples_right}] samples "
+        f"= [{args.left_secs:.2f}, {args.chunk_secs:.2f}, {args.right_secs:.2f}] s"
+    )
+
+    def dump(name: str, t, stage: str) -> None:
+        a = to_np(t)
+        write_tensor(name, a, stage, source, out_dir=out_dir)
+
+    # Spin up the StreamingBatchedAudioBuffer NeMo's reference script uses.
+    from nemo.collections.asr.parts.utils.streaming_utils import (
+        ContextSize,
+        StreamingBatchedAudioBuffer,
+    )
+
+    context_samples = ContextSize(
+        left=samples_left, chunk=samples_chunk, right=samples_right,
+    )
+
+    audio_tensor = torch.tensor(pcm, dtype=torch.float32).unsqueeze(0)  # [1, T]
+    audio_lengths = torch.tensor([pcm.size], dtype=torch.long)
+
+    buffer = StreamingBatchedAudioBuffer(
+        batch_size=1,
+        context_samples=context_samples,
+        dtype=audio_tensor.dtype,
+        device=audio_tensor.device,
+    )
+    rest_audio_lengths = audio_lengths.clone()
+
+    current_batched_hyps = None
+    state = None
+    left_sample = 0
+    right_sample = min(context_samples.chunk + context_samples.right, audio_tensor.shape[1])
+
+    per_chunk_text: list[str] = []
+    cumulative_tokens: list[int] = []
+    step_num = 0
+
+    with torch.inference_mode():
+        while left_sample < audio_tensor.shape[1]:
+            chunk_length = min(right_sample, audio_tensor.shape[1]) - left_sample
+            is_last_chunk_batch = chunk_length >= rest_audio_lengths
+            is_last_chunk = right_sample >= audio_tensor.shape[1]
+            chunk_lengths_batch = torch.where(
+                is_last_chunk_batch,
+                rest_audio_lengths,
+                torch.full_like(rest_audio_lengths, fill_value=chunk_length),
+            )
+            buffer.add_audio_batch_(
+                audio_tensor[:, left_sample:right_sample],
+                audio_lengths=chunk_lengths_batch,
+                is_last_chunk=is_last_chunk,
+                is_last_chunk_batch=is_last_chunk_batch,
+            )
+
+            # Dump the PCM window the encoder sees this chunk.
+            dump(
+                f"stream.chunk.{step_num}.audio_in",
+                buffer.samples[0],
+                "buffered_streaming.audio_in",
+            )
+
+            encoder_output, encoder_output_len = model(
+                input_signal=buffer.samples,
+                input_signal_length=buffer.context_size_batch.total(),
+            )
+            encoder_output = encoder_output.transpose(1, 2)  # (B, T_enc, D)
+            encoder_context = buffer.context_size.subsample(
+                factor=encoder_frame2audio_samples
+            )
+            encoder_context_batch = buffer.context_size_batch.subsample(
+                factor=encoder_frame2audio_samples
+            )
+            # Drop left-context encoder frames before decoding.
+            encoder_output_chunk = encoder_output[:, encoder_context.left:]
+
+            # Dump the chunk-aligned encoder output the decoder sees.
+            dump(
+                f"stream.chunk.{step_num}.enc_out",
+                encoder_output_chunk[0],
+                "buffered_streaming.enc_out",
+            )
+
+            chunk_batched_hyps, _, state = decoding_computer(
+                x=encoder_output_chunk,
+                out_len=torch.where(
+                    is_last_chunk_batch,
+                    encoder_output_len - encoder_context_batch.left,
+                    encoder_context_batch.chunk,
+                ),
+                prev_batched_state=state,
+                multi_biasing_ids=None,
+            )
+            if current_batched_hyps is None:
+                current_batched_hyps = chunk_batched_hyps
+            else:
+                current_batched_hyps.merge_(chunk_batched_hyps)
+
+            # Snapshot cumulative tokens after this chunk. Use NeMo's
+            # `batched_hyps_to_hypotheses` to extract the clean per-batch
+            # `y_sequence` (already strips blanks); raw
+            # `current_batched_hyps.transcript` includes the blank id
+            # 1024 which SPM rejects.
+            from nemo.collections.asr.parts.utils.rnnt_utils import (
+                batched_hyps_to_hypotheses,
+            )
+            hyps_view = batched_hyps_to_hypotheses(
+                current_batched_hyps, None, batch_size=1
+            )
+            tokens_so_far: list[int] = []
+            if hyps_view and getattr(hyps_view[0], "y_sequence", None) is not None:
+                tokens_so_far = [int(x) for x in hyps_view[0].y_sequence.tolist()]
+            cumulative_tokens = tokens_so_far
+            step_text = model.tokenizer.ids_to_text(tokens_so_far) if tokens_so_far else ""
+            per_chunk_text.append(step_text)
+            print(f"  step[{step_num}]: text={step_text!r}")
+
+            rest_audio_lengths = rest_audio_lengths - chunk_lengths_batch
+            left_sample = right_sample
+            right_sample = min(right_sample + context_samples.chunk, audio_tensor.shape[1])
+            step_num += 1
+
+    final_text = per_chunk_text[-1] if per_chunk_text else ""
+    write_transcript(out_dir, final_text, source=source)
+
+    import json
+    history_path = out_dir / "stream_history.json"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    with history_path.open("w") as f:
+        json.dump({
+            "per_chunk_text": per_chunk_text,
+            "final_tokens": cumulative_tokens,
+            "buffered_streaming": source["buffered_streaming"],
+        }, f, indent=2)
+    print(f"buffered streaming: wrote {history_path}")
+    print(f"final transcript: {final_text!r}")
+
+    return 0
+
+
 def cmd_decode(args: argparse.Namespace) -> int:
     """Dump end-to-end: encoder + decoder first step + joint/CTC + greedy transcript.
 
@@ -1053,6 +1341,41 @@ def main() -> int:
         ),
     )
     sp.set_defaults(func=cmd_streaming)
+
+    bp = sub.add_parser(
+        "buffered_streaming",
+        help="Dump per-chunk buffered RNN-T streaming intermediates (parakeet-unified)",
+    )
+    add_common_args(bp)
+    bp.add_argument(
+        "--left-secs",
+        type=float,
+        default=5.6,
+        help=(
+            "Left-context window in seconds. Default 5.6s — the trained "
+            "default for parakeet-unified-en-0.6b (matches 70 encoder "
+            "frames at the 80ms post-subsample rate)."
+        ),
+    )
+    bp.add_argument(
+        "--chunk-secs",
+        type=float,
+        default=1.04,
+        help=(
+            "Chunk size in seconds. Default 1.04s (13 encoder frames) — "
+            "the model card's best-accuracy row for parakeet-unified-en-0.6b."
+        ),
+    )
+    bp.add_argument(
+        "--right-secs",
+        type=float,
+        default=1.04,
+        help=(
+            "Right-context (lookahead) in seconds. Default 1.04s "
+            "(13 encoder frames) — matches the best-accuracy row."
+        ),
+    )
+    bp.set_defaults(func=cmd_buffered_streaming)
 
     args = p.parse_args()
     return args.func(args)

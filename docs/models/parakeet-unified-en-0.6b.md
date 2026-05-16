@@ -8,9 +8,23 @@ RNN-T transducer decoder, trained as a "unified" streaming/offline model.
 
 English speech-to-text with greedy RNN-T decoding. Outputs cased,
 punctuated transcripts. Token- and word-level timestamps are available.
-This port runs the model in **offline** mode only — the streaming
-attention contexts in the upstream encoder are present in the GGUF but
-transcribe.cpp does not yet expose a streaming entry point.
+
+This port runs the model in both **offline** and **buffered streaming**
+modes from the same GGUF weights:
+
+- Offline (`transcribe_run`): the full audio is consumed in one pass
+  with full attention.
+- Streaming (`transcribe_stream_{begin,feed,finalize}` /
+  `transcribe-cli --stream-chunk-ms N`): per-chunk encoder forward
+  passes over a sliding `[left | chunk | right]` PCM window with the
+  `chunked_limited_with_rc` 3-tuple attention mask, plus an
+  RNN-T-state-carrying greedy decoder across chunks. The runtime
+  `(L, C, R)` tuple is selected at `stream_begin` from the model's
+  training menu (`L ∈ {70}`, `C ∈ {1, 2, 7, 13}`, `R ∈ {0, 1, 2, 3,
+  4, 7, 13}` encoder frames at the 80ms post-subsample rate). Default
+  is the highest-accuracy tuple `(70, 13, 13)` = `5.6s / 1.04s /
+  1.04s` (2.08s latency) — the row NVIDIA publishes the model card's
+  streaming WER for.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-unified-en-0.6b)
 for training data, intended use, streaming methodology, and upstream
@@ -107,11 +121,73 @@ attenuation through the encoder).
 | Manifest | `tests/golden/parakeet/parakeet-unified-en-0.6b.manifest.json` |
 | Command | `uv run scripts/validate.py all --family parakeet --variant parakeet-unified-en-0.6b` |
 
-## Known limitations
+## Streaming parity
 
-- Streaming decoding is not exposed by transcribe.cpp. The model is
-  loaded with full-utterance attention and is benchmarked / measured in
-  offline mode only.
+Buffered streaming on `samples/jfk.wav` at the default `(L=70, C=13,
+R=13)` frames tuple (= 5.6 / 1.04 / 1.04 s) reproduces NeMo's
+reference inference loop
+(`speech_to_text_streaming_infer_rnnt.py`) per-chunk: identical
+chunk geometry, bit-exact `audio_in` windows, and per-tensor
+`enc_out` drift inside the parakeet family's accepted noise envelope
+(`tests/tolerances/parakeet.json` allows `max_abs=3.7` at `enc.final`;
+observed max_abs ≤ 1.0 on CPU 1-thread). The cpp driver uses the
+same variable-stride algorithm — step 0 consumes `chunk + right`
+audio, steady-state consumes `chunk`, and the final step folds the
+trailing right slot plus the ragged tail into one is_last emit —
+so chunk boundaries are byte-identical to the reference.
+
+Final-transcript byte match holds on long-form audio (e.g.
+`samples/dots.wav`, 35.3 s, 33 chunks). On short-form audio
+(`samples/jfk.wav`, 11 s) greedy RNN-T can tip a single token at
+the last chunk on fp32 encoder noise — the cpp transcript adds a
+trailing `.` that the ref doesn't emit. This is a single-token edit
+inside the same per-chunk geometry; corpus-level WER on
+LibriSpeech test-clean is the gate of record.
+
+### Transcript WER (LibriSpeech test-clean)
+
+Scored against the same reference framework as the offline WER table,
+at the default `(70, 13, 13)` tuple:
+
+| Variant              | N    | WER%  |  95% CI         | Sub | Del | Ins |
+| -------------------- | ---: | ----: | --------------- | --: | --: | --: |
+| REF (NeMo buffered)  | 512  |  1.44 | [1.16, 1.79]    | 113 |  26 |  18 |
+| cpp-F32 (variable-stride) | 512 |  1.46 | [1.17, 1.82]    | 114 |  26 |  19 |
+
+`|Δ| = 0.02%` absolute between cpp and ref — comfortably inside the
+family's 0.5% gate, and substitution / deletion / insertion counts
+match to within 1 each. Variable-stride brings cpp into near-perfect
+alignment with the reference algorithm; the residual 1-sub / 1-ins
+gap is fp32 encoder noise tipping a small number of greedy
+decisions at chunk boundaries.
+
+### Streaming parity reproduction
+
+```bash
+uv run --project scripts/envs/parakeet \
+  scripts/validate_buffered_streaming.py \
+    --nemo /path/to/parakeet-unified-en-0.6b.nemo \
+    --gguf models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf \
+    --audio samples/jfk.wav \
+    --out build/validate_buffered_streaming/parakeet-unified/jfk/default \
+    --backend cpu --threads 1
+```
+
+WER reproduction:
+
+```bash
+uv run --project scripts/envs/parakeet \
+  scripts/wer/run_reference_parakeet_buffered_streaming_nemo.py \
+    --model /path/to/parakeet-unified-en-0.6b.nemo \
+    --manifest samples/wer/test-clean.512.manifest.jsonl \
+    --out reports/wer/parakeet-unified-buffered-REF-default.test-clean-512.jsonl
+
+uv run scripts/wer/run.py \
+  --manifest samples/wer/test-clean.512.manifest.jsonl \
+  --model models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf \
+  --out reports/wer/parakeet-unified-buffered-F32-default.test-clean-512.jsonl \
+  --stream-chunk-ms 500 --language en
+```
 
 ## Reproduction
 

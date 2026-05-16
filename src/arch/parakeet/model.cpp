@@ -60,6 +60,7 @@
 // ggml-backend.h discovers Metal/Vulkan/CUDA/BLAS at runtime.
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -521,16 +522,53 @@ transcribe_status load(
         return st;
     }
 
-    // Derive supports_streaming from hparams. Only cache-aware streaming
-    // variants — ChunkedLimited attention with non-negative left/right
-    // context — can drive the cache_last_channel / cache_last_time
-    // streaming path; offline parakeet variants (Regular full attention
-    // or no chunking) stay non-streaming regardless of any KV claim.
-    // Today's only consumer is nemotron-speech-streaming-en-0.6b.
-    if (m->hparams.enc_att_context_style ==
-            ParakeetHParams::AttContextStyle::ChunkedLimited &&
+    // Derive supports_streaming from hparams.
+    //
+    //   ChunkedLimited + (L, R) >= 0   — cache-aware streaming
+    //     (nemotron-speech-streaming-en-0.6b). The cache_last_channel /
+    //     cache_last_time path is engaged at stream_begin.
+    //   ChunkedLimitedWithRc + non-empty (L, C, R) menu — buffered
+    //     streaming (parakeet-unified-en-0.6b). The buffered driver
+    //     re-runs the offline encoder per chunk with a 3-tuple chunk
+    //     mask; no per-layer cache.
+    //
+    // Offline parakeet variants (Regular full attention or no chunking)
+    // stay non-streaming regardless of any KV claim.
+    const bool cache_aware_streaming =
+        (m->hparams.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimited) &&
         m->hparams.enc_att_context_left  >= 0 &&
-        m->hparams.enc_att_context_right >= 0)
+        m->hparams.enc_att_context_right >= 0;
+    const bool buffered_streaming =
+        (m->hparams.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc) &&
+        !m->hparams.enc_att_chunk_left_choices.empty() &&
+        !m->hparams.enc_att_chunk_chunk_choices.empty() &&
+        !m->hparams.enc_att_chunk_right_choices.empty();
+    if (buffered_streaming) {
+        m->caps.supports_streaming = true;
+        const int frame_ms =
+            (m->hparams.enc_subsampling_factor * m->hparams.fe_hop_length * 1000) /
+            std::max(m->hparams.fe_sample_rate, 1);
+        auto max_in = [](const std::vector<int32_t> & v) {
+            int32_t best = 0; for (auto x : v) if (x > best) best = x; return best;
+        };
+        auto min_in = [](const std::vector<int32_t> & v) {
+            int32_t best = INT32_MAX; for (auto x : v) if (x < best) best = x;
+            return best == INT32_MAX ? 0 : best;
+        };
+        const int default_C = max_in(m->hparams.enc_att_chunk_chunk_choices);
+        const int default_R = max_in(m->hparams.enc_att_chunk_right_choices);
+        const int min_C     = min_in(m->hparams.enc_att_chunk_chunk_choices);
+        const int min_R     = min_in(m->hparams.enc_att_chunk_right_choices);
+        m->caps.streaming_chunk_ms         = default_C * frame_ms;
+        m->caps.streaming_lookahead_ms     = default_R * frame_ms;
+        m->caps.streaming_lookahead_ms_min = min_R * frame_ms;
+        (void)min_C; // smaller C means lower per-chunk latency but is
+                     // surfaced via streaming_chunk_ms only after we
+                     // expose multi-tuple menus through the API.
+    }
+    if (cache_aware_streaming)
     {
         m->caps.supports_streaming = true;
 
@@ -1556,6 +1594,55 @@ void fill_streaming_chunked_mask(ggml_tensor * mask_in,
                             0, mask_buf.size() * sizeof(float));
 }
 
+} // namespace
+
+// Already inside namespace transcribe::parakeet { ... }. The function is
+// declared in parakeet.h so external callers (unit tests, the buffered
+// streaming driver) can link against it.
+void compute_chunked_limited_with_rc_mask(
+    float * out_buf,
+    int     T,
+    int     left_context_frames,
+    int     chunk_size_frames,
+    int     right_context_frames,
+    int     pad_length)
+{
+    assert(out_buf != nullptr);
+    assert(T >= 1);
+    assert(chunk_size_frames >= 1);
+    assert(left_context_frames >= 0);
+    assert(right_context_frames >= 0);
+    assert(pad_length >= 0);
+
+    const int L = left_context_frames;
+    const int C = chunk_size_frames;
+    const int R = right_context_frames;
+    // Clamp pad_length to [0, T]. pad_length >= T means "no pad mask" —
+    // every frame is valid.
+    const int P = pad_length > T ? T : pad_length;
+
+    for (int q = 0; q < T; ++q) {
+        const int c_q                    = q / C;
+        const int window_start_unclamped = c_q * C - L;
+        const int window_end_unclamped   = c_q * C + C - 1 + R;
+        const int window_start = window_start_unclamped > 0 ? window_start_unclamped : 0;
+        const int window_end   = window_end_unclamped < (T - 1) ? window_end_unclamped : (T - 1);
+        const bool q_padded    = q >= P;
+
+        float * row = out_buf + static_cast<size_t>(q) * static_cast<size_t>(T);
+        for (int k = 0; k < T; ++k) {
+            const bool k_padded = k >= P;
+            const bool allowed  = (k >= window_start && k <= window_end)
+                                  && !q_padded && !k_padded;
+            row[k] = allowed
+                ? 0.0f
+                : -std::numeric_limits<float>::infinity();
+        }
+    }
+}
+
+namespace {
+
 // Build, run, and post-process a single streaming encoder chunk.
 //
 // Inputs:
@@ -1877,6 +1964,357 @@ void rebuild_streaming_result_text(ParakeetContext * pc,
     pc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 }
 
+// ----- Buffered streaming (parakeet-unified-en-0.6b) -----------------
+//
+// Mirrors NeMo's `speech_to_text_streaming_infer_rnnt.py` reference at
+// the per-chunk granularity. The variable-stride algorithm:
+//   - Step 0 (initial fill): num_new = samples_chunk + samples_right.
+//   - Steady state: num_new = samples_chunk.
+//   - Final step (from finalize): num_new = remaining audio; the
+//     trailing right context slot is folded into chunk via
+//     `add_frames_get_removed_(is_last=true)`.
+// Per step:
+//   - Update the buffer's internal ContextSize (buf_ctx_*) via the
+//     same accounting NeMo's StreamingBatchedAudioBuffer uses.
+//   - Slice the last ctx.total() samples from stream_pcm_buffer as
+//     the encoder window.
+//   - Compute mel over the full window.
+//   - Build the encoder graph with a BufferedStreamMaskOverride to
+//     engage the chunked_limited_with_rc attention mask sized for
+//     the expected (L, C, R).
+//   - Slice off the first (ctx_left / samples_per_frame) encoder
+//     frames and decode (ctx_chunk / samples_per_frame) on non-last
+//     or (T_enc_full - ctx_left_frames) on last with greedy RNN-T
+//     plus carried LstmState. Matches the reference's
+//     encoder_context_batch.chunk vs
+//     encoder_output_len - encoder_context_batch.left dispatch.
+static void buf_ctx_add_frames(
+    ParakeetContext * pc, int64_t num_new, bool is_last)
+{
+    pc->buf_ctx_left  += pc->buf_ctx_chunk;
+    pc->buf_ctx_chunk  = 0;
+    pc->buf_ctx_right += num_new;
+    if (is_last) {
+        pc->buf_ctx_chunk = pc->buf_ctx_right;
+        pc->buf_ctx_right = 0;
+    } else {
+        pc->buf_ctx_chunk  = pc->buf_samples_chunk;
+        pc->buf_ctx_right -= static_cast<int64_t>(pc->buf_samples_chunk);
+    }
+    const int64_t total_now = pc->buf_ctx_left + pc->buf_ctx_chunk + pc->buf_ctx_right;
+    const int64_t expected  = static_cast<int64_t>(pc->buf_samples_left) +
+                              static_cast<int64_t>(pc->buf_samples_chunk) +
+                              static_cast<int64_t>(pc->buf_samples_right);
+    const int64_t extra = std::max<int64_t>(total_now - expected, 0);
+    pc->buf_ctx_left -= extra;
+}
+
+transcribe_status emit_buffered_chunk(
+    ParakeetContext * pc,
+    ParakeetModel *   pm,
+    int64_t           num_new_samples,
+    bool              is_last_chunk)
+{
+    if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+
+    const auto & hp = pm->hparams;
+    if (!pm->mel.has_value()) {
+        std::fprintf(stderr,
+                     "parakeet buffered: model has no MelFrontend\n");
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const int samples_per_frame =
+        hp.enc_subsampling_factor * hp.fe_hop_length;
+    if (samples_per_frame <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
+
+    // ----- Update buffer ContextSize (mirrors NeMo's add_frames_get_removed_) -----
+    buf_ctx_add_frames(pc, num_new_samples, is_last_chunk);
+
+    // ----- Build the [left | chunk | right] PCM window from absolute coords -----
+    const int64_t end_abs   = pc->buf_next_audio_read + num_new_samples;
+    const int64_t total_now =
+        pc->buf_ctx_left + pc->buf_ctx_chunk + pc->buf_ctx_right;
+    const int64_t start_abs = end_abs - total_now;
+
+    std::vector<float> window_pcm(
+        static_cast<size_t>(total_now), 0.0f);
+    const int64_t buf_size =
+        static_cast<int64_t>(pc->stream_pcm_buffer.size());
+    for (int64_t i = 0; i < total_now; ++i) {
+        const int64_t src = start_abs + i;
+        if (src >= 0 && src < buf_size) {
+            window_pcm[static_cast<size_t>(i)] =
+                pc->stream_pcm_buffer[static_cast<size_t>(src)];
+        }
+    }
+
+    // ----- Per-chunk dumps (TRANSCRIBE_DUMP_DIR; mirror NeMo names) -----
+    const int chunk_step = pc->buf_chunk_step;
+    if (transcribe::debug::enabled()) {
+        char name[64];
+        std::snprintf(name, sizeof(name),
+                      "stream.chunk.%d.audio_in", chunk_step);
+        const long long shape[1] = { static_cast<long long>(window_pcm.size()) };
+        transcribe::debug::dump_host_f32(
+            name, window_pcm.data(),
+            static_cast<long long>(window_pcm.size()),
+            shape, 1, "buffered_streaming.audio_in");
+    }
+
+    // ----- Mel -----
+    const int64_t t_mel_start = ggml_time_us();
+    int mel_n_mels   = 0;
+    int mel_n_frames = 0;
+    if (const transcribe_status mst = pm->mel->compute(
+            window_pcm.data(), window_pcm.size(),
+            pc->mel_buf, mel_n_mels, mel_n_frames, pc->n_threads);
+        mst != TRANSCRIBE_OK)
+    {
+        std::fprintf(stderr,
+                     "parakeet buffered: MelFrontend::compute failed (%s)\n",
+                     transcribe_status_string(mst));
+        return mst;
+    }
+    pc->t_mel_us += ggml_time_us() - t_mel_start;
+
+    // ----- Reset per-chunk compute state -----
+    if (pc->compute_ctx != nullptr) {
+        ggml_free(pc->compute_ctx);
+        pc->compute_ctx = nullptr;
+    }
+    pc->encoder_out = nullptr;
+    {
+        ggml_init_params init_params {};
+        init_params.mem_size   = 4 * 1024 * 1024;
+        init_params.mem_buffer = nullptr;
+        init_params.no_alloc   = true;
+        pc->compute_ctx = ggml_init(init_params);
+        if (pc->compute_ctx == nullptr) {
+            std::fprintf(stderr,
+                         "parakeet buffered: ggml_init for compute_ctx failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    ggml_type resolved_kv = GGML_TYPE_COUNT;
+    if (pc->kv_type == TRANSCRIBE_KV_TYPE_F32) resolved_kv = GGML_TYPE_F32;
+    if (pc->kv_type == TRANSCRIBE_KV_TYPE_F16) resolved_kv = GGML_TYPE_F16;
+
+    BufferedStreamMaskOverride buf_mask {};
+    buf_mask.left_frames  = pc->buf_left_frames;
+    buf_mask.chunk_frames = pc->buf_chunk_frames;
+    buf_mask.right_frames = pc->buf_right_frames;
+
+    EncoderBuild eb = build_encoder_graph(
+        pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames,
+        resolved_kv, pm->backend.c_str(), &buf_mask);
+    if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // ----- Scheduler alloc + mel upload -----
+    if (pc->sched == nullptr) {
+        pc->sched = ggml_backend_sched_new(
+            pm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(pm->plan.scheduler_list.size()),
+            /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
+        if (pc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(pc->sched);
+    if (!ggml_backend_sched_alloc_graph(pc->sched, eb.graph)) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_tensor_set(eb.mel_in, pc->mel_buf.data(),
+                            0, pc->mel_buf.size() * sizeof(float));
+
+    // ----- Pos_emb fill (full 2T-1 layout; matches offline ChunkedLimited path) -----
+    if (eb.pos_emb_in != nullptr) {
+        const int d_model = hp.enc_d_model;
+        const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
+        const int zero_index = (pos_len - 1) / 2;
+
+        pc->pos_buf.assign(
+            static_cast<size_t>(pos_len) * d_model, 0.0f);
+        pc->pos_div_term.resize(static_cast<size_t>(d_model / 2));
+        const float ln_10000 = std::log(10000.0f);
+        for (int k = 0; k < d_model / 2; ++k) {
+            pc->pos_div_term[static_cast<size_t>(k)] =
+                std::exp(static_cast<float>(2 * k) *
+                         (-ln_10000 / static_cast<float>(d_model)));
+        }
+        for (int i = 0; i < pos_len; ++i) {
+            const float pos = static_cast<float>(zero_index - i);
+            float * row = pc->pos_buf.data() +
+                static_cast<size_t>(i) * d_model;
+            for (int k = 0; k < d_model / 2; ++k) {
+                const float div = pc->pos_div_term[static_cast<size_t>(k)];
+                row[2 * k]     = std::sin(pos * div);
+                row[2 * k + 1] = std::cos(pos * div);
+            }
+        }
+        ggml_backend_tensor_set(eb.pos_emb_in, pc->pos_buf.data(),
+                                0, pc->pos_buf.size() * sizeof(float));
+    }
+
+    // ----- Chunked_limited_with_rc mask fill -----
+    //
+    // Pad-mask: NeMo's encoder ANDs a conv-overhang pad_mask onto the
+    // chunked mask before MHA — frames past `padding_length` (post
+    // pre-encode) are masked out. The conv subsampling can emit T_enc
+    // > ctx.total/samples_per_frame when the input doesn't tile the
+    // subsampling stride exactly; without the pad mask, those trailing
+    // frames contaminate every other frame's attention scores. We
+    // mirror NeMo by passing `effective_T = ctx.total /
+    // samples_per_frame` so the mask compute folds in the pad_mask.
+    // Critical at low-C/low-R configs where one extra frame of
+    // contamination tips many greedy-emission decisions; barely
+    // noticeable at (70,13,13).
+    if (eb.chunked_mask_in != nullptr) {
+        const int T_enc =
+            static_cast<int>(eb.chunked_mask_in->ne[0]);
+        const int64_t ctx_total = pc->buf_ctx_left + pc->buf_ctx_chunk
+                                 + pc->buf_ctx_right;
+        const int effective_T = static_cast<int>(
+            ctx_total / samples_per_frame);
+        std::vector<float> mask_buf(
+            static_cast<size_t>(T_enc) * static_cast<size_t>(T_enc));
+        compute_chunked_limited_with_rc_mask(
+            mask_buf.data(), T_enc,
+            pc->buf_left_frames,
+            pc->buf_chunk_frames,
+            pc->buf_right_frames,
+            effective_T);
+        ggml_backend_tensor_set(eb.chunked_mask_in, mask_buf.data(),
+                                0, mask_buf.size() * sizeof(float));
+    }
+
+    // ----- Threading -----
+    {
+        int n_threads = pc->n_threads;
+        if (n_threads <= 0) {
+            n_threads = std::min(8, std::max(1, static_cast<int>(
+                std::thread::hardware_concurrency())));
+        }
+        for (int i = 0; i < ggml_backend_sched_get_n_backends(pc->sched); ++i) {
+            ggml_backend_t be = ggml_backend_sched_get_backend(pc->sched, i);
+            ggml_backend_dev_t dev = ggml_backend_get_device(be);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (reg == nullptr) continue;
+            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+            if (fn != nullptr) fn(be, n_threads);
+        }
+    }
+
+    // ----- Compute -----
+    const int64_t t_enc_start = ggml_time_us();
+    if (const ggml_status gs =
+            ggml_backend_sched_graph_compute(pc->sched, eb.graph);
+        gs != GGML_STATUS_SUCCESS)
+    {
+        std::fprintf(stderr,
+                     "parakeet buffered: sched_graph_compute failed (%d)\n",
+                     static_cast<int>(gs));
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    pc->t_encode_us += ggml_time_us() - t_enc_start;
+
+    pc->encoder_out = eb.out;
+
+    // ----- Readback encoder output, slice off left frames -----
+    const int d_enc      = static_cast<int>(eb.out->ne[0]);
+    const int T_enc_full = static_cast<int>(eb.out->ne[1]);
+    if (T_enc_full <= 0) {
+        std::fprintf(stderr,
+                     "parakeet buffered: encoder produced %d frames\n",
+                     T_enc_full);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    pc->enc_host.resize(static_cast<size_t>(d_enc) *
+                        static_cast<size_t>(T_enc_full));
+    ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
+                            pc->enc_host.size() * sizeof(float));
+
+    transcribe::debug::dump_tensor(
+        "enc.final", eb.out, "encoder.final");
+
+    // Subsample ctx into encoder frames — mirrors NeMo's
+    // buffer.context_size.subsample(factor=encoder_frame2audio_samples).
+    const int ctx_left_frames  = static_cast<int>(
+        pc->buf_ctx_left  / samples_per_frame);
+    const int ctx_chunk_frames = static_cast<int>(
+        pc->buf_ctx_chunk / samples_per_frame);
+
+    auto advance_cursor = [&]() {
+        pc->buf_next_audio_read += num_new_samples;
+        pc->buf_chunk_step      += 1;
+        pc->buf_initialized      = true;
+    };
+
+    if (T_enc_full <= ctx_left_frames) {
+        // Window was too small to produce any chunk-region frames
+        // (e.g. degenerate audio shorter than the left context). Skip
+        // emission for this chunk.
+        advance_cursor();
+        return TRANSCRIBE_OK;
+    }
+
+    // Decode length matches NeMo's dispatch:
+    //   non-final:   encoder_context_batch.chunk
+    //   final:       encoder_output_len - encoder_context_batch.left
+    const int T_chunk_avail = T_enc_full - ctx_left_frames;
+    const int T_to_decode = is_last_chunk
+        ? T_chunk_avail
+        : std::min(ctx_chunk_frames, T_chunk_avail);
+    if (T_to_decode <= 0) {
+        advance_cursor();
+        return TRANSCRIBE_OK;
+    }
+
+    const float * enc_chunk = pc->enc_host.data() +
+        static_cast<size_t>(ctx_left_frames) * static_cast<size_t>(d_enc);
+
+    // Per-chunk encoder output dump. Mirrors NeMo's reference: emit
+    // the FULL post-slice encoder output (chunk + right context),
+    // not just the frames that get decoded this step. The decoder
+    // gates on T_to_decode below; the dump captures the entire
+    // chunk-aligned region so the parity harness can compare both
+    // the decoded and lookahead portions.
+    if (transcribe::debug::enabled()) {
+        char name[64];
+        std::snprintf(name, sizeof(name),
+                      "stream.chunk.%d.enc_out", chunk_step);
+        const long long shape[2] = {
+            static_cast<long long>(T_chunk_avail),
+            static_cast<long long>(d_enc),
+        };
+        transcribe::debug::dump_host_f32(
+            name, enc_chunk,
+            static_cast<long long>(T_chunk_avail) *
+                static_cast<long long>(d_enc),
+            shape, 2, "buffered_streaming.enc_out");
+    }
+
+    // ----- Decode with carried RNN-T state -----
+    const int64_t t_dec_start = ggml_time_us();
+    if (const transcribe_status st = decode_rnnt_greedy_streaming(
+            pm->host_decoder, enc_chunk, T_to_decode, d_enc,
+            pc->stream_dec_state.lstm_state,
+            pc->stream_dec_state.prev_token_id,
+            static_cast<int>(pc->stream_dec_state.frame_offset),
+            pc->raw_tokens);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    pc->t_decode_us += ggml_time_us() - t_dec_start;
+
+    pc->stream_dec_state.frame_offset += T_to_decode;
+    advance_cursor();
+    return TRANSCRIBE_OK;
+}
+
 transcribe_status stream_begin(
     transcribe_context *              ctx,
     const transcribe_params *         run_params,
@@ -1897,11 +2335,113 @@ transcribe_status stream_begin(
     // begin via the supports_streaming gate for non-streaming variants,
     // but reject again here in case a future refactor lets a Regular
     // (offline) variant slip through.
-    if (pm->hparams.enc_att_context_style !=
-            ParakeetHParams::AttContextStyle::ChunkedLimited)
-    {
+    const bool is_chunked_limited =
+        (pm->hparams.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimited);
+    const bool is_chunked_with_rc =
+        (pm->hparams.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc);
+    if (!is_chunked_limited && !is_chunked_with_rc) {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
+
+    // -------- Buffered streaming path (parakeet-unified-en-0.6b) --------
+    //
+    // The unified model declares chunked_limited_with_rc and ships a
+    // 3-tuple training menu. Buffered streaming re-runs the offline
+    // encoder on a sliding [left | chunk | right] PCM window per chunk;
+    // there's no per-layer cache to maintain. The RNN-T predictor +
+    // joint reuse the existing greedy-streaming decoder so the only
+    // new state is the runtime (L, C, R) geometry and the LSTM carry.
+    if (is_chunked_with_rc) {
+        // Resolve (L, C, R) in milliseconds from the caller; -1 sentinels
+        // → "use model defaults". Defaults are the highest-accuracy
+        // tuple = the max value of each choices list (matches the model
+        // card's first row for parakeet-unified-en-0.6b).
+        const int frame_ms =
+            (pm->hparams.enc_subsampling_factor * pm->hparams.fe_hop_length * 1000) /
+            std::max(pm->hparams.fe_sample_rate, 1);
+
+        auto max_in = [](const std::vector<int32_t> & v) -> int32_t {
+            int32_t best = 0;
+            for (auto x : v) if (x > best) best = x;
+            return best;
+        };
+        const int default_L = static_cast<int>(max_in(pm->hparams.enc_att_chunk_left_choices));
+        const int default_C = static_cast<int>(max_in(pm->hparams.enc_att_chunk_chunk_choices));
+        const int default_R = static_cast<int>(max_in(pm->hparams.enc_att_chunk_right_choices));
+
+        int req_L_ms = -1, req_C_ms = -1, req_R_ms = -1;
+        if (stream_params != nullptr && stream_params->parakeet_buffered != nullptr) {
+            req_L_ms = stream_params->parakeet_buffered->left_ms;
+            req_C_ms = stream_params->parakeet_buffered->chunk_ms;
+            req_R_ms = stream_params->parakeet_buffered->right_ms;
+        }
+        const int L_frames = (req_L_ms >= 0)
+            ? (req_L_ms / std::max(frame_ms, 1))
+            : default_L;
+        const int C_frames = (req_C_ms >= 0)
+            ? (req_C_ms / std::max(frame_ms, 1))
+            : default_C;
+        const int R_frames = (req_R_ms >= 0)
+            ? (req_R_ms / std::max(frame_ms, 1))
+            : default_R;
+
+        // Validate against the trained menu.
+        auto contains = [](const std::vector<int32_t> & v, int x) -> bool {
+            for (auto y : v) if (y == x) return true;
+            return false;
+        };
+        if (!contains(pm->hparams.enc_att_chunk_left_choices, L_frames) ||
+            !contains(pm->hparams.enc_att_chunk_chunk_choices, C_frames) ||
+            !contains(pm->hparams.enc_att_chunk_right_choices, R_frames))
+        {
+            std::fprintf(stderr,
+                         "parakeet buffered: requested (L, C, R) = (%d, %d, %d) "
+                         "encoder frames not in model menu. "
+                         "Allowed L=", L_frames, C_frames, R_frames);
+            for (auto v : pm->hparams.enc_att_chunk_left_choices)  std::fprintf(stderr, "%d,", v);
+            std::fprintf(stderr, " C=");
+            for (auto v : pm->hparams.enc_att_chunk_chunk_choices) std::fprintf(stderr, "%d,", v);
+            std::fprintf(stderr, " R=");
+            for (auto v : pm->hparams.enc_att_chunk_right_choices) std::fprintf(stderr, "%d,", v);
+            std::fprintf(stderr, "\n");
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (C_frames < 1) return TRANSCRIBE_ERR_INVALID_ARG;
+
+        const int subsampling_factor = pm->hparams.enc_subsampling_factor;
+        const int hop                = pm->hparams.fe_hop_length;
+        const int samples_per_frame  = subsampling_factor * hop;
+
+        pc->buf_left_frames     = L_frames;
+        pc->buf_chunk_frames    = C_frames;
+        pc->buf_right_frames    = R_frames;
+        pc->buf_samples_left    = L_frames * samples_per_frame;
+        pc->buf_samples_chunk   = C_frames * samples_per_frame;
+        pc->buf_samples_right   = R_frames * samples_per_frame;
+        pc->buf_next_audio_read = 0;
+        pc->buf_ctx_left        = 0;
+        pc->buf_ctx_chunk       = 0;
+        pc->buf_ctx_right       = 0;
+        pc->buf_initialized     = false;
+        pc->buf_chunk_step      = 0;
+        pc->buf_active          = true;
+
+        pc->stream_pcm_buffer.clear();
+        pc->raw_tokens.clear();
+        pc->stream_run_params = *run_params;
+        reset_streaming_decoder_state(pc, pm);
+        // For buffered streaming the predictor state's frame_offset
+        // starts at 0; we advance it per-chunk by T_to_decode so token
+        // step_at_emit lands in stream-wide encoder-frame coordinates.
+        pc->stream_dec_state.frame_offset = 0;
+
+        return TRANSCRIBE_OK;
+    }
+
+    // -------- Cache-aware streaming path (nemotron-speech-streaming) --------
+    pc->buf_active = false;
 
     // Resolve the active (att_context_left, att_context_right) for
     // this stream. Multi-lookahead models advertise a menu via
@@ -2033,6 +2573,59 @@ transcribe_status stream_feed(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    // -------- Buffered streaming path --------
+    //
+    // Emit one chunk at a time while we have enough audio in
+    // stream_pcm_buffer to cover the next non-final [chunk | right]
+    // window. The left context is pulled from already-buffered audio
+    // (zero-padded at the start of the stream).
+    if (pc->buf_active) {
+        // Variable-stride loop: step 0 requires (samples_chunk +
+        // samples_right) of new audio; steady-state needs samples_chunk.
+        // We only emit non-last chunks here; the last chunk (and its
+        // ragged-tail folding) is the responsibility of stream_finalize.
+        while (true) {
+            if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+            const int64_t num_new = pc->buf_initialized
+                ? static_cast<int64_t>(pc->buf_samples_chunk)
+                : static_cast<int64_t>(pc->buf_samples_chunk) +
+                  static_cast<int64_t>(pc->buf_samples_right);
+            const int64_t need_end = pc->buf_next_audio_read + num_new;
+            if (need_end > static_cast<int64_t>(pc->stream_pcm_buffer.size())) {
+                break;
+            }
+            if (const transcribe_status st = emit_buffered_chunk(
+                    pc, pm, num_new, /*is_last_chunk=*/false);
+                st != TRANSCRIBE_OK)
+            {
+                return st;
+            }
+        }
+        const bool tokens_changed =
+            static_cast<int>(pc->raw_tokens.size()) != prev_n_tokens;
+        if (tokens_changed) {
+            rebuild_streaming_result_text(pc, pm);
+            pc->n_committed_tokens   = static_cast<int>(pc->tokens.size());
+            pc->n_committed_words    = 0;
+            pc->n_committed_segments = 0;
+            pc->stream_revision     += 1;
+            pc->stream_audio_committed_us =
+                pc->buf_next_audio_read * 1000000LL /
+                std::max<int64_t>(pm->hparams.fe_sample_rate, 1);
+        }
+        if (update != nullptr) {
+            update->result_changed     = tokens_changed;
+            update->revision           = pc->stream_revision;
+            update->input_received_ms  = us_to_ms(pc->stream_audio_input_us);
+            update->audio_committed_ms = us_to_ms(pc->stream_audio_committed_us);
+            update->buffered_ms        = us_to_ms(
+                pc->stream_audio_input_us - pc->stream_audio_committed_us);
+        }
+        return TRANSCRIBE_OK;
+    }
+
+    // -------- Cache-aware streaming path --------
+    //
     // Recompute mel from the (sliding) accumulated PCM buffer.
     //
     // The buffer is trimmed after each emit to retain only the prefix
@@ -2273,6 +2866,49 @@ transcribe_status stream_finalize(
 
     const int prev_n_tokens = static_cast<int>(pc->raw_tokens.size());
 
+    // -------- Buffered streaming finalize --------
+    //
+    // Mirrors NeMo's reference loop tail exactly: one final emit that
+    // consumes all remaining audio (num_new = audio_len - next_audio_read)
+    // with is_last_chunk=true. add_frames_get_removed_ folds the existing
+    // samples_right slot plus this final num_new into the chunk slot, so
+    // the decoder gets every encoder frame past ctx_left. No zero-pad,
+    // no fixed-stride trailing chunks.
+    if (pc->buf_active) {
+        const int64_t total =
+            static_cast<int64_t>(pc->stream_pcm_buffer.size());
+        if (pc->buf_next_audio_read < total) {
+            if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+            const int64_t num_new = total - pc->buf_next_audio_read;
+            if (const transcribe_status st = emit_buffered_chunk(
+                    pc, pm, num_new, /*is_last_chunk=*/true);
+                st != TRANSCRIBE_OK)
+            {
+                return st;
+            }
+        }
+        const bool tokens_changed =
+            static_cast<int>(pc->raw_tokens.size()) != prev_n_tokens;
+        if (tokens_changed || !pc->has_result) {
+            rebuild_streaming_result_text(pc, pm);
+        }
+        pc->stream_audio_committed_us = pc->stream_audio_input_us;
+        pc->n_committed_tokens        = static_cast<int>(pc->tokens.size());
+        pc->n_committed_words         = static_cast<int>(pc->words.size());
+        pc->n_committed_segments      = static_cast<int>(pc->segments.size());
+        pc->stream_revision          += 1;
+        if (update != nullptr) {
+            update->result_changed     = pc->has_result;
+            update->revision           = pc->stream_revision;
+            update->input_received_ms  = us_to_ms(pc->stream_audio_input_us);
+            update->audio_committed_ms = us_to_ms(pc->stream_audio_committed_us);
+            update->buffered_ms        = 0;
+        }
+        return TRANSCRIBE_OK;
+    }
+
+    // -------- Cache-aware streaming finalize --------
+    //
     // Recompute mel one last time and check for a sub-chunk tail.
     // If there are any unprocessed mel frames left over (i.e. the
     // stream ended mid-chunk), zero-pad to chunk_size_total and run a

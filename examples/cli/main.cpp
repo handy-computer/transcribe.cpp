@@ -130,6 +130,15 @@ struct cli_args {
     // nemotron-speech-streaming-en-0.6b settings. Set by
     // --stream-att-right N. Ignored when stream_chunk_ms == 0.
     int         stream_att_right             = -1;
+    // Parakeet buffered streaming (parakeet-unified-en-0.6b): override
+    // the (L, C, R) attention context tuple in milliseconds. -1 = use
+    // the model's default (highest-accuracy row of the training menu).
+    // Frame-aligned: the lib rounds each value down to the nearest
+    // post-subsample frame (80ms at 4x subsampling). Ignored when
+    // stream_chunk_ms == 0 or when the model is not buffered-streaming.
+    int         stream_buf_left_ms           = -1;
+    int         stream_buf_chunk_ms          = -1;
+    int         stream_buf_right_ms          = -1;
 };
 
 void print_usage(const char * argv0) {
@@ -163,6 +172,13 @@ void print_usage(const char * argv0) {
         "                        setting from the model's training menu;\n"
         "                        nemotron-speech-streaming-en-0.6b accepts\n"
         "                        R in {0,1,6,13}; default = model's first choice\n"
+        "  --stream-buf-left-ms N  (parakeet-unified buffered streaming)\n"
+        "                        left-context size in ms; -1 = model default\n"
+        "  --stream-buf-chunk-ms N (parakeet-unified buffered streaming)\n"
+        "                        chunk size in ms; -1 = model default\n"
+        "  --stream-buf-right-ms N (parakeet-unified buffered streaming)\n"
+        "                        right-context (lookahead) size in ms;\n"
+        "                        -1 = model default\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
 }
@@ -300,6 +316,18 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
                              "error: --stream-att-right must be >= 0\n");
                 return false;
             }
+        } else if (a == "--stream-buf-left-ms") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.stream_buf_left_ms = std::atoi(v);
+        } else if (a == "--stream-buf-chunk-ms") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.stream_buf_chunk_ms = std::atoi(v);
+        } else if (a == "--stream-buf-right-ms") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.stream_buf_right_ms = std::atoi(v);
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -508,6 +536,17 @@ int main(int argc, char ** argv) {
                     pkt_sp.att_context_right = args.stream_att_right;
                     sp.parakeet = &pkt_sp;
                 }
+                struct transcribe_parakeet_buffered_stream_params pkt_buf_sp =
+                    transcribe_parakeet_buffered_stream_default_params();
+                if (args.stream_buf_left_ms  >= 0 ||
+                    args.stream_buf_chunk_ms >= 0 ||
+                    args.stream_buf_right_ms >= 0)
+                {
+                    pkt_buf_sp.left_ms  = args.stream_buf_left_ms;
+                    pkt_buf_sp.chunk_ms = args.stream_buf_chunk_ms;
+                    pkt_buf_sp.right_ms = args.stream_buf_right_ms;
+                    sp.parakeet_buffered = &pkt_buf_sp;
+                }
                 run_st = transcribe_stream_begin(ctx, &rp, &sp);
                 if (run_st == TRANSCRIBE_OK) {
                     const int chunk_samples =
@@ -700,6 +739,21 @@ int main(int argc, char ** argv) {
                 sp.parakeet = &pkt_sp;
                 std::printf("stream: att_context_right=%d\n",
                             args.stream_att_right);
+            }
+            struct transcribe_parakeet_buffered_stream_params pkt_buf_sp =
+                transcribe_parakeet_buffered_stream_default_params();
+            if (args.stream_buf_left_ms  >= 0 ||
+                args.stream_buf_chunk_ms >= 0 ||
+                args.stream_buf_right_ms >= 0)
+            {
+                pkt_buf_sp.left_ms  = args.stream_buf_left_ms;
+                pkt_buf_sp.chunk_ms = args.stream_buf_chunk_ms;
+                pkt_buf_sp.right_ms = args.stream_buf_right_ms;
+                sp.parakeet_buffered = &pkt_buf_sp;
+                std::printf("stream: buffered (L,C,R)_ms=(%d,%d,%d)\n",
+                            args.stream_buf_left_ms,
+                            args.stream_buf_chunk_ms,
+                            args.stream_buf_right_ms);
             }
             // Print the streaming capability hints so users see what
             // the model offers before the first feed.

@@ -100,6 +100,30 @@ add_test(NAME transcribe_backend_init_unit
     COMMAND transcribe_backend_init_unit)
 
 # -----------------------------------------------------------------------------
+# Parakeet chunked_limited_with_rc attention mask unit test
+# -----------------------------------------------------------------------------
+#
+# Validates compute_chunked_limited_with_rc_mask against an inline
+# reproduction of NeMo's ConformerEncoder._create_masks formula for the
+# chunked_limited_with_rc branch. The buffered streaming driver
+# (parakeet-unified-en-0.6b) feeds this mask into rel_pos_mhsa; any
+# divergence from NeMo would break the streaming WER gate.
+
+add_executable(transcribe_parakeet_chunked_limited_with_rc_mask_unit
+    parakeet_chunked_limited_with_rc_mask_unit.cpp)
+
+target_link_libraries(transcribe_parakeet_chunked_limited_with_rc_mask_unit
+    PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_parakeet_chunked_limited_with_rc_mask_unit
+    PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_parakeet_chunked_limited_with_rc_mask_unit)
+
+add_test(NAME transcribe_parakeet_chunked_limited_with_rc_mask_unit
+    COMMAND transcribe_parakeet_chunked_limited_with_rc_mask_unit)
+
+# -----------------------------------------------------------------------------
 # F16 → F32 conv pointwise promotion unit test
 # -----------------------------------------------------------------------------
 #

@@ -38,6 +38,51 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::parakeet {
 
+// ---------------------------------------------------------------------------
+// Attention masks
+// ---------------------------------------------------------------------------
+//
+// Host-side helpers that materialize the 2D attention masks used by the
+// streaming paths. Declared here (in the family-internal header) so the
+// per-mask unit tests can call them directly without needing a ggml
+// backend or a real GGUF on disk.
+//
+// chunked_limited_with_rc mask (buffered streaming, parakeet-unified-en-0.6b)
+//
+//   Mirrors NeMo `ConformerEncoder._create_masks` lines 843-869 for the
+//   chunked_limited_with_rc branch:
+//
+//     c_q = q / C
+//     window_start = max(0, c_q * C - L)
+//     window_end   = min(T - 1, c_q * C + C - 1 + R)
+//     mask[q, k]   = 0  if  window_start <= k <= window_end  else -INF
+//
+//   The output buffer is row-major [T_q, T_k] with T_q == T_k == T —
+//   the buffered driver always runs the encoder over a power-of-T
+//   window, so query and key axes match. out_buf must point to at
+//   least T*T floats. The mask broadcasts over heads in rel_pos_mhsa.
+//
+//   Asserts (debug-only): T >= 1, C >= 1, L >= 0, R >= 0.
+//
+//   `pad_length` (optional) folds in NeMo's conv-overhang pad_mask:
+//   cells where row q >= pad_length OR col k >= pad_length are masked
+//   regardless of the chunked window. This matches NeMo's
+//   ConformerEncoder.forward, which ANDs pad_mask onto the chunked
+//   mask before MHA. Set pad_length = T to disable padding masking
+//   (the offline / no-pad-overhang case). For buffered streaming,
+//   pass effective_T = ctx.total / encoder_frame2audio_samples; the
+//   conv frontend may produce T_enc > effective_T due to padding
+//   overhang, and those trailing frames must be masked out or they
+//   contaminate the attention scores of valid frames.
+void compute_chunked_limited_with_rc_mask(
+    float * out_buf,
+    int     T,
+    int     left_context_frames,
+    int     chunk_size_frames,
+    int     right_context_frames,
+    int     pad_length);
+
+
 // Family defaults — applied before transcribe::read_capability_kv runs,
 // so capability KV present overrides the default and capability KV
 // absent leaves the default in place. Defined in capabilities.cpp.
@@ -346,6 +391,54 @@ struct ParakeetContext final : public transcribe_context {
     // context destructor.
     ParakeetStreamingCaches        stream_caches;
     ParakeetStreamingDecoderState  stream_dec_state;
+
+    // ---- Buffered streaming state (parakeet-unified-en-0.6b) ----
+    //
+    // Mirrors NeMo's `StreamingBatchedAudioBuffer` + the reference
+    // inference loop at
+    // `examples/asr/asr_chunked_inference/rnnt/speech_to_text_streaming_infer_rnnt.py`.
+    // Variable-stride: step 0 (initial fill) consumes
+    // `samples_chunk + samples_right` of new audio; subsequent feed
+    // steps consume `samples_chunk`; finalize's single last step
+    // consumes whatever's left (chunk slot absorbs the trailing right
+    // context, no zero-pad).
+    //
+    // The expected geometry (buf_left_frames / buf_samples_left etc.)
+    // is constant per stream and reflects the active (L, C, R) tuple.
+    // The ctx_* fields track the buffer's INTERNAL `ContextSize`
+    // (left/chunk/right slot sizes in samples), updated per-chunk via
+    // `buf_ctx_add_frames` to mirror NeMo's `add_frames_get_removed_`.
+    // The encoder output sliced off this chunk = (ctx_left /
+    // frame_samples) leading frames; the decoder decodes
+    // (ctx_chunk / frame_samples) frames on non-last, or all remaining
+    // frames on last.
+    //
+    // The RNN-T LSTM state + last-emitted token id ride on the
+    // existing stream_dec_state slot — buffered streaming reuses the
+    // same predictor/joint code path the cache-aware driver does,
+    // just without a per-layer encoder cache.
+    int32_t buf_left_frames   = 0;  // L (expected)
+    int32_t buf_chunk_frames  = 0;  // C
+    int32_t buf_right_frames  = 0;  // R
+    int32_t buf_samples_left  = 0;  // L * encoder_frame2audio_samples
+    int32_t buf_samples_chunk = 0;
+    int32_t buf_samples_right = 0;
+    // Next sample index in stream_pcm_buffer to feed (= NeMo's
+    // `left_sample` at the start of the next step). 0 at stream_begin;
+    // advances by num_new_samples after each emit.
+    int64_t buf_next_audio_read = 0;
+    // Buffer's internal ContextSize. (0,0,0) at stream_begin; ramps up
+    // as audio arrives until it saturates at (samples_left, chunk, right).
+    int64_t buf_ctx_left  = 0;
+    int64_t buf_ctx_chunk = 0;
+    int64_t buf_ctx_right = 0;
+    // Whether step 0 (the initial fill of samples_chunk+samples_right)
+    // has run. False at stream_begin; first emit flips it.
+    bool    buf_initialized = false;
+    // Per-stream chunk step counter (== NeMo's `step_num`). Used for
+    // per-chunk dump file naming.
+    int32_t buf_chunk_step = 0;
+    bool    buf_active = false;
 
     ParakeetContext() = default;
     ~ParakeetContext() override;

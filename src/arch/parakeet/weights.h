@@ -133,11 +133,43 @@ struct ParakeetHParams {
     // can read uniformly.
     std::vector<std::pair<int32_t, int32_t>> enc_att_context_size_choices;
 
+    // Chunked-limited-with-rc training menu (buffered streaming variants,
+    // i.e. parakeet-unified-en-0.6b). NeMo stores the 3-tuple [L, C, R]
+    // training menu as three independent lists in
+    // `att_chunk_context_size` — the cartesian product of the three is
+    // the full set of (L, C, R) combinations the model was trained
+    // against. At inference the runtime picks one entry from each list
+    // to form the active (L, C, R) tuple driving the chunked attention
+    // mask. Empty for variants that do not declare
+    // enc_att_context_style == ChunkedLimitedWithRc.
+    //
+    // For parakeet-unified-en-0.6b: L ∈ {70}, C ∈ {1, 2, 7, 13},
+    // R ∈ {0, 1, 2, 3, 4, 7, 13} (encoder frames at the 80ms rate).
+    // The "best accuracy" default is (70, 13, 13) = 5.6s / 1.04s / 1.04s.
+    std::vector<int32_t> enc_att_chunk_left_choices;
+    std::vector<int32_t> enc_att_chunk_chunk_choices;
+    std::vector<int32_t> enc_att_chunk_right_choices;
+
     // Self-attention context style (introduced by streaming variants).
     // Resolved from stt.parakeet.encoder.att_context_style (string KV);
     // optional, defaults to "regular" so every legacy GGUF stays on the
     // existing path.
-    enum class AttContextStyle { Regular, ChunkedLimited };
+    //
+    //   Regular              — full attention (when L=R=-1) or local
+    //     sliding window. Every offline parakeet variant ships this.
+    //
+    //   ChunkedLimited       — cache-aware streaming with a 2-tuple
+    //     (L, R) chunk mask. nemotron-speech-streaming-en-0.6b.
+    //
+    //   ChunkedLimitedWithRc — buffered streaming with a 3-tuple
+    //     (L, C, R) chunk mask. parakeet-unified-en-0.6b. The training
+    //     menu lives in enc_att_chunk_*_choices above; the active
+    //     tuple is picked at stream_begin time. Note the offline path
+    //     stays on full attention even when the style is
+    //     ChunkedLimitedWithRc — the cfg's `att_context_size` is
+    //     [-1, -1] for this variant; the streaming mask is engaged
+    //     only by the buffered driver.
+    enum class AttContextStyle { Regular, ChunkedLimited, ChunkedLimitedWithRc };
     AttContextStyle enc_att_context_style = AttContextStyle::Regular;
 
     // Depthwise convolution context window inside the Conformer block.

@@ -935,12 +935,40 @@ struct transcribe_parakeet_stream_params {
     int32_t att_context_right;
 };
 
+/*
+ * Buffered-streaming knobs for the parakeet-unified family.
+ *
+ * parakeet-unified-en-0.6b is trained with chunked_limited_with_rc
+ * attention over a menu of (left, chunk, right) context tuples
+ * expressed in 80ms encoder frames. The user picks the active tuple
+ * at stream_begin time; the encoder re-runs over each new
+ * [left | chunk | right] PCM window. Each field is in MILLISECONDS;
+ * the runtime converts to encoder frames via the 80ms frame rate.
+ *
+ * Use -1 (sentinel) on any field to get the model's "best accuracy"
+ * default — L=5600 ms / C=1040 ms / R=1040 ms for unified-en-0.6b,
+ * which the published WER numbers correspond to. Non-default tuples
+ * are passed through to the encoder's set_default_att_context_size;
+ * the runtime validates the resolved (L, C, R) against the model's
+ * training menu (stt.parakeet.encoder.att_chunk_{left,chunk,right}_choices).
+ * Tuples outside the menu return TRANSCRIBE_ERR_INVALID_ARG.
+ */
+struct transcribe_parakeet_buffered_stream_params {
+    int32_t left_ms;
+    int32_t chunk_ms;
+    int32_t right_ms;
+};
+
 struct transcribe_stream_params {
-    const struct transcribe_parakeet_stream_params * parakeet;
+    const struct transcribe_parakeet_stream_params *          parakeet;
+    const struct transcribe_parakeet_buffered_stream_params * parakeet_buffered;
 };
 
 TRANSCRIBE_API struct transcribe_parakeet_stream_params
     transcribe_parakeet_stream_default_params(void);
+
+TRANSCRIBE_API struct transcribe_parakeet_buffered_stream_params
+    transcribe_parakeet_buffered_stream_default_params(void);
 
 /*
  * Optional per-call change metadata returned by feed/finalize.

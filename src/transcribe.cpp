@@ -272,7 +272,8 @@ extern "C" struct transcribe_stream_params
 transcribe_stream_default_params(void)
 {
     struct transcribe_stream_params p = {};
-    p.parakeet = nullptr;
+    p.parakeet          = nullptr;
+    p.parakeet_buffered = nullptr;
     return p;
 }
 
@@ -281,6 +282,16 @@ transcribe_parakeet_stream_default_params(void)
 {
     struct transcribe_parakeet_stream_params p = {};
     p.att_context_right = -1; // use model default
+    return p;
+}
+
+extern "C" struct transcribe_parakeet_buffered_stream_params
+transcribe_parakeet_buffered_stream_default_params(void)
+{
+    struct transcribe_parakeet_buffered_stream_params p = {};
+    p.left_ms  = -1; // use model default
+    p.chunk_ms = -1;
+    p.right_ms = -1;
     return p;
 }
 

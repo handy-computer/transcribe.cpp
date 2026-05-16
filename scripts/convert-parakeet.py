@@ -171,13 +171,13 @@ VARIANT_PROFILES: dict[str, dict] = {
         "languages": ["en"],
         "lang_detect": False,
     },
-    # 0.6B English unified offline+streaming RNNT. v1 transcribe.cpp
-    # port targets OFFLINE only; streaming uses the same weights and
-    # is deferred until streaming infra lands.
-    # offline_only=True forces enc_att_context_style="regular" in the
-    # emitted GGUF, overriding the cfg's "chunked_limited_with_rc"
-    # value (NeMo 2.7.2 doesn't recognise that style anyway; the
-    # dumper's --offline-only achieves the same at oracle time).
+    # 0.6B English unified offline+streaming RNNT. Same FastConformer
+    # encoder weights serve both modes — offline runs with full
+    # attention (att_context_size=[-1,-1] in the cfg), streaming runs
+    # with chunked_limited_with_rc attention over a runtime-selected
+    # (L, C, R) tuple drawn from the model's training menu
+    # (att_chunk_context_size). The GGUF carries both: the offline
+    # default and the streaming menu.
     "parakeet-unified-en-0.6b": {
         "variant": "unified-en-0.6b",
         "version": "v1",
@@ -187,7 +187,6 @@ VARIANT_PROFILES: dict[str, dict] = {
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
-        "offline_only": True,
     },
     # 0.6B English CTC. No predictor, no joint — encoder feeds a
     # single 1x1 conv (decoder.decoder_layers.0) projecting d_model
@@ -564,6 +563,35 @@ def _resolve_att_context_size_choices(raw) -> list[tuple[int, int]]:
     return []
 
 
+def _resolve_att_chunk_context_size(raw) -> tuple[list[int], list[int], list[int]]:
+    """Parse NeMo's att_chunk_context_size for chunked_limited_with_rc.
+
+    Shape on disk is a list of three sublists: [[L0, L1, ...],
+    [C0, C1, ...], [R0, R1, ...]] — the training-time cartesian-product
+    menu of (left, chunk, right) attention contexts in encoder frames.
+    parakeet-unified-en-0.6b ships [[70], [1, 2, 7, 13], [0, 1, 2, 3,
+    4, 7, 13]]; the model card's "best accuracy" row (L=5.6s, C=1.04s,
+    R=1.04s) is (70, 13, 13) at the 80ms encoder frame rate.
+
+    Returns (left_choices, chunk_choices, right_choices). Falls back
+    to three empty lists when raw is None or malformed; the loader
+    treats an empty triple as "this checkpoint did not train any
+    chunked_limited_with_rc menu" and leaves chunked_limited_with_rc
+    streaming unsupported on it.
+    """
+    if raw is None:
+        return ([], [], [])
+    if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+        return ([], [], [])
+
+    def _as_int_list(entry) -> list[int]:
+        if not isinstance(entry, (list, tuple)):
+            return []
+        return [int(v) for v in entry]
+
+    return (_as_int_list(raw[0]), _as_int_list(raw[1]), _as_int_list(raw[2]))
+
+
 def _resolve_conv_context_size(raw, kernel_size: int) -> tuple[int, int]:
     """NeMo's conv_context_size accepts:
       - 'causal'  -> [(k-1), 0]
@@ -683,12 +711,23 @@ def read_hparams(config: dict) -> dict:
         # collapses to "no menu" / use att_context_left/right). Encoded
         # as a flat int32 array [L0, R0, L1, R1, ...] in the GGUF.
         "enc_att_context_size_choices": _resolve_att_context_size_choices(enc.get("att_context_size")),
+        # Chunked-limited-with-rc 3-tuple training menu (parakeet-unified-en-0.6b).
+        # NeMo stores it on a separate field `att_chunk_context_size` as
+        # three lists [[L_choices], [C_choices], [R_choices]] in encoder
+        # frames at the 80ms post-subsample rate. Offline / non-unified
+        # variants leave this null and these lists come back empty.
+        "enc_att_chunk_left_choices":  _resolve_att_chunk_context_size(enc.get("att_chunk_context_size"))[0],
+        "enc_att_chunk_chunk_choices": _resolve_att_chunk_context_size(enc.get("att_chunk_context_size"))[1],
+        "enc_att_chunk_right_choices": _resolve_att_chunk_context_size(enc.get("att_chunk_context_size"))[2],
         # att_context_style: 'regular' (per-token sliding window, default
-        # for offline FastConformer) or 'chunked_limited' (chunk-based
-        # mask used by cache-aware streaming models). The masks are
-        # mathematically distinct and produce different outputs for the
-        # same att_context_size. Default 'regular' for variants without
-        # the field. NeMo's training-time default is also 'regular'.
+        # for offline FastConformer), 'chunked_limited' (2-tuple chunk
+        # mask used by cache-aware streaming models like nemotron), or
+        # 'chunked_limited_with_rc' (3-tuple [left, chunk, right] mask
+        # used by buffered streaming on parakeet-unified-en-0.6b). For
+        # chunked_limited_with_rc the cfg's att_context_size is [-1, -1]
+        # (offline default = full attention); the streaming menu lives
+        # in att_chunk_context_size and is engaged at inference time.
+        # Default 'regular' for variants without the field.
         "enc_att_context_style":    str(enc.get("att_context_style", "regular")),
         # conv_norm_type: 'batch_norm' (default for original FastConformer)
         # or 'layer_norm' (used by cache-aware streaming variants).
@@ -775,12 +814,17 @@ def resolve_runtime_hparams(hp: dict, model, config: dict, head_kind: str) -> No
     """
     # Streaming-encoder constants. setup_streaming_params() runs in
     # ConformerEncoder.__init__, so model.encoder.streaming_cfg is
-    # always populated. We only emit these to the GGUF when the encoder
-    # is actually chunked_limited — offline encoders carry a
-    # streaming_cfg too (NeMo populates it unconditionally) but the
-    # values are meaningless. The att_context_style gate is checked
-    # later in convert(), after offline_only overrides.
-    enc_cfg = getattr(model.encoder, "streaming_cfg", None)
+    # always populated — except when we fell back to the
+    # _DirectNemoArchive path (no live encoder module). The latter
+    # only happens for chunked_limited_with_rc checkpoints, which
+    # ship buffered streaming on the C++ side and never read these
+    # cache-aware KVs anyway. We only emit these to the GGUF when the
+    # encoder is actually chunked_limited (offline encoders carry a
+    # streaming_cfg too but the values are meaningless). The
+    # att_context_style gate is checked later in convert(), after
+    # offline_only overrides.
+    enc_module = getattr(model, "encoder", None)
+    enc_cfg = getattr(enc_module, "streaming_cfg", None) if enc_module is not None else None
     if enc_cfg is not None:
         # pre_encode_cache_size is a list [a, b] when the ConvSubsampling
         # stack has 2 conv layers, or a scalar otherwise. The "right"
@@ -1073,14 +1117,12 @@ def convert(model_spec: str, out_path: Path) -> None:
     hp = read_hparams(config)
     resolve_runtime_hparams(hp, model, config, head_kind)
 
-    # Apply variant-profile-level offline-mode override. parakeet-unified-en-0.6b
-    # is the one ported variant whose v1 C++ deliberately targets offline /
-    # full-context inference; the cfg's att_context_style value
-    # ('chunked_limited_with_rc') is not a style the C++ implements. Emitting
-    # 'regular' here keeps the GGUF self-consistent with the v1 C++ behavior
-    # and mirrors what the dumper's --offline-only achieves at oracle time.
-    # Cache-aware streaming variants (e.g. nemotron-speech-streaming-en-0.6b)
-    # leave this flag unset so their native chunked_limited propagates.
+    # Apply variant-profile-level offline-mode override. Currently no
+    # shipped variant sets `offline_only`; parakeet-unified-en-0.6b used
+    # to set it (the C++ couldn't run chunked_limited_with_rc), and the
+    # mechanism remains in case a future variant needs the same escape
+    # hatch. With the flag set, the cfg's att_context_style is forced
+    # to 'regular' on disk.
     if profile.get("offline_only"):
         original_style = hp["enc_att_context_style"]
         if original_style != "regular":
@@ -1090,16 +1132,30 @@ def convert(model_spec: str, out_path: Path) -> None:
             )
             hp["enc_att_context_style"] = "regular"
     # Reject unknown att_context_style values rather than emit them to GGUF
-    # and discover the mismatch at C++ load time. Stage 4 only implements
-    # 'regular' and 'chunked_limited'; new values need an explicit profile
-    # override or a Stage 4 extension.
-    if hp["enc_att_context_style"] not in ("regular", "chunked_limited"):
+    # and discover the mismatch at C++ load time. The C++ side implements
+    # three styles: 'regular' (offline full / local attention),
+    # 'chunked_limited' (2-tuple cache-aware streaming, nemotron), and
+    # 'chunked_limited_with_rc' (3-tuple buffered streaming, parakeet-unified).
+    if hp["enc_att_context_style"] not in (
+            "regular", "chunked_limited", "chunked_limited_with_rc"):
         raise ValueError(
             f"unsupported att_context_style={hp['enc_att_context_style']!r}; "
-            f"converter only emits 'regular' or 'chunked_limited' to GGUF. "
-            f"If this variant should run in offline mode, add "
-            f"'offline_only': True to its VARIANT_PROFILES entry."
+            f"converter emits 'regular', 'chunked_limited', or "
+            f"'chunked_limited_with_rc'. If this variant should run in "
+            f"offline mode only, add 'offline_only': True to its "
+            f"VARIANT_PROFILES entry."
         )
+    if hp["enc_att_context_style"] == "chunked_limited_with_rc":
+        if not (hp["enc_att_chunk_left_choices"]
+                and hp["enc_att_chunk_chunk_choices"]
+                and hp["enc_att_chunk_right_choices"]):
+            raise ValueError(
+                "att_context_style=chunked_limited_with_rc requires a "
+                "non-empty att_chunk_context_size triple in the cfg; "
+                f"got left={hp['enc_att_chunk_left_choices']!r} "
+                f"chunk={hp['enc_att_chunk_chunk_choices']!r} "
+                f"right={hp['enc_att_chunk_right_choices']!r}."
+            )
 
     raw_vocab_size = hp["pred_vocab"] - 1
     print(f"Detected raw vocab_size = {raw_vocab_size}")
@@ -1219,6 +1275,26 @@ def convert(model_spec: str, out_path: Path) -> None:
         for (l, r) in choices:
             flat.extend([int(l), int(r)])
         writer.add_array("stt.parakeet.encoder.att_context_size_choices", flat)
+    # Chunked-limited-with-rc training menu (parakeet-unified-en-0.6b).
+    # Three independent lists [L_choices], [C_choices], [R_choices] in
+    # encoder frames. The runtime picks one entry from each at
+    # stream_begin time to form the (L, C, R) tuple that drives the
+    # chunked attention mask. Index 0 of each list is the trained-on
+    # default; the model card's "best accuracy" row corresponds to the
+    # max value in each list (L=70, C=13, R=13 for unified-en-0.6b).
+    if hp["enc_att_context_style"] == "chunked_limited_with_rc":
+        writer.add_array(
+            "stt.parakeet.encoder.att_chunk_left_choices",
+            [int(v) for v in hp["enc_att_chunk_left_choices"]],
+        )
+        writer.add_array(
+            "stt.parakeet.encoder.att_chunk_chunk_choices",
+            [int(v) for v in hp["enc_att_chunk_chunk_choices"]],
+        )
+        writer.add_array(
+            "stt.parakeet.encoder.att_chunk_right_choices",
+            [int(v) for v in hp["enc_att_chunk_right_choices"]],
+        )
     # Streaming-encoder pre-encode cache constants. Emitted only for
     # cache-aware streaming variants; offline variants skip the KVs
     # (loader treats absent as "non-streaming model"). The C++ loader

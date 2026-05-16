@@ -162,12 +162,32 @@ struct EncoderBuild {
 // GGML_TYPE_COUNT means "auto" (f16 for quantized weights, f32 for f32).
 // backend_name: primary backend name (e.g. "MTL0", "Vulkan0", "CPU") for
 // auto-detecting optimal conv strategy. Env vars override if set.
+// Runtime override for chunked_limited_with_rc streaming. When the
+// model declares enc_att_context_style=ChunkedLimitedWithRc and the
+// caller wants to engage the chunked mask (i.e. buffered streaming on
+// parakeet-unified-en-0.6b), pass a non-null pointer to a
+// BufferedStreamMaskOverride with (L, C, R) in encoder frames. The
+// builder then allocates a chunked_mask_in input tensor (the same
+// shape the ChunkedLimited path uses) and routes the block params
+// through the ChunkedLimited code path so rel_pos_mhsa picks up the
+// precomputed mask. The caller fills the mask host-side via
+// fill_chunked_limited_with_rc_mask after the compute buffer is
+// allocated. Leaving this argument null keeps the offline behavior:
+// the unified encoder runs with full attention (att_context_size
+// [-1, -1] from the GGUF) and no mask.
+struct BufferedStreamMaskOverride {
+    int left_frames;
+    int chunk_frames;
+    int right_frames;
+};
+
 EncoderBuild build_encoder_graph(ggml_context *          compute_ctx,
                                  const ParakeetWeights & weights,
                                  const ParakeetHParams & hp,
                                  int                     n_mel_frames,
                                  ggml_type               kv_type = GGML_TYPE_COUNT,
-                                 const char *            backend_name = "");
+                                 const char *            backend_name = "",
+                                 const BufferedStreamMaskOverride * buf_mask = nullptr);
 
 // Per-layer streaming cache I/O for the streaming encoder graph.
 // The inputs are persistent backend tensors (allocated outside the

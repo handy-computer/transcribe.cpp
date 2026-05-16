@@ -263,12 +263,13 @@ std::vector<int> parse_sub_block_env(int n_layers)
 
 } // namespace
 
-EncoderBuild build_encoder_graph(ggml_context *          ctx,
-                                 const ParakeetWeights & w,
-                                 const ParakeetHParams & hp,
-                                 int                     n_mel_frames,
-                                 ggml_type               kv_type,
-                                 const char *            backend_name)
+EncoderBuild build_encoder_graph(ggml_context *                      ctx,
+                                 const ParakeetWeights &             w,
+                                 const ParakeetHParams &             hp,
+                                 int                                 n_mel_frames,
+                                 ggml_type                           kv_type,
+                                 const char *                        backend_name,
+                                 const BufferedStreamMaskOverride *  buf_mask)
 {
     // Per-family dispatch policy. Parakeet keeps the historical split
     // where the in-block depthwise uses the direct path on every
@@ -279,12 +280,18 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
     policy.direct_dw_in_pre_encode = false;
-    // Cache-aware streaming variants set conv_context_{left,right} to
-    // explicit causal values; that flag also drives NeMo's
-    // ConvSubsampling to use CausalConv2D (left=k-1, right=stride-1
-    // pad on both spatial axes), so we mirror it here.
-    policy.causal_pre_encode = (hp.enc_conv_context_left  >= 0 &&
-                                hp.enc_conv_context_right >= 0);
+    // Cache-aware streaming variants (NeMo `causal_downsampling=true`)
+    // use CausalConv2D for the pre-encode subsample stack (left=k-1,
+    // right=stride-1 pad on both spatial axes). We infer this from the
+    // attention style: ChunkedLimited (cache-aware) implies causal
+    // subsample; Regular (offline) and ChunkedLimitedWithRc (buffered
+    // streaming) both use the standard non-causal symmetric pad. The
+    // pre-encode kernel (k=3) and the conformer conv-module kernel
+    // (k=9) are independent — hp.enc_conv_context_{left,right} are
+    // for the latter and don't say anything about the former.
+    policy.causal_pre_encode =
+        (hp.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb {};
 
@@ -398,9 +405,17 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         // LocalAttRelPositionalEncoding. ChunkedLimited style keeps pos_emb
         // at the full 2T-1 and uses a separate attention-position mask
         // (built below).
+        // ChunkedLimited (2-tuple cache-aware) always engages the mask.
+        // ChunkedLimitedWithRc (3-tuple buffered streaming) only engages
+        // when the caller passes a non-null buf_mask override — offline
+        // load of a unified-en GGUF runs the encoder with full attention
+        // even though the style declares chunked_limited_with_rc.
         const bool is_chunked =
             (hp.enc_att_context_style ==
-                 ParakeetHParams::AttContextStyle::ChunkedLimited);
+                 ParakeetHParams::AttContextStyle::ChunkedLimited) ||
+            (hp.enc_att_context_style ==
+                 ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc
+             && buf_mask != nullptr);
         const bool is_local_pe =
             (!is_chunked) &&
             (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
@@ -598,8 +613,11 @@ EncoderBuild build_encoder_graph_streaming(
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
     policy.direct_dw_in_pre_encode = false;
-    policy.causal_pre_encode = (hp.enc_conv_context_left  >= 0 &&
-                                hp.enc_conv_context_right >= 0);
+    // See the offline analog in build_encoder_graph: causal pre-encode
+    // is the cache-aware streaming convention only.
+    policy.causal_pre_encode =
+        (hp.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb {};
 

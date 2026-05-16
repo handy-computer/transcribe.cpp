@@ -5,7 +5,7 @@ description = "Python env for Parakeet TDT reference dumps via NeMo"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "torch>=2.2",
-    "nemo_toolkit[asr]>=2.0",
+    "nemo-toolkit[asr]==2.7.3",
     "huggingface-hub>=0.20",
     "soundfile>=0.12",
     "numpy>=1.26",
