@@ -268,6 +268,12 @@ struct BlockParams {
     int conv_context_left  = -1;
     int conv_context_right = -1;
 
+    // Optional post-GLU valid-frame mask for the conv module. Shape
+    // [T, 1, 1, 1], values 1.0 for valid frames and 0.0 for padded
+    // overhang. NeMo applies pad_mask after pointwise_conv1+GLU and
+    // before the depthwise convolution; null keeps the historical path.
+    ggml_tensor * conv_pad_mask = nullptr;
+
     // Conv-module normalisation choice. BatchNorm uses fused scale +
     // bias precomputed at load time (BlockView::conv_bn_fused_*).
     // LayerNorm computes per-channel mean/std at inference and uses
@@ -421,10 +427,12 @@ ggml_tensor * add_conv_bias(ggml_context * ctx,
 // Sub-blocks (exposed for families that hand-build a block)
 // ===========================================================================
 
-// Convolution sub-block: pointwise -> GLU -> depthwise -> BN/LN ->
-// SiLU -> pointwise. Operates on post-LayerNorm input; the LN is
-// applied by the caller. Reads BlockParams::conv_context_{left,right}
-// (depthwise padding) and BlockParams::conv_norm_type (BN vs LN).
+// Convolution sub-block: pointwise -> GLU -> optional valid-frame mask
+// -> depthwise -> BN/LN -> SiLU -> pointwise. Operates on post-LayerNorm
+// input; the LN is applied by the caller. Reads
+// BlockParams::conv_context_{left,right} (depthwise padding),
+// BlockParams::conv_pad_mask, and BlockParams::conv_norm_type
+// (BN vs LN).
 ggml_tensor * conv_module(ggml_context *      ctx,
                           ggml_tensor *       x,
                           const BlockView &   b,

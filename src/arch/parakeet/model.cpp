@@ -618,6 +618,16 @@ transcribe_status load(
         cfg.f_min        = m->hparams.fe_f_min;
         cfg.f_max        = m->hparams.fe_f_max;
         cfg.normalize    = m->hparams.fe_normalize;
+        // NeMo's FilterbankFeatures.stft uses pad_mode="constant" for
+        // the STFT center-pad (see features.py line 385). The cpp
+        // MelConfig default is "reflect" — matching cpp's behavior to
+        // NeMo here. The two differ in the first/last few STFT frames:
+        // reflect pads with mirrored audio, constant pads with zeros.
+        // Offline this is one boundary per utterance and the residual
+        // washes it out; streaming sees boundary effects every chunk
+        // and the per-feature normalize amplifies the divergence into
+        // the encoder.
+        cfg.pad_mode     = "constant";
         m->mel.emplace(cfg);
     }
 
@@ -2035,6 +2045,7 @@ transcribe_status emit_buffered_chunk(
     const int64_t end_abs   = pc->buf_next_audio_read + num_new_samples;
     const int64_t total_now =
         pc->buf_ctx_left + pc->buf_ctx_chunk + pc->buf_ctx_right;
+    const int effective_T = static_cast<int>(total_now / samples_per_frame);
     const int64_t start_abs = end_abs - total_now;
 
     std::vector<float> window_pcm(
@@ -2050,14 +2061,23 @@ transcribe_status emit_buffered_chunk(
     }
 
     // ----- Per-chunk dumps (TRANSCRIBE_DUMP_DIR; mirror NeMo names) -----
+    //
+    // Push a `stream.chunk.<N>.` prefix so every dump_tensor inside the
+    // encoder graph builder gets scoped per chunk (otherwise the block
+    // outputs `enc.block.<L>.out` would overwrite across chunks). The
+    // prefix is popped at function exit via the guard below.
     const int chunk_step = pc->buf_chunk_step;
+    char chunk_prefix[64];
+    std::snprintf(chunk_prefix, sizeof(chunk_prefix),
+                  "stream.chunk.%d.", chunk_step);
+    transcribe::debug::push_name_prefix(chunk_prefix);
+    struct PrefixPopGuard {
+        ~PrefixPopGuard() { transcribe::debug::pop_name_prefix(); }
+    } _prefix_pop_guard;
     if (transcribe::debug::enabled()) {
-        char name[64];
-        std::snprintf(name, sizeof(name),
-                      "stream.chunk.%d.audio_in", chunk_step);
         const long long shape[1] = { static_cast<long long>(window_pcm.size()) };
         transcribe::debug::dump_host_f32(
-            name, window_pcm.data(),
+            "audio_in", window_pcm.data(),
             static_cast<long long>(window_pcm.size()),
             shape, 1, "buffered_streaming.audio_in");
     }
@@ -2068,7 +2088,7 @@ transcribe_status emit_buffered_chunk(
     int mel_n_frames = 0;
     if (const transcribe_status mst = pm->mel->compute(
             window_pcm.data(), window_pcm.size(),
-            pc->mel_buf, mel_n_mels, mel_n_frames, pc->n_threads);
+            pc->mel_buf, mel_n_mels, mel_n_frames);
         mst != TRANSCRIBE_OK)
     {
         std::fprintf(stderr,
@@ -2105,6 +2125,7 @@ transcribe_status emit_buffered_chunk(
     buf_mask.left_frames  = pc->buf_left_frames;
     buf_mask.chunk_frames = pc->buf_chunk_frames;
     buf_mask.right_frames = pc->buf_right_frames;
+    buf_mask.valid_frames = effective_T;
 
     EncoderBuild eb = build_encoder_graph(
         pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames,
@@ -2157,6 +2178,29 @@ transcribe_status emit_buffered_chunk(
                                 0, pc->pos_buf.size() * sizeof(float));
     }
 
+    // ----- Conformer conv pad mask -----
+    //
+    // NeMo passes pad_mask into every Conformer conv module and zeros
+    // post-GLU activations where pre_encode emitted padded overhang
+    // frames. The attention mask below already excludes those frames
+    // from MHA; this mask prevents them from leaking backward through
+    // the depthwise conv's right context.
+    if (eb.conv_pad_mask_in != nullptr) {
+        const int T_enc =
+            static_cast<int>(eb.conv_pad_mask_in->ne[0]);
+        const int P = std::max(0, std::min(effective_T, T_enc));
+        std::vector<float> mask_buf(static_cast<size_t>(T_enc), 1.0f);
+        for (int t = P; t < T_enc; ++t) {
+            mask_buf[static_cast<size_t>(t)] = 0.0f;
+        }
+        ggml_backend_tensor_set(eb.conv_pad_mask_in, mask_buf.data(),
+                                0, mask_buf.size() * sizeof(float));
+        transcribe::debug::dump_tensor(
+            "enc.conv.pad_mask",
+            eb.conv_pad_mask_in,
+            "encoder.conv.pad_mask");
+    }
+
     // ----- Chunked_limited_with_rc mask fill -----
     //
     // Pad-mask: NeMo's encoder ANDs a conv-overhang pad_mask onto the
@@ -2173,10 +2217,6 @@ transcribe_status emit_buffered_chunk(
     if (eb.chunked_mask_in != nullptr) {
         const int T_enc =
             static_cast<int>(eb.chunked_mask_in->ne[0]);
-        const int64_t ctx_total = pc->buf_ctx_left + pc->buf_ctx_chunk
-                                 + pc->buf_ctx_right;
-        const int effective_T = static_cast<int>(
-            ctx_total / samples_per_frame);
         std::vector<float> mask_buf(
             static_cast<size_t>(T_enc) * static_cast<size_t>(T_enc));
         compute_chunked_limited_with_rc_mask(
@@ -2221,6 +2261,57 @@ transcribe_status emit_buffered_chunk(
     pc->t_encode_us += ggml_time_us() - t_enc_start;
 
     pc->encoder_out = eb.out;
+
+    // Dump cpp's mel input alongside the per-block intermediates so the
+    // ref-vs-cpp bisect can also localize drift to the mel frontend.
+    if (transcribe::debug::enabled()) {
+        transcribe::debug::dump_tensor("enc.mel.in", eb.mel_in, "encoder.mel");
+    }
+
+    // ----- Per-chunk intermediate dumps (debug only) -----
+    //
+    // Same set of intermediates the offline path dumps via run(); used
+    // for layer-by-layer divergence bisect against NeMo's per-block
+    // outputs at the streaming geometry. Gated on TRANSCRIBE_DUMP_DIR
+    // and TRANSCRIBE_DUMP_ALL_BLOCKS env vars. The active per-chunk
+    // name prefix (push_name_prefix above) scopes these names to this
+    // chunk's directory: `stream.chunk.<N>.enc.block.<L>.out` etc.
+    if (transcribe::debug::enabled()) {
+        auto try_dump = [](const char * name, ggml_tensor * t,
+                           const char * stage) {
+            if (t != nullptr) transcribe::debug::dump_tensor(name, t, stage);
+        };
+        try_dump("enc.pre_encode.out",   eb.dumps.pre_encode_out,    "encoder.pre_encode");
+        try_dump("enc.block.0.ff1",      eb.dumps.block0_after_ff1,  "encoder.block0.ff1");
+        try_dump("enc.block.0.attn",     eb.dumps.block0_after_attn, "encoder.block0.attn");
+        try_dump("enc.block.0.conv",     eb.dumps.block0_after_conv, "encoder.block0.conv");
+        try_dump("enc.block.0.ff2",      eb.dumps.block0_after_ff2,  "encoder.block0.ff2");
+        try_dump("enc.block.0.out",      eb.dumps.block0_out,        "encoder.block0.out");
+        if (eb.dumps.mid_block_out != nullptr && eb.dumps.mid_block_idx >= 0) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "enc.block.%d.out",
+                          eb.dumps.mid_block_idx);
+            transcribe::debug::dump_tensor(name, eb.dumps.mid_block_out,
+                                           "encoder.block.mid.out");
+        }
+        if (eb.dumps.last_block_out != nullptr && eb.dumps.last_block_idx >= 0) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "enc.block.%d.out",
+                          eb.dumps.last_block_idx);
+            transcribe::debug::dump_tensor(name, eb.dumps.last_block_out,
+                                           "encoder.block.last.out");
+        }
+        if (std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr) {
+            for (size_t i = 0; i < eb.dumps.all_block_outs.size(); ++i) {
+                ggml_tensor * t = eb.dumps.all_block_outs[i];
+                if (t == nullptr) continue;
+                char name[64];
+                std::snprintf(name, sizeof(name), "enc.block.%zu.out", i);
+                transcribe::debug::dump_tensor(name, t,
+                                               "encoder.block.bisect");
+            }
+        }
+    }
 
     // ----- Readback encoder output, slice off left frames -----
     const int d_enc      = static_cast<int>(eb.out->ne[0]);
@@ -2282,15 +2373,12 @@ transcribe_status emit_buffered_chunk(
     // chunk-aligned region so the parity harness can compare both
     // the decoded and lookahead portions.
     if (transcribe::debug::enabled()) {
-        char name[64];
-        std::snprintf(name, sizeof(name),
-                      "stream.chunk.%d.enc_out", chunk_step);
         const long long shape[2] = {
             static_cast<long long>(T_chunk_avail),
             static_cast<long long>(d_enc),
         };
         transcribe::debug::dump_host_f32(
-            name, enc_chunk,
+            "enc_out", enc_chunk,
             static_cast<long long>(T_chunk_avail) *
                 static_cast<long long>(d_enc),
             shape, 2, "buffered_streaming.enc_out");

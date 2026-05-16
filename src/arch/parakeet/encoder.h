@@ -131,6 +131,11 @@ struct EncoderBuild {
     // across heads inside rel_pos_mhsa.
     ggml_tensor * chunked_mask_in = nullptr;
 
+    // Buffered-streaming conv valid-frame mask, ne=[T_enc, 1, 1, 1] f32.
+    // Null unless the buffered path has pre_encode overhang frames that
+    // NeMo would expose via pad_mask to every Conformer conv module.
+    ggml_tensor * conv_pad_mask_in = nullptr;
+
     // Encoder forward output, ne=[d_model, T_enc, 1, 1] f32. Equal
     // to dumps.final_out; provided as a separate field so callers
     // that don't care about intermediates can ignore the dumps
@@ -179,6 +184,7 @@ struct BufferedStreamMaskOverride {
     int left_frames;
     int chunk_frames;
     int right_frames;
+    int valid_frames;
 };
 
 EncoderBuild build_encoder_graph(ggml_context *          compute_ctx,

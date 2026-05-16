@@ -819,21 +819,25 @@ transcribe_status MelFrontend::compute(
     // normalize_batch. fp64 accumulators throughout to keep the row
     // sums numerically stable; cast back to fp32 at storage.
     //
-    // When pad_mode is "constant" (Cohere), the last STFT frame is
-    // a padding artifact. The normalization statistics are computed
-    // over the first seq_len = n_samples / hop frames (not n_frames
-    // = seq_len + 1), and the last frame is zeroed after
-    // normalization. This matches the Cohere reference
-    // (processing_cohere_asr.py get_seq_len / normalize_batch).
-    //
-    // When pad_mode is "reflect" (Parakeet), all n_frames frames
-    // are valid and used for normalization.
+    // NeMo's `FilterbankFeatures.forward` computes seq_len =
+    // floor(n_samples / hop_length) (see get_seq_len with
+    // center=True), normalizes over [0, seq_len), then masks frames
+    // [seq_len, n_frames) to pad_value=0 (features.py lines 481-483).
+    // Both pad_modes ("constant" Cohere, "reflect" Parakeet) emit one
+    // extra trailing frame from the STFT's center pad — NeMo masks
+    // it regardless. Mirror that here unconditionally: leaving the
+    // trailing frame in the normalization statistics shifts the mean
+    // and std for every bin and leaves a non-zero log-mel value at a
+    // position the encoder should see as zero. Offline this hides
+    // under the residual averages; streaming, where each chunk has a
+    // trailing-frame contribution, accumulates real drift (~bin-2
+    // mel divergence of ~1.5 at the pad frame at L70-C7-R7 before
+    // fix).
     //
     // resize() instead of assign(): the loop below writes every
     // element exactly once, so the zero-fill that assign() would do
     // is dead work.
-    const bool mask_last = (cfg_.pad_mode == "constant");
-    const int  n_norm    = mask_last ? (n_frames - 1) : n_frames;
+    const int n_norm = n_frames - 1;
 
     out_mel.resize(
         static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames));
@@ -862,10 +866,8 @@ transcribe_status MelFrontend::compute(
                 (static_cast<double>(src[t]) - mean) * inv);
         }
 
-        // Zero the last frame when it's a padding artifact.
-        if (mask_last) {
-            dst[n_norm] = 0.0f;
-        }
+        // Zero the trailing center-pad frame.
+        dst[n_norm] = 0.0f;
     }
 
     out_n_mels   = n_mels;

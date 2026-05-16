@@ -398,6 +398,13 @@ ggml_tensor * conv_module(ggml_context *      ctx,
         x = ggml_cont(ctx, x);
     }
 
+    // NeMo zeros padded-overhang frames after pointwise_conv1 + GLU and
+    // before the depthwise convolution. Without this, buffered streaming
+    // overhang frames can leak backward through the conv kernel.
+    if (params.conv_pad_mask != nullptr) {
+        x = ggml_mul(ctx, x, params.conv_pad_mask);
+    }
+
     // Depthwise conv: kernel size from hparams, groups=d_model. The
     // ggml depthwise ops accept a single symmetric padding value on
     // each axis; for asymmetric padding (causal: [k-1, 0]) we prepend

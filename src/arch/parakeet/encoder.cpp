@@ -336,6 +336,12 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     }
     ggml_set_name(eb.mel_in, "mel.in");
     ggml_set_input(eb.mel_in);
+    // Debug-only: pin the mel_in buffer so the scheduler doesn't reuse
+    // its slot for a later activation before dump_tensor() reads it
+    // back. Without this, streaming dumps of enc.mel.in show garbage
+    // because n_mel_frames is small and the slot is the first to be
+    // freed. No-op in normal builds.
+    transcribe::debug::mark_tensor_for_dump(eb.mel_in);
 
     // Build the pre_encode subgraph.
     ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode),
@@ -440,6 +446,18 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
             eb.chunked_mask_in = chunked_mask_in;
         }
 
+        ggml_tensor * conv_pad_mask_in = nullptr;
+        if (buf_mask != nullptr &&
+            buf_mask->valid_frames >= 0 &&
+            buf_mask->valid_frames < T_enc)
+        {
+            conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                                  T_enc, 1, 1, 1);
+            ggml_set_name(conv_pad_mask_in, "conv.pad_mask.in");
+            ggml_set_input(conv_pad_mask_in);
+            eb.conv_pad_mask_in = conv_pad_mask_in;
+        }
+
         conf::BlockParams bparams {};
         bparams.d_model           = hp.enc_d_model;
         bparams.n_head            = hp.enc_n_heads;
@@ -455,6 +473,7 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         bparams.attn_chunked_mask = chunked_mask_in;
         bparams.conv_context_left  = hp.enc_conv_context_left;
         bparams.conv_context_right = hp.enc_conv_context_right;
+        bparams.conv_pad_mask      = conv_pad_mask_in;
         bparams.conv_norm_type = (hp.enc_conv_norm_type
                                   == ParakeetHParams::ConvNormType::LayerNorm)
             ? conf::BlockParams::ConvNormType::LayerNorm

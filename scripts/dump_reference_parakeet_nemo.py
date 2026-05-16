@@ -1015,6 +1015,85 @@ def cmd_buffered_streaming(args: argparse.Namespace) -> int:
         a = to_np(t)
         write_tensor(name, a, stage, source, out_dir=out_dir)
 
+    # Per-chunk intermediate capture for layer-by-layer divergence
+    # bisect against the cpp port. The captures land in `intermediates`
+    # and are dumped + cleared inside the per-step loop. Hooks fire
+    # exactly once per encoder forward pass (i.e. once per chunk), so
+    # the dict reflects the most recent chunk.
+    intermediates: dict[str, Any] = {}
+
+    def _hook(name, extract_idx=0):
+        def fn(_module, _input, output):
+            if isinstance(output, tuple):
+                intermediates[name] = output[extract_idx].detach().clone()
+            else:
+                intermediates[name] = output.detach().clone()
+        return fn
+
+    block_hooks = []
+    block_hooks.append(model.preprocessor.register_forward_hook(
+        _hook("enc.mel.in", 0)))
+    block_hooks.append(model.encoder.pre_encode.register_forward_hook(
+        _hook("enc.pre_encode.out", 0)))
+    for i in range(len(model.encoder.layers)):
+        block_hooks.append(model.encoder.layers[i].register_forward_hook(
+            _hook(f"enc.block.{i}.out")))
+
+    # Sub-block wrapping for block 0 — captures the residual after each
+    # of FF1/attn/conv/FF2 so cpp-vs-ref drift can be localized to a
+    # specific Conformer sub-component. Mirrors `_set_up_intermediates_capture`
+    # in the offline path. Wrapping installs a custom forward; restored
+    # at the end of the loop.
+    from nemo.collections.asr.parts.submodules.multi_head_attention import (
+        RelPositionMultiHeadAttention,
+        RelPositionMultiHeadAttentionLongformer,
+    )
+    block0_layer = model.encoder.layers[0]
+    block0_original_forward = block0_layer.forward
+    def block0_wrapped(x, att_mask=None, pos_emb=None, pad_mask=None,
+                       cache_last_channel=None, cache_last_time=None):
+        layer = block0_layer
+        residual = x
+        x_n = layer.norm_feed_forward1(x)
+        ff1 = layer.feed_forward1(x_n)
+        residual = residual + layer.dropout(ff1) * layer.fc_factor
+        intermediates["enc.block.0.ff1"] = residual.detach().clone()
+
+        x_n = layer.norm_self_att(residual)
+        if isinstance(layer.self_attn, RelPositionMultiHeadAttention):
+            attn_out = layer.self_attn(query=x_n, key=x_n, value=x_n,
+                                       mask=att_mask, pos_emb=pos_emb,
+                                       cache=cache_last_channel)
+        elif isinstance(layer.self_attn, RelPositionMultiHeadAttentionLongformer):
+            attn_out = layer.self_attn(query=x_n, key=x_n, value=x_n,
+                                       pad_mask=pad_mask, pos_emb=pos_emb,
+                                       cache=cache_last_channel)
+        else:
+            attn_out = layer.self_attn(query=x_n, key=x_n, value=x_n,
+                                       mask=att_mask, cache=cache_last_channel)
+        if cache_last_channel is not None:
+            attn_out, cache_last_channel = attn_out
+        residual = residual + layer.dropout(attn_out)
+        intermediates["enc.block.0.attn"] = residual.detach().clone()
+
+        x_n = layer.norm_conv(residual)
+        conv_out = layer.conv(x_n, pad_mask=pad_mask, cache=cache_last_time)
+        if cache_last_time is not None:
+            conv_out, cache_last_time = conv_out
+        residual = residual + layer.dropout(conv_out)
+        intermediates["enc.block.0.conv"] = residual.detach().clone()
+
+        x_n = layer.norm_feed_forward2(residual)
+        ff2 = layer.feed_forward2(x_n)
+        residual = residual + layer.dropout(ff2) * layer.fc_factor
+        intermediates["enc.block.0.ff2"] = residual.detach().clone()
+
+        out = layer.norm_out(residual)
+        if cache_last_channel is None:
+            return out
+        return out, cache_last_channel, cache_last_time
+    block0_layer.forward = block0_wrapped
+
     # Spin up the StreamingBatchedAudioBuffer NeMo's reference script uses.
     from nemo.collections.asr.parts.utils.streaming_utils import (
         ContextSize,
@@ -1090,6 +1169,20 @@ def cmd_buffered_streaming(args: argparse.Namespace) -> int:
                 "buffered_streaming.enc_out",
             )
 
+            # Dump per-chunk per-block intermediates (for cpp-vs-ref
+            # encoder fp32 drift bisect).
+            for cap_name, cap_tensor in intermediates.items():
+                # Convert NeMo's [B, T, D] (or [B, D, T] for pre_encode)
+                # to the cpp-port layout [T, D]. pre_encode returns [B, T, D],
+                # encoder layers return [B, T, D] too. encoder.pre_encode is
+                # special-cased upstream. Trust the squeeze + match.
+                t = cap_tensor[0] if cap_tensor.dim() == 3 else cap_tensor
+                dump(
+                    f"stream.chunk.{step_num}.{cap_name}",
+                    t,
+                    f"buffered_streaming.{cap_name}",
+                )
+
             chunk_batched_hyps, _, state = decoding_computer(
                 x=encoder_output_chunk,
                 out_len=torch.where(
@@ -1128,6 +1221,10 @@ def cmd_buffered_streaming(args: argparse.Namespace) -> int:
             left_sample = right_sample
             right_sample = min(right_sample + context_samples.chunk, audio_tensor.shape[1])
             step_num += 1
+
+    for h in block_hooks:
+        h.remove()
+    block0_layer.forward = block0_original_forward
 
     final_text = per_chunk_text[-1] if per_chunk_text else ""
     write_transcript(out_dir, final_text, source=source)

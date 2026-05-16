@@ -64,6 +64,15 @@ bool enabled();
 // as the dumper is enabled. Useful for tests.
 const char * dump_dir();
 
+// Push/pop a name prefix that gets prepended to every subsequent
+// dump_tensor / dump_host_f32 call. Used by buffered streaming to
+// scope per-chunk intermediate dumps (e.g. "stream.chunk.5.") so the
+// encoder's `enc.block.<L>.out` tensors don't get overwritten across
+// chunks. Stack-style — last push wins. Empty string clears the
+// prefix. No-op when the dumper is disabled.
+void push_name_prefix(const char * prefix);
+void pop_name_prefix();
+
 // Preserve a ggml tensor for a later dump_tensor() call.
 //
 // The ggml scheduler is allowed to reuse intermediate buffers unless a
