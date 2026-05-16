@@ -74,10 +74,33 @@ CLI flags:
 
 ## Performance
 
-Bench artifacts under `reports/perf/<machine>/` are pending for this
-variant. Once Stage 6 (`porting-6-bench`) has been run on a reference
-machine, this section gets the standard latency table; for now treat
-the absence as TODO rather than a missing capability.
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
+decimal places).
+
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Vulkan  | jfk (11.0s)  |   2.41 s (4.6×)  |   2.11 s (5.2×)  |
+| Vulkan  | dots (35.3s) |   9.72 s (3.6×)  |   8.48 s (4.2×)  |
+| CPU     | jfk (11.0s)  |   4.73 s (2.3×)  |   3.43 s (3.2×)  |
+| CPU     | dots (35.3s) |  18.42 s (1.9×)  |  13.51 s (2.6×)  |
+
+Fedora Linux 43, transcribe.cpp `51db32d`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models canary-qwen-2.5b \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends metal,cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name canary-qwen-2.5b-publication
+```
 
 ## Numerical Validation
 
