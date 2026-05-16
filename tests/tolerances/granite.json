@@ -1,0 +1,90 @@
+{
+  "_comment": [
+    "Magnitude-aware provisional tolerances derived from oracle tensor",
+    "statistics across all granite variants (granite-4.0-1b-speech,",
+    "granite-speech-4.1-2b, granite-speech-4.1-2b-plus).",
+    "Per tensor: max_abs = max(1e-4 * p99_abs, 1e-6),",
+    "mean_abs = max(1e-5 * rms, 1e-6).",
+    "When a tensor name appears across multiple (variant, case, stage_dir)",
+    "sidecars the worst-magnitude p99_abs and rms are used so the budget",
+    "covers every shipped variant.",
+    "These are PROVISIONAL. Stage 4 finalizes them against observed",
+    "C++ drift before _provisional flags can be removed.",
+    "Do NOT ship a model while _provisional entries remain."
+  ],
+  "dec.audio_injected": {
+    "max_abs": 2.34375e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "dec.block.0.out": {
+    "max_abs": 0.000259375,
+    "mean_abs": 8.084001342117985e-06,
+    "_provisional": true
+  },
+  "dec.block.20.out": {
+    "max_abs": 0.000265625,
+    "mean_abs": 0.0002479265539415278,
+    "_provisional": true
+  },
+  "dec.block.39.out": {
+    "max_abs": 0.0011350624999999128,
+    "mean_abs": 0.00013884374130051269,
+    "_provisional": true
+  },
+  "dec.logits_raw": {
+    "max_abs": 0.0010562500000000001,
+    "mean_abs": 3.985658768877117e-05,
+    "_provisional": true
+  },
+  "dec.out_before_head": {
+    "max_abs": 0.00205,
+    "mean_abs": 9.31443646769267e-05,
+    "_provisional": true
+  },
+  "dec.token_emb": {
+    "max_abs": 1.083984375e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.00018046875000000002,
+    "mean_abs": 5.070948197809848e-06,
+    "_provisional": true
+  },
+  "enc.block.15.out": {
+    "max_abs": 0.00065625,
+    "mean_abs": 2.4856553822617927e-05,
+    "_provisional": true
+  },
+  "enc.block.8.out": {
+    "max_abs": 5.9375e-05,
+    "mean_abs": 1.7486966788273162e-06,
+    "_provisional": true
+  },
+  "enc.input_linear.out": {
+    "max_abs": 0.00013671875,
+    "mean_abs": 4.223620450380665e-06,
+    "_provisional": true
+  },
+  "enc.mel.in": {
+    "max_abs": 0.0001592243709564209,
+    "mean_abs": 7.326062387417351e-06,
+    "_provisional": true
+  },
+  "enc.out": {
+    "max_abs": 0.00065625,
+    "mean_abs": 2.4856553822617927e-05,
+    "_provisional": true
+  },
+  "proj.out": {
+    "max_abs": 2.5e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "proj.qformer.out": {
+    "max_abs": 1.484375e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  }
+}

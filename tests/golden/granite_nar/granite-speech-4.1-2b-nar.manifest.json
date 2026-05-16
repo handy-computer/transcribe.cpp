@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "granite_nar",
+  "variant": "granite-speech-4.1-2b-nar",
+  "source_model": {
+    "hf_repo": "ibm-granite/granite-speech-4.1-2b-nar",
+    "hf_revision": "7d20732df04d097262c4ecd8fe7f34ec2b3e6c42"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "_skeleton": true
+}
