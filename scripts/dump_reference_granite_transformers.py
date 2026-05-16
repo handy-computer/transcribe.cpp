@@ -337,8 +337,19 @@ def cmd_decode(args: argparse.Namespace) -> int:
     user_message = f"<|audio|>{args.instruction}"
     chat = [{"role": "user", "content": user_message}]
     if processor.tokenizer.chat_template is not None or processor.chat_template is not None:
+        # add_generation_prompt=True so the prompt ends with the
+        # assistant-role marker. With False, granite-speech-4.1-2b-plus
+        # emits an immediate <|end_of_text|> on short / ambiguous clips
+        # (27/512 empty hypotheses on LibriSpeech test-clean). The plus
+        # model card's WER numbers were measured with the assistant
+        # turn explicitly opened, so we mirror that here for Stage-4
+        # tensor parity with the C++ port (which also opens the
+        # assistant turn explicitly). For 1b / 2b there is no chat
+        # template registered at all and we fall through to the bare
+        # USER:/ASSISTANT: format below, which already includes the
+        # ASSISTANT: marker — so the change is a no-op there.
         prompt = processor.tokenizer.apply_chat_template(
-            chat, tokenize=False, add_generation_prompt=False
+            chat, tokenize=False, add_generation_prompt=True
         )
     else:
         prompt = f"USER: {user_message}\n ASSISTANT:"
@@ -470,27 +481,57 @@ def cmd_decode(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = p.add_subparsers(dest="cmd", required=True)
+def cmd_encoder(args: argparse.Namespace) -> int:
+    """No-op alias.
 
-    decode = sub.add_parser("decode", help="full encoder+projector+LM dump + transcript")
-    decode.add_argument("--model", required=True, help="HF repo id or local path")
-    decode.add_argument("--audio", required=True, help="path to audio file (16kHz)")
-    decode.add_argument("--out", required=True, help="output directory for dumps")
-    decode.add_argument(
+    validate.py runs both `encoder` and `decode` subcommands per family
+    dumper. Granite captures every tensor (enc.*, proj.*, dec.*) in a
+    single decode pass, so the encoder pass is intentionally empty —
+    the subsequent decode call fills `--out` with all tensors and the
+    transcript. Returning 0 keeps validate.py's loop happy without
+    duplicating work.
+    """
+    out = Path(args.out).expanduser().resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    return 0
+
+
+def add_common_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--model", required=True, help="HF repo id or local path")
+    p.add_argument("--audio", required=True, help="path to audio file (16kHz)")
+    p.add_argument("--out", required=True, help="output directory for dumps")
+    p.add_argument(
         "--instruction",
         default="can you transcribe the speech into a written format?",
         help="user instruction following the <|audio|> placeholder",
     )
-    decode.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"])
-    decode.add_argument(
+    p.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"])
+    p.add_argument(
         "--dtype",
         default="bf16",
         choices=["bf16", "f16", "f32"],
         help="model dtype",
     )
-    decode.add_argument("--torch-threads", type=int, default=4)
+    p.add_argument("--torch-threads", type=int, default=4)
+    # Granite is multilingual but the captured prompt is English-only;
+    # accept --language for validate.py parity and ignore it.
+    p.add_argument(
+        "--language",
+        default=None,
+        help="ignored (prompt is fixed per the captured reference)",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    encoder = sub.add_parser("encoder", help="no-op (decode pass dumps every tensor)")
+    add_common_args(encoder)
+    encoder.set_defaults(func=cmd_encoder)
+
+    decode = sub.add_parser("decode", help="full encoder+projector+LM dump + transcript")
+    add_common_args(decode)
     decode.add_argument(
         "--enc-blocks",
         type=int,

@@ -82,6 +82,12 @@ add_library(transcribe
     arch/gigaam/encoder.cpp
     arch/gigaam/decoder.cpp
     arch/gigaam/mel.cpp
+    arch/granite/model.cpp
+    arch/granite/capabilities.cpp
+    arch/granite/weights.cpp
+    arch/granite/encoder.cpp
+    arch/granite/projector.cpp
+    arch/granite/decoder.cpp
 )
 
 target_include_directories(transcribe

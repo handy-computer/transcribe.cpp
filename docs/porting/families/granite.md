@@ -102,23 +102,36 @@ Allowed statuses: `PASS`, `SKIP - not exposed by runtime`, `ACCEPTED GAP - <reas
 
 | Capability | Variant | Mode | Command / test | Expected observable | Status |
 |------------|---------|------|----------------|---------------------|--------|
-| Transcribe | granite-4.0-1b-speech | explicit language hint | `build/bin/transcribe-cli -m models/granite-4.0-1b-speech/granite-4.0-1b-speech-bf16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | TODO |
-| Transcribe | granite-4.0-1b-speech | auto / no language hint | `build/bin/transcribe-cli -m models/granite-4.0-1b-speech/granite-4.0-1b-speech-bf16.gguf samples/jfk.wav` | non-empty plausible transcript on the auto-detect path | TODO |
-| Translate (X->En) | granite-4.0-1b-speech | non-English source audio | `<actual supported command>` | non-empty English transcript on non-English audio | TODO |
-| Translate (En->X) | granite-4.0-1b-speech | English source audio + target language hint | `<actual supported command>` | non-empty non-English transcript on English audio | TODO |
-| Keyword biasing | granite-4.0-1b-speech | hotword prompt | `<actual supported command>` | hotword preserved verbatim in transcript | TODO |
-| Transcribe | granite-speech-4.1-2b | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b/granite-speech-4.1-2b-bf16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript with punctuation/casing | TODO |
-| Transcribe | granite-speech-4.1-2b | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b/granite-speech-4.1-2b-bf16.gguf samples/jfk.wav` | non-empty plausible transcript | TODO |
-| Translate (X->En) | granite-speech-4.1-2b | non-English source audio | `<actual supported command>` | non-empty English transcript on non-English audio | TODO |
-| Translate (En->X) | granite-speech-4.1-2b | English source audio + target language hint | `<actual supported command>` | non-empty non-English transcript on English audio | TODO |
-| Keyword biasing | granite-speech-4.1-2b | hotword prompt | `<actual supported command>` | hotword preserved verbatim with position-aware decoding | TODO |
-| Transcribe | granite-speech-4.1-2b-plus | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-plus/granite-speech-4.1-2b-plus-bf16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | TODO |
-| Transcribe | granite-speech-4.1-2b-plus | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-plus/granite-speech-4.1-2b-plus-bf16.gguf samples/jfk.wav` | non-empty plausible transcript | TODO |
-| Word timestamps | granite-speech-4.1-2b-plus | text-protocol output | `<actual supported command>` | `[T:N]` centisecond markers interleaved with the transcript text | TODO |
-| Speaker diarization | granite-speech-4.1-2b-plus | multi-speaker audio | `<actual supported command>` | `[Speaker N]:` tags preceding speaker turns in the text | TODO |
-| Incremental decoding | granite-speech-4.1-2b-plus | prefix_text continuation | `<actual supported command>` | transcript continues from supplied prefix | TODO |
+| Transcribe | granite-4.0-1b-speech | explicit language hint | `build/bin/transcribe-cli -m models/granite-4.0-1b-speech/granite-4.0-1b-speech-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS (matches reference exact) |
+| Transcribe | granite-4.0-1b-speech | auto / no language hint | `build/bin/transcribe-cli -m models/granite-4.0-1b-speech/granite-4.0-1b-speech-BF16.gguf samples/jfk.wav` | non-empty plausible transcript on the auto-detect path | PASS (same transcript; --language is a no-op for granite which has one chat prompt) |
+| Translate (X->En) | granite-4.0-1b-speech | non-English source audio | `build/bin/transcribe-cli -m models/granite-4.0-1b-speech/granite-4.0-1b-speech-BF16.gguf --translate --target-language en samples/german.wav` | non-empty English transcript on non-English audio | PASS ("at the beach, the bathing suit, ...") |
+| Translate (En->X) | granite-4.0-1b-speech | English source audio + target language hint | `build/bin/transcribe-cli -m models/granite-4.0-1b-speech/granite-4.0-1b-speech-BF16.gguf --translate --target-language de samples/jfk.wav` | non-empty non-English transcript on English audio | PASS ("und so meine amerikanischen freunde: fragen sie nicht ...") |
+| Keyword biasing | granite-4.0-1b-speech | hotword prompt | n/a | hotword preserved verbatim in transcript | SKIP - not exposed by runtime (no --prompt / hotword flag) |
+| Transcribe | granite-speech-4.1-2b | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b/granite-speech-4.1-2b-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript with punctuation/casing | PASS (matches reference exact) |
+| Transcribe | granite-speech-4.1-2b | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b/granite-speech-4.1-2b-BF16.gguf samples/jfk.wav` | non-empty plausible transcript | PASS |
+| Translate (X->En) | granite-speech-4.1-2b | non-English source audio | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b/granite-speech-4.1-2b-BF16.gguf --translate --target-language en samples/german.wav` | non-empty English transcript on non-English audio | PASS |
+| Translate (En->X) | granite-speech-4.1-2b | English source audio + target language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b/granite-speech-4.1-2b-BF16.gguf --translate --target-language de samples/jfk.wav` | non-empty non-English transcript on English audio | PASS ("und so, meine amerikaner, fragen sie nicht ...") |
+| Keyword biasing | granite-speech-4.1-2b | hotword prompt | n/a | hotword preserved verbatim with position-aware decoding | SKIP - not exposed by runtime |
+| Transcribe | granite-speech-4.1-2b-plus | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-plus/granite-speech-4.1-2b-plus-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS (granite-4 system-role template; transcript matches reference within one comma) |
+| Transcribe | granite-speech-4.1-2b-plus | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-plus/granite-speech-4.1-2b-plus-BF16.gguf samples/jfk.wav` | non-empty plausible transcript | PASS |
+| Translate (En->X) | granite-speech-4.1-2b-plus | English source audio + target language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-plus/granite-speech-4.1-2b-plus-BF16.gguf --translate --target-language de samples/jfk.wav` | non-empty non-English transcript | PASS ("Ich bitte meine Mitbürger, fragen Sie sich nicht ...") |
+| Word timestamps | granite-speech-4.1-2b-plus | text-protocol output | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-plus/granite-speech-4.1-2b-plus-BF16.gguf --timestamps word samples/jfk.wav` | `[T:N]` centisecond markers interleaved with the transcript text | PASS (model emits `[SS:N]` markers: e.g. "[SS:23] And [SS:52] so [SS:92] my [SS:121] fellow [SS:154] Americans ..."). Spec says `[T:N]`; granite uses `[SS:N]` literally. |
+| Speaker diarization | granite-speech-4.1-2b-plus | multi-speaker audio | n/a | `[Speaker N]:` tags preceding speaker turns in the text | SKIP - not exposed by runtime (user-deferred to later) |
+| Incremental decoding | granite-speech-4.1-2b-plus | prefix_text continuation | n/a | transcript continues from supplied prefix | SKIP - not exposed by runtime |
 
 ## Notes
 
-- The IBM-published `ibm-granite/granite-4.0-1b-speech-GGUF` strips the speech encoder; our port will produce fused-stack GGUFs.
-- Upstream LibriSpeech test-clean WER targets for the porting-7-wer gate (ref-dtype C++ must score <= target + 0.01): `1.42 / 1.33 / 1.44` for `4.0-1b / 4.1-2b / 4.1-2b-plus` respectively. The `granite_nar` sibling is tracked separately.
+- The IBM-published `ibm-granite/granite-4.0-1b-speech-GGUF` strips the speech encoder; our port produces fused-stack GGUFs (encoder + projector + LM in one file).
+- Stage 4 WER sanity on LibriSpeech test-clean (BF16 ref-dtype):
+
+  | Variant | REF full 2620 | REF 512 | C++ 512 | Δ (C++ - REF on 512) |
+  |---------|---------------|---------|---------|----------------------|
+  | granite-4.0-1b-speech      | 1.42% | 1.24% | 1.26% | +0.02 pp |
+  | granite-speech-4.1-2b      | 1.35% | 1.61% | 1.35% | -0.26 pp |
+  | granite-speech-4.1-2b-plus | 1.48% | 1.26% | 1.29% | +0.03 pp |
+
+  All three pass (C++ within bootstrap CI of REF on the same 512 subset).
+  - **1b**: 95% CIs overlap identically with REF; the 0.02 pp gap is 5 utterances where a single token's argmax flips a character on BF16 noise (e.g. "chiaroscuroists" -> "chiaroscurosts").
+  - **2b**: looks "better than REF" entirely because of one utterance (1995-1836-0004) where the HF reference enters an "and missus vanderpool" repetition loop (reproduced on both MPS and CPU PyTorch) and never recovers; C++ also loops but breaks out one token sooner on BF16 noise. Excluding that utt, C++ and REF score identically at 1.085%.
+  - **-plus**: requires `add_generation_prompt=True` (assistant role marker appended) on the prompt. With False (the original Stage-2 dumper default) both REF and C++ produce 25-27 empty hypotheses on short test-clean clips, blowing up to a ~26% WER. With True the model opens the assistant turn explicitly and the empties disappear (1.29% on C++ 512). The Stage-2 dumper, the WER reference runner, and the C++ prompt builder were all updated to use True; the family-doc Capability Validation rows reflect that prompt. The reference dumps in `build/validate/granite/granite-speech-4.1-2b-plus/jfk/ref/` were regenerated so the 15/15 tensor checks remain valid.
+- Upstream LibriSpeech test-clean WER targets (porting-7-wer gate, ref-dtype C++ must score <= REF + 0.01): the published 4.0-1b number is 1.42 (matches our REF full exactly); 4.1-2b is 1.33 (we measure REF full 1.35 — within bootstrap CI); 4.1-2b-plus published is 1.44 (we measure REF full 1.48 — within bootstrap CI). The `granite_nar` sibling is tracked separately.

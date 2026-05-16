@@ -358,7 +358,11 @@ def read_hparams(config: dict, preproc: dict, processor: dict) -> dict:
         "fe_win_length":   win_length,
         "fe_hop_length":   hop_length,
         "fe_window":       "hann_periodic",
-        "fe_normalize":    "none",
+        # GraniteSpeechFeatureExtractor applies whisper-style per-utterance
+        # normalization: clip(mel, 1e-10).log10() → max-8 floor → /4 + 1.
+        # MelFrontend's whisper_mode does the same; we declare it here so
+        # the loader takes that path.
+        "fe_normalize":    "per_utterance",
         "fe_dither":       0.0,
         "fe_pre_emphasis": 0.0,
         "fe_f_min":        0.0,

@@ -498,6 +498,168 @@ std::vector<std::string> pretokenize_qwen2(const std::string & text) {
 }
 
 // ---------------------------------------------------------------------------
+// Granite (gpt-oss style) pretokenizer.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Same as qwen2_split_offsets except alt 4 stops at the punctuation
+// run — it does NOT swallow trailing `[\r\n]*`. Matches the HF
+// tokenizers crate's interpretation of the granite tokenizer.json
+// regex (`tokenizers` Rust regex engine does not consume the
+// `[\r\n]*` here even though the Python `regex` module does).
+std::vector<size_t> granite_split_offsets(const std::vector<uint32_t> & cpts,
+                                          size_t begin,
+                                          size_t end)
+{
+    std::vector<size_t> out;
+
+    auto get_cpt = [&](size_t p) -> uint32_t {
+        return (begin <= p && p < end) ? cpts[p] : OOR;
+    };
+    auto get_flags = [&](size_t p) -> CptFlags {
+        return (begin <= p && p < end) ? flags_from_cpt(cpts[p]) : CptFlags{};
+    };
+
+    size_t prev = begin;
+    auto push_upto = [&](size_t p) {
+        assert(prev <= p && p <= end);
+        if (p > prev) {
+            out.push_back(p);
+            prev = p;
+        }
+    };
+
+    size_t pos = begin;
+    while (pos < end) {
+        const uint32_t cpt   = get_cpt(pos);
+        const CptFlags flags = get_flags(pos);
+
+        // Contractions (case-insensitive).
+        if (cpt == '\'' && pos + 1 < end) {
+            const uint32_t c1 = tolower_ascii(get_cpt(pos + 1));
+            if (c1 == 's' || c1 == 't' || c1 == 'm' || c1 == 'd') {
+                pos += 2;
+                push_upto(pos);
+                continue;
+            }
+            if (pos + 2 < end) {
+                const uint32_t c2 = tolower_ascii(get_cpt(pos + 2));
+                if ((c1 == 'r' && c2 == 'e') ||
+                    (c1 == 'v' && c2 == 'e') ||
+                    (c1 == 'l' && c2 == 'l'))
+                {
+                    pos += 3;
+                    push_upto(pos);
+                    continue;
+                }
+            }
+        }
+
+        // [^\r\n\p{L}\p{N}]? \p{L}+
+        if (!(cpt == '\r' || cpt == '\n' || flags.is_number())) {
+            const bool self_is_letter = flags.is_letter();
+            const bool next_is_letter = get_flags(pos + 1).is_letter();
+            if (self_is_letter || next_is_letter) {
+                pos++;
+                while (get_flags(pos).is_letter()) {
+                    pos++;
+                }
+                push_upto(pos);
+                continue;
+            }
+        }
+
+        // \p{N}{1,3}  (1-3 digits, like qwen2 but multi-digit is fine
+        // up to 3; HF granite uses {1,3}).
+        if (flags.is_number()) {
+            size_t n = 0;
+            while (n < 3 && get_flags(pos + n).is_number()) ++n;
+            pos += n;
+            push_upto(pos);
+            continue;
+        }
+
+        // " "? [^\s\p{L}\p{N}]+    (NO trailing [\r\n]* — that's the
+        // granite-specific divergence from qwen2.)
+        {
+            CptFlags f2 = (cpt == ' ') ? get_flags(pos + 1) : flags;
+            if (!(f2.is_whitespace() || f2.is_letter() || f2.is_number()) && flags.has_category()) {
+                pos += (cpt == ' ' ? 1 : 0);
+                while (true) {
+                    const CptFlags fx = get_flags(pos);
+                    if (fx.is_whitespace() || fx.is_letter() || fx.is_number() || !fx.has_category()) {
+                        break;
+                    }
+                    pos++;
+                }
+                push_upto(pos);
+                continue;
+            }
+        }
+
+        // Whitespace handling: \s*[\r\n]+ | \s+(?!\S) | \s+
+        size_t ws_count       = 0;
+        size_t last_after_nl  = 0;
+        while (get_flags(pos + ws_count).is_whitespace()) {
+            const uint32_t cw = get_cpt(pos + ws_count);
+            if (cw == '\r' || cw == '\n') {
+                last_after_nl = pos + ws_count + 1;
+            }
+            ws_count++;
+        }
+        if (last_after_nl > 0) {
+            pos = last_after_nl;
+            push_upto(pos);
+            continue;
+        }
+        if (ws_count > 1 && get_cpt(pos + ws_count) != OOR) {
+            pos += ws_count - 1;
+            push_upto(pos);
+            continue;
+        }
+        if (ws_count > 0) {
+            pos += ws_count;
+            push_upto(pos);
+            continue;
+        }
+
+        // Fallback: emit one codepoint as its own pretoken.
+        pos++;
+        push_upto(pos);
+    }
+
+    return out;
+}
+
+} // namespace
+
+std::vector<std::string> pretokenize_granite(const std::string & text) {
+    std::vector<std::string> out;
+    if (text.empty()) {
+        return out;
+    }
+    const auto cpts = cpts_from_utf8(text);
+    const auto ends = granite_split_offsets(cpts, 0, cpts.size());
+
+    out.reserve(ends.size());
+    size_t prev = 0;
+    for (size_t e : ends) {
+        std::string encoded;
+        encoded.reserve((e - prev) * 2);
+        for (size_t i = prev; i < e; ++i) {
+            const std::string u = cpt_to_utf8(cpts[i]);
+            for (char c : u) {
+                encoded += byte_to_unicode(static_cast<uint8_t>(c));
+            }
+        }
+        out.emplace_back(std::move(encoded));
+        prev = e;
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // GPT-2 pretokenizer.
 // ---------------------------------------------------------------------------
 //
