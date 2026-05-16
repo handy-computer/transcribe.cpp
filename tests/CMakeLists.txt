@@ -410,6 +410,24 @@ endif()
 # test is hermetic — it does not need a golden generation step.
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_moonshine_streaming_stream_parity
+        moonshine_streaming_stream_parity.cpp)
+
+    target_link_libraries(transcribe_moonshine_streaming_stream_parity
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_moonshine_streaming_stream_parity PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_moonshine_streaming_stream_parity)
+
+    add_test(NAME transcribe_moonshine_streaming_stream_parity
+        COMMAND transcribe_moonshine_streaming_stream_parity)
+    set_tests_properties(transcribe_moonshine_streaming_stream_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_executable(transcribe_decoder_smoke
         decoder_smoke.cpp)
 

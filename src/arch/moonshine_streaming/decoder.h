@@ -75,6 +75,44 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       compute_c
                                   MoonshineStreamingKvCache &          kv_cache,
                                   int                                  T_enc);
 
+// Build a graph that computes cross-attn K/V projections for every
+// decoder layer over an [dec_d_model, n_frames] adapter slice, leaving
+// the per-layer K and V tensors readable to host. Does NOT touch the
+// persistent KV cache — the caller accumulates K/V into host buffers
+// across feeds and pushes them into the cache once at finalize via
+// build_cross_kv_commit_graph. This keeps the per-feed work bounded
+// and decouples the cache allocation (which requires the final T_enc)
+// from per-feed computation.
+struct CrossKVProjectionBuild {
+    ggml_tensor *               encoder_out_in = nullptr; // [dec_d_model, n_frames] f32
+    std::vector<ggml_tensor *>  per_layer_k;              // [dec_d_model, n_frames] f32 each
+    std::vector<ggml_tensor *>  per_layer_v;
+    ggml_cgraph *               graph          = nullptr;
+};
+
+CrossKVProjectionBuild build_cross_kv_projection_graph(
+    ggml_context *                       compute_ctx,
+    const MoonshineStreamingWeights &    weights,
+    const MoonshineStreamingHParams &    hp,
+    int                                  n_frames);
+
+// Build a graph that uploads per-layer K and V host buffers (one
+// pair per decoder layer, each [dec_d_model, T_enc] f32) into the
+// kv_cache.cross_k / cross_v slots via ggml_cpy. Routing the upload
+// through ggml_cpy lets the backend handle any F32→F16 conversion
+// that the cache's storage dtype requires.
+struct CrossKVCommitBuild {
+    std::vector<ggml_tensor *>  per_layer_k_in;  // [dec_d_model, T_enc] f32 input each
+    std::vector<ggml_tensor *>  per_layer_v_in;
+    ggml_cgraph *               graph = nullptr;
+};
+
+CrossKVCommitBuild build_cross_kv_commit_graph(
+    ggml_context *                       compute_ctx,
+    const MoonshineStreamingHParams &    hp,
+    MoonshineStreamingKvCache &          kv_cache,
+    int                                  T_enc);
+
 // Build a KV-cached decoder graph for the prompt or step pass.
 DecoderBuild build_decoder_graph_kv(ggml_context *                       compute_ctx,
                                     const MoonshineStreamingWeights &    weights,

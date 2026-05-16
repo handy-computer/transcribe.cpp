@@ -1,11 +1,19 @@
 # Moonshine Streaming
 
-Status: supported (one-shot decode) with manifest-driven numerical
+Status: supported (one-shot decode + real-time streaming with
+mid-stream partial transcripts) with manifest-driven numerical
 validation against the HF Transformers reference, `validate.py all`
-passing on CPU. Streaming session API not yet wired into
-`transcribe-cli` — the reference itself is one-shot at the time of port,
-so the C++ scope mirrors that and the chunked-feed surface is a
-follow-up.
+passing on CPU. Each `stream_feed` runs the encoder over a sliding
+PCM window, applies the adapter on the new emit slice, projects
+cross-attention K/V per layer, then re-decodes the transcript from
+BOS — so callers see a live tentative transcript that grows and
+self-corrects as audio arrives. The longest token-id prefix that
+re-appeared identically in two consecutive feeds is marked
+committed; tokens past the divergence stay tentative until the next
+feed confirms them or `stream_finalize` commits everything. Final
+transcript parity with `transcribe_run` is validated by
+`transcribe_moonshine_streaming_stream_parity` across chunk sizes
+1, 20, 40, 80, 160, 500, 1000 ms.
 
 ## Identity
 
@@ -185,14 +193,20 @@ uv run scripts/wer/score.py reports/wer/moonshine-streaming-tiny-REF.test-clean.
 - Translation: no.
 - Timestamps: none (no timestamp tokens in vocab; model card does not
   advertise).
-- **Streaming: yes** (advertised). Phase 4a of the streaming API
-  proposal exposes a *stream-of-whole* implementation: `stream_begin`
-  buffers PCM, `stream_finalize` runs the existing one-shot inference
-  path on the accumulated buffer. The streaming dispatcher, lifecycle
-  state machine, and result-snapshot accessors all work; only the
-  inference itself is non-incremental. Real incremental encoder /
-  decoder is Phase 4b+ and keeps the same `supports_streaming` flag.
-  See "Streaming validation strategy" below.
+- **Streaming: yes** (advertised). Phase 4b-full of the streaming
+  API proposal is implemented. Per `stream_feed`: incremental encoder
+  over a sliding PCM window, adapter applied per-slice with absolute
+  pos_ids, cross-attention K/V projected per-slice and accumulated in
+  host buffers, then a fresh AR decode from BOS over the current
+  cross-KV produces a live partial transcript. The committed prefix
+  is the longest token-id prefix that re-appeared identically in two
+  consecutive feeds; the tentative suffix may be revised by later
+  feeds. `stream_finalize` commits everything. Capability hints
+  `streaming_lookahead_ms = 240`, `streaming_chunk_ms = 80`,
+  `streaming_lookahead_ms_min = 240` reflect the cumulative
+  right-context across the encoder's `(L=16, R∈{4,0}) × 6`
+  sliding-window stack at 50 Hz (20 ms/frame). See
+  "Streaming validation strategy" below.
 - VAD / diarization: no.
 
 ## Upstream benchmarks (from model card, Open ASR results table)
@@ -220,13 +234,16 @@ Highlights:
 2. Novel encoder: ergodic (no pos-enc on self-attn) + sliding-window
    attention. Existing causal mask helpers will not cover the
    (L=16, R=4) lookahead pattern — need a new ggml mask shape.
-3. Streaming runtime contract: Phase 4a exposes the public streaming
-   session API and CLI smoke path as stream-of-whole. Real chunked
-   encoder feeding with persistent encoder state is still Phase 4b+.
-   The reference itself is one-shot today (model card: "the current
-   Transformers code path does not yet implement fully efficient
-   streaming"), so Phase 4a validates the stream-of-whole path against
-   the existing one-shot numerics.
+3. Streaming runtime contract: Phase 4b-encoder runs the encoder
+   incrementally over a sliding PCM window per feed and runs adapter +
+   decoder once at finalize. Numerical parity with `transcribe_run` is
+   asserted by the `transcribe_moonshine_streaming_stream_parity` test
+   across a range of chunk sizes. Mid-stream partial transcripts
+   (`result_changed=true` per feed) remain a Phase 4b-full follow-up.
+   The HF Transformers reference itself is one-shot today (model card:
+   "the current Transformers code path does not yet implement fully
+   efficient streaming"); our streaming path is independent of that
+   absence because the architecture is mechanically streaming-capable.
 4. Adapter layer is new (not present in moonshine). Need to enumerate
    its ops at Stage 2 from the transformers source.
 5. Frontend is novel (50 Hz time-domain + CMVN + 2 causal stride-2 convs).
@@ -258,50 +275,162 @@ each command. Allowed statuses:
 |------------|------|----------------|---------------------|--------|
 | Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS |
 | Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf samples/jfk.wav` | non-empty plausible transcript (English-only model — auto path is the same as explicit `en`) | PASS |
-| Streaming | chunked feed, finalize at end (Phase 4a stream-of-whole) | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --stream-chunk-ms 500 samples/jfk.wav` | per-feed progress lines (`feed[i]: input=... ms buffered=... ms`), then a single `finalize:` line, then the final transcript. result_changed flips only at finalize for stream-of-whole — partial transcripts mid-stream are a Phase 4b feature. | PASS (Phase 4a) |
+| Streaming | chunked feed with live partial transcripts (Phase 4b-full) | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --stream-chunk-ms 500 samples/jfk.wav` | per-feed lines show a growing `partial="..."` tentative transcript as audio arrives ("And so" → "And so my fellow" → ...), with `result_changed=true` and `revision` bumping whenever the text advances. `buffered_ms` settles at the published 240 ms right-context. `finalize:` commits the final transcript, which matches one-shot. `transcribe_moonshine_streaming_stream_parity` asserts: (a) final text matches one-shot across chunk sizes 1..1000 ms, (b) revision monotonic, (c) `n_committed_tokens` monotonic, (d) `result_changed=true` implies text changed, (e) `n_committed_tokens == n_tokens` after finalize. | PASS (Phase 4b-full) |
 
 ## Streaming validation strategy
 
-Phase 4a wires the streaming session API to moonshine_streaming as
-*stream-of-whole*: `stream_begin` snapshots the run params and clears
-the family's audio scratch; `stream_feed` appends PCM to the scratch
-buffer; `stream_finalize` invokes the same internal helper that
-`transcribe_run` invokes (`run_one_shot_inner` in
-`src/arch/moonshine_streaming/model.cpp`). Both entry points are
-siblings of that helper — neither owns the inference. See the
-"run/stream parity" comment block in model.cpp for why we chose
-sibling-sharing over `run()` literally delegating through the public
-stream hooks.
+Phase 4b-full runs the encoder, adapter, cross-attention K/V
+projection, and AR decoder all incrementally as audio arrives. The
+property that makes the streaming path equivalent to one-shot is the
+encoder's *ergodicity*: there is no positional encoding on encoder
+self-attn, every layer uses a sliding-window mask with bounded `(L, R)`
+context, and the frontend convs are causal. Output frame `t` is a
+function only of conv-stack output frames in `[t - L_total, t + R_total]`
+where `L_total = sum_i max(0, L_i - 1) = 90` and
+`R_total = sum_i max(0, R_i - 1) = 12` for the tiny variant. So
+re-running the encoder over a sliding window containing those
+neighbors produces frame `t`'s value bit-identically.
 
-This gives the streaming-vs-batch parity the proposal asks for
-*by construction* for Phase 4a:
+The adapter (`pos_emb` get_rows + add + optional `proj`) is indexed by
+absolute frame so it can run on a slice with pos_ids
+`[abs_frame_offset, abs_frame_offset + n_frames)`. The cross-attention
+K/V projections are per-frame linear, so projecting a slice and
+concatenating across feeds produces the same values a one-shot batched
+projection would.
+
+`stream_feed`:
+
+1. Append new PCM, bump `input_received_ms`.
+2. Compute `available_T = floor(total_pcm / samples_per_enc_frame)`
+   in absolute encoder-frame units (the PCM buffer is sliding;
+   `pcm_start_sample` tracks the absolute sample index of buffer[0]
+   so the absolute frame count keeps growing across trims).
+   `stable_T = available_T - R_total` is the frame index past which
+   right-context isn't yet available.
+3. For new stable frames `[T_emitted, stable_T)`, build a PCM window
+   covering `[T_emitted - L_total - frontend_pad, stable_T + R_total)`
+   in encoder-frame units (with `frontend_pad = 4` enc frames of
+   conv-stack history beyond the L_total mask context), encode, then
+   on the emit slice `[T_emitted, stable_T)`:
+   - apply the adapter with absolute pos_ids → append to
+     `stream_adapter_committed`;
+   - run the cross-KV projection graph → append per-layer K and V to
+     `stream_cross_k_committed[il]` / `stream_cross_v_committed[il]`.
+4. `T_emitted = stable_T`. Bump `audio_committed_ms` to match.
+   `result_changed = false` (no tokens emitted yet).
+5. **PCM trimming**: drop samples in `[pcm_start_sample,
+   (T_emitted - L_total - frontend_pad) * samples_per_enc_frame)`
+   from the front of `stream_pcm_buffer`. Bumps `pcm_start_sample`
+   to the new boundary. The retained suffix covers every PCM
+   sample any future feed (or the finalize tail) can possibly
+   need — at the tiny variant that's ~1.8 s of audio.
+6. **Partial decode**: if any new encoder frames committed since
+   the previous decode, allocate / reuse the `kv_cache` for the
+   current `T_emitted`, upload the accumulated per-layer K/V buffers
+   via `build_cross_kv_commit_graph`, and run the AR greedy decoder
+   from BOS over the cross-attended cache. Result text fields
+   (`tokens`, `segments`, `full_text`) are overwritten from scratch.
+   Commit prefix: compute longest token-id prefix shared with the
+   previous decode → `n_committed_tokens`. Bump `stream_revision`
+   and set `update.result_changed = true` iff `full_text` actually
+   changed.
+
+`stream_finalize`:
+
+1. Right-pad the trailing PCM to a multiple of `enc_frame_len`
+   (matches one-shot's `right_pad_pcm`). `pcm_start_sample` stays
+   frame-aligned.
+2. If frames remain past `T_emitted`, run one more
+   `flush_stable_frames` over `[T_emitted, T_total)` with no
+   right-context margin. Adapter + cross-KV K/V projections for the
+   tail append to the host buffers as in feed.
+3. If `T_emitted` advanced past `stream_last_decoded_T` (or no
+   result yet), re-run `decode_partial` so the final transcript
+   reflects the just-added tail frames. Otherwise the last feed's
+   decode is already final and we keep it as-is. Note finalize
+   ignores the decode-interval throttle — the final decode always
+   runs when there's new audio to fold in.
+4. Commit everything: `n_committed_tokens / words / segments` are
+   set to the full counts. Bump `stream_revision` to mark the
+   state transition.
+
+### Decode throttle
+
+The per-feed AR decode is the bulk of the streaming compute cost (it
+re-runs from BOS over the full cross-KV, so cost scales with the
+emitted token count). Decoupling decode cadence from feed cadence is
+critical: callers feeding 10–20 ms chunks from a microphone would
+otherwise trigger a decode every 20 ms of audio, which is overkill
+for any real UI and quickly slower than real-time on the smaller
+variants.
+
+The decode throttle lives in
+`transcribe_moonshine_streaming_stream_params::min_decode_interval_ms`:
+
+- **`-1`** (sentinel, the default of
+  `transcribe_moonshine_streaming_stream_default_params()`): resolved
+  to the family default of **240 ms** = one cumulative-right-context
+  window = ~4 partial-transcript updates per second after warmup.
+- **`0`**: decode on every encoder-frame advance (no throttle).
+  Useful for tests / benchmarks; not recommended for end-user UIs.
+- **`>0`**: minimum gap in milliseconds of audio between successive
+  partial decodes.
+
+Examples on jfk (11 s, 20 ms feed chunks):
+
+| `min_decode_interval_ms` | Partial updates |
+|---|---|
+| 0 (no throttle)        | ~75 |
+| 240 (default)          | ~29 |
+| 500                    | ~17 |
+
+In all cases the **final** transcript at `stream_finalize` matches
+`transcribe_run` byte-for-byte. Only the intermediate update count
+and CPU cost change.
+
+This knob exclusively affects how often per-feed partial transcripts
+fire; it does not change the `streaming_lookahead_ms = 240` floor on
+when audio can first contribute to a stable encoder frame.
+
+Validation tiers (proposal terminology):
 
 1. **Upstream streaming reference**: the HF transformers code path is
    not fully streaming today (see the model card note and intake risk
    #3), so there is no upstream streaming reference to compare against.
-   The streaming proposal's first validation tier (streaming whole vs
-   upstream streaming) does not apply.
 2. **Streaming whole vs upstream one-shot**: the existing WER smoke
    for moonshine_streaming runs the C++ one-shot path against the
-   upstream HF one-shot transcripts. Because the streaming-of-whole
-   path shares the inference helper, that same WER number certifies
-   stream-of-whole equally — anyone with the checkpoint downloaded
-   can confirm with `--stream-chunk-ms 500` on the same sample.
-3. **Optimized one-shot vs stream-path parity**: not applicable at
-   Phase 4a — there is only one inference path. This tier becomes
-   meaningful when Phase 4b introduces a real incremental encoder /
-   decoder; at that point an empirical parity test belongs alongside
-   the WER smoke.
+   upstream HF one-shot transcripts. Because streaming feed/finalize
+   share `decode_from_committed_enc`, that WER number certifies the
+   streaming path equally.
+3. **Optimized one-shot vs stream-path parity**: covered by
+   `tests/moonshine_streaming_stream_parity.cpp`. The test loads jfk
+   audio, runs `transcribe_run`, then runs `stream_begin/feed/finalize`
+   with chunk sizes `{1, 20, 40, 80, 160, 500, 1000} ms` and asserts
+   identical final transcript bytes vs the one-shot reference. Per-feed
+   invariants: `revision` monotonic, `n_committed_tokens` monotonic,
+   `result_changed=true` implies `full_text` differs from the prior
+   snapshot, `n_committed_tokens == n_tokens` after finalize, and
+   post-stream `transcribe_run` still produces the reference text.
+   Decode throttle: separate cases with `min_decode_interval_ms`
+   `{0, -1=default, 500}` assert that each higher throttle strictly
+   reduces the partial-update count, that all three produce identical
+   final transcripts, and that the default-throttle update count
+   falls in a reasonable range (20..80 for 11 s of audio).
 
-Phase 4b items to revisit when real incremental streaming lands:
+Follow-ups beyond Phase 4b-full:
 
-- Per-feed `result_changed = true` partial transcripts (today only
-  finalize flips this).
-- `streaming_lookahead_ms` / `streaming_chunk_ms` capability hints
-  (today both 0 — "unsupported or unknown").
-- Empirical stream-vs-batch WER parity smoke (matched-text or
-  matched-token-id assertion) using the same fixture audio the
-  current run() smoke uses.
+- **KV cache resize amortization**: today the `kv_cache` is
+  free + re-allocated when `T_enc` changes between decodes. For
+  small `T_enc` deltas (one extra frame), the realloc is wasteful.
+  Doubling-grow with a separate `T_active` field would amortize
+  this to amortized-constant per feed at the cost of a small
+  refactor in `build_decoder_graph_kv` (stride vs length).
+- **Alignment-aware commit**: today the commit prefix is the
+  longest token-id match across two consecutive decodes. A
+  cross-attention-alignment-aware version could commit a token as
+  soon as its dominant encoder-frame anchor is safely before the
+  right-context-pending tail, which is a stronger guarantee and
+  would let callers display committed words sooner.
 
 ## Notes
 
@@ -309,9 +438,10 @@ Phase 4b items to revisit when real incremental streaming lands:
   (no language tokens, no task tokens, no timestamp tokens). Translate /
   language-detect / timestamps rows are intentionally absent from the
   capability table because the model does not advertise them.
-- First port targets greedy argmax single-utterance transcription as a
-  one-shot pass through the encoder (matches the reference's current
-  behavior; streaming session API is a post-port follow-up).
+- First port targets greedy argmax single-utterance transcription. The
+  initial Stage 4 work shipped the one-shot path (matches HF reference);
+  Phase 4b-encoder layered real streaming on top by reusing the same
+  encoder + decoder helpers.
 - The model card warns about hallucination loops on short / noisy
   segments; Stage 7 WER work should bound `max_new_tokens` per audio
   duration following the model-card guidance (`seq_lens * 6.5 / 16000`).

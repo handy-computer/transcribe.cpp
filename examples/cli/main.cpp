@@ -706,11 +706,12 @@ int main(int argc, char ** argv) {
         }
 
         // Streaming demo: drive transcribe_stream_begin/feed/finalize
-        // with fixed-size PCM chunks. Phase 4a's stream-of-whole
-        // moonshine_streaming reports result_changed only at
-        // finalize, so per-feed lines mostly just show progress; a
-        // future real-incremental streaming family would print
-        // partial transcripts as result_changed flips.
+        // with fixed-size PCM chunks. Families with true per-feed
+        // partial decoding (moonshine_streaming) flip
+        // update.result_changed whenever the transcript advances; the
+        // CLI prints the live tentative text on each such feed.
+        // Families that only commit at finalize keep result_changed
+        // false until the finalize call.
         transcribe_status run_st = TRANSCRIBE_OK;
         if (args.stream_chunk_ms > 0) {
             const transcribe_capabilities * caps =

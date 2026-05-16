@@ -959,9 +959,45 @@ struct transcribe_parakeet_buffered_stream_params {
     int32_t right_ms;
 };
 
+/*
+ * Moonshine-Streaming family stream knobs.
+ *
+ *   min_decode_interval_ms
+ *
+ *     Minimum gap (in milliseconds of audio) between successive
+ *     per-feed AR decoder runs. The runtime extends the encoder /
+ *     adapter / cross-KV host buffers on every stream_feed that
+ *     advances the committed encoder frame count, but only re-runs
+ *     the AR decoder (and only flips update->result_changed) when
+ *     at least this many milliseconds of new audio have committed
+ *     since the previous decode.
+ *
+ *     The point of this knob is to decouple the caller's PCM feed
+ *     cadence (often dictated by mic buffer size, typically 10-50 ms)
+ *     from the partial-transcript update rate (a UX choice, typically
+ *     ~250 ms). Without it, a caller pushing 10 ms chunks from a
+ *     microphone would trigger a decode every 20 ms of audio for the
+ *     entire stream — most of which would be wasted compute that the
+ *     consumer never gets a chance to render.
+ *
+ *     Set 0 to decode on every encoder-frame advance (no throttle).
+ *     Set -1 to use the family default (240 ms = one
+ *     R_total = ~4 updates/sec after the initial right-context
+ *     warmup; balances responsiveness with compute cost).
+ *
+ *     Note this is a *minimum* gap — the decoder always runs once at
+ *     stream_finalize regardless of this value, and a feed that does
+ *     not advance the committed encoder frame count never triggers a
+ *     decode either way.
+ */
+struct transcribe_moonshine_streaming_stream_params {
+    int32_t min_decode_interval_ms;
+};
+
 struct transcribe_stream_params {
-    const struct transcribe_parakeet_stream_params *          parakeet;
-    const struct transcribe_parakeet_buffered_stream_params * parakeet_buffered;
+    const struct transcribe_parakeet_stream_params *           parakeet;
+    const struct transcribe_parakeet_buffered_stream_params *  parakeet_buffered;
+    const struct transcribe_moonshine_streaming_stream_params *moonshine_streaming;
 };
 
 TRANSCRIBE_API struct transcribe_parakeet_stream_params
@@ -969,6 +1005,9 @@ TRANSCRIBE_API struct transcribe_parakeet_stream_params
 
 TRANSCRIBE_API struct transcribe_parakeet_buffered_stream_params
     transcribe_parakeet_buffered_stream_default_params(void);
+
+TRANSCRIBE_API struct transcribe_moonshine_streaming_stream_params
+    transcribe_moonshine_streaming_stream_default_params(void);
 
 /*
  * Optional per-call change metadata returned by feed/finalize.

@@ -127,26 +127,86 @@ struct MoonshineStreamingContext final : public transcribe_context {
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
-    // ---- streaming-of-whole state ----
+    // ---- incremental streaming state (Phase 4b-encoder + adapter/xkv) ----
     //
-    // Phase 4a moonshine_streaming exposes the streaming API surface but
-    // does the actual inference on the full accumulated PCM at finalize
-    // time (stream-of-whole). The buffer below is the per-utterance
-    // audio scratch space; the params snapshot pins the run options
-    // chosen at begin so feed/finalize call into the one-shot helper
-    // with the exact configuration the caller asked for.
+    // Each feed extends three host-side committed buffers in lockstep:
+    //
+    //   stream_adapter_committed  - post-adapter encoder hidden, sized
+    //                               [dec_d_model, T_emitted]. Built per
+    //                               feed by re-running the encoder over
+    //                               a sliding window and immediately
+    //                               applying the adapter (pos_emb +
+    //                               optional proj) at absolute frame
+    //                               positions.
+    //
+    //   stream_cross_k_committed  - one host vector per decoder layer,
+    //   stream_cross_v_committed    each sized [dec_d_model, T_emitted].
+    //                               Populated by the cross-KV projection
+    //                               graph (k_proj / v_proj) on the
+    //                               adapter slice. NOT written to the
+    //                               persistent kv_cache yet — that's a
+    //                               single bulk upload at finalize.
+    //
+    // Trimming: stream_pcm_buffer is trimmed each feed to drop PCM
+    // older than (T_emitted - L_total - frontend_pad) encoder frames.
+    // The 1.8 s of left-context history that the encoder needs to
+    // produce numerically-identical frames is preserved; everything
+    // before is no longer reachable. stream_pcm_start_sample tracks
+    // the absolute sample index of stream_pcm_buffer[0] so the
+    // streaming driver can translate absolute frame indices back to
+    // buffer-relative offsets.
+    //
+    // The design relies on the encoder being ergodic (no positional
+    // encoding on encoder self-attn) plus per-layer sliding-window
+    // attention plus causal-conv frontend, so output frame t is a
+    // function only of conv-stack output frames in
+    // [t - L_total, t + R_total]; the adapter is a positional
+    // embedding add indexed by absolute frame so it's free to apply
+    // per-feed; and the cross-KV projection is per-frame linear so
+    // accumulating its output across feeds and uploading once at
+    // finalize is numerically equivalent to a single batched call.
     //
     // Lifecycle:
-    //   stream_begin:    stream_pcm_buffer.clear(); stream_run_params = *run_params;
-    //   stream_feed:     append samples
-    //   stream_finalize: drain buffer through run_one_shot_inner()
-    //   stream_reset:    stream_pcm_buffer.clear() (keep capacity)
+    //   stream_begin:    derive geometry, clear scratch + counters.
+    //   stream_feed:     append PCM, slide-window encode, apply adapter,
+    //                    project cross K/V, append to host buffers,
+    //                    trim PCM.
+    //   stream_finalize: encode tail (no R_total margin needed),
+    //                    apply adapter + project K/V on the tail,
+    //                    allocate kv_cache, upload host K/V buffers,
+    //                    run AR decoder only.
+    //   stream_reset:    clear scratch (keep capacity).
     //
     // These fields are NOT touched by clear_result; the dispatcher
     // wipes lifecycle-agnostic snapshot state there, and the family
-    // owns its per-utterance audio scratch.
-    std::vector<float>   stream_pcm_buffer;
-    transcribe_params    stream_run_params {};
+    // owns its per-utterance audio + encoder scratch.
+    std::vector<float>                stream_pcm_buffer;
+    int64_t                           stream_pcm_start_sample = 0;
+    std::vector<float>                stream_adapter_committed;
+    std::vector<std::vector<float>>   stream_cross_k_committed;
+    std::vector<std::vector<float>>   stream_cross_v_committed;
+    int32_t                           stream_T_emitted             = 0;
+    // T_emitted captured at the last successful partial decode; lets
+    // stream_feed / stream_finalize skip a redundant decode when no
+    // new encoder frames have been committed since the previous one.
+    int32_t                           stream_last_decoded_T        = 0;
+    // Previous decode's token id sequence, used to compute the
+    // longest common prefix that's safe to mark committed across
+    // feeds. Reset at stream_begin; updated after every successful
+    // partial decode.
+    std::vector<int32_t>              stream_prev_token_ids;
+    // Geometry, resolved at stream_begin (constant per stream).
+    int32_t                           stream_L_total_frames        = 0;
+    int32_t                           stream_R_total_frames        = 0;
+    int32_t                           stream_frontend_pad_frames   = 0;
+    int32_t                           stream_samples_per_enc_frame = 0;
+    // Minimum gap, in encoder frames, between successive per-feed AR
+    // decoder runs. Resolved at stream_begin from
+    // transcribe_moonshine_streaming_stream_params::min_decode_interval_ms.
+    // 0 means "decode on every encoder-frame advance". The finalize
+    // path always runs one last decode regardless of this throttle.
+    int32_t                           stream_min_decode_frames     = 0;
+    transcribe_params                 stream_run_params {};
 
     MoonshineStreamingContext() = default;
     ~MoonshineStreamingContext() override;

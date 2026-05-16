@@ -272,8 +272,9 @@ extern "C" struct transcribe_stream_params
 transcribe_stream_default_params(void)
 {
     struct transcribe_stream_params p = {};
-    p.parakeet          = nullptr;
-    p.parakeet_buffered = nullptr;
+    p.parakeet            = nullptr;
+    p.parakeet_buffered   = nullptr;
+    p.moonshine_streaming = nullptr;
     return p;
 }
 
@@ -292,6 +293,14 @@ transcribe_parakeet_buffered_stream_default_params(void)
     p.left_ms  = -1; // use model default
     p.chunk_ms = -1;
     p.right_ms = -1;
+    return p;
+}
+
+extern "C" struct transcribe_moonshine_streaming_stream_params
+transcribe_moonshine_streaming_stream_default_params(void)
+{
+    struct transcribe_moonshine_streaming_stream_params p = {};
+    p.min_decode_interval_ms = -1; // use family default (240 ms)
     return p;
 }
 

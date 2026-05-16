@@ -412,6 +412,136 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
 }
 
 // ---------------------------------------------------------------------------
+// Cross-KV projection (incremental streaming)
+// ---------------------------------------------------------------------------
+
+CrossKVProjectionBuild build_cross_kv_projection_graph(
+    ggml_context *                       ctx,
+    const MoonshineStreamingWeights &    w,
+    const MoonshineStreamingHParams &    hp,
+    int                                  n_frames)
+{
+    CrossKVProjectionBuild pb {};
+
+    if (ctx == nullptr || n_frames <= 0) {
+        std::fprintf(stderr,
+                     "moonshine_streaming cross_kv_proj: invalid arg "
+                     "(ctx=%p, n_frames=%d)\n",
+                     static_cast<void *>(ctx), n_frames);
+        return pb;
+    }
+
+    const int d_model = hp.dec_d_model;
+
+    pb.encoder_out_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, n_frames);
+    named(pb.encoder_out_in, "dec.encoder_in_adapted.proj");
+    ggml_set_input(pb.encoder_out_in);
+
+    pb.graph = ggml_new_graph_custom(ctx, 4096, false);
+    if (pb.graph == nullptr) {
+        std::fprintf(stderr,
+                     "moonshine_streaming cross_kv_proj: ggml_new_graph_custom failed\n");
+        return pb;
+    }
+
+    const int n_layers = static_cast<int>(w.dec_blocks.size());
+    pb.per_layer_k.reserve(static_cast<size_t>(n_layers));
+    pb.per_layer_v.reserve(static_cast<size_t>(n_layers));
+    for (int il = 0; il < n_layers; ++il) {
+        const auto & blk = w.dec_blocks[il];
+
+        ggml_tensor * Kcross = ggml_mul_mat(ctx, blk.cross_k_w, pb.encoder_out_in);
+        ggml_tensor * Vcross = ggml_mul_mat(ctx, blk.cross_v_w, pb.encoder_out_in);
+
+        char kname[64], vname[64];
+        std::snprintf(kname, sizeof(kname), "xkv.proj.k.%d", il);
+        std::snprintf(vname, sizeof(vname), "xkv.proj.v.%d", il);
+        named(Kcross, kname);
+        named(Vcross, vname);
+        ggml_set_output(Kcross);
+        ggml_set_output(Vcross);
+
+        pb.per_layer_k.push_back(Kcross);
+        pb.per_layer_v.push_back(Vcross);
+
+        ggml_build_forward_expand(pb.graph, Kcross);
+        ggml_build_forward_expand(pb.graph, Vcross);
+    }
+
+    return pb;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-KV commit (host buffers → persistent cache)
+// ---------------------------------------------------------------------------
+
+CrossKVCommitBuild build_cross_kv_commit_graph(
+    ggml_context *                       ctx,
+    const MoonshineStreamingHParams &    hp,
+    MoonshineStreamingKvCache &          kv_cache,
+    int                                  T_enc)
+{
+    CrossKVCommitBuild cb {};
+
+    if (ctx == nullptr || T_enc <= 0 || kv_cache.cross_k == nullptr ||
+        kv_cache.cross_v == nullptr)
+    {
+        std::fprintf(stderr,
+                     "moonshine_streaming cross_kv_commit: invalid arg "
+                     "(ctx=%p, T_enc=%d, cache=%s)\n",
+                     static_cast<void *>(ctx), T_enc,
+                     (kv_cache.cross_k == nullptr ||
+                      kv_cache.cross_v == nullptr) ? "null" : "ok");
+        return cb;
+    }
+
+    const int d_model = hp.dec_d_model;
+    cb.graph = ggml_new_graph_custom(ctx, 4096, false);
+    if (cb.graph == nullptr) {
+        std::fprintf(stderr,
+                     "moonshine_streaming cross_kv_commit: ggml_new_graph_custom failed\n");
+        return cb;
+    }
+
+    const int n_layers = static_cast<int>(hp.dec_n_layers);
+    cb.per_layer_k_in.reserve(static_cast<size_t>(n_layers));
+    cb.per_layer_v_in.reserve(static_cast<size_t>(n_layers));
+
+    const size_t k_elem = ggml_element_size(kv_cache.cross_k);
+    const size_t v_elem = ggml_element_size(kv_cache.cross_v);
+
+    for (int il = 0; il < n_layers; ++il) {
+        ggml_tensor * K_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_enc);
+        ggml_tensor * V_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_enc);
+        char kname[64], vname[64];
+        std::snprintf(kname, sizeof(kname), "xkv.commit.k_in.%d", il);
+        std::snprintf(vname, sizeof(vname), "xkv.commit.v_in.%d", il);
+        named(K_in, kname);
+        named(V_in, vname);
+        ggml_set_input(K_in);
+        ggml_set_input(V_in);
+        cb.per_layer_k_in.push_back(K_in);
+        cb.per_layer_v_in.push_back(V_in);
+
+        ggml_tensor * k_dst = ggml_view_1d(
+            ctx, kv_cache.cross_k,
+            static_cast<int64_t>(T_enc) * d_model,
+            k_elem * static_cast<size_t>(
+                static_cast<int64_t>(il) * T_enc * d_model));
+        ggml_tensor * v_dst = ggml_view_1d(
+            ctx, kv_cache.cross_v,
+            static_cast<int64_t>(T_enc) * d_model,
+            v_elem * static_cast<size_t>(
+                static_cast<int64_t>(il) * T_enc * d_model));
+
+        ggml_build_forward_expand(cb.graph, ggml_cpy(ctx, K_in, k_dst));
+        ggml_build_forward_expand(cb.graph, ggml_cpy(ctx, V_in, v_dst));
+    }
+
+    return cb;
+}
+
+// ---------------------------------------------------------------------------
 // KV-cached decoder graph (prompt + step)
 // ---------------------------------------------------------------------------
 
