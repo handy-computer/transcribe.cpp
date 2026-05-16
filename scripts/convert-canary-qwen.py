@@ -509,10 +509,17 @@ SKIP_EXACT = {
     "perception.encoder.pos_enc.pe",
 }
 
-# Prefixes whose tensors are runtime-computed in the C++ frontend and
-# don't need to be exported.
+# Note: `perception.preprocessor.featurizer.{fb,window}` were previously
+# included here (and recomputed at convert time via librosa / numpy).
+# That was a SUBTLE BUG: the SALM checkpoint stores its weights at BF16,
+# so even when loaded at F32 those buffers carry BF16-truncated values
+# (e.g. fb[0,1] = 0.0283203125 vs librosa's 0.02837754). The reference
+# dumper reads exactly those truncated buffers, so matching the
+# reference requires baking the SAME truncated values — not freshly
+# recomputed F32 ones. We now extract them in `convert()` and DO NOT
+# skip them here; the consume_preproc_buffers() helper marks them as
+# consumed so the unused-key check stays clean.
 SKIP_PREFIXES = (
-    "perception.preprocessor.",   # mel filterbank + window — recomputed
     "perception.encoder.interctc.",  # InterCTC head, not used at inference
 )
 
@@ -746,22 +753,32 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict) -> Non
     writer.add_bool   ("stt.frontend.log",          hp["fe_log"])
 
     # ---- frontend buffers (mel filterbank + window) ----
-    # Bake librosa's slaney-normalized mel filterbank and a periodic Hann
-    # window into the GGUF so the C++ MelFrontend uses bit-identical
-    # buffers. Removes filterbank/window construction as a Stage 4
-    # variable.
-    import librosa as _lb
-    mel_fb = _lb.filters.mel(
-        sr=hp["fe_sample_rate"],
-        n_fft=hp["fe_n_fft"],
-        n_mels=hp["fe_num_mels"],
-        fmin=hp["fe_f_min"],
-        fmax=hp["fe_f_max"],
-        norm="slaney",
-        htk=False,  # NeMo's mel_scale defaults to htk=False (slaney)
-    ).astype(np.float32)
-    N = int(hp["fe_win_length"])
-    hann = (0.5 - 0.5 * np.cos(2.0 * np.pi * np.arange(N) / N)).astype(np.float32)
+    # CRITICAL: Use the loaded model's runtime buffers, NOT freshly
+    # computed librosa/torch versions. The SALM checkpoint stores its
+    # weights at BF16; even when loaded at F32, the buffers
+    # `featurizer.fb` and `featurizer.window` carry BF16-truncated
+    # values (e.g. fb[0,1] = 0.0283203125 vs librosa's 0.02837754,
+    # window[100] = 0.50390625 vs torch.hann_window(periodic=False)
+    # value 0.5019684). The reference dumper reads exactly these
+    # truncated buffers, so bit-identical tensor parity requires us to
+    # do the same. Recomputing librosa/torch produces a different
+    # filterbank/window and shows up as concentrated drift on the
+    # extreme mel bins — propagated through 32 conformer blocks it
+    # corrupts the LM input enough to derail generation.
+    fe_buffers = {
+        k: v for k, v in sd.items() if k.startswith("perception.preprocessor.")
+    }
+    fb_key  = "perception.preprocessor.featurizer.fb"
+    win_key = "perception.preprocessor.featurizer.window"
+    if fb_key not in fe_buffers or win_key not in fe_buffers:
+        raise RuntimeError(
+            f"SALM state_dict is missing {fb_key!r} / {win_key!r} — "
+            f"cannot extract runtime mel filterbank / window."
+        )
+    mel_fb = tensor_to_fp32_numpy(sd[fb_key])
+    if mel_fb.ndim == 3 and mel_fb.shape[0] == 1:
+        mel_fb = mel_fb[0]
+    hann = tensor_to_fp32_numpy(sd[win_key])
 
     n_added = 0
     bytes_in = 0
@@ -783,6 +800,10 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict) -> Non
 
     # ---- weight tensors ----
     consumed: set[str] = set()
+    # Mark the runtime preprocessor buffers we extracted above as consumed
+    # so they don't trip the unused-key warning.
+    consumed.add(fb_key)
+    consumed.add(win_key)
 
     def add(src_name: str, dst_name: str) -> None:
         nonlocal n_added, bytes_in, bytes_out

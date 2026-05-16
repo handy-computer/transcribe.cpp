@@ -43,12 +43,19 @@ def walk_variant(variant: str) -> list[dict]:
             continue
         rel = json_path.relative_to(variant_dir)
         parts = rel.parts
-        # Layout: <case>/<stage_dir>/ref/<name>.json
-        if len(parts) < 4 or parts[-2] != "ref":
-            print(f"  warn: unexpected layout at {json_path}")
+        # Two acceptable layouts:
+        #   <case>/<stage_dir>/ref/<name>.json   (stage 2 oracle layout)
+        #   <case>/ref/<name>.json               (single-pass dumper layout)
+        if len(parts) >= 4 and parts[-2] == "ref":
+            case = parts[0]
+            stage_dir = parts[1]
+        elif len(parts) == 3 and parts[1] == "ref":
+            case = parts[0]
+            stage_dir = parts[0]   # case == stage_dir; ref dumper writes everything in one shot
+        else:
+            # cpp dumps and unknown layouts are skipped silently — the
+            # coverage file is for ref tensors only.
             continue
-        case = parts[0]
-        stage_dir = parts[1]
         entries.append({
             "case": case,
             "stage_dir": stage_dir,

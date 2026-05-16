@@ -235,6 +235,32 @@ class CaptureHook:
         self.value = output
 
 
+class CaptureNthHook:
+    """Record the Nth (0-indexed) output tensor a module emits.
+
+    Used to capture mid-generation logits: with `target=8`, the hook
+    fires on the 9th invocation of `lm_head`. The 1st invocation is
+    prefill (gen0); the 2nd through 9th are autoregressive steps; the
+    9th invocation thus corresponds to the C++ side's `dec.logits_raw.gen8`
+    naming (= 9th lm_head call = step iter 7 of the step loop).
+    """
+
+    def __init__(self, target: int, extract_idx: int = 0) -> None:
+        self.value = None
+        self.target = int(target)
+        self.extract_idx = extract_idx
+        self._n_calls = 0
+
+    def __call__(self, module, inputs, output) -> None:
+        idx = self._n_calls
+        self._n_calls += 1
+        if idx != self.target or self.value is not None:
+            return
+        if isinstance(output, tuple):
+            output = output[self.extract_idx]
+        self.value = output
+
+
 def _block_indices(n_layers: int, requested: list[int]) -> list[int]:
     if requested:
         return sorted({i for i in requested if 0 <= i < n_layers})
@@ -267,6 +293,13 @@ def find_llm_inner(model):
 
     Returns (llm_for_causal_lm, qwen3_text_model, embed_tokens, layers, norm, lm_head).
     Any field can be None if probing fails.
+
+    Note on embed_tokens: SALM deletes `self.llm.model.embed_tokens` at
+    construction time and exposes the embedding at the top level as
+    `model.embed_tokens` (so it can do audio-placeholder scatter before
+    handing inputs_embeds to the inner Qwen3). We must hook the top-level
+    SALM module, not the inner text_model, otherwise the hook never fires
+    and dec.token_emb is silently empty.
     """
     llm = getattr(model, "llm", None)
     if llm is None:
@@ -280,7 +313,8 @@ def find_llm_inner(model):
     # base is now Qwen3ForCausalLM (.model = Qwen3Model, .lm_head = Linear)
     text_model = getattr(base, "model", None)
     lm_head = getattr(base, "lm_head", None)
-    embed_tokens = getattr(text_model, "embed_tokens", None) if text_model is not None else None
+    # Top-level SALM embedding (the inner one is deleted by SALM ctor).
+    embed_tokens = getattr(model, "embed_tokens", None)
     layers = getattr(text_model, "layers", None) if text_model is not None else None
     norm = getattr(text_model, "norm", None) if text_model is not None else None
 
@@ -331,8 +365,10 @@ def register_perception_hooks(perception_parts: dict, blocks: list[int]) -> dict
     return hooks
 
 
-def register_lm_hooks(text_model, layers, norm, lm_head, blocks: list[int]) -> dict[str, CaptureHook]:
-    """Hook the inner Qwen3 transformer + lm_head."""
+def register_lm_hooks(text_model, embed_tokens, layers, norm, lm_head,
+                      blocks: list[int]) -> dict[str, CaptureHook]:
+    """Hook the inner Qwen3 transformer + lm_head + the SALM-top-level
+    embed_tokens (see find_llm_inner for why we don't use the inner one)."""
     hooks: dict[str, CaptureHook] = {}
 
     def hook_forward(name: str, module, *, extract_idx: int = 0) -> None:
@@ -342,7 +378,9 @@ def register_lm_hooks(text_model, layers, norm, lm_head, blocks: list[int]) -> d
         module.register_forward_hook(h)
         hooks[name] = h
 
-    embed_tokens = getattr(text_model, "embed_tokens", None) if text_model is not None else None
+    # `embed_tokens` here is SALM's top-level embedding (see
+    # find_llm_inner doc) — the only path through which prompt tokens
+    # become embeddings before audio-placeholder scatter.
     hook_forward("dec.token_emb", embed_tokens, extract_idx=0)
 
     if layers is not None:
@@ -352,6 +390,14 @@ def register_lm_hooks(text_model, layers, norm, lm_head, blocks: list[int]) -> d
 
     hook_forward("dec.out_before_head", norm, extract_idx=0)
     hook_forward("dec.logits_raw.gen0", lm_head, extract_idx=0)
+
+    # Mid-generation logits: capture the 9th lm_head invocation. Same
+    # naming convention as funasr_nano / canary_qwen C++ side. Lives
+    # alongside gen0 on the same lm_head module.
+    if lm_head is not None:
+        gen8 = CaptureNthHook(target=8, extract_idx=0)
+        lm_head.register_forward_hook(gen8)
+        hooks["dec.logits_raw.gen8"] = gen8
     return hooks
 
 
@@ -475,7 +521,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
     # Register all hooks.
     enc_hooks = register_perception_hooks(perception_parts, enc_blocks)
     inj_hooks = register_injection_hook(text_model)
-    lm_hooks = register_lm_hooks(text_model, lm_layers, lm_norm, lm_head, lm_blocks)
+    lm_hooks = register_lm_hooks(text_model, embed_tokens, lm_layers, lm_norm, lm_head, lm_blocks)
 
     # Build provenance.
     locator = getattr(model, "audio_locator_tag", "<|audioplaceholder|>")
@@ -533,6 +579,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
         flush(key, lm_hooks.get(key, CaptureHook()).value, f"decoder.block{i}.out")
     flush("dec.out_before_head", lm_hooks.get("dec.out_before_head", CaptureHook()).value, "decoder.out_before_head")
     flush("dec.logits_raw.gen0", lm_hooks.get("dec.logits_raw.gen0", CaptureHook()).value, "decoder.logits_raw.gen0")
+    flush("dec.logits_raw.gen8", lm_hooks.get("dec.logits_raw.gen8", CaptureNthHook(target=8)).value, "decoder.logits_raw.gen8")
 
     # Write transcript.
     if text or token_ids:

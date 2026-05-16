@@ -1,0 +1,123 @@
+[NeMo W 2026-05-15 09:14:01 megatron_init:62] Megatron num_microbatches_calculator not found, using Apex version.
+W0515 09:14:01.604000 98903 torch/distributed/elastic/multiprocessing/redirects.py:35] NOTE: Redirects are currently not supported in MacOs.
+OneLogger: Setting error_handling_strategy to DISABLE_QUIETLY_AND_REPORT_METRIC_ERROR for rank (rank=0) with OneLogger disabled. To override: explicitly set error_handling_strategy parameter.
+No exporters were provided. This means that no telemetry data will be collected.
+loading: nvidia/canary-qwen-2.5b
+[NeMo I 2026-05-15 09:14:03 ear_tts_model:184] Using PyTorch fallback (Triton unavailable or no CUDA).
+[NeMo I 2026-05-15 09:14:04 auto_tokenizer:234] 1 special tokens added, resize your model accordingly.
+`torch_dtype` is deprecated! Use `dtype` instead!
+[NeMo I 2026-05-15 09:14:56 lora:30] LoRA adapter installed: LoraConfig(task_type='CAUSAL_LM', peft_type=<PeftType.LORA: 'LORA'>, auto_mapping=None, peft_version='0.19.1', base_model_name_or_path='Qwen/Qwen3-1.7B', revision=None, inference_mode=False, r=128, target_modules=['q_proj', 'v_proj'], exclude_modules=None, lora_alpha=256, lora_dropout=0.01, fan_in_fan_out=False, bias='none', use_rslora=False, modules_to_save=None, init_lora_weights=True, layers_to_transform=None, layers_pattern=None, rank_pattern={}, alpha_pattern={}, megatron_config=None, megatron_core='megatron.core', trainable_token_indices=None, loftq_config={}, eva_config=None, corda_config=None, lora_ga_config=None, use_dora=False, alora_invocation_tokens=None, use_qalora=False, qalora_group_size=16, layer_replication=None, runtime_config=LoraRuntimeConfig(ephemeral_gpu_offload=False), lora_bias=False, target_parameters=None, use_bdlora=None, arrow_config=None, ensure_weight_tying=False)
+`generation_config` default values have been modified to match model-specific defaults: {'bos_token_id': 151643}. If this is not desired, please set these values explicitly.
+  overriding preprocessor dither 1e-05 -> 0.0 for deterministic runs
+manifest: samples/wer/test-clean.manifest.jsonl (2620 utterances)
+output:   reports/wer/canary-qwen-2.5b-REF.librispeech-test-clean.jsonl
+prompt:   'Transcribe the following: <|audioplaceholder|>'
+max_new_tokens: 128  device: cpu
+  [25/2620] 0.01 utt/s, ETA 8409.5 min, errors=0
+  [50/2620] 0.01 utt/s, ETA 5608.3 min, errors=0
+  [75/2620] 0.01 utt/s, ETA 4542.6 min, errors=0
+  [100/2620] 0.01 utt/s, ETA 4077.8 min, errors=0
+  [125/2620] 0.01 utt/s, ETA 3411.9 min, errors=0
+  [150/2620] 0.01 utt/s, ETA 2839.6 min, errors=0
+  [175/2620] 0.02 utt/s, ETA 2429.8 min, errors=0
+  [200/2620] 0.02 utt/s, ETA 2130.8 min, errors=0
+  [225/2620] 0.02 utt/s, ETA 1891.9 min, errors=0
+  [250/2620] 0.02 utt/s, ETA 1698.6 min, errors=0
+  [275/2620] 0.03 utt/s, ETA 1542.5 min, errors=0
+  [300/2620] 0.03 utt/s, ETA 1411.5 min, errors=0
+  [325/2620] 0.03 utt/s, ETA 1299.9 min, errors=0
+  [350/2620] 0.03 utt/s, ETA 1203.1 min, errors=0
+  [375/2620] 0.03 utt/s, ETA 1116.6 min, errors=0
+  [400/2620] 0.04 utt/s, ETA 1040.0 min, errors=0
+  [425/2620] 0.04 utt/s, ETA 972.3 min, errors=0
+  [450/2620] 0.04 utt/s, ETA 912.6 min, errors=0
+  [475/2620] 0.04 utt/s, ETA 861.2 min, errors=0
+  [500/2620] 0.04 utt/s, ETA 813.8 min, errors=0
+  [525/2620] 0.05 utt/s, ETA 773.6 min, errors=0
+  [550/2620] 0.05 utt/s, ETA 734.9 min, errors=0
+  [575/2620] 0.05 utt/s, ETA 698.5 min, errors=0
+  [600/2620] 0.05 utt/s, ETA 667.7 min, errors=0
+  [625/2620] 0.05 utt/s, ETA 638.2 min, errors=0
+  [650/2620] 0.05 utt/s, ETA 609.6 min, errors=0
+  [675/2620] 0.06 utt/s, ETA 582.5 min, errors=0
+  [700/2620] 0.06 utt/s, ETA 557.1 min, errors=0
+  [725/2620] 0.06 utt/s, ETA 533.3 min, errors=0
+  [750/2620] 0.06 utt/s, ETA 511.9 min, errors=0
+  [775/2620] 0.06 utt/s, ETA 491.3 min, errors=0
+  [800/2620] 0.06 utt/s, ETA 472.1 min, errors=0
+  [825/2620] 0.07 utt/s, ETA 453.4 min, errors=0
+  [850/2620] 0.07 utt/s, ETA 436.0 min, errors=0
+  [875/2620] 0.07 utt/s, ETA 419.9 min, errors=0
+  [900/2620] 0.07 utt/s, ETA 405.7 min, errors=0
+  [925/2620] 0.07 utt/s, ETA 391.9 min, errors=0
+  [950/2620] 0.07 utt/s, ETA 379.2 min, errors=0
+  [975/2620] 0.07 utt/s, ETA 366.7 min, errors=0
+  [1000/2620] 0.08 utt/s, ETA 354.6 min, errors=0
+  [1025/2620] 0.08 utt/s, ETA 343.4 min, errors=0
+  [1050/2620] 0.08 utt/s, ETA 332.6 min, errors=0
+  [1075/2620] 0.08 utt/s, ETA 322.1 min, errors=0
+  [1100/2620] 0.08 utt/s, ETA 312.5 min, errors=0
+  [1125/2620] 0.08 utt/s, ETA 302.9 min, errors=0
+  [1150/2620] 0.08 utt/s, ETA 292.8 min, errors=0
+  [1175/2620] 0.09 utt/s, ETA 282.9 min, errors=0
+  [1200/2620] 0.09 utt/s, ETA 273.3 min, errors=0
+  [1225/2620] 0.09 utt/s, ETA 264.0 min, errors=0
+  [1250/2620] 0.09 utt/s, ETA 255.4 min, errors=0
+  [1275/2620] 0.09 utt/s, ETA 247.2 min, errors=0
+  [1300/2620] 0.09 utt/s, ETA 239.4 min, errors=0
+  [1325/2620] 0.09 utt/s, ETA 231.5 min, errors=0
+  [1350/2620] 0.09 utt/s, ETA 224.2 min, errors=0
+  [1375/2620] 0.10 utt/s, ETA 217.1 min, errors=0
+  [1400/2620] 0.10 utt/s, ETA 210.2 min, errors=0
+  [1425/2620] 0.10 utt/s, ETA 203.8 min, errors=0
+  [1450/2620] 0.10 utt/s, ETA 197.2 min, errors=0
+  [1475/2620] 0.10 utt/s, ETA 190.7 min, errors=0
+  [1500/2620] 0.10 utt/s, ETA 184.1 min, errors=0
+  [1525/2620] 0.10 utt/s, ETA 177.7 min, errors=0
+  [1550/2620] 0.10 utt/s, ETA 171.7 min, errors=0
+  [1575/2620] 0.10 utt/s, ETA 166.2 min, errors=0
+  [1600/2620] 0.11 utt/s, ETA 161.2 min, errors=0
+  [1625/2620] 0.11 utt/s, ETA 155.7 min, errors=0
+  [1650/2620] 0.11 utt/s, ETA 150.2 min, errors=0
+  [1675/2620] 0.11 utt/s, ETA 144.9 min, errors=0
+  [1700/2620] 0.11 utt/s, ETA 139.5 min, errors=0
+  [1725/2620] 0.11 utt/s, ETA 134.2 min, errors=0
+  [1750/2620] 0.11 utt/s, ETA 129.1 min, errors=0
+  [1775/2620] 0.11 utt/s, ETA 124.1 min, errors=0
+  [1800/2620] 0.11 utt/s, ETA 119.3 min, errors=0
+  [1825/2620] 0.12 utt/s, ETA 114.6 min, errors=0
+  [1850/2620] 0.12 utt/s, ETA 109.8 min, errors=0
+  [1875/2620] 0.12 utt/s, ETA 105.3 min, errors=0
+  [1900/2620] 0.12 utt/s, ETA 100.8 min, errors=0
+  [1925/2620] 0.12 utt/s, ETA 96.5 min, errors=0
+  [1950/2620] 0.12 utt/s, ETA 92.2 min, errors=0
+  [1975/2620] 0.12 utt/s, ETA 88.1 min, errors=0
+  [2000/2620] 0.12 utt/s, ETA 83.9 min, errors=0
+  [2025/2620] 0.12 utt/s, ETA 79.9 min, errors=0
+  [2050/2620] 0.13 utt/s, ETA 76.0 min, errors=0
+  [2075/2620] 0.13 utt/s, ETA 72.1 min, errors=0
+  [2100/2620] 0.13 utt/s, ETA 68.3 min, errors=0
+  [2125/2620] 0.13 utt/s, ETA 64.6 min, errors=0
+  [2150/2620] 0.13 utt/s, ETA 60.8 min, errors=0
+  [2175/2620] 0.13 utt/s, ETA 57.2 min, errors=0
+  [2200/2620] 0.13 utt/s, ETA 53.7 min, errors=0
+  [2225/2620] 0.13 utt/s, ETA 50.1 min, errors=0
+  [2250/2620] 0.13 utt/s, ETA 46.7 min, errors=0
+  [2275/2620] 0.13 utt/s, ETA 43.3 min, errors=0
+  [2300/2620] 0.13 utt/s, ETA 40.1 min, errors=0
+  [2325/2620] 0.13 utt/s, ETA 36.8 min, errors=0
+  [2350/2620] 0.13 utt/s, ETA 33.5 min, errors=0
+  [2375/2620] 0.14 utt/s, ETA 30.2 min, errors=0
+  [2400/2620] 0.14 utt/s, ETA 27.0 min, errors=0
+  [2425/2620] 0.14 utt/s, ETA 23.8 min, errors=0
+  [2450/2620] 0.14 utt/s, ETA 20.6 min, errors=0
+  [2475/2620] 0.14 utt/s, ETA 17.5 min, errors=0
+  [2500/2620] 0.14 utt/s, ETA 14.4 min, errors=0
+  [2525/2620] 0.14 utt/s, ETA 11.3 min, errors=0
+  [2550/2620] 0.14 utt/s, ETA 8.3 min, errors=0
+  [2575/2620] 0.14 utt/s, ETA 5.3 min, errors=0
+  [2600/2620] 0.14 utt/s, ETA 2.3 min, errors=0
+  [2620/2620] 0.14 utt/s, ETA 0.0 min, errors=0
+
+done. 2620 utterances in 18355.0s (0.14 utt/s), 0 errors
+report: reports/wer/canary-qwen-2.5b-REF.librispeech-test-clean.jsonl

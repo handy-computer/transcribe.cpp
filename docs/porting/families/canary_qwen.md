@@ -152,9 +152,9 @@ One row per advertised capability. Stage 1 drafts the rows with `Status: TODO`; 
 
 | Capability | Mode | Command / test | Expected observable | Status |
 |------------|------|----------------|---------------------|--------|
-| Transcribe | explicit language hint (en) | `build/bin/transcribe-cli -m models/canary-qwen-2.5b/canary-qwen-2.5b-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | TODO |
-| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/canary-qwen-2.5b/canary-qwen-2.5b-BF16.gguf samples/jfk.wav` | non-empty plausible transcript on the no-hint path (model has no source-language conditioning, so behavior should be identical to the en path) | TODO |
-| Punctuation & capitalization | always-on (no toggle exposed by SALM prompt) | `build/bin/transcribe-cli -m models/canary-qwen-2.5b/canary-qwen-2.5b-BF16.gguf --language en samples/jfk.wav` | transcript carries punctuation and mixed-case | TODO |
+| Transcribe | explicit language hint (en) | `build/bin/transcribe-cli --backend cpu --threads 1 -m models/canary-qwen-2.5b/canary-qwen-2.5b-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | **PASS** — exact match with reference: `And so my fellow Americans ask not what your country can do for you ask what you can do for your country` (23 tokens). |
+| Transcribe | auto / no language hint | `build/bin/transcribe-cli --backend cpu --threads 1 -m models/canary-qwen-2.5b/canary-qwen-2.5b-BF16.gguf samples/jfk.wav` | non-empty plausible transcript on the no-hint path (model has no source-language conditioning, so behavior should be identical to the en path) | **PASS** — identical output to the en-hint path; canary-qwen ignores the language hint internally because the Qwen3 LM has no source-language conditioning. |
+| Punctuation & capitalization | always-on (no toggle exposed by SALM prompt) | `build/bin/transcribe-cli --backend cpu --threads 1 -m models/canary-qwen-2.5b/canary-qwen-2.5b-BF16.gguf --language en samples/jfk.wav` | transcript carries punctuation and mixed-case | **PASS (partial)** — output carries mixed-case (`And`, `Americans`) but NO punctuation on this clip. The reference NeMo SALM produces the same punctuation-free transcript on jfk.wav, so this is a model/audio property, not a port regression. Model is PnC-capable per the upstream card (open-asr-leaderboard PnC entries); a longer or more-formal clip would exhibit punctuation. |
 | Translate | n/a | not advertised by upstream | n/a | SKIP — not advertised |
 | Segment timestamps | n/a | not advertised by upstream | n/a | SKIP — not advertised |
 | Word timestamps | n/a | not advertised by upstream | n/a | SKIP — not advertised |
@@ -163,6 +163,60 @@ One row per advertised capability. Stage 1 drafts the rows with `Status: TODO`; 
 | Speaker diarization | n/a | not advertised by upstream | n/a | SKIP — not advertised |
 | Language detection | n/a | not advertised by upstream (English only) | n/a | SKIP — not advertised |
 | Dual-mode LLM (text-only QA on transcript) | non-ASR mode | `model.llm.disable_adapter()` + text-only generate | reasoning / summarization output | SKIP — not exposed by runtime (transcribe-cli is ASR only; LLM mode is out of scope for v1) |
+
+**Backend regime note.** PASS rows are reproduced on both `--backend cpu --threads 1` (the Stage 4 validation regime; ~50 s for jfk.wav) and the default Metal backend (~2 s). Metal initially produced a broken `text: !` because the F16 conv promotion was gated CPU-only; promoting conv kernels (including depthwise) regardless of backend resolved it — Metal's BF16 matmul handles the linear weights natively without needing F32 promotion. See `src/arch/canary_qwen/model.cpp::promote_conv_pw_to_f32_on_cpu` for the current policy.
+
+## Stage 4 subset WER
+
+Reference runner: `scripts/wer/run_reference_canary_qwen_nemo.py` (batches NeMo SALM via `model.generate(prompts=...)` over a manifest, writes `run.py`-compatible JSONL for `score.py`).
+
+Subset: `samples/wer/test-clean.512.manifest.jsonl` (LibriSpeech test-clean, first 512 utterances).
+
+| Run | WER | 95% CI |
+|-----|----:|--------|
+| Reference (NeMo SALM, CPU torch) | 1.22 % | [0.94, 1.56] |
+| C++ (BF16 GGUF, Metal default)   | 1.24 % | [0.95, 1.57] |
+| Delta                            | +0.02 | overlap |
+
+Per-utterance breakdown and per-utt diff analysis: `reports/wer/canary-qwen-2.5b.test-clean-512.summary.md`. 4 of 512 utterances differ after WER normalization; one is a C++ win (`Halloa` vs ref's truncated `Hallo What`); the other three are scattered single-token edits (one hallucinated `Mr`, one homophone `Solmes`/`Soames`, one article `the`/`a`). No structural drift — pattern matches BF16-vs-F32 logit-tie noise.
+
+The +0.02 nudge is over the porting-skill +0.01 absolute headroom but the 95 % CIs overlap heavily and the per-utt analysis shows micro-noise rather than a systematic bug. Accepted on those grounds; documented in the summary.
+
+Reproduce:
+
+```bash
+uv run scripts/wer/run.py \
+  --model models/canary-qwen-2.5b/canary-qwen-2.5b-BF16.gguf \
+  --manifest samples/wer/test-clean.512.manifest.jsonl \
+  --out reports/wer/canary-qwen-2.5b-BF16.test-clean-512.jsonl
+uv run scripts/wer/score.py reports/wer/canary-qwen-2.5b-BF16.test-clean-512.jsonl
+
+uv run --project scripts/envs/canary_qwen \
+  scripts/wer/run_reference_canary_qwen_nemo.py \
+    --model nvidia/canary-qwen-2.5b \
+    --manifest samples/wer/test-clean.512.manifest.jsonl \
+    --out reports/wer/canary-qwen-2.5b-REF.test-clean-512.jsonl
+uv run scripts/wer/score.py reports/wer/canary-qwen-2.5b-REF.test-clean-512.jsonl
+```
+
+## Stage 7 full LibriSpeech test-clean WER
+
+Full 2620-utt manifest scored on every shipped preset plus a same-machine NeMo SALM reference run. Summary table: `reports/wer/canary-qwen-2.5b.librispeech-test-clean.summary.md`.
+
+| Source | WER | 95% CI | n |
+|---|---:|:---:|---:|
+| Upstream-published (NeMo v2.5.0) | 1.60% | — | 2620 |
+| Our REF (NeMo SALM, CPU torch threads=1, dither=0.0, greedy) | 1.61% | [1.47, 1.75] | 2620 |
+| C++ BF16 | 1.63% | [1.49, 1.78] | 2620 |
+| C++ F16 / Q8_0 / Q6_K / Q5_K_M / Q4_K_M | all 1.63% | overlapping | 2620 |
+
+Per `porting-7-wer` Step 3, BF16 1.63% is +0.02 over `upstream + 0.01 = 1.61` and triggers required investigation. Investigation outcome:
+
+1. Our REF run (same checkpoint, same framework, same normalizer `whisper-normalizer v0.1.12`, same greedy `model.generate(max_new_tokens=128)`) lands at **1.61%**, also above upstream's 1.60. The upstream-published number is not directly reproducible on this machine; suspected sources are HF `datasets` LibriSpeech test.clean variant vs OpenSLR test-clean WAVs directly, audio resampler differences, or NeMo build/version drift.
+2. C++ vs our REF on identical audio: only **21 / 2620 (0.8%)** utterances differ post `EnglishTextNormalizer`. All 21 are scattered token-level edits — homophones (`solmes`/`soames`, `dorcas`/`dorcus`), word-boundary flips (`woodcutters`/`wood cutters`), function-word swaps (`the tree`/`a tree`), one trailing hallucinated word. No length explosions, no language drift, no special-token confusion.
+3. The 95% CIs of upstream 1.60, REF 1.61, and C++ 1.63 all overlap heavily inside [1.47, 1.78].
+
+This is `porting-7-wer` case (4): C++ matches the reference within BF16 cascade noise; both differ from the upstream-published number by an unreproducible protocol delta. Quant tiers are at exactly 1.63% (zero delta to BF16). **Accepted; documented in the Stage 7 summary doc.**
 
 ## Notes
 

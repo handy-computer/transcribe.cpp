@@ -1,0 +1,191 @@
+=== START F16 Fri May 15 09:14:05 PDT 2026 ===
+Reading inline script metadata from `scripts/wer/run.py`
+model:    models/canary-qwen-2.5b/canary-qwen-2.5b-F16.gguf
+manifest: samples/wer/test-clean.manifest.jsonl (2620 utterances)
+language: (default)
+output:   reports/wer/canary-qwen-2.5b-F16.librispeech-test-clean.jsonl
+mode:     batch (single process, model loads once)
+  $ /Users/cj/code/handy-computer/transcribe.cpp/build/bin/transcribe-cli -q -m models/canary-qwen-2.5b/canary-qwen-2.5b-F16.gguf --batch /var/folders/9q/0sxpjffx0gq3rk7j7k64qlbh0000gn/T/tmp0pgfq_sw.list ...
+  [200/2620] 0.8 utt/s, ETA 3153s, errors=0
+  [400/2620] 0.8 utt/s, ETA 2716s, errors=0
+  [600/2620] 0.8 utt/s, ETA 2403s, errors=0
+  [800/2620] 0.9 utt/s, ETA 2048s, errors=0
+  [1000/2620] 0.9 utt/s, ETA 1834s, errors=0
+  [1200/2620] 0.9 utt/s, ETA 1635s, errors=0
+  [1400/2620] 0.9 utt/s, ETA 1390s, errors=0
+  [1600/2620] 0.9 utt/s, ETA 1168s, errors=0
+  [1800/2620] 0.9 utt/s, ETA 921s, errors=0
+  [2000/2620] 0.9 utt/s, ETA 683s, errors=0
+  [2200/2620] 0.9 utt/s, ETA 461s, errors=0
+  [2400/2620] 0.9 utt/s, ETA 246s, errors=0
+  [2600/2620] 0.9 utt/s, ETA 22s, errors=0
+  [2620/2620] 0.9 utt/s, ETA 0s, errors=0
+
+done. 2620 utterances in 2926.4s (0.9 utt/s), 0 errors
+report: reports/wer/canary-qwen-2.5b-F16.librispeech-test-clean.jsonl
+Reading inline script metadata from `scripts/wer/score.py`
+
+============================================================
+  WER:   1.63%  (95% CI: [1.48%, 1.78%])
+  language: en (default)
+  N:     2620 utterances
+  Sub:   631  Del: 123  Ins: 110
+  Errors (transcribe-cli failures): 0
+  Latency: mean=1095ms p50=903ms p99=3355ms
+============================================================
+
+score: reports/wer/canary-qwen-2.5b-F16.librispeech-test-clean.score.json
+=== END   F16 Fri May 15 10:03:14 PDT 2026 ===
+=== START Q8_0 Fri May 15 10:03:14 PDT 2026 ===
+Reading inline script metadata from `scripts/wer/run.py`
+model:    models/canary-qwen-2.5b/canary-qwen-2.5b-Q8_0.gguf
+manifest: samples/wer/test-clean.manifest.jsonl (2620 utterances)
+language: (default)
+output:   reports/wer/canary-qwen-2.5b-Q8_0.librispeech-test-clean.jsonl
+mode:     batch (single process, model loads once)
+  $ /Users/cj/code/handy-computer/transcribe.cpp/build/bin/transcribe-cli -q -m models/canary-qwen-2.5b/canary-qwen-2.5b-Q8_0.gguf --batch /var/folders/9q/0sxpjffx0gq3rk7j7k64qlbh0000gn/T/tmp30f_p3r9.list ...
+  [200/2620] 1.1 utt/s, ETA 2238s, errors=0
+  [400/2620] 1.2 utt/s, ETA 1916s, errors=0
+  [600/2620] 1.2 utt/s, ETA 1697s, errors=0
+  [800/2620] 1.3 utt/s, ETA 1446s, errors=0
+  [1000/2620] 1.3 utt/s, ETA 1295s, errors=0
+  [1200/2620] 1.2 utt/s, ETA 1152s, errors=0
+  [1400/2620] 1.2 utt/s, ETA 978s, errors=0
+  [1600/2620] 1.2 utt/s, ETA 821s, errors=0
+  [1800/2620] 1.3 utt/s, ETA 647s, errors=0
+  [2000/2620] 1.3 utt/s, ETA 480s, errors=0
+  [2200/2620] 1.3 utt/s, ETA 325s, errors=0
+  [2400/2620] 1.3 utt/s, ETA 173s, errors=0
+  [2600/2620] 1.3 utt/s, ETA 16s, errors=0
+  [2620/2620] 1.3 utt/s, ETA 0s, errors=0
+
+done. 2620 utterances in 2060.3s (1.3 utt/s), 0 errors
+report: reports/wer/canary-qwen-2.5b-Q8_0.librispeech-test-clean.jsonl
+Reading inline script metadata from `scripts/wer/score.py`
+
+============================================================
+  WER:   1.63%  (95% CI: [1.48%, 1.77%])
+  language: en (default)
+  N:     2620 utterances
+  Sub:   631  Del: 122  Ins: 110
+  Errors (transcribe-cli failures): 0
+  Latency: mean=771ms p50=634ms p99=2370ms
+============================================================
+
+score: reports/wer/canary-qwen-2.5b-Q8_0.librispeech-test-clean.score.json
+=== END   Q8_0 Fri May 15 10:37:58 PDT 2026 ===
+=== START Q6_K Fri May 15 10:37:58 PDT 2026 ===
+Reading inline script metadata from `scripts/wer/run.py`
+model:    models/canary-qwen-2.5b/canary-qwen-2.5b-Q6_K.gguf
+manifest: samples/wer/test-clean.manifest.jsonl (2620 utterances)
+language: (default)
+output:   reports/wer/canary-qwen-2.5b-Q6_K.librispeech-test-clean.jsonl
+mode:     batch (single process, model loads once)
+  $ /Users/cj/code/handy-computer/transcribe.cpp/build/bin/transcribe-cli -q -m models/canary-qwen-2.5b/canary-qwen-2.5b-Q6_K.gguf --batch /var/folders/9q/0sxpjffx0gq3rk7j7k64qlbh0000gn/T/tmpbcpd4vxx.list ...
+  [200/2620] 1.2 utt/s, ETA 2006s, errors=0
+  [400/2620] 1.3 utt/s, ETA 1707s, errors=0
+  [600/2620] 1.3 utt/s, ETA 1510s, errors=0
+  [800/2620] 1.4 utt/s, ETA 1291s, errors=0
+  [1000/2620] 1.4 utt/s, ETA 1155s, errors=0
+  [1200/2620] 1.4 utt/s, ETA 1024s, errors=0
+  [1400/2620] 1.4 utt/s, ETA 871s, errors=0
+  [1600/2620] 1.4 utt/s, ETA 730s, errors=0
+  [1800/2620] 1.4 utt/s, ETA 575s, errors=0
+  [2000/2620] 1.5 utt/s, ETA 426s, errors=0
+  [2200/2620] 1.5 utt/s, ETA 288s, errors=0
+  [2400/2620] 1.4 utt/s, ETA 154s, errors=0
+  [2600/2620] 1.4 utt/s, ETA 14s, errors=0
+  [2620/2620] 1.4 utt/s, ETA 0s, errors=0
+
+done. 2620 utterances in 1834.1s (1.4 utt/s), 0 errors
+report: reports/wer/canary-qwen-2.5b-Q6_K.librispeech-test-clean.jsonl
+Reading inline script metadata from `scripts/wer/score.py`
+
+============================================================
+  WER:   1.63%  (95% CI: [1.49%, 1.78%])
+  language: en (default)
+  N:     2620 utterances
+  Sub:   630  Del: 125  Ins: 112
+  Errors (transcribe-cli failures): 0
+  Latency: mean=688ms p50=568ms p99=2104ms
+============================================================
+
+score: reports/wer/canary-qwen-2.5b-Q6_K.librispeech-test-clean.score.json
+=== END   Q6_K Fri May 15 11:08:57 PDT 2026 ===
+=== START Q5_K_M Fri May 15 11:08:57 PDT 2026 ===
+Reading inline script metadata from `scripts/wer/run.py`
+model:    models/canary-qwen-2.5b/canary-qwen-2.5b-Q5_K_M.gguf
+manifest: samples/wer/test-clean.manifest.jsonl (2620 utterances)
+language: (default)
+output:   reports/wer/canary-qwen-2.5b-Q5_K_M.librispeech-test-clean.jsonl
+mode:     batch (single process, model loads once)
+  $ /Users/cj/code/handy-computer/transcribe.cpp/build/bin/transcribe-cli -q -m models/canary-qwen-2.5b/canary-qwen-2.5b-Q5_K_M.gguf --batch /var/folders/9q/0sxpjffx0gq3rk7j7k64qlbh0000gn/T/tmptw8nvvx6.list ...
+  [200/2620] 1.2 utt/s, ETA 1938s, errors=0
+  [400/2620] 1.3 utt/s, ETA 1653s, errors=0
+  [600/2620] 1.4 utt/s, ETA 1460s, errors=0
+  [800/2620] 1.5 utt/s, ETA 1247s, errors=0
+  [1000/2620] 1.4 utt/s, ETA 1118s, errors=0
+  [1200/2620] 1.4 utt/s, ETA 992s, errors=0
+  [1400/2620] 1.4 utt/s, ETA 844s, errors=0
+  [1600/2620] 1.4 utt/s, ETA 707s, errors=0
+  [1800/2620] 1.5 utt/s, ETA 560s, errors=0
+  [2000/2620] 1.5 utt/s, ETA 415s, errors=0
+  [2200/2620] 1.5 utt/s, ETA 280s, errors=0
+  [2400/2620] 1.5 utt/s, ETA 150s, errors=0
+  [2600/2620] 1.5 utt/s, ETA 14s, errors=0
+  [2620/2620] 1.5 utt/s, ETA 0s, errors=0
+
+done. 2620 utterances in 1779.0s (1.5 utt/s), 0 errors
+report: reports/wer/canary-qwen-2.5b-Q5_K_M.librispeech-test-clean.jsonl
+Reading inline script metadata from `scripts/wer/score.py`
+
+============================================================
+  WER:   1.63%  (95% CI: [1.49%, 1.78%])
+  language: en (default)
+  N:     2620 utterances
+  Sub:   625  Del: 127  Ins: 113
+  Errors (transcribe-cli failures): 0
+  Latency: mean=667ms p50=547ms p99=2014ms
+============================================================
+
+score: reports/wer/canary-qwen-2.5b-Q5_K_M.librispeech-test-clean.score.json
+=== END   Q5_K_M Fri May 15 11:39:00 PDT 2026 ===
+=== START Q4_K_M Fri May 15 11:39:00 PDT 2026 ===
+Reading inline script metadata from `scripts/wer/run.py`
+model:    models/canary-qwen-2.5b/canary-qwen-2.5b-Q4_K_M.gguf
+manifest: samples/wer/test-clean.manifest.jsonl (2620 utterances)
+language: (default)
+output:   reports/wer/canary-qwen-2.5b-Q4_K_M.librispeech-test-clean.jsonl
+mode:     batch (single process, model loads once)
+  $ /Users/cj/code/handy-computer/transcribe.cpp/build/bin/transcribe-cli -q -m models/canary-qwen-2.5b/canary-qwen-2.5b-Q4_K_M.gguf --batch /var/folders/9q/0sxpjffx0gq3rk7j7k64qlbh0000gn/T/tmpcdqm2_s6.list ...
+  [200/2620] 1.4 utt/s, ETA 1782s, errors=0
+  [400/2620] 1.4 utt/s, ETA 1532s, errors=0
+  [600/2620] 1.5 utt/s, ETA 1355s, errors=0
+  [800/2620] 1.6 utt/s, ETA 1158s, errors=0
+  [1000/2620] 1.6 utt/s, ETA 1037s, errors=0
+  [1200/2620] 1.5 utt/s, ETA 918s, errors=0
+  [1400/2620] 1.6 utt/s, ETA 781s, errors=0
+  [1600/2620] 1.6 utt/s, ETA 653s, errors=0
+  [1800/2620] 1.6 utt/s, ETA 515s, errors=0
+  [2000/2620] 1.6 utt/s, ETA 382s, errors=0
+  [2200/2620] 1.6 utt/s, ETA 258s, errors=0
+  [2400/2620] 1.6 utt/s, ETA 138s, errors=0
+  [2600/2620] 1.6 utt/s, ETA 12s, errors=0
+  [2620/2620] 1.6 utt/s, ETA 0s, errors=0
+
+done. 2620 utterances in 1636.3s (1.6 utt/s), 0 errors
+report: reports/wer/canary-qwen-2.5b-Q4_K_M.librispeech-test-clean.jsonl
+Reading inline script metadata from `scripts/wer/score.py`
+
+============================================================
+  WER:   1.63%  (95% CI: [1.49%, 1.78%])
+  language: en (default)
+  N:     2620 utterances
+  Sub:   643  Del: 107  Ins: 115
+  Errors (transcribe-cli failures): 0
+  Latency: mean=614ms p50=505ms p99=1838ms
+============================================================
+
+score: reports/wer/canary-qwen-2.5b-Q4_K_M.librispeech-test-clean.score.json
+=== END   Q4_K_M Fri May 15 12:06:41 PDT 2026 ===
+ALL DONE
