@@ -41,12 +41,7 @@ GGUF presets land at exactly 1.63% (`+0.02pp` over our same-machine REF
 run). The remaining `+0.02pp` C++ vs REF gap is BF16 weight-precision
 cascade noise: of 2620 utterances, only 21 (0.8%) differ post-normalizer,
 all classic small-margin token flips (homophones, word-boundary flips,
-function-word substitutions). See
-[`reports/wer/canary-qwen-2.5b.librispeech-test-clean.summary.md`](../../reports/wer/canary-qwen-2.5b.librispeech-test-clean.summary.md)
-and
-[`reports/wer/canary-qwen-2.5b.divergent-utt-tensor-trace.md`](../../reports/wer/canary-qwen-2.5b.divergent-utt-tensor-trace.md)
-for the teacher-forced logit comparison that corroborates the BF16
-hypothesis.
+function-word substitutions).
 
 ## Quick Start
 

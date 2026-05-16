@@ -53,9 +53,8 @@ wer:
     same CI band). Investigation of the worst per-utterance differences
     shows scattered token-level noise consistent with BF16 weight
     precision (homophones, word-boundary flips, function-word
-    substitutions); see the transcribe.cpp model page for the full
-    teacher-forced logit comparison. Reproduce with `scripts/wer/run.py`
-    + `scripts/wer/score.py`.
+    substitutions). Reproduce with `scripts/wer/run.py` +
+    `scripts/wer/score.py`.
 
 quants:
   - name: BF16
