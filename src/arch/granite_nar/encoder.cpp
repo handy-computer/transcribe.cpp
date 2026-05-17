@@ -20,6 +20,7 @@
 #include "weights.h"
 
 #include "conformer/conformer.h"
+#include "granite_conformer/shaw_attn.h"
 #include "transcribe-debug.h"
 #include "transcribe-mel.h"
 
@@ -221,92 +222,6 @@ ggml_tensor * conv_module(ggml_context *             ctx,
     return x;
 }
 
-ggml_tensor * shaw_block_attn(ggml_context *             ctx,
-                              ggml_tensor *              x,
-                              ggml_tensor *              zero_pad,
-                              ggml_tensor *              dists,
-                              ggml_tensor *              pad_mask_3d,
-                              const GraniteNarEncBlock & b,
-                              int                        n_heads,
-                              int                        head_dim,
-                              int                        context_size,
-                              int                        num_blocks,
-                              int                        T_enc)
-{
-    const int64_t inner_dim = static_cast<int64_t>(n_heads) * head_dim;
-    const int64_t T_pad     = static_cast<int64_t>(context_size) * num_blocks;
-    const float   scale     = 1.0f / std::sqrt(static_cast<float>(head_dim));
-
-    ggml_tensor * h = layer_norm(ctx, x, b.norm_attn_w, b.norm_attn_b);
-
-    if (T_pad > T_enc) {
-        if (zero_pad == nullptr) {
-            std::fprintf(stderr,
-                         "granite_nar encoder: zero_pad is null but T_pad > T_enc\n");
-            return nullptr;
-        }
-        h = ggml_concat(ctx, h, zero_pad, /*dim=*/1);
-    }
-
-    ggml_tensor * q  = ggml_mul_mat(ctx, b.attn_q_w,  h);
-    ggml_tensor * kv = ggml_mul_mat(ctx, b.attn_kv_w, h);
-
-    ggml_tensor * k = ggml_view_2d(ctx, kv, inner_dim, kv->ne[1],
-                                   kv->nb[1], 0);
-    ggml_tensor * v = ggml_view_2d(ctx, kv, inner_dim, kv->ne[1],
-                                   kv->nb[1],
-                                   inner_dim * ggml_element_size(kv));
-    k = ggml_cont(ctx, k);
-    v = ggml_cont(ctx, v);
-
-    auto reshape_qkv = [&](ggml_tensor * t) -> ggml_tensor * {
-        ggml_tensor * r = ggml_reshape_4d(ctx, t,
-                                          head_dim, n_heads,
-                                          context_size, num_blocks);
-        r = ggml_cont(ctx, ggml_permute(ctx, r, 0, 2, 1, 3));
-        return r;
-    };
-    q = reshape_qkv(q);
-    k = reshape_qkv(k);
-    v = reshape_qkv(v);
-
-    ggml_tensor * dists_flat = ggml_reshape_1d(ctx, dists,
-                                               static_cast<int64_t>(context_size) * context_size);
-    ggml_tensor * rel_lookup = ggml_get_rows(ctx, b.attn_rel_pos_emb, dists_flat);
-    rel_lookup = ggml_reshape_3d(ctx, rel_lookup,
-                                 head_dim, context_size, context_size);
-
-    ggml_tensor * q_perm = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
-    ggml_tensor * pos_attn = ggml_mul_mat(ctx, rel_lookup, q_perm);
-
-    ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-    pos_attn = ggml_cont(ctx, ggml_permute(ctx, pos_attn, 0, 2, 1, 3));
-
-    ggml_tensor * scores = ggml_add(ctx, kq, pos_attn);
-    scores = ggml_scale(ctx, scores, scale);
-
-    ggml_tensor * pad_mask_4d = ggml_reshape_4d(ctx, pad_mask_3d,
-                                                context_size, context_size,
-                                                1, num_blocks);
-    scores = ggml_add(ctx, scores, pad_mask_4d);
-    ggml_tensor * attn = ggml_soft_max(ctx, scores);
-
-    ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
-    ggml_tensor * out = ggml_mul_mat(ctx, v_t, attn);
-
-    out = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));
-    out = ggml_reshape_2d(ctx, out, inner_dim, T_pad);
-
-    if (T_pad > T_enc) {
-        out = ggml_view_2d(ctx, out, inner_dim, T_enc, out->nb[1], 0);
-        out = ggml_cont(ctx, out);
-    }
-
-    out = ggml_mul_mat(ctx, b.attn_out_w, out);
-    out = ggml_add(ctx, out, b.attn_out_b);
-    return out;
-}
-
 } // namespace
 
 EncoderBuild build_encoder_graph(ggml_context *            ctx,
@@ -382,10 +297,17 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
 
         x = macaron(ctx, x, b, /*is_ff1=*/true);
 
-        ggml_tensor * attn_out = shaw_block_attn(
+        const transcribe::granite_conformer::ShawAttnWeights shaw_w {
+            b.norm_attn_w, b.norm_attn_b,
+            b.attn_q_w, b.attn_kv_w, b.attn_rel_pos_emb,
+            b.attn_out_w, b.attn_out_b,
+        };
+        ggml_tensor * attn_out = transcribe::granite_conformer::shaw_block_attn(
             ctx, x,
             eb.zero_pad, eb.attention_dists, eb.last_block_mask,
-            b, n_heads, head_dim, ctx_size, eb.n_blocks_local, T_enc);
+            shaw_w,
+            n_heads, head_dim, ctx_size, eb.n_blocks_local, T_enc,
+            kLayerNormEps);
         if (attn_out == nullptr) return eb;
         x = ggml_add(ctx, x, attn_out);
 

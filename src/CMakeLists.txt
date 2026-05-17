@@ -30,6 +30,7 @@ add_library(transcribe
     conformer/conformer.cpp
     sanm/sanm.cpp
     qwen3_lm/qwen3_lm.cpp
+    granite_conformer/shaw_attn.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp

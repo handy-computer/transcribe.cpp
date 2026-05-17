@@ -32,6 +32,7 @@
 #include "weights.h"
 
 #include "conformer/conformer.h"
+#include "granite_conformer/shaw_attn.h"
 #include "transcribe-debug.h"
 #include "transcribe-mel.h"
 
@@ -326,236 +327,6 @@ ggml_tensor * granite_conv_module(ggml_context *          ctx,
     return x;
 }
 
-// Block-local Shaw self-attention.
-//
-// Mirrors GraniteSpeechConformerAttention.forward exactly:
-//
-//   h = pre_norm(x)                                # at T_enc
-//   if remainder > 0: h = F.pad(h, (0, 0, 0, pad)) # zero-pad to T_pad
-//   q = to_q(h); kv = to_kv(h); k, v = kv.chunk(2, dim=-1)
-//   ... block-local attention with Shaw bias ...
-//   out = out.reshape(..., T_pad, inner_dim)
-//   out = to_out(out[:, :num_features, :])         # slice back to T_enc
-//   return out                                     # at T_enc
-//
-// The slice happens BEFORE to_out (the upstream order), which means
-// the conv module that follows sees an unpadded tensor — critical
-// because the depthwise conv would otherwise pull pad-row garbage
-// into valid frames near the tail.
-//
-//   x:           [d_model, T_enc]  (the pre-norm input).
-//   zero_pad:    [d_model, pad_n] = [d_model, T_pad - T_enc] f32 zeros,
-//                or nullptr when T_enc % context_size == 0.
-//   dists:       [context_size * context_size] int32, Shaw lookup indices.
-//   pad_mask_3d: [context_size, context_size, num_blocks] additive mask.
-//                All zero except the last slice for non-aligned T_enc
-//                (pad-K columns at -INF; pad-Q rows are NOT masked,
-//                see precompute_last_block_mask comments).
-//
-// Output: [d_model, T_enc] (matches input shape).
-ggml_tensor * granite_shaw_block_attn(ggml_context *          ctx,
-                                      ggml_tensor *           x,
-                                      ggml_tensor *           zero_pad,
-                                      ggml_tensor *           dists,
-                                      ggml_tensor *           pad_mask_3d,
-                                      const GraniteEncBlock & b,
-                                      int                     n_heads,
-                                      int                     head_dim,
-                                      int                     context_size,
-                                      int                     num_blocks,
-                                      int                     T_enc)
-{
-    const int64_t inner_dim = static_cast<int64_t>(n_heads) * head_dim;
-    const int64_t d_model   = x->ne[0];
-    const int64_t T_pad     = static_cast<int64_t>(context_size) * num_blocks;
-    const float   scale     = 1.0f / std::sqrt(static_cast<float>(head_dim));
-
-    // Pre-LayerNorm on the T_enc input.
-    ggml_tensor * h = layer_norm(ctx, x, b.norm_attn_w, b.norm_attn_b);
-
-    // Pad to T_pad along the time axis with zeros (graph input).
-    if (T_pad > T_enc) {
-        if (zero_pad == nullptr) {
-            std::fprintf(stderr,
-                         "granite encoder: zero_pad is null but T_pad > T_enc\n");
-            return nullptr;
-        }
-        h = ggml_concat(ctx, h, zero_pad, /*dim=*/1);
-    }
-    // h ne = [d_model, T_pad]
-    (void)d_model;
-
-    // QKV projections. q has no bias; kv is fused (2*inner_dim) with no
-    // bias; out has bias. The shape after projection in [feature, T_pad]
-    // layout: q is [inner_dim, T_pad], kv is [2*inner_dim, T_pad].
-    ggml_tensor * q  = ggml_mul_mat(ctx, b.attn_q_w,  h);  // [inner_dim, T_pad]
-    ggml_tensor * kv = ggml_mul_mat(ctx, b.attn_kv_w, h);  // [2*inner_dim, T_pad]
-
-    // Split kv into k, v along ne[0]. The mul_mat output is contiguous,
-    // so views with a strided ne[0] are safe.
-    ggml_tensor * k = ggml_view_2d(ctx, kv, inner_dim, kv->ne[1],
-                                   kv->nb[1], /*offset=*/0);
-    ggml_tensor * v = ggml_view_2d(ctx, kv, inner_dim, kv->ne[1],
-                                   kv->nb[1],
-                                   inner_dim * ggml_element_size(kv));
-    k = ggml_cont(ctx, k);
-    v = ggml_cont(ctx, v);
-
-    // Reshape into block-local form. We want q, k, v with ne layout
-    // [head_dim, context_size, n_heads, num_blocks] so that
-    // ggml_mul_mat(k, q) does per-(head, block) batched attention.
-    //
-    // Source layout: [inner_dim = n_heads*head_dim, T_pad = context_size*num_blocks].
-    //
-    // Step 1: reshape to [head_dim, n_heads, context_size, num_blocks].
-    //   ne[0] = head_dim (inner-most of inner_dim split)
-    //   ne[1] = n_heads
-    //   ne[2] = context_size (inner-most of T_pad split)
-    //   ne[3] = num_blocks
-    auto reshape_qkv = [&](ggml_tensor * t) -> ggml_tensor * {
-        ggml_tensor * r = ggml_reshape_4d(ctx, t,
-                                          head_dim, n_heads,
-                                          context_size, num_blocks);
-        // Step 2: permute to [head_dim, context_size, n_heads, num_blocks].
-        // ggml_permute new[a_i] = old[i]: we want new dims = (head_dim,
-        // context_size, n_heads, num_blocks) coming from old dims
-        // (head_dim, n_heads, context_size, num_blocks) at positions
-        // (0, 2, 1, 3). So old[0] -> new[0], old[1] -> new[2],
-        // old[2] -> new[1], old[3] -> new[3]: ggml_permute(r, 0, 2, 1, 3).
-        r = ggml_cont(ctx, ggml_permute(ctx, r, 0, 2, 1, 3));
-        return r;
-    };
-    q = reshape_qkv(q);
-    k = reshape_qkv(k);
-    v = reshape_qkv(v);
-
-    // ----- Shaw positional bias -----
-    // rel_pos_emb is [head_dim, 2*max_pos_emb+1]. attention_dists is
-    // [context_size, context_size] int32. We materialise the per-(c, r)
-    // lookup as a [head_dim, context_size*context_size] tensor, then
-    // reshape to [head_dim, context_size=r, context_size=c, 1].
-    //
-    // ggml_get_rows(a, b) where a has ne[0..1] = [K, N] and b is int32
-    // [B] returns [K, B] with row B[i] = a[:, b[i]].
-    //
-    // Flatten attention_dists to [context_size * context_size] via a
-    // 1-D view.
-    ggml_tensor * dists_flat = ggml_reshape_1d(ctx, dists,
-                                               static_cast<int64_t>(context_size) * context_size);
-    ggml_tensor * rel_lookup = ggml_get_rows(ctx, b.attn_rel_pos_emb, dists_flat);
-    // rel_lookup ne = [head_dim, context_size*context_size]. We treat
-    // it as [head_dim, context_size=r, context_size=c] (row-major over
-    // (c, r) pairs — attention_dists is stored as c-then-r).
-    rel_lookup = ggml_reshape_3d(ctx, rel_lookup,
-                                 head_dim, context_size, context_size);
-
-    // pos_attn[h, b, c, r] = sum_d q[h, b, c, d] * rel_lookup[c, r, d].
-    //
-    // Permute q from [head_dim, context_size=c, n_heads, num_blocks]
-    // to [head_dim, n_heads, context_size=c, num_blocks] so that c is
-    // ne[2]. Then ggml_mul_mat(rel_lookup, q_perm) with
-    //   rel_lookup: [K=head_dim, M=r, batch=c, 1]
-    //   q_perm:     [K=head_dim, N=n_heads, batch=c, num_blocks]
-    // gives output [M=r, N=n_heads, c, num_blocks]. The "batch=c" axis
-    // must match between the two operands. We need to broadcast
-    // num_blocks across the rel_lookup tensor, which has ne[3] = 1.
-    // ggml's mul_mat broadcasts the second operand's outer dims onto
-    // the first by repeat if shapes are compatible (1 or matching).
-    ggml_tensor * q_perm = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
-    // q_perm ne = [head_dim, n_heads, context_size, num_blocks]
-
-    // rel_lookup is [head_dim, r=context_size, c=context_size, 1]. We
-    // want this to act as the LHS with K=head_dim and batch=c. Then
-    // mul_mat over K. ggml_mul_mat treats ne[2:] as batch dims; the
-    // second operand's ne[2:] must broadcast against the first's.
-    // rel_lookup has ne[2]=c and ne[3]=1; q_perm has ne[2]=c and ne[3]=num_blocks.
-    // Broadcast: ne[3]=1 of LHS broadcasts to num_blocks of RHS.
-
-    ggml_tensor * pos_attn = ggml_mul_mat(ctx, rel_lookup, q_perm);
-    // pos_attn ne = [M=r=context_size, N=n_heads, c=context_size, num_blocks]
-
-    // ----- QK^T -----
-    // ggml_mul_mat(K, Q) with K, Q both [head_dim, context_size,
-    // n_heads, num_blocks] produces [context_size=k, context_size=q,
-    // n_heads, num_blocks].
-    ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-    // kq ne = [k=context_size, q=context_size, n_heads, num_blocks]
-
-    // To add pos_attn into kq, both must have the same ne layout.
-    // pos_attn is [r=context_size, n_heads, c=context_size, num_blocks]
-    // (r = key index, c = query index in our naming). kq is
-    // [k, q, n_heads, num_blocks]. To match, permute pos_attn so
-    // r becomes ne[0] (matches kq's k), c becomes ne[1] (matches q),
-    // n_heads ne[2], num_blocks ne[3].
-    //
-    // Source: pos_attn (r, n_heads, c, num_blocks) at positions (0,1,2,3).
-    // Target: (r, c, n_heads, num_blocks).
-    // Mapping: old[0]->new[0], old[1]->new[2], old[2]->new[1], old[3]->new[3].
-    // ggml_permute args (0, 2, 1, 3).
-    pos_attn = ggml_cont(ctx, ggml_permute(ctx, pos_attn, 0, 2, 1, 3));
-
-    // Combine: scores = (kq + pos_attn) * scale + pad_mask
-    ggml_tensor * scores = ggml_add(ctx, kq, pos_attn);
-    scores = ggml_scale(ctx, scores, scale);
-
-    // Add per-block additive mask (all-zero for non-last blocks; -INF
-    // pad cells in last block). pad_mask_3d ne =
-    // [context_size, context_size, num_blocks, 1]. Broadcast across
-    // n_heads (ne[2] of scores) by adding to a permuted view.
-    //
-    // scores ne = [k, q, n_heads, num_blocks]
-    // pad_mask_3d ne = [k, q, num_blocks, 1]
-    //
-    // For the add to broadcast across n_heads, we'd want pad_mask shape
-    // [k, q, 1, num_blocks]. ggml_add broadcasts dims that are 1.
-    // Reshape pad_mask_3d:
-    ggml_tensor * pad_mask_4d = ggml_reshape_4d(ctx, pad_mask_3d,
-                                                context_size, context_size,
-                                                1, num_blocks);
-    scores = ggml_add(ctx, scores, pad_mask_4d);
-
-    // Softmax over the k axis (ne[0]).
-    ggml_tensor * attn = ggml_soft_max(ctx, scores);
-    // attn ne = [k=context_size, q=context_size, n_heads, num_blocks]
-
-    // out = attn @ V along k. We want output ne = [head_dim, q, n_heads,
-    // num_blocks]. ggml_mul_mat with V transposed (V^T is implied by
-    // mul_mat semantics): we need V as [head_dim, k, n_heads, num_blocks]
-    // and attn as [k, q, n_heads, num_blocks]. Computing
-    // ggml_mul_mat(V_T, attn) where V_T has the contraction axis k on
-    // ne[0]. V's existing layout is [head_dim, k=context_size, n_heads,
-    // num_blocks]. We need [k, head_dim, ...] so K matches.
-    ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
-    // v_t ne = [k, head_dim, n_heads, num_blocks]
-
-    ggml_tensor * out = ggml_mul_mat(ctx, v_t, attn);
-    // out ne = [head_dim, q, n_heads, num_blocks]
-
-    // Reshape back to [inner_dim, T_pad]. out has ne (head_dim, q,
-    // n_heads, num_blocks). We want (head_dim * n_heads = inner_dim,
-    // q * num_blocks = T_pad). First permute to (head_dim, n_heads,
-    // q, num_blocks) so the collapse-to-2D below interleaves head_dim
-    // and n_heads correctly.
-    out = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));
-    // out ne = [head_dim, n_heads, q=context_size, num_blocks]
-    out = ggml_reshape_2d(ctx, out, inner_dim, T_pad);
-    // out ne = [inner_dim, T_pad]
-
-    // Slice off pad rows BEFORE the out_proj, mirroring the reference's
-    // `out = self.to_out(out[:, :num_features, :])` order. This is the
-    // critical step that keeps pad-row garbage from leaking into the
-    // post-attention conv module via the depthwise kernel.
-    if (T_pad > T_enc) {
-        out = ggml_view_2d(ctx, out, inner_dim, T_enc, out->nb[1], 0);
-        out = ggml_cont(ctx, out);
-    }
-
-    // Final out_proj (with bias). Operates at T_enc.
-    out = ggml_mul_mat(ctx, b.attn_out_w, out);
-    out = ggml_add(ctx, out, b.attn_out_b);
-    // out ne = [d_model, T_enc]
-    return out;
-}
 
 } // namespace
 
@@ -670,10 +441,17 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
         // reference where to_out runs on the unpadded slice. This is
         // load-bearing: the conv module below cannot see pad-row
         // garbage near the tail (depthwise kernel would spread it).
-        ggml_tensor * attn_out = granite_shaw_block_attn(
+        const transcribe::granite_conformer::ShawAttnWeights shaw_w {
+            b.norm_attn_w, b.norm_attn_b,
+            b.attn_q_w, b.attn_kv_w, b.attn_rel_pos_emb,
+            b.attn_out_w, b.attn_out_b,
+        };
+        ggml_tensor * attn_out = transcribe::granite_conformer::shaw_block_attn(
             ctx, x,
             eb.zero_pad, eb.attention_dists, eb.last_block_mask,
-            b, n_heads, head_dim, ctx_size, eb.n_blocks_local, T_enc);
+            shaw_w,
+            n_heads, head_dim, ctx_size, eb.n_blocks_local, T_enc,
+            kLayerNormEps);
         if (attn_out == nullptr) {
             return eb;
         }
