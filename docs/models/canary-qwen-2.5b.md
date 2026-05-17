@@ -73,6 +73,17 @@ Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
 speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
 decimal places).
 
+### Apple M4 Max
+
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Metal   | jfk (11.0s)  | 243.9 ms (45.1×) | 232.4 ms (47.3×) |
+| Metal   | dots (35.3s) |   1.02 s (34.5×) | 911.7 ms (38.8×) |
+| CPU     | jfk (11.0s)  |    1.42 s (7.7×) |   1.06 s (10.4×) |
+| CPU     | dots (35.3s) |    5.14 s (6.9×) |    4.00 s (8.8×) |
+
+macOS 26.4.1, transcribe.cpp `1b19945`.
+
 ### AMD Ryzen 7 PRO 4750U
 
 | Backend | Sample       |             Q8_0 |           Q4_K_M |
