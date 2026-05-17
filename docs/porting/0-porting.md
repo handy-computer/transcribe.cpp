@@ -45,8 +45,7 @@ The authoritative stage chain is the eight `porting-N` skills under
 
 Each skill owns its postconditions and is the source of truth for what
 must exist by the time you advance. Read the corresponding SKILL.md
-before starting each stage. `docs/porting/skills-v2-proposal.md` records
-the v2 framing and the rationale for the split.
+before starting each stage.
 
 The high-level intent of each stage:
 
@@ -88,11 +87,6 @@ Every family should end with:
 - bench matrix support in `scripts/bench/run.py`
 - manifest support under `tests/golden/<family>/` so `scripts/validate.py`
   can run reference -> C++ -> compare
-
-Recommended local workspace setup is described in
-[`7-workspace-setup.md`](7-workspace-setup.md). Current manifests use
-model ids by default; local model and GGUF paths remain overridable with
-`--model` and `--gguf`.
 
 Numerical validation workflow is described in
 [`4-numerical-validation.md`](4-numerical-validation.md). Common

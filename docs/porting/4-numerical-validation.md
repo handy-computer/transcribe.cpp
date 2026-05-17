@@ -1,19 +1,12 @@
 # Numerical Validation
 
 Numerical validation is the tensor-by-tensor gate used during bring-up
-and after backend or performance changes. It is also the primary
-development methodology: you write reference dumps first, then build
-the C++ implementation stage by stage until each tensor matches.
-
-## Flow
-
-```text
-1. Study architecture, decide dump points
-2. Write reference dump script, generate reference tensors
-3. Implement C++ stage by stage, comparing against reference at each stage
-4. Set tolerances from observed data
-5. Gate: all tensors within tolerance, transcript correct
-```
+and after backend or performance changes. The procedural workflow —
+generating the oracle, converting, implementing C++ stage by stage,
+finalizing tolerances — lives in the porting skills under
+`.claude/skills/` (`porting-2-oracle`, `porting-3-convert`,
+`porting-4-cpp`). This doc covers the conceptual contract: *what to
+dump*, *why those points*, and *how to read a failure*.
 
 ## Dump Principles
 
@@ -109,86 +102,9 @@ SwiGLU, RMSNorm), the dump points and expected behavior will be
 similar to `llama.cpp` models. The per-layer outputs, final norm,
 and pre-softmax logits follow the same patterns.
 
-## Bring-Up: Reference First, Then C++
+## Tensor Roles and Tolerances
 
-### Step 1: Study the architecture
-
-Read the reference implementation end to end. Understand the forward
-pass, the preprocessing pipeline, and any special tokens or prompt
-construction. Identify the dump points above. Write down what shapes
-you expect at each stage.
-
-### Step 2: Write the reference dump script
-
-Write `scripts/dump_reference_<family>_<ref>.py` with subcommands for
-each stage (`mel`, `encoder`, `decode`). Create
-`scripts/envs/<family>/pyproject.toml` with the reference's
-dependencies.
-
-Always use the model author's canonical implementation as the
-reference. If the model was released through HuggingFace Transformers,
-use Transformers. If through NeMo, use NeMo. Don't switch frameworks
-mid-bringup.
-
-The dump script has two jobs:
-1. Generate the reference tensors you'll build toward.
-2. Serve as executable documentation of the model's forward pass.
-
-Run it on `samples/jfk.wav`. Verify shapes match your expectations.
-Verify the transcript is correct. These reference dumps are now fixed —
-you won't regenerate them during C++ development unless you find a bug
-in the dump script itself.
-
-### Step 3: Implement and validate stage by stage
-
-Build the C++ implementation incrementally, using the reference dumps
-as your test oracle at each stage:
-
-**Frontend.** Implement the mel/feature extractor. Dump it. Compare
-against the reference mel. Fix until it matches. Common issues: wrong
-window function, missing preemphasis, dither mismatch, normalization
-differences, and off-by-one STFT frame alignment. Don't proceed until
-this is clean — every downstream tensor depends on it.
-
-**Encoder.** Implement the graph builder. Start with just the
-pre-encode stage (conv subsampling or equivalent), dump, compare. Then
-add blocks one at a time or all at once — the per-layer dumps will
-tell you where divergence starts if something is wrong. Work until
-`enc.final` matches.
-
-**Encoder-decoder bridge.** Implement the projection or cross-attention
-K/V computation. Dump, compare.
-
-**Decoder.** Same pattern. Start with embedding lookups (should be
-near-exact — if not, you have a tokenizer or weight loading bug). Add
-layers, dump per-layer outputs. Work until `dec.out_before_head`
-matches. Then add the head and compare `dec.logits_raw`.
-
-At each stage, the comparison is:
-
-```bash
-TRANSCRIBE_DUMP_DIR=build/validate/<family>/jfk/cpp \
-  build/bin/transcribe-cli -m <model.gguf> --backend cpu samples/jfk.wav
-
-uv run scripts/compare_tensors.py \
-  build/validate/<family>/jfk/cpp \
-  build/validate/<family>/jfk/ref
-```
-
-Run without tolerances during development to see raw numbers. You're
-looking for tensors that are close (within dtype noise) vs tensors
-that are completely wrong (off by orders of magnitude or wrong shape).
-Also inspect each side's tensor scale via the JSON sidecar `min`, `max`,
-and `mean` fields. Activation scale is a sanity check, not a substitute
-for tolerances: two tensors can have similar ranges while being
-transposed, shifted, or wrong-sign element by element, and a high-gain
-pre-normalization stage can have a large absolute diff that later
-normalization gates attenuate.
-
-### Step 4: Classify tensors and set tolerances
-
-Once all stages pass informally, classify each tensor into one of
-three roles:
+Each tensor falls into one of three roles:
 
 **Gate** — post-normalization tensors where drift is small and stable.
 A real bug (wrong weights, wrong op, wrong layer order) would produce
@@ -210,62 +126,20 @@ failure. Examples: conformer sub-stage outputs like
 Both gate and informational tensors go in the tolerance file and
 must be symmetric (present on both sides). Debug tensors do not.
 
-Set tolerances from observed data:
-- Gate tensors: ~10x the observed CPU max_abs.
-- Informational tensors: ~3x the observed max_abs.
+Tolerance derivation:
+- Provisional tolerances are sized from per-tensor magnitude in
+  `porting-2-oracle` (`1e-4 × p99_abs` for max, `1e-5 × rms` for mean,
+  with a `1e-6` floor).
+- Finalization happens in `porting-4-cpp` against observed C++ drift.
 - Don't guess numbers in advance — run the comparison and read them.
 
-Write the tolerance file to `tests/tolerances/<family>.json`. Include
+Tolerance files live at `tests/tolerances/<family>.json` and include
 a `_comment` documenting the reference framework, the dtype, known
-divergence causes, and the attenuation profile you observed.
-
-### Step 5: Verify
-
-Once the bring-up is complete, use `validate.py` for end-to-end
-validation:
-
-```bash
-# Full validation: ref dumps + C++ dumps + comparison
-uv run scripts/validate.py all --family <family>
-
-# Or step by step
-uv run scripts/validate.py ref     --family <family>
-uv run scripts/validate.py cpp     --family <family>
-uv run scripts/validate.py compare --family <family>
-
-# With a different backend
-uv run scripts/validate.py cpp --family <family> --backend metal
-```
-
-During incremental development, you can still run the pieces manually:
-
-```bash
-TRANSCRIBE_DUMP_DIR=build/validate/<family>/<variant>/jfk/cpp \
-  build/bin/transcribe-cli --backend cpu -m <model.gguf> samples/jfk.wav
-
-uv run scripts/compare_tensors.py \
-  build/validate/<family>/<variant>/jfk/cpp \
-  build/validate/<family>/<variant>/jfk/ref \
-  --tolerances tests/tolerances/<family>.json
-```
-
-All comparisons should exit 0 with every matched tensor within
-tolerance. If the reference side writes `transcript.json`, `validate.py`
-also requires the C++ transcript text to match the reference text
-character-for-character. CPU validation is the default gate. If an
-accelerator backend needs a different tolerance policy, document the
-manual `compare_tensors.py --tolerances <backend-file>` command in the
-family note; `validate.py compare` currently auto-selects
-`tests/tolerances/<family>.json`.
-
-`validate.py` assumes an accuracy GGUF already exists. It can auto-pick a
-GGUF under `models/<family>/` or accept `--gguf`, but conversion belongs
-to the converter path rather than validation.
+divergence causes, and the attenuation profile observed.
 
 ## Troubleshooting
 
-This document defines what to dump, how to compare it, and how
-tolerances become the validation contract. Failure diagnosis lives in
+Failure diagnosis lives in
 [`4a-numerical-troubleshooting.md`](4a-numerical-troubleshooting.md),
 including common mel/STFT off-by-one errors, dtype and accumulation
 drift, layout bugs, attention mask or position mismatches, token

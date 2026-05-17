@@ -69,9 +69,10 @@ the canonical reference framework by itself.
 3. Maintainer reviews the completed intake. Sign-off means converter and C++
    work can begin.
 
-4. Intake runs through **preflight Gate A** (see `4-numerical-validation.md`
-   and the preflight spec) to catch declared-value-vs-reference mismatches
-   before cascading into converter work.
+4. Intake runs through **preflight Gate A** (see the Preflight Gates
+   section below and `scripts/preflight.py`) to catch
+   declared-value-vs-reference mismatches before cascading into converter
+   work.
 
 ## Field Reference
 

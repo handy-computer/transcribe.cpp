@@ -20,7 +20,8 @@ Gates:
     B  Post-converter. Declared vs GGUF vs reference.
 
 Gate C (post-mel runtime) and Gate D (post-quantization) live in separate
-flows; see 4-numerical-validation.md Divergence Classification and the plan.
+flows owned by validate.py and the Stage 5 quant smoke pass; this script
+only owns Gates A and B.
 
 The "declared state" can come from reports/porting/<family>/<variant>/intake.json
 (preferred, captured before the port) or from the golden manifest
