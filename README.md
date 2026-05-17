@@ -1,6 +1,6 @@
 # transcribe.cpp
 
-C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, targeting Metal and Vulkan for fast GPU inference everywhere.
+C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, with Metal, Vulkan, and CUDA backends for fast GPU inference.
 
 **Supported models:**
 
@@ -38,7 +38,15 @@ cmake -B build -DTRANSCRIBE_VULKAN=ON
 cmake --build build
 ```
 
-`libopenblas-dev` is optional but recommended — it accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
+For CUDA (Linux + NVIDIA GPU):
+
+```bash
+# requires the CUDA toolkit (nvcc) on PATH
+cmake -B build -DTRANSCRIBE_CUDA=ON
+cmake --build build
+```
+
+`libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
 
 To build the quantization tool:
 

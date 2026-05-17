@@ -163,7 +163,25 @@ int main() {
     }
 
     // ---------------------------------------------------------------
-    // 4. AUTO — always succeeds (falls back to CPU at minimum)
+    // 4. Explicit CUDA — same pattern as Metal / Vulkan
+    // ---------------------------------------------------------------
+    {
+        BackendPlan plan;
+        transcribe_status st = init_backends(
+            TRANSCRIBE_BACKEND_CUDA, "test-cuda", plan);
+
+        if (st == TRANSCRIBE_OK) {
+            CHECK_EQ(plan.primary_kind, BackendKind::Cuda);
+            CHECK(plan.primary != nullptr);
+            CHECK(plan.scheduler_list.size() >= 2);
+            free_plan(plan);
+        } else {
+            CHECK_EQ(st, TRANSCRIBE_ERR_BACKEND);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 5. AUTO — always succeeds (falls back to CPU at minimum)
     // ---------------------------------------------------------------
     //
     // AUTO probes GPU/IGPU devices and falls back to CPU if none
@@ -191,7 +209,7 @@ int main() {
     }
 
     // ---------------------------------------------------------------
-    // 5. Invalid enum — returns TRANSCRIBE_ERR_INVALID_ARG
+    // 6. Invalid enum — returns TRANSCRIBE_ERR_INVALID_ARG
     // ---------------------------------------------------------------
     {
         BackendPlan plan;
