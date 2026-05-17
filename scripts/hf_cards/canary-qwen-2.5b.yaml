@@ -1,0 +1,83 @@
+# Spec for the HF README of handy-computer/canary-qwen-2.5b-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: nvidia/canary-qwen-2.5b
+target_repo: handy-computer/canary-qwen-2.5b-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/canary-qwen-2.5b.md
+
+upstream_commit: b1469e1bba1cfe140205529c79c434ca47180960
+pin_date: 2026-05-15
+
+validation:
+  reference: NeMo SALM 2.7.3
+  commit: 6f6c699
+  date: 2026-05-16
+
+license: cc-by-4.0
+license_display: CC-BY-4.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - canary
+  - canary-qwen
+  - salm
+  - audio-llm
+  - fastconformer
+  - qwen3
+
+summary: |
+  Offline English speech-to-text. NeMo SALM (Speech-Augmented Language
+  Model): a FastConformer audio encoder (32 layers, `d_model=1024`) feeds
+  audio embeddings into a Qwen3-1.7B causal LM (28 layers,
+  `hidden_size=2048`) via audio-token injection at a sentinel position in
+  the prompt. English only. Takes a 16 kHz mono WAV and produces a
+  transcript via greedy decoding.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech `test-clean` split (2620 English
+    utterances) with the Whisper-style English text normalizer and jiwer
+    3.x, on the metal backend of an Apple M4. The same-machine NeMo SALM
+    reference run (CPU torch, dither=0.0, greedy `model.generate`) lands
+    at **1.61%** with 95% bootstrap CI [1.47%, 1.75%]: `0.01` above
+    NVIDIA's published 1.60% but well within statistical noise. All six
+    GGUF presets land at exactly 1.63% (`+0.02` over our reference run,
+    same CI band). Investigation of the worst per-utterance differences
+    shows scattered token-level noise consistent with BF16 weight
+    precision (homophones, word-boundary flips, function-word
+    substitutions). Reproduce with `scripts/wer/run.py` +
+    `scripts/wer/score.py`.
+
+quants:
+  - name: BF16
+    filename: canary-qwen-2.5b-BF16.gguf
+    size: 4.73 GB
+    wer: 1.63%
+  - name: F16
+    filename: canary-qwen-2.5b-F16.gguf
+    size: 4.73 GB
+    wer: 1.63%
+  - name: Q8_0
+    filename: canary-qwen-2.5b-Q8_0.gguf
+    size: 2.61 GB
+    wer: 1.63%
+  - name: Q6_K
+    filename: canary-qwen-2.5b-Q6_K.gguf
+    size: 2.06 GB
+    wer: 1.63%
+  - name: Q5_K_M
+    filename: canary-qwen-2.5b-Q5_K_M.gguf
+    size: 1.85 GB
+    wer: 1.63%
+  - name: Q4_K_M
+    filename: canary-qwen-2.5b-Q4_K_M.gguf
+    size: 1.62 GB
+    wer: 1.63%

@@ -1,0 +1,55 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "canary_qwen",
+  "variant": "canary-qwen-2.5b",
+  "source_model": {
+    "hf_repo": "nvidia/canary-qwen-2.5b",
+    "hf_revision": "b1469e1bba1cfe140205529c79c434ca47180960"
+  },
+  "reference": {
+    "kind": "nemo",
+    "source": "https://github.com/NVIDIA/NeMo",
+    "revision": ">=2.5.0",
+    "entrypoint": "scripts/dump_reference_canary_qwen_nemo.py"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_feature",
+    "preemphasis": 0.97,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 151936,
+    "special_tokens": {
+      "pad": 151643,
+      "eos": 151645,
+      "audio_locator": 151669
+    },
+    "audio_locator_tag": "<|audioplaceholder|>",
+    "audio_locator_id_source": "model.tokenizer.text_to_ids('<|audioplaceholder|>') == [151669] (pinned by Stage 2 dumper on nvidia/canary-qwen-2.5b @ b1469e1bba1cfe140205529c79c434ca47180960, NeMo 2.7.3)"
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/canary_qwen.json",
+  "cases": [
+    {
+      "audio": "jfk",
+      "language": "en"
+    }
+  ]
+}

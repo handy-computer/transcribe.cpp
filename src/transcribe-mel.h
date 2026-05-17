@@ -85,6 +85,21 @@ struct MelConfig {
     // Optional checkpoint-provided window [win_length]. When non-empty,
     // used instead of computing a periodic Hann window.
     std::vector<float> window;
+
+    // For "per_feature" normalize, if true compute mean/std using only
+    // the first floor(n_samples / hop_length) frames and zero positions
+    // beyond that. Matches NeMo's normalize_batch behavior, which uses
+    // get_seq_len() = floor(n_samples / hop_length) (NOT +1) as the
+    // valid window even when the STFT itself produces seq_len + 1
+    // frames (the trailing center-pad frame).
+    //
+    // Default false to preserve the legacy parakeet/canary path where
+    // all n_frames frames are used. Cohere already triggers the same
+    // masking via pad_mode == "constant" and does not need this flag.
+    // Set true for any NeMo family that wires the LM directly off the
+    // normalized mel (e.g. canary_qwen) — the LM is brittle to the
+    // trailing-frame distributional shift.
+    bool nemo_mask_trailing_frame = false;
 };
 
 // Pure C++ log-mel extractor. Construct once, call compute() any

@@ -292,6 +292,7 @@ typedef enum {
     TRANSCRIBE_BACKEND_METAL     = 2,
     TRANSCRIBE_BACKEND_VULKAN    = 3,
     TRANSCRIBE_BACKEND_CPU_ACCEL = 4,
+    TRANSCRIBE_BACKEND_CUDA      = 5,
 } transcribe_backend_request;
 
 /*

@@ -149,13 +149,18 @@ transcribe_status init_backends(transcribe_backend_request requested,
     }
 
     case TRANSCRIBE_BACKEND_METAL:
-    case TRANSCRIBE_BACKEND_VULKAN: {
+    case TRANSCRIBE_BACKEND_VULKAN:
+    case TRANSCRIBE_BACKEND_CUDA: {
         // Specific GPU backend request: must find a matching device
         // or fail. ACCEL is still layered on because it's host-memory
         // and orthogonal to the GPU/CPU split.
-        const BackendKind wanted = (requested == TRANSCRIBE_BACKEND_METAL)
-                                 ? BackendKind::Metal
-                                 : BackendKind::Vulkan;
+        BackendKind wanted = BackendKind::Unknown;
+        switch (requested) {
+            case TRANSCRIBE_BACKEND_METAL:  wanted = BackendKind::Metal;  break;
+            case TRANSCRIBE_BACKEND_VULKAN: wanted = BackendKind::Vulkan; break;
+            case TRANSCRIBE_BACKEND_CUDA:   wanted = BackendKind::Cuda;   break;
+            default: break;
+        }
         BackendKind got_kind = BackendKind::Unknown;
         ggml_backend_t gpu_be = try_init_kind(wanted, error_tag, got_kind);
         if (gpu_be == nullptr) {

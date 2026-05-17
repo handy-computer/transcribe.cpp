@@ -1,6 +1,6 @@
 # transcribe.cpp
 
-C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, targeting Metal and Vulkan for fast GPU inference everywhere.
+C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, with Metal, Vulkan, and CUDA backends for fast GPU inference.
 
 **Supported models:**
 
@@ -8,6 +8,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | --- | --- | --- |
 | Parakeet | 10 variants: TDT, RNN-T, CTC, TDT+CTC (110M–1.1B) | [docs/models/parakeet.md](docs/models/parakeet.md) |
 | Canary | `canary-1b`, `canary-1b-v2`, `canary-1b-flash`, `canary-180m-flash` | [docs/models/canary.md](docs/models/canary.md) |
+| Canary-Qwen | `canary-qwen-2.5b` (FastConformer + Qwen3-1.7B SALM) | [docs/models/canary-qwen-2.5b.md](docs/models/canary-qwen-2.5b.md) |
 | Whisper | 12 variants (`tiny` through `large-v3-turbo`, plus `.en` siblings) | [docs/models/whisper.md](docs/models/whisper.md) |
 | GigaAM | `gigaam-v3-{e2e-rnnt,e2e-ctc,rnnt,ctc}` | [docs/models/gigaam.md](docs/models/gigaam.md) |
 | Moonshine | `moonshine-tiny`, `moonshine-base` | [docs/models/moonshine.md](docs/models/moonshine.md) |
@@ -37,7 +38,15 @@ cmake -B build -DTRANSCRIBE_VULKAN=ON
 cmake --build build
 ```
 
-`libopenblas-dev` is optional but recommended — it accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
+For CUDA (Linux + NVIDIA GPU):
+
+```bash
+# requires the CUDA toolkit (nvcc) on PATH
+cmake -B build -DTRANSCRIBE_CUDA=ON
+cmake --build build
+```
+
+`libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
 
 To build the quantization tool:
 
