@@ -70,9 +70,10 @@ bool parse_backend_kind(const char *                   s,
     if (std::strcmp(s, "cpu_accel") == 0) { out = TRANSCRIBE_BACKEND_CPU_ACCEL; return true; }
     if (std::strcmp(s, "metal")     == 0) { out = TRANSCRIBE_BACKEND_METAL;     return true; }
     if (std::strcmp(s, "vulkan")    == 0) { out = TRANSCRIBE_BACKEND_VULKAN;    return true; }
+    if (std::strcmp(s, "cuda")      == 0) { out = TRANSCRIBE_BACKEND_CUDA;      return true; }
     std::fprintf(stderr,
         "error: --backend value '%s' not recognized "
-        "(expected one of: auto, cpu, cpu_accel, metal, vulkan)\n", s);
+        "(expected one of: auto, cpu, cpu_accel, metal, vulkan, cuda)\n", s);
     return false;
 }
 

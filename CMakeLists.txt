@@ -38,6 +38,7 @@ option(TRANSCRIBE_BUILD_EXAMPLES "Build example CLI"        ON)
 option(TRANSCRIBE_BUILD_TOOLS    "Build inspect / quantize" OFF)  # post pass 2
 option(TRANSCRIBE_METAL          "Enable Metal backend"     ${TRANSCRIBE_IS_APPLE_SILICON})
 option(TRANSCRIBE_VULKAN         "Enable Vulkan backend"    OFF)  # post-v1
+option(TRANSCRIBE_CUDA           "Enable CUDA backend"      OFF)  # opt-in; Linux + nvcc
 option(TRANSCRIBE_SANITIZE       "Enable ASan + UBSan"      OFF)
 option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 
@@ -117,6 +118,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 set(GGML_METAL    ${TRANSCRIBE_METAL}  CACHE BOOL "" FORCE)
 set(GGML_VULKAN   ${TRANSCRIBE_VULKAN} CACHE BOOL "" FORCE)
+set(GGML_CUDA     ${TRANSCRIBE_CUDA}   CACHE BOOL "" FORCE)
 set(GGML_BLAS OFF CACHE BOOL "" FORCE)
 
 # We don't want ggml's tests / examples leaking into our build tree. They
