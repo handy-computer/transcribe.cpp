@@ -6,7 +6,47 @@
     "hf_repo": "ibm-granite/granite-speech-4.1-2b-nar",
     "hf_revision": "7d20732df04d097262c4ecd8fe7f34ec2b3e6c42"
   },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar",
+    "revision": "7d20732df04d097262c4ecd8fe7f34ec2b3e6c42",
+    "entrypoint": "scripts/dump_reference_granite_nar_transformers.py",
+    "comment": "trust_remote_code: NLEConfig + NLENARDecoder + EncoderProjectorQFormer + NLECTCEncoder + NLEConformerBlock + Tokenizer all live in the HF repo. attn_implementation=eager so is_causal=False on every llm layer yields the bidirectional forward (flash-attn isn't available on Apple)."
+  },
   "expected_dtype": "bfloat16",
   "dtype_source": "config",
-  "_skeleton": true
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_utterance",
+    "preemphasis": null,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 100352,
+    "special_tokens": {
+      "bos": 100257,
+      "eos": 100257,
+      "pad": 100256
+    },
+    "ctc_vocab_size": 348,
+    "comment": "Two tokenizers: a char-level CTC tokenizer (vocab 348) over the encoder.out head, and the granite-4 BPE tokenizer (vocab 100352, no audio_token_index) over the LLM input/output."
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "pt"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/granite_nar.json",
+  "transcript_compare": "normalized",
+  "cases": ["jfk"]
 }

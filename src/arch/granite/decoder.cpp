@@ -325,9 +325,15 @@ ggml_tensor * block_step(
     x = ggml_add(ctx, x, o);
 
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
-    ggml_tensor * gate = ggml_mul_mat(ctx, view.ffn_gate_w, ff_norm);
-    ggml_tensor * up   = ggml_mul_mat(ctx, view.ffn_up_w,   ff_norm);
-    ggml_tensor * ff   = ggml_mul(ctx, ggml_silu(ctx, gate), up);
+    ggml_tensor * ff;
+    if (view.ffn_gate_up_w != nullptr) {
+        ggml_tensor * gate_up = ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm);
+        ff = ggml_swiglu(ctx, gate_up);
+    } else {
+        ggml_tensor * gate = ggml_mul_mat(ctx, view.ffn_gate_w, ff_norm);
+        ggml_tensor * up   = ggml_mul_mat(ctx, view.ffn_up_w,   ff_norm);
+        ff = ggml_mul(ctx, ggml_silu(ctx, gate), up);
+    }
     ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
     ff = ggml_scale(ctx, ff, params.residual_mul);
     x = ggml_add(ctx, x, ff);

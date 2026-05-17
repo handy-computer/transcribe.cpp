@@ -91,6 +91,10 @@ struct GraniteModel final : public transcribe_model {
     ggml_context *        bn_fused_ctx    = nullptr;
     ggml_backend_buffer_t bn_fused_buffer = nullptr;
 
+    // Packed FFN gate+up: one mul_mat per block instead of two. Owned by
+    // qwen3_lm::pack_gate_up; freed in ~GraniteModel().
+    transcribe::qwen3_lm::PackedGateUpHandles packed_gate_up;
+
     std::optional<transcribe::MelFrontend> mel;
 
     // Jinja chat template from the GGUF KV. Stored verbatim — we don't

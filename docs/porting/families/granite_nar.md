@@ -82,8 +82,10 @@ Allowed statuses: `PASS`, `SKIP - not exposed by runtime`, `ACCEPTED GAP - <reas
 
 | Capability | Mode | Command / test | Expected observable | Status |
 |------------|------|----------------|---------------------|--------|
-| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-nar/granite-speech-4.1-2b-nar-bf16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript produced by a single NAR editor pass | TODO |
-| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-nar/granite-speech-4.1-2b-nar-bf16.gguf samples/jfk.wav` | non-empty plausible transcript | TODO |
+| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-nar/granite-speech-4.1-2b-nar-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript produced by a single NAR editor pass | PASS — emits "and so, my fellow americans, ask not what your country can do for you. ask what you can do for your country." (reference NLE has a typo "americ.ans"; C++ is cleaner) |
+| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/granite-speech-4.1-2b-nar/granite-speech-4.1-2b-nar-BF16.gguf samples/jfk.wav` | non-empty plausible transcript | PASS — same transcript as the language-hinted run (NLE has no language conditioning at the model API) |
+| Translate | --target-language fr/de/es/pt/ja | not exercised | reference NAR variant does NOT advertise translation in upstream config | SKIP — not exposed by NAR family (the NLE editor is single-task ASR; AR `granite_speech` exposes translation) |
+| Timestamps | word/segment | not exercised | NAR encoder collapses to per-window pooled output; no per-token timing recovery | SKIP — not exposed by runtime |
 
 ## Notes
 

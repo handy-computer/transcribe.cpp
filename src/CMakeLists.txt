@@ -88,6 +88,12 @@ add_library(transcribe
     arch/granite/encoder.cpp
     arch/granite/projector.cpp
     arch/granite/decoder.cpp
+    arch/granite_nar/model.cpp
+    arch/granite_nar/capabilities.cpp
+    arch/granite_nar/weights.cpp
+    arch/granite_nar/encoder.cpp
+    arch/granite_nar/projector.cpp
+    arch/granite_nar/decoder.cpp
 )
 
 target_include_directories(transcribe

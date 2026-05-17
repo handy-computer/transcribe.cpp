@@ -81,6 +81,7 @@ GraniteModel::~GraniteModel() {
         ggml_backend_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
+    packed_gate_up.free();
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
@@ -365,6 +366,28 @@ transcribe_status load(
     // fused [inner_dim] scale/bias tensors per block.
     if (const transcribe_status st = fuse_batch_norm(*m); st != TRANSCRIBE_OK) {
         return st;
+    }
+
+    // Gate+Up fusion: shared qwen3_lm packer. Drops one FFN mul_mat per
+    // block and lets the graph use ggml_swiglu(gate_up) instead of
+    // explicit silu(gate)*up.
+    {
+        std::vector<transcribe::qwen3_lm::GateUpEntry> entries;
+        entries.reserve(m->weights.dec_blocks.size());
+        for (auto & b : m->weights.dec_blocks) {
+            entries.push_back({b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w});
+        }
+        if (!transcribe::qwen3_lm::pack_gate_up(
+                m->plan.primary,
+                m->hparams.dec_hidden,
+                m->hparams.dec_intermediate,
+                entries,
+                m->packed_gate_up,
+                "granite"))
+        {
+            m->packed_gate_up.free();
+            return TRANSCRIBE_ERR_GGUF;
+        }
     }
 
     m->t_load_us = ggml_time_us() - t_load_start;
@@ -847,23 +870,37 @@ transcribe_status run(
     }
     input_ids.insert(input_ids.end(), suffix_ids.begin(), suffix_ids.end());
 
-    // Allocate the KV cache on first use. We size n_ctx generously to
-    // cover the prompt + a typical jfk-length transcript (~200 tokens
-    // suffices; allocate 1024 to leave room for longer audio without
-    // re-allocating).
+    // Size the KV cache dynamically: T_prompt + room for the longest
+    // generation we'll emit. Matches the HF reference's DynamicCache
+    // semantics (grows as needed) without paying for a worst-case
+    // pre-alloc. If the existing cache is too small for this prompt,
+    // free and re-allocate. Round up to a 256-row bucket so back-to-back
+    // runs of similar audio lengths don't keep re-allocating.
+    constexpr int kStepBudget = 256;
+    constexpr int kKvBucket   = 256;
+    const int needed_raw = T_prompt + kStepBudget;
+    const int needed_n_ctx =
+        ((needed_raw + kKvBucket - 1) / kKvBucket) * kKvBucket;
+
+    if (cc->kv.self_k != nullptr && cc->kv.n_ctx < needed_n_ctx) {
+        cc->kv.free();
+    }
     if (cc->kv.self_k == nullptr) {
-        constexpr int kKvCtx = 1024;
         ggml_type kv_t = GGML_TYPE_F16;
         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_t = GGML_TYPE_F32;
         if (!transcribe::qwen3_lm::kv_init(
-                cc->kv, cm->plan.primary, kKvCtx,
+                cc->kv, cm->plan.primary, needed_n_ctx,
                 cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                 cm->hparams.dec_n_layers, kv_t))
         {
-            std::fprintf(stderr, "granite run: kv_init failed\n");
+            std::fprintf(stderr,
+                         "granite run: kv_init failed (n_ctx=%d)\n",
+                         needed_n_ctx);
             return TRANSCRIBE_ERR_BACKEND;
         }
     }
+    // After dynamic sizing this should be unreachable; keep as a
+    // belt-and-braces invariant check.
     if (T_prompt > cc->kv.n_ctx) {
         std::fprintf(stderr,
                      "granite run: T_prompt=%d exceeds kv.n_ctx=%d\n",
