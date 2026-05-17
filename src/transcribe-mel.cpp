@@ -832,7 +832,8 @@ transcribe_status MelFrontend::compute(
     // resize() instead of assign(): the loop below writes every
     // element exactly once, so the zero-fill that assign() would do
     // is dead work.
-    const bool mask_last = (cfg_.pad_mode == "constant");
+    const bool mask_last = (cfg_.pad_mode == "constant") ||
+                           cfg_.nemo_mask_trailing_frame;
     const int  n_norm    = mask_last ? (n_frames - 1) : n_frames;
 
     out_mel.resize(

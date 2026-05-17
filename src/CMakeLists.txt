@@ -50,6 +50,11 @@ add_library(transcribe
     arch/qwen3_asr/weights.cpp
     arch/qwen3_asr/encoder.cpp
     arch/qwen3_asr/decoder.cpp
+    arch/canary_qwen/model.cpp
+    arch/canary_qwen/capabilities.cpp
+    arch/canary_qwen/weights.cpp
+    arch/canary_qwen/encoder.cpp
+    arch/canary_qwen/decoder.cpp
     arch/whisper/model.cpp
     arch/whisper/capabilities.cpp
     arch/whisper/weights.cpp
