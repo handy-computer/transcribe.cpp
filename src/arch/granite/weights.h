@@ -46,6 +46,14 @@ namespace transcribe::granite {
 // ---------------------------------------------------------------------------
 
 struct GraniteHParams {
+    // Identity. `stt.variant` distinguishes models that share the same
+    // architecture and hparams but differ in their published evaluation
+    // prompt (e.g. granite-4.0-1b-speech, granite-speech-4.1-2b,
+    // granite-speech-4.1-2b-plus). Used in model.cpp to pick the
+    // per-variant instruction + optional system prompt that matches the
+    // model card. Empty string falls back to the historical default.
+    std::string variant;
+
     // Encoder (Conformer, granite_speech_encoder).
     int32_t enc_n_layers         = 0;
     int32_t enc_hidden           = 0;  // 1024

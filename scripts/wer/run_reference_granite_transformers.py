@@ -50,8 +50,23 @@ def main() -> int:
                    help="HF revision to pin (ignored for local paths).")
     p.add_argument(
         "--instruction",
-        default="can you transcribe the speech into a written format?",
-        help="User instruction after the <|audio|> placeholder.",
+        default=None,
+        help="User instruction after the <|audio|> placeholder. When "
+             "omitted, the default is picked per-variant from --model "
+             "to match the published model card: "
+             "1b/plus -> 'can you transcribe the speech into a written "
+             "format?' (with a leading space for plus); "
+             "4.1-2b base -> 'transcribe the speech with proper "
+             "punctuation and capitalization.' "
+             "Override only if you know what you are doing.",
+    )
+    p.add_argument(
+        "--system-prompt",
+        default=None,
+        help="System message content. When omitted, picked per-variant "
+             "from --model to match the model card. Pass empty string "
+             "to force no system role. Only applied when the variant's "
+             "chat template includes a system role (plus today).",
     )
     p.add_argument("--language", default=None,
                    help="Ignored (granite chat prompt is fixed).")
@@ -126,9 +141,39 @@ def main() -> int:
     ).eval().to(args.device)
     load_ms = (time.monotonic() - t0) * 1000
 
+    # Pick per-variant prompt to match the model card. The variant is
+    # inferred from --model: the substring after the last '/' is the
+    # repo basename (also the local dir name when passing a path),
+    # which is exactly stt.variant in the GGUF.
+    variant = args.model.rstrip("/").rsplit("/", 1)[-1]
+    if args.instruction is not None:
+        instruction = args.instruction
+    elif variant == "granite-speech-4.1-2b":
+        instruction = "transcribe the speech with proper punctuation and capitalization."
+    elif variant == "granite-speech-4.1-2b-plus":
+        # Leading space matters: BPE tokenizes " can" vs "can" differently.
+        instruction = " can you transcribe the speech into a written format?"
+    else:
+        # granite-4.0-1b-speech and any other variant.
+        instruction = "can you transcribe the speech into a written format?"
+
+    if args.system_prompt is not None:
+        system_content = args.system_prompt
+    elif variant == "granite-speech-4.1-2b-plus":
+        system_content = (
+            "Knowledge Cutoff Date: April 2024.\n"
+            "Today's Date: December 19, 2024.\n"
+            "You are Granite, developed by IBM. You are a helpful AI assistant"
+        )
+    else:
+        system_content = ""
+
     # Build the prompt once. Same prompt every utterance.
-    user_message = f"<|audio|>{args.instruction}"
-    chat = [{"role": "user", "content": user_message}]
+    user_message = f"<|audio|>{instruction}"
+    chat = []
+    if system_content:
+        chat.append({"role": "system", "content": system_content})
+    chat.append({"role": "user", "content": user_message})
     has_template = (
         getattr(processor.tokenizer, "chat_template", None) is not None
         or getattr(processor, "chat_template", None) is not None
@@ -139,6 +184,7 @@ def main() -> int:
         )
     else:
         prompt = f"USER: {user_message}\n ASSISTANT:"
+    print(f"variant: {variant}")
     print(f"prompt: {prompt!r}")
 
     with open(args.manifest) as f:

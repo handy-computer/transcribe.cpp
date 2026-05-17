@@ -28,6 +28,11 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    // ----- Identity -----
+    if (auto st = read_optional_string_kv(
+            gguf, "stt.variant", kFamilyTag, "", hp.variant);
+        st != TRANSCRIBE_OK) return st;
+
     // ----- Encoder (Conformer) -----
     if (auto st = read_required_u32_kv(gguf, "stt.granite.encoder.n_layers", kFamilyTag, hp.enc_n_layers); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.encoder.hidden", kFamilyTag, hp.enc_hidden); st != TRANSCRIBE_OK) return st;

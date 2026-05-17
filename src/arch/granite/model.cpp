@@ -723,15 +723,31 @@ transcribe_status run(
     //     are emitted directly rather than tokenized from their literal
     //     piece strings.
     //
-    // Granite-speech instructions:
-    //   transcribe (default): "can you transcribe the speech into a written format?"
-    //   transcribe + word ts: "transcribe the speech with timestamps in [SS:MS] format"
-    //                          (only -plus actually emits the [SS:N] markers; 1b/2b
-    //                          fall back to plain transcript, which Stage-4 Capability
-    //                          Validation records as SKIP rather than PASS)
-    //   translate:            "can you translate the speech into <Language>?"
-    std::string instruction =
-        "can you transcribe the speech into a written format?";
+    // Granite-speech instructions. Each variant's published WER on
+    // LibriSpeech test-clean was measured with a specific prompt; using
+    // a different prompt produces a measurable WER drift (typically
+    // 0.02-0.04pp). Match the model card per variant.
+    //
+    //   granite-4.0-1b-speech            : "can you transcribe the speech into a written format?"
+    //   granite-speech-4.1-2b            : "transcribe the speech with proper punctuation and capitalization."
+    //   granite-speech-4.1-2b-plus       : " can you transcribe the speech into a written format?"
+    //                                       (leading space matters: BPE token IDs differ)
+    //                                       PLUS a Granite-specific system prompt (see use_granite4_chat below).
+    //   word-timestamps task             : "transcribe the speech with timestamps in [SS:MS] format"
+    //                                       (only -plus actually emits the [SS:N] markers; 1b/2b
+    //                                       fall back to plain transcript, which Stage-4 Capability
+    //                                       Validation records as SKIP rather than PASS)
+    //   translate task                   : "can you translate the speech into <Language>?"
+    std::string instruction;
+    if (cm->hparams.variant == "granite-speech-4.1-2b") {
+        instruction = "transcribe the speech with proper punctuation and capitalization.";
+    } else if (cm->hparams.variant == "granite-speech-4.1-2b-plus") {
+        instruction = " can you transcribe the speech into a written format?";
+    } else {
+        // granite-4.0-1b-speech and any future variant default to the
+        // 1b prompt unless we add a per-variant override above.
+        instruction = "can you transcribe the speech into a written format?";
+    }
     bool want_timestamps = false;
     if (params != nullptr) {
         if (params->task == TRANSCRIBE_TASK_TRANSLATE) {
@@ -777,18 +793,26 @@ transcribe_status run(
     if (use_granite4_chat) {
         // prefix:
         //   <|start_of_role|> system <|end_of_role|>
-        //   You are a helpful assistant. Please ensure responses are
-        //   professional, accurate, and safe.
+        //   {system_content}
         //   <|end_of_text|> \n <|start_of_role|> user <|end_of_role|>
         //   <|audio|>...
         // We assemble token ids manually so the special pieces are
         // exact, not BPE'd.
+        //
+        // Per-variant system content (the granite-speech-4.1-2b-plus
+        // model card publishes the Granite-style system prompt below;
+        // future granite4-chat variants would slot in here):
+        const char * system_content =
+            (cm->hparams.variant == "granite-speech-4.1-2b-plus")
+                ? "Knowledge Cutoff Date: April 2024.\n"
+                  "Today's Date: December 19, 2024.\n"
+                  "You are Granite, developed by IBM. You are a helpful AI assistant"
+                : "You are a helpful assistant. Please ensure responses "
+                  "are professional, accurate, and safe.";
         std::vector<int32_t> text_a, text_b;
         if (const transcribe_status st = cm->tok.encode("system", text_a);
             st != TRANSCRIBE_OK) return st;
-        if (const transcribe_status st = cm->tok.encode(
-                "You are a helpful assistant. Please ensure responses "
-                "are professional, accurate, and safe.", text_b);
+        if (const transcribe_status st = cm->tok.encode(system_content, text_b);
             st != TRANSCRIBE_OK) return st;
         prefix_ids.push_back(cm->chat_tokens.start_of_role);
         prefix_ids.insert(prefix_ids.end(), text_a.begin(), text_a.end());
