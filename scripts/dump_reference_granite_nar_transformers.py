@@ -157,6 +157,24 @@ def load_reference(args: argparse.Namespace):
     if hasattr(cfg, "attn_implementation"):
         cfg.attn_implementation = "eager"
 
+    # Force bidirectional attention without flash-attn-2 (which is CUDA-only).
+    #
+    # transformers.models.granite.modeling_granite.GraniteModel.forward
+    # unconditionally builds a causal mask via create_causal_mask() and
+    # passes it to every layer as attention_mask. eager_attention_forward
+    # then adds that mask to attn_weights, giving causal attention even
+    # though NLE sets layer.self_attn.is_causal = False. flash_attention_2
+    # is the only backend that bypasses this path — hence the assert in
+    # modeling_nle.py.
+    #
+    # Patching create_causal_mask to return None makes eager honor the
+    # NLE-set is_causal=False and compute true bidirectional attention,
+    # matching what flash-attn-2 would produce. Verified: 1.29% WER on
+    # LibriSpeech test-clean (matches model card) vs 7.64% without the
+    # patch.
+    from transformers.models.granite import modeling_granite as _granite_mod
+    _granite_mod.create_causal_mask = lambda **kw: None
+
     model = AutoModel.from_pretrained(
         model_id,
         config=cfg,
@@ -165,10 +183,10 @@ def load_reference(args: argparse.Namespace):
         dtype=dtype,
         attn_implementation="eager",
     ).eval()
-    # The model __init__ wires is_causal=False on every layer; that
-    # propagates through sdpa correctly because the granite LM's eager
-    # forward respects is_causal_user_override. The runtime assertion
-    # only fires inside .forward(), so we patch it after construction.
+    # The modeling_nle assert checks self.config.attn_implementation ==
+    # "flash_attention_2". We've made eager bidirectional via the mask
+    # patch above; bypass the assert by temporarily flipping the config
+    # value while the forward body runs.
     import types
     original_forward = model.forward.__func__
 
