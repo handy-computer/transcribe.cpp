@@ -64,34 +64,74 @@ The `granite-speech-4.1-2b-plus` repo is missing `preprocessor_config.json`. The
 
 ## Commands
 
-Reference run:
+Reference WER run (per-variant prompt picked automatically from `--model`):
 
 ```bash
-TODO
+uv run --project scripts/envs/granite \
+  scripts/wer/run_reference_granite_transformers.py \
+    --model ibm-granite/granite-4.0-1b-speech \
+    --manifest samples/wer/test-clean.manifest.jsonl \
+    --out reports/wer/granite-4.0-1b-speech-REF.test-clean.jsonl
 ```
 
-Reference dumps:
+Reference tensor dumps (per-variant):
 
 ```bash
-TODO
+uv run --project scripts/envs/granite \
+  scripts/dump_reference_granite_transformers.py encoder \
+    --model ibm-granite/granite-4.0-1b-speech \
+    --audio samples/jfk.wav \
+    --out build/validate/granite/granite-4.0-1b-speech/jfk/encoder/ref
+
+uv run --project scripts/envs/granite \
+  scripts/dump_reference_granite_transformers.py decode \
+    --model ibm-granite/granite-4.0-1b-speech \
+    --audio samples/jfk.wav \
+    --out build/validate/granite/granite-4.0-1b-speech/jfk/decode/ref
 ```
 
-Conversion:
+Conversion (preserves source dtypes; one HF repo per variant):
 
 ```bash
-TODO
+uv run --project scripts/envs/granite \
+  scripts/convert-granite.py ibm-granite/granite-4.0-1b-speech \
+  --repo-id ibm-granite/granite-4.0-1b-speech
 ```
 
-Validation:
+Validation (ref-dtype, CPU strict; `--variant` selects per-variant manifest):
 
 ```bash
-TODO
+uv run scripts/validate.py all \
+  --family granite --variant granite-4.0-1b-speech
 ```
 
-Benchmarks:
+Or step by step:
 
 ```bash
-TODO
+uv run scripts/validate.py ref     --family granite --variant granite-4.0-1b-speech
+uv run scripts/validate.py cpp     --family granite --variant granite-4.0-1b-speech
+uv run scripts/validate.py compare --family granite --variant granite-4.0-1b-speech
+```
+
+Benchmarks (per-variant):
+
+```bash
+uv run scripts/perf/bench.py \
+  --model models/granite-4.0-1b-speech/granite-4.0-1b-speech-Q8_0.gguf \
+  --backend metal \
+  --machine "$(uname -srm | tr ' ' _)"
+```
+
+Full WER sweep (Stage 7):
+
+```bash
+for PRESET in BF16 F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
+  uv run scripts/wer/run.py \
+    --model models/granite-4.0-1b-speech/granite-4.0-1b-speech-${PRESET}.gguf \
+    --manifest samples/wer/test-clean.manifest.jsonl \
+    --out reports/wer/granite-4.0-1b-speech-${PRESET}.test-clean.jsonl
+  uv run scripts/wer/score.py reports/wer/granite-4.0-1b-speech-${PRESET}.test-clean.jsonl
+done
 ```
 
 ## Capability Validation

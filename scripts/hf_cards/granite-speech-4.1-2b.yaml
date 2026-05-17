@@ -1,0 +1,83 @@
+# Spec for the HF README of handy-computer/granite-speech-4.1-2b-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: ibm-granite/granite-speech-4.1-2b
+target_repo: handy-computer/granite-speech-4.1-2b-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/granite-speech-4.1-2b.md
+
+upstream_commit: 8f4bb5f
+pin_date: 2026-05-17
+
+validation:
+  reference: Transformers
+  commit: 275332d
+  date: 2026-05-17
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+  - fr
+  - de
+  - es
+  - pt
+  - ja
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - granite
+  - granite-speech
+  - audio-llm
+  - multilingual
+
+summary: |
+  Offline multilingual speech-to-text. IBM Granite Speech 4.1-2b is an
+  audio-LLM with the same architecture as 4.0-1b (Conformer encoder with
+  block-local Shaw attention, BLIP-2 Q-Former projector, Granite-4.0-1b-base
+  autoregressive LLM decoder) and improved punctuation and casing over 4.0-1b.
+  Takes a 16 kHz mono WAV and produces a transcript. Transcribes English,
+  French, German, Spanish, Portuguese, and Japanese. Translates between
+  English and each of those five other languages in either direction
+  (en ↔ fr, en ↔ de, en ↔ es, en ↔ pt, en ↔ ja) — always via English, no
+  direct fr↔de etc.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances)
+    with greedy decoding. BF16 reference baseline (re-run locally with the
+    model card's exact prompt): 1.31% — 0.02pp below upstream's published
+    1.33%, likely a minor normalization difference on the publisher side and
+    well within bootstrap CI overlap. Text normalizer: Whisper
+    `EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
+
+quants:
+  - name: BF16
+    filename: granite-speech-4.1-2b-BF16.gguf
+    size: 4.63 GB
+    wer: 1.31%
+  - name: F16
+    filename: granite-speech-4.1-2b-F16.gguf
+    size: 4.63 GB
+    wer: 1.32%
+  - name: Q8_0
+    filename: granite-speech-4.1-2b-Q8_0.gguf
+    size: 2.56 GB
+    wer: 1.32%
+  - name: Q6_K
+    filename: granite-speech-4.1-2b-Q6_K.gguf
+    size: 2.02 GB
+    wer: 1.29%
+  - name: Q5_K_M
+    filename: granite-speech-4.1-2b-Q5_K_M.gguf
+    size: 1.83 GB
+    wer: 1.33%
+  - name: Q4_K_M
+    filename: granite-speech-4.1-2b-Q4_K_M.gguf
+    size: 1.60 GB
+    wer: 1.37%

@@ -46,34 +46,68 @@ The encoder consumes `80 mels x 2-frame stack = input_dim=160`; the 2-frame stac
 
 ## Commands
 
-Reference run:
+Reference WER run (`create_causal_mask` is monkey-patched to `None` inside
+the runner so eager attention matches the upstream `flash-attn-2`
+bidirectional semantics without requiring flash-attn-2 on the host):
 
 ```bash
-TODO
+uv run --project scripts/envs/granite_nar \
+  scripts/wer/run_reference_granite_nar_transformers.py \
+    --model ibm-granite/granite-speech-4.1-2b-nar \
+    --manifest samples/wer/test-clean.manifest.jsonl \
+    --out reports/wer/granite-speech-4.1-2b-nar-REF.test-clean.jsonl
 ```
 
-Reference dumps:
+Reference tensor dumps (encoder + projector + bidirectional decoder, single
+pass):
 
 ```bash
-TODO
+uv run --project scripts/envs/granite_nar \
+  scripts/dump_reference_granite_nar_transformers.py encoder \
+    --model ibm-granite/granite-speech-4.1-2b-nar \
+    --audio samples/jfk.wav \
+    --out build/validate/granite_nar/granite-speech-4.1-2b-nar/jfk/encoder/ref
+
+uv run --project scripts/envs/granite_nar \
+  scripts/dump_reference_granite_nar_transformers.py decode \
+    --model ibm-granite/granite-speech-4.1-2b-nar \
+    --audio samples/jfk.wav \
+    --out build/validate/granite_nar/granite-speech-4.1-2b-nar/jfk/decode/ref
 ```
 
-Conversion:
+Conversion (preserves source bf16 dtype):
 
 ```bash
-TODO
+uv run --project scripts/envs/granite_nar \
+  scripts/convert-granite_nar.py ibm-granite/granite-speech-4.1-2b-nar \
+  --repo-id ibm-granite/granite-speech-4.1-2b-nar
 ```
 
-Validation:
+Validation (ref-dtype, CPU strict, 11 tensors):
 
 ```bash
-TODO
+uv run scripts/validate.py all --family granite_nar --variant granite-speech-4.1-2b-nar
 ```
 
 Benchmarks:
 
 ```bash
-TODO
+uv run scripts/perf/bench.py \
+  --model models/granite-speech-4.1-2b-nar/granite-speech-4.1-2b-nar-Q8_0.gguf \
+  --backend metal \
+  --machine "$(uname -srm | tr ' ' _)"
+```
+
+Full WER sweep (Stage 7):
+
+```bash
+for PRESET in BF16 F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
+  uv run scripts/wer/run.py \
+    --model models/granite-speech-4.1-2b-nar/granite-speech-4.1-2b-nar-${PRESET}.gguf \
+    --manifest samples/wer/test-clean.manifest.jsonl \
+    --out reports/wer/granite-speech-4.1-2b-nar-${PRESET}.test-clean.jsonl
+  uv run scripts/wer/score.py reports/wer/granite-speech-4.1-2b-nar-${PRESET}.test-clean.jsonl
+done
 ```
 
 ## Capability Validation
