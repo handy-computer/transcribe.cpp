@@ -1,0 +1,104 @@
+/*
+ * include/transcribe/parakeet.h - Parakeet-family public extension surface.
+ *
+ * Includes transcribe.h; safe to include in C or C++ TUs. Holds the
+ * streaming extension structs (cache-aware and chunked-attention
+ * variants) and their kind constants and INIT macros.
+ *
+ * Acceptance is per-loaded-model-variant: nemotron-speech-streaming-en-0.6b
+ * (cache-aware) accepts TRANSCRIBE_EXT_KIND_PARAKEET_STREAM and rejects
+ * TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM; parakeet-unified-en-0.6b
+ * (chunked_limited_with_rc) does the opposite. Probe via
+ * transcribe_model_accepts_ext_kind before pointing
+ * transcribe_stream_params::family at one of these structs.
+ *
+ * FourCC kinds are reserved in docs/extension-kinds.md.
+ */
+
+#ifndef TRANSCRIBE_PARAKEET_H
+#define TRANSCRIBE_PARAKEET_H
+
+#include "transcribe.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* 'PKST' little-endian = 0x54534B50 */
+#define TRANSCRIBE_EXT_KIND_PARAKEET_STREAM           0x54534B50u
+/* 'PKBS' little-endian = 0x53424B50 */
+#define TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM  0x53424B50u
+
+/*
+ * Cache-aware streaming knob (nemotron-speech-streaming-en-0.6b).
+ *
+ *   att_context_right
+ *
+ *     Right-context (lookahead) selector in encoder frames. The cache-
+ *     aware streaming variants are trained on a menu of (left, right)
+ *     pairs simultaneously - the user picks one at inference time to
+ *     trade latency for accuracy. nemotron's published menu is
+ *     right ∈ {13, 6, 1, 0}, corresponding to lookahead of
+ *     {1040, 480, 80, 0} ms at the 80ms encoder frame rate.
+ *
+ *     -1 (default): use the model's default setting (first entry of
+ *                   att_context_size_choices = max-accuracy /
+ *                   max-latency).
+ *     >=0:          select the corresponding (left, att_context_right)
+ *                   entry from the model's training menu.
+ *                   transcribe_stream_begin returns
+ *                   TRANSCRIBE_ERR_INVALID_ARG if the requested right
+ *                   is not in the menu.
+ *
+ *     Inspect transcribe_capabilities::streaming_lookahead_ms to see
+ *     the default's lookahead in milliseconds, and
+ *     transcribe_capabilities::streaming_lookahead_ms_min to see the
+ *     fastest setting the model supports.
+ */
+struct transcribe_parakeet_stream_ext {
+    struct transcribe_ext ext;
+    int32_t               att_context_right;
+};
+
+#define TRANSCRIBE_PARAKEET_STREAM_EXT_INIT                            \
+    { { sizeof(struct transcribe_parakeet_stream_ext),                 \
+        TRANSCRIBE_EXT_KIND_PARAKEET_STREAM },                         \
+      -1 /* att_context_right: model default */ }
+
+/*
+ * Chunked-attention (buffered) streaming knob (parakeet-unified-en-0.6b).
+ *
+ * parakeet-unified-en-0.6b is trained with chunked_limited_with_rc
+ * attention over a menu of (left, chunk, right) context tuples
+ * expressed in 80ms encoder frames. The user picks the active tuple at
+ * stream_begin time; the encoder re-runs over each new
+ * [left | chunk | right] PCM window. Each field is in MILLISECONDS;
+ * the runtime converts to encoder frames via the 80ms frame rate.
+ *
+ * Use -1 (sentinel) on any field to get the model's "best accuracy"
+ * default - L=5600 ms / C=1040 ms / R=1040 ms for unified-en-0.6b,
+ * which the published WER numbers correspond to. Non-default tuples
+ * are passed through to the encoder's set_default_att_context_size;
+ * the runtime validates the resolved (L, C, R) against the model's
+ * training menu (stt.parakeet.encoder.att_chunk_{left,chunk,right}_choices).
+ * Tuples outside the menu return TRANSCRIBE_ERR_INVALID_ARG.
+ */
+struct transcribe_parakeet_buffered_stream_ext {
+    struct transcribe_ext ext;
+    int32_t               left_ms;
+    int32_t               chunk_ms;
+    int32_t               right_ms;
+};
+
+#define TRANSCRIBE_PARAKEET_BUFFERED_STREAM_EXT_INIT                       \
+    { { sizeof(struct transcribe_parakeet_buffered_stream_ext),            \
+        TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM },                    \
+      -1, /* left_ms:  model default */                                    \
+      -1, /* chunk_ms: model default */                                    \
+      -1  /* right_ms: model default */ }
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* TRANSCRIBE_PARAKEET_H */

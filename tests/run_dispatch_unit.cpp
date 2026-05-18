@@ -38,7 +38,8 @@ int main() {
     CHECK(!ctx.has_result);
     CHECK(ctx.full_text.empty());
 
-    const transcribe_timings t = transcribe_get_timings(&ctx);
+    transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
+    CHECK(transcribe_get_timings(&ctx, &t) == TRANSCRIBE_OK);
     CHECK(t.mel_ms == 0.0f);
     CHECK(t.encode_ms == 0.0f);
     CHECK(t.decode_ms == 0.0f);

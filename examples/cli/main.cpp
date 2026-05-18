@@ -20,6 +20,7 @@
 //   -h, --help         show this help
 
 #include "transcribe.h"
+#include "transcribe/parakeet.h"
 #include "wav.h"
 
 #include <algorithm>
@@ -495,7 +496,8 @@ int main(int argc, char ** argv) {
         // the one-shot load time so downstream WER tooling can record it
         // without parsing stderr. Per-file lines follow on subsequent lines.
         if (args.batch_jsonl) {
-            const struct transcribe_timings load_tm = transcribe_get_timings(ctx);
+            struct transcribe_timings load_tm = TRANSCRIBE_TIMINGS_INIT;
+            (void)transcribe_get_timings(ctx, &load_tm);
             std::printf("{\"type\":\"batch_header\",\"load_ms\":%.1f}\n",
                         (double)load_tm.load_ms);
             std::fflush(stdout);
@@ -528,24 +530,28 @@ int main(int argc, char ** argv) {
             // harness can measure cache-aware streaming output.
             transcribe_status run_st = TRANSCRIBE_OK;
             if (args.stream_chunk_ms > 0) {
-                struct transcribe_stream_params sp =
-                    transcribe_stream_default_params();
-                struct transcribe_parakeet_stream_params pkt_sp =
-                    transcribe_parakeet_stream_default_params();
-                if (args.stream_att_right >= 0) {
-                    pkt_sp.att_context_right = args.stream_att_right;
-                    sp.parakeet = &pkt_sp;
-                }
-                struct transcribe_parakeet_buffered_stream_params pkt_buf_sp =
-                    transcribe_parakeet_buffered_stream_default_params();
-                if (args.stream_buf_left_ms  >= 0 ||
+                struct transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
+                struct transcribe_parakeet_stream_ext pkt_sp =
+                    TRANSCRIBE_PARAKEET_STREAM_EXT_INIT;
+                struct transcribe_parakeet_buffered_stream_ext pkt_buf_sp =
+                    TRANSCRIBE_PARAKEET_BUFFERED_STREAM_EXT_INIT;
+                const bool want_cache_aware = (args.stream_att_right >= 0);
+                const bool want_buffered =
+                    args.stream_buf_left_ms  >= 0 ||
                     args.stream_buf_chunk_ms >= 0 ||
-                    args.stream_buf_right_ms >= 0)
+                    args.stream_buf_right_ms >= 0;
+                if (want_cache_aware && transcribe_model_accepts_ext_kind(
+                        model, TRANSCRIBE_EXT_KIND_PARAKEET_STREAM))
+                {
+                    pkt_sp.att_context_right = args.stream_att_right;
+                    sp.family = &pkt_sp.ext;
+                } else if (want_buffered && transcribe_model_accepts_ext_kind(
+                        model, TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM))
                 {
                     pkt_buf_sp.left_ms  = args.stream_buf_left_ms;
                     pkt_buf_sp.chunk_ms = args.stream_buf_chunk_ms;
                     pkt_buf_sp.right_ms = args.stream_buf_right_ms;
-                    sp.parakeet_buffered = &pkt_buf_sp;
+                    sp.family = &pkt_buf_sp.ext;
                 }
                 run_st = transcribe_stream_begin(ctx, &rp, &sp);
                 if (run_st == TRANSCRIBE_OK) {
@@ -556,7 +562,7 @@ int main(int argc, char ** argv) {
                         const size_t take = std::min<size_t>(
                             static_cast<size_t>(chunk_samples),
                             pcm.size() - pos);
-                        struct transcribe_stream_update upd = {};
+                        struct transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
                         run_st = transcribe_stream_feed(
                             ctx, pcm.data() + pos,
                             static_cast<int>(take), &upd);
@@ -564,7 +570,7 @@ int main(int argc, char ** argv) {
                         pos += take;
                     }
                     if (run_st == TRANSCRIBE_OK) {
-                        struct transcribe_stream_update fin_upd = {};
+                        struct transcribe_stream_update fin_upd = TRANSCRIBE_STREAM_UPDATE_INIT;
                         run_st = transcribe_stream_finalize(ctx, &fin_upd);
                     }
                 }
@@ -590,7 +596,8 @@ int main(int argc, char ** argv) {
             // error tag, so downstream tools count them as silent
             // successes.
             if (args.batch_jsonl) {
-                struct transcribe_timings tm = transcribe_get_timings(ctx);
+                struct transcribe_timings tm = TRANSCRIBE_TIMINGS_INIT;
+                (void)transcribe_get_timings(ctx, &tm);
                 const std::string escaped  = json_escape(text);
                 const std::string segments = segments_json(ctx);
                 std::string err_field;
@@ -714,9 +721,10 @@ int main(int argc, char ** argv) {
         // false until the finalize call.
         transcribe_status run_st = TRANSCRIBE_OK;
         if (args.stream_chunk_ms > 0) {
-            const transcribe_capabilities * caps =
-                transcribe_model_capabilities(model);
-            if (caps == nullptr || !caps->supports_streaming) {
+            struct transcribe_capabilities caps = TRANSCRIBE_CAPABILITIES_INIT;
+            const transcribe_status caps_st =
+                transcribe_model_get_capabilities(model, &caps);
+            if (caps_st != TRANSCRIBE_OK || !caps.supports_streaming) {
                 std::fprintf(stderr,
                              "stream: model does not advertise "
                              "supports_streaming; use a streaming-capable "
@@ -731,26 +739,30 @@ int main(int argc, char ** argv) {
             std::printf("stream: chunk=%d ms (%d samples)\n",
                         args.stream_chunk_ms, chunk_samples);
 
-            struct transcribe_stream_params sp =
-                transcribe_stream_default_params();
-            struct transcribe_parakeet_stream_params pkt_sp =
-                transcribe_parakeet_stream_default_params();
-            if (args.stream_att_right >= 0) {
+            struct transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
+            struct transcribe_parakeet_stream_ext pkt_sp =
+                TRANSCRIBE_PARAKEET_STREAM_EXT_INIT;
+            struct transcribe_parakeet_buffered_stream_ext pkt_buf_sp =
+                TRANSCRIBE_PARAKEET_BUFFERED_STREAM_EXT_INIT;
+            const bool want_cache_aware = (args.stream_att_right >= 0);
+            const bool want_buffered =
+                args.stream_buf_left_ms  >= 0 ||
+                args.stream_buf_chunk_ms >= 0 ||
+                args.stream_buf_right_ms >= 0;
+            if (want_cache_aware && transcribe_model_accepts_ext_kind(
+                    model, TRANSCRIBE_EXT_KIND_PARAKEET_STREAM))
+            {
                 pkt_sp.att_context_right = args.stream_att_right;
-                sp.parakeet = &pkt_sp;
+                sp.family = &pkt_sp.ext;
                 std::printf("stream: att_context_right=%d\n",
                             args.stream_att_right);
-            }
-            struct transcribe_parakeet_buffered_stream_params pkt_buf_sp =
-                transcribe_parakeet_buffered_stream_default_params();
-            if (args.stream_buf_left_ms  >= 0 ||
-                args.stream_buf_chunk_ms >= 0 ||
-                args.stream_buf_right_ms >= 0)
+            } else if (want_buffered && transcribe_model_accepts_ext_kind(
+                    model, TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM))
             {
                 pkt_buf_sp.left_ms  = args.stream_buf_left_ms;
                 pkt_buf_sp.chunk_ms = args.stream_buf_chunk_ms;
                 pkt_buf_sp.right_ms = args.stream_buf_right_ms;
-                sp.parakeet_buffered = &pkt_buf_sp;
+                sp.family = &pkt_buf_sp.ext;
                 std::printf("stream: buffered (L,C,R)_ms=(%d,%d,%d)\n",
                             args.stream_buf_left_ms,
                             args.stream_buf_chunk_ms,
@@ -758,13 +770,11 @@ int main(int argc, char ** argv) {
             }
             // Print the streaming capability hints so users see what
             // the model offers before the first feed.
-            if (caps != nullptr) {
-                std::printf(
-                    "stream: caps chunk_ms=%d lookahead_ms=%d lookahead_ms_min=%d\n",
-                    caps->streaming_chunk_ms,
-                    caps->streaming_lookahead_ms,
-                    caps->streaming_lookahead_ms_min);
-            }
+            std::printf(
+                "stream: caps chunk_ms=%d lookahead_ms=%d lookahead_ms_min=%d\n",
+                caps.streaming_chunk_ms,
+                caps.streaming_lookahead_ms,
+                caps.streaming_lookahead_ms_min);
             run_st = transcribe_stream_begin(ctx, &rp, &sp);
             if (run_st != TRANSCRIBE_OK) {
                 std::fprintf(stderr,
@@ -777,7 +787,7 @@ int main(int argc, char ** argv) {
                     const size_t take = std::min<size_t>(
                         static_cast<size_t>(chunk_samples),
                         pcm.size() - pos);
-                    struct transcribe_stream_update upd = {};
+                    struct transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
                     run_st = transcribe_stream_feed(
                         ctx, pcm.data() + pos,
                         static_cast<int>(take), &upd);
@@ -802,7 +812,7 @@ int main(int argc, char ** argv) {
                     ++feed_n;
                 }
                 if (run_st == TRANSCRIBE_OK) {
-                    struct transcribe_stream_update fin_upd = {};
+                    struct transcribe_stream_update fin_upd = TRANSCRIBE_STREAM_UPDATE_INIT;
                     run_st = transcribe_stream_finalize(ctx, &fin_upd);
                     std::printf("  finalize: status=%s "
                                 "revision=%d input=%lld ms committed=%lld ms\n",
@@ -876,7 +886,8 @@ int main(int argc, char ** argv) {
         transcribe_print_timings(ctx);
 
         {
-            struct transcribe_timings tm = transcribe_get_timings(ctx);
+            struct transcribe_timings tm = TRANSCRIBE_TIMINGS_INIT;
+            (void)transcribe_get_timings(ctx, &tm);
             const double total_ms = tm.mel_ms + tm.encode_ms + tm.decode_ms;
             if (total_ms > 0.0 && duration_s > 0.0) {
                 std::printf("  realtime:   %.0fx (%.1f ms for %.1f s)\n",

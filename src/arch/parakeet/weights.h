@@ -121,7 +121,7 @@ struct ParakeetHParams {
     // nemotron-speech-streaming-en-0.6b is trained on four (L, R) pairs
     // simultaneously (att_context_probs = [0.25, 0.25, 0.25, 0.25] over
     // [[70,13],[70,6],[70,1],[70,0]]) and the caller picks at inference
-    // time via transcribe_parakeet_stream_params::att_context_right.
+    // time via transcribe_parakeet_stream_ext::att_context_right.
     //
     // Encoded as a flat GGUF int32 array [L0,R0,L1,R1,...] under the KV
     // stt.parakeet.encoder.att_context_size_choices. Index 0 is the

@@ -122,7 +122,10 @@ struct transcribe_model * load_or_fail(const char * fixture_name,
         }
     }
 
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->native_sample_rate == 16000);
@@ -210,7 +213,10 @@ void test_v2_fixture() {
         load_or_fail("tokenizer_minimal.gguf", "tdt-0.6b-v2");
     if (model == nullptr) return;
 
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->supports_language_detect == false);
@@ -243,7 +249,10 @@ void test_v3_fixture() {
         load_or_fail("tokenizer_minimal_v3.gguf", "tdt-0.6b-v3");
     if (model == nullptr) return;
 
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         // Capability KV overrode the family default.

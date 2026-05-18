@@ -7,6 +7,7 @@
 // decode keeps the tensor-validation prompt available.
 
 #include "transcribe.h"
+#include "transcribe/whisper.h"
 
 #include "wav.h"
 
@@ -88,7 +89,10 @@ int main() {
     }
 
     CHECK(std::strcmp(transcribe_model_arch_string(model), "whisper") == 0);
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK_EQ_INT(caps->native_sample_rate, 16000);
@@ -239,8 +243,8 @@ int main() {
     // avg_logprob are real numbers from the decoder, not zero.
     {
         CHECK_EQ_INT(transcribe_get_whisper_chunk_count(ctx), 1);
-        transcribe_whisper_chunk_trace tr =
-            transcribe_get_whisper_chunk_trace(ctx, 0);
+        transcribe_whisper_chunk_trace tr = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+        CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, 0, &tr), TRANSCRIBE_OK);
         CHECK(tr.t0_ms == 0);
         CHECK(tr.t1_ms > tr.t0_ms);
         CHECK(tr.temperature_used == 0.0f);
@@ -253,8 +257,8 @@ int main() {
         CHECK(tr.avg_logprob < 0.0f); /* log probabilities are negative */
         CHECK(!tr.no_speech_triggered);
         /* Out-of-range index returns a zeroed trace. */
-        transcribe_whisper_chunk_trace oor =
-            transcribe_get_whisper_chunk_trace(ctx, 99);
+        transcribe_whisper_chunk_trace oor = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+        CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, 99, &oor), TRANSCRIBE_OK);
         CHECK(oor.t0_ms == 0 && oor.t1_ms == 0 &&
               oor.temperature_used == 0.0f && oor.n_fallbacks == 0);
     }
@@ -289,8 +293,8 @@ int main() {
         /* Every chunk trace's temperature is on the fallback tuple. */
         const int n_chunks = transcribe_get_whisper_chunk_count(ctx);
         for (int i = 0; i < n_chunks; ++i) {
-            transcribe_whisper_chunk_trace tr =
-                transcribe_get_whisper_chunk_trace(ctx, i);
+            transcribe_whisper_chunk_trace tr = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+            CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, i, &tr), TRANSCRIBE_OK);
             CHECK(tr.temperature_used >= 0.0f);
             CHECK(tr.temperature_used <= 1.0f + 1e-3f);
             CHECK(tr.n_fallbacks >= 0);
@@ -336,8 +340,8 @@ int main() {
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
         const int n = transcribe_get_whisper_chunk_count(ctx);
         for (int i = 0; i < n; ++i) {
-            transcribe_whisper_chunk_trace tr =
-                transcribe_get_whisper_chunk_trace(ctx, i);
+            transcribe_whisper_chunk_trace tr = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+            CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, i, &tr), TRANSCRIBE_OK);
             /* no_speech skip gate MUST NOT fire when no_speech_thold
              * is disabled; no_speech_prob itself still populates
              * because the capture is independent of the skip check. */
@@ -353,8 +357,8 @@ int main() {
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
         const int n = transcribe_get_whisper_chunk_count(ctx);
         for (int i = 0; i < n; ++i) {
-            transcribe_whisper_chunk_trace tr =
-                transcribe_get_whisper_chunk_trace(ctx, i);
+            transcribe_whisper_chunk_trace tr = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+            CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, i, &tr), TRANSCRIBE_OK);
             CHECK(!tr.no_speech_triggered);
         }
     }
@@ -386,8 +390,8 @@ int main() {
         const int n = transcribe_get_whisper_chunk_count(ctx);
         CHECK(n >= 1);
         if (n >= 1) {
-            transcribe_whisper_chunk_trace tr =
-                transcribe_get_whisper_chunk_trace(ctx, 0);
+            transcribe_whisper_chunk_trace tr = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+            CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, 0, &tr), TRANSCRIBE_OK);
             CHECK(tr.no_speech_triggered);
             CHECK_EQ_INT(tr.n_fallbacks, 0);
             /* Chunk output was discarded → full_text is empty. */

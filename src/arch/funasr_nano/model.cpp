@@ -882,14 +882,15 @@ transcribe_status run(
 } // namespace
 
 extern const Arch arch = {
-    /* .name            = */ "funasr_nano",
-    /* .load            = */ load,
-    /* .init_context    = */ init_context,
-    /* .run             = */ run,
-    /* .stream_begin    = */ nullptr,
-    /* .stream_feed     = */ nullptr,
-    /* .stream_finalize = */ nullptr,
-    /* .stream_reset    = */ nullptr,
+    /* .name             = */ "funasr_nano",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::funasr_nano

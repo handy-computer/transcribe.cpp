@@ -353,7 +353,8 @@ int main() {
     CHECK(std::strcmp(transcribe_segment_text(ctx, 5), "") == 0);
 
     // ---- Timings ---------------------------------------------------
-    const transcribe_timings t = transcribe_get_timings(ctx);
+    transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
+    CHECK(transcribe_get_timings(ctx, &t) == TRANSCRIBE_OK);
     std::fprintf(stdout,
                  "decoder_smoke: timings load=%.2f mel=%.2f encode=%.2f decode=%.2f\n",
                  t.load_ms, t.mel_ms, t.encode_ms, t.decode_ms);

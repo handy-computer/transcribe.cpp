@@ -64,6 +64,16 @@ function(transcribe_apply_warnings tgt)
             -Wshadow
             -Wpedantic
             -Wno-unused-parameter
+            # The output-side TRANSCRIBE_*_INIT macros (timings,
+            # stream_update, capabilities, whisper_chunk_trace, ...)
+            # are deliberate zero-fill aggregate initializers:
+            # struct_size is set, every other field falls to
+            # initializer zero by C aggregate-init rules. The
+            # zero-means-absent contract is documented and load-bearing.
+            # -Wmissing-field-initializers would fire on every use of
+            # those macros; the warning's signal-to-noise on this
+            # codebase is too low to justify keeping it on.
+            -Wno-missing-field-initializers
         )
     endif()
 endfunction()

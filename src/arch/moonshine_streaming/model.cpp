@@ -1280,18 +1280,24 @@ transcribe_status stream_begin(
     cc->stream_samples_per_enc_frame  = samples_per_encoder_frame(hp);
     cc->stream_run_params             = *run_params;
 
-    // Resolve the per-stream decode-throttle knob from
-    // stream_params->moonshine_streaming. Sentinel -1 (or a null
-    // pointer) selects the family default. Convert milliseconds to
-    // encoder frames using the model's actual frame rate
-    // (samples_per_enc_frame / sample_rate). Clamping at >= 0 means
-    // a negative value other than the sentinel is treated as 0
+    // Resolve the per-stream decode-throttle knob from the generic
+    // partial_update_min_interval_ms field. Sentinel -1 selects the
+    // family default. Convert milliseconds to encoder frames using
+    // the model's actual frame rate (samples_per_enc_frame /
+    // sample_rate). Non-negative values pass through; >= 0 means a
+    // negative value other than the sentinel is treated as 0
     // (= no throttle, decode on every advance).
+    //
+    // Reject any family extension on this variant - Moonshine-Streaming
+    // has no family-specific stream knobs (the previous min_decode_interval_ms
+    // promoted to generic partial_update_min_interval_ms in the
+    // streaming-pilot ABI migration).
+    if (stream_params != nullptr && stream_params->family != nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
     int32_t min_decode_ms = k_default_min_decode_interval_ms;
-    if (stream_params != nullptr &&
-        stream_params->moonshine_streaming != nullptr)
-    {
-        const int32_t req = stream_params->moonshine_streaming->min_decode_interval_ms;
+    if (stream_params != nullptr) {
+        const int32_t req = stream_params->partial_update_min_interval_ms;
         if (req >= 0) min_decode_ms = req;
     }
     const int64_t spf = cc->stream_samples_per_enc_frame > 0
@@ -1721,14 +1727,15 @@ void stream_reset(transcribe_context * ctx) {
 } // namespace
 
 extern const Arch arch = {
-    /* .name            = */ "moonshine_streaming",
-    /* .load            = */ load,
-    /* .init_context    = */ init_context,
-    /* .run             = */ run,
-    /* .stream_begin    = */ stream_begin,
-    /* .stream_feed     = */ stream_feed,
-    /* .stream_finalize = */ stream_finalize,
-    /* .stream_reset    = */ stream_reset,
+    /* .name             = */ "moonshine_streaming",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .stream_begin     = */ stream_begin,
+    /* .stream_feed      = */ stream_feed,
+    /* .stream_finalize  = */ stream_finalize,
+    /* .stream_reset     = */ stream_reset,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::moonshine_streaming

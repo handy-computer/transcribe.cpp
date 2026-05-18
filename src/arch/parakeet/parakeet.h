@@ -250,7 +250,7 @@ struct ParakeetStreamingCaches {
 
     // Streaming geometry for the active stream. Resolved at
     // stream_begin from ParakeetHParams + the caller-selected
-    // att_context_right (transcribe_parakeet_stream_params). All four
+    // att_context_right (transcribe_parakeet_stream_ext). All four
     // fields are constant across chunks within one stream; they
     // change only when stream_begin is called again with a different
     // att_context_right selection.

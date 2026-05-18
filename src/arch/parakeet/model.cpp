@@ -42,6 +42,8 @@
 #include "encoder.h"
 #include "weights.h"
 
+#include "transcribe/parakeet.h"
+
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
 #include "transcribe-load-common.h"
@@ -564,9 +566,10 @@ transcribe_status load(
         m->caps.streaming_chunk_ms         = default_C * frame_ms;
         m->caps.streaming_lookahead_ms     = default_R * frame_ms;
         m->caps.streaming_lookahead_ms_min = min_R * frame_ms;
-        (void)min_C; // smaller C means lower per-chunk latency but is
-                     // surfaced via streaming_chunk_ms only after we
-                     // expose multi-tuple menus through the API.
+        // Buffered streaming commits at chunk granularity, so the
+        // smallest chunk size in the menu is the floor below which a
+        // partial_update_min_interval_ms request rounds up.
+        m->caps.partial_update_min_interval_ms_min = min_C * frame_ms;
     }
     if (cache_aware_streaming)
     {
@@ -582,7 +585,7 @@ transcribe_status load(
         //   lookahead_ms = att_context_right_default * frame_ms
         //   lookahead_ms_min = min(R) over choices * frame_ms
         //                  -- the fastest setting the user can pick
-        //                     via transcribe_parakeet_stream_params.
+        //                     via transcribe_parakeet_stream_ext.
         //
         // hop_length / sample_rate is fixed by NeMo's preprocessor at
         // 10ms (160 / 16000). The expression below uses integer math
@@ -599,6 +602,10 @@ transcribe_status load(
             if (p.second < min_right) min_right = p.second;
         }
         m->caps.streaming_lookahead_ms_min = min_right * frame_ms;
+        // Cache-aware streaming commits at chunk granularity (one
+        // chunk per stream_feed advance), so the chunk_ms is the
+        // smallest meaningful partial-update interval.
+        m->caps.partial_update_min_interval_ms_min = m->caps.streaming_chunk_ms;
     }
 
     // Construct the mel front-end now that hparams are available.
@@ -2460,10 +2467,20 @@ transcribe_status stream_begin(
         const int default_R = static_cast<int>(max_in(pm->hparams.enc_att_chunk_right_choices));
 
         int req_L_ms = -1, req_C_ms = -1, req_R_ms = -1;
-        if (stream_params != nullptr && stream_params->parakeet_buffered != nullptr) {
-            req_L_ms = stream_params->parakeet_buffered->left_ms;
-            req_C_ms = stream_params->parakeet_buffered->chunk_ms;
-            req_R_ms = stream_params->parakeet_buffered->right_ms;
+        const transcribe_ext * family = stream_params != nullptr ? stream_params->family : nullptr;
+        if (const transcribe_status st = transcribe_ext_check(
+                family,
+                TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM,
+                sizeof(struct transcribe_parakeet_buffered_stream_ext));
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+        if (family != nullptr) {
+            const auto * px = reinterpret_cast<const transcribe_parakeet_buffered_stream_ext *>(family);
+            req_L_ms = px->left_ms;
+            req_C_ms = px->chunk_ms;
+            req_R_ms = px->right_ms;
         }
         const int L_frames = (req_L_ms >= 0)
             ? (req_L_ms / std::max(frame_ms, 1))
@@ -2531,35 +2548,47 @@ transcribe_status stream_begin(
     // -------- Cache-aware streaming path (nemotron-speech-streaming) --------
     pc->buf_active = false;
 
-    // Resolve the active (att_context_left, att_context_right) for
-    // this stream. Multi-lookahead models advertise a menu via
-    // hp.enc_att_context_size_choices; the caller picks one via
-    // transcribe_parakeet_stream_params::att_context_right (-1 =
-    // model default = choices[0]).
+    // Resolve the active (att_context_left, att_context_right) for this
+    // stream. Multi-lookahead models advertise a menu via
+    // hp.enc_att_context_size_choices; the caller picks one via the
+    // PARAKEET_STREAM family extension's att_context_right field
+    // (-1 = model default = choices[0]).
     int chosen_right = pm->hparams.enc_att_context_right;
     int chosen_left  = pm->hparams.enc_att_context_left;
-    if (stream_params != nullptr && stream_params->parakeet != nullptr) {
-        const int requested = stream_params->parakeet->att_context_right;
-        if (requested >= 0) {
-            bool matched = false;
-            for (const auto & p : pm->hparams.enc_att_context_size_choices) {
-                if (p.second == requested) {
-                    chosen_right = p.second;
-                    chosen_left  = p.first;
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) {
-                std::fprintf(stderr,
-                             "parakeet: requested att_context_right=%d "
-                             "not in model's training menu; available: ",
-                             requested);
+    {
+        const transcribe_ext * family = stream_params != nullptr ? stream_params->family : nullptr;
+        if (const transcribe_status st = transcribe_ext_check(
+                family,
+                TRANSCRIBE_EXT_KIND_PARAKEET_STREAM,
+                sizeof(struct transcribe_parakeet_stream_ext));
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+        if (family != nullptr) {
+            const auto * px = reinterpret_cast<const transcribe_parakeet_stream_ext *>(family);
+            const int requested = px->att_context_right;
+            if (requested >= 0) {
+                bool matched = false;
                 for (const auto & p : pm->hparams.enc_att_context_size_choices) {
-                    std::fprintf(stderr, "%d ", p.second);
+                    if (p.second == requested) {
+                        chosen_right = p.second;
+                        chosen_left  = p.first;
+                        matched = true;
+                        break;
+                    }
                 }
-                std::fprintf(stderr, "\n");
-                return TRANSCRIBE_ERR_INVALID_ARG;
+                if (!matched) {
+                    std::fprintf(stderr,
+                                 "parakeet: requested att_context_right=%d "
+                                 "not in model's training menu; available: ",
+                                 requested);
+                    for (const auto & p : pm->hparams.enc_att_context_size_choices) {
+                        std::fprintf(stderr, "%d ", p.second);
+                    }
+                    std::fprintf(stderr, "\n");
+                    return TRANSCRIBE_ERR_INVALID_ARG;
+                }
             }
         }
     }
@@ -3114,20 +3143,40 @@ void stream_reset(transcribe_context * ctx) {
     pc->stream_pcm_buffer.clear();
 }
 
+// Kind probe: reports which family extension kinds the loaded variant
+// accepts on transcribe_stream_params::family. Cache-aware variants
+// (ChunkedLimited) take the PARAKEET_STREAM kind; chunked-attention
+// variants (ChunkedLimitedWithRc) take the PARAKEET_BUFFERED_STREAM
+// kind. Offline-only Parakeet variants accept neither.
+bool accepts_ext_kind(const transcribe_model * model, uint32_t kind) {
+    if (model == nullptr) return false;
+    const auto * pm = static_cast<const ParakeetModel *>(model);
+    switch (pm->hparams.enc_att_context_style) {
+        case ParakeetHParams::AttContextStyle::ChunkedLimited:
+            return kind == TRANSCRIBE_EXT_KIND_PARAKEET_STREAM;
+        case ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc:
+            return kind == TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM;
+        case ParakeetHParams::AttContextStyle::Regular:
+            return false;
+    }
+    return false;
+}
+
 } // namespace
 
 // `extern const` to force external linkage. Without `extern`, a
 // namespace-scope `const` object has internal linkage in C++ and the
 // forward declaration in transcribe-arch.cpp would not resolve.
 extern const Arch arch = {
-    /* .name            = */ "parakeet",
-    /* .load            = */ load,
-    /* .init_context    = */ init_context,
-    /* .run             = */ run,
-    /* .stream_begin    = */ stream_begin,
-    /* .stream_feed     = */ stream_feed,
-    /* .stream_finalize = */ stream_finalize,
-    /* .stream_reset    = */ stream_reset,
+    /* .name             = */ "parakeet",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .stream_begin     = */ stream_begin,
+    /* .stream_feed      = */ stream_feed,
+    /* .stream_finalize  = */ stream_finalize,
+    /* .stream_reset     = */ stream_reset,
+    /* .accepts_ext_kind = */ accepts_ext_kind,
 };
 
 } // namespace transcribe::parakeet

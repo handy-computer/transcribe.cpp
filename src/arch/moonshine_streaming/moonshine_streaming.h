@@ -201,8 +201,8 @@ struct MoonshineStreamingContext final : public transcribe_context {
     int32_t                           stream_frontend_pad_frames   = 0;
     int32_t                           stream_samples_per_enc_frame = 0;
     // Minimum gap, in encoder frames, between successive per-feed AR
-    // decoder runs. Resolved at stream_begin from
-    // transcribe_moonshine_streaming_stream_params::min_decode_interval_ms.
+    // decoder runs. Resolved at stream_begin from the generic
+    // transcribe_stream_params::partial_update_min_interval_ms knob.
     // 0 means "decode on every encoder-frame advance". The finalize
     // path always runs one last decode regardless of this throttle.
     int32_t                           stream_min_decode_frames     = 0;

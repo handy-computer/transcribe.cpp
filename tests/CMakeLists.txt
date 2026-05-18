@@ -54,6 +54,12 @@ target_link_libraries(transcribe_api_smoke PRIVATE transcribe)
 
 add_test(NAME transcribe_api_smoke COMMAND transcribe_api_smoke)
 
+add_test(
+    NAME transcribe_extension_umbrella_check
+    COMMAND ${CMAKE_COMMAND}
+        -DTRANSCRIBE_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_extension_umbrella.cmake)
+
 # -----------------------------------------------------------------------------
 # Backend classification unit test
 # -----------------------------------------------------------------------------

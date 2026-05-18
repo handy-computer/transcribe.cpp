@@ -74,12 +74,9 @@ int run_streaming(transcribe_context *      ctx,
                   int *                      out_n_partial_updates,
                   std::string &              out_text)
 {
-    transcribe_params       rp = transcribe_default_params();
-    transcribe_stream_params sp = transcribe_stream_default_params();
-    transcribe_moonshine_streaming_stream_params msp =
-        transcribe_moonshine_streaming_stream_default_params();
-    msp.min_decode_interval_ms = min_decode_interval_ms;
-    sp.moonshine_streaming = &msp;
+    transcribe_params       rp = TRANSCRIBE_PARAMS_INIT;
+    transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
+    sp.partial_update_min_interval_ms = min_decode_interval_ms;
     transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
     if (st != TRANSCRIBE_OK) {
         std::fprintf(stderr,
@@ -97,7 +94,7 @@ int run_streaming(transcribe_context *      ctx,
     while (pos < pcm.size()) {
         const size_t take = std::min<size_t>(
             static_cast<size_t>(chunk_samples), pcm.size() - pos);
-        transcribe_stream_update upd {};
+        transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
         st = transcribe_stream_feed(ctx, pcm.data() + pos,
                                     static_cast<int>(take), &upd);
         if (st != TRANSCRIBE_OK) {
@@ -146,7 +143,7 @@ int run_streaming(transcribe_context *      ctx,
         ++feed_count;
     }
 
-    transcribe_stream_update fin_upd {};
+    transcribe_stream_update fin_upd = TRANSCRIBE_STREAM_UPDATE_INIT;
     st = transcribe_stream_finalize(ctx, &fin_upd);
     if (st != TRANSCRIBE_OK) {
         std::fprintf(stderr,
@@ -233,13 +230,12 @@ int main(int /*argc*/, char ** /*argv*/) {
     // Capabilities sanity: streaming must be advertised, lookahead and
     // chunk hints must be non-zero (Phase 4b-encoder publishes both).
     {
-        const transcribe_capabilities * caps =
-            transcribe_model_capabilities(model);
-        CHECK(caps != nullptr);
-        CHECK(caps->supports_streaming);
-        CHECK(caps->streaming_lookahead_ms     > 0);
-        CHECK(caps->streaming_chunk_ms         > 0);
-        CHECK(caps->streaming_lookahead_ms_min > 0);
+        transcribe_capabilities caps = TRANSCRIBE_CAPABILITIES_INIT;
+        CHECK(transcribe_model_get_capabilities(model, &caps) == TRANSCRIBE_OK);
+        CHECK(caps.supports_streaming);
+        CHECK(caps.streaming_lookahead_ms     > 0);
+        CHECK(caps.streaming_chunk_ms         > 0);
+        CHECK(caps.streaming_lookahead_ms_min > 0);
     }
 
     // Reference: one-shot transcribe_run.

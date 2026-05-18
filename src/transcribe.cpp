@@ -21,6 +21,7 @@
 // init_context(), and run().
 
 #include "transcribe.h"
+#include "transcribe/whisper.h"
 
 #include "transcribe-arch.h"
 #include "transcribe-context.h"
@@ -70,6 +71,7 @@ extern "C" const char * transcribe_status_string(int status) {
         case TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS:
                                                   return "unsupported timestamp granularity";
         case TRANSCRIBE_ERR_ABORTED:              return "aborted by callback";
+        case TRANSCRIBE_ERR_BAD_STRUCT_SIZE:      return "caller-owned struct missing or has bad struct_size";
         default:                                  return "unknown status";
     }
 }
@@ -215,32 +217,27 @@ extern "C" void transcribe_log_set(transcribe_log_callback cb, void * userdata) 
 // ---------------------------------------------------------------------------
 // Params factories
 // ---------------------------------------------------------------------------
+//
+// Factories are retained alongside the new TRANSCRIBE_*_INIT macros so
+// existing 0.x callers keep working. The factories set struct_size to
+// the library's view of the struct, which is the correct value for
+// internal callers that pass the result straight back into the library;
+// caller-side use should prefer the INIT macros because sizeof in the
+// caller's TU is what makes the size-aware ABI work in the
+// shared-library case. Phase 5 removes these factories before v1.
 
 extern "C" struct transcribe_model_params transcribe_model_default_params(void) {
-    struct transcribe_model_params p = {};
-    p.backend    = TRANSCRIBE_BACKEND_AUTO;
-    p.gpu_device = -1;
+    struct transcribe_model_params p = TRANSCRIBE_MODEL_PARAMS_INIT;
     return p;
 }
 
 extern "C" struct transcribe_context_params transcribe_context_default_params(void) {
-    struct transcribe_context_params p = {};
-    p.n_threads = 0; // 0 = library picks a default
-    p.kv_type   = TRANSCRIBE_KV_TYPE_AUTO;
+    struct transcribe_context_params p = TRANSCRIBE_CONTEXT_PARAMS_INIT;
     return p;
 }
 
 extern "C" struct transcribe_params transcribe_default_params(void) {
-    struct transcribe_params p = {};
-    p.task               = TRANSCRIBE_TASK_TRANSCRIBE;
-    p.timestamps         = TRANSCRIBE_TIMESTAMPS_NONE;
-    p.language           = nullptr;
-    p.target_language    = nullptr;
-    p.strip_special_tags = true;
-    p.whisper            = nullptr;
-    p.sensevoice         = nullptr;
-    p.funasr_nano        = nullptr;
-    p.canary             = nullptr;
+    struct transcribe_params p = TRANSCRIBE_PARAMS_INIT;
     return p;
 }
 
@@ -271,36 +268,7 @@ transcribe_canary_default_params(void)
 extern "C" struct transcribe_stream_params
 transcribe_stream_default_params(void)
 {
-    struct transcribe_stream_params p = {};
-    p.parakeet            = nullptr;
-    p.parakeet_buffered   = nullptr;
-    p.moonshine_streaming = nullptr;
-    return p;
-}
-
-extern "C" struct transcribe_parakeet_stream_params
-transcribe_parakeet_stream_default_params(void)
-{
-    struct transcribe_parakeet_stream_params p = {};
-    p.att_context_right = -1; // use model default
-    return p;
-}
-
-extern "C" struct transcribe_parakeet_buffered_stream_params
-transcribe_parakeet_buffered_stream_default_params(void)
-{
-    struct transcribe_parakeet_buffered_stream_params p = {};
-    p.left_ms  = -1; // use model default
-    p.chunk_ms = -1;
-    p.right_ms = -1;
-    return p;
-}
-
-extern "C" struct transcribe_moonshine_streaming_stream_params
-transcribe_moonshine_streaming_stream_default_params(void)
-{
-    struct transcribe_moonshine_streaming_stream_params p = {};
-    p.min_decode_interval_ms = -1; // use family default (240 ms)
+    struct transcribe_stream_params p = TRANSCRIBE_STREAM_PARAMS_INIT;
     return p;
 }
 
@@ -323,6 +291,86 @@ extern "C" struct transcribe_whisper_params transcribe_whisper_default_params(vo
 }
 
 // ---------------------------------------------------------------------------
+// Extension helpers
+// ---------------------------------------------------------------------------
+
+extern "C" transcribe_status transcribe_ext_check(
+    const struct transcribe_ext * ext,
+    uint32_t                      expected_kind,
+    size_t                        min_size)
+{
+    if (ext == nullptr) {
+        return TRANSCRIBE_OK;
+    }
+    if (ext->size < sizeof(struct transcribe_ext)) {
+        return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+    }
+    if (ext->kind != expected_kind) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (ext->size < min_size) {
+        return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+    }
+    return TRANSCRIBE_OK;
+}
+
+extern "C" bool transcribe_model_accepts_ext_kind(
+    const struct transcribe_model * model,
+    uint32_t                        kind)
+{
+    if (model == nullptr || model->arch == nullptr) {
+        return false;
+    }
+    if (model->arch->accepts_ext_kind == nullptr) {
+        return false;
+    }
+    return model->arch->accepts_ext_kind(model, kind);
+}
+
+namespace {
+
+// Minimum struct_size accepted on each caller-owned input/output struct.
+// Sized to the prefix the library currently relies on: any field the
+// library writes on a given call path must lie inside this prefix. New
+// fields appended at the end of the public struct without growing the
+// library-side prefix do NOT raise this value.
+#define TRANSCRIBE_FIELD_END(type, field) \
+    (offsetof(type, field) + sizeof(((type *) 0)->field))
+
+constexpr size_t k_min_model_params_size =
+    TRANSCRIBE_FIELD_END(transcribe_model_params, gpu_device);
+constexpr size_t k_min_context_params_size =
+    TRANSCRIBE_FIELD_END(transcribe_context_params, kv_type);
+constexpr size_t k_min_run_params_size =
+    TRANSCRIBE_FIELD_END(transcribe_params, canary);
+constexpr size_t k_min_stream_params_size =
+    TRANSCRIBE_FIELD_END(transcribe_stream_params, family);
+constexpr size_t k_min_stream_update_size =
+    TRANSCRIBE_FIELD_END(transcribe_stream_update, buffered_ms);
+constexpr size_t k_min_capabilities_size =
+    TRANSCRIBE_FIELD_END(transcribe_capabilities, partial_update_min_interval_ms_min);
+constexpr size_t k_min_timings_size =
+    TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
+constexpr size_t k_min_whisper_chunk_trace_size =
+    TRANSCRIBE_FIELD_END(transcribe_whisper_chunk_trace, n_fallbacks);
+
+#undef TRANSCRIBE_FIELD_END
+
+inline transcribe_status check_struct_size(size_t got, size_t want) {
+    if (got < want) {
+        return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+    }
+    return TRANSCRIBE_OK;
+}
+
+void copy_out_prefix(void * dst, const void * src, size_t caller_size, size_t library_size) {
+    const size_t n = caller_size < library_size ? caller_size : library_size;
+    std::memcpy(dst, src, n);
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
 // Lifecycle (stubs)
 // ---------------------------------------------------------------------------
 
@@ -337,6 +385,11 @@ extern "C" transcribe_status transcribe_model_load_file(
     *out_model = nullptr;
     if (path == nullptr || params == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(params->struct_size, k_min_model_params_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
     }
 
     // Reserved-field validation. gpu_device is documented in the
@@ -456,6 +509,11 @@ extern "C" transcribe_status transcribe_context_init(
     if (model == nullptr || params == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    if (const auto st = check_struct_size(params->struct_size, k_min_context_params_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
     // n_threads contract from include/transcribe.h: 0 means "library
     // picks a sensible default", positive means "use this many." A
     // negative value is undefined input, not a documented sentinel —
@@ -525,6 +583,16 @@ extern "C" transcribe_status transcribe_stream_begin(
     if (ctx == nullptr || run_params == nullptr || stream_params == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    if (const auto st = check_struct_size(run_params->struct_size, k_min_run_params_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (const auto st = check_struct_size(stream_params->struct_size, k_min_stream_params_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
     if (ctx->stream_state == TRANSCRIBE_STREAM_ACTIVE) {
         // Caller must finalize or reset before starting a new stream.
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -562,6 +630,15 @@ extern "C" transcribe_status transcribe_stream_begin(
         return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
     }
 
+    if (stream_params->family != nullptr) {
+        if (stream_params->family->size < sizeof(struct transcribe_ext)) {
+            return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+        }
+        if (!transcribe_model_accepts_ext_kind(ctx->model, stream_params->family->kind)) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+
     // All checks pass — clear the previous snapshot and hand off.
     ctx->clear_result();
     ctx->t_mel_us    = 0;
@@ -583,14 +660,34 @@ extern "C" transcribe_status transcribe_stream_begin(
     return st;
 }
 
+// Helper: validate the caller's stream_update struct_size and reset
+// every field except struct_size to a clean state before handing the
+// update buffer to the family hook. Returns OK when update is NULL
+// (the update buffer is optional) or when the size passes validation.
+static transcribe_status prepare_stream_update(struct transcribe_stream_update * update) {
+    if (update == nullptr) {
+        return TRANSCRIBE_OK;
+    }
+    if (const auto st = check_struct_size(update->struct_size, k_min_stream_update_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const size_t caller_size = update->struct_size;
+    transcribe_stream_update staged{};
+    staged.struct_size = caller_size;
+    copy_out_prefix(update, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
+
 extern "C" transcribe_status transcribe_stream_feed(
     struct transcribe_context *        ctx,
     const float *                      pcm,
     int                                n_samples,
     struct transcribe_stream_update *  update)
 {
-    if (update != nullptr) {
-        *update = transcribe_stream_update{};
+    if (const auto st = prepare_stream_update(update); st != TRANSCRIBE_OK) {
+        return st;
     }
     if (ctx == nullptr || pcm == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -626,8 +723,8 @@ extern "C" transcribe_status transcribe_stream_finalize(
     struct transcribe_context *        ctx,
     struct transcribe_stream_update *  update)
 {
-    if (update != nullptr) {
-        *update = transcribe_stream_update{};
+    if (const auto st = prepare_stream_update(update); st != TRANSCRIBE_OK) {
+        return st;
     }
     if (ctx == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -748,17 +845,34 @@ extern "C" int transcribe_get_whisper_chunk_count(
     return static_cast<int>(wc->chunk_traces.size());
 }
 
-extern "C" struct transcribe_whisper_chunk_trace
-transcribe_get_whisper_chunk_trace(
-    const struct transcribe_context * ctx, int i)
+extern "C" transcribe_status transcribe_get_whisper_chunk_trace(
+    const struct transcribe_context *       ctx,
+    int                                     i,
+    struct transcribe_whisper_chunk_trace * out_trace)
 {
-    struct transcribe_whisper_chunk_trace zero = {};
-    const auto * wc = maybe_whisper_context(ctx);
-    if (wc == nullptr) return zero;
-    if (i < 0 || static_cast<size_t>(i) >= wc->chunk_traces.size()) {
-        return zero;
+    if (out_trace == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    return wc->chunk_traces[static_cast<size_t>(i)];
+    if (const auto st = check_struct_size(out_trace->struct_size, k_min_whisper_chunk_trace_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const size_t caller_size = out_trace->struct_size;
+    transcribe_whisper_chunk_trace zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out_trace, &zero, caller_size, sizeof(zero));
+    const auto * wc = maybe_whisper_context(ctx);
+    if (wc == nullptr) {
+        return TRANSCRIBE_OK;
+    }
+    if (i < 0 || static_cast<size_t>(i) >= wc->chunk_traces.size()) {
+        return TRANSCRIBE_OK;
+    }
+    transcribe_whisper_chunk_trace staged = wc->chunk_traces[static_cast<size_t>(i)];
+    staged.struct_size = caller_size;
+    copy_out_prefix(out_trace, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
 }
 
 extern "C" transcribe_status transcribe_run(
@@ -781,6 +895,11 @@ extern "C" transcribe_status transcribe_run(
     }
     if (n_samples < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(params->struct_size, k_min_run_params_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
     }
     // A run cannot replace an active stream's results — that would
     // strand the in-flight stream's per-family state. Caller must
@@ -858,12 +977,30 @@ extern "C" transcribe_status transcribe_run(
 // per-family callback for them: per-family load() is responsible for
 // filling caps / variant / backend in the base before returning success.
 
-extern "C" const struct transcribe_capabilities *
-transcribe_model_capabilities(const struct transcribe_model * model) {
-    if (model == nullptr) {
-        return nullptr;
+extern "C" transcribe_status transcribe_model_get_capabilities(
+    const struct transcribe_model *  model,
+    struct transcribe_capabilities * out_caps)
+{
+    if (model == nullptr || out_caps == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    return &model->caps;
+    if (const auto st = check_struct_size(out_caps->struct_size, k_min_capabilities_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    // Preserve the caller-declared size, then write only the prefix
+    // that fits in both the caller's buffer and this library's view;
+    // any tail bytes stay as the caller initialized them (zero, by
+    // the INIT macro contract).
+    //
+    // Pointer fields written into the caller buffer (e.g. languages)
+    // remain model-owned and valid until transcribe_model_free().
+    const size_t caller_size = out_caps->struct_size;
+    transcribe_capabilities staged = model->caps;
+    staged.struct_size = caller_size;
+    copy_out_prefix(out_caps, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
 }
 
 extern "C" const char * transcribe_model_arch_string(const struct transcribe_model * model) {
@@ -945,20 +1082,29 @@ extern "C" const char * transcribe_model_backend(const struct transcribe_model *
 // populate t_load_us. The accessors here just convert microseconds to
 // milliseconds and return a small value type.
 
-extern "C" struct transcribe_timings
-transcribe_get_timings(const struct transcribe_context * ctx)
+extern "C" transcribe_status transcribe_get_timings(
+    const struct transcribe_context * ctx,
+    struct transcribe_timings *       out_timings)
 {
-    struct transcribe_timings out = {};
-    if (ctx == nullptr) {
-        return out;
+    if (ctx == nullptr || out_timings == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    if (const auto st = check_struct_size(out_timings->struct_size, k_min_timings_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const size_t caller_size = out_timings->struct_size;
+    transcribe_timings staged{};
+    staged.struct_size = caller_size;
     if (ctx->model != nullptr) {
-        out.load_ms = static_cast<float>(ctx->model->t_load_us) / 1000.0f;
+        staged.load_ms = static_cast<float>(ctx->model->t_load_us) / 1000.0f;
     }
-    out.mel_ms    = static_cast<float>(ctx->t_mel_us)    / 1000.0f;
-    out.encode_ms = static_cast<float>(ctx->t_encode_us) / 1000.0f;
-    out.decode_ms = static_cast<float>(ctx->t_decode_us) / 1000.0f;
-    return out;
+    staged.mel_ms    = static_cast<float>(ctx->t_mel_us)    / 1000.0f;
+    staged.encode_ms = static_cast<float>(ctx->t_encode_us) / 1000.0f;
+    staged.decode_ms = static_cast<float>(ctx->t_decode_us) / 1000.0f;
+    copy_out_prefix(out_timings, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
 }
 
 extern "C" void
@@ -967,7 +1113,8 @@ transcribe_print_timings(const struct transcribe_context * ctx)
     if (ctx == nullptr) {
         return;
     }
-    const struct transcribe_timings t = transcribe_get_timings(ctx);
+    struct transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
+    (void)transcribe_get_timings(ctx, &t);
     char buf[256];
 
     std::snprintf(buf, sizeof(buf),

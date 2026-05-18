@@ -11,6 +11,8 @@
 // land in Phase 3 against an existing non-streaming arch.
 
 #include "transcribe-context.h"
+#include "transcribe-arch.h"
+#include "transcribe-model.h"
 #include "transcribe.h"
 
 #include <cstdio>
@@ -19,6 +21,7 @@
 namespace {
 
 int g_failures = 0;
+int g_begin_calls = 0;
 
 #define CHECK(cond)                                                         \
     do {                                                                    \
@@ -50,7 +53,9 @@ void test_accessors_on_idle_ctx() {
 
 void test_default_params() {
     const transcribe_stream_params p = transcribe_stream_default_params();
-    CHECK(p.parakeet == nullptr);
+    CHECK(p.family                         == nullptr);
+    CHECK(p.partial_update_min_interval_ms == -1);
+    CHECK(p.struct_size == sizeof(transcribe_stream_params));
 }
 
 void test_begin_null_args() {
@@ -92,10 +97,127 @@ void test_begin_no_model_returns_not_implemented() {
     CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_IDLE);
 }
 
+transcribe_status fake_stream_begin(
+    transcribe_context *              ctx,
+    const transcribe_params *         run_params,
+    const transcribe_stream_params *  stream_params)
+{
+    (void)ctx;
+    (void)run_params;
+    (void)stream_params;
+    ++g_begin_calls;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status fake_stream_feed(
+    transcribe_context *     ctx,
+    const float *            pcm,
+    int                      n_samples,
+    transcribe_stream_update * update)
+{
+    (void)ctx;
+    (void)pcm;
+    (void)n_samples;
+    (void)update;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status fake_stream_finalize(
+    transcribe_context *      ctx,
+    transcribe_stream_update * update)
+{
+    (void)ctx;
+    (void)update;
+    return TRANSCRIBE_OK;
+}
+
+bool fake_accepts_no_ext(
+    const transcribe_model * model,
+    uint32_t                 kind)
+{
+    (void)model;
+    (void)kind;
+    return false;
+}
+
+void test_begin_rejects_unknown_ext_kind_before_hook() {
+    const transcribe::Arch arch = {
+        "fake-stream",
+        nullptr,
+        nullptr,
+        nullptr,
+        fake_stream_begin,
+        fake_stream_feed,
+        fake_stream_finalize,
+        nullptr,
+        fake_accepts_no_ext,
+    };
+
+    transcribe_model model;
+    model.arch = &arch;
+    model.caps.supports_streaming = true;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+
+    transcribe_context ctx;
+    ctx.model        = &model;
+    ctx.has_result   = true;
+    ctx.full_text    = "previous result";
+
+    transcribe_params rp = TRANSCRIBE_PARAMS_INIT;
+    transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
+    const transcribe_ext ext = { sizeof(transcribe_ext), 0x58585858u };
+    sp.family = &ext;
+
+    g_begin_calls = 0;
+    CHECK(transcribe_stream_begin(&ctx, &rp, &sp) ==
+          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(g_begin_calls == 0);
+    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_IDLE);
+    CHECK(ctx.has_result);
+    CHECK(ctx.full_text == "previous result");
+}
+
+void test_begin_rejects_tiny_ext_before_hook() {
+    const transcribe::Arch arch = {
+        "fake-stream",
+        nullptr,
+        nullptr,
+        nullptr,
+        fake_stream_begin,
+        fake_stream_feed,
+        fake_stream_finalize,
+        nullptr,
+        fake_accepts_no_ext,
+    };
+
+    transcribe_model model;
+    model.arch = &arch;
+    model.caps.supports_streaming = true;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+
+    transcribe_context ctx;
+    ctx.model      = &model;
+    ctx.has_result = true;
+    ctx.full_text  = "previous result";
+
+    transcribe_params rp = TRANSCRIBE_PARAMS_INIT;
+    transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
+    transcribe_ext ext = { 0, 0 };
+    sp.family = &ext;
+
+    g_begin_calls = 0;
+    CHECK(transcribe_stream_begin(&ctx, &rp, &sp) ==
+          TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    CHECK(g_begin_calls == 0);
+    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_IDLE);
+    CHECK(ctx.has_result);
+    CHECK(ctx.full_text == "previous result");
+}
+
 void test_feed_rejects_idle() {
     transcribe_context ctx;
     float pcm = 0.0f;
-    transcribe_stream_update upd;
+    transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
     upd.result_changed = true; // dirty sentinel — must be zeroed
     upd.is_final       = true;
     upd.revision       = 42;
@@ -103,10 +225,12 @@ void test_feed_rejects_idle() {
 
     CHECK(transcribe_stream_feed(&ctx, &pcm, 1, &upd) ==
           TRANSCRIBE_ERR_INVALID_ARG);
-    // Dispatcher zero-inits update before the state check returns.
-    CHECK(upd.result_changed == false);
-    CHECK(upd.is_final       == false);
-    CHECK(upd.revision       == 0);
+    // Dispatcher zero-inits update before the state check returns,
+    // preserving the caller's struct_size.
+    CHECK(upd.struct_size       == sizeof(transcribe_stream_update));
+    CHECK(upd.result_changed    == false);
+    CHECK(upd.is_final          == false);
+    CHECK(upd.revision          == 0);
     CHECK(upd.input_received_ms == 0);
 }
 
@@ -181,7 +305,7 @@ void test_finalize_rejects_non_active() {
 
 void test_finalize_update_zeroinit() {
     transcribe_context ctx;
-    transcribe_stream_update upd;
+    transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
     upd.result_changed   = true;
     upd.is_final         = false; // will be cleared then forced true on success path
     upd.revision         = 99;
@@ -191,10 +315,11 @@ void test_finalize_update_zeroinit() {
     // zero-inits update before returning so the caller sees a clean
     // struct (is_final is only forced true after a hook call, which
     // doesn't happen here — verify the early-return path leaves
-    // update fully zeroed).
+    // update fully zeroed and preserves the caller's struct_size).
     ctx.stream_state = TRANSCRIBE_STREAM_ACTIVE;
     CHECK(transcribe_stream_finalize(&ctx, &upd) ==
           TRANSCRIBE_ERR_NOT_IMPLEMENTED);
+    CHECK(upd.struct_size        == sizeof(transcribe_stream_update));
     CHECK(upd.result_changed     == false);
     CHECK(upd.is_final           == false);
     CHECK(upd.revision           == 0);
@@ -325,6 +450,8 @@ int main() {
     test_begin_null_args();
     test_begin_rejected_when_active();
     test_begin_no_model_returns_not_implemented();
+    test_begin_rejects_unknown_ext_kind_before_hook();
+    test_begin_rejects_tiny_ext_before_hook();
     test_feed_rejects_idle();
     test_feed_rejects_finished_and_failed();
     test_feed_rejects_null_ctx_and_bad_input();

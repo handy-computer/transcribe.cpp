@@ -280,7 +280,8 @@ int main() {
     }
 
     // ---- Verify timing -----------------------------------------------
-    const transcribe_timings t = transcribe_get_timings(ctx);
+    transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
+    CHECK(transcribe_get_timings(ctx, &t) == TRANSCRIBE_OK);
     std::fprintf(stderr,
                  "cohere_e2e_smoke: timings load=%.2f mel=%.2f "
                  "encode=%.2f decode=%.2f ms\n",

@@ -172,7 +172,10 @@ int main() {
     // trip; translate stays false (family invariant); max_timestamp
     // stays NONE (first port doesn't emit alignment).
     {
-        const auto * caps = transcribe_model_capabilities(model);
+        transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+        const bool caps_ok =
+            transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+        const auto * caps = caps_ok ? &caps_buf : nullptr;
         CHECK(caps != nullptr);
         CHECK_EQ_INT(caps->native_sample_rate, 16000);
         CHECK(caps->supports_translate == false);

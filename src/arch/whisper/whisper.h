@@ -18,6 +18,7 @@
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
+#include "transcribe/whisper.h"
 #include "weights.h"
 
 #include "ggml.h"

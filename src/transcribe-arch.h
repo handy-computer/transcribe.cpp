@@ -130,6 +130,20 @@ struct Arch {
 
     void (*stream_reset)(
         struct transcribe_context *            ctx);
+
+    // Optional kind probe. Returns true when the loaded model variant
+    // accepts the named extension kind on transcribe_stream_params::family
+    // (or, after Phase 2, transcribe_params::family). NULL means "no
+    // family extension kinds accepted" — the dispatcher's
+    // transcribe_model_accepts_ext_kind() returns false in that case.
+    //
+    // Acceptance is per-loaded-variant, not per-family: e.g. parakeet
+    // returns true for PARAKEET_STREAM on cache-aware variants and for
+    // PARAKEET_BUFFERED_STREAM on chunked-attention variants, never both
+    // on the same loaded model.
+    bool (*accepts_ext_kind)(
+        const struct transcribe_model *        model,
+        uint32_t                               kind);
 };
 
 // Look up an architecture by name. Returns nullptr if no registered

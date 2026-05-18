@@ -218,7 +218,12 @@ int main(int argc, char ** argv) {
     }
 
     // load_ms is a model-scoped one-shot, captured before any run.
-    const double load_ms = static_cast<double>(transcribe_get_timings(ctx).load_ms);
+    double load_ms = 0.0;
+    {
+        struct transcribe_timings load_tm = TRANSCRIBE_TIMINGS_INIT;
+        (void)transcribe_get_timings(ctx, &load_tm);
+        load_ms = static_cast<double>(load_tm.load_ms);
+    }
 
     struct transcribe_params rp = transcribe_default_params();
 
@@ -256,7 +261,8 @@ int main(int argc, char ** argv) {
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
-        const struct transcribe_timings after = transcribe_get_timings(ctx);
+        struct transcribe_timings after = TRANSCRIBE_TIMINGS_INIT;
+        (void)transcribe_get_timings(ctx, &after);
         iter_timings row;
         row.mel_ms    = static_cast<double>(after.mel_ms);
         row.encode_ms = static_cast<double>(after.encode_ms);

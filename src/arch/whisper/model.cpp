@@ -2575,7 +2575,7 @@ transcribe_status whisper_run(
         // no-speech gate saw; callers tracing a hallucination can map
         // an output segment back to the tier/metric that produced it.
         {
-            transcribe_whisper_chunk_trace trace = {};
+            transcribe_whisper_chunk_trace trace = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
             trace.t0_ms               = time_offset_ms;
             trace.t1_ms               = time_offset_ms +
                                         static_cast<int64_t>(seek_num_frames) * 10;
@@ -2839,14 +2839,15 @@ transcribe_status whisper_run(
 } // namespace
 
 extern const Arch arch = {
-    /* .name            = */ "whisper",
-    /* .load            = */ whisper_load,
-    /* .init_context    = */ whisper_init_context,
-    /* .run             = */ whisper_run,
-    /* .stream_begin    = */ nullptr,
-    /* .stream_feed     = */ nullptr,
-    /* .stream_finalize = */ nullptr,
-    /* .stream_reset    = */ nullptr,
+    /* .name             = */ "whisper",
+    /* .load             = */ whisper_load,
+    /* .init_context     = */ whisper_init_context,
+    /* .run              = */ whisper_run,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::whisper

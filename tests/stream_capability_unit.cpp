@@ -117,7 +117,10 @@ void test_supports_streaming_false() {
     struct transcribe_context * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal.gguf", &model, &ctx)) return;
 
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->supports_streaming     == false);
@@ -156,7 +159,10 @@ void test_supports_streaming_true_variant_offline() {
     struct transcribe_context * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal_streaming.gguf", &model, &ctx)) return;
 
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         // KV path works: the loader read stt.capability.streaming=true

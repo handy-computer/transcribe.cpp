@@ -44,23 +44,30 @@
  *   stronger guarantees.
  *
  * Params and ABI stability:
- * - Every public params struct ships with a transcribe_*_default_params()
- *   factory function. Callers MUST use the factory rather than zero-
- *   initializing the struct themselves. New fields are added only at the
- *   end of structs.
- * - This is the whisper.cpp / llama.cpp discipline. It is NOT a real
- *   forward ABI: it relies on the caller being rebuilt against the same
- *   header version it links against. If you upgrade transcribe.cpp, you
- *   must rebuild your caller. Mixing a newer library with an older
- *   caller's smaller params struct is undefined behavior - the library
- *   will read past the end of the caller's struct.
- * - This is acceptable for transcribe.cpp because the project is at
- *   version 0.x and the deployment story is "vendored or rebuilt by the
- *   binding maintainer", not "system-installed shared library that
- *   ships independently of its consumers". When the project moves toward
- *   a stable shared-library deployment, a struct_size / version field
- *   will be added to each params struct as the first member. That change
- *   is itself an ABI break, which is fine within 0.x.
+ * - Every caller-owned public struct crossing the ABI carries `struct_size`
+ *   as field 0, both for inputs (params, family extensions) and outputs
+ *   (capabilities, stream updates, timings, family telemetry).
+ * - Callers MUST initialize each struct via its TRANSCRIBE_*_INIT macro.
+ *   `{0}` is rejected with TRANSCRIBE_ERR_BAD_STRUCT_SIZE. INIT macros are
+ *   positional aggregate-init forms; designated initializers are C99 but
+ *   not standard C++ until C++20, so the macros stay positional and the
+ *   field order is part of the ABI.
+ * - For input structs the INIT macro spells out the default values for
+ *   every field. For output structs the INIT macro sets `struct_size` and
+ *   relies on C aggregate-init zero-fill for the rest; "absent / unknown
+ *   / false / none" is encoded by zero on every output field.
+ * - sizeof(struct ...) is evaluated in the caller's translation unit, so
+ *   struct_size captures the caller's view: a newer library writes only
+ *   the fields that fit and an older library never touches tail fields
+ *   the new caller added. New fields are appended at the end of the
+ *   struct; layout-incompatible changes are an ABI break.
+ * - Family-specific knobs are reached via an opaque, kind-tagged
+ *   extension pointer (`struct transcribe_ext`). Callers probe whether
+ *   the loaded model accepts a given extension kind via
+ *   transcribe_model_accepts_ext_kind(), then pass a pointer to a typed
+ *   family extension struct (declared in include/transcribe/<family>.h)
+ *   whose first field embeds `struct transcribe_ext`. NULL family
+ *   extension selects family defaults.
  *
  * Results:
  * - Results are owned by the context and exposed via accessor functions.
@@ -140,6 +147,15 @@ typedef enum {
      * distinguishes partial-from-abort from complete.
      */
     TRANSCRIBE_ERR_ABORTED              = 13,
+    /*
+     * Returned by every entry point that takes a caller-owned size-
+     * aware struct (params, stream params, capabilities out, timings
+     * out, family extension) when the supplied struct_size is zero or
+     * smaller than the minimum the call path requires. Distinct from
+     * INVALID_ARG so bindings can match on "caller forgot to use the
+     * TRANSCRIBE_*_INIT macro" specifically.
+     */
+    TRANSCRIBE_ERR_BAD_STRUCT_SIZE      = 14,
 } transcribe_status;
 
 /*
@@ -242,6 +258,81 @@ struct transcribe_model;
 struct transcribe_context;
 
 /* ----------------------------------------------------------------------- */
+/* Family extensions                                                       */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Generic header for every typed family extension struct. The kind tag
+ * names the family schema (one FourCC-style 32-bit value per schema,
+ * allocated in docs/extension-kinds.md); the size is the caller's
+ * sizeof of the full extension struct, captured in the caller's
+ * translation unit so a newer library only reads what fits.
+ *
+ * Each family declares its extension struct in
+ * include/transcribe/<family>.h with `struct transcribe_ext ext` as
+ * field 0 and a TRANSCRIBE_<FAMILY>_<NAME>_EXT_INIT macro that fills
+ * both `ext.size` and `ext.kind` from the caller's perspective.
+ *
+ * Pointer-to-first-member is well-defined: because `ext` sits at
+ * field 0, the address of the family struct equals the address of its
+ * embedded transcribe_ext, and family handlers can cast the generic
+ * pointer back to the typed family struct after a successful
+ * transcribe_ext_check.
+ *
+ * Include transcribe/extensions.h to pull in every family extension
+ * header shipped by this install. Binding generators should usually
+ * point at that umbrella header; direct C/C++ callers that only need
+ * the generic ABI can keep including transcribe.h. See
+ * docs/extension-kinds.md for the registered family extension headers
+ * and kind values.
+ */
+struct transcribe_ext {
+    size_t   size;
+    uint32_t kind;
+};
+
+/*
+ * Validate the universal shape of an extension before the family casts
+ * its pointer to the typed struct.
+ *
+ *   ext == NULL                    -> TRANSCRIBE_OK (family decides
+ *                                     what NULL means; usually "defaults").
+ *   ext->size < sizeof(transcribe_ext)
+ *                                  -> TRANSCRIBE_ERR_BAD_STRUCT_SIZE.
+ *   ext->kind != expected_kind     -> TRANSCRIBE_ERR_INVALID_ARG.
+ *   ext->size < min_size           -> TRANSCRIBE_ERR_BAD_STRUCT_SIZE.
+ *   otherwise                       -> TRANSCRIBE_OK.
+ *
+ * The family handler owns `expected_kind` (its own TRANSCRIBE_EXT_KIND_*
+ * constant) and `min_size` (typically sizeof of the kind's minimum
+ * supported layout). The helper exists so every family rejects malformed
+ * input identically.
+ */
+TRANSCRIBE_API transcribe_status transcribe_ext_check(
+    const struct transcribe_ext * ext,
+    uint32_t                      expected_kind,
+    size_t                        min_size);
+
+/*
+ * Returns true when the loaded model variant accepts the named
+ * extension kind. The probe is per-loaded-model-variant, not per-family
+ * - a family may ship multiple extension kinds that apply to different
+ * variants (e.g. parakeet streaming has cache-aware and chunked-
+ * attention variants whose stream knobs are different kinds), and the
+ * probe reflects what the specific loaded model can actually configure.
+ *
+ * Returns false if model is NULL, if the model's family has no extension
+ * surface at all, or if the kind is unknown.
+ *
+ * Callers should write intent-first probes ("does this model accept
+ * the parakeet stream kind?"), not discovery loops over every known
+ * kind.
+ */
+TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(
+    const struct transcribe_model * model,
+    uint32_t                        kind);
+
+/* ----------------------------------------------------------------------- */
 /* Params                                                                  */
 /* ----------------------------------------------------------------------- */
 
@@ -309,9 +400,15 @@ typedef enum {
  *             the current release.
  */
 struct transcribe_model_params {
+    size_t                     struct_size;
     transcribe_backend_request backend;
     int                        gpu_device;
 };
+
+#define TRANSCRIBE_MODEL_PARAMS_INIT                                       \
+    { sizeof(struct transcribe_model_params), /* struct_size            */ \
+      TRANSCRIBE_BACKEND_AUTO,                /* backend                */ \
+      -1 }                                    /* gpu_device             */
 
 TRANSCRIBE_API struct transcribe_model_params transcribe_model_default_params(void);
 
@@ -325,9 +422,15 @@ TRANSCRIBE_API struct transcribe_model_params transcribe_model_default_params(vo
  *            AUTO (default) uses f16 for quantized models, f32 for f32.
  */
 struct transcribe_context_params {
+    size_t             struct_size;
     int                n_threads;
     transcribe_kv_type kv_type;
 };
+
+#define TRANSCRIBE_CONTEXT_PARAMS_INIT                                     \
+    { sizeof(struct transcribe_context_params), /* struct_size          */ \
+      0,                                        /* n_threads            */ \
+      TRANSCRIBE_KV_TYPE_AUTO }                 /* kv_type              */
 
 TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_params(void);
 
@@ -364,6 +467,8 @@ struct transcribe_funasr_nano_params;
 struct transcribe_canary_params;
 
 struct transcribe_params {
+    size_t                    struct_size;
+
     transcribe_task           task;
     transcribe_timestamp_kind timestamps;
     const char *              language;
@@ -375,22 +480,29 @@ struct transcribe_params {
      * Only consulted when the loaded model's architecture matches the
      * pointed-to struct's family; other families ignore it.
      *
-     * Placed at the end of the struct so new fields appended after it
-     * in future minor versions do not shift the layout of any earlier
-     * field. This is source-compatible (callers rebuild against the
-     * new header and pick up the expanded struct cleanly) but NOT
-     * forward-ABI-safe: a pre-Stage-1 caller linked against an older
-     * binary whose struct ended before `whisper` would have the new
-     * library read past the end of its stack-allocated params object.
-     * See "Params and ABI stability" above — 0.x is vendored/rebuilt,
-     * not system-installed-independent, and callers MUST rebuild when
-     * they upgrade transcribe.cpp.
+     * The Phase-2 migration will replace these named pointers with a
+     * single `const struct transcribe_ext * family` slot, mirroring the
+     * shape already used by transcribe_stream_params. Until then the
+     * named pointers continue to work; their structs are reached via
+     * the legacy named factories below.
      */
     const struct transcribe_whisper_params *     whisper;
     const struct transcribe_sensevoice_params *  sensevoice;
     const struct transcribe_funasr_nano_params * funasr_nano;
     const struct transcribe_canary_params *      canary;
 };
+
+#define TRANSCRIBE_PARAMS_INIT                                             \
+    { sizeof(struct transcribe_params), /* struct_size                  */ \
+      TRANSCRIBE_TASK_TRANSCRIBE,       /* task                         */ \
+      TRANSCRIBE_TIMESTAMPS_NONE,       /* timestamps                   */ \
+      NULL,                             /* language                     */ \
+      NULL,                             /* target_language              */ \
+      true,                             /* strip_special_tags           */ \
+      NULL,                             /* whisper                      */ \
+      NULL,                             /* sensevoice                   */ \
+      NULL,                             /* funasr_nano                  */ \
+      NULL }                            /* canary                       */
 
 TRANSCRIBE_API struct transcribe_params transcribe_default_params(void);
 
@@ -606,47 +718,6 @@ TRANSCRIBE_API struct transcribe_canary_params
     transcribe_canary_default_params(void);
 
 /* ----------------------------------------------------------------------- */
-/* Whisper decoding trace                                                  */
-/* ----------------------------------------------------------------------- */
-
-/*
- * Per-chunk observability: the temperature tier that the fallback loop
- * accepted, the metric values that drove acceptance, and whether the
- * no-speech gate fired. Populated on every successful transcribe_run()
- * call for a Whisper context; one entry per 30-second encoder window
- * that actually decoded (no-speech-skipped chunks still emit an entry).
- *
- * The chunk window `t0_ms .. t1_ms` is the global encoder slice, not a
- * segment boundary. Segments carried in transcribe_n_segments() / -
- * transcribe_segment_*() live inside these windows.
- *
- * Without the trace, every fallback bug is unresolvable — the exact
- * knob the caller twisted may not match the threshold that fired. Keep
- * this surface stable.
- */
-struct transcribe_whisper_chunk_trace {
-    int64_t  t0_ms;
-    int64_t  t1_ms;
-    float    temperature_used;    /* the tier that was accepted */
-    float    compression_ratio;
-    float    avg_logprob;
-    float    no_speech_prob;
-    bool     no_speech_triggered; /* chunk output was discarded */
-    int32_t  n_fallbacks;         /* tiers tried before accept (0 = tier 0 accepted) */
-};
-
-/* Number of chunk traces captured on the most recent successful run.
- * Returns 0 before any run or on non-Whisper contexts. */
-TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
-    const struct transcribe_context * ctx);
-
-/* Trace at index [0, count). Out-of-range indices return a zeroed
- * struct. Non-Whisper contexts return a zeroed struct. */
-TRANSCRIBE_API struct transcribe_whisper_chunk_trace
-    transcribe_get_whisper_chunk_trace(
-        const struct transcribe_context * ctx, int i);
-
-/* ----------------------------------------------------------------------- */
 /* Capabilities                                                            */
 /* ----------------------------------------------------------------------- */
 
@@ -669,6 +740,8 @@ TRANSCRIBE_API struct transcribe_whisper_chunk_trace
  * to its own max_timestamp_kind when it assembles the result.
  */
 struct transcribe_capabilities {
+    size_t                    struct_size;
+
     int32_t                   native_sample_rate;
     int                       n_languages;
     const char * const *      languages;
@@ -700,17 +773,42 @@ struct transcribe_capabilities {
      * streaming_lookahead_ms reports the default setting's lookahead and
      * streaming_lookahead_ms_min reports the fastest setting available.
      * When the two differ the caller can pick a lower-latency setting via
-     * the family-specific stream params extension (parakeet:
-     * att_context_right). When the model has only one setting the two
-     * fields are equal.
+     * a family-specific stream extension. When the model has only one
+     * setting the two fields are equal.
+     *
+     * partial_update_min_interval_ms_min reports the family's minimum
+     * effective partial-result cadence — the floor below which a request
+     * via transcribe_stream_params::partial_update_min_interval_ms is
+     * silently rounded up (e.g. to the encoder frame rate or chunk size).
+     * Zero means "unknown / not applicable."
      */
     int32_t                   streaming_lookahead_ms;
     int32_t                   streaming_chunk_ms;
     int32_t                   streaming_lookahead_ms_min;
+    int32_t                   partial_update_min_interval_ms_min;
 };
 
-TRANSCRIBE_API const struct transcribe_capabilities *
-    transcribe_model_capabilities(const struct transcribe_model * model);
+#define TRANSCRIBE_CAPABILITIES_INIT \
+    { sizeof(struct transcribe_capabilities) }
+
+/*
+ * Read model capabilities into caller-owned storage. The caller
+ * initializes *out_caps via TRANSCRIBE_CAPABILITIES_INIT (zero-fill);
+ * the library writes only the fields that fit and leaves tail bytes
+ * beyond the caller's struct_size untouched.
+ *
+ * Returns:
+ *   TRANSCRIBE_ERR_INVALID_ARG     model or out_caps is NULL.
+ *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE out_caps->struct_size is 0 or
+ *                                  smaller than the library's minimum.
+ *
+ * Pointer fields written by the library (e.g. `languages`) point at
+ * model-owned storage and remain valid until transcribe_model_free().
+ * The output struct itself is caller-owned.
+ */
+TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(
+    const struct transcribe_model *  model,
+    struct transcribe_capabilities * out_caps);
 
 /*
  * Stable identifier strings read from GGUF and runtime state.
@@ -738,7 +836,7 @@ TRANSCRIBE_API const struct transcribe_capabilities *
  *
  *     Backend is a runtime fact, reported separately from the
  *     model's semantic capabilities (see
- *     transcribe_model_capabilities), which never change based on
+ *     transcribe_model_get_capabilities), which never change based on
  *     backend state.
  *
  * All three return statically allocated or model-owned strings; the
@@ -890,9 +988,15 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_context * ctx
  * then run at most one stream per context. The model is shared and
  * read-only; each context owns its own stream state.
  *
- * v1 explicitly limits stream params to family-specific extension
- * pointers. Generic latency / partial-output knobs will be added when
- * a shipped family implements them with clear semantics.
+ * Streaming params (transcribe_stream_params) carry one generic
+ * caller-facing knob (partial_update_min_interval_ms) plus an
+ * optional, kind-tagged family extension pointer. Family-specific
+ * extension structs live in include/transcribe/<family>.h and are
+ * reached intent-first: a caller that wants to set a parakeet
+ * streaming knob probes transcribe_model_accepts_ext_kind for the
+ * parakeet stream kind and, if accepted, points
+ * transcribe_stream_params::family at a TRANSCRIBE_*_INIT-initialized
+ * extension struct.
  */
 
 enum transcribe_stream_state {
@@ -903,115 +1007,59 @@ enum transcribe_stream_state {
 };
 
 /*
- * Family-specific streaming extensions. Defined per-family alongside
- * the corresponding run-params extension. NULL selects the family
- * default. Only consulted by the matching family; others ignore.
+ * Streaming run params.
  *
- * Parakeet streaming:
+ * struct_size:                   sizeof(*this) captured by the caller.
+ *                                Initialized via TRANSCRIBE_STREAM_PARAMS_INIT.
  *
- *   att_context_right
+ * partial_update_min_interval_ms:
+ *                                Generic floor on visible partial-result
+ *                                update cadence, in milliseconds of audio.
+ *                                -1 selects the family's default cadence.
+ *                                 0 requests the family's natural maximum
+ *                                rate (decode on every encoder-frame advance
+ *                                for frame-by-frame emitters; chunk-aligned
+ *                                emitters round 0 up to their chunk_ms).
+ *                                Positive values request that consecutive
+ *                                visible partial results be separated by at
+ *                                least this many milliseconds of audio.
+ *                                Inspect transcribe_capabilities to discover
+ *                                the family's effective floor
+ *                                (partial_update_min_interval_ms_min).
  *
- *     Right-context (lookahead) selector in encoder frames. The
- *     cache-aware streaming variants (e.g. nemotron-speech-streaming-en-0.6b)
- *     are trained on a menu of (left, right) pairs simultaneously —
- *     the user picks one at inference time to trade latency for
- *     accuracy. nemotron's published menu is right ∈ {13, 6, 1, 0},
- *     corresponding to lookahead of {1040, 480, 80, 0} ms at the 80ms
- *     encoder frame rate.
- *
- *     -1 (default): use the model's default setting (first entry of
- *     att_context_size_choices = max-accuracy / max-latency).
- *     >=0: select the corresponding (left, att_context_right) entry
- *     from the model's training menu. transcribe_stream_begin returns
- *     TRANSCRIBE_ERR_INVALID_ARG if the requested right is not in the
- *     menu.
- *
- *     Inspect transcribe_capabilities::streaming_lookahead_ms to see
- *     the default's lookahead in milliseconds, and
- *     transcribe_capabilities::streaming_lookahead_ms_min to see the
- *     fastest setting the model supports.
+ * family:                        Optional family-specific extension. NULL
+ *                                selects family defaults. The pointed-to
+ *                                object is caller-owned and the library
+ *                                copies any values it needs out of it
+ *                                before transcribe_stream_begin returns;
+ *                                the caller may free the extension storage
+ *                                immediately after begin. Each family
+ *                                declares its typed extension struct in
+ *                                include/transcribe/<family>.h with
+ *                                `struct transcribe_ext ext` as field 0.
+ *                                Use transcribe_model_accepts_ext_kind to
+ *                                probe whether the loaded model accepts a
+ *                                given kind before pointing `family` at it.
  */
-struct transcribe_parakeet_stream_params {
-    int32_t att_context_right;
-};
-
-/*
- * Buffered-streaming knobs for the parakeet-unified family.
- *
- * parakeet-unified-en-0.6b is trained with chunked_limited_with_rc
- * attention over a menu of (left, chunk, right) context tuples
- * expressed in 80ms encoder frames. The user picks the active tuple
- * at stream_begin time; the encoder re-runs over each new
- * [left | chunk | right] PCM window. Each field is in MILLISECONDS;
- * the runtime converts to encoder frames via the 80ms frame rate.
- *
- * Use -1 (sentinel) on any field to get the model's "best accuracy"
- * default — L=5600 ms / C=1040 ms / R=1040 ms for unified-en-0.6b,
- * which the published WER numbers correspond to. Non-default tuples
- * are passed through to the encoder's set_default_att_context_size;
- * the runtime validates the resolved (L, C, R) against the model's
- * training menu (stt.parakeet.encoder.att_chunk_{left,chunk,right}_choices).
- * Tuples outside the menu return TRANSCRIBE_ERR_INVALID_ARG.
- */
-struct transcribe_parakeet_buffered_stream_params {
-    int32_t left_ms;
-    int32_t chunk_ms;
-    int32_t right_ms;
-};
-
-/*
- * Moonshine-Streaming family stream knobs.
- *
- *   min_decode_interval_ms
- *
- *     Minimum gap (in milliseconds of audio) between successive
- *     per-feed AR decoder runs. The runtime extends the encoder /
- *     adapter / cross-KV host buffers on every stream_feed that
- *     advances the committed encoder frame count, but only re-runs
- *     the AR decoder (and only flips update->result_changed) when
- *     at least this many milliseconds of new audio have committed
- *     since the previous decode.
- *
- *     The point of this knob is to decouple the caller's PCM feed
- *     cadence (often dictated by mic buffer size, typically 10-50 ms)
- *     from the partial-transcript update rate (a UX choice, typically
- *     ~250 ms). Without it, a caller pushing 10 ms chunks from a
- *     microphone would trigger a decode every 20 ms of audio for the
- *     entire stream — most of which would be wasted compute that the
- *     consumer never gets a chance to render.
- *
- *     Set 0 to decode on every encoder-frame advance (no throttle).
- *     Set -1 to use the family default (240 ms = one
- *     R_total = ~4 updates/sec after the initial right-context
- *     warmup; balances responsiveness with compute cost).
- *
- *     Note this is a *minimum* gap — the decoder always runs once at
- *     stream_finalize regardless of this value, and a feed that does
- *     not advance the committed encoder frame count never triggers a
- *     decode either way.
- */
-struct transcribe_moonshine_streaming_stream_params {
-    int32_t min_decode_interval_ms;
-};
-
 struct transcribe_stream_params {
-    const struct transcribe_parakeet_stream_params *           parakeet;
-    const struct transcribe_parakeet_buffered_stream_params *  parakeet_buffered;
-    const struct transcribe_moonshine_streaming_stream_params *moonshine_streaming;
+    size_t                        struct_size;
+    int32_t                       partial_update_min_interval_ms;
+    const struct transcribe_ext * family;
 };
 
-TRANSCRIBE_API struct transcribe_parakeet_stream_params
-    transcribe_parakeet_stream_default_params(void);
+#define TRANSCRIBE_STREAM_PARAMS_INIT                                       \
+    { sizeof(struct transcribe_stream_params), /* struct_size            */ \
+      -1,                                      /* partial_update_min_..  */ \
+      NULL }                                   /* family                 */
 
-TRANSCRIBE_API struct transcribe_parakeet_buffered_stream_params
-    transcribe_parakeet_buffered_stream_default_params(void);
-
-TRANSCRIBE_API struct transcribe_moonshine_streaming_stream_params
-    transcribe_moonshine_streaming_stream_default_params(void);
+TRANSCRIBE_API struct transcribe_stream_params
+    transcribe_stream_default_params(void);
 
 /*
  * Optional per-call change metadata returned by feed/finalize.
  *
+ *   struct_size        Caller's sizeof(*this). Initialized via
+ *                      TRANSCRIBE_STREAM_UPDATE_INIT (zero-fill).
  *   result_changed     The context result was modified by this call.
  *                      Inspect the accessors after the call to read
  *                      the new snapshot.
@@ -1033,8 +1081,16 @@ TRANSCRIBE_API struct transcribe_moonshine_streaming_stream_params
  * update is nullable. Passing NULL means the caller will inspect the
  * context directly (revision + committed-count accessors). Audio
  * cursor fields are only available via this struct.
+ *
+ * Zero-means-absent contract: every field on this struct is designed
+ * so the zero value encodes "absent / unknown / false / none." This
+ * is what makes the TRANSCRIBE_STREAM_UPDATE_INIT zero-fill safe for
+ * forward ABI: a new caller paired with an older library reads tail
+ * fields the older library never wrote, and those bytes must remain
+ * zero.
  */
 struct transcribe_stream_update {
+    size_t  struct_size;
     bool    result_changed;
     bool    is_final;
     int32_t revision;
@@ -1043,8 +1099,8 @@ struct transcribe_stream_update {
     int64_t buffered_ms;
 };
 
-TRANSCRIBE_API struct transcribe_stream_params
-    transcribe_stream_default_params(void);
+#define TRANSCRIBE_STREAM_UPDATE_INIT \
+    { sizeof(struct transcribe_stream_update) }
 
 /*
  * Begin a streaming run on ctx.
@@ -1062,7 +1118,19 @@ TRANSCRIBE_API struct transcribe_stream_params
  *
  * Returns:
  *   TRANSCRIBE_ERR_INVALID_ARG       NULL arg, ctx in ACTIVE state,
- *                                    or out-of-range enum in run_params.
+ *                                    out-of-range enum in run_params, or
+ *                                    an extension whose kind is unknown
+ *                                    to / not accepted by the loaded model.
+ *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE   run_params or stream_params has a
+ *                                    struct_size below what this entry
+ *                                    point requires, or stream_params->family
+ *                                    is too small to contain a
+ *                                    transcribe_ext header. A family
+ *                                    extension with a size below its
+ *                                    kind's minimum is reported by the
+ *                                    family hook after the context enters
+ *                                    ACTIVE.
+ *                                    Use TRANSCRIBE_*_INIT macros to avoid.
  *   TRANSCRIBE_ERR_NOT_IMPLEMENTED   Model has no streaming hooks or
  *                                    capabilities advertise
  *                                    supports_streaming == false.
@@ -1081,9 +1149,10 @@ TRANSCRIBE_API struct transcribe_stream_params
  *
  * Failure semantics split at the family hook boundary:
  *
- *   Pre-hook failures (every status above) leave the context's
- *   lifecycle state untouched — the call returns without entering
- *   ACTIVE and without clearing the previous result snapshot.
+ *   Pre-hook failures leave the context's lifecycle state untouched —
+ *   the call returns without entering ACTIVE and without clearing the
+ *   previous result snapshot. These include unknown / unaccepted
+ *   extension kinds and top-level struct_size failures.
  *
  *   Family-hook failures (any non-OK status returned by the family's
  *   stream_begin hook after the dispatcher has already cleared the
@@ -1259,29 +1328,35 @@ TRANSCRIBE_API int transcribe_tokenize(
  *              always 0 since the decoder isn't wired yet; phase 5
  *              fills this in.
  *
- * The struct shape follows whisper.cpp's whisper_timings: a small
- * value type returned by an accessor, no allocation crossing the FFI.
- * New fields will only be added at the end of the struct (the same
- * "factory + add at end" rule the params structs follow); within 0.x
- * this is not a forward-ABI guarantee — see "Params and ABI
- * stability" elsewhere in this header.
+ * Output struct: caller initializes via TRANSCRIBE_TIMINGS_INIT (zero-
+ * fill); the library writes only the fields that fit within
+ * struct_size. Every field is a numeric value where zero encodes
+ * "unknown / not measured."
  */
 struct transcribe_timings {
-    float load_ms;
-    float mel_ms;
-    float encode_ms;
-    float decode_ms;
+    size_t struct_size;
+    float  load_ms;
+    float  mel_ms;
+    float  encode_ms;
+    float  decode_ms;
 };
 
+#define TRANSCRIBE_TIMINGS_INIT { sizeof(struct transcribe_timings) }
+
 /*
- * Read the current timings from a context. Safe to call before any
- * transcribe_run; mel_ms / encode_ms / decode_ms will be 0. load_ms
- * is non-zero as soon as the underlying model is loaded.
+ * Read the current timings from a context into caller-owned storage.
+ * Safe to call before any transcribe_run; mel_ms / encode_ms /
+ * decode_ms will be 0. load_ms is non-zero as soon as the underlying
+ * model is loaded.
  *
- * Returns a zeroed struct if ctx is NULL.
+ * Returns:
+ *   TRANSCRIBE_ERR_INVALID_ARG     ctx or out_timings is NULL.
+ *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE out_timings->struct_size is 0 or
+ *                                  smaller than the library's minimum.
  */
-TRANSCRIBE_API struct transcribe_timings
-transcribe_get_timings(const struct transcribe_context * ctx);
+TRANSCRIBE_API transcribe_status transcribe_get_timings(
+    const struct transcribe_context * ctx,
+    struct transcribe_timings *       out_timings);
 
 /*
  * Pretty-print the current timings to the registered log callback at

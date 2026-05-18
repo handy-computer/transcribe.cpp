@@ -60,7 +60,10 @@ struct transcribe_model {
 
     // Public capabilities. Per-family load() fills this in directly,
     // calling set_languages() for the languages chain. Immutable after
-    // a successful load.
+    // a successful load. Zero-initialized here; the capabilities
+    // copy-out accessor overwrites struct_size with the caller's view
+    // before returning, so the value of caps.struct_size on the model
+    // is irrelevant to external observers.
     transcribe_capabilities caps{};
 
     // Wall-clock load time in microseconds, captured by per-family
