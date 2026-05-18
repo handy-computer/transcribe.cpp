@@ -66,19 +66,44 @@ editor handles language detection implicitly.
 
 ## Performance
 
-Cells are wall-clock latency on the 11.0 s `samples/jfk.wav` (mean over 5
-iterations after 2 warmups), with speedup over realtime in parentheses. Q8_0.
+Cells are wall-clock latency, with speedup over realtime in parentheses.
+NAR is faster than the AR variants on GPU backends because there is no
+autoregressive step loop — a single bidirectional forward through 40 LLM
+layers replaces the per-token decode graph.
 
 ### Apple M4
+
+Mean over 5 iterations after 2 warmups. Q8_0.
 
 | Backend | Sample      |       Q8_0        |
 | ------- | ----------- | ----------------: |
 | Metal   | jfk (11.0s) |    614 ms (18×)   |
 | CPU     | jfk (11.0s) |   2.55 s (4×)     |
 
-macOS 26.1, transcribe.cpp `275332d`. NAR is faster than the AR variants on
-Metal because there is no autoregressive step loop — a single bidirectional
-forward through 40 LLM layers replaces the per-token decode graph.
+macOS 26.1, transcribe.cpp `275332d`.
+
+### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
+
+Mean over 3 iterations after 1 warmup.
+
+**Vulkan (RADV)**
+
+| Sample       |     Q4_K_M       |       Q8_0       |
+| ------------ | ---------------: | ---------------: |
+| jfk (11.0s)  |   3.16 s (3.5×)  |   3.06 s (3.6×)  |
+| dots (35.3s) |   9.85 s (3.6×)  |   9.57 s (3.7×)  |
+
+**CPU**
+
+| Sample       |     Q4_K_M       |       Q8_0       |
+| ------------ | ---------------: | ---------------: |
+| jfk (11.0s)  |   5.71 s (1.9×)  |   7.05 s (1.6×)  |
+| dots (35.3s) |  20.39 s (1.7×)  |  24.81 s (1.4×)  |
+
+Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`. NAR's Vulkan RTF stays
+flat across short and long samples (jfk and dots both ~3.6×) because the
+single bidirectional LLM pass dominates over the encoder; on CPU the
+encoder dominates so RTF tapers slightly with sequence length.
 
 ## Capabilities
 

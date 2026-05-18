@@ -70,10 +70,11 @@ build/bin/transcribe-cli \
 
 ## Performance
 
-Cells are wall-clock latency on the 11.0 s `samples/jfk.wav` (mean over 5
-iterations after 2 warmups), with speedup over realtime in parentheses. Q8_0.
+Cells are wall-clock latency, with speedup over realtime in parentheses.
 
 ### Apple M4
+
+Mean over 5 iterations after 2 warmups. Q8_0.
 
 | Backend | Sample      |       Q8_0        |
 | ------- | ----------- | ----------------: |
@@ -81,6 +82,26 @@ iterations after 2 warmups), with speedup over realtime in parentheses. Q8_0.
 | CPU     | jfk (11.0s) |   2.44 s (5×)     |
 
 macOS 26.1, transcribe.cpp `275332d`.
+
+### AMD Ryzen 7 PRO 4750U (Vega 8 iGPU)
+
+Mean over 3 iterations after 1 warmup.
+
+**Vulkan (RADV)**
+
+| Sample       |     Q4_K_M       |       Q8_0       |
+| ------------ | ---------------: | ---------------: |
+| jfk (11.0s)  |   3.47 s (3.2×)  |   3.71 s (3.0×)  |
+| dots (35.3s) |  11.37 s (3.1×)  |  12.30 s (2.9×)  |
+
+**CPU**
+
+| Sample       |     Q4_K_M       |       Q8_0       |
+| ------------ | ---------------: | ---------------: |
+| jfk (11.0s)  |   5.21 s (2.1×)  |   6.72 s (1.6×)  |
+| dots (35.3s) |  18.08 s (1.9×)  |  24.21 s (1.5×)  |
+
+Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 
 ## Capabilities
 
