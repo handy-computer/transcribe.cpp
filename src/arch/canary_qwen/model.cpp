@@ -580,12 +580,6 @@ transcribe_status load(
         // the window family.
         cfg.window_type  = "hann_symmetric";
         cfg.normalize    = m->hparams.fe_normalize;
-        // SALM feeds the LM directly off the normalized mel; the LM is
-        // brittle to the trailing-frame distributional shift that NeMo's
-        // FilterbankFeatures.forward zeros out. Match NeMo: compute
-        // mean/std over the first floor(n_samples / hop) frames and zero
-        // the trailing pad frame.
-        cfg.nemo_mask_trailing_frame = true;
 
         // Pull baked filterbank/window from GGUF if present.
         using R = load_common::ReadF32Result;
@@ -1269,10 +1263,15 @@ transcribe_status run(transcribe_context *      context,
 } // namespace
 
 extern const Arch arch = {
-    /* .name         = */ "canary_qwen",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name             = */ "canary_qwen",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::canary_qwen
