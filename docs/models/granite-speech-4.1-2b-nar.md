@@ -71,6 +71,26 @@ NAR is faster than the AR variants on GPU backends because there is no
 autoregressive step loop — a single bidirectional forward through 40 LLM
 layers replaces the per-token decode graph.
 
+### Apple M4 Max
+
+Mean over 3 iterations after 1 warmup.
+
+**Metal**
+
+| Sample       |     Q4_K_M       |       Q8_0       |
+| ------------ | ---------------: | ---------------: |
+| jfk (11.0s)  |    209 ms (53×)  |    196 ms (56×)  |
+| dots (35.3s) |    664 ms (53×)  |    635 ms (56×)  |
+
+**CPU**
+
+| Sample       |     Q4_K_M       |       Q8_0       |
+| ------------ | ---------------: | ---------------: |
+| jfk (11.0s)  |   1.87 s (5.9×)  |   1.99 s (5.5×)  |
+| dots (35.3s) |   6.50 s (5.4×)  |   7.71 s (4.6×)  |
+
+macOS 26.4, transcribe.cpp `de05c43`.
+
 ### Apple M4
 
 Mean over 5 iterations after 2 warmups. Q8_0.

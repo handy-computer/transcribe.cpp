@@ -73,6 +73,26 @@ build/bin/transcribe-cli \
 
 Cells are wall-clock latency, with speedup over realtime in parentheses.
 
+### Apple M4 Max
+
+Mean over 3 iterations after 1 warmup.
+
+**Metal**
+
+| Sample       |     Q4_K_M       |       Q8_0       |
+| ------------ | ---------------: | ---------------: |
+| jfk (11.0s)  |    272 ms (40×)  |    303 ms (36×)  |
+| dots (35.3s) |   1.00 s (35×)   |   1.16 s (30×)   |
+
+**CPU**
+
+| Sample       |     Q4_K_M       |       Q8_0       |
+| ------------ | ---------------: | ---------------: |
+| jfk (11.0s)  |   1.67 s (6.6×)  |   1.85 s (5.9×)  |
+| dots (35.3s) |   5.49 s (6.4×)  |   6.22 s (5.7×)  |
+
+macOS 26.4, transcribe.cpp `de05c43`.
+
 ### Apple M4
 
 Mean over 5 iterations after 2 warmups. Q8_0.
