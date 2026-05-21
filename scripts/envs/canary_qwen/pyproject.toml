@@ -1,0 +1,17 @@
+[project]
+name = "transcribe-canary-qwen-env"
+version = "0.1.0"
+description = "Python env for Canary-Qwen SALM (FastConformer + Qwen3-1.7B + LoRA) reference dumps via NeMo speechlm2"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.2",
+    "nemo_toolkit[asr]>=2.5",
+    "transformers>=4.45",
+    "peft>=0.13",
+    "huggingface-hub>=0.20",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "sentencepiece>=0.2",
+    "librosa>=0.10",
+    "gguf>=0.10.0",
+]

@@ -1,0 +1,261 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "granite",
+  "hf_repo": "ibm-granite/granite-4.0-1b-speech",
+  "hf_revision": "bd87ab862416353633ea431fe49b1614003623c5",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "no generation_config.json shipped; defaults come from the inner Granite LLM"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "transformers.models.granite_speech (GraniteSpeechForConditionalGeneration, GraniteSpeechProcessor)",
+      "status": "found",
+      "detail": "Mainline transformers >=4.52.1; model card pins transformers_version=4.54.0"
+    },
+    "model_card": {
+      "kind": "hf_file",
+      "path": "README.md",
+      "status": "found",
+      "detail": "Capabilities, languages, and Open ASR Leaderboard WER table sourced here"
+    },
+    "official_gguf": {
+      "kind": "hf_api",
+      "path": "ibm-granite/granite-4.0-1b-speech-GGUF",
+      "status": "found",
+      "detail": "IBM-published GGUF; reference indicates it ships only the inner Granite LLM (architecture=granite), not the full speech stack. Tooling: llama.cpp b9045 + transformers 5.8.0. Quant ladder BF16/Q8_0/Q6_K/Q5_K_M/Q4_K_M. Not directly usable; the speech encoder + Q-Former projector are not in the file."
+    }
+  },
+  "variants": [
+    {
+      "name": "granite-4.0-1b-speech",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "audio-llm"
+    ],
+    "key_fields": {
+      "architectures": [
+        "GraniteSpeechForConditionalGeneration"
+      ],
+      "model_type": "granite_speech",
+      "audio_token_index": 100352,
+      "downsample_rate": 5,
+      "window_size": 15,
+      "tie_word_embeddings": false,
+      "has_lora_adapter": false,
+      "encoder.model_type": "granite_speech_encoder",
+      "encoder.num_layers": 16,
+      "encoder.hidden_dim": 1024,
+      "encoder.num_heads": 8,
+      "encoder.dim_head": 128,
+      "encoder.input_dim": 160,
+      "encoder.output_dim": 348,
+      "encoder.conv_kernel_size": 15,
+      "encoder.conv_expansion_factor": 2,
+      "encoder.feedforward_mult": 4,
+      "encoder.max_pos_emb": 512,
+      "encoder.context_size": 200,
+      "projector.model_type": "blip_2_qformer",
+      "projector.hidden_size": 1024,
+      "projector.intermediate_size": 4096,
+      "projector.num_attention_heads": 16,
+      "projector.num_hidden_layers": 2,
+      "projector.encoder_hidden_size": 1024,
+      "projector.cross_attention_frequency": 1,
+      "projector.position_embedding_type": "absolute",
+      "projector.layer_norm_eps": 1e-12,
+      "projector.vocab_size": 30522,
+      "text.model_type": "granite",
+      "text.hidden_size": 2048,
+      "text.intermediate_size": 4096,
+      "text.num_hidden_layers": 40,
+      "text.num_attention_heads": 16,
+      "text.num_key_value_heads": 4,
+      "text.vocab_size": 100353,
+      "text.max_position_embeddings": 4096,
+      "text.rope_theta": 10000,
+      "text.rms_norm_eps": 1e-05,
+      "text.hidden_act": "silu",
+      "text.embedding_multiplier": 12.0,
+      "text.logits_scaling": 8.0,
+      "text.attention_multiplier": 0.0078125,
+      "text.residual_multiplier": 0.22,
+      "text.tie_word_embeddings": false
+    },
+    "varying_across_variants": [
+      "encoder_config.cat_hidden_layers",
+      "projector_config.encoder_hidden_size",
+      "model_type",
+      "architectures",
+      "transformers_version"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "weights_header",
+    "evidence": "safetensors header BF16=938 (all floating tensors); top-level config.torch_dtype=bfloat16 and encoder/projector sub-configs also declare bfloat16. The intake script flagged float32 because text_config.dtype=\"float32\" is a vestigial field carried from the base LLM checkpoint; the speech checkpoint stores all weights in BF16.",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 938,
+        "I64": 16
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 100353,
+    "special_tokens": {
+      "bos": 100257,
+      "eos": 100257,
+      "pad": 100256,
+      "audio": 100352
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": "cd9faddbc5d020a41fb6dfa6924c090bf987ede9092bc088f6a7c66aef416af2"
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "pt", "ja"],
+    "language_detection": false,
+    "translation": true,
+    "timestamps": ["none"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.42,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "Open ASR Leaderboard reproduction; ref-dtype C++ port must score <= 1.43 on the same manifest to pass porting-7-wer."
+    },
+    {
+      "dataset": "LibriSpeech test-other (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.85,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "TED-LIUM v3 (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.10,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "SPGISpeech (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.89,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "VoxPopuli (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 5.84,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "AMI (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 8.44,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "Earnings22 (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 8.48,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "GigaSpeech (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 10.14,
+      "score_unit": "percent",
+      "source": "model card"
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "Mainline transformers (>=4.52.1) ships GraniteSpeechForConditionalGeneration and GraniteSpeechProcessor as first-class classes; the model card pins transformers_version=4.54.0. No author repo or NeMo path is needed. IBM also publishes an LLM-only GGUF (ibm-granite/granite-4.0-1b-speech-GGUF) but it does not contain the speech encoder or projector, so it is not reusable as our canonical reference.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "Conformer encoder with block-attention (~4s blocks, context_size=200) and Shaw relative positional encoding (max_pos_emb=512). Not a standard transformer self-attention mask; the block boundaries gate the attention pattern, similar to Qwen3-ASR's cu_seqlens blockmask but parameterized differently.",
+    "Encoder input is 80 logmels x 2-frame stack -> input_dim=160. The 2-frame stride at the input fuses adjacent mel frames before the first Conformer layer; the converter must preserve this fold-in. Effective frame rate after the encoder + projector downsample_rate=5 is ~10 Hz audio tokens injected into the LLM.",
+    "Conformer macaroni FFN (feedforward_mult=4 with 0.5 residual scaling on both half-FFNs), GLU-gated convolution module (conv_expansion_factor=2 -> pointwise conv2x -> GLU -> depthwise conv kernel=15 -> SiLU/Swish -> pointwise conv1x), and self-conditioned CTC bypass from a middle encoder layer back into the residual stream. None of these are stock transformer blocks.",
+    "Projector is a BLIP-2 Q-Former (model_type=blip_2_qformer, 2 layers, hidden 1024, intermediate 4096, 16 heads, vocab_size=30522 is vestigial from BLIP-2 and unused). It performs cross-attention from a small set of trainable queries to the encoder output windows (window_size=15). ggml does not have a Q-Former primitive; we will implement it as standard cross-attention with absolute position embeddings.",
+    "Audio token injection: GraniteSpeechForConditionalGeneration scatters the projector output into the LLM input embeddings at positions where input_ids == audio_token_index (100352). Standard audio-LLM pattern; matches docs/porting/0-porting.md guidance.",
+    "Granite LLM uses non-standard scalar multipliers: embedding_multiplier=12, logits_scaling=8, attention_multiplier=1/128, residual_multiplier=0.22. These must be baked into the graph; missing any one of them silently degrades accuracy without crashing.",
+    "GQA on the LLM: 16 query heads / 4 KV heads. tie_word_embeddings=false at the top level (the LLM has a distinct lm_head).",
+    "Tokenizer special tokens include audio (100352), bos/eos collapsed at 100257, pad at 100256. has_language_tokens=true (chat template encodes language via prompt, not vocab tokens) -- confirm against the chat_template before assuming language is a runtime arg.",
+    "Frontend uses torchaudio MelSpectrogram defaults (n_fft=512, win_length=400 with zero-padding to 512, hop=160, n_mels=80, Hann periodic window, htk-style mel filterbank, no normalization). The n_fft != win_length asymmetry is a classic mismatch source; converter and C++ frontend must match exactly. preprocessor_config.json declares only the melspec_kwargs; window/center/pad_mode/mel_scale come from torchaudio defaults and need to be locked down at oracle time.",
+    "Translation (AST) capability is exposed via prompt template (X->En for de/es/fr/pt/ja; En->X for de/es/fr/it/ja/pt/zh). The C++ runtime needs to round-trip the prompt template from GGUF metadata to make this observable."
+  ],
+  "intake_gaps": [
+    {
+      "field": "frontend.window/center/padding_mode/mel_filterbank_norm",
+      "reason": "Not declared in preprocessor_config.json (only melspec_kwargs hop_length/n_fft/n_mels/sample_rate/win_length are recorded). Values above are torchaudio MelSpectrogram defaults (hann_periodic, center=True, reflect padding, htk mel scale, norm=None). Oracle (porting-2) must confirm by running the reference processor and matching observed frames."
+    }
+  ]
+}

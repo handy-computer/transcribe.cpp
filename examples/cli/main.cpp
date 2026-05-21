@@ -244,8 +244,9 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             else if (vs == "cpu_accel") out.backend = TRANSCRIBE_BACKEND_CPU_ACCEL;
             else if (vs == "metal")     out.backend = TRANSCRIBE_BACKEND_METAL;
             else if (vs == "vulkan")    out.backend = TRANSCRIBE_BACKEND_VULKAN;
+            else if (vs == "cuda")      out.backend = TRANSCRIBE_BACKEND_CUDA;
             else {
-                std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, or vulkan\n");
+                std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, vulkan, or cuda\n");
                 return false;
             }
         } else if (a == "--timestamps") {

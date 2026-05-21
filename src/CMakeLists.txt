@@ -30,6 +30,7 @@ add_library(transcribe
     conformer/conformer.cpp
     sanm/sanm.cpp
     qwen3_lm/qwen3_lm.cpp
+    granite_conformer/shaw_attn.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp
@@ -50,6 +51,11 @@ add_library(transcribe
     arch/qwen3_asr/weights.cpp
     arch/qwen3_asr/encoder.cpp
     arch/qwen3_asr/decoder.cpp
+    arch/canary_qwen/model.cpp
+    arch/canary_qwen/capabilities.cpp
+    arch/canary_qwen/weights.cpp
+    arch/canary_qwen/encoder.cpp
+    arch/canary_qwen/decoder.cpp
     arch/whisper/model.cpp
     arch/whisper/capabilities.cpp
     arch/whisper/weights.cpp
@@ -82,6 +88,18 @@ add_library(transcribe
     arch/gigaam/encoder.cpp
     arch/gigaam/decoder.cpp
     arch/gigaam/mel.cpp
+    arch/granite/model.cpp
+    arch/granite/capabilities.cpp
+    arch/granite/weights.cpp
+    arch/granite/encoder.cpp
+    arch/granite/projector.cpp
+    arch/granite/decoder.cpp
+    arch/granite_nar/model.cpp
+    arch/granite_nar/capabilities.cpp
+    arch/granite_nar/weights.cpp
+    arch/granite_nar/encoder.cpp
+    arch/granite_nar/projector.cpp
+    arch/granite_nar/decoder.cpp
 )
 
 target_include_directories(transcribe

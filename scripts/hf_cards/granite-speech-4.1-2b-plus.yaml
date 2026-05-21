@@ -1,0 +1,92 @@
+# Spec for the HF README of handy-computer/granite-speech-4.1-2b-plus-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: ibm-granite/granite-speech-4.1-2b-plus
+target_repo: handy-computer/granite-speech-4.1-2b-plus-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/granite-speech-4.1-2b-plus.md
+
+upstream_commit: edd3bf5
+pin_date: 2026-05-17
+
+validation:
+  reference: Transformers
+  commit: 275332d
+  date: 2026-05-17
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+  - fr
+  - de
+  - es
+  - pt
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - granite
+  - granite-speech
+  - audio-llm
+  - multilingual
+  - word-timestamps
+
+summary: |
+  Offline multilingual speech-to-text with word-level timestamps. IBM Granite
+  Speech 4.1-2b-plus is the timestamp-and-diarization variant of the
+  Granite-Speech family. Same architecture as the base 4.1-2b (Conformer
+  encoder, BLIP-2 Q-Former projector, Granite-4.0-1b autoregressive LLM
+  decoder) with two changes: the encoder concatenates mid-layer (idx 3) and
+  final-layer hidden states (`cat_hidden_layers=[3]`, doubling the projector
+  K/V input from 1024 to 2048), and the LM token embeddings are tied with
+  the lm_head. Takes a 16 kHz mono WAV and produces a transcript, optionally
+  interleaved with `[SS:N]` word-timestamp markers. Transcribes English,
+  French, German, Spanish, and Portuguese (no Japanese on this variant).
+  Translates between English and each of those four other languages in
+  either direction (en ↔ fr, en ↔ de, en ↔ es, en ↔ pt) — always via
+  English, no direct fr↔de etc.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances)
+    with greedy decoding and the model-card chat template (system prompt +
+    leading-space user instruction + `add_generation_prompt=True`). BF16
+    reference baseline (re-run locally with that exact prompt): 1.48%; 0.04pp
+    above upstream's published 1.44%, within bootstrap CI overlap and likely
+    a chat-template / normalization difference on the publisher side. Text
+    normalizer: Whisper `EnglishTextNormalizer`, the same normalizer Open ASR
+    Leaderboard uses. The `add_generation_prompt=True` is load-bearing —
+    without it the model emits 25-27 empty hypotheses on short test-clean
+    clips and WER blows up to ~26%. The transcribe.cpp runtime hard-codes the
+    prompt correctly; this note only matters if you reproduce the reference.
+
+quants:
+  - name: BF16
+    filename: granite-speech-4.1-2b-plus-BF16.gguf
+    size: 4.23 GB
+    wer: 1.49%
+  - name: F16
+    filename: granite-speech-4.1-2b-plus-F16.gguf
+    size: 4.23 GB
+    wer: 1.48%
+  - name: Q8_0
+    filename: granite-speech-4.1-2b-plus-Q8_0.gguf
+    size: 2.35 GB
+    wer: 1.50%
+  - name: Q6_K
+    filename: granite-speech-4.1-2b-plus-Q6_K.gguf
+    size: 1.86 GB
+    wer: 1.46%
+  - name: Q5_K_M
+    filename: granite-speech-4.1-2b-plus-Q5_K_M.gguf
+    size: 1.69 GB
+    wer: 1.48%
+  - name: Q4_K_M
+    filename: granite-speech-4.1-2b-plus-Q4_K_M.gguf
+    size: 1.49 GB
+    wer: 1.56%

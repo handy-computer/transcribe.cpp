@@ -164,11 +164,13 @@ def _format_distribution(dist: dict[str, int]) -> str:
 
 
 def _config_dtype(config: dict) -> str | None:
+    # Top-level first; sub-config is a fallback. See the matching note in
+    # scripts/preflight.py:_config_dtype.
     for path in (
-        ("text_config", "dtype"),
-        ("text_config", "torch_dtype"),
         ("dtype",),
         ("torch_dtype",),
+        ("text_config", "dtype"),
+        ("text_config", "torch_dtype"),
     ):
         node = config
         for k in path:
