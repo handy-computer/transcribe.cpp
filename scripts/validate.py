@@ -455,6 +455,7 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",
         )
         if result.stdout:
             print(result.stdout, end="")

@@ -1,0 +1,49 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "granite",
+  "variant": "granite-speech-4.1-2b-plus",
+  "source_model": {
+    "hf_repo": "ibm-granite/granite-speech-4.1-2b-plus",
+    "hf_revision": "edd3bf54fbb06d8e263aa0c1939321d67b073f86"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://github.com/huggingface/transformers",
+    "revision": "v5.8.1",
+    "entrypoint": "scripts/dump_reference_granite_transformers.py"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "weights_header",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 100353,
+    "special_tokens": {
+      "bos": 100257,
+      "eos": 100257,
+      "pad": 100256,
+      "audio": 100352
+    }
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "pt"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["word"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": true
+  },
+  "tolerance_file": "tests/tolerances/granite.json",
+  "cases": ["jfk"]
+}
