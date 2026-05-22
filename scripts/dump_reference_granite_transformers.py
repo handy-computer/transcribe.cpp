@@ -335,7 +335,10 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
     # Build the chat-templated prompt with an audio placeholder.
     user_message = f"<|audio|>{args.instruction}"
-    chat = [{"role": "user", "content": user_message}]
+    chat: list[dict] = []
+    if args.system:
+        chat.append({"role": "system", "content": args.system})
+    chat.append({"role": "user", "content": user_message})
     if processor.tokenizer.chat_template is not None or processor.chat_template is not None:
         # add_generation_prompt=True so the prompt ends with the
         # assistant-role marker. With False, granite-speech-4.1-2b-plus
@@ -504,6 +507,15 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
         "--instruction",
         default="can you transcribe the speech into a written format?",
         help="user instruction following the <|audio|> placeholder",
+    )
+    p.add_argument(
+        "--system",
+        default=None,
+        help=("Optional system-role content to prepend to the chat. "
+              "Used for granite-speech-4.1-2b-plus, whose HF model card "
+              "publishes a Granite-specific SYSTEM_PROMPT; not used on "
+              "1b / 2b (their tokenizer has no chat template and the "
+              "dumper falls through to bare USER:/ASSISTANT:)."),
     )
     p.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"])
     p.add_argument(

@@ -125,7 +125,7 @@ def load_reference(args: argparse.Namespace):
     """
     import torch
     import transformers
-    from transformers import AutoConfig, AutoFeatureExtractor, AutoModel
+    from transformers import AutoConfig, AutoModel, AutoProcessor
 
     model_id, local_only = resolve_model(args.model)
     source = "local path" if local_only else "HuggingFace"
@@ -134,11 +134,12 @@ def load_reference(args: argparse.Namespace):
         f"transformers {transformers.__version__}, device={args.device})..."
     )
 
-    feature_extractor = AutoFeatureExtractor.from_pretrained(
+    processor = AutoProcessor.from_pretrained(
         model_id,
         trust_remote_code=True,
         local_files_only=local_only,
     )
+    feature_extractor = processor.feature_extractor
 
     dtype = {"bf16": torch.bfloat16,
              "f16":  torch.float16,
@@ -183,33 +184,16 @@ def load_reference(args: argparse.Namespace):
         dtype=dtype,
         attn_implementation="eager",
     ).eval()
-    # The modeling_nle assert checks self.config.attn_implementation ==
-    # "flash_attention_2". We've made eager bidirectional via the mask
-    # patch above; bypass the assert by temporarily flipping the config
-    # value while the forward body runs.
-    import types
-    original_forward = model.forward.__func__
-
-    def patched_forward(self, *args, **kwargs):
-        # Bypass the flash-attn assertion; we use sdpa with is_causal=False
-        # which yields bidirectional attention.
-        cfg = self.config
-        if cfg.attn_implementation != "flash_attention_2":
-            # Run the original body but skip the assert by temporarily
-            # claiming we are flash. The forward body only inspects this
-            # one line, the layer-level attention is already wired.
-            saved = cfg.attn_implementation
-            cfg.attn_implementation = "flash_attention_2"
-            try:
-                return original_forward(self, *args, **kwargs)
-            finally:
-                cfg.attn_implementation = saved
-        return original_forward(self, *args, **kwargs)
-
-    model.forward = types.MethodType(patched_forward, model)
+    # Older NAR modeling snapshots asserted attn_implementation == "flash_attention_2"
+    # at the top of forward; the script used to flip the config flag to bypass
+    # the assert. The current snapshot (f2720345...) has dropped that assert
+    # and lets each attention layer pick its kernel via ALL_ATTENTION_FUNCTIONS,
+    # so the wrapper would now actually force flash and break on platforms
+    # without FA2 installed. We leave eager + the create_causal_mask patch
+    # above as the bidirectional path.
 
     model.to(args.device)
-    return feature_extractor, model
+    return feature_extractor, model, processor
 
 
 class CaptureHook:
@@ -292,7 +276,7 @@ def cmd_decode(args: argparse.Namespace) -> int:
     import torch
 
     configure_torch(args)
-    feature_extractor, model = load_reference(args)
+    feature_extractor, model, processor = load_reference(args)
     model_id, _ = resolve_model(args.model)
     model_dtype = model_dtype_name(model)
 
@@ -334,25 +318,32 @@ def cmd_decode(args: argparse.Namespace) -> int:
     # ---------- LLM hooks (single-pass forward) ----------
     # The flat layout going into the LLM is [audio_embeds, text_embeds]
     # per sample. We capture inputs_embeds via a pre-hook on
-    # llm.model (the inner GraniteModel); editing_logits comes out of
-    # the .forward() result.
+    # language_model.model (the inner GraniteModel); editing_logits
+    # comes out of the .forward() result.
     llm_pre_hook = CaptureHook()
     def _pre(module, args_, kwargs_):
         if llm_pre_hook.value is None:
             emb = kwargs_.get("inputs_embeds")
             if emb is not None:
                 llm_pre_hook.value = emb
-    model.llm.model.register_forward_pre_hook(_pre, with_kwargs=True)
+    model.language_model.model.register_forward_pre_hook(_pre, with_kwargs=True)
 
-    # ---------- Forward + generate ----------
+    # ---------- Forward + transcribe ----------
+    # Upstream GraniteSpeechNarForASR exposes .transcribe() (not .generate())
+    # for single-pass NAR inference. Returns preds (text token ids) and
+    # encoder_preds (CTC token ids); decode both via the processor's
+    # tokenizer for the printable transcripts.
     with torch.inference_mode():
-        gen_out = model.generate(input_features=input_features,
-                                  attention_mask=attention_mask)
+        gen_out = model.transcribe(
+            input_features=input_features,
+            attention_mask=attention_mask,
+            output_encoder_logits=True,
+        )
 
-    text_preds = gen_out.text_preds
-    text_ctc_preds = gen_out.text_ctc_preds
     encoder_logits = gen_out.encoder_logits  # [B, T, 348]
 
+    text_preds = processor.batch_decode(gen_out.preds, skip_special_tokens=True)
+    text_ctc_preds = processor.batch_decode(gen_out.encoder_preds, skip_special_tokens=True)
     text_pred = text_preds[0] if text_preds else ""
     text_ctc_pred = text_ctc_preds[0] if text_ctc_preds else ""
     print(f"  CTC initial : {text_ctc_pred!r}")
@@ -392,13 +383,17 @@ def cmd_decode(args: argparse.Namespace) -> int:
         print(f"  dec.flat_embeds: shape={flat.shape}")
 
     # Final editing logits (lm_head over the text portions; per-sample
-    # tensors live in gen_out.editing_logits but generate() doesn't
-    # actually return that — we re-derive it from the forward path on
-    # the same inputs to make the dump deterministic).
+    # tensors come out of forward() as the `logits` field — the new
+    # API splits text-row logits out of the flat LLM forward and
+    # returns them as a list of per-sample tensors. We re-derive them
+    # here from a forward() call on the same inputs to make the dump
+    # deterministic. (Older snapshots returned `editing_logits` as a
+    # separate field; current ones repurpose `.logits` for the same
+    # thing.)
     with torch.inference_mode():
         full = model.forward(input_features=input_features,
                              attention_mask=attention_mask)
-    edit_list = list(full.editing_logits) if full.editing_logits is not None else []
+    edit_list = list(full.logits) if full.logits is not None else []
     if edit_list:
         edit_a = to_np(edit_list[0])
         write_tensor("dec.text_logits", edit_a, "decoder", source, out_dir=out_dir)

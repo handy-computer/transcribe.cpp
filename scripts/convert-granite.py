@@ -663,8 +663,19 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
                         variant == "granite-speech-4.1-2b-plus")
 
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----
+        #
+        # Pretokenizer flavor differs across granite-speech variants:
+        #   - granite-4.0-1b-speech / granite-speech-4.1-2b  use a custom
+        #     Split-then-ByteLevel sequence with a \p{N}{1,3} digit rule
+        #     (the "granite" flavor in transcribe::unicode::pretokenize_granite).
+        #   - granite-speech-4.1-2b-plus uses plain ByteLevel(use_regex=true),
+        #     i.e. the standard GPT-2 split (\p{N}+ unlimited-digit), so
+        #     "2024" stays one pretoken and BPE merges to ['20','24'] not
+        #     ['202','4']. The C++ tokenizer pretokenize_gpt2 path handles
+        #     that — we just have to declare it correctly in the GGUF.
         writer.add_string("tokenizer.ggml.model", "gpt2")
-        writer.add_string("tokenizer.ggml.pre",   "granite")
+        pre_flavor = "gpt2" if variant == "granite-speech-4.1-2b-plus" else "granite"
+        writer.add_string("tokenizer.ggml.pre",   pre_flavor)
         writer.add_array("tokenizer.ggml.tokens",     tok["tokens"])
         writer.add_array("tokenizer.ggml.token_type", tok["types"])
         writer.add_array("tokenizer.ggml.merges",     tok["merges"])
