@@ -48,8 +48,13 @@ struct GraniteNarHParams {
     int32_t enc_head_dim         = 0;   // 128
     int32_t enc_input_dim        = 0;   // 160 (2 stacked mel frames)
     int32_t enc_output_dim       = 0;   // 348 (CTC char vocab)
-    int32_t enc_bpe_output_dim   = 0;   // 100353 (BPE CTC head; 0 if absent)
+    int32_t enc_bpe_output_dim   = 0;   // 100352 (new snapshot) or 100353 (old)
     int32_t enc_bpe_pool_window  = 0;   // 4
+    // BPE-CTC blank id. New snapshot: 100257 (BOS, channel exists inside
+    // the bpe_output_dim=vocab_size head, decode uses argmax directly).
+    // Old snapshot: 0 (separate blank channel at index 0, decode subtracts 1
+    // from non-blank argmax to recover the LLM token id).
+    int32_t enc_bpe_blank_id     = 0;
     int32_t enc_self_cond_layer  = 0;   // 8 (1-indexed boundary)
     int32_t enc_feedforward_mult = 0;   // 4
     int32_t enc_conv_kernel_size = 0;   // 15

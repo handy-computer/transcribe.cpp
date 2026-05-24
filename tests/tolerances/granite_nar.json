@@ -1,106 +1,137 @@
 {
   "_comment": [
-    "Tolerances for granite_nar (NLE non-autoregressive editor).",
+    "Tolerances for granite_nar (NAR non-autoregressive editor).",
     "",
     "Correctness regime:",
-    "  - Reference: transformers 5.5.3, NLENARDecoder (modeling_nle.py), bf16",
-    "    weights, attn_implementation='eager' with create_causal_mask patched",
-    "    to return None (see scripts/dump_reference_granite_nar_transformers.py).",
-    "    Required because eager + transformers' auto-built causal mask produces",
-    "    causal attention even when layer.is_causal=False; only flash-attn-2",
-    "    bypasses it natively. With the mask patched, eager yields a truly",
-    "    bidirectional forward matching flash-attn-2 semantics. Verified via",
-    "    LibriSpeech test-clean WER 1.29% (matches model card to two decimals).",
-    "  - C++: bf16 weights (F32 norms, F32 biases, F16 conv kernels), F32",
+    "  - Reference: transformers 5.5.3, GraniteSpeechNarForASR loaded via",
+    "    trust_remote_code at HF revision 99a4df9... (single-file modeling",
+    "    snapshot, the README's canonical inference target). bf16 weights,",
+    "    attn_implementation='eager' on CPU. The dumper mirrors the model",
+    "    card path: AutoProcessor + AutoModel + model.transcribe(**inputs),",
+    "    then processor.batch_decode(output.preds). LibriSpeech test-clean",
+    "    WER 1.29% (matches the model card).",
+    "  - C++: bf16 weights (F32 norms / biases, F16 conv kernels), F32",
     "    accumulators, CPU backend, threads=1. Bidirectional attention via",
     "    ggml_soft_max_ext(kq, mask=nullptr) in decoder.cpp.",
-    "  - Mel: reference Whisper feature extractor (80-mel log-mel + 2-frame",
-    "    stack); enc.mel.in tolerance reflects librosa-vs-host-FFT precision.",
+    "  - Mel: production C++ MelFrontend in eval mode against the HF",
+    "    GraniteSpeechNarFeatureExtractor (torchaudio MelSpectrogram +",
+    "    log10/max-8/div-4/add-1 + 2-frame stack).",
     "  - KV cache: not used (single-pass bidirectional forward).",
     "",
-    "Dominant drift sources:",
-    "  - Encoder Conformer blocks: standard bf16 reduction-order noise. The",
-    "    last layer accumulates the bypass-induced residual plus 16 layers of",
-    "    bf16 mul_mat noise. enc.block.15.out shows a localized drift band",
-    "    around t=348-361 (a single Shaw block-local window boundary) on the",
-    "    jfk sample, raising max_abs >> mean_abs. The mid-CTC-bypass dump",
-    "    enc.block.7.out is tighter because it's BEFORE the bypass.",
-    "  - enc.ctc_logits: 1024->348 linear acting on the high-drift final",
-    "    hidden state propagates the same band into the char-CTC head.",
-    "  - proj.qformer.out / proj.out: NLE simplified Q-Former (2 cross-attn",
-    "    + MLP layers, no self-attn). Drift comes from the encoder + bf16",
-    "    cross attention.",
-    "  - dec.text_logits: 40 bf16 LLM layers + bf16 lm_head accumulate noise",
-    "    on per-position logits running O(100). Observed max 2.86 / mean 0.26",
-    "    is ~3% relative — genuine bf16 reduction-order noise, no structural",
-    "    delta. Prior tolerance of 200/20 in this file dated from before the",
-    "    reference dumper was patched and was absorbing a structural",
-    "    causal/bidirectional mismatch, not bf16 noise.",
+    "Drift sources (in order):",
+    "  1. F32 BLAS reduction-order noise on bf16 weights. Each Conformer",
+    "     block applies 7+ matmuls (FF1 up/down, Q/KV/Out, conv 1x1 + 1x1,",
+    "     FF2 up/down) over 1024-wide hiddens. Per-substep drift on block",
+    "     0 measured at <0.07 across post-FF1 / post-attn / post-conv /",
+    "     post-FF2 — well under the bf16 magnitude budget and consistent",
+    "     with reduction-order noise alone (no structural delta).",
+    "  2. enc.block.15.out: 16-block cascade compounds the per-block",
+    "     reduction-order noise. Final-block magnitude is ~7-23 (rms 2.46,",
+    "     p99_abs 6.6); observed max_abs 0.21 is well within bf16 noise.",
+    "  3. proj.qformer.out / proj.out: NAR simplified Q-Former (2 cross-attn",
+    "     + MLP layers, learned 3-query, no self-attn). Drift comes from the",
+    "     encoder + bf16 cross attention.",
+    "  4. dec.text_logits: 40 bf16 LLM layers + bf16 lm_head + /logits_scaling.",
+    "     The NEW NAR LM (GraniteSpeechNarLM.forward in the 99a4df9 snapshot)",
+    "     applies /logits_scaling=8 to the lm_head output; the C++ decoder",
+    "     mirrors this scaling (it was an unscaled head in the older NLE",
+    "     snapshot — see decoder.cpp). Observed drift ~0.4 on logits ~ O(20)",
+    "     post-scaling.",
+    "  5. dec.flat_embeds: text-portion rows are an exact embed_tokens lookup",
+    "     on the BPE-CTC initial hypothesis. Audio rows come from the",
+    "     projector pre-divided by embedding_multiplier. Drift is dominated",
+    "     by the projector pass.",
+    "",
+    "Per-substep block-0 dumps (enc.block.0.post_{ff1,attn,conv,ff2}) are",
+    "instrumentation taps the dumper hooks via forward-pre-hooks on the",
+    "downstream submodule. They are not part of the regular contract; they",
+    "exist so future drift regressions can be localized inside a single",
+    "Conformer block. The C++ side names matching intermediate tensors and",
+    "marks them for dump.",
+    "",
+    "BPE-CTC scheme: the 99a4df9 snapshot uses bpe_output_dim = vocab_size",
+    "(100352), blank_token_id = 100257 (BOS), and the LLM token id IS the",
+    "argmax index directly. The older 7d20732d snapshot used bpe_output_dim",
+    "= vocab_size + 1 with blank at channel 0 and `argmax - 1` shift. The",
+    "converter writes the actual blank_token_id as a new KV so C++ honors",
+    "the right scheme — see encoder.cpp::compute_bpe_ctc_initial_hypothesis.",
     "",
     "All numbers measured with `validate.py all --family granite_nar --variant",
-    "granite-speech-4.1-2b-nar` on a single jfk dump pair. Bands reflect 1.5x",
-    "observed; means use the 1.5x rule too. Floors at 1e-6.",
-    "",
-    "Shape-stability caveat for dec.* on inputs other than jfk: the NAR forward",
-    "is shape-dependent on the BPE-CTC initial hypothesis (n_text = 2n + 1",
-    "with min 8). On marginal inputs, tiny bf16 noise at the CTC head's argmax",
-    "can flip frames between blank and non-blank, producing different n_text",
-    "between reference and C++ and making tensor comparison impossible. jfk is",
-    "robust here; other audio cases would need verification before adding."
+    "granite-speech-4.1-2b-nar`. Recipe: max(1.5x observed, 1e-6)."
   ],
   "enc.mel.in": {
     "max_abs": 3.5e-05,
     "mean_abs": 4.5e-07,
-    "_comment": "C++ MelFrontend vs HF WhisperFeatureExtractor. Observed 2.17e-5 max / 2.98e-7 mean from librosa-vs-host-FFT precision differences in the 400-sample STFT window. Widened 1.5x."
+    "_comment": "C++ MelFrontend vs HF GraniteSpeechNarFeatureExtractor. Observed 2.17e-5 / 2.98e-7."
   },
   "enc.input_linear.out": {
     "max_abs": 0.024,
     "mean_abs": 0.0003,
-    "_comment": "bf16 mul_mat noise on the 160->1024 linear. Observed 1.55e-2 max / 1.83e-4 mean; widened 1.5x."
+    "_comment": "160->1024 Linear with bf16 weights. Observed 1.55e-2 / 1.83e-4."
+  },
+  "enc.block.0.post_ff1": {
+    "max_abs": 0.05,
+    "mean_abs": 0.0015,
+    "_comment": "Block 0 sub-step: post-FF1 residual. Observed 2.8e-2 / 7.6e-4."
+  },
+  "enc.block.0.post_attn": {
+    "max_abs": 0.07,
+    "mean_abs": 0.002,
+    "_comment": "Block 0 sub-step: post-attn residual. Observed 4.0e-2 / 9.0e-4."
+  },
+  "enc.block.0.post_conv": {
+    "max_abs": 0.1,
+    "mean_abs": 0.005,
+    "_comment": "Block 0 sub-step: post-conv residual. Observed 6.3e-2 / 3.3e-3."
+  },
+  "enc.block.0.post_ff2": {
+    "max_abs": 0.1,
+    "mean_abs": 0.006,
+    "_comment": "Block 0 sub-step: post-FF2 residual (LN damps to block.0.out). Observed 6.1e-2 / 3.9e-3."
   },
   "enc.block.0.out": {
     "max_abs": 0.06,
-    "mean_abs": 0.0036,
-    "_comment": "First Conformer block. Observed 4e-2 / 2.37e-3; widened 1.5x."
+    "mean_abs": 0.004,
+    "_comment": "First Conformer block post-LN. Observed 3.8e-2 / 2.4e-3."
   },
   "enc.block.7.out": {
-    "max_abs": 0.12,
-    "mean_abs": 0.0018,
-    "_comment": "Layer 7 output BEFORE the self-conditioned CTC bypass injection. Observed 8e-2 / 1.20e-3; widened 1.5x."
+    "max_abs": 0.06,
+    "mean_abs": 0.002,
+    "_comment": "Layer 7 output, BEFORE the self-conditioned CTC bypass injection. Observed 3.7e-2 / 1.1e-3."
   },
   "enc.block.8.out": {
     "max_abs": 0.04,
-    "mean_abs": 0.0007,
-    "_comment": "Layer 8 output (the layer immediately after the bypass injection seeds the residual). Observed 2.55e-2 / 4.49e-4; widened 1.5x."
+    "mean_abs": 0.001,
+    "_comment": "Layer 8 output, AFTER the bypass residual. The bypass (softmax(mid_logits) @ out_mid) is a low-rank correction back into the stream — drift is smaller here than block 7. Observed 2.1e-2 / 4.2e-4."
   },
   "enc.block.15.out": {
-    "max_abs": 9.0,
-    "mean_abs": 0.031,
-    "_comment": "Last Conformer block. Observed 5.93 / 2.05e-2 — the localized band at the last Shaw window boundary dominates max_abs while mean is small. Same drift pattern as AR granite enc.block.15.out (max 8.9 in tests/tolerances/granite.json)."
+    "max_abs": 0.35,
+    "mean_abs": 0.02,
+    "_comment": "Final Conformer block. Observed 2.1e-1 / 1.3e-2. Magnitudes here reach ~23 on outlier positions; mean drift stays small (~0.5% of rms)."
   },
   "enc.ctc_logits": {
-    "max_abs": 14.0,
-    "mean_abs": 0.13,
-    "_comment": "Final char-CTC head (348 vocab) over enc.block.15.out. Observed 9.01 / 8.33e-2; widened 1.5x. Argmax is robust on most positions but the drift band shifts a few frames between blank and non-blank — the BPE pool absorbs most of that."
+    "max_abs": 0.5,
+    "mean_abs": 0.04,
+    "_comment": "Char-CTC head mid_logits at the self-conditioning step (encoder.out applied to layer-7 hidden state in the reference; identical 1024->348 Linear in C++). Observed 2.5e-1 / 2.0e-2. Reference rms ~10.9 / p99_abs ~18.5."
   },
   "proj.qformer.out": {
-    "max_abs": 0.42,
-    "mean_abs": 0.032,
-    "_comment": "NLE simplified Q-Former (2 cross-attn + MLP layers, learned 3-query, no self-attn). Observed 2.70e-1 / 2.10e-2; widened 1.5x."
+    "max_abs": 0.3,
+    "mean_abs": 0.025,
+    "_comment": "NAR simplified Q-Former output (2 cross-attn + MLP layers, learned 3-query, no self-attn). Observed 1.6e-1 / 1.7e-2."
   },
   "proj.out": {
-    "max_abs": 0.19,
-    "mean_abs": 0.015,
-    "_comment": "out_linear projection of the qformer output to the LLM hidden dim. Observed 1.24e-1 / 9.97e-3; widened 1.5x."
+    "max_abs": 0.12,
+    "mean_abs": 0.012,
+    "_comment": "out_linear projection of the qformer output to the LLM hidden dim. Observed 6.7e-2 / 6.9e-3."
   },
   "dec.flat_embeds": {
-    "max_abs": 0.02,
-    "mean_abs": 0.001,
-    "_comment": "Pre-multiplier flat inputs_embeds = cat(audio/embedding_multiplier, embed_tokens(text_with_eos_slots)). Drift comes from the projector (bf16 cross-attn + MLP) on the audio side. Observed 1.06e-2 / 6.03e-4; widened 1.5x."
+    "max_abs": 0.012,
+    "mean_abs": 0.0007,
+    "_comment": "Pre-multiplier flat inputs_embeds = cat(audio/embedding_multiplier, embed_tokens(text_with_eos_slots)). Drift comes from the projector on the audio side; text rows are an exact embed_tokens lookup. Observed 6.9e-3 / 4.1e-4."
   },
   "dec.text_logits": {
-    "max_abs": 5.0,
-    "mean_abs": 0.5,
-    "_comment": "Raw lm_head logits over the text-portion slice (NLE bypasses GraniteForCausalLM's /logits_scaling divisor — see decoder.cpp). 40 bf16 LLM layers + bf16 lm_head accumulate noise on magnitudes that themselves run O(100) at confident positions. Observed 2.86 / 0.26 against the patched-bidirectional reference; widened ~1.5x. The previous 200/20 band predated the dumper's create_causal_mask patch and was absorbing a structural causal/bidirectional mismatch, not bf16 noise — see top-of-file _comment."
+    "max_abs": 0.6,
+    "mean_abs": 0.06,
+    "_comment": "Per-sample text-portion lm_head logits with /logits_scaling=8 applied (matching the 99a4df9 modeling — see decoder.cpp). 40 bf16 LLM layers + bf16 lm_head accumulate noise on post-scaling magnitudes of ~O(20). Observed 4.0e-1 / 3.5e-2."
   }
 }

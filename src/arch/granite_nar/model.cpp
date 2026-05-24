@@ -465,6 +465,10 @@ transcribe_status run(
         if (t != nullptr) transcribe::debug::dump_tensor(name, t, stage);
     };
     try_dump("enc.input_linear.out", eb.dumps.input_linear_out, "encoder");
+    try_dump("enc.block.0.post_ff1",  eb.dumps.block_0_post_ff1,  "encoder");
+    try_dump("enc.block.0.post_attn", eb.dumps.block_0_post_attn, "encoder");
+    try_dump("enc.block.0.post_conv", eb.dumps.block_0_post_conv, "encoder");
+    try_dump("enc.block.0.post_ff2",  eb.dumps.block_0_post_ff2,  "encoder");
     try_dump("enc.block.0.out",      eb.dumps.block_0_out,      "encoder");
     if (eb.dumps.block_mid_pre)  try_dump(eb.dumps.block_mid_pre->name,
                                           eb.dumps.block_mid_pre,  "encoder");
@@ -520,7 +524,8 @@ transcribe_status run(
         compute_bpe_ctc_initial_hypothesis(
             mid_non_blank,
             cc->ctc_bpe_logits_host, n_bpe_vocab,
-            t_enc, cm->hparams.enc_bpe_pool_window, /*blank_id=*/0, hyp_ids);
+            t_enc, cm->hparams.enc_bpe_pool_window,
+            /*blank_id=*/cm->hparams.enc_bpe_blank_id, hyp_ids);
     }
     if (hyp_ids.empty()) {
         // No tokens — emit empty transcript and return.

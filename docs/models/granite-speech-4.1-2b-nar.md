@@ -18,30 +18,32 @@ See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-
 for training data, intended use, and upstream evaluation methodology.
 
 Licensed Apache-2.0. Ported from upstream commit
-[`7d20732`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar/commit/7d20732df04d097262c4ecd8fe7f34ec2b3e6c42),
-pinned 2026-05-17.
+[`99a4df9`](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar/commit/99a4df9007ac5682f9daa093fb7008ff606e9a5d),
+pinned 2026-05-24 (single-file `modeling_granite_speech_nar.py` snapshot —
+the README's canonical inference target).
 
 ## Download
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [granite-speech-4.1-2b-nar-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-BF16.gguf)     | 4.51 GB | 1.29% |
-| F16    | [granite-speech-4.1-2b-nar-F16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-F16.gguf)       | 4.52 GB | 1.29% |
-| Q8_0   | [granite-speech-4.1-2b-nar-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q8_0.gguf)     | 2.50 GB | 1.29% |
-| Q6_K   | [granite-speech-4.1-2b-nar-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q6_K.gguf)     | 1.98 GB | 1.29% |
-| Q5_K_M | [granite-speech-4.1-2b-nar-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q5_K_M.gguf) | 1.78 GB | 1.28% |
-| Q4_K_M | [granite-speech-4.1-2b-nar-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q4_K_M.gguf) | 1.56 GB | 1.34% |
+| BF16   | [granite-speech-4.1-2b-nar-BF16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-BF16.gguf)     | 4.20 GB | 1.29% |
+| F16    | [granite-speech-4.1-2b-nar-F16.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-F16.gguf)       | 4.21 GB | 1.29% |
+| Q8_0   | [granite-speech-4.1-2b-nar-Q8_0.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q8_0.gguf)     | 2.33 GB | 1.29% |
+| Q6_K   | [granite-speech-4.1-2b-nar-Q6_K.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q6_K.gguf)     | 1.84 GB | 1.29% |
+| Q5_K_M | [granite-speech-4.1-2b-nar-Q5_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q5_K_M.gguf) | 1.66 GB | 1.25% |
+| Q4_K_M | [granite-speech-4.1-2b-nar-Q4_K_M.gguf](https://huggingface.co/handy-computer/granite-speech-4.1-2b-nar-gguf/resolve/main/granite-speech-4.1-2b-nar-Q4_K_M.gguf) | 1.45 GB | 1.35% |
 
 WER measured on the full LibriSpeech test-clean split (2620 utterances).
-BF16 reference baseline (transformers, re-run locally): 1.29% — matches the
-upstream model card exactly. Reference reproduction on a host without
-`flash-attn-2` requires monkey-patching
-`transformers.models.granite.modeling_granite.create_causal_mask` to `None`;
-the transcribe.cpp runtime implements bidirectional attention natively, so
-this caveat only matters if you reproduce the reference. Text normalizer:
-Whisper `EnglishTextNormalizer`. F16, Q8_0, and Q6_K all score bit-for-bit
-the same WER as BF16, indicating the editor is very robust to weight
-quantization down to Q5_K_M.
+BF16 reference baseline (transformers `model.transcribe`, MPS, re-run
+locally): 1.28% — matches the upstream model card's 1.29% to within
+sampling noise. Text normalizer: Whisper `EnglishTextNormalizer`. F16,
+Q8_0, and Q6_K all score the same 1.29% as BF16 — the editor is very
+robust to weight quantization down through Q5_K_M, where the WER
+actually dips slightly (1.25%, within overlapping 95% CI of REF).
+Reference reproduction follows the model card path verbatim
+(`AutoProcessor` + `AutoModel.transcribe` + `processor.batch_decode`)
+at HF revision `99a4df9`; the older snapshot's bidirectional-mask patch
+is obsolete in this snapshot.
 
 ## Quick start
 

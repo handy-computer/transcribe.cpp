@@ -26,9 +26,9 @@ Tensor layout in HF state dict:
   projector.qformer.layers.{0,1}.{attn_norm, cross_attention.*,
                                   mlp_norm, mlp.fc1, mlp.fc2}.*
 
-  llm.model.embed_tokens.weight   # tied lm_head; no separate output weight
-  llm.model.norm.weight
-  llm.model.layers.{i}.{input_layernorm, post_attention_layernorm,
+  language_model.model.embed_tokens.weight   # tied lm_head; no separate output weight
+  language_model.model.norm.weight
+  language_model.model.layers.{i}.{input_layernorm, post_attention_layernorm,
                          self_attn.{q,k,v,o}_proj,
                          mlp.{gate,up,down}_proj}.*
 
@@ -154,7 +154,9 @@ def read_ctc_chars(config: dict) -> list[str]:
 def read_hparams(config: dict, preproc: dict, processor: dict | None) -> dict:
     enc = config["encoder_config"]
     prj = config["projector_config"]
-    llm = config["llm_config"]
+    # NAR config renamed `llm_config` -> `text_config` between snapshots
+    # 7d20732d (multi-file modeling) and 99a4df9 (single-file modeling).
+    llm = config.get("text_config") or config["llm_config"]
     hp = {}
 
     # Encoder
@@ -166,6 +168,17 @@ def read_hparams(config: dict, preproc: dict, processor: dict | None) -> dict:
     hp["enc_output_dim"]        = enc["output_dim"]
     hp["enc_bpe_output_dim"]    = enc.get("bpe_output_dim", 0)
     hp["enc_bpe_pool_window"]   = enc.get("bpe_pooling_window", 0)
+    # BPE-CTC scheme:
+    #   - 7d20732d snapshot: bpe_output_dim = vocab_size + 1, blank channel
+    #     is at index 0, non-blank argmax mapped back via (argmax - 1).
+    #   - 99a4df9  snapshot: bpe_output_dim = vocab_size, the blank channel
+    #     IS one of the vocab channels (the BOS id 100257), no shift on
+    #     decode. config["blank_token_id"] = 100257 in the new snapshot.
+    # Read blank_token_id from the encoder_config (or fall back to root),
+    # default to 0 to preserve the old scheme.
+    hp["enc_bpe_blank_id"] = int(
+        enc.get("blank_token_id") or config.get("blank_token_id") or 0
+    )
     hp["enc_self_cond_layer"]   = enc.get("self_conditioning_layer", enc["num_layers"] // 2)
     hp["enc_feedforward_mult"]  = enc["feedforward_mult"]
     hp["enc_conv_kernel_size"]  = enc["conv_kernel_size"]
@@ -202,7 +215,12 @@ def read_hparams(config: dict, preproc: dict, processor: dict | None) -> dict:
     hp["dec_head_dim"]           = llm.get("head_dim", llm["hidden_size"] // llm["num_attention_heads"])
     hp["dec_hidden_act"]         = llm["hidden_act"]
     hp["dec_rms_norm_eps"]       = llm["rms_norm_eps"]
-    hp["dec_rope_theta"]         = llm["rope_theta"]
+    # 99a4df9 snapshot nests rope_theta under rope_parameters; the 7d20732d
+    # snapshot stored it as a flat key.
+    hp["dec_rope_theta"]         = (
+        llm.get("rope_parameters", {}).get("rope_theta")
+        or llm["rope_theta"]
+    )
     hp["dec_max_pos_emb"]        = llm["max_position_embeddings"]
     hp["dec_tie_word_embeddings"] = bool(llm.get("tie_word_embeddings", True))
     hp["dec_vocab_size"]         = llm["vocab_size"]
@@ -348,8 +366,8 @@ PROJ_BLOCK_MAP = [
 
 # Granite-4 LLM. Mirrors AR convert-granite.py decoder layout (dec.*).
 DEC_TOP_MAP = [
-    ("llm.model.embed_tokens.weight", "dec.token_embd.weight"),
-    ("llm.model.norm.weight",         "dec.output_norm.weight"),
+    ("language_model.model.embed_tokens.weight", "dec.token_embd.weight"),
+    ("language_model.model.norm.weight",         "dec.output_norm.weight"),
 ]
 DEC_BLOCK_MAP = [
     ("input_layernorm.weight",          "norm_attn.weight"),
@@ -522,6 +540,7 @@ def main(argv: list[str]) -> int:
     writer.add_uint32("stt.granite_nar.encoder.output_dim", hp["enc_output_dim"])
     writer.add_uint32("stt.granite_nar.encoder.bpe_output_dim", hp["enc_bpe_output_dim"])
     writer.add_uint32("stt.granite_nar.encoder.bpe_pool_window", hp["enc_bpe_pool_window"])
+    writer.add_uint32("stt.granite_nar.encoder.bpe_blank_id", hp["enc_bpe_blank_id"])
     writer.add_uint32("stt.granite_nar.encoder.self_cond_layer", hp["enc_self_cond_layer"])
     writer.add_uint32("stt.granite_nar.encoder.feedforward_mult", hp["enc_feedforward_mult"])
     writer.add_uint32("stt.granite_nar.encoder.conv_kernel_size", hp["enc_conv_kernel_size"])
@@ -641,7 +660,7 @@ def main(argv: list[str]) -> int:
         # LLM layers.
         for i in range(hp["dec_n_layers"]):
             for src_suf, dst_suf in DEC_BLOCK_MAP:
-                emit(f"llm.model.layers.{i}.{src_suf}",
+                emit(f"language_model.model.layers.{i}.{src_suf}",
                      f"dec.blocks.{i}.{dst_suf}", handles, key_sets)
 
         leftover = sorted(all_keys - consumed)

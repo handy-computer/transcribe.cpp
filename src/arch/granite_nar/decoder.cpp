@@ -240,14 +240,22 @@ ForwardBuild build_forward_graph(ggml_context *            ctx,
     text_x = ggml_cont(ctx, text_x);
 
     // ---------- LM head (tied to token_embd) ----------
-    // Reference NLE bypasses the GraniteForCausalLM forward wrapper that
-    // would normally divide by `logits_scaling`. It calls
-    // `self.llm.lm_head(text_x)` directly, which returns raw lm_head
-    // logits (no division). We mirror that here — emitting the raw logits
-    // keeps the dec.text_logits dump value-aligned with the reference.
-    // Argmax is scale-invariant so the C++ transcript is unaffected.
+    // 99a4df9 modeling: GraniteSpeechNarLM.forward applies
+    //   logits = lm_head(hidden) / config.logits_scaling
+    // (the /logits_scaling divisor is part of the Granite-4 head and
+    //  the new NAR LM does NOT bypass it — see line 913 of
+    //  modeling_granite_speech_nar.py). The OLD multi-file snapshot
+    //  (7d20732d) called self.llm.lm_head(text_x) directly, bypassing
+    //  the divisor. The dumper now follows the README path which
+    //  routes through the new forward; mirror its scaling here so
+    //  dec.text_logits dump aligns numerically with the reference.
+    //  Argmax is scale-invariant either way, so the C++ transcript is
+    //  unchanged by this division.
     ggml_tensor * logits = ggml_mul_mat(
         ctx, weights.dec_embed.token_w, text_x);
+    if (hp.dec_logits_scaling > 0.0f && hp.dec_logits_scaling != 1.0f) {
+        logits = ggml_scale(ctx, logits, 1.0f / hp.dec_logits_scaling);
+    }
     // ne = [vocab, n_text]
     named(logits, "dec.text_logits");
     fb.out = logits;
