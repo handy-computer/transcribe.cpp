@@ -444,6 +444,7 @@ int main() {
         // First, seed the context with a real successful run so
         // there is a previous result to clobber.
         transcribe_params rp_ok = transcribe_default_params();
+        rp_ok.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
         const transcribe_status st_ok =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_ok);
         CHECK(st_ok == TRANSCRIBE_OK);
