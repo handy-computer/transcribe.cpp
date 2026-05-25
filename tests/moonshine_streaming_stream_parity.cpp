@@ -19,6 +19,7 @@
 // file is missing.
 
 #include "transcribe.h"
+#include "transcribe/moonshine_streaming.h"
 
 #include "wav.h"
 
@@ -76,7 +77,10 @@ int run_streaming(transcribe_context *      ctx,
 {
     transcribe_params       rp = TRANSCRIBE_PARAMS_INIT;
     transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
-    sp.partial_update_min_interval_ms = min_decode_interval_ms;
+    transcribe_moonshine_streaming_stream_ext ms =
+        TRANSCRIBE_MOONSHINE_STREAMING_STREAM_EXT_INIT;
+    ms.min_decode_interval_ms = min_decode_interval_ms;
+    sp.family = &ms.ext;
     transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
     if (st != TRANSCRIBE_OK) {
         std::fprintf(stderr,

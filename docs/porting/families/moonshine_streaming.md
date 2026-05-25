@@ -365,10 +365,11 @@ for any real UI and quickly slower than real-time on the smaller
 variants.
 
 The decode throttle lives in
-`transcribe_moonshine_streaming_stream_params::min_decode_interval_ms`:
+`transcribe_moonshine_streaming_stream_ext::min_decode_interval_ms`,
+passed through `transcribe_stream_params::family`:
 
 - **`-1`** (sentinel, the default of
-  `transcribe_moonshine_streaming_stream_default_params()`): resolved
+  `TRANSCRIBE_MOONSHINE_STREAMING_STREAM_EXT_INIT`): resolved
   to the family default of **240 ms** = one cumulative-right-context
   window = ~4 partial-transcript updates per second after warmup.
 - **`0`**: decode on every encoder-frame advance (no throttle).

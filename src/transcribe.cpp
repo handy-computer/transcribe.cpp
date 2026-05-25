@@ -348,7 +348,7 @@ constexpr size_t k_min_stream_params_size =
 constexpr size_t k_min_stream_update_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_update, buffered_ms);
 constexpr size_t k_min_capabilities_size =
-    TRANSCRIBE_FIELD_END(transcribe_capabilities, partial_update_min_interval_ms_min);
+    TRANSCRIBE_FIELD_END(transcribe_capabilities, streaming_lookahead_ms_min);
 constexpr size_t k_min_timings_size =
     TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
 constexpr size_t k_min_whisper_chunk_trace_size =

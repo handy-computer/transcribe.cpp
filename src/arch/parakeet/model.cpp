@@ -561,15 +561,10 @@ transcribe_status load(
         };
         const int default_C = max_in(m->hparams.enc_att_chunk_chunk_choices);
         const int default_R = max_in(m->hparams.enc_att_chunk_right_choices);
-        const int min_C     = min_in(m->hparams.enc_att_chunk_chunk_choices);
         const int min_R     = min_in(m->hparams.enc_att_chunk_right_choices);
         m->caps.streaming_chunk_ms         = default_C * frame_ms;
         m->caps.streaming_lookahead_ms     = default_R * frame_ms;
         m->caps.streaming_lookahead_ms_min = min_R * frame_ms;
-        // Buffered streaming commits at chunk granularity, so the
-        // smallest chunk size in the menu is the floor below which a
-        // partial_update_min_interval_ms request rounds up.
-        m->caps.partial_update_min_interval_ms_min = min_C * frame_ms;
     }
     if (cache_aware_streaming)
     {
@@ -602,10 +597,6 @@ transcribe_status load(
             if (p.second < min_right) min_right = p.second;
         }
         m->caps.streaming_lookahead_ms_min = min_right * frame_ms;
-        // Cache-aware streaming commits at chunk granularity (one
-        // chunk per stream_feed advance), so the chunk_ms is the
-        // smallest meaningful partial-update interval.
-        m->caps.partial_update_min_interval_ms_min = m->caps.streaming_chunk_ms;
     }
 
     // Construct the mel front-end now that hparams are available.

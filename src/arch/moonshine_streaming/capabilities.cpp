@@ -45,11 +45,6 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     caps.streaming_lookahead_ms        = 240;
     caps.streaming_chunk_ms            = 80;
     caps.streaming_lookahead_ms_min    = 240;
-
-    // The minimum effective decode-cadence floor. Moonshine throttles
-    // decodes at encoder-frame granularity (20 ms), so a caller's
-    // partial_update_min_interval_ms request below this rounds up.
-    caps.partial_update_min_interval_ms_min = 20;
 }
 
 } // namespace transcribe::moonshine_streaming

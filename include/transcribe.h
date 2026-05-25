@@ -777,16 +777,10 @@ struct transcribe_capabilities {
      * a family-specific stream extension. When the model has only one
      * setting the two fields are equal.
      *
-     * partial_update_min_interval_ms_min reports the family's minimum
-     * effective partial-result cadence — the floor below which a request
-     * via transcribe_stream_params::partial_update_min_interval_ms is
-     * silently rounded up (e.g. to the encoder frame rate or chunk size).
-     * Zero means "unknown / not applicable."
      */
     int32_t                   streaming_lookahead_ms;
     int32_t                   streaming_chunk_ms;
     int32_t                   streaming_lookahead_ms_min;
-    int32_t                   partial_update_min_interval_ms_min;
 };
 
 #define TRANSCRIBE_CAPABILITIES_INIT \
@@ -989,15 +983,13 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_context * ctx
  * then run at most one stream per context. The model is shared and
  * read-only; each context owns its own stream state.
  *
- * Streaming params (transcribe_stream_params) carry one generic
- * caller-facing knob (partial_update_min_interval_ms) plus an
- * optional, kind-tagged family extension pointer. Family-specific
- * extension structs live in include/transcribe/<family>.h and are
- * reached intent-first: a caller that wants to set a parakeet
- * streaming knob probes transcribe_model_accepts_ext_kind for the
- * parakeet stream kind and, if accepted, points
- * transcribe_stream_params::family at a TRANSCRIBE_*_INIT-initialized
- * extension struct.
+ * Streaming params (transcribe_stream_params) carry an optional,
+ * kind-tagged family extension pointer. Family-specific extension
+ * structs live in include/transcribe/<family>.h and are reached
+ * intent-first: a caller that wants to set a parakeet streaming knob
+ * probes transcribe_model_accepts_ext_kind for the parakeet stream kind
+ * and, if accepted, points transcribe_stream_params::family at a
+ * TRANSCRIBE_*_INIT-initialized extension struct.
  */
 
 enum transcribe_stream_state {
@@ -1012,21 +1004,6 @@ enum transcribe_stream_state {
  *
  * struct_size:                   sizeof(*this) captured by the caller.
  *                                Initialized via TRANSCRIBE_STREAM_PARAMS_INIT.
- *
- * partial_update_min_interval_ms:
- *                                Generic floor on visible partial-result
- *                                update cadence, in milliseconds of audio.
- *                                -1 selects the family's default cadence.
- *                                 0 requests the family's natural maximum
- *                                rate (decode on every encoder-frame advance
- *                                for frame-by-frame emitters; chunk-aligned
- *                                emitters round 0 up to their chunk_ms).
- *                                Positive values request that consecutive
- *                                visible partial results be separated by at
- *                                least this many milliseconds of audio.
- *                                Inspect transcribe_capabilities to discover
- *                                the family's effective floor
- *                                (partial_update_min_interval_ms_min).
  *
  * family:                        Optional family-specific extension. NULL
  *                                selects family defaults. The pointed-to
@@ -1044,13 +1021,11 @@ enum transcribe_stream_state {
  */
 struct transcribe_stream_params {
     size_t                        struct_size;
-    int32_t                       partial_update_min_interval_ms;
     const struct transcribe_ext * family;
 };
 
 #define TRANSCRIBE_STREAM_PARAMS_INIT                                       \
     { sizeof(struct transcribe_stream_params), /* struct_size            */ \
-      -1,                                      /* partial_update_min_..  */ \
       NULL }                                   /* family                 */
 
 TRANSCRIBE_API struct transcribe_stream_params

@@ -135,9 +135,8 @@ static void test_init_macros(void) {
     CHECK(rp_macro.canary             == NULL);
 
     struct transcribe_stream_params sp_macro = TRANSCRIBE_STREAM_PARAMS_INIT;
-    CHECK(sp_macro.struct_size                    == sizeof(struct transcribe_stream_params));
-    CHECK(sp_macro.partial_update_min_interval_ms == -1);
-    CHECK(sp_macro.family                         == NULL);
+    CHECK(sp_macro.struct_size == sizeof(struct transcribe_stream_params));
+    CHECK(sp_macro.family      == NULL);
 
     /* Output structs: struct_size set, rest zero-filled. The
      * zero-means-absent contract is what makes a new caller paired with
@@ -157,7 +156,6 @@ static void test_init_macros(void) {
     CHECK(caps_macro.n_languages                        == 0);
     CHECK(caps_macro.languages                          == NULL);
     CHECK(caps_macro.supports_streaming                 == false);
-    CHECK(caps_macro.partial_update_min_interval_ms_min == 0);
 
     struct transcribe_timings tm_macro = TRANSCRIBE_TIMINGS_INIT;
     CHECK(tm_macro.struct_size == sizeof(struct transcribe_timings));
@@ -179,6 +177,12 @@ static void test_init_macros(void) {
     CHECK(pkb.left_ms   == -1);
     CHECK(pkb.chunk_ms  == -1);
     CHECK(pkb.right_ms  == -1);
+
+    struct transcribe_moonshine_streaming_stream_ext ms =
+        TRANSCRIBE_MOONSHINE_STREAMING_STREAM_EXT_INIT;
+    CHECK(ms.ext.size               == sizeof(struct transcribe_moonshine_streaming_stream_ext));
+    CHECK(ms.ext.kind               == TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM);
+    CHECK(ms.min_decode_interval_ms == -1);
 
     struct transcribe_whisper_chunk_trace wtr =
         TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;

@@ -36,6 +36,8 @@
 #include "encoder.h"
 #include "weights.h"
 
+#include "transcribe/moonshine_streaming.h"
+
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
@@ -1280,31 +1282,40 @@ transcribe_status stream_begin(
     cc->stream_samples_per_enc_frame  = samples_per_encoder_frame(hp);
     cc->stream_run_params             = *run_params;
 
-    // Resolve the per-stream decode-throttle knob from the generic
-    // partial_update_min_interval_ms field. Sentinel -1 selects the
-    // family default. Convert milliseconds to encoder frames using
-    // the model's actual frame rate (samples_per_enc_frame /
-    // sample_rate). Non-negative values pass through; >= 0 means a
-    // negative value other than the sentinel is treated as 0
-    // (= no throttle, decode on every advance).
-    //
-    // Reject any family extension on this variant - Moonshine-Streaming
-    // has no family-specific stream knobs (the previous min_decode_interval_ms
-    // promoted to generic partial_update_min_interval_ms in the
-    // streaming-pilot ABI migration).
-    if (stream_params != nullptr && stream_params->family != nullptr) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
+    // Resolve the per-stream decode-throttle knob from the Moonshine-
+    // Streaming family extension. Sentinel -1 selects the family default.
+    // Convert milliseconds to encoder frames using the model's actual
+    // frame rate (samples_per_enc_frame / sample_rate).
     int32_t min_decode_ms = k_default_min_decode_interval_ms;
-    if (stream_params != nullptr) {
-        const int32_t req = stream_params->partial_update_min_interval_ms;
-        if (req >= 0) min_decode_ms = req;
+    const transcribe_ext * family =
+        stream_params != nullptr ? stream_params->family : nullptr;
+    if (const transcribe_status st = transcribe_ext_check(
+            family,
+            TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM,
+            sizeof(struct transcribe_moonshine_streaming_stream_ext));
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (family != nullptr) {
+        const auto * mx =
+            reinterpret_cast<const transcribe_moonshine_streaming_stream_ext *>(family);
+        if (mx->min_decode_interval_ms < -1) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (mx->min_decode_interval_ms >= 0) {
+            min_decode_ms = mx->min_decode_interval_ms;
+        }
     }
     const int64_t spf = cc->stream_samples_per_enc_frame > 0
                           ? cc->stream_samples_per_enc_frame : 1;
+    const int64_t min_decode_samples =
+        static_cast<int64_t>(min_decode_ms) * k_sample_rate_hz;
     cc->stream_min_decode_frames = static_cast<int32_t>(
-        (static_cast<int64_t>(min_decode_ms) * k_sample_rate_hz) /
-        (1000LL * spf));
+        (min_decode_samples + 1000LL * spf - 1) / (1000LL * spf));
+    if (min_decode_ms >= 0 && cc->stream_min_decode_frames < 1) {
+        cc->stream_min_decode_frames = 1;
+    }
 
     cc->kv_cache.n               = 0;
     cc->kv_cache.head            = 0;
@@ -1724,6 +1735,11 @@ void stream_reset(transcribe_context * ctx) {
     cc->stream_prev_token_ids.clear();
 }
 
+bool accepts_ext_kind(const transcribe_model * model, uint32_t kind) {
+    (void) model;
+    return kind == TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM;
+}
+
 } // namespace
 
 extern const Arch arch = {
@@ -1735,7 +1751,7 @@ extern const Arch arch = {
     /* .stream_feed      = */ stream_feed,
     /* .stream_finalize  = */ stream_finalize,
     /* .stream_reset     = */ stream_reset,
-    /* .accepts_ext_kind = */ nullptr,
+    /* .accepts_ext_kind = */ accepts_ext_kind,
 };
 
 } // namespace transcribe::moonshine_streaming

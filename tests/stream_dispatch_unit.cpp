@@ -53,8 +53,7 @@ void test_accessors_on_idle_ctx() {
 
 void test_default_params() {
     const transcribe_stream_params p = transcribe_stream_default_params();
-    CHECK(p.family                         == nullptr);
-    CHECK(p.partial_update_min_interval_ms == -1);
+    CHECK(p.family == nullptr);
     CHECK(p.struct_size == sizeof(transcribe_stream_params));
 }
 

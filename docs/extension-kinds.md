@@ -29,6 +29,7 @@ gets a new kind.
 | -------------- | ------ | ----------------------------------------------- | ------------ | ------------------------------- |
 | `0x54534B50`   | `PKST` | `TRANSCRIBE_EXT_KIND_PARAKEET_STREAM`           | parakeet     | `include/transcribe/parakeet.h` |
 | `0x53424B50`   | `PKBS` | `TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM`  | parakeet     | `include/transcribe/parakeet.h` |
+| `0x5453534D`   | `MSST` | `TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM` | moonshine_streaming | `include/transcribe/moonshine_streaming.h` |
 
 Empty rows reserved for future allocations:
 
