@@ -94,7 +94,7 @@ void compute_chunked_limited_with_rc_mask(
 // and the family-agnostic readers in transcribe-meta.h consume.
 // RESUME.md "Decisions still load-bearing" has the rationale and the
 // llama.cpp / whisper.cpp comparison that drove it.
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // Concrete model. Owns the ggml_context that holds every weight
 // tensor's data buffer (allocated by gguf_init_from_file with

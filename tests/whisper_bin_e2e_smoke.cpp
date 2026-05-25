@@ -27,6 +27,7 @@
 // subsections may be exercised independently.
 
 #include "transcribe.h"
+#include "transcribe/whisper.h"
 
 #include "wav.h"
 
@@ -110,8 +111,8 @@ void test_multilingual(const char * model_path) {
         CHECK(caps->native_sample_rate == 16000);
         CHECK(caps->supports_language_detect);
         CHECK(caps->supports_translate);
-        CHECK(caps->supports_long_form);
-        CHECK(caps->supports_initial_prompt);
+        CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_LONG_FORM));
+        CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_INITIAL_PROMPT));
         // Multilingual whisper has 99 languages in canonical builds.
         CHECK(caps->n_languages == 99);
         CHECK(caps->languages != nullptr);
@@ -194,9 +195,9 @@ void test_multilingual(const char * model_path) {
         for (const char * t : literals) {
             transcribe_params rp = transcribe_default_params();
             rp.language = "en";
-            transcribe_whisper_params wp = transcribe_whisper_default_params();
+            transcribe_whisper_run_ext wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
             wp.initial_prompt = t;
-            rp.whisper = &wp;
+            rp.family = &wp.ext;
             st = transcribe_run(ctx, jfk.data(),
                                 static_cast<int>(jfk.size()), &rp);
             CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
@@ -207,9 +208,9 @@ void test_multilingual(const char * model_path) {
     {
         transcribe_params rp = transcribe_default_params();
         rp.language = "en";
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_whisper_run_ext wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
         wp.initial_prompt = "Inaugural address";
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, jfk.data(),
                             static_cast<int>(jfk.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
@@ -262,13 +263,12 @@ void test_multilingual(const char * model_path) {
             const int unprompted_hits =
                 product_hits(transcribe_full_text(ctx));
 
-            transcribe_whisper_params wp =
-                transcribe_whisper_default_params();
+            transcribe_whisper_run_ext wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
             wp.initial_prompt =
                 "QuirkQuid Quill Inc, P3-Quattro, O3-Omni, "
                 "B3-BondX, E3-Equity, W3-WrapZ, O2-Outlier, "
                 "U3-UniFund, M3-Mover";
-            rp.whisper = &wp;
+            rp.family = &wp.ext;
             st = transcribe_run(ctx, product_pcm.data(),
                                 static_cast<int>(product_pcm.size()), &rp);
             CHECK(st == TRANSCRIBE_OK);
@@ -289,10 +289,10 @@ void test_multilingual(const char * model_path) {
         if (n > 0) {
             transcribe_params rp = transcribe_default_params();
             rp.language = "en";
-            transcribe_whisper_params wp = transcribe_whisper_default_params();
+            transcribe_whisper_run_ext wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
             wp.prompt_tokens   = tok_buf;
             wp.n_prompt_tokens = static_cast<size_t>(n);
-            rp.whisper = &wp;
+            rp.family = &wp.ext;
             st = transcribe_run(ctx, jfk.data(),
                                 static_cast<int>(jfk.size()), &rp);
             CHECK(st == TRANSCRIBE_OK);

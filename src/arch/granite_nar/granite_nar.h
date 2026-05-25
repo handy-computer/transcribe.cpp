@@ -33,7 +33,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::granite_nar {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 struct GraniteNarModel final : public transcribe_model {
     Tokenizer        tok;

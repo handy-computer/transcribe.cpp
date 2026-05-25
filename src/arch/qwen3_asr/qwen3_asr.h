@@ -38,7 +38,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::qwen3_asr {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // Encode "language {Name}<asr_text>" for the given BCP-47 code. The
 // output is the token-id sequence the Qwen3-ASR chat template seeds

@@ -262,7 +262,7 @@ transcribe_status load(
     }
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -523,7 +523,7 @@ std::vector<int32_t> build_prompt_canary2(const CanaryModel &   cm,
     //
     // For ASR with empty decoder context the realized sequence is 9
     // tokens. itn / timestamp / diarize stay hardwired to their off
-    // tokens — only pnc is user-toggleable (see transcribe_canary_params).
+    // tokens — only pnc is user-toggleable (see transcribe_params::pnc).
     std::vector<int32_t> ids;
     ids.reserve(9);
 
@@ -793,9 +793,19 @@ transcribe_status run(
         return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
     }
 
+    // Generic transcribe_params::pnc routes here. DEFAULT maps to the
+    // model's shipped behavior (pnc=on; matches the upstream model card's
+    // published WER numbers). OFF / ON override explicitly. Non-DEFAULT
+    // requests have already passed the dispatcher's advisory-warn gate
+    // (which only warns when supports_pnc == false; canary advertises
+    // supports_pnc = true so no warn fires here).
     bool pnc = true;
-    if (params != nullptr && params->canary != nullptr) {
-        pnc = params->canary->pnc;
+    if (params != nullptr) {
+        switch (params->pnc) {
+            case TRANSCRIBE_PNC_MODE_DEFAULT: pnc = true;  break;
+            case TRANSCRIBE_PNC_MODE_OFF:     pnc = false; break;
+            case TRANSCRIBE_PNC_MODE_ON:      pnc = true;  break;
+        }
     }
 
     std::vector<int32_t> prompt_ids;

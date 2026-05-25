@@ -5,7 +5,9 @@
 
 namespace transcribe::moonshine_streaming {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     caps.native_sample_rate = 16000;
 
     // English-only model. Translation and language detection are off; the
@@ -22,10 +24,6 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // a per-utterance committed buffer; stream_finalize runs adapter +
     // cross_kv + AR decode once over the full committed buffer.
     caps.supports_streaming            = true;
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
 
     // Streaming timing hints. Cumulative right-context across the
     // encoder layer stack is 12 conv-stack output frames (the four
@@ -45,6 +43,11 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     caps.streaming_lookahead_ms        = 240;
     caps.streaming_chunk_ms            = 80;
     caps.streaming_lookahead_ms_min    = 240;
+
+    // Cancellation is wired at the per-run + per-feed level. No PNC/ITN
+    // runtime toggle. Whisper-style fallback / long-form / prompt
+    // features do not apply.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
 } // namespace transcribe::moonshine_streaming

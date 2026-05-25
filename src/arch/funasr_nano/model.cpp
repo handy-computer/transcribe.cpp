@@ -250,7 +250,7 @@ transcribe_status load(
     m->variant   = loader.variant().empty() ? k_default_variant : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -617,10 +617,19 @@ transcribe_status run(
         compute_fake_token_len(T_lfr, hp.adaptor_use_low_frame_rate);
 
     const char * lang = (params != nullptr) ? params->language : nullptr;
-    const bool use_itn =
-        (params != nullptr && params->funasr_nano != nullptr)
-            ? params->funasr_nano->use_itn
-            : false;
+    // Generic transcribe_params::itn routes here. DEFAULT maps to the
+    // family's shipping default (use_itn=false; matches the upstream
+    // `itn=False` Python path). OFF / ON override explicitly. The
+    // dispatcher's advisory WARN only fires when supports_itn == false;
+    // funasr_nano advertises supports_itn = true, so no WARN here.
+    bool use_itn = false;
+    if (params != nullptr) {
+        switch (params->itn) {
+            case TRANSCRIBE_ITN_MODE_DEFAULT: use_itn = false; break;
+            case TRANSCRIBE_ITN_MODE_OFF:     use_itn = false; break;
+            case TRANSCRIBE_ITN_MODE_ON:      use_itn = true;  break;
+        }
+    }
 
     std::vector<int32_t> prompt_ids;
     int fbank_beg = 0;

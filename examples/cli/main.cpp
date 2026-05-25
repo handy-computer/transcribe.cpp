@@ -21,6 +21,7 @@
 
 #include "transcribe.h"
 #include "transcribe/parakeet.h"
+#include "transcribe/whisper.h"
 #include "wav.h"
 
 #include <algorithm>
@@ -70,16 +71,15 @@ std::string segments_json(const transcribe_context * ctx) {
     std::string out = ",\"segments\":[";
     for (int s = 0; s < n_seg; ++s) {
         if (s > 0) out += ",";
-        const int64_t t0 = transcribe_segment_t0_ms(ctx, s);
-        const int64_t t1 = transcribe_segment_t1_ms(ctx, s);
-        const char *  st = transcribe_segment_text(ctx, s);
+        struct transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+        (void)transcribe_get_segment(ctx, s, &seg);
         char head[96];
         std::snprintf(head, sizeof(head),
                       "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"text\":\"",
-                      static_cast<long long>(t0),
-                      static_cast<long long>(t1));
+                      static_cast<long long>(seg.t0_ms),
+                      static_cast<long long>(seg.t1_ms));
         out += head;
-        out += json_escape(st);
+        out += json_escape(seg.text != nullptr ? seg.text : "");
         out += "\"}";
     }
     out += "]";
@@ -462,31 +462,31 @@ int main(int argc, char ** argv) {
         if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
         rp.timestamps = args.timestamps;
 
-        // Whisper extension. Allocated outside rp's scope so its bytes
-        // outlive the per-file loop below.
-        struct transcribe_whisper_params wp = transcribe_whisper_default_params();
+        if (args.itn_set) {
+            rp.itn = args.use_itn ? TRANSCRIBE_ITN_MODE_ON
+                                  : TRANSCRIBE_ITN_MODE_OFF;
+        }
+        if (args.canary_pnc_set) {
+            rp.pnc = args.canary_pnc ? TRANSCRIBE_PNC_MODE_ON
+                                     : TRANSCRIBE_PNC_MODE_OFF;
+        }
+
+        // Whisper run extension. Allocated outside rp's scope so its
+        // bytes outlive the per-file loop below; the library copies
+        // initial_prompt/prompt_tokens before transcribe_run returns,
+        // but rp aliases &wx.ext for the run call itself.
+        struct transcribe_whisper_run_ext wx = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
         if (args.whisper_set) {
             if (!args.initial_prompt.empty()) {
-                wp.initial_prompt = args.initial_prompt.c_str();
+                wx.initial_prompt = args.initial_prompt.c_str();
             }
-            wp.condition_on_prev_tokens = args.condition_on_prev_tokens;
-            wp.prompt_condition         = args.prompt_condition;
-            rp.whisper                  = &wp;
-        }
-
-        struct transcribe_sensevoice_params svp = transcribe_sensevoice_default_params();
-        struct transcribe_funasr_nano_params fnp = transcribe_funasr_nano_default_params();
-        if (args.itn_set) {
-            svp.use_itn   = args.use_itn;
-            fnp.use_itn   = args.use_itn;
-            rp.sensevoice  = &svp;
-            rp.funasr_nano = &fnp;
-        }
-
-        struct transcribe_canary_params cnp = transcribe_canary_default_params();
-        if (args.canary_pnc_set) {
-            cnp.pnc   = args.canary_pnc;
-            rp.canary = &cnp;
+            wx.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            wx.prompt_condition         = args.prompt_condition;
+            if (transcribe_model_accepts_ext_kind(
+                    model, TRANSCRIBE_EXT_KIND_WHISPER_RUN))
+            {
+                rp.family = &wx.ext;
+            }
         }
 
         if (args.keep_special_tags) {
@@ -684,29 +684,27 @@ int main(int argc, char ** argv) {
         if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
         rp.timestamps = args.timestamps;
 
-        struct transcribe_whisper_params wp = transcribe_whisper_default_params();
+        if (args.itn_set) {
+            rp.itn = args.use_itn ? TRANSCRIBE_ITN_MODE_ON
+                                  : TRANSCRIBE_ITN_MODE_OFF;
+        }
+        if (args.canary_pnc_set) {
+            rp.pnc = args.canary_pnc ? TRANSCRIBE_PNC_MODE_ON
+                                     : TRANSCRIBE_PNC_MODE_OFF;
+        }
+
+        struct transcribe_whisper_run_ext wx = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
         if (args.whisper_set) {
             if (!args.initial_prompt.empty()) {
-                wp.initial_prompt = args.initial_prompt.c_str();
+                wx.initial_prompt = args.initial_prompt.c_str();
             }
-            wp.condition_on_prev_tokens = args.condition_on_prev_tokens;
-            wp.prompt_condition         = args.prompt_condition;
-            rp.whisper                  = &wp;
-        }
-
-        struct transcribe_sensevoice_params svp = transcribe_sensevoice_default_params();
-        struct transcribe_funasr_nano_params fnp = transcribe_funasr_nano_default_params();
-        if (args.itn_set) {
-            svp.use_itn   = args.use_itn;
-            fnp.use_itn   = args.use_itn;
-            rp.sensevoice  = &svp;
-            rp.funasr_nano = &fnp;
-        }
-
-        struct transcribe_canary_params cnp = transcribe_canary_default_params();
-        if (args.canary_pnc_set) {
-            cnp.pnc   = args.canary_pnc;
-            rp.canary = &cnp;
+            wx.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            wx.prompt_condition         = args.prompt_condition;
+            if (transcribe_model_accepts_ext_kind(
+                    model, TRANSCRIBE_EXT_KIND_WHISPER_RUN))
+            {
+                rp.family = &wx.ext;
+            }
         }
 
         if (args.keep_special_tags) {
@@ -848,12 +846,11 @@ int main(int argc, char ** argv) {
             if (n_seg > 0 && ret_kind != TRANSCRIBE_TIMESTAMPS_NONE) {
                 std::printf("segments: %d\n", n_seg);
                 for (int i = 0; i < n_seg; ++i) {
-                    const int64_t t0 = transcribe_segment_t0_ms(ctx, i);
-                    const int64_t t1 = transcribe_segment_t1_ms(ctx, i);
-                    const char *  seg_text = transcribe_segment_text(ctx, i);
+                    struct transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+                    (void)transcribe_get_segment(ctx, i, &seg);
                     std::printf("  [%7.2f -> %7.2f] %s\n",
-                                t0 / 1000.0, t1 / 1000.0,
-                                (seg_text && *seg_text) ? seg_text : "");
+                                seg.t0_ms / 1000.0, seg.t1_ms / 1000.0,
+                                (seg.text != nullptr) ? seg.text : "");
                 }
             }
             if (ret_kind == TRANSCRIBE_TIMESTAMPS_WORD ||
@@ -861,25 +858,22 @@ int main(int argc, char ** argv) {
                 const int n_wrd = transcribe_n_words(ctx);
                 std::printf("words: %d\n", n_wrd);
                 for (int i = 0; i < n_wrd; ++i) {
-                    const int64_t t0 = transcribe_word_t0_ms(ctx, i);
-                    const int64_t t1 = transcribe_word_t1_ms(ctx, i);
-                    const char *  wt = transcribe_word_text(ctx, i);
+                    struct transcribe_word wrd = TRANSCRIBE_WORD_INIT;
+                    (void)transcribe_get_word(ctx, i, &wrd);
                     std::printf("  [%7.2f -> %7.2f] %s\n",
-                                t0 / 1000.0, t1 / 1000.0,
-                                (wt && *wt) ? wt : "");
+                                wrd.t0_ms / 1000.0, wrd.t1_ms / 1000.0,
+                                (wrd.text != nullptr) ? wrd.text : "");
                 }
             }
             if (ret_kind == TRANSCRIBE_TIMESTAMPS_TOKEN) {
                 const int n_tok = transcribe_n_tokens(ctx);
                 std::printf("tokens: %d\n", n_tok);
                 for (int i = 0; i < n_tok; ++i) {
-                    const int64_t t0 = transcribe_token_t0_ms(ctx, i);
-                    const int64_t t1 = transcribe_token_t1_ms(ctx, i);
-                    const char *  tt = transcribe_token_text(ctx, i);
-                    const float   p  = transcribe_token_p(ctx, i);
+                    struct transcribe_token tok = TRANSCRIBE_TOKEN_INIT;
+                    (void)transcribe_get_token(ctx, i, &tok);
                     std::printf("  [%7.2f -> %7.2f] p=%.3f %s\n",
-                                t0 / 1000.0, t1 / 1000.0, p,
-                                (tt && *tt) ? tt : "");
+                                tok.t0_ms / 1000.0, tok.t1_ms / 1000.0, tok.p,
+                                (tok.text != nullptr) ? tok.text : "");
                 }
             }
         }

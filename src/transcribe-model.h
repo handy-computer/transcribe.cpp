@@ -66,6 +66,14 @@ struct transcribe_model {
     // is irrelevant to external observers.
     transcribe_capabilities caps{};
 
+    // Backing store for the transcribe_model_supports() probe. One bit
+    // per transcribe_feature value (0..63). Per-family load() opts in
+    // by calling transcribe::set_feature(m, FEATURE, true) inside
+    // apply_family_invariants. Zero means "not supported"; the probe
+    // returns false for any feature whose bit isn't set, including
+    // unknown enum values out of range.
+    uint64_t feature_bits = 0;
+
     // Wall-clock load time in microseconds, captured by per-family
     // load() (start at function entry, stop just before *out_model
     // is set). Surfaced via transcribe_get_timings on any context
@@ -100,3 +108,30 @@ private:
     std::vector<std::string>  language_storage_;
     std::vector<const char *> language_ptrs_;
 };
+
+namespace transcribe {
+
+// Internal feature-bit helpers. Per-family load() / capability KV
+// reader calls set_feature; the central probe (transcribe_model_supports)
+// reads via has_feature. Both treat out-of-range enums as no-ops / false
+// so the bitset stays bounded and unused bits remain zero.
+inline void set_feature(transcribe_model * m, transcribe_feature f, bool on) {
+    if (m == nullptr) return;
+    const unsigned bit = static_cast<unsigned>(f);
+    if (bit >= 64) return;
+    const uint64_t mask = (uint64_t) 1 << bit;
+    if (on) {
+        m->feature_bits |= mask;
+    } else {
+        m->feature_bits &= ~mask;
+    }
+}
+
+inline bool has_feature(const transcribe_model * m, transcribe_feature f) {
+    if (m == nullptr) return false;
+    const unsigned bit = static_cast<unsigned>(f);
+    if (bit >= 64) return false;
+    return (m->feature_bits & ((uint64_t) 1 << bit)) != 0;
+}
+
+} // namespace transcribe

@@ -40,7 +40,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::canary_qwen {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // Resolved chat-template special-token ids (filled at load time from the
 // GGUF tokenizer). The HF chat template emits these by name; we look up

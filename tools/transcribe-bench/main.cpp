@@ -284,8 +284,10 @@ int main(int argc, char ** argv) {
     token_ids_csv.reserve(static_cast<size_t>(n_tokens) * 6);
     for (int i = 0; i < n_tokens; ++i) {
         if (i > 0) token_ids_csv.push_back(',');
+        struct transcribe_token tok = TRANSCRIBE_TOKEN_INIT;
+        (void)transcribe_get_token(ctx, i, &tok);
         char buf[16];
-        std::snprintf(buf, sizeof(buf), "%d", transcribe_token_id(ctx, i));
+        std::snprintf(buf, sizeof(buf), "%d", tok.id);
         token_ids_csv.append(buf);
     }
 

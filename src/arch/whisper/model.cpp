@@ -485,7 +485,7 @@ transcribe_status whisper_load(
 
     // Capabilities: apply family invariants, then let the GGUF KV
     // override, then install the language list from general.languages.
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -1282,12 +1282,29 @@ transcribe_status whisper_run(
         }
     };
 
-    // Run-scoped Whisper params pointer + RNG.
+    // Run-scoped Whisper run-ext pointer + RNG.
     //
-    // The params pointer is hoisted here so per-chunk state (temperature
-    // tuple, threshold checks, max_initial_timestamp cap) all read from a
-    // single source. NULL selects the library defaults; the local
-    // `default_wp` must outlive the chunk loop because `wp` aliases it.
+    // The whisper-specific knobs (initial prompt, prompt-token
+    // conditioning, temperature tuple, threshold checks,
+    // max_initial_timestamp cap) live on a kind-tagged family
+    // extension reached via transcribe_params::family. NULL selects
+    // TRANSCRIBE_WHISPER_RUN_EXT_INIT — Whisper's own shipping recipe.
+    // The local `default_wp` must outlive the chunk loop because `wp`
+    // aliases it.
+    //
+    // The dispatcher has already validated that, if params->family is
+    // non-null, its size+kind pass transcribe_model_accepts_ext_kind.
+    // We call transcribe_ext_check here for the per-family size
+    // assertion (rejects callers with a too-small ext struct on the
+    // family-owned minimum).
+    //
+    // Pointer-field lifetimes (initial_prompt, prompt_tokens) are
+    // documented in include/transcribe/whisper.h: the library copies
+    // the referenced data into context state before transcribe_run
+    // returns; the caller may free the underlying buffers immediately
+    // after the call. Whisper realizes that contract by tokenizing
+    // initial_prompt into prev_ids below and by reading prompt_tokens
+    // into the same vector — neither pointer is retained.
     //
     // RNG must be run-scoped, not chunk-scoped. HF does not reset its
     // sampler between chunks (generation_whisper.py threads a single
@@ -1298,11 +1315,19 @@ transcribe_status whisper_run(
     // is meant to achieve (reproducible long-form transcripts). When
     // seed == 0 we draw an OS entropy sample once and then let the
     // single rng advance monotonically across chunks and tiers.
-    const transcribe_whisper_params default_wp =
-        transcribe_whisper_default_params();
-    const transcribe_whisper_params * wp =
-        (params != nullptr && params->whisper != nullptr)
-            ? params->whisper : &default_wp;
+    if (const transcribe_status st = transcribe_ext_check(
+            params != nullptr ? params->family : nullptr,
+            TRANSCRIBE_EXT_KIND_WHISPER_RUN,
+            sizeof(struct transcribe_whisper_run_ext));
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const transcribe_whisper_run_ext default_wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
+    const transcribe_whisper_run_ext * wp =
+        (params != nullptr && params->family != nullptr)
+            ? reinterpret_cast<const transcribe_whisper_run_ext *>(params->family)
+            : &default_wp;
     std::mt19937 rng(wp->seed != 0 ? wp->seed : std::random_device{}());
 
     // ===== Stage 3: prompt + condition_on_prev_tokens setup =============
@@ -1367,7 +1392,7 @@ transcribe_status whisper_run(
             std::fprintf(stderr,
                          "whisper run: prompt_tokens must not include "
                          "<|startofprev|> (id %d) at index 0; the library "
-                         "prepends it. See transcribe_whisper_params docs.\n",
+                         "prepends it. See transcribe_whisper_run_ext docs.\n",
                          prev_sot_id);
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
@@ -1847,7 +1872,7 @@ transcribe_status whisper_run(
         // tier's output (HF does the same to avoid infinite loops).
         //
         // Thresholds use INF sentinels to mean "disabled"; see
-        // transcribe_whisper_default_params() and the header's DISABLED
+        // TRANSCRIBE_WHISPER_RUN_EXT_INIT and the header's DISABLED
         // constants. `wp` and `rng` are hoisted to run scope above.
         std::vector<float> temperatures;
         temperatures.push_back(wp->temperature);
@@ -2836,6 +2861,17 @@ transcribe_status whisper_run(
     return TRANSCRIBE_OK;
 }
 
+// Kind probe: every whisper variant accepts the WHISPER_RUN run-extension
+// kind. There is currently no whisper variant that ships without the run
+// extension surface, so this is a flat "true for WHRN, false otherwise."
+static bool whisper_accepts_ext_kind(
+    const transcribe_model * model,
+    uint32_t                 kind)
+{
+    (void) model;
+    return kind == TRANSCRIBE_EXT_KIND_WHISPER_RUN;
+}
+
 } // namespace
 
 extern const Arch arch = {
@@ -2847,7 +2883,7 @@ extern const Arch arch = {
     /* .stream_feed      = */ nullptr,
     /* .stream_finalize  = */ nullptr,
     /* .stream_reset     = */ nullptr,
-    /* .accepts_ext_kind = */ nullptr,
+    /* .accepts_ext_kind = */ whisper_accepts_ext_kind,
 };
 
 } // namespace transcribe::whisper

@@ -26,7 +26,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::sensevoice {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 struct SenseVoiceModel final : public transcribe_model {
     transcribe::Tokenizer tok;

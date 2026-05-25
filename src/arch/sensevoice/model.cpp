@@ -97,7 +97,7 @@ transcribe_status load(
                                           : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -336,12 +336,18 @@ transcribe_status run(
     const int32_t lid_idx = resolve_lid_idx(hp, lang);
     const int32_t event_emo[2] = { 1, 2 };  // literal indices in the embed table
 
-    // ITN slot. Library callers flip it via params->sensevoice->use_itn.
-    // CLI doesn't expose a flag yet, but the public API does, so any
-    // library consumer can drive the textnorm prefix programmatically.
+    // ITN slot. Generic transcribe_params::itn routes here. DEFAULT maps
+    // to the shipped behavior (use_itn=false; matches the family's
+    // `itn=False` Python default). OFF / ON override explicitly. The
+    // dispatcher's advisory WARN only fires when supports_itn == false;
+    // SenseVoice advertises supports_itn = true, so no WARN fires here.
     bool use_itn = false;
-    if (params != nullptr && params->sensevoice != nullptr) {
-        use_itn = params->sensevoice->use_itn;
+    if (params != nullptr) {
+        switch (params->itn) {
+            case TRANSCRIBE_ITN_MODE_DEFAULT: use_itn = false; break;
+            case TRANSCRIBE_ITN_MODE_OFF:     use_itn = false; break;
+            case TRANSCRIBE_ITN_MODE_ON:      use_itn = true;  break;
+        }
     }
     const int32_t textnorm_idx = use_itn ? hp.prefix_withitn : hp.prefix_woitn;
 

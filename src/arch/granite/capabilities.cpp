@@ -4,7 +4,9 @@
 
 namespace transcribe::granite {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     caps.native_sample_rate = 16000;
 
     // Word timestamps are advertised on the -plus variant (the
@@ -27,11 +29,8 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // Cancellation is wired at the per-run level. Whisper-specific
     // long-form / temperature-fallback / initial-prompt features do
     // not apply to granite (the LLM produces a single greedy
-    // transcript per utterance).
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
+    // transcript per utterance). No PNC/ITN runtime toggle.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
 } // namespace transcribe::granite

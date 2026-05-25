@@ -72,6 +72,8 @@ extern "C" const char * transcribe_status_string(int status) {
                                                   return "unsupported timestamp granularity";
         case TRANSCRIBE_ERR_ABORTED:              return "aborted by callback";
         case TRANSCRIBE_ERR_BAD_STRUCT_SIZE:      return "caller-owned struct missing or has bad struct_size";
+        case TRANSCRIBE_ERR_UNSUPPORTED_PNC:      return "model does not support runtime PNC control (reserved; not currently returned)";
+        case TRANSCRIBE_ERR_UNSUPPORTED_ITN:      return "model does not support runtime ITN control (reserved; not currently returned)";
         default:                                  return "unknown status";
     }
 }
@@ -198,11 +200,10 @@ extern "C" void transcribe_log_set(transcribe_log_callback cb, void * userdata) 
 }
 
 // Internal emission helper. Not part of the public ABI, not declared in
-// any header. Used by future logging code paths (loader, frontend, decode);
-// kept here in pass 1 so the load-side memory ordering is locked in
-// alongside the store-side. Marked maybe_unused because no caller exists
-// yet at pass 1.
-[[maybe_unused]] static void transcribe_log_emit(
+// any header. Used by transcribe_print_timings and the advisory-warn
+// path; future logging from the loader / frontend / decode can call
+// through here as well.
+static void transcribe_log_emit(
     transcribe_log_level level,
     const char *         msg)
 {
@@ -212,6 +213,19 @@ extern "C" void transcribe_log_set(transcribe_log_callback cb, void * userdata) 
     }
     void * userdata = g_log_userdata.load(std::memory_order_relaxed);
     cb(level, msg, userdata);
+}
+
+// Stderr-fallback wrapper for messages we want surfaced even when the
+// caller hasn't installed a log sink. Mirrors transcribe_print_timings'
+// fallback so dev / CLI builds don't silently drop the diagnostic.
+static void transcribe_log_emit_or_stderr(
+    transcribe_log_level level,
+    const char *         msg)
+{
+    transcribe_log_emit(level, msg);
+    if (g_log_cb.load(std::memory_order_acquire) == nullptr) {
+        std::fprintf(stderr, "%s\n", msg);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -241,30 +255,6 @@ extern "C" struct transcribe_params transcribe_default_params(void) {
     return p;
 }
 
-extern "C" struct transcribe_sensevoice_params
-transcribe_sensevoice_default_params(void)
-{
-    struct transcribe_sensevoice_params p = {};
-    p.use_itn = false;
-    return p;
-}
-
-extern "C" struct transcribe_funasr_nano_params
-transcribe_funasr_nano_default_params(void)
-{
-    struct transcribe_funasr_nano_params p = {};
-    p.use_itn = false;
-    return p;
-}
-
-extern "C" struct transcribe_canary_params
-transcribe_canary_default_params(void)
-{
-    struct transcribe_canary_params p = {};
-    p.pnc = true;
-    return p;
-}
-
 extern "C" struct transcribe_stream_params
 transcribe_stream_default_params(void)
 {
@@ -272,23 +262,13 @@ transcribe_stream_default_params(void)
     return p;
 }
 
-extern "C" struct transcribe_whisper_params transcribe_whisper_default_params(void) {
-    struct transcribe_whisper_params p = {};
-    p.initial_prompt           = nullptr;
-    p.prompt_tokens            = nullptr;
-    p.n_prompt_tokens          = 0;
-    p.prompt_condition         = TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;
-    p.condition_on_prev_tokens = false;
-    p.max_prev_context_tokens  = 223; // max_target_positions / 2 - 1
-    p.temperature              = 0.0f;
-    p.temperature_inc          = 0.2f;
-    p.compression_ratio_thold  = 2.4f;
-    p.logprob_thold            = -1.0f;
-    p.no_speech_thold          = 0.6f;
-    p.seed                     = 0; // 0 = nondeterministic (whisper.cpp convention)
-    p.max_initial_timestamp    = 1.0f;
-    return p;
-}
+// The whisper/sensevoice/funasr_nano/canary per-family run-params
+// factories were removed in the Phase-2 migration:
+//   - whisper's knobs are now in transcribe_whisper_run_ext (reached via
+//     transcribe_params::family); use TRANSCRIBE_WHISPER_RUN_EXT_INIT.
+//   - sensevoice/funasr_nano `use_itn` collapsed into the generic
+//     transcribe_params::itn enum.
+//   - canary `pnc` collapsed into the generic transcribe_params::pnc enum.
 
 // ---------------------------------------------------------------------------
 // Extension helpers
@@ -327,6 +307,13 @@ extern "C" bool transcribe_model_accepts_ext_kind(
     return model->arch->accepts_ext_kind(model, kind);
 }
 
+extern "C" bool transcribe_model_supports(
+    const struct transcribe_model * model,
+    transcribe_feature              feature)
+{
+    return transcribe::has_feature(model, feature);
+}
+
 namespace {
 
 // Minimum struct_size accepted on each caller-owned input/output struct.
@@ -342,13 +329,19 @@ constexpr size_t k_min_model_params_size =
 constexpr size_t k_min_context_params_size =
     TRANSCRIBE_FIELD_END(transcribe_context_params, kv_type);
 constexpr size_t k_min_run_params_size =
-    TRANSCRIBE_FIELD_END(transcribe_params, canary);
+    TRANSCRIBE_FIELD_END(transcribe_params, family);
 constexpr size_t k_min_stream_params_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_params, family);
 constexpr size_t k_min_stream_update_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_update, buffered_ms);
 constexpr size_t k_min_capabilities_size =
     TRANSCRIBE_FIELD_END(transcribe_capabilities, streaming_lookahead_ms_min);
+constexpr size_t k_min_segment_size =
+    TRANSCRIBE_FIELD_END(transcribe_segment, text);
+constexpr size_t k_min_word_size =
+    TRANSCRIBE_FIELD_END(transcribe_word, text);
+constexpr size_t k_min_token_size =
+    TRANSCRIBE_FIELD_END(transcribe_token, text);
 constexpr size_t k_min_timings_size =
     TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
 constexpr size_t k_min_whisper_chunk_trace_size =
@@ -366,6 +359,63 @@ inline transcribe_status check_struct_size(size_t got, size_t want) {
 void copy_out_prefix(void * dst, const void * src, size_t caller_size, size_t library_size) {
     const size_t n = caller_size < library_size ? caller_size : library_size;
     std::memcpy(dst, src, n);
+}
+
+// Advisory pnc/itn warning. Emits a WARN log message when a non-DEFAULT
+// caller request hits a model that does not support runtime control of
+// the corresponding axis, then returns so the dispatcher can proceed.
+// "Best effort" semantics: the model produces *something* either way,
+// and silently ignoring the request would be a footgun. The reserved
+// TRANSCRIBE_ERR_UNSUPPORTED_PNC / _ITN codes are NOT returned today;
+// they are placeholders for a future opt-in strict-advisory mode (a
+// per-call advisory_strict flag on transcribe_params).
+//
+// The arch + variant strings are included in the message so a grepping
+// developer can pinpoint which model dropped the request without having
+// to reproduce the call. Emission falls back to stderr when no log
+// callback is installed (mirrors transcribe_print_timings).
+void warn_unsupported_advisory(
+    const struct transcribe_model *  model,
+    const struct transcribe_params * rp)
+{
+    if (model == nullptr || rp == nullptr) {
+        return;
+    }
+    const char * arch_name =
+        (model->arch != nullptr && model->arch->name != nullptr)
+            ? model->arch->name : "(unknown)";
+    const char * variant = model->variant.c_str();
+    if (variant == nullptr || variant[0] == '\0') {
+        variant = "(unknown)";
+    }
+
+    char buf[512];
+    if (rp->pnc != TRANSCRIBE_PNC_MODE_DEFAULT &&
+        !transcribe::has_feature(model, TRANSCRIBE_FEATURE_PNC))
+    {
+        const char * req = (rp->pnc == TRANSCRIBE_PNC_MODE_ON) ? "ON" : "OFF";
+        std::snprintf(buf, sizeof(buf),
+            "transcribe_run: caller requested pnc=%s but model '%s' "
+            "(variant '%s') does not support pnc control; output will use "
+            "the model's default behavior. Use "
+            "transcribe_model_supports(model, TRANSCRIBE_FEATURE_PNC) to "
+            "pre-check.",
+            req, arch_name, variant);
+        transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
+    }
+    if (rp->itn != TRANSCRIBE_ITN_MODE_DEFAULT &&
+        !transcribe::has_feature(model, TRANSCRIBE_FEATURE_ITN))
+    {
+        const char * req = (rp->itn == TRANSCRIBE_ITN_MODE_ON) ? "ON" : "OFF";
+        std::snprintf(buf, sizeof(buf),
+            "transcribe_run: caller requested itn=%s but model '%s' "
+            "(variant '%s') does not support itn control; output will use "
+            "the model's default behavior. Use "
+            "transcribe_model_supports(model, TRANSCRIBE_FEATURE_ITN) to "
+            "pre-check.",
+            req, arch_name, variant);
+        transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_WARN, buf);
+    }
 }
 
 } // namespace
@@ -639,6 +689,12 @@ extern "C" transcribe_status transcribe_stream_begin(
         }
     }
 
+    // Advisory warn for pnc/itn requests against models that don't
+    // expose the corresponding runtime toggle. Emitted before
+    // clear_result so the pre-hook "snapshot preserved on rejection"
+    // contract is undisturbed.
+    warn_unsupported_advisory(ctx->model, run_params);
+
     // All checks pass — clear the previous snapshot and hand off.
     ctx->clear_result();
     ctx->t_mel_us    = 0;
@@ -909,11 +965,40 @@ extern "C" transcribe_status transcribe_run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    // Pre-clear family-extension validation. A malformed run ext must
+    // NOT wipe the previous result snapshot — the snapshot-clearing
+    // semantics below are reserved for well-formed calls. Mirrors the
+    // transcribe_stream_begin contract for stream_params->family. The
+    // kind-accept probe needs a valid model; when model is null we
+    // skip the pre-clear check and let the post-clear NOT_IMPLEMENTED
+    // path handle it (the existing snapshot-wipe-on-NOT_IMPLEMENTED
+    // contract is preserved).
+    if (params->family != nullptr &&
+        ctx->model != nullptr && ctx->model->arch != nullptr)
+    {
+        if (params->family->size < sizeof(struct transcribe_ext)) {
+            return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+        }
+        if (!transcribe_model_accepts_ext_kind(ctx->model, params->family->kind)) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+
+    // Advisory warn for pnc/itn requests against models that don't
+    // expose the corresponding runtime toggle. Best-effort semantics:
+    // log a WARN and proceed with the model's default behavior. Emitted
+    // before clear_result so a malformed advisory doesn't disturb the
+    // previous snapshot. Skipped when model is null — the post-clear
+    // NOT_IMPLEMENTED path will signal that more directly.
+    if (ctx->model != nullptr) {
+        warn_unsupported_advisory(ctx->model, params);
+    }
+
     // Result-replacement contract: everything past this point either
     // succeeds and writes a fresh result, or fails and leaves the
     // context in the documented "no result" sentinel state. Clear
-    // eagerly so every downstream rejection path — NOT_IMPLEMENTED
-    // on an incomplete arch, INVALID_ARG on an out-of-range enum,
+    // eagerly so every downstream rejection path — NOT_IMPLEMENTED on
+    // an incomplete arch, INVALID_ARG on an out-of-range enum,
     // UNSUPPORTED_TASK / _TIMESTAMPS / _LANGUAGE on a capability
     // mismatch — inherits the sentinel without each branch having
     // to remember to call clear_result() itself.
@@ -1191,111 +1276,127 @@ extern "C" int transcribe_n_tokens(const struct transcribe_context * ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// Result accessors - segment level
+// Result accessors - per-item rows
 // ---------------------------------------------------------------------------
+//
+// 3 copy-out accessors backed by the context's segments / words /
+// tokens vectors. Each takes a caller-owned struct initialized via
+// TRANSCRIBE_*_INIT and writes only the prefix that fits within the
+// caller's struct_size. Out-of-range index or pre-run access leaves
+// the caller's struct as zero-init (text==NULL, scalars 0); the
+// dispatch path always returns OK in those cases so callers can use
+// the row's text!=NULL check as the "row present" signal without
+// branching on status.
+//
+// `text` pointers in the staged structs alias the context's
+// std::string storage. The library treats that as ctx-owned: valid
+// until the next transcribe_run / transcribe_stream_begin /
+// transcribe_stream_reset / transcribe_context_free on the same
+// context. The public header documents the lifetime contract.
 
-namespace {
-inline bool seg_in_range(const transcribe_context * ctx, int i) {
-    return ctx != nullptr && ctx->has_result && i >= 0 &&
-           static_cast<size_t>(i) < ctx->segments.size();
-}
-inline bool word_in_range(const transcribe_context * ctx, int i) {
-    return ctx != nullptr && ctx->has_result && i >= 0 &&
-           static_cast<size_t>(i) < ctx->words.size();
-}
-inline bool token_in_range(const transcribe_context * ctx, int i) {
-    return ctx != nullptr && ctx->has_result && i >= 0 &&
-           static_cast<size_t>(i) < ctx->tokens.size();
-}
-} // namespace
-
-extern "C" const char * transcribe_segment_text(const struct transcribe_context * ctx, int i) {
-    if (!seg_in_range(ctx, i)) return "";
-    return ctx->segments[static_cast<size_t>(i)].text.c_str();
-}
-extern "C" int64_t transcribe_segment_t0_ms(const struct transcribe_context * ctx, int i) {
-    if (!seg_in_range(ctx, i)) return 0;
-    return ctx->segments[static_cast<size_t>(i)].t0_ms;
-}
-extern "C" int64_t transcribe_segment_t1_ms(const struct transcribe_context * ctx, int i) {
-    if (!seg_in_range(ctx, i)) return 0;
-    return ctx->segments[static_cast<size_t>(i)].t1_ms;
-}
-extern "C" int transcribe_segment_first_word(const struct transcribe_context * ctx, int i) {
-    if (!seg_in_range(ctx, i)) return 0;
-    return ctx->segments[static_cast<size_t>(i)].first_word;
-}
-extern "C" int transcribe_segment_n_words(const struct transcribe_context * ctx, int i) {
-    if (!seg_in_range(ctx, i)) return 0;
-    return ctx->segments[static_cast<size_t>(i)].n_words;
-}
-extern "C" int transcribe_segment_first_token(const struct transcribe_context * ctx, int i) {
-    if (!seg_in_range(ctx, i)) return 0;
-    return ctx->segments[static_cast<size_t>(i)].first_token;
-}
-extern "C" int transcribe_segment_n_tokens(const struct transcribe_context * ctx, int i) {
-    if (!seg_in_range(ctx, i)) return 0;
-    return ctx->segments[static_cast<size_t>(i)].n_tokens;
-}
-
-// ---------------------------------------------------------------------------
-// Result accessors - word level
-// ---------------------------------------------------------------------------
-
-extern "C" const char * transcribe_word_text(const struct transcribe_context * ctx, int i) {
-    if (!word_in_range(ctx, i)) return "";
-    return ctx->words[static_cast<size_t>(i)].text.c_str();
-}
-extern "C" int64_t transcribe_word_t0_ms(const struct transcribe_context * ctx, int i) {
-    if (!word_in_range(ctx, i)) return 0;
-    return ctx->words[static_cast<size_t>(i)].t0_ms;
-}
-extern "C" int64_t transcribe_word_t1_ms(const struct transcribe_context * ctx, int i) {
-    if (!word_in_range(ctx, i)) return 0;
-    return ctx->words[static_cast<size_t>(i)].t1_ms;
-}
-extern "C" int transcribe_word_seg_index(const struct transcribe_context * ctx, int i) {
-    if (!word_in_range(ctx, i)) return 0;
-    return ctx->words[static_cast<size_t>(i)].seg_index;
-}
-extern "C" int transcribe_word_first_token(const struct transcribe_context * ctx, int i) {
-    if (!word_in_range(ctx, i)) return 0;
-    return ctx->words[static_cast<size_t>(i)].first_token;
-}
-extern "C" int transcribe_word_n_tokens(const struct transcribe_context * ctx, int i) {
-    if (!word_in_range(ctx, i)) return 0;
-    return ctx->words[static_cast<size_t>(i)].n_tokens;
+extern "C" transcribe_status transcribe_get_segment(
+    const struct transcribe_context * ctx,
+    int                               i,
+    struct transcribe_segment *       out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_segment_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const size_t caller_size = out->struct_size;
+    transcribe_segment zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+    if (ctx == nullptr || !ctx->has_result || i < 0 ||
+        static_cast<size_t>(i) >= ctx->segments.size())
+    {
+        return TRANSCRIBE_OK;
+    }
+    const auto & s = ctx->segments[static_cast<size_t>(i)];
+    transcribe_segment staged{};
+    staged.struct_size = caller_size;
+    staged.t0_ms       = s.t0_ms;
+    staged.t1_ms       = s.t1_ms;
+    staged.first_word  = s.first_word;
+    staged.n_words     = s.n_words;
+    staged.first_token = s.first_token;
+    staged.n_tokens    = s.n_tokens;
+    staged.text        = s.text.c_str();
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Result accessors - token level
-// ---------------------------------------------------------------------------
+extern "C" transcribe_status transcribe_get_word(
+    const struct transcribe_context * ctx,
+    int                               i,
+    struct transcribe_word *          out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_word_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const size_t caller_size = out->struct_size;
+    transcribe_word zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+    if (ctx == nullptr || !ctx->has_result || i < 0 ||
+        static_cast<size_t>(i) >= ctx->words.size())
+    {
+        return TRANSCRIBE_OK;
+    }
+    const auto & w = ctx->words[static_cast<size_t>(i)];
+    transcribe_word staged{};
+    staged.struct_size = caller_size;
+    staged.t0_ms       = w.t0_ms;
+    staged.t1_ms       = w.t1_ms;
+    staged.seg_index   = w.seg_index;
+    staged.first_token = w.first_token;
+    staged.n_tokens    = w.n_tokens;
+    staged.text        = w.text.c_str();
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
 
-extern "C" int transcribe_token_id(const struct transcribe_context * ctx, int i) {
-    if (!token_in_range(ctx, i)) return 0;
-    return ctx->tokens[static_cast<size_t>(i)].id;
-}
-extern "C" const char * transcribe_token_text(const struct transcribe_context * ctx, int i) {
-    if (!token_in_range(ctx, i)) return "";
-    return ctx->tokens[static_cast<size_t>(i)].text.c_str();
-}
-extern "C" float transcribe_token_p(const struct transcribe_context * ctx, int i) {
-    if (!token_in_range(ctx, i)) return NAN;
-    return ctx->tokens[static_cast<size_t>(i)].p;
-}
-extern "C" int64_t transcribe_token_t0_ms(const struct transcribe_context * ctx, int i) {
-    if (!token_in_range(ctx, i)) return 0;
-    return ctx->tokens[static_cast<size_t>(i)].t0_ms;
-}
-extern "C" int64_t transcribe_token_t1_ms(const struct transcribe_context * ctx, int i) {
-    if (!token_in_range(ctx, i)) return 0;
-    return ctx->tokens[static_cast<size_t>(i)].t1_ms;
-}
-extern "C" int transcribe_token_seg_index(const struct transcribe_context * ctx, int i) {
-    if (!token_in_range(ctx, i)) return 0;
-    return ctx->tokens[static_cast<size_t>(i)].seg_index;
-}
-extern "C" int transcribe_token_word_index(const struct transcribe_context * ctx, int i) {
-    if (!token_in_range(ctx, i)) return 0;
-    return ctx->tokens[static_cast<size_t>(i)].word_index;
+extern "C" transcribe_status transcribe_get_token(
+    const struct transcribe_context * ctx,
+    int                               i,
+    struct transcribe_token *         out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_token_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const size_t caller_size = out->struct_size;
+    transcribe_token zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+    if (ctx == nullptr || !ctx->has_result || i < 0 ||
+        static_cast<size_t>(i) >= ctx->tokens.size())
+    {
+        return TRANSCRIBE_OK;
+    }
+    const auto & t = ctx->tokens[static_cast<size_t>(i)];
+    transcribe_token staged{};
+    staged.struct_size = caller_size;
+    staged.id          = t.id;
+    staged.p           = t.p;
+    staged.t0_ms       = t.t0_ms;
+    staged.t1_ms       = t.t1_ms;
+    staged.seg_index   = t.seg_index;
+    staged.word_index  = t.word_index;
+    staged.text        = t.text.c_str();
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
 }

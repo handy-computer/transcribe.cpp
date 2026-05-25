@@ -484,7 +484,7 @@ transcribe_status load(
     // know" rather than "the model has no languages". A v3 multilingual
     // GGUF supplies the real list via general.languages and
     // read_languages_kv overwrites the defaults via set_languages.
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 

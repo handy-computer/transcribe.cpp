@@ -246,24 +246,19 @@ int main() {
     int   prev_t0  = -1;
     int   n_with_p = 0;
     for (int i = 0; i < n_tokens; ++i) {
-        const int    id    = transcribe_token_id(ctx, i);
-        const char * text  = transcribe_token_text(ctx, i);
-        const float  p     = transcribe_token_p(ctx, i);
-        const int64_t t0   = transcribe_token_t0_ms(ctx, i);
-        const int64_t t1   = transcribe_token_t1_ms(ctx, i);
-        const int    sidx  = transcribe_token_seg_index(ctx, i);
-        const int    widx  = transcribe_token_word_index(ctx, i);
+        transcribe_token tok = TRANSCRIBE_TOKEN_INIT;
+        CHECK_EQ_INT(transcribe_get_token(ctx, i, &tok), TRANSCRIBE_OK);
 
-        CHECK(id >= 0);
-        CHECK(text != nullptr);
-        CHECK(t0 >= 0);
-        CHECK(t1 >= t0);
-        CHECK(t0 >= prev_t0);  // monotone
-        CHECK_EQ_INT(sidx, 0);
-        CHECK(widx >= 0);
-        CHECK(p >= 0.0f && p <= 1.0001f && !std::isnan(p));
-        if (p > 0.0f) ++n_with_p;
-        prev_t0 = static_cast<int>(t0);
+        CHECK(tok.id >= 0);
+        CHECK(tok.text != nullptr);
+        CHECK(tok.t0_ms >= 0);
+        CHECK(tok.t1_ms >= tok.t0_ms);
+        CHECK(tok.t0_ms >= prev_t0);  // monotone
+        CHECK_EQ_INT(tok.seg_index, 0);
+        CHECK(tok.word_index >= 0);
+        CHECK(tok.p >= 0.0f && tok.p <= 1.0001f && !std::isnan(tok.p));
+        if (tok.p > 0.0f) ++n_with_p;
+        prev_t0 = static_cast<int>(tok.t0_ms);
     }
     // At least most tokens should carry a positive confidence (the
     // entropy-based formula gives ~0 for a uniform distribution and
@@ -284,38 +279,34 @@ int main() {
     int last_word_t1 = -1;
     int n_words_with_text = 0;
     for (int i = 0; i < n_words; ++i) {
-        const char *  text = transcribe_word_text(ctx, i);
-        const int64_t t0   = transcribe_word_t0_ms(ctx, i);
-        const int64_t t1   = transcribe_word_t1_ms(ctx, i);
-        const int     sidx = transcribe_word_seg_index(ctx, i);
-        const int     ft   = transcribe_word_first_token(ctx, i);
-        const int     nt   = transcribe_word_n_tokens(ctx, i);
+        transcribe_word wrd = TRANSCRIBE_WORD_INIT;
+        CHECK_EQ_INT(transcribe_get_word(ctx, i, &wrd), TRANSCRIBE_OK);
 
-        CHECK(text != nullptr);
-        if (text != nullptr && text[0] != '\0') ++n_words_with_text;
-        CHECK_EQ_INT(sidx, 0);
-        CHECK(ft >= 0 && ft < n_tokens);
-        CHECK(nt > 0 && ft + nt <= n_tokens);
-        CHECK(t0 >= 0);
-        CHECK(t1 >= t0);
-        CHECK(t0 >= last_word_t1 - 200); // allow some inter-word slop
+        CHECK(wrd.text != nullptr);
+        if (wrd.text != nullptr && wrd.text[0] != '\0') ++n_words_with_text;
+        CHECK_EQ_INT(wrd.seg_index, 0);
+        CHECK(wrd.first_token >= 0 && wrd.first_token < n_tokens);
+        CHECK(wrd.n_tokens > 0 && wrd.first_token + wrd.n_tokens <= n_tokens);
+        CHECK(wrd.t0_ms >= 0);
+        CHECK(wrd.t1_ms >= wrd.t0_ms);
+        CHECK(wrd.t0_ms >= last_word_t1 - 200); // allow some inter-word slop
         // No leading space on a word — the result builder strips it.
-        if (text != nullptr && text[0] == ' ') {
+        if (wrd.text != nullptr && wrd.text[0] == ' ') {
             std::fprintf(stderr,
                          "FAIL: word %d has leading space: \"%s\"\n",
-                         i, text);
+                         i, wrd.text);
             ++g_failures;
         }
         // No SentencePiece marker should leak into a word's text.
-        if (text != nullptr &&
-            std::strstr(text, k_sp_marker) != nullptr)
+        if (wrd.text != nullptr &&
+            std::strstr(wrd.text, k_sp_marker) != nullptr)
         {
             std::fprintf(stderr,
                          "FAIL: word %d contains raw SP marker: \"%s\"\n",
-                         i, text);
+                         i, wrd.text);
             ++g_failures;
         }
-        last_word_t1 = static_cast<int>(t1);
+        last_word_t1 = static_cast<int>(wrd.t1_ms);
     }
     CHECK(n_words_with_text == n_words);
 
@@ -323,34 +314,39 @@ int main() {
     const int n_segments = transcribe_n_segments(ctx);
     CHECK_EQ_INT(n_segments, 1);
 
-    const char *  seg_text = transcribe_segment_text(ctx, 0);
-    const int64_t seg_t0   = transcribe_segment_t0_ms(ctx, 0);
-    const int64_t seg_t1   = transcribe_segment_t1_ms(ctx, 0);
-    const int     seg_fw   = transcribe_segment_first_word(ctx, 0);
-    const int     seg_nw   = transcribe_segment_n_words(ctx, 0);
-    const int     seg_ft   = transcribe_segment_first_token(ctx, 0);
-    const int     seg_nt   = transcribe_segment_n_tokens(ctx, 0);
+    transcribe_segment seg0 = TRANSCRIBE_SEGMENT_INIT;
+    CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg0), TRANSCRIBE_OK);
 
-    CHECK(seg_text != nullptr);
-    CHECK(seg_text != nullptr && seg_text[0] != '\0');
-    CHECK(seg_t0 >= 0);
-    CHECK(seg_t1 > seg_t0);
-    CHECK_EQ_INT(seg_fw, 0);
-    CHECK_EQ_INT(seg_nw, n_words);
-    CHECK_EQ_INT(seg_ft, 0);
-    CHECK_EQ_INT(seg_nt, n_tokens);
+    CHECK(seg0.text != nullptr);
+    CHECK(seg0.text != nullptr && seg0.text[0] != '\0');
+    CHECK(seg0.t0_ms >= 0);
+    CHECK(seg0.t1_ms > seg0.t0_ms);
+    CHECK_EQ_INT(seg0.first_word,  0);
+    CHECK_EQ_INT(seg0.n_words,     n_words);
+    CHECK_EQ_INT(seg0.first_token, 0);
+    CHECK_EQ_INT(seg0.n_tokens,    n_tokens);
     // Segment text should equal full_text.
-    CHECK(seg_text != nullptr && std::strcmp(seg_text, full) == 0);
+    CHECK(seg0.text != nullptr && std::strcmp(seg0.text, full) == 0);
     // Segment time should span the audio.
-    CHECK(seg_t1 <= 12000); // jfk.wav is ~11 s; allow 1 s slack
+    CHECK(seg0.t1_ms <= 12000); // jfk.wav is ~11 s; allow 1 s slack
 
-    // ---- Out-of-bounds accessors return safe sentinels --------------
-    CHECK(transcribe_token_id(ctx, n_tokens)    == 0);
-    CHECK(transcribe_token_id(ctx, -1)          == 0);
-    CHECK(std::strcmp(transcribe_token_text(ctx, n_tokens), "") == 0);
-    CHECK(std::isnan(transcribe_token_p(ctx, n_tokens)));
-    CHECK(transcribe_word_n_tokens(ctx, n_words) == 0);
-    CHECK(std::strcmp(transcribe_segment_text(ctx, 5), "") == 0);
+    // ---- Out-of-bounds accessors leave the caller's struct zero-init.
+    {
+        transcribe_token oob = TRANSCRIBE_TOKEN_INIT;
+        CHECK_EQ_INT(transcribe_get_token(ctx, n_tokens, &oob), TRANSCRIBE_OK);
+        CHECK(oob.text == nullptr);
+        CHECK_EQ_INT(oob.id, 0);
+        CHECK_EQ_INT(transcribe_get_token(ctx, -1, &oob), TRANSCRIBE_OK);
+        CHECK(oob.text == nullptr);
+
+        transcribe_word oob_w = TRANSCRIBE_WORD_INIT;
+        CHECK_EQ_INT(transcribe_get_word(ctx, n_words, &oob_w), TRANSCRIBE_OK);
+        CHECK_EQ_INT(oob_w.n_tokens, 0);
+
+        transcribe_segment oob_s = TRANSCRIBE_SEGMENT_INIT;
+        CHECK_EQ_INT(transcribe_get_segment(ctx, 5, &oob_s), TRANSCRIBE_OK);
+        CHECK(oob_s.text == nullptr);
+    }
 
     // ---- Timings ---------------------------------------------------
     transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
@@ -381,7 +377,9 @@ int main() {
         const int w_n_words = transcribe_n_words(ctx);
         CHECK(w_n_words > 0);
         if (w_n_words > 0) {
-            CHECK(transcribe_word_t1_ms(ctx, 0) >= transcribe_word_t0_ms(ctx, 0));
+            transcribe_word w0 = TRANSCRIBE_WORD_INIT;
+            CHECK_EQ_INT(transcribe_get_word(ctx, 0, &w0), TRANSCRIBE_OK);
+            CHECK(w0.t1_ms >= w0.t0_ms);
         }
         // Token table elided at WORD granularity, and every word's
         // back-reference into the now-empty token table must be
@@ -389,12 +387,18 @@ int main() {
         // word_n_tokens cannot index into a cleared table.
         CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         for (int i = 0; i < w_n_words; ++i) {
-            CHECK_EQ_INT(transcribe_word_first_token(ctx, i), 0);
-            CHECK_EQ_INT(transcribe_word_n_tokens(ctx, i),    0);
+            transcribe_word wi = TRANSCRIBE_WORD_INIT;
+            CHECK_EQ_INT(transcribe_get_word(ctx, i, &wi), TRANSCRIBE_OK);
+            CHECK_EQ_INT(wi.first_token, 0);
+            CHECK_EQ_INT(wi.n_tokens,    0);
         }
         // Segment's token back-references also zeroed.
-        CHECK_EQ_INT(transcribe_segment_first_token(ctx, 0), 0);
-        CHECK_EQ_INT(transcribe_segment_n_tokens(ctx, 0),    0);
+        {
+            transcribe_segment s0 = TRANSCRIBE_SEGMENT_INIT;
+            CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
+            CHECK_EQ_INT(s0.first_token, 0);
+            CHECK_EQ_INT(s0.n_tokens,    0);
+        }
         // Full text still populated.
         const char * full2 = transcribe_full_text(ctx);
         CHECK(full2 != nullptr && full2[0] != '\0');
@@ -410,9 +414,12 @@ int main() {
         CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
         // Segment timings are still real at SEGMENT granularity.
-        CHECK(transcribe_segment_t1_ms(ctx, 0) > transcribe_segment_t0_ms(ctx, 0));
-        const char * seg_text2 = transcribe_segment_text(ctx, 0);
-        CHECK(seg_text2 != nullptr && seg_text2[0] != '\0');
+        {
+            transcribe_segment s0 = TRANSCRIBE_SEGMENT_INIT;
+            CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
+            CHECK(s0.t1_ms > s0.t0_ms);
+            CHECK(s0.text != nullptr && s0.text[0] != '\0');
+        }
     }
     {
         transcribe_params rp2 = transcribe_default_params();
@@ -425,10 +432,13 @@ int main() {
         CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         // Segment survives as the text carrier; its t0/t1 are zeroed.
         CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
-        CHECK_EQ_INT(transcribe_segment_t0_ms(ctx, 0), 0);
-        CHECK_EQ_INT(transcribe_segment_t1_ms(ctx, 0), 0);
-        const char * seg_text2 = transcribe_segment_text(ctx, 0);
-        CHECK(seg_text2 != nullptr && seg_text2[0] != '\0');
+        {
+            transcribe_segment s0 = TRANSCRIBE_SEGMENT_INIT;
+            CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
+            CHECK_EQ_INT(s0.t0_ms, 0);
+            CHECK_EQ_INT(s0.t1_ms, 0);
+            CHECK(s0.text != nullptr && s0.text[0] != '\0');
+        }
     }
 
     // ---- Failed transcribe_run clears the prior result -------------

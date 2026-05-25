@@ -41,7 +41,7 @@ namespace transcribe::gigaam {
 // Family defaults — applied before read_capability_kv runs. Defined in
 // capabilities.cpp. KV-driven overrides take precedence per the
 // project-wide convention.
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // Concrete model. Owns the ggml_context that holds every weight tensor's
 // data buffer, and any per-family precomputed buffers we may add later

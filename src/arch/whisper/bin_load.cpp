@@ -507,7 +507,7 @@ transcribe_status resolve_tensors(
 void apply_caps_and_languages(WhisperModel &                                  m,
                               const transcribe::bin_loader::WhisperBinModel & bm)
 {
-    apply_family_invariants(m.caps);
+    apply_family_invariants(m);
 
     if (!bm.is_multilingual) {
         m.caps.supports_language_detect = false;

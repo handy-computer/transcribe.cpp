@@ -156,6 +156,22 @@ typedef enum {
      * TRANSCRIBE_*_INIT macro" specifically.
      */
     TRANSCRIBE_ERR_BAD_STRUCT_SIZE      = 14,
+    /*
+     * Reserved. Phase 2 ships warn-and-proceed semantics for
+     * transcribe_params::pnc: a non-DEFAULT value against a model that
+     * does not advertise transcribe_model_supports(model, TRANSCRIBE_FEATURE_PNC)
+     * emits a WARN-level log message and proceeds with the model's
+     * default behavior. This code is preserved at its assigned value
+     * for a future opt-in strict-advisory mode in which the dispatcher
+     * would return this code instead of warning. Not currently
+     * returned.
+     */
+    TRANSCRIBE_ERR_UNSUPPORTED_PNC      = 15,
+    /*
+     * Reserved. Symmetric with TRANSCRIBE_ERR_UNSUPPORTED_PNC for
+     * transcribe_params::itn. Not currently returned.
+     */
+    TRANSCRIBE_ERR_UNSUPPORTED_ITN      = 16,
 } transcribe_status;
 
 /*
@@ -249,6 +265,59 @@ typedef enum {
     TRANSCRIBE_KV_TYPE_F32  = 1,
     TRANSCRIBE_KV_TYPE_F16  = 2,
 } transcribe_kv_type;
+
+/*
+ * Punctuation + capitalization (PNC) toggle on the run params.
+ *
+ * Each family that exposes a runtime PNC toggle reads this field; families
+ * that do not (whisper, parakeet, ...) ignore it. The dispatcher emits a
+ * WARN-level log message when a non-DEFAULT value is set against a model
+ * whose capabilities advertise supports_pnc == false, then proceeds with
+ * the model's default behavior. Use transcribe_capabilities::supports_pnc
+ * to pre-check.
+ *
+ *   DEFAULT (0): the family's shipped default. Zero-init via
+ *                TRANSCRIBE_PARAMS_INIT gives this value. The family
+ *                picks the value its model card published WER numbers
+ *                against (canary: pnc on; others: family-specific).
+ *   OFF:         explicitly disable runtime PNC. Supporting families
+ *                emit lowercase, de-punctuated text. Non-supporting
+ *                families ignore (with WARN).
+ *   ON:          explicitly enable runtime PNC. Supporting families
+ *                emit punctuated, capitalized text. Non-supporting
+ *                families ignore (with WARN).
+ */
+enum transcribe_pnc_mode {
+    TRANSCRIBE_PNC_MODE_DEFAULT = 0,
+    TRANSCRIBE_PNC_MODE_OFF     = 1,
+    TRANSCRIBE_PNC_MODE_ON      = 2,
+};
+
+/*
+ * Inverse text normalization (ITN) toggle on the run params.
+ *
+ * Symmetric semantics to transcribe_pnc_mode but for ITN — the
+ * transformation that renders numbers, dates, currencies, etc. in formal
+ * form ("twenty twenty four" → "2024", "ten dollars" → "$10"). Each
+ * family that exposes a runtime ITN toggle reads this field; families
+ * that do not ignore it. Non-DEFAULT values against
+ * supports_itn == false emit a WARN and proceed with default behavior.
+ *
+ *   DEFAULT (0): family default. Zero-init gives this value.
+ *   OFF:         explicit ITN off. Supporting families emit verbatim
+ *                spoken-form text. Non-supporting families ignore (WARN).
+ *   ON:          explicit ITN on. Supporting families apply ITN.
+ *                Non-supporting families ignore (WARN).
+ *
+ * Some families bundle PNC and ITN (e.g. their ITN toggle also flips
+ * punctuation/casing as a side effect). See the family doc for the
+ * observed bundling.
+ */
+enum transcribe_itn_mode {
+    TRANSCRIBE_ITN_MODE_DEFAULT = 0,
+    TRANSCRIBE_ITN_MODE_OFF     = 1,
+    TRANSCRIBE_ITN_MODE_ON      = 2,
+};
 
 /* ----------------------------------------------------------------------- */
 /* Handles                                                                 */
@@ -453,6 +522,16 @@ TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_param
  *              Use AUTO to get the finest granularity the model
  *              supports.
  *
+ * pnc:         punctuation+capitalization runtime toggle. See
+ *              transcribe_pnc_mode. DEFAULT is always safe. Non-DEFAULT
+ *              values against models with supports_pnc == false emit a
+ *              WARN and proceed with the model's default behavior.
+ *
+ * itn:         inverse text normalization runtime toggle. See
+ *              transcribe_itn_mode. DEFAULT is always safe. Non-DEFAULT
+ *              values against models with supports_itn == false emit a
+ *              WARN and proceed with the model's default behavior.
+ *
  * language:        source language hint as a BCP-47-ish short code, or
  *                  NULL to autodetect (only if the model supports it).
  *
@@ -461,262 +540,43 @@ TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_param
  * strip_special_tags: strip special vocabulary tags (e.g. <|...|>) from
  *                     the returned text fields. Token-level accessors
  *                     still expose the raw token text.
+ *
+ * family:      optional family-specific extension. NULL selects family
+ *              defaults. The pointed-to object is caller-owned; the
+ *              library copies any values it needs out of it before
+ *              transcribe_run returns, so the caller may free the
+ *              extension storage immediately after the call. Each
+ *              family declares its typed extension struct in
+ *              include/transcribe/<family>.h with `struct transcribe_ext
+ *              ext` as field 0. Use transcribe_model_accepts_ext_kind
+ *              to probe whether the loaded model accepts a given kind
+ *              before pointing `family` at it.
  */
-struct transcribe_whisper_params;
-struct transcribe_sensevoice_params;
-struct transcribe_funasr_nano_params;
-struct transcribe_canary_params;
-
 struct transcribe_params {
-    size_t                    struct_size;
+    size_t                        struct_size;
 
-    transcribe_task           task;
-    transcribe_timestamp_kind timestamps;
-    const char *              language;
-    const char *              target_language;
-    bool                      strip_special_tags;
-
-    /*
-     * Family-specific extension pointers. NULL selects family defaults.
-     * Only consulted when the loaded model's architecture matches the
-     * pointed-to struct's family; other families ignore it.
-     *
-     * The Phase-2 migration will replace these named pointers with a
-     * single `const struct transcribe_ext * family` slot, mirroring the
-     * shape already used by transcribe_stream_params. Until then the
-     * named pointers continue to work; their structs are reached via
-     * the legacy named factories below.
-     */
-    const struct transcribe_whisper_params *     whisper;
-    const struct transcribe_sensevoice_params *  sensevoice;
-    const struct transcribe_funasr_nano_params * funasr_nano;
-    const struct transcribe_canary_params *      canary;
+    transcribe_task               task;
+    transcribe_timestamp_kind     timestamps;
+    enum transcribe_pnc_mode      pnc;
+    enum transcribe_itn_mode      itn;
+    const char *                  language;
+    const char *                  target_language;
+    bool                          strip_special_tags;
+    const struct transcribe_ext * family;
 };
 
 #define TRANSCRIBE_PARAMS_INIT                                             \
     { sizeof(struct transcribe_params), /* struct_size                  */ \
       TRANSCRIBE_TASK_TRANSCRIBE,       /* task                         */ \
       TRANSCRIBE_TIMESTAMPS_NONE,       /* timestamps                   */ \
+      TRANSCRIBE_PNC_MODE_DEFAULT,      /* pnc                          */ \
+      TRANSCRIBE_ITN_MODE_DEFAULT,      /* itn                          */ \
       NULL,                             /* language                     */ \
       NULL,                             /* target_language              */ \
       true,                             /* strip_special_tags           */ \
-      NULL,                             /* whisper                      */ \
-      NULL,                             /* sensevoice                   */ \
-      NULL,                             /* funasr_nano                  */ \
-      NULL }                            /* canary                       */
+      NULL }                            /* family                       */
 
 TRANSCRIBE_API struct transcribe_params transcribe_default_params(void);
-
-/* ----------------------------------------------------------------------- */
-/* Whisper-specific params                                                 */
-/* ----------------------------------------------------------------------- */
-
-/*
- * Sentinels for "disabled" on threshold fields. Never rely on 0.0 as a
- * sentinel — it is a legitimate value for logprob_thold and lies in
- * the normal range of the other thresholds.
- *
- *   Check shape "X > thold"  →  disable with +INF (_THOLD_DISABLED).
- *   Check shape "X < thold"  →  disable with -INF (_LOGPROB_DISABLED).
- */
-#define TRANSCRIBE_WHISPER_THOLD_DISABLED   ((float) (1.0 / 0.0))  /* +INF */
-#define TRANSCRIBE_WHISPER_LOGPROB_DISABLED ((float) (-1.0 / 0.0)) /* -INF */
-
-/*
- * How an initial prompt composes with condition_on_prev_tokens on
- * long-form runs. Matches HF's prompt_condition_type string knob.
- *
- *   FIRST_SEGMENT (default): the initial prompt sits at the head of
- *     the first chunk's prefix. If condition_on_prev_tokens is true,
- *     subsequent chunks carry the decoded prior-chunk tokens under
- *     <|startofprev|> and the initial prompt is visible only while
- *     it still fits in the sliding 223-token window.
- *
- *   ALL_SEGMENTS: the initial prompt replaces <|startofprev|> as the
- *     persistent BOS of the prev-context window on EVERY chunk.
- *     Requires condition_on_prev_tokens=true; passing this mode
- *     without condition_on_prev_tokens returns
- *     TRANSCRIBE_ERR_INVALID_ARG (mirrors HF's ValueError).
- */
-enum transcribe_whisper_prompt_condition {
-    TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT = 0,
-    TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS  = 1,
-};
-
-/*
- * Whisper-family run knobs. Reached via transcribe_params::whisper.
- * A NULL pointer uses transcribe_whisper_default_params() values.
- *
- * The defaults intentionally enable temperature fallback and the
- * compression-ratio / avg-logprob / no-speech safety nets. This
- * matches Whisper's own recipe (OpenAI whisper shipping default;
- * HF's own docstring advisory). Callers that want HF library-wide
- * generate() behavior ("all thresholds disabled") set each _thold
- * field to its _DISABLED sentinel.
- */
-struct transcribe_whisper_params {
-    /*
-     * Initial prompt / prior context.
-     *
-     *   If prompt_tokens != NULL:
-     *       Use prompt_tokens verbatim (caller owns the bytes; they must
-     *       NOT include the <|startofprev|> marker — the library prepends
-     *       it). initial_prompt is IGNORED.
-     *
-     *   Else if initial_prompt != NULL:
-     *       Tokenize as HF's get_prompt_ids does:
-     *           "<|startofprev|>" + " " + initial_prompt.strip()
-     *       The leading space is mandatory (matches
-     *       transformers tokenization_whisper.py:710-722). Any special
-     *       token (<|...|>) found in the tokenized prompt text is
-     *       rejected with TRANSCRIBE_ERR_INVALID_ARG, mirroring HF's
-     *       own check.
-     *
-     *   Else: no initial prompt.
-     */
-    const char *    initial_prompt;
-    const int32_t * prompt_tokens;
-    size_t          n_prompt_tokens;
-
-    /* See transcribe_whisper_prompt_condition above. Default FIRST_SEGMENT. */
-    enum transcribe_whisper_prompt_condition prompt_condition;
-
-    /*
-     * Per HF generation_whisper.py:1853-1918. When true and any prior
-     * chunk decoded successfully at temperature < 0.5, the tail of the
-     * prior chunk's tokens is prepended (under <|startofprev|>) to the
-     * next chunk's prefix, capped at max_prev_context_tokens. Auto-
-     * disables for the next chunk when the prior chunk was accepted at
-     * temperature >= 0.5 (matches HF ":1090-1093").
-     */
-    bool            condition_on_prev_tokens;
-
-    /* Cap for carried prev tokens; default 223 = max_target_positions/2 - 1. */
-    int32_t         max_prev_context_tokens;
-
-    /*
-     * Sampling + temperature fallback. Default behavior matches
-     * Whisper's own recipe, not HF generate()'s library-default.
-     * Use the _DISABLED sentinels to turn off individual thresholds.
-     */
-    float           temperature;             /* first-tier; default 0.0 */
-    float           temperature_inc;         /* default 0.2             */
-    float           compression_ratio_thold; /* default 2.4             */
-    float           logprob_thold;           /* default -1.0            */
-    float           no_speech_thold;         /* default 0.6             */
-
-    /*
-     * Seed for the sampler at temperature > 0. 0 = nondeterministic
-     * (matches the whisper.cpp convention). A nonzero seed produces
-     * reproducible output across runs at matching temperatures.
-     * Ignored when temperature == 0.0 (greedy decode is deterministic
-     * by construction).
-     */
-    uint32_t        seed;
-
-    /* Seconds. Caps the first emitted timestamp; default 1.0. */
-    float           max_initial_timestamp;
-};
-
-TRANSCRIBE_API struct transcribe_whisper_params transcribe_whisper_default_params(void);
-
-/* ----------------------------------------------------------------------- */
-/* SenseVoice-specific params                                              */
-/* ----------------------------------------------------------------------- */
-
-/*
- * SenseVoiceSmall family knobs. Reached via transcribe_params::sensevoice.
- * A NULL pointer selects transcribe_sensevoice_default_params() values.
- *
- * SenseVoice is non-autoregressive (encoder + CTC head) and ships four
- * input prefix-embedding slots that condition the encoder on language,
- * audio-event, emotion, and inverse text normalization (ITN). The
- * language slot is driven by the family-agnostic transcribe_params::language
- * field; the audio-event and emotion slots are hard-coded by the upstream
- * inference path so they emerge in the OUTPUT (not as input prefixes).
- * The ITN slot is the only remaining user-facing knob:
- *
- *   use_itn = false (default): encoder receives the `woitn` prefix, and
- *     the CTC head emits raw transcription with no inverse text
- *     normalization. The control token `<|woitn|>` rides along in the
- *     output.
- *
- *   use_itn = true: encoder receives the `withitn` prefix, the CTC head
- *     applies inverse text normalization (numbers/punctuation rendered
- *     in formal form), and `<|withitn|>` rides along in the output.
- *
- * NOTE: the runtime cannot enable ITN for languages the upstream model
- * was not trained to ITN-format. SenseVoiceSmall ships ITN coverage for
- * its five advertised languages (zh, yue, en, ja, ko). Setting use_itn
- * on a non-supported audio is a no-op rather than an error.
- */
-struct transcribe_sensevoice_params {
-    bool use_itn;
-};
-
-TRANSCRIBE_API struct transcribe_sensevoice_params
-    transcribe_sensevoice_default_params(void);
-
-/* ----------------------------------------------------------------------- */
-/* FunASR-Nano-specific params                                             */
-/* ----------------------------------------------------------------------- */
-
-/*
- * FunASR-Nano family knobs. Reached via transcribe_params::funasr_nano.
- * A NULL pointer selects transcribe_funasr_nano_default_params() values.
- *
- * FunASR-Nano is autoregressive (encoder + audio adaptor + bundled
- * Qwen3-0.6B LLM). The user-visible prompt knob is inverse text
- * normalization, controlled via the system prompt the LLM receives:
- *
- *   use_itn = false (default): the LLM prompt appends
- *     "，不进行文本规整" ("do not apply text normalization") so the
- *     decoded transcript stays close to verbatim — no digit/punctuation
- *     formatting, lowercase English. Matches the reference's
- *     `itn=False` Python path.
- *
- *   use_itn = true: the LLM prompt omits the no-ITN suffix and the
- *     decoder is free to render numbers, capitalization, and
- *     punctuation in formal form. Matches `itn=True` upstream.
- *
- * Applies to both fun-asr-nano-2512 (zh / en / ja, plus dialects /
- * accents) and fun-asr-mlt-nano-2512 (31 languages). The family shares
- * one prompt builder; ITN coverage per language is whatever the
- * upstream model was trained on.
- */
-struct transcribe_funasr_nano_params {
-    bool use_itn;
-};
-
-TRANSCRIBE_API struct transcribe_funasr_nano_params
-    transcribe_funasr_nano_default_params(void);
-
-/* ----------------------------------------------------------------------- */
-/* Canary-specific params                                                  */
-/* ----------------------------------------------------------------------- */
-
-/*
- * Canary-family run knobs. Reached via transcribe_params::canary.
- * A NULL pointer selects transcribe_canary_default_params() values.
- *
- * pnc = true (default): the multitask prompt's pnc slot is set to
- *   <|pnc|>, and the AED emits text with punctuation and standard
- *   capitalization. This is the regime under which the upstream model
- *   card WER numbers are reported.
- *
- * pnc = false: the prompt slot is set to <|nopnc|>, and the AED emits
- *   lowercase, de-punctuated text — useful for downstream pipelines
- *   that re-punctuate or that need verbatim-style output.
- *
- * The pnc/nopnc tokens are positional in the multitask prompt; flipping
- * this changes one token id at the prompt-build site, nothing else.
- */
-struct transcribe_canary_params {
-    bool pnc;
-};
-
-TRANSCRIBE_API struct transcribe_canary_params
-    transcribe_canary_default_params(void);
 
 /* ----------------------------------------------------------------------- */
 /* Capabilities                                                            */
@@ -740,26 +600,59 @@ TRANSCRIBE_API struct transcribe_canary_params
  * unconditionally and the per-family run() handler resolves AUTO
  * to its own max_timestamp_kind when it assembles the result.
  */
+/*
+ * Capabilities are split by character, not by size:
+ *
+ *   - Values and bools-that-gate-allied-data live on
+ *     `transcribe_capabilities`. The struct holds data (sample rate,
+ *     language list, max timestamp kind, streaming hints) plus the
+ *     three "gate" bools whose meaning is inseparable from neighboring
+ *     fields (supports_streaming gates the streaming hint trio;
+ *     supports_translate gates the task enum and target_language
+ *     semantics on transcribe_params; supports_language_detect gates
+ *     the languages array and autodetect mode).
+ *
+ *   - Unallied behavioral toggles (initial prompt, temperature
+ *     fallback, long-form chunking, cancellation, PNC, ITN, and
+ *     anything similar in the future) live behind the
+ *     transcribe_model_supports() probe, keyed by transcribe_feature.
+ *     A new feature is +1 enum value with no struct_size churn.
+ *
+ * Trajectory note: revisit this shape if the bool cluster in the
+ * struct grows past ~5 or if a plugin-like family ABI is introduced.
+ * Neither condition is in flight today.
+ */
 struct transcribe_capabilities {
     size_t                    struct_size;
 
     int32_t                   native_sample_rate;
     int                       n_languages;
     const char * const *      languages;
-    bool                      supports_language_detect;
-    bool                      supports_translate;
-    bool                      supports_streaming;
     transcribe_timestamp_kind max_timestamp_kind;
 
     /*
-     * Family-level feature advertisements, set by apply_family_invariants
-     * and immutable after load. Added at the end of the struct; old
-     * callers that only read the fields above keep working unchanged.
+     * Gate bools with allied struct data. Kept here so reading the
+     * struct gives a coherent picture of "what tasks does this model
+     * support and what data does it expose for them."
+     *
+     *   supports_language_detect: gates the languages[] array's role.
+     *     False means the autodetect path is unavailable; the listed
+     *     languages (if any) are still the model's supported set when
+     *     the caller passes a hint via transcribe_params::language.
+     *
+     *   supports_translate: gates TRANSCRIBE_TASK_TRANSLATE on
+     *     transcribe_params, plus the meaning of
+     *     transcribe_params::target_language. Hard-error gate; the
+     *     dispatcher rejects TRANSLATE against models with
+     *     supports_translate == false.
+     *
+     *   supports_streaming: gates the streaming entry points
+     *     (transcribe_stream_*) plus the streaming hint trio below.
+     *     Hard-error gate at transcribe_stream_begin.
      */
-    bool                      supports_initial_prompt;
-    bool                      supports_temperature_fallback;
-    bool                      supports_long_form;
-    bool                      supports_cancellation;
+    bool                      supports_language_detect;
+    bool                      supports_translate;
+    bool                      supports_streaming;
 
     /*
      * Streaming timing hints. Consumer-facing advisories: callers may use
@@ -776,7 +669,6 @@ struct transcribe_capabilities {
      * When the two differ the caller can pick a lower-latency setting via
      * a family-specific stream extension. When the model has only one
      * setting the two fields are equal.
-     *
      */
     int32_t                   streaming_lookahead_ms;
     int32_t                   streaming_chunk_ms;
@@ -804,6 +696,60 @@ struct transcribe_capabilities {
 TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(
     const struct transcribe_model *  model,
     struct transcribe_capabilities * out_caps);
+
+/*
+ * Per-feature capability probe. Pure yes/no advisories that don't
+ * gate any allied struct data live here instead of as boolean fields
+ * on transcribe_capabilities. Adding a feature is +1 enum value with
+ * no struct_size advance, which makes the surface easy to grow
+ * without ABI churn.
+ *
+ * Feature meanings:
+ *
+ *   INITIAL_PROMPT       The model accepts a free-text or token
+ *                        prompt to bias decoding. Today: whisper
+ *                        only; reached via transcribe_whisper_run_ext.
+ *
+ *   TEMPERATURE_FALLBACK The model runs a multi-tier temperature loop
+ *                        with metric-driven fallback. Today: whisper.
+ *
+ *   LONG_FORM            The model exposes a long-form chunker that
+ *                        handles audio longer than its native window
+ *                        in a single transcribe_run call. Today:
+ *                        whisper.
+ *
+ *   CANCELLATION         transcribe_set_abort_callback fires between
+ *                        chunks / decode steps and the family hook
+ *                        honors it.
+ *
+ *   PNC                  The model exposes a runtime toggle for
+ *                        punctuation + capitalization via
+ *                        transcribe_params::pnc. False does NOT mean
+ *                        the model produces no PNC — only that the
+ *                        caller cannot control whether PNC appears.
+ *                        Non-DEFAULT pnc against a model where this
+ *                        returns false emits a WARN and proceeds.
+ *
+ *   ITN                  The model exposes a runtime toggle for
+ *                        inverse text normalization via
+ *                        transcribe_params::itn. Same "can-control
+ *                        vs does-emit" distinction as PNC; non-DEFAULT
+ *                        itn against an unsupported model warns.
+ *
+ * Returns false on NULL model or unknown feature enum.
+ */
+typedef enum {
+    TRANSCRIBE_FEATURE_INITIAL_PROMPT       = 0,
+    TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK = 1,
+    TRANSCRIBE_FEATURE_LONG_FORM            = 2,
+    TRANSCRIBE_FEATURE_CANCELLATION         = 3,
+    TRANSCRIBE_FEATURE_PNC                  = 4,
+    TRANSCRIBE_FEATURE_ITN                  = 5,
+} transcribe_feature;
+
+TRANSCRIBE_API bool transcribe_model_supports(
+    const struct transcribe_model * model,
+    transcribe_feature              feature);
 
 /*
  * Stable identifier strings read from GGUF and runtime state.
@@ -1379,47 +1325,110 @@ TRANSCRIBE_API int                        transcribe_n_tokens(const struct trans
 TRANSCRIBE_API const char *               transcribe_detected_language(const struct transcribe_context * ctx);
 
 /* ----------------------------------------------------------------------- */
-/* Result accessors - segment level                                        */
+/* Result accessors - per-item rows                                        */
 /* ----------------------------------------------------------------------- */
 
-TRANSCRIBE_API const char * transcribe_segment_text       (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int64_t      transcribe_segment_t0_ms      (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int64_t      transcribe_segment_t1_ms      (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_segment_first_word (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_segment_n_words    (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_segment_first_token(const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_segment_n_tokens   (const struct transcribe_context * ctx, int i);
-
-/* ----------------------------------------------------------------------- */
-/* Result accessors - word level                                           */
-/* ----------------------------------------------------------------------- */
-
-TRANSCRIBE_API const char * transcribe_word_text       (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int64_t      transcribe_word_t0_ms      (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int64_t      transcribe_word_t1_ms      (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_word_seg_index  (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_word_first_token(const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_word_n_tokens   (const struct transcribe_context * ctx, int i);
-
-/* ----------------------------------------------------------------------- */
-/* Result accessors - token level                                          */
-/* ----------------------------------------------------------------------- */
-
-TRANSCRIBE_API int          transcribe_token_id        (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API const char * transcribe_token_text      (const struct transcribe_context * ctx, int i);
 /*
- * transcribe_token_p returns the per-token probability when the
+ * Per-item results are exposed as caller-owned copy-out structs. Three
+ * accessors (transcribe_get_segment / _word / _token) take a row index
+ * and a pointer to a TRANSCRIBE_*_INIT-initialized struct; the library
+ * writes the row's fields into the caller's buffer.
+ *
+ * `text` pointers in these structs are ctx-owned and remain valid until
+ * the next transcribe_run() (one-shot) / transcribe_stream_begin()
+ * (streaming) / transcribe_stream_reset() / transcribe_context_free()
+ * call on the same context. Callers that want to hold the text past
+ * those boundaries must copy the bytes.
+ *
+ * Out-of-range index (i < 0 or i >= the corresponding transcribe_n_*())
+ * returns TRANSCRIBE_OK with the caller's struct left as zero-init:
+ * `text == NULL`, every scalar 0, and (for tokens) `p == 0.0f`. There
+ * is no empty-string sentinel — bindings distinguish "row not present"
+ * from "row present with empty text" by null-checking `text`.
+ *
+ * Forward-ABI: struct_size in each row struct is captured at the
+ * caller's TU; the library writes only the fields that fit and never
+ * touches tail bytes beyond the caller's struct_size. New fields are
+ * appended at the end.
+ */
+
+struct transcribe_segment {
+    size_t       struct_size;
+    int64_t      t0_ms;
+    int64_t      t1_ms;
+    int          first_word;
+    int          n_words;
+    int          first_token;
+    int          n_tokens;
+    const char * text;        /* ctx-owned; see lifetime note above */
+};
+
+#define TRANSCRIBE_SEGMENT_INIT { sizeof(struct transcribe_segment) }
+
+struct transcribe_word {
+    size_t       struct_size;
+    int64_t      t0_ms;
+    int64_t      t1_ms;
+    int          seg_index;
+    int          first_token;
+    int          n_tokens;
+    const char * text;        /* ctx-owned; see lifetime note above */
+};
+
+#define TRANSCRIBE_WORD_INIT { sizeof(struct transcribe_word) }
+
+/*
+ * transcribe_token::p is the per-token probability when the
  * architecture produces one, or NaN when it does not. The semantic of
  * "token probability" varies by family (joint softmax for transducer,
- * per-step softmax for autoregressive, per-frame argmax probability for
- * CTC) and callers should treat it as a confidence hint, not a
+ * per-step softmax for autoregressive, per-frame argmax probability
+ * for CTC) and callers should treat it as a confidence hint, not a
  * calibrated probability.
+ *
+ * On out-of-range index `p` follows the zero-init rule (0.0f, not
+ * NaN); inspect `text != NULL` to distinguish a present row.
  */
-TRANSCRIBE_API float        transcribe_token_p         (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int64_t      transcribe_token_t0_ms     (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int64_t      transcribe_token_t1_ms     (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_token_seg_index (const struct transcribe_context * ctx, int i);
-TRANSCRIBE_API int          transcribe_token_word_index(const struct transcribe_context * ctx, int i);
+struct transcribe_token {
+    size_t       struct_size;
+    int          id;
+    float        p;
+    int64_t      t0_ms;
+    int64_t      t1_ms;
+    int          seg_index;
+    int          word_index;
+    const char * text;        /* ctx-owned; see lifetime note above */
+};
+
+#define TRANSCRIBE_TOKEN_INIT { sizeof(struct transcribe_token) }
+
+/*
+ * Read one segment / word / token row into caller-owned storage.
+ *
+ * Returns:
+ *   TRANSCRIBE_ERR_INVALID_ARG     out is NULL.
+ *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE out->struct_size is 0 or smaller
+ *                                  than the library's minimum.
+ *   TRANSCRIBE_OK                  otherwise. The caller's struct is
+ *                                  written when ctx is non-NULL, the
+ *                                  context has a result, and i is in
+ *                                  range; otherwise it stays as
+ *                                  zero-initialized by INIT (text NULL,
+ *                                  scalars 0).
+ */
+TRANSCRIBE_API transcribe_status transcribe_get_segment(
+    const struct transcribe_context * ctx,
+    int                               i,
+    struct transcribe_segment *       out);
+
+TRANSCRIBE_API transcribe_status transcribe_get_word(
+    const struct transcribe_context * ctx,
+    int                               i,
+    struct transcribe_word *          out);
+
+TRANSCRIBE_API transcribe_status transcribe_get_token(
+    const struct transcribe_context * ctx,
+    int                               i,
+    struct transcribe_token *         out);
 
 #ifdef __cplusplus
 } /* extern "C" */

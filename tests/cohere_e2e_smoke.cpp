@@ -310,8 +310,9 @@ int main() {
 
     // At least one segment with non-empty text.
     if (n_segments > 0) {
-        const char * seg_text = transcribe_segment_text(ctx, 0);
-        CHECK(seg_text != nullptr && seg_text[0] != '\0');
+        transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+        CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
+        CHECK(seg.text != nullptr && seg.text[0] != '\0');
     }
 
     // Cohere advertises max_timestamp_kind = NONE, which means
@@ -326,8 +327,10 @@ int main() {
     CHECK_EQ_INT(transcribe_n_words(ctx),  0);
     CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
     if (n_segments > 0) {
-        CHECK_EQ_INT(transcribe_segment_n_words(ctx, 0),  0);
-        CHECK_EQ_INT(transcribe_segment_n_tokens(ctx, 0), 0);
+        transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+        CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
+        CHECK_EQ_INT(seg.n_words,  0);
+        CHECK_EQ_INT(seg.n_tokens, 0);
     }
 
     // ---- Verify capability-aware dispatcher rejections ---------------

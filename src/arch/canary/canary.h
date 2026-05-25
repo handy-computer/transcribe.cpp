@@ -45,7 +45,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::canary {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // ---------------------------------------------------------------------------
 // KV cache for the autoregressive decoder. Same shape as cohere.

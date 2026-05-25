@@ -1,11 +1,21 @@
 /*
  * include/transcribe/whisper.h - Whisper-family public extension surface.
  *
- * Includes transcribe.h; safe to include in C or C++ TUs. Whisper-specific
- * run params still live in transcribe.h pending the Phase-2 run-params
- * migration; this header currently exposes only the family telemetry
- * (chunk traces) which moved out of transcribe.h in the Phase-4 output-API
- * conversion.
+ * Includes transcribe.h; safe to include in C or C++ TUs. Holds:
+ *   - the Whisper-family run extension struct (initial prompt + token
+ *     conditioning, temperature fallback tuple, no-speech gate);
+ *   - the family telemetry chunk-trace struct;
+ *   - the disabled-threshold sentinel macros (+/-INF) and the prompt
+ *     composition enum used by the run ext.
+ *
+ * Whisper exposes substantial real model-specific knobs (13 fields).
+ * The PNC/ITN toggles that other families share via transcribe_params
+ * do not apply: whisper does not advertise supports_pnc / supports_itn,
+ * and a non-DEFAULT pnc/itn against a whisper model produces a WARN.
+ * Probe via transcribe_model_accepts_ext_kind before pointing
+ * transcribe_params::family at this struct.
+ *
+ * FourCC kinds are reserved in docs/extension-kinds.md.
  */
 
 #ifndef TRANSCRIBE_WHISPER_H
@@ -16,6 +26,141 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* ----------------------------------------------------------------------- */
+/* Whisper run extension                                                   */
+/* ----------------------------------------------------------------------- */
+
+/* 'WHRN' little-endian = 0x4E524857 */
+#define TRANSCRIBE_EXT_KIND_WHISPER_RUN 0x4E524857u
+
+/*
+ * Sentinels for "disabled" on threshold fields. Never rely on 0.0 as a
+ * sentinel — it is a legitimate value for logprob_thold and lies in
+ * the normal range of the other thresholds.
+ *
+ *   Check shape "X > thold"  →  disable with +INF (_THOLD_DISABLED).
+ *   Check shape "X < thold"  →  disable with -INF (_LOGPROB_DISABLED).
+ */
+#define TRANSCRIBE_WHISPER_THOLD_DISABLED   ((float) (1.0 / 0.0))  /* +INF */
+#define TRANSCRIBE_WHISPER_LOGPROB_DISABLED ((float) (-1.0 / 0.0)) /* -INF */
+
+/*
+ * How an initial prompt composes with condition_on_prev_tokens on
+ * long-form runs. Matches HF's prompt_condition_type string knob.
+ *
+ *   FIRST_SEGMENT (default): the initial prompt sits at the head of
+ *     the first chunk's prefix. If condition_on_prev_tokens is true,
+ *     subsequent chunks carry the decoded prior-chunk tokens under
+ *     <|startofprev|> and the initial prompt is visible only while
+ *     it still fits in the sliding 223-token window.
+ *
+ *   ALL_SEGMENTS: the initial prompt replaces <|startofprev|> as the
+ *     persistent BOS of the prev-context window on EVERY chunk.
+ *     Requires condition_on_prev_tokens=true; passing this mode
+ *     without condition_on_prev_tokens returns
+ *     TRANSCRIBE_ERR_INVALID_ARG (mirrors HF's ValueError).
+ */
+enum transcribe_whisper_prompt_condition {
+    TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT = 0,
+    TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS  = 1,
+};
+
+/*
+ * Whisper-family run knobs. Reached via transcribe_params::family.
+ * NULL family selects TRANSCRIBE_WHISPER_RUN_EXT_INIT values (Whisper's
+ * own shipping recipe: temperature fallback on, compression-ratio /
+ * avg-logprob / no-speech safety nets active). Callers that want HF
+ * library-wide generate() behavior ("all thresholds disabled") set each
+ * _thold field to its _DISABLED sentinel.
+ *
+ * Pointer lifetime: the library copies referenced data (initial_prompt
+ * bytes, prompt_tokens contents) into context state before
+ * transcribe_run returns. The caller may free both buffers immediately
+ * after the call.
+ */
+struct transcribe_whisper_run_ext {
+    struct transcribe_ext ext;
+
+    /*
+     * Initial prompt / prior context.
+     *
+     *   If prompt_tokens != NULL:
+     *       Use prompt_tokens verbatim (caller owns the bytes; they must
+     *       NOT include the <|startofprev|> marker — the library prepends
+     *       it). initial_prompt is IGNORED.
+     *
+     *   Else if initial_prompt != NULL:
+     *       Tokenize as HF's get_prompt_ids does:
+     *           "<|startofprev|>" + " " + initial_prompt.strip()
+     *       The leading space is mandatory (matches
+     *       transformers tokenization_whisper.py:710-722). Any special
+     *       token (<|...|>) found in the tokenized prompt text is
+     *       rejected with TRANSCRIBE_ERR_INVALID_ARG, mirroring HF's
+     *       own check.
+     *
+     *   Else: no initial prompt.
+     */
+    const char *    initial_prompt;
+    const int32_t * prompt_tokens;
+    size_t          n_prompt_tokens;
+
+    /* See transcribe_whisper_prompt_condition above. Default FIRST_SEGMENT. */
+    enum transcribe_whisper_prompt_condition prompt_condition;
+
+    /*
+     * Per HF generation_whisper.py:1853-1918. When true and any prior
+     * chunk decoded successfully at temperature < 0.5, the tail of the
+     * prior chunk's tokens is prepended (under <|startofprev|>) to the
+     * next chunk's prefix, capped at max_prev_context_tokens. Auto-
+     * disables for the next chunk when the prior chunk was accepted at
+     * temperature >= 0.5 (matches HF ":1090-1093").
+     */
+    bool            condition_on_prev_tokens;
+
+    /* Cap for carried prev tokens; default 223 = max_target_positions/2 - 1. */
+    int32_t         max_prev_context_tokens;
+
+    /*
+     * Sampling + temperature fallback. Default behavior matches
+     * Whisper's own recipe, not HF generate()'s library-default.
+     * Use the _DISABLED sentinels to turn off individual thresholds.
+     */
+    float           temperature;             /* first-tier; default 0.0 */
+    float           temperature_inc;         /* default 0.2             */
+    float           compression_ratio_thold; /* default 2.4             */
+    float           logprob_thold;           /* default -1.0            */
+    float           no_speech_thold;         /* default 0.6             */
+
+    /*
+     * Seed for the sampler at temperature > 0. 0 = nondeterministic
+     * (matches the whisper.cpp convention). A nonzero seed produces
+     * reproducible output across runs at matching temperatures.
+     * Ignored when temperature == 0.0 (greedy decode is deterministic
+     * by construction).
+     */
+    uint32_t        seed;
+
+    /* Seconds. Caps the first emitted timestamp; default 1.0. */
+    float           max_initial_timestamp;
+};
+
+#define TRANSCRIBE_WHISPER_RUN_EXT_INIT                                       \
+    { { sizeof(struct transcribe_whisper_run_ext),                            \
+        TRANSCRIBE_EXT_KIND_WHISPER_RUN },                                    \
+      NULL,                                       /* initial_prompt        */ \
+      NULL,                                       /* prompt_tokens         */ \
+      0,                                          /* n_prompt_tokens       */ \
+      TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT,    /* prompt_condition      */ \
+      false,                                      /* condition_on_prev_... */ \
+      223,                                        /* max_prev_context_t.   */ \
+      0.0f,                                       /* temperature           */ \
+      0.2f,                                       /* temperature_inc       */ \
+      2.4f,                                       /* compression_ratio_th. */ \
+      -1.0f,                                      /* logprob_thold         */ \
+      0.6f,                                       /* no_speech_thold       */ \
+      0u,                                         /* seed                  */ \
+      1.0f }                                      /* max_initial_timestamp */
 
 /* ----------------------------------------------------------------------- */
 /* Whisper decoding trace                                                  */

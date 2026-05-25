@@ -6,7 +6,9 @@
 
 namespace transcribe::sensevoice {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     // FunASR WavFrontend hard-codes 16 kHz; the upstream model card
     // rejects anything else. The CLI rejects non-16 kHz WAVs at load
     // time so this number is the contract.
@@ -24,14 +26,17 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // user asks for word timing.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
-    // SenseVoice has no autoregressive decoder, no temperature loop,
-    // no long-form chunker. Direct inference is hard-capped at 30 s
-    // per call by the upstream model card; long-form is delegated to
-    // an external fsmn-vad chunker out of scope for this port.
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
+    // Feature bits: cancellation is wired at the run level. SenseVoice
+    // exposes a runtime ITN toggle via the textnorm prefix embedding
+    // (`woitn` / `withitn`); the generic transcribe_params::itn enum
+    // routes here. No PNC runtime toggle.
+    //
+    // TODO(family doc): on en/zh/yue/ja/ko, observe whether `withitn`
+    // also bundles punctuation/casing changes alongside number/date
+    // normalization and capture in the family doc. API shape doesn't
+    // change either way.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN,          true);
 }
 
 } // namespace transcribe::sensevoice

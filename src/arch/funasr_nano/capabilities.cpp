@@ -4,7 +4,9 @@
 
 namespace transcribe::funasr_nano {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     caps.native_sample_rate = 16000;
 
     // Fun-ASR-Nano produces transcript text via a Qwen3 chat-format
@@ -14,10 +16,19 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
     caps.supports_translate            = false;
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
+
+    // Feature bits: cancellation is wired at the run level. FunASR-Nano
+    // exposes a runtime ITN toggle via the LLM system-prompt suffix
+    // ("，不进行文本规整" appended on itn=false, omitted on itn=true).
+    // The generic transcribe_params::itn enum routes here. No PNC
+    // runtime toggle.
+    //
+    // TODO(family doc): observe whether itn=true bundles
+    // punctuation/casing changes alongside number/date normalization on
+    // shipped variants (fun-asr-nano-2512, fun-asr-mlt-nano-2512) and
+    // record in the family doc. API shape unchanged either way.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN,          true);
 }
 
 } // namespace transcribe::funasr_nano

@@ -51,7 +51,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::granite {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // Chat-template token ids resolved through the loaded tokenizer at
 // load time. Granite's bare-USER:/ASSISTANT: template (1b/2b) and the

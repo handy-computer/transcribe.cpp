@@ -4,7 +4,9 @@
 
 namespace transcribe::canary {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     caps.native_sample_rate = 16000;
 
     // Canary is a multitask AED — every variant supports en->de/es/fr
@@ -20,12 +22,14 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // wires up the timestamp decoder path.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
-    // No initial-prompt / temperature-fallback / long-form support in
-    // v1. Cancellation is wired at the run level; flag accordingly.
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
+    // Feature bits: cancellation is wired at the run level. Canary
+    // exposes a runtime PNC toggle via the multitask prompt's pnc /
+    // nopnc token slot; the generic transcribe_params::pnc enum routes
+    // there. No runtime ITN control on canary, so FEATURE_ITN stays
+    // unset and a non-DEFAULT itn against canary triggers the
+    // advisory WARN.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_PNC,          true);
 }
 
 } // namespace transcribe::canary

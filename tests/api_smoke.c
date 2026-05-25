@@ -71,6 +71,8 @@ static void test_status_string(void) {
         TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS,
         TRANSCRIBE_ERR_ABORTED,
         TRANSCRIBE_ERR_BAD_STRUCT_SIZE,
+        TRANSCRIBE_ERR_UNSUPPORTED_PNC,
+        TRANSCRIBE_ERR_UNSUPPORTED_ITN,
     };
     for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
         const char * s = transcribe_status_string(all[i]);
@@ -126,13 +128,12 @@ static void test_init_macros(void) {
     CHECK(rp_macro.struct_size        == sizeof(struct transcribe_params));
     CHECK(rp_macro.task               == TRANSCRIBE_TASK_TRANSCRIBE);
     CHECK(rp_macro.timestamps         == TRANSCRIBE_TIMESTAMPS_NONE);
+    CHECK(rp_macro.pnc                == TRANSCRIBE_PNC_MODE_DEFAULT);
+    CHECK(rp_macro.itn                == TRANSCRIBE_ITN_MODE_DEFAULT);
     CHECK(rp_macro.language           == NULL);
     CHECK(rp_macro.target_language    == NULL);
     CHECK(rp_macro.strip_special_tags == true);
-    CHECK(rp_macro.whisper            == NULL);
-    CHECK(rp_macro.sensevoice         == NULL);
-    CHECK(rp_macro.funasr_nano        == NULL);
-    CHECK(rp_macro.canary             == NULL);
+    CHECK(rp_macro.family             == NULL);
 
     struct transcribe_stream_params sp_macro = TRANSCRIBE_STREAM_PARAMS_INIT;
     CHECK(sp_macro.struct_size == sizeof(struct transcribe_stream_params));
@@ -155,6 +156,8 @@ static void test_init_macros(void) {
     CHECK(caps_macro.native_sample_rate                 == 0);
     CHECK(caps_macro.n_languages                        == 0);
     CHECK(caps_macro.languages                          == NULL);
+    CHECK(caps_macro.supports_language_detect           == false);
+    CHECK(caps_macro.supports_translate                 == false);
     CHECK(caps_macro.supports_streaming                 == false);
 
     struct transcribe_timings tm_macro = TRANSCRIBE_TIMINGS_INIT;
@@ -190,6 +193,25 @@ static void test_init_macros(void) {
     CHECK(wtr.t0_ms       == 0);
     CHECK(wtr.t1_ms       == 0);
     CHECK(wtr.n_fallbacks == 0);
+
+    /* Whisper run extension: kind + size wired by the INIT macro, and
+     * the field defaults match the family's shipping recipe. */
+    struct transcribe_whisper_run_ext wrx = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
+    CHECK(wrx.ext.size                  == sizeof(struct transcribe_whisper_run_ext));
+    CHECK(wrx.ext.kind                  == TRANSCRIBE_EXT_KIND_WHISPER_RUN);
+    CHECK(wrx.initial_prompt            == NULL);
+    CHECK(wrx.prompt_tokens             == NULL);
+    CHECK(wrx.n_prompt_tokens           == 0);
+    CHECK(wrx.prompt_condition          == TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT);
+    CHECK(wrx.condition_on_prev_tokens  == false);
+    CHECK(wrx.max_prev_context_tokens   == 223);
+    CHECK(wrx.temperature               == 0.0f);
+    CHECK(wrx.temperature_inc           == 0.2f);
+    CHECK(wrx.compression_ratio_thold   == 2.4f);
+    CHECK(wrx.logprob_thold             == -1.0f);
+    CHECK(wrx.no_speech_thold           == 0.6f);
+    CHECK(wrx.seed                      == 0u);
+    CHECK(wrx.max_initial_timestamp     == 1.0f);
 
     /* The disabled-sentinel defines must be usable as compile-time
      * constants with the right signs. */
@@ -321,6 +343,16 @@ static void test_model_introspection_null(void) {
     /* The kind probe is safe on NULL and returns false. */
     CHECK(transcribe_model_accepts_ext_kind(NULL,
               TRANSCRIBE_EXT_KIND_PARAKEET_STREAM) == false);
+
+    /* The feature probe is also NULL-safe and returns false for every
+     * known feature value plus any out-of-range enum. */
+    CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_INITIAL_PROMPT)       == false);
+    CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK) == false);
+    CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_LONG_FORM)            == false);
+    CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_CANCELLATION)         == false);
+    CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_PNC)                  == false);
+    CHECK(transcribe_model_supports(NULL, TRANSCRIBE_FEATURE_ITN)                  == false);
+    CHECK(transcribe_model_supports(NULL, (transcribe_feature) 9999)               == false);
 }
 
 static void test_ext_check(void) {
@@ -436,32 +468,51 @@ static void test_result_accessors_null(void) {
     CHECK(transcribe_n_words(ctx)    == 0);
     CHECK(transcribe_n_tokens(ctx)   == 0);
 
-    /* Segment. */
-    CHECK_STR_EMPTY(transcribe_segment_text(ctx, 0));
-    CHECK(transcribe_segment_t0_ms(ctx, 0)       == 0);
-    CHECK(transcribe_segment_t1_ms(ctx, 0)       == 0);
-    CHECK(transcribe_segment_first_word(ctx, 0)  == 0);
-    CHECK(transcribe_segment_n_words(ctx, 0)     == 0);
-    CHECK(transcribe_segment_first_token(ctx, 0) == 0);
-    CHECK(transcribe_segment_n_tokens(ctx, 0)    == 0);
+    /* Segment row: NULL ctx → OK, struct stays zero-init (text=NULL). */
+    struct transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+    CHECK(transcribe_get_segment(ctx, 0, &seg) == TRANSCRIBE_OK);
+    CHECK(seg.struct_size == sizeof(struct transcribe_segment));
+    CHECK(seg.text        == NULL);
+    CHECK(seg.t0_ms       == 0);
+    CHECK(seg.t1_ms       == 0);
+    CHECK(seg.first_word  == 0);
+    CHECK(seg.n_words     == 0);
+    CHECK(seg.first_token == 0);
+    CHECK(seg.n_tokens    == 0);
 
-    /* Word. */
-    CHECK_STR_EMPTY(transcribe_word_text(ctx, 0));
-    CHECK(transcribe_word_t0_ms(ctx, 0)       == 0);
-    CHECK(transcribe_word_t1_ms(ctx, 0)       == 0);
-    CHECK(transcribe_word_seg_index(ctx, 0)   == 0);
-    CHECK(transcribe_word_first_token(ctx, 0) == 0);
-    CHECK(transcribe_word_n_tokens(ctx, 0)    == 0);
+    /* Word row. */
+    struct transcribe_word wrd = TRANSCRIBE_WORD_INIT;
+    CHECK(transcribe_get_word(ctx, 0, &wrd) == TRANSCRIBE_OK);
+    CHECK(wrd.struct_size == sizeof(struct transcribe_word));
+    CHECK(wrd.text        == NULL);
+    CHECK(wrd.t0_ms       == 0);
+    CHECK(wrd.t1_ms       == 0);
+    CHECK(wrd.seg_index   == 0);
+    CHECK(wrd.first_token == 0);
+    CHECK(wrd.n_tokens    == 0);
 
-    /* Token. */
-    CHECK(transcribe_token_id(ctx, 0) == 0);
-    CHECK_STR_EMPTY(transcribe_token_text(ctx, 0));
-    /* token_p must be NaN by contract when no probability is available. */
-    CHECK(isnan(transcribe_token_p(ctx, 0)));
-    CHECK(transcribe_token_t0_ms(ctx, 0)      == 0);
-    CHECK(transcribe_token_t1_ms(ctx, 0)      == 0);
-    CHECK(transcribe_token_seg_index(ctx, 0)  == 0);
-    CHECK(transcribe_token_word_index(ctx, 0) == 0);
+    /* Token row. p is 0.0f (not NaN) on the zero-init path; bindings
+     * distinguish "row not present" via text==NULL, not via NaN-on-p. */
+    struct transcribe_token tok = TRANSCRIBE_TOKEN_INIT;
+    CHECK(transcribe_get_token(ctx, 0, &tok) == TRANSCRIBE_OK);
+    CHECK(tok.struct_size == sizeof(struct transcribe_token));
+    CHECK(tok.text        == NULL);
+    CHECK(tok.id          == 0);
+    CHECK(tok.p           == 0.0f);
+    CHECK(tok.t0_ms       == 0);
+    CHECK(tok.t1_ms       == 0);
+    CHECK(tok.seg_index   == 0);
+    CHECK(tok.word_index  == 0);
+
+    /* NULL out_ptr -> INVALID_ARG. */
+    CHECK(transcribe_get_segment(ctx, 0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_get_word   (ctx, 0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_get_token  (ctx, 0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+
+    /* Uninitialized struct_size (== 0) -> BAD_STRUCT_SIZE. */
+    struct transcribe_segment seg_bad = {0};
+    CHECK(transcribe_get_segment(ctx, 0, &seg_bad)
+          == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
 }
 
 static void test_stream_state_values(void) {
