@@ -148,4 +148,27 @@ std::vector<std::string> pretokenize_gpt2(const std::string & text);
 // remapped form.
 std::vector<std::string> pretokenize_gpt2_raw_bytes(const std::string & text);
 
+// IBM Granite-4 / gpt-oss pretokenizer. Almost identical to the Qwen2
+// regex but symbol runs do NOT swallow trailing `[\r\n]*`; instead
+// each newline starts a fresh pretoken. The granite tokenizer.json
+// regex is:
+//
+//   (?i:'s|'t|'re|'ve|'m|'ll|'d)
+//   | [^\r\n\p{L}\p{N}]? \p{L}+
+//   | \p{N}{1,3}
+//   |  ?[^\s\p{L}\p{N}]+ [\r\n]*
+//   | \s* [\r\n]+
+//   | \s+ (?!\S)
+//   | \s+
+//
+// In the HF tokenizers crate that regex tokenizes "?\n" as TWO
+// pretokens ("?" then "\n") rather than the one chunk the Python
+// `regex` module produces — alt 4's `[\r\n]*` does not actually
+// consume the trailing newline in HF's regex engine. This split
+// matters because the granite BPE has a merge for "?+\n" (token
+// 5380); applying that merge produces a token id the LM was not
+// trained to see right after "format". Without this granite-specific
+// pretokenizer we'd emit 5380 where the reference produces (30, 198).
+std::vector<std::string> pretokenize_granite(const std::string & text);
+
 } // namespace transcribe::unicode

@@ -1,0 +1,274 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "granite",
+  "hf_repo": "ibm-granite/granite-speech-4.1-2b-plus",
+  "hf_revision": "edd3bf54fbb06d8e263aa0c1939321d67b073f86",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "accepted_gap",
+      "detail": "Not shipped in the repo. The granite_speech_plus processor is registered in HEAD transformers and reuses GraniteSpeechFeatureExtractor; frontend values mirrored from the base 4.1-2b variant. Oracle (porting-2) must confirm by running the HEAD-transformers processor end-to-end."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "transformers.models.granite_speech_plus (GraniteSpeechPlusForConditionalGeneration)",
+      "status": "found",
+      "detail": "Requires transformers HEAD (config pins 5.6.0.dev0; PyPI release expected at >=5.8). granite_speech_plus is a separate model_type from granite_speech and will not load under older transformers."
+    },
+    "model_card": {
+      "kind": "hf_file",
+      "path": "README.md",
+      "status": "found",
+      "detail": "Capabilities, languages, WER table, speaker-attribution and word-timestamp output protocols sourced here"
+    }
+  },
+  "variants": [
+    {
+      "name": "granite-speech-4.1-2b-plus",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "audio-llm"
+    ],
+    "key_fields": {
+      "architectures": [
+        "GraniteSpeechPlusForConditionalGeneration"
+      ],
+      "model_type": "granite_speech_plus",
+      "audio_token_index": 100352,
+      "downsample_rate": 5,
+      "window_size": 15,
+      "has_lora_adapter": false,
+      "encoder.model_type": "granite_speech_plus_encoder",
+      "encoder.num_layers": 16,
+      "encoder.hidden_dim": 1024,
+      "encoder.num_heads": 8,
+      "encoder.dim_head": 128,
+      "encoder.input_dim": 160,
+      "encoder.output_dim": 348,
+      "encoder.conv_kernel_size": 15,
+      "encoder.conv_expansion_factor": 2,
+      "encoder.feedforward_mult": 4,
+      "encoder.max_pos_emb": 512,
+      "encoder.context_size": 200,
+      "encoder.cat_hidden_layers": [3],
+      "projector.model_type": "blip_2_qformer",
+      "projector.hidden_size": 1024,
+      "projector.intermediate_size": 4096,
+      "projector.num_attention_heads": 16,
+      "projector.num_hidden_layers": 2,
+      "projector.encoder_hidden_size": 2048,
+      "projector.cross_attention_frequency": 1,
+      "projector.position_embedding_type": "absolute",
+      "projector.layer_norm_eps": 1e-12,
+      "projector.vocab_size": 30522,
+      "text.model_type": "granite",
+      "text.hidden_size": 2048,
+      "text.intermediate_size": 4096,
+      "text.num_hidden_layers": 40,
+      "text.num_attention_heads": 16,
+      "text.num_key_value_heads": 4,
+      "text.vocab_size": 100353,
+      "text.max_position_embeddings": 4096,
+      "text.rope_theta": 10000,
+      "text.rms_norm_eps": 1e-05,
+      "text.hidden_act": "silu",
+      "text.embedding_multiplier": 12,
+      "text.logits_scaling": 8,
+      "text.attention_multiplier": 0.0078125,
+      "text.residual_multiplier": 0.22,
+      "text.tie_word_embeddings": true
+    },
+    "varying_across_variants": [
+      "encoder_config.cat_hidden_layers",
+      "projector_config.encoder_hidden_size",
+      "model_type",
+      "architectures",
+      "transformers_version",
+      "text_config.tie_word_embeddings"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "weights_header",
+    "evidence": "Top-level config.dtype=bfloat16 and safetensors header BF16=937 (all floating tensors) agree. text_config.dtype=float32 is vestigial and inconsistent with both the top-level declaration and the actual weight storage. Treat top-level + header as authoritative.",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 937,
+        "I64": 16
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 100353,
+    "special_tokens": {
+      "bos": 100257,
+      "eos": 100257,
+      "pad": 100256,
+      "audio": 100352
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": "cd9faddbc5d020a41fb6dfa6924c090bf987ede9092bc088f6a7c66aef416af2"
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "pt"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["word"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": true
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.44,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "Ref-dtype C++ port must score <= 1.45 to pass porting-7-wer."
+    },
+    {
+      "dataset": "LibriSpeech test-other (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.06,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "TED-LIUM v3 (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.89,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "SPGISpeech (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.72,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "VoxPopuli (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 5.9,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "AMI (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 8.63,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "Earnings22 (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 8.68,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "GigaSpeech (Open ASR Leaderboard)",
+      "language": "en",
+      "metric": "wer",
+      "score": 10.38,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "FISHER (diarization WDER)",
+      "language": "en",
+      "metric": "other",
+      "score": 0.9,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "Word-level diarization error rate (lower is better). Diarization scoring is not part of porting-7-wer."
+    },
+    {
+      "dataset": "CALLHOME (diarization WDER)",
+      "language": "en",
+      "metric": "other",
+      "score": 2.2,
+      "score_unit": "percent",
+      "source": "model card"
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "Mainline transformers carries granite_speech_plus as of the HEAD branch (config pins 5.6.0.dev0; the model card directs users to install transformers from source >=5.8). The class GraniteSpeechPlusForConditionalGeneration is a separate registration from granite_speech; older transformers cannot load this checkpoint. No author repo is involved. We pin a HEAD-transformers SHA in scripts/envs/granite/pyproject.toml.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "Encoder forward path differs from base granite_speech: with cat_hidden_layers=[3], the encoder hidden state at layer index 3 is concatenated along the feature dimension with the final-layer output before being fed into the projector. The projector's encoder_hidden_size=2048 (vs 1024 in the base) reflects this concatenation. Stage 4 must collect and concat the mid-layer hidden state correctly; missing this silently doubles the feature mismatch under the Q-Former.",
+    "Output protocol embeds speaker tags ([Speaker N]:) and word-level timestamps ([T:N], N in centiseconds mod 1000) as text tokens. There are no structured fields. The C++ runtime emits a single text stream; downstream consumers parse the brackets. Stage 4 should add a parser-side test that exercises the text protocol; the model_card defines the exact format.",
+    "preprocessor_config.json is missing from the repo. Frontend values above mirror the base 4.1-2b variant (GraniteSpeechFeatureExtractor defaults: 16kHz, n_fft=512, n_mels=80, hop=160, win=400). Oracle (porting-2) must confirm by loading the HEAD-transformers processor and dumping the realized mel features against a known wave.",
+    "text_config.tie_word_embeddings=true here, while the base 4.1-2b and 4.0-1b variants have it false. If a single C++ loader serves the whole family, this distinction must be data-driven (e.g. via a GGUF KV pair) and must wire up llama.cpp-style TENSOR_DUPLICATED fallback for the lm_head when tied.",
+    "Loses Japanese support vs base 4.1-2b: ja is absent from the supported language list. The C++ runtime must surface this difference in capability metadata; per-variant capability rows belong in the family doc's Capability Validation table.",
+    "transformers version requirement is unstable (5.6.0.dev0 in the config, >=5.8 in the model card). Reference env should pin a specific commit SHA and the family doc must record both the pinned transformers SHA and the model card's recommended minimum at the time of port.",
+    "All risks from the base granite_speech intake (Conformer block-attention, Shaw relpos, BLIP-2 Q-Former, Granite LLM scalar multipliers, GQA 16/4, audio token injection at id 100352, frontend torchaudio defaults) apply here unchanged."
+  ],
+  "intake_gaps": [
+    {
+      "field": "frontend",
+      "reason": "preprocessor_config.json is not shipped. Values mirrored from base 4.1-2b. Oracle (porting-2) must confirm against HEAD transformers' granite_speech_plus processor."
+    },
+    {
+      "field": "frontend.window/center/padding_mode/mel_filterbank_norm",
+      "reason": "Same caveat as base granite_speech variants: torchaudio defaults assumed; oracle confirms."
+    }
+  ]
+}

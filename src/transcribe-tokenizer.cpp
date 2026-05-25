@@ -492,6 +492,8 @@ transcribe_status Tokenizer::encode(const std::string &    text,
     std::vector<std::string> words;
     if (pre_ == "gpt2") {
         words = unicode::pretokenize_gpt2(text);
+    } else if (pre_ == "granite") {
+        words = unicode::pretokenize_granite(text);
     } else {
         if (pre_ != "qwen2" && !pre_.empty()) {
             std::fprintf(stderr,

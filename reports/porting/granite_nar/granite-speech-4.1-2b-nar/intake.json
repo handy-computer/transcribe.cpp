@@ -1,0 +1,282 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "granite_nar",
+  "hf_repo": "ibm-granite/granite-speech-4.1-2b-nar",
+  "hf_revision": "7d20732df04d097262c4ecd8fe7f34ec2b3e6c42",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "found"
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "found"
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "NAR decoding is single-pass; no autoregressive generation config needed"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "ibm-granite/granite-speech-4.1-2b-nar repo files (configuration_nle.py, feature_extraction_nle.py, modeling_nle.py via trust_remote_code)",
+      "status": "found",
+      "detail": "Not in mainline transformers. auto_map points at in-repo Python modules. Loader must use trust_remote_code=True; the model card pins transformers==4.57.6 or 5.5.3 and flash-attn==2.8.3."
+    },
+    "model_card": {
+      "kind": "hf_file",
+      "path": "README.md",
+      "status": "found"
+    }
+  },
+  "variants": [
+    {
+      "name": "granite-speech-4.1-2b-nar",
+      "memory_gb": null,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "encoder-ctc"
+    ],
+    "key_fields": {
+      "architectures": [
+        "NLENARDecoder"
+      ],
+      "model_type": "nle",
+      "attn_implementation": "flash_attention_2",
+      "scale_projected_embeddings": true,
+      "encoder.num_layers": 16,
+      "encoder.hidden_dim": 1024,
+      "encoder.num_heads": 8,
+      "encoder.dim_head": 128,
+      "encoder.input_dim": 160,
+      "encoder.output_dim": 348,
+      "encoder.bpe_output_dim": 100353,
+      "encoder.bpe_pooling_window": 4,
+      "encoder.self_conditioning_layer": 8,
+      "encoder.attn_type": "block",
+      "encoder.conv_kernel_size": 15,
+      "encoder.conv_expansion_factor": 2,
+      "encoder.feedforward_mult": 4,
+      "encoder.max_pos_emb": 512,
+      "encoder.context_size": 200,
+      "encoder.loss_lambda": 0.2,
+      "projector.type": "nle_projector",
+      "projector.block_size": 15,
+      "projector.downsample_rate": 5,
+      "projector.encoder_dim": 1024,
+      "projector.hidden_size": 2048,
+      "projector.llm_dim": 2048,
+      "projector.mlp_ratio": 2,
+      "projector.num_layers": 2,
+      "projector.num_heads": 32,
+      "projector.num_encoder_layers": 4,
+      "projector.attn_bias": true,
+      "projector.layernorm_eps": 1e-06,
+      "projector.encoder_layer_indices": [4, 8, 12, -1],
+      "text.model_type": "granite",
+      "text.hidden_size": 2048,
+      "text.num_hidden_layers": 40,
+      "text.num_attention_heads": 16,
+      "text.num_key_value_heads": 4,
+      "text.vocab_size": 100352,
+      "text.tie_word_embeddings": true,
+      "text.rope_theta": 10000,
+      "text.rms_norm_eps": 1e-05,
+      "ctc_tokenizer.vocab_size": 348,
+      "ctc_tokenizer.coverage": "ASCII 32-127 + Latin-1 supplement 128-255 + Katakana 0x30A1-0x30FB -> indices 256-347"
+    },
+    "varying_across_variants": [
+      "model_type",
+      "architectures",
+      "projector.type",
+      "scale_projected_embeddings",
+      "audio_token_index",
+      "text_config.tie_word_embeddings"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "config",
+    "evidence": "config.dtype=bfloat16; safetensors header BF16=930 (all floating tensors) agrees.",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 930,
+        "I64": 16
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "htk"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 100352,
+    "special_tokens": {
+      "bos": 100257,
+      "eos": 100257,
+      "pad": 100256
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": "cd9faddbc5d020a41fb6dfa6924c090bf987ede9092bc088f6a7c66aef416af2"
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "pt"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": ["none"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": 1.29,
+      "score_unit": "percent",
+      "source": "model card",
+      "notes": "Ref-dtype C++ port must score <= 1.30 to pass porting-7-wer."
+    },
+    {
+      "dataset": "LibriSpeech test-other",
+      "language": "en",
+      "metric": "wer",
+      "score": 2.75,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "Common Voice v15 en",
+      "language": "en",
+      "metric": "wer",
+      "score": 6.50,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "Common Voice v15 de",
+      "language": "de",
+      "metric": "wer",
+      "score": 4.73,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "Common Voice v15 es",
+      "language": "es",
+      "metric": "wer",
+      "score": 4.02,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "Common Voice v15 fr",
+      "language": "fr",
+      "metric": "wer",
+      "score": 7.17,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "Common Voice v15 pt",
+      "language": "pt",
+      "metric": "wer",
+      "score": 2.57,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "MLS en",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.77,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "TED-LIUM v3",
+      "language": "en",
+      "metric": "wer",
+      "score": 3.67,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "Earnings22",
+      "language": "en",
+      "metric": "wer",
+      "score": 8.48,
+      "score_unit": "percent",
+      "source": "model card"
+    },
+    {
+      "dataset": "GigaSpeech",
+      "language": "en",
+      "metric": "wer",
+      "score": 10.12,
+      "score_unit": "percent",
+      "source": "model card"
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "Reference is loaded via the transformers framework but using trust_remote_code: the auto_map in config.json points at in-repo configuration_nle.NLEConfig, feature_extraction_nle.NLEFeatureExtractor, and modeling_nle.NLENARDecoder. This is not in mainline transformers and has no separate author PyPI package (the code lives in the HF repo itself). The pinning is transformers==4.57.6 or 5.5.3 with flash-attn==2.8.3 per the model card. This variant is split into its own granite_nar family (separate from the granite audio-LLM family) because the non-autoregressive editor architecture (bidirectional LLM, no audio-token injection, single-pass CTC decode on LLM logits) does not share an implementation with GraniteSpeechForConditionalGeneration.",
+  "architecture_pattern": "encoder-ctc",
+  "known_risks": [
+    "Non-autoregressive editor flow: Conformer encoder -> CTC head (vocab 348) emits a hypothesis with insertion slots -> NLE projector (MLP, not a Q-Former) lifts encoder features to 2048-d -> bidirectional Granite LLM (causal mask disabled) emits a single forward-pass logits tensor -> CTC greedy decode on the LLM output produces final text. There is no autoregressive token loop. architecture_pattern=encoder-ctc captures the encoder shape and final-decode op; the LLM-as-editor step is structurally novel and is not directly captured by any of the four canonical patterns.",
+    "Encoder also emits a self-conditioned CTC at layer 8 (encoder.self_conditioning_layer=8) which feeds back into the residual stream. This is at training-time only; whether it is also applied at inference depends on modeling_nle.py and must be confirmed at oracle time.",
+    "Projector consumes multi-layer encoder features (encoder_layer_indices=[4, 8, 12, -1]) -- four hidden states concatenated or attended jointly, not just the final layer. Stage 4 must wire up the multi-layer hidden-state collection.",
+    "NLE projector is an MLP with attention (block_size=15, mlp_ratio=2, attn_bias=true, layernorm_eps=1e-06), not a Q-Former. Architecturally simpler than blip_2_qformer but with different layernorm eps (1e-06 vs the Q-Former's 1e-12).",
+    "scale_projected_embeddings=true: the projector output is scaled before being fed to the LLM. The exact scale factor must be read from modeling_nle.py; a missing scale silently degrades accuracy.",
+    "Bidirectional attention on a Granite LLM: causal mask is disabled. ggml graph for the LLM must not apply the standard causal triangular mask. Flash-attention reference requires flash-attn 2.8.3 with is_causal=False. Note that the LLM weights here are presumably LoRA-adapted from granite-4.0-1b-base for the editor task; whether LoRA deltas are merged into the safetensors or stored separately must be confirmed (the config does not set has_lora_adapter explicitly).",
+    "Tokenizer vocab_size is 100352 here vs 100353 for the AR variants (the audio token at 100352 is the difference; NAR has no audio token because there is no LLM token-injection -- the LLM consumes projected encoder outputs as token embeddings directly).",
+    "text_config.tie_word_embeddings=true here (vs false in the AR variants). Loader must wire up llama.cpp-style TENSOR_DUPLICATED fallback for lm_head.",
+    "ctc_tokenizer is embedded inline in config (char2idx, 348 entries: ASCII 32-127 + Latin-1 supplement + Katakana). The CTC vocab covers Japanese kana but the supported_languages list omits Japanese -- the Katakana entries appear vestigial.",
+    "feature_extractor is NLEFeatureExtractor (not GraniteSpeechFeatureExtractor) and uses flat preprocessor_config.json fields (no melspec_kwargs nesting). Numbers are identical to the AR variants' melspec.",
+    "No autoregressive generation_config and no audio_token_index. The downstream runtime API must treat this variant differently -- a single forward pass producing a text string, not a streaming token loop."
+  ],
+  "intake_gaps": [
+    {
+      "field": "frontend.window/center/padding_mode/mel_filterbank_norm",
+      "reason": "torchaudio MelSpectrogram defaults assumed (Hann periodic, center=True, reflect, htk, norm=None); preprocessor_config.json declares only the numeric fields. Oracle (porting-2) confirms by running the reference processor end-to-end."
+    },
+    {
+      "field": "has_lora_adapter",
+      "reason": "Not set in config; the model card hints at LoRA-adapted LLM weights for the editor task. Must be confirmed by inspecting safetensors tensor names at converter time."
+    }
+  ]
+}
