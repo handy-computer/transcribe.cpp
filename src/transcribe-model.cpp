@@ -11,7 +11,7 @@
 //      every consumer for no benefit.
 
 #include "transcribe-model.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 
 #include <utility>
 
@@ -20,9 +20,9 @@
 transcribe_model::~transcribe_model() = default;
 
 // Same anchoring trick for the context base.
-transcribe_context::~transcribe_context() = default;
+transcribe_session::~transcribe_session() = default;
 
-void transcribe_context::clear_result() {
+void transcribe_session::clear_result() {
     tokens.clear();
     words.clear();
     segments.clear();

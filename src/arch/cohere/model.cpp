@@ -44,9 +44,9 @@ namespace transcribe::cohere {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   CohereModel>);
-static_assert(std::is_base_of_v<transcribe_context, CohereContext>);
+static_assert(std::is_base_of_v<transcribe_session, CohereSession>);
 
-CohereContext::~CohereContext() {
+CohereSession::~CohereSession() {
     kv_cache.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
@@ -127,7 +127,7 @@ bool kv_cache_init(CohereKvCache & cache,
         ggml_nbytes(cache.cross_k) + ggml_nbytes(cache.cross_v);
     std::fprintf(stderr,
                  "cohere kv_cache: allocated %.1f MB (%s) "
-                 "(self: %d ctx x %d layers, cross: %d T_enc x %d layers)\n",
+                 "(self: %d session x %d layers, cross: %d T_enc x %d layers)\n",
                  static_cast<double>(total_bytes) / (1024.0 * 1024.0),
                  ggml_type_name(kv_type),
                  n_ctx, n_layer, T_enc, n_layer);
@@ -325,16 +325,16 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CohereModel & m) {
 constexpr const char k_default_variant[] = "cohere-asr";
 
 // Forward declarations for the Arch trait below.
-extern transcribe_status load        (Loader &, const transcribe_model_params *,
+extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
-extern transcribe_status init_context(transcribe_model *, const transcribe_context_params *,
-                                      transcribe_context **);
-extern transcribe_status run         (transcribe_context *, const float *, int,
-                                      const transcribe_params *);
+extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
+                                      transcribe_session **);
+extern transcribe_status run         (transcribe_session *, const float *, int,
+                                      const transcribe_run_params *);
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     // params->backend is consumed below in the backend init block;
@@ -545,19 +545,19 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto cc = std::make_unique<CohereContext>();
+    auto cc = std::make_unique<CohereSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
-    // Flash-attention policy -- see CohereContext (cohere.h) for why
+    // Flash-attention policy -- see CohereSession (cohere.h) for why
     // this is split into encoder vs decoder. The short version:
     // encoder dk=160 is unsupported by upstream ggml Metal flash, so
     // the encoder auto-disables on Metal; decoder dk=128 works on
@@ -583,16 +583,16 @@ transcribe_status init_context(
 }
 
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * cc = static_cast<CohereContext *>(ctx);
+    auto * cc = static_cast<CohereSession *>(session);
     auto * cm = static_cast<CohereModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1111,7 +1111,7 @@ transcribe_status run(
                 full.erase(full.begin());
             }
 
-            transcribe_context::SegmentEntry seg;
+            transcribe_session::SegmentEntry seg;
             seg.t0_ms       = 0;
             seg.t1_ms       = 0;
             seg.first_token = 0;

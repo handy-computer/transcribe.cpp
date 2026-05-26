@@ -62,7 +62,7 @@ std::string json_escape(const char * s) {
 // segment timestamps. Returns an empty string when the result kind is
 // NONE (the library still populates a single dummy entry in that case,
 // but with zero timing — don't pollute the JSON with it).
-std::string segments_json(const transcribe_context * ctx) {
+std::string segments_json(const transcribe_session * ctx) {
     if (transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE) {
         return {};
     }
@@ -431,7 +431,7 @@ int main(int argc, char ** argv) {
         }
 
         // Load model once.
-        struct transcribe_model_params mp = transcribe_model_default_params();
+        struct transcribe_model_load_params mp = transcribe_model_load_default_params();
         mp.backend = args.backend;
         struct transcribe_model *      model = nullptr;
         const transcribe_status        load_st =
@@ -443,12 +443,12 @@ int main(int argc, char ** argv) {
         }
 
         // Init context once (reused across all files via run()).
-        struct transcribe_context_params cp = transcribe_context_default_params();
+        struct transcribe_session_params cp = transcribe_session_default_params();
         cp.n_threads = args.n_threads;
         cp.kv_type   = args.kv_type;
-        struct transcribe_context *      ctx = nullptr;
+        struct transcribe_session *      ctx = nullptr;
         const transcribe_status          init_st =
-            transcribe_context_init(model, &cp, &ctx);
+            transcribe_session_init(model, &cp, &ctx);
         if (init_st != TRANSCRIBE_OK) {
             std::fprintf(stderr, "context init: %s\n",
                          transcribe_status_string(init_st));
@@ -456,7 +456,7 @@ int main(int argc, char ** argv) {
             return EXIT_FAILURE;
         }
 
-        struct transcribe_params rp = transcribe_default_params();
+        struct transcribe_run_params rp = transcribe_run_default_params();
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
         if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
@@ -631,7 +631,7 @@ int main(int argc, char ** argv) {
                          n_ok, n_fail, wav_paths.size());
         }
 
-        transcribe_context_free(ctx);
+        transcribe_session_free(ctx);
         transcribe_model_free(model);
         return n_fail > 0 ? EXIT_FAILURE : EXIT_SUCCESS;
     }
@@ -651,7 +651,7 @@ int main(int argc, char ** argv) {
     std::printf("  sample rate 16000 Hz mono float32\n");
 
     if (!args.model_path.empty()) {
-        struct transcribe_model_params mp = transcribe_model_default_params();
+        struct transcribe_model_load_params mp = transcribe_model_load_default_params();
         mp.backend = args.backend;
         struct transcribe_model *      model = nullptr;
         const transcribe_status        st =
@@ -664,12 +664,12 @@ int main(int argc, char ** argv) {
         }
         std::printf("  backend:    %s\n", transcribe_model_backend(model));
 
-        struct transcribe_context_params cp = transcribe_context_default_params();
+        struct transcribe_session_params cp = transcribe_session_default_params();
         cp.n_threads = args.n_threads;
         cp.kv_type   = args.kv_type;
-        struct transcribe_context *      ctx = nullptr;
+        struct transcribe_session *      ctx = nullptr;
         const transcribe_status          init_st =
-            transcribe_context_init(model, &cp, &ctx);
+            transcribe_session_init(model, &cp, &ctx);
         if (init_st != TRANSCRIBE_OK) {
             std::fprintf(stderr,
                          "context init: %s\n",
@@ -678,7 +678,7 @@ int main(int argc, char ** argv) {
             return EXIT_FAILURE;
         }
 
-        struct transcribe_params rp = transcribe_default_params();
+        struct transcribe_run_params rp = transcribe_run_default_params();
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
         if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
@@ -728,7 +728,7 @@ int main(int argc, char ** argv) {
                              "stream: model does not advertise "
                              "supports_streaming; use a streaming-capable "
                              "model or drop --stream-chunk-ms\n");
-                transcribe_context_free(ctx);
+                transcribe_session_free(ctx);
                 transcribe_model_free(model);
                 return EXIT_FAILURE;
             }
@@ -891,7 +891,7 @@ int main(int argc, char ** argv) {
             }
         }
 
-        transcribe_context_free(ctx);
+        transcribe_session_free(ctx);
         transcribe_model_free(model);
 
         if (run_st != TRANSCRIBE_OK) {

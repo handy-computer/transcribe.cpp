@@ -21,7 +21,7 @@
 
 #include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -103,7 +103,7 @@ struct CanaryQwenModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct CanaryQwenContext final : public transcribe_context {
+struct CanaryQwenSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
@@ -122,8 +122,8 @@ struct CanaryQwenContext final : public transcribe_context {
     bool encoder_use_flash = false;
     bool decoder_use_flash = false;
 
-    CanaryQwenContext() = default;
-    ~CanaryQwenContext() override;
+    CanaryQwenSession() = default;
+    ~CanaryQwenSession() override;
 };
 
 } // namespace transcribe::canary_qwen

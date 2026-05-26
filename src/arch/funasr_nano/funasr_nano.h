@@ -9,7 +9,7 @@
 
 #include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-kaldi-fbank.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -74,7 +74,7 @@ struct FunAsrNanoModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct FunAsrNanoContext final : public transcribe_context {
+struct FunAsrNanoSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
@@ -91,8 +91,8 @@ struct FunAsrNanoContext final : public transcribe_context {
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
-    FunAsrNanoContext() = default;
-    ~FunAsrNanoContext() override;
+    FunAsrNanoSession() = default;
+    ~FunAsrNanoSession() override;
 };
 
 } // namespace transcribe::funasr_nano

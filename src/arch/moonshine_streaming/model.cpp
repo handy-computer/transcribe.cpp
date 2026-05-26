@@ -67,9 +67,9 @@ namespace transcribe::moonshine_streaming {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   MoonshineStreamingModel>);
-static_assert(std::is_base_of_v<transcribe_context, MoonshineStreamingContext>);
+static_assert(std::is_base_of_v<transcribe_session, MoonshineStreamingSession>);
 
-MoonshineStreamingContext::~MoonshineStreamingContext() {
+MoonshineStreamingSession::~MoonshineStreamingSession() {
     kv_cache.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
@@ -158,16 +158,16 @@ namespace {
 
 constexpr const char k_default_variant[] = "moonshine-streaming";
 
-extern transcribe_status load        (Loader &, const transcribe_model_params *,
+extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
-extern transcribe_status init_context(transcribe_model *, const transcribe_context_params *,
-                                      transcribe_context **);
-extern transcribe_status run         (transcribe_context *, const float *, int,
-                                      const transcribe_params *);
+extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
+                                      transcribe_session **);
+extern transcribe_status run         (transcribe_session *, const float *, int,
+                                      const transcribe_run_params *);
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -241,13 +241,13 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    auto cc = std::make_unique<MoonshineStreamingContext>();
+    auto cc = std::make_unique<MoonshineStreamingSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
@@ -264,7 +264,7 @@ transcribe_status init_context(
     return TRANSCRIBE_OK;
 }
 
-void apply_thread_policy(MoonshineStreamingContext * cc) {
+void apply_thread_policy(MoonshineStreamingSession * cc) {
     int n_threads = cc->n_threads;
     if (n_threads <= 0) {
         n_threads = std::min(8, std::max(1, static_cast<int>(
@@ -281,7 +281,7 @@ void apply_thread_policy(MoonshineStreamingContext * cc) {
     }
 }
 
-bool ensure_compute_ctx(MoonshineStreamingContext * cc, size_t mem_size) {
+bool ensure_compute_ctx(MoonshineStreamingSession * cc, size_t mem_size) {
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
@@ -294,9 +294,9 @@ bool ensure_compute_ctx(MoonshineStreamingContext * cc, size_t mem_size) {
     return cc->compute_ctx != nullptr;
 }
 
-ggml_tensor * find_tensor_by_name(ggml_context * ctx, const char * name) {
-    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr;
-         t = ggml_get_next_tensor(ctx, t))
+ggml_tensor * find_tensor_by_name(ggml_context * gctx, const char * name) {
+    for (ggml_tensor * t = ggml_get_first_tensor(gctx); t != nullptr;
+         t = ggml_get_next_tensor(gctx, t))
     {
         if (std::strcmp(t->name, name) == 0) return t;
     }
@@ -322,7 +322,7 @@ std::vector<float> right_pad_pcm(const float * pcm, int n_samples, int frame_len
 }
 
 // Ensure the per-context backend scheduler is allocated. Idempotent.
-transcribe_status ensure_sched(MoonshineStreamingContext * cc,
+transcribe_status ensure_sched(MoonshineStreamingSession * cc,
                                MoonshineStreamingModel *   cm)
 {
     if (cc->sched != nullptr) return TRANSCRIBE_OK;
@@ -400,7 +400,7 @@ int samples_per_encoder_frame(const MoonshineStreamingHParams & hp) {
 //
 // n_samples must be > 0 and a multiple of hp.enc_frame_len.
 transcribe_status encode_window_to_host(
-    MoonshineStreamingContext * cc,
+    MoonshineStreamingSession * cc,
     MoonshineStreamingModel *   cm,
     const float *               pcm,
     int                         n_samples,
@@ -503,7 +503,7 @@ transcribe_status encode_window_to_host(
 //
 // out_adapter is resized to [dec_d_model, n_frames] f32 row-major.
 transcribe_status apply_adapter_window(
-    MoonshineStreamingContext * cc,
+    MoonshineStreamingSession * cc,
     MoonshineStreamingModel *   cm,
     const float *               enc_data,
     int                         n_frames,
@@ -578,7 +578,7 @@ transcribe_status apply_adapter_window(
 // Wall-clock accumulates into cc->t_decode_us (cross-KV projection is
 // part of the decoder pipeline).
 transcribe_status project_cross_kv_window(
-    MoonshineStreamingContext *           cc,
+    MoonshineStreamingSession *           cc,
     MoonshineStreamingModel *             cm,
     const float *                         adapter_data,
     int                                   n_frames,
@@ -656,7 +656,7 @@ transcribe_status project_cross_kv_window(
 // cache is sized exactly at T_enc. Marks cross_populated = false so a
 // downstream commit / direct-write graph fills it.
 transcribe_status ensure_kv_cache_for_T(
-    MoonshineStreamingContext * cc,
+    MoonshineStreamingSession * cc,
     MoonshineStreamingModel *   cm,
     int                         T_enc)
 {
@@ -695,7 +695,7 @@ transcribe_status ensure_kv_cache_for_T(
 // conversion the cache's storage dtype requires. Accumulates into
 // cc->t_decode_us.
 transcribe_status commit_cross_kv_from_host(
-    MoonshineStreamingContext *               cc,
+    MoonshineStreamingSession *               cc,
     MoonshineStreamingModel *                 cm,
     int                                       T_enc,
     const std::vector<std::vector<float>> &   per_layer_k,
@@ -771,10 +771,10 @@ transcribe_status commit_cross_kv_from_host(
 // the context result vectors and accumulates wall-clock time into
 // cc->t_decode_us.
 transcribe_status decode_from_kv_cache(
-    MoonshineStreamingContext * cc,
+    MoonshineStreamingSession * cc,
     MoonshineStreamingModel *   cm,
     int                         T_enc,
-    const transcribe_params *   params,
+    const transcribe_run_params *   params,
     bool                        emit_dumps)
 {
     (void)params;
@@ -955,7 +955,7 @@ transcribe_status decode_from_kv_cache(
         cc->tokens.reserve(cc->tokens.size() +
                            static_cast<size_t>(n_generated));
         for (int i = 0; i < n_generated; ++i) {
-            transcribe_context::TokenEntry tok;
+            transcribe_session::TokenEntry tok;
             tok.id         = generated_ids[static_cast<size_t>(i)];
             tok.p          = 0.0f;
             tok.t0_ms      = 0;
@@ -965,7 +965,7 @@ transcribe_status decode_from_kv_cache(
             cc->tokens.push_back(std::move(tok));
         }
 
-        transcribe_context::SegmentEntry seg;
+        transcribe_session::SegmentEntry seg;
         seg.t0_ms       = 0;
         seg.t1_ms       = 0;
         seg.first_token = 0;
@@ -989,11 +989,11 @@ transcribe_status decode_from_kv_cache(
 // adapter + commit path so the cross-KV K/V projections never need
 // to round-trip through host adapter at finalize.
 transcribe_status decode_from_committed_enc(
-    MoonshineStreamingContext * cc,
+    MoonshineStreamingSession * cc,
     MoonshineStreamingModel *   cm,
     const float *               enc_host_data,
     int                         T_enc,
-    const transcribe_params *   params,
+    const transcribe_run_params *   params,
     bool                        emit_dumps)
 {
     if (T_enc <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1051,7 +1051,7 @@ transcribe_status decode_from_committed_enc(
 }
 
 // Internal one-shot inference helper. Encoder over the full PCM, then
-// adapter + cross-KV + decoder. Does NOT call ctx->clear_result();
+// adapter + cross-KV + decoder. Does NOT call session->clear_result();
 // callers handle result-snapshot management.
 //
 // The streaming hooks share encode_window_to_host + apply_adapter_window
@@ -1061,11 +1061,11 @@ transcribe_status decode_from_committed_enc(
 // projection and cache write into a single graph for minimum
 // host↔backend traffic.
 transcribe_status run_one_shot_inner(
-    MoonshineStreamingContext * cc,
+    MoonshineStreamingSession * cc,
     MoonshineStreamingModel *   cm,
     const float *               pcm,
     int                         n_samples,
-    const transcribe_params *   params)
+    const transcribe_run_params *   params)
 {
     if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
 
@@ -1094,18 +1094,18 @@ transcribe_status run_one_shot_inner(
         /*emit_dumps=*/true);
 }
 
-// One-shot entry point. Validates ctx/cm, clears the previous result
+// One-shot entry point. Validates session/cm, clears the previous result
 // snapshot, then forwards to the shared inference helper.
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    auto * cc = static_cast<MoonshineStreamingSession *>(session);
     auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1175,7 +1175,7 @@ int64_t us_to_ms(int64_t us) {
 // text from scratch every call: re-decoding from BOS produces a full
 // transcript that replaces the previous one, but the snapshot
 // counters need to keep moving forward, not reset.
-void reset_result_text_only(MoonshineStreamingContext * cc) {
+void reset_result_text_only(MoonshineStreamingSession * cc) {
     cc->tokens.clear();
     cc->words.clear();
     cc->segments.clear();
@@ -1190,9 +1190,9 @@ void reset_result_text_only(MoonshineStreamingContext * cc) {
 // result text fields on cc; bumps `stream_last_decoded_T` on success
 // so subsequent calls can skip when no new frames have committed.
 transcribe_status decode_partial(
-    MoonshineStreamingContext * cc,
+    MoonshineStreamingSession * cc,
     MoonshineStreamingModel *   cm,
-    const transcribe_params *   params,
+    const transcribe_run_params *   params,
     bool                        emit_dumps)
 {
     const int T_enc = cc->stream_T_emitted;
@@ -1227,7 +1227,7 @@ transcribe_status decode_partial(
 // reproduced under a larger cross-KV, so it's unlikely to change
 // again. Returns the prefix length in tokens.
 int longest_common_prefix_in_tokens(
-    const std::vector<transcribe_context::TokenEntry> & new_tokens,
+    const std::vector<transcribe_session::TokenEntry> & new_tokens,
     const std::vector<int32_t> &                        prev_ids)
 {
     const int n_new  = static_cast<int>(new_tokens.size());
@@ -1252,11 +1252,11 @@ int longest_common_prefix_in_tokens(
 constexpr int k_default_min_decode_interval_ms = 240;
 
 transcribe_status stream_begin(
-    transcribe_context *              ctx,
-    const transcribe_params *         run_params,
+    transcribe_session *              session,
+    const transcribe_run_params *         run_params,
     const transcribe_stream_params *  stream_params)
 {
-    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    auto * cc = static_cast<MoonshineStreamingSession *>(session);
     auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1339,7 +1339,7 @@ transcribe_status stream_begin(
 // sample index of buffer[0] so absolute frame indices translate to
 // buffer-relative offsets via the subtraction.
 transcribe_status flush_stable_frames(
-    MoonshineStreamingContext * cc,
+    MoonshineStreamingSession * cc,
     MoonshineStreamingModel *   cm,
     int                         win_start,
     int                         win_end,
@@ -1453,7 +1453,7 @@ transcribe_status flush_stable_frames(
 // unreachable. Quantize the trim to samples_per_enc_frame so
 // pcm_start_sample stays frame-aligned and absolute↔buffer-relative
 // translation is integer.
-void trim_pcm_buffer(MoonshineStreamingContext * cc) {
+void trim_pcm_buffer(MoonshineStreamingSession * cc) {
     const int spf = cc->stream_samples_per_enc_frame;
     const int64_t keep_from_frame = std::max<int64_t>(
         0,
@@ -1476,12 +1476,12 @@ void trim_pcm_buffer(MoonshineStreamingContext * cc) {
 }
 
 transcribe_status stream_feed(
-    transcribe_context *        ctx,
+    transcribe_session *        session,
     const float *               pcm,
     int                         n_samples,
     transcribe_stream_update *  update)
 {
-    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    auto * cc = static_cast<MoonshineStreamingSession *>(session);
     auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1593,10 +1593,10 @@ transcribe_status stream_feed(
 }
 
 transcribe_status stream_finalize(
-    transcribe_context *        ctx,
+    transcribe_session *        session,
     transcribe_stream_update *  update)
 {
-    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+    auto * cc = static_cast<MoonshineStreamingSession *>(session);
     auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1723,8 +1723,8 @@ transcribe_status stream_finalize(
     return TRANSCRIBE_OK;
 }
 
-void stream_reset(transcribe_context * ctx) {
-    auto * cc = static_cast<MoonshineStreamingContext *>(ctx);
+void stream_reset(transcribe_session * session) {
+    auto * cc = static_cast<MoonshineStreamingSession *>(session);
     cc->stream_pcm_buffer.clear();
     cc->stream_pcm_start_sample = 0;
     cc->stream_adapter_committed.clear();

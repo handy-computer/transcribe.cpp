@@ -22,7 +22,7 @@
 // GPUs).
 //
 // This header is INTERNAL to src/arch/parakeet/. The public C ABI
-// only sees ParakeetContext::result populated by Parakeet::run.
+// only sees ParakeetSession::result populated by Parakeet::run.
 
 #pragma once
 

@@ -58,9 +58,9 @@ namespace transcribe::granite {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   GraniteModel>);
-static_assert(std::is_base_of_v<transcribe_context, GraniteContext>);
+static_assert(std::is_base_of_v<transcribe_session, GraniteSession>);
 
-GraniteContext::~GraniteContext() {
+GraniteSession::~GraniteSession() {
     kv.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
@@ -203,7 +203,7 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
 
 transcribe_status load(
     Loader &                         loader,
-    const transcribe_model_params *  params,
+    const transcribe_model_load_params *  params,
     transcribe_model **              out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -397,14 +397,14 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto cc = std::make_unique<GraniteContext>();
+    auto cc = std::make_unique<GraniteSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
@@ -444,15 +444,15 @@ static const char * granite_target_language_name(const char * code_or_name) {
 }
 
 transcribe_status run(
-    transcribe_context *      ctx_base,
+    transcribe_session *      ctx_base,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
     if (ctx_base == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    auto * cc = static_cast<GraniteContext *>(ctx_base);
+    auto * cc = static_cast<GraniteSession *>(ctx_base);
     auto * cm = static_cast<GraniteModel *>(cc->model);
 
     transcribe::debug::init();
@@ -1126,7 +1126,7 @@ transcribe_status run(
 
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result  = true;
-    transcribe_context::SegmentEntry seg {};
+    transcribe_session::SegmentEntry seg {};
     seg.text  = cc->full_text;
     seg.t0_ms = 0;
     seg.t1_ms = static_cast<int64_t>(n_samples) * 1000

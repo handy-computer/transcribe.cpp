@@ -1,9 +1,9 @@
-// transcribe-context.h - internal base class for the public opaque
-// transcribe_context handle.
+// transcribe-session.h - internal base class for the public opaque
+// transcribe_session handle.
 //
 // Mirror of transcribe-model.h. Same Option B layout: a small base owned
 // by the central dispatch, derived per-family contexts owning everything
-// else. The base has a virtual destructor so transcribe_context_free()
+// else. The base has a virtual destructor so transcribe_session_free()
 // can `delete ctx;` polymorphically.
 //
 // The result storage is on the BASE because it's family-agnostic: the
@@ -23,11 +23,17 @@
 
 struct transcribe_model;
 
-struct transcribe_context {
-    // The model this context was constructed from. Borrowed pointer:
+struct transcribe_session {
+    // The model this session was constructed from. Borrowed pointer:
     // the caller is required (per the public threading contract) to keep
-    // the model alive for the lifetime of every derived context.
+    // the model alive for the lifetime of every derived session.
     transcribe_model * model = nullptr;
+
+    // True only for sessions created via transcribe_open(), which loads
+    // and therefore owns its model. transcribe_close() frees the owned
+    // model after the session; transcribe_session_free() never does.
+    // Sessions created via transcribe_session_init() leave this false.
+    bool owns_model = false;
 
     // Cached n_threads value the caller passed at init time. 0 means
     // "library picks a sensible default" (matches the factory).
@@ -153,11 +159,11 @@ struct transcribe_context {
 
     void clear_result();
 
-    transcribe_context() = default;
-    virtual ~transcribe_context();
+    transcribe_session() = default;
+    virtual ~transcribe_session();
 
-    transcribe_context(const transcribe_context &)             = delete;
-    transcribe_context & operator=(const transcribe_context &) = delete;
-    transcribe_context(transcribe_context &&)                  = delete;
-    transcribe_context & operator=(transcribe_context &&)      = delete;
+    transcribe_session(const transcribe_session &)             = delete;
+    transcribe_session & operator=(const transcribe_session &) = delete;
+    transcribe_session(transcribe_session &&)                  = delete;
+    transcribe_session & operator=(transcribe_session &&)      = delete;
 };

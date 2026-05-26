@@ -89,9 +89,9 @@ extern const Arch arch;
 // Cheap insurance against a future contributor accidentally dropping the
 // inheritance relationship. Cost: zero. Caught at compile time.
 static_assert(std::is_base_of_v<transcribe_model,   ParakeetModel>);
-static_assert(std::is_base_of_v<transcribe_context, ParakeetContext>);
+static_assert(std::is_base_of_v<transcribe_session, ParakeetSession>);
 
-ParakeetContext::~ParakeetContext() {
+ParakeetSession::~ParakeetSession() {
     // Tear down per-call compute state. Order matters: the scheduler
     // owns the compute buffers, the context owns the tensor metadata,
     // both must be freed before the model's backend plan (which
@@ -109,7 +109,7 @@ ParakeetContext::~ParakeetContext() {
     // Streaming cache tensors live in their own ggml_context with
     // their own backend buffer (allocated lazily on first stream_begin
     // for ChunkedLimited variants). Free in the same order as the
-    // weights buffer/ctx in ParakeetModel: backend buffer first (it
+    // weights buffer/session in ParakeetModel: backend buffer first (it
     // may hold a backend ref), then the ggml_context that owned the
     // tensor metadata.
     if (stream_caches.buffer != nullptr) {
@@ -143,7 +143,7 @@ ParakeetModel::~ParakeetModel() {
         ggml_backend_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
-    // The CPU conv_pw F32 promotion ctx + buffer (no-op on GPU primary
+    // The CPU conv_pw F32 promotion session + buffer (no-op on GPU primary
     // backends; non-null only when promote_conv_pw_to_f32_on_cpu ran).
     if (conv_pw_f32_ctx != nullptr) {
         ggml_free(conv_pw_f32_ctx);
@@ -285,12 +285,12 @@ constexpr const char k_default_variant[] = "tdt-0.6b-v2";
 // The cache tensors live in their own ggml_context with a dedicated
 // backend buffer, allocated on the model's primary backend so reads
 // and writes inside the encoder graph stay backend-local. The buffer
-// is freed in ~ParakeetContext.
+// is freed in ~ParakeetSession.
 //
 // Initialization is idempotent — calling on an already-initialized
 // caches struct is a no-op. To zero contents on a fresh stream, call
 // zero_streaming_caches separately.
-transcribe_status init_streaming_caches(ParakeetContext * pc,
+transcribe_status init_streaming_caches(ParakeetSession * pc,
                                         ParakeetModel *   pm)
 {
     if (pc->stream_caches.initialized) return TRANSCRIBE_OK;
@@ -386,7 +386,7 @@ transcribe_status init_streaming_caches(ParakeetContext * pc,
 // (NeMo's get_initial_cache_state returns zeros every time).
 //
 // The backend buffer survives — only the contents are cleared.
-void zero_streaming_caches(ParakeetContext * pc) {
+void zero_streaming_caches(ParakeetSession * pc) {
     if (pc->stream_caches.buffer != nullptr) {
         ggml_backend_buffer_clear(pc->stream_caches.buffer, 0);
     }
@@ -402,7 +402,7 @@ void zero_streaming_caches(ParakeetContext * pc) {
 // offset). Sized to the model's predictor on first call; resized
 // in-place on subsequent calls if the predictor reshape ever happens
 // (it won't, but the guard is cheap).
-void reset_streaming_decoder_state(ParakeetContext * pc,
+void reset_streaming_decoder_state(ParakeetSession * pc,
                                    const ParakeetModel * pm)
 {
     const auto & pred = pm->host_decoder.predictor;
@@ -416,16 +416,16 @@ void reset_streaming_decoder_state(ParakeetContext * pc,
 }
 
 // Forward declarations for the Arch trait below.
-extern transcribe_status load        (Loader &, const transcribe_model_params *,
+extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
-extern transcribe_status init_context(transcribe_model *, const transcribe_context_params *,
-                                      transcribe_context **);
-extern transcribe_status run         (transcribe_context *, const float *, int,
-                                      const transcribe_params *);
+extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
+                                      transcribe_session **);
+extern transcribe_status run         (transcribe_session *, const float *, int,
+                                      const transcribe_run_params *);
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     // The dispatcher has already verified out_model is non-null and
@@ -629,7 +629,7 @@ transcribe_status load(
         m->mel.emplace(cfg);
     }
 
-    // Stage 2: reopen the file with no_alloc=true + ctx=&ctx_meta.
+    // Stage 2: reopen the file with no_alloc=true + session=&ctx_meta.
     // ggml builds the tensor catalog (metadata only — no data
     // buffers); we then bind a runtime backend, allocate a backend
     // buffer for every tensor in ctx_meta, and stream the GGUF data
@@ -775,8 +775,8 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     // The central dispatcher has already null-checked model, params,
     // and out_ctx. We still want to be sure the model we received is
@@ -788,7 +788,7 @@ transcribe_status init_context(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto pc = std::make_unique<ParakeetContext>();
+    auto pc = std::make_unique<ParakeetSession>();
     pc->model     = model;
     pc->n_threads = params->n_threads;
     pc->kv_type   = params->kv_type;
@@ -818,11 +818,11 @@ transcribe_status init_context(
 //   will diverge from this helper and an empirical stream-vs-batch
 //   parity test becomes meaningful.
 static transcribe_status run_one_shot_inner(
-    ParakeetContext *         pc,
+    ParakeetSession *         pc,
     ParakeetModel *           pm,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
     // Pre-run abort check. Parakeet is non-chunked today; this is the
     // single observation point. A caller that wants to veto a run
@@ -1161,7 +1161,7 @@ static transcribe_status run_one_shot_inner(
     try_dump("enc.final",            eb.dumps.final_out,        "encoder.final");
 
     // Stash the encoder output for the accuracy test (it reaches in
-    // via the ParakeetContext view) and as a borrowed reference for
+    // via the ParakeetSession view) and as a borrowed reference for
     // the readback below.
     pc->encoder_out = eb.out;
 
@@ -1252,7 +1252,7 @@ static transcribe_status run_one_shot_inner(
 
     pc->tokens.reserve(pc->raw_tokens.size());
     for (const TdtToken & rt : pc->raw_tokens) {
-        transcribe_context::TokenEntry te;
+        transcribe_session::TokenEntry te;
         te.id    = rt.id;
         te.p     = rt.p;
         te.t0_ms = static_cast<int64_t>(
@@ -1280,7 +1280,7 @@ static transcribe_status run_one_shot_inner(
     // safe-sentinel state when there are no tokens.
     if (!pc->tokens.empty()) {
         // Single segment.
-        transcribe_context::SegmentEntry seg;
+        transcribe_session::SegmentEntry seg;
         seg.t0_ms       = pc->tokens.front().t0_ms;
         seg.t1_ms       = pc->tokens.back().t1_ms;
         seg.first_token = 0;
@@ -1293,15 +1293,15 @@ static transcribe_status run_one_shot_inner(
         // piece begins with the SentencePiece marker opens a new
         // word. Continuation tokens (no marker) extend the current
         // word.
-        transcribe_context::WordEntry  cur_word;
+        transcribe_session::WordEntry  cur_word;
         bool                        cur_word_open = false;
 
-        auto open_new_word = [&](int token_index, const transcribe_context::TokenEntry & tk) {
+        auto open_new_word = [&](int token_index, const transcribe_session::TokenEntry & tk) {
             if (cur_word_open) {
                 cur_word.t1_ms   = pc->tokens[static_cast<size_t>(token_index - 1)].t1_ms;
                 cur_word.n_tokens = token_index - cur_word.first_token;
                 pc->words.push_back(std::move(cur_word));
-                cur_word = transcribe_context::WordEntry{};
+                cur_word = transcribe_session::WordEntry{};
             }
             cur_word.t0_ms       = tk.t0_ms;
             cur_word.first_token = token_index;
@@ -1438,16 +1438,16 @@ static transcribe_status run_one_shot_inner(
     return TRANSCRIBE_OK;
 }
 
-// One-shot entry point. Validates ctx/pm, clears the previous result
+// One-shot entry point. Validates session/pm, clears the previous result
 // snapshot, then forwards to the shared inference helper. The
 // streaming hooks reuse the same helper so a finalize on the
 // accumulated buffer produces identical results to a direct run() of
 // the same audio.
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
     // The dispatcher (transcribe.cpp) has already enum-range
     // validated params->task / params->timestamps, rejected
@@ -1456,11 +1456,11 @@ transcribe_status run(
     // max_timestamp_kind=TOKEN. What arrives here is guaranteed
     // sane — we only need to resolve AUTO and downcast finer-grained
     // output to the requested ceiling when the result is built.
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * pc = static_cast<ParakeetContext *>(ctx);
+    auto * pc = static_cast<ParakeetSession *>(session);
     auto * pm = static_cast<ParakeetModel *>(pc->model);
     if (pm == nullptr || pm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1530,7 +1530,7 @@ static int64_t us_to_ms(int64_t us) {
 // `pos_emb_in` shape: ne=[d_model, pos_len, 1, 1] f32 (the encoder
 // graph builder allocated it). Side-effect: pc->pos_buf and
 // pc->pos_div_term are resized in place.
-void fill_streaming_pos_emb(ParakeetContext * pc,
+void fill_streaming_pos_emb(ParakeetSession * pc,
                             ggml_tensor *     pos_emb_in,
                             int               d_model)
 {
@@ -1673,7 +1673,7 @@ namespace {
 // On success, appends new TdtTokens to pc->raw_tokens and advances
 // the persistent cache + decoder state.
 transcribe_status emit_streaming_chunk(
-    ParakeetContext * pc,
+    ParakeetSession * pc,
     ParakeetModel *   pm,
     const float *     mel_chunk_data,
     int               n_mel_chunk_frames,
@@ -1929,7 +1929,7 @@ transcribe_status emit_streaming_chunk(
 // populated during streaming — those derive from richer logic in the
 // offline run() result builder and are deferred to stream_finalize
 // (or omitted entirely for the first M2 cut).
-void rebuild_streaming_result_text(ParakeetContext * pc,
+void rebuild_streaming_result_text(ParakeetSession * pc,
                                    const ParakeetModel * pm)
 {
     pc->tokens.clear();
@@ -1955,7 +1955,7 @@ void rebuild_streaming_result_text(ParakeetContext * pc,
     std::vector<int32_t> all_ids;
     all_ids.reserve(pc->raw_tokens.size());
     for (const auto & tk : pc->raw_tokens) {
-        transcribe_context::TokenEntry te;
+        transcribe_session::TokenEntry te;
         te.id           = tk.id;
         te.p            = tk.p;
         te.t0_ms        = tk.step_at_emit * ms_per_frame;
@@ -1984,7 +1984,7 @@ void rebuild_streaming_result_text(ParakeetContext * pc,
 // Per step:
 //   - Update the buffer's internal ContextSize (buf_ctx_*) via the
 //     same accounting NeMo's StreamingBatchedAudioBuffer uses.
-//   - Slice the last ctx.total() samples from stream_pcm_buffer as
+//   - Slice the last session.total() samples from stream_pcm_buffer as
 //     the encoder window.
 //   - Compute mel over the full window.
 //   - Build the encoder graph with a BufferedStreamMaskOverride to
@@ -1997,7 +1997,7 @@ void rebuild_streaming_result_text(ParakeetContext * pc,
 //     encoder_context_batch.chunk vs
 //     encoder_output_len - encoder_context_batch.left dispatch.
 static void buf_ctx_add_frames(
-    ParakeetContext * pc, int64_t num_new, bool is_last)
+    ParakeetSession * pc, int64_t num_new, bool is_last)
 {
     pc->buf_ctx_left  += pc->buf_ctx_chunk;
     pc->buf_ctx_chunk  = 0;
@@ -2018,7 +2018,7 @@ static void buf_ctx_add_frames(
 }
 
 transcribe_status emit_buffered_chunk(
-    ParakeetContext * pc,
+    ParakeetSession * pc,
     ParakeetModel *   pm,
     int64_t           num_new_samples,
     bool              is_last_chunk)
@@ -2204,10 +2204,10 @@ transcribe_status emit_buffered_chunk(
     // Pad-mask: NeMo's encoder ANDs a conv-overhang pad_mask onto the
     // chunked mask before MHA — frames past `padding_length` (post
     // pre-encode) are masked out. The conv subsampling can emit T_enc
-    // > ctx.total/samples_per_frame when the input doesn't tile the
+    // > session.total/samples_per_frame when the input doesn't tile the
     // subsampling stride exactly; without the pad mask, those trailing
     // frames contaminate every other frame's attention scores. We
-    // mirror NeMo by passing `effective_T = ctx.total /
+    // mirror NeMo by passing `effective_T = session.total /
     // samples_per_frame` so the mask compute folds in the pad_mask.
     // Critical at low-C/low-R configs where one extra frame of
     // contamination tips many greedy-emission decisions; barely
@@ -2328,7 +2328,7 @@ transcribe_status emit_buffered_chunk(
     transcribe::debug::dump_tensor(
         "enc.final", eb.out, "encoder.final");
 
-    // Subsample ctx into encoder frames — mirrors NeMo's
+    // Subsample session into encoder frames — mirrors NeMo's
     // buffer.context_size.subsample(factor=encoder_frame2audio_samples).
     const int ctx_left_frames  = static_cast<int>(
         pc->buf_ctx_left  / samples_per_frame);
@@ -2402,11 +2402,11 @@ transcribe_status emit_buffered_chunk(
 }
 
 transcribe_status stream_begin(
-    transcribe_context *              ctx,
-    const transcribe_params *         run_params,
+    transcribe_session *              session,
+    const transcribe_run_params *         run_params,
     const transcribe_stream_params *  stream_params)
 {
-    auto * pc = static_cast<ParakeetContext *>(ctx);
+    auto * pc = static_cast<ParakeetSession *>(session);
     auto * pm = static_cast<ParakeetModel *>(pc->model);
     if (pm == nullptr || pm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -2585,7 +2585,7 @@ transcribe_status stream_begin(
     }
 
     pc->stream_pcm_buffer.clear();
-    pc->raw_tokens.clear();  // The dispatcher clears ctx->tokens / words /
+    pc->raw_tokens.clear();  // The dispatcher clears session->tokens / words /
                              // segments / full_text via clear_result, but
                              // raw_tokens is parakeet-internal and
                              // accumulates per-chunk; without this reset
@@ -2659,12 +2659,12 @@ transcribe_status stream_begin(
 }
 
 transcribe_status stream_feed(
-    transcribe_context *        ctx,
+    transcribe_session *        session,
     const float *               pcm,
     int                         n_samples,
     transcribe_stream_update *  update)
 {
-    auto * pc = static_cast<ParakeetContext *>(ctx);
+    auto * pc = static_cast<ParakeetSession *>(session);
     auto * pm = static_cast<ParakeetModel *>(pc->model);
     if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
 
@@ -2960,10 +2960,10 @@ transcribe_status stream_feed(
 }
 
 transcribe_status stream_finalize(
-    transcribe_context *        ctx,
+    transcribe_session *        session,
     transcribe_stream_update *  update)
 {
-    auto * pc = static_cast<ParakeetContext *>(ctx);
+    auto * pc = static_cast<ParakeetSession *>(session);
     auto * pm = static_cast<ParakeetModel *>(pc->model);
     if (pm == nullptr || pm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -3127,8 +3127,8 @@ transcribe_status stream_finalize(
     return TRANSCRIBE_OK;
 }
 
-void stream_reset(transcribe_context * ctx) {
-    auto * pc = static_cast<ParakeetContext *>(ctx);
+void stream_reset(transcribe_session * session) {
+    auto * pc = static_cast<ParakeetSession *>(session);
     // Drop the buffered audio contents but keep the allocation for
     // the next stream.
     pc->stream_pcm_buffer.clear();

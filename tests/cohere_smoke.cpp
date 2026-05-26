@@ -127,7 +127,7 @@ int main() {
     // backend guaranteed to be present everywhere we run this test;
     // it also exercises promote_conv_pw_to_f32_on_cpu, which is a
     // no-op on GPU backends.
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp = transcribe_model_load_default_params();
     mp.backend = TRANSCRIBE_BACKEND_CPU;
     struct transcribe_model * model = nullptr;
 

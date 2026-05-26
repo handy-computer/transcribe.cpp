@@ -45,7 +45,7 @@ namespace transcribe::whisper {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   WhisperModel>);
-static_assert(std::is_base_of_v<transcribe_context, WhisperContext>);
+static_assert(std::is_base_of_v<transcribe_session, WhisperSession>);
 
 WhisperModel::~WhisperModel() {
     if (ctx_meta != nullptr) {
@@ -66,7 +66,7 @@ WhisperModel::~WhisperModel() {
     plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
-WhisperContext::~WhisperContext() {
+WhisperSession::~WhisperSession() {
     kv_cache.free();
     enc_out.free();
     if (sched != nullptr) {
@@ -209,7 +209,7 @@ constexpr const char k_default_variant[] = "whisper";
 // loop. The free + malloc churn was visible in the per-step build
 // timer (~30 us per step on tiny F16) plus allocator pressure on
 // very long inputs.
-bool ensure_compute_ctx(WhisperContext * cc, size_t mem) {
+bool ensure_compute_ctx(WhisperSession * cc, size_t mem) {
     if (cc->compute_ctx != nullptr) {
         if (cc->compute_ctx_size >= mem) {
             ggml_reset(cc->compute_ctx);
@@ -347,7 +347,7 @@ bool whisper_perf_enabled() {
 
 transcribe_status whisper_load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -556,21 +556,21 @@ transcribe_status whisper_load(
 
 transcribe_status whisper_init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto cc = std::make_unique<WhisperContext>();
+    auto cc = std::make_unique<WhisperSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
     // Whisper defaults: both encoder and decoder flash-on. Head dim for
     // whisper-tiny is 64 (d_model=384, 6 heads); supported on every
-    // backend we ship. See WhisperContext for the rationale.
+    // backend we ship. See WhisperSession for the rationale.
     cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(
@@ -606,7 +606,7 @@ namespace {
 // short-form) and for the first chunk in long-form; false otherwise
 // so the long-form loop does not overwrite dumps from the first chunk.
 transcribe_status run_whisper_encoder_on_window(
-    WhisperContext * cc,
+    WhisperSession * cc,
     WhisperModel *   cm,
     const float *    mel_data,
     int              n_mels,
@@ -986,16 +986,16 @@ transcribe_status load_mel_from_ref(const char *         ref_dir,
 } // namespace
 
 transcribe_status whisper_run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * cc = static_cast<WhisperContext *>(ctx);
+    auto * cc = static_cast<WhisperSession *>(session);
     auto * cm = static_cast<WhisperModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1267,7 +1267,7 @@ transcribe_status whisper_run(
         }
 
         if (!want_segment_timestamps) {
-            transcribe_context::SegmentEntry seg {};
+            transcribe_session::SegmentEntry seg {};
             seg.text = text;
             cc->segments.push_back(std::move(seg));
         }
@@ -1287,7 +1287,7 @@ transcribe_status whisper_run(
     // The whisper-specific knobs (initial prompt, prompt-token
     // conditioning, temperature tuple, threshold checks,
     // max_initial_timestamp cap) live on a kind-tagged family
-    // extension reached via transcribe_params::family. NULL selects
+    // extension reached via transcribe_run_params::family. NULL selects
     // TRANSCRIBE_WHISPER_RUN_EXT_INIT — Whisper's own shipping recipe.
     // The local `default_wp` must outlive the chunk loop because `wp`
     // aliases it.
@@ -2743,7 +2743,7 @@ transcribe_status whisper_run(
                     static_cast<int64_t>(last_tok - timestamp_begin);
 
                 if (want_segment_timestamps) {
-                    transcribe_context::SegmentEntry seg {};
+                    transcribe_session::SegmentEntry seg {};
                     seg.t0_ms = time_offset_ms + start_ts_pos * 20;
                     seg.t1_ms = time_offset_ms + end_ts_pos   * 20;
                     if (seg.t1_ms < seg.t0_ms) seg.t1_ms = seg.t0_ms;
@@ -2785,7 +2785,7 @@ transcribe_status whisper_run(
                 }
             }
             if (want_segment_timestamps && gn > 0) {
-                transcribe_context::SegmentEntry seg {};
+                transcribe_session::SegmentEntry seg {};
                 seg.t0_ms = time_offset_ms;
                 seg.t1_ms = time_offset_ms + last_ts_pos * 20;
                 seg.text  = decode_range(0, gn);

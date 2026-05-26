@@ -39,9 +39,9 @@ namespace transcribe::sensevoice {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   SenseVoiceModel>);
-static_assert(std::is_base_of_v<transcribe_context, SenseVoiceContext>);
+static_assert(std::is_base_of_v<transcribe_session, SenseVoiceSession>);
 
-SenseVoiceContext::~SenseVoiceContext() {
+SenseVoiceSession::~SenseVoiceSession() {
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -75,16 +75,16 @@ namespace {
 
 constexpr const char k_default_variant[] = "sensevoice-small";
 
-extern transcribe_status load        (Loader &, const transcribe_model_params *,
+extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
-extern transcribe_status init_context(transcribe_model *, const transcribe_context_params *,
-                                      transcribe_context **);
-extern transcribe_status run         (transcribe_context *, const float *, int,
-                                      const transcribe_params *);
+extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
+                                      transcribe_session **);
+extern transcribe_status run         (transcribe_session *, const float *, int,
+                                      const transcribe_run_params *);
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -189,13 +189,13 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    auto cc = std::make_unique<SenseVoiceContext>();
+    auto cc = std::make_unique<SenseVoiceSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
@@ -220,7 +220,7 @@ int resolve_lid_idx(const SenseVoiceHParams & hp, const char * lang_or_null) {
     return hp.prefix_lang_auto;
 }
 
-void apply_thread_policy(SenseVoiceContext * cc) {
+void apply_thread_policy(SenseVoiceSession * cc) {
     int n_threads = cc->n_threads;
     if (n_threads <= 0) {
         n_threads = std::min(8, std::max(1, static_cast<int>(
@@ -238,15 +238,15 @@ void apply_thread_policy(SenseVoiceContext * cc) {
 }
 
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    auto * cc = static_cast<SenseVoiceContext *>(ctx);
+    auto * cc = static_cast<SenseVoiceSession *>(session);
     auto * cm = static_cast<SenseVoiceModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty() ||
         cm->frontend == nullptr)
@@ -336,7 +336,7 @@ transcribe_status run(
     const int32_t lid_idx = resolve_lid_idx(hp, lang);
     const int32_t event_emo[2] = { 1, 2 };  // literal indices in the embed table
 
-    // ITN slot. Generic transcribe_params::itn routes here. DEFAULT maps
+    // ITN slot. Generic transcribe_run_params::itn routes here. DEFAULT maps
     // to the shipped behavior (use_itn=false; matches the family's
     // `itn=False` Python default). OFF / ON override explicitly. The
     // dispatcher's advisory WARN only fires when supports_itn == false;
@@ -500,7 +500,7 @@ transcribe_status run(
         // strip_special_tags.
         cc->tokens.reserve(cc->token_ids.size());
         for (int id : cc->token_ids) {
-            transcribe_context::TokenEntry te;
+            transcribe_session::TokenEntry te;
             te.id    = id;
             te.text  = tok.decode(&id, 1);
             te.t0_ms = 0;
@@ -532,7 +532,7 @@ transcribe_status run(
             full.erase(full.begin());
         }
 
-        transcribe_context::SegmentEntry seg;
+        transcribe_session::SegmentEntry seg;
         seg.t0_ms = 0;
         seg.t1_ms = static_cast<int64_t>(
             std::llround(1000.0 * static_cast<double>(n_samples) /

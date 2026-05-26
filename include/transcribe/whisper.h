@@ -9,11 +9,11 @@
  *     composition enum used by the run ext.
  *
  * Whisper exposes substantial real model-specific knobs (13 fields).
- * The PNC/ITN toggles that other families share via transcribe_params
+ * The PNC/ITN toggles that other families share via transcribe_run_params
  * do not apply: whisper does not advertise supports_pnc / supports_itn,
  * and a non-DEFAULT pnc/itn against a whisper model produces a WARN.
  * Probe via transcribe_model_accepts_ext_kind before pointing
- * transcribe_params::family at this struct.
+ * transcribe_run_params::family at this struct.
  *
  * FourCC kinds are reserved in docs/extension-kinds.md.
  */
@@ -67,7 +67,7 @@ enum transcribe_whisper_prompt_condition {
 };
 
 /*
- * Whisper-family run knobs. Reached via transcribe_params::family.
+ * Whisper-family run knobs. Reached via transcribe_run_params::family.
  * NULL family selects TRANSCRIBE_WHISPER_RUN_EXT_INIT values (Whisper's
  * own shipping recipe: temperature fallback on, compression-ratio /
  * avg-logprob / no-speech safety nets active). Callers that want HF
@@ -202,7 +202,7 @@ struct transcribe_whisper_chunk_trace {
  * Returns 0 before any run or on non-Whisper contexts.
  */
 TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
-    const struct transcribe_context * ctx);
+    const struct transcribe_session * ctx);
 
 /*
  * Read the trace at index [0, count) into caller-owned storage.
@@ -219,7 +219,7 @@ TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
  *                                  left as zero-initialized by INIT.
  */
 TRANSCRIBE_API transcribe_status transcribe_get_whisper_chunk_trace(
-    const struct transcribe_context *       ctx,
+    const struct transcribe_session *       ctx,
     int                                     i,
     struct transcribe_whisper_chunk_trace * out_trace);
 

@@ -98,7 +98,7 @@ int main() {
         return 77;
     }
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp = transcribe_model_load_default_params();
     struct transcribe_model * model = nullptr;
     const transcribe_status st =
         transcribe_model_load_file(fixture.c_str(), &mp, &model);

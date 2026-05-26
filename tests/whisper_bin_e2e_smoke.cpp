@@ -87,7 +87,7 @@ void test_multilingual(const char * model_path) {
         return;
     }
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp = transcribe_model_load_default_params();
     mp.backend = TRANSCRIBE_BACKEND_CPU;
     transcribe_model * model = nullptr;
     transcribe_status st =
@@ -129,9 +129,9 @@ void test_multilingual(const char * model_path) {
         CHECK(n > 0);
     }
 
-    transcribe_context_params cp = transcribe_context_default_params();
-    transcribe_context * ctx = nullptr;
-    st = transcribe_context_init(model, &cp, &ctx);
+    transcribe_session_params cp = transcribe_session_default_params();
+    transcribe_session * ctx = nullptr;
+    st = transcribe_session_init(model, &cp, &ctx);
     CHECK(st == TRANSCRIBE_OK);
     if (st != TRANSCRIBE_OK || ctx == nullptr) {
         transcribe_model_free(model);
@@ -140,7 +140,7 @@ void test_multilingual(const char * model_path) {
 
     // English JFK with explicit hint.
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp = transcribe_run_default_params();
         rp.language = "en";
         st = transcribe_run(ctx, jfk.data(),
                             static_cast<int>(jfk.size()), &rp);
@@ -156,7 +156,7 @@ void test_multilingual(const char * model_path) {
     // German with explicit --language de — exercises the
     // arithmetic-derived lang_token_ids on the .bin path.
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp = transcribe_run_default_params();
         rp.language = "de";
         st = transcribe_run(ctx, german.data(),
                             static_cast<int>(german.size()), &rp);
@@ -193,7 +193,7 @@ void test_multilingual(const char * model_path) {
             "ending <|endoftext|> here",
         };
         for (const char * t : literals) {
-            transcribe_params rp = transcribe_default_params();
+            transcribe_run_params rp = transcribe_run_default_params();
             rp.language = "en";
             transcribe_whisper_run_ext wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
             wp.initial_prompt = t;
@@ -206,7 +206,7 @@ void test_multilingual(const char * model_path) {
 
     // Text initial_prompt — now ACCEPTED (tiktoken encoder works).
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp = transcribe_run_default_params();
         rp.language = "en";
         transcribe_whisper_run_ext wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
         wp.initial_prompt = "Inaugural address";
@@ -255,7 +255,7 @@ void test_multilingual(const char * model_path) {
                 return n;
             };
 
-            transcribe_params rp = transcribe_default_params();
+            transcribe_run_params rp = transcribe_run_default_params();
             rp.language = "en";
             st = transcribe_run(ctx, product_pcm.data(),
                                 static_cast<int>(product_pcm.size()), &rp);
@@ -287,7 +287,7 @@ void test_multilingual(const char * model_path) {
                                           tok_buf, 32);
         CHECK(n > 0);
         if (n > 0) {
-            transcribe_params rp = transcribe_default_params();
+            transcribe_run_params rp = transcribe_run_default_params();
             rp.language = "en";
             transcribe_whisper_run_ext wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
             wp.prompt_tokens   = tok_buf;
@@ -300,7 +300,7 @@ void test_multilingual(const char * model_path) {
         }
     }
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
     ++g_subtests_run;
 }
@@ -313,7 +313,7 @@ void test_english_only(const char * model_path) {
         return;
     }
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp = transcribe_model_load_default_params();
     mp.backend = TRANSCRIBE_BACKEND_CPU;
     transcribe_model * model = nullptr;
     transcribe_status st =
@@ -341,9 +341,9 @@ void test_english_only(const char * model_path) {
         }
     }
 
-    transcribe_context_params cp = transcribe_context_default_params();
-    transcribe_context * ctx = nullptr;
-    st = transcribe_context_init(model, &cp, &ctx);
+    transcribe_session_params cp = transcribe_session_default_params();
+    transcribe_session * ctx = nullptr;
+    st = transcribe_session_init(model, &cp, &ctx);
     CHECK(st == TRANSCRIBE_OK);
     if (st != TRANSCRIBE_OK || ctx == nullptr) {
         transcribe_model_free(model);
@@ -353,7 +353,7 @@ void test_english_only(const char * model_path) {
     // No language hint — lang detection short-circuits to "en"
     // because the model only advertises one language.
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp = transcribe_run_default_params();
         st = transcribe_run(ctx, jfk.data(),
                             static_cast<int>(jfk.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
@@ -362,7 +362,7 @@ void test_english_only(const char * model_path) {
 
     // Explicit --language en accepted (no <|en|> token to resolve).
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp = transcribe_run_default_params();
         rp.language = "en";
         st = transcribe_run(ctx, jfk.data(),
                             static_cast<int>(jfk.size()), &rp);
@@ -372,7 +372,7 @@ void test_english_only(const char * model_path) {
 
     // Non-English language — rejected with a non-OK status.
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp = transcribe_run_default_params();
         rp.language = "de";
         st = transcribe_run(ctx, jfk.data(),
                             static_cast<int>(jfk.size()), &rp);
@@ -381,7 +381,7 @@ void test_english_only(const char * model_path) {
 
     // Translate task — rejected (no <|translate|> token).
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp = transcribe_run_default_params();
         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         rp.language = "en";
         st = transcribe_run(ctx, jfk.data(),
@@ -389,7 +389,7 @@ void test_english_only(const char * model_path) {
         CHECK(st != TRANSCRIBE_OK);
     }
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
     ++g_subtests_run;
 }

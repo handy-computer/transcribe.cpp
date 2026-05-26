@@ -114,18 +114,18 @@ static void test_init_macros(void) {
     /* TRANSCRIBE_*_INIT must give back the same default values the
      * legacy factories return. The factories themselves wrap the INIT
      * macros, so the comparison is round-trip on every field. */
-    struct transcribe_model_params mp_macro = TRANSCRIBE_MODEL_PARAMS_INIT;
-    CHECK(mp_macro.struct_size == sizeof(struct transcribe_model_params));
+    struct transcribe_model_load_params mp_macro = TRANSCRIBE_MODEL_LOAD_PARAMS_INIT;
+    CHECK(mp_macro.struct_size == sizeof(struct transcribe_model_load_params));
     CHECK(mp_macro.backend     == TRANSCRIBE_BACKEND_AUTO);
     CHECK(mp_macro.gpu_device  == -1);
 
-    struct transcribe_context_params cp_macro = TRANSCRIBE_CONTEXT_PARAMS_INIT;
-    CHECK(cp_macro.struct_size == sizeof(struct transcribe_context_params));
+    struct transcribe_session_params cp_macro = TRANSCRIBE_SESSION_PARAMS_INIT;
+    CHECK(cp_macro.struct_size == sizeof(struct transcribe_session_params));
     CHECK(cp_macro.n_threads   == 0);
     CHECK(cp_macro.kv_type     == TRANSCRIBE_KV_TYPE_AUTO);
 
-    struct transcribe_params rp_macro = TRANSCRIBE_PARAMS_INIT;
-    CHECK(rp_macro.struct_size        == sizeof(struct transcribe_params));
+    struct transcribe_run_params rp_macro = TRANSCRIBE_RUN_PARAMS_INIT;
+    CHECK(rp_macro.struct_size        == sizeof(struct transcribe_run_params));
     CHECK(rp_macro.task               == TRANSCRIBE_TASK_TRANSCRIBE);
     CHECK(rp_macro.timestamps         == TRANSCRIBE_TIMESTAMPS_NONE);
     CHECK(rp_macro.pnc                == TRANSCRIBE_PNC_MODE_DEFAULT);
@@ -253,7 +253,7 @@ static void test_log_set_publication(void) {
 }
 
 static void test_load_invalid(void) {
-    struct transcribe_model_params mp = TRANSCRIBE_MODEL_PARAMS_INIT;
+    struct transcribe_model_load_params mp = TRANSCRIBE_MODEL_LOAD_PARAMS_INIT;
     struct transcribe_model *      m  = (struct transcribe_model *)0xdeadbeef;
 
     /* NULL out_model -> INVALID_ARG. */
@@ -265,15 +265,19 @@ static void test_load_invalid(void) {
           == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(m == NULL);
 
-    /* NULL params -> INVALID_ARG and out_model is cleared. */
+    /* NULL params -> "all defaults", NOT an error. The call proceeds
+     * past parameter validation and fails only on the missing file,
+     * proving NULL was accepted as defaults. Contrast with {0} below,
+     * which claims struct_size == 0 and is rejected. */
     m = (struct transcribe_model *)0xdeadbeef;
-    CHECK(transcribe_model_load_file("ignored", NULL, &m)
-          == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf",
+                                     NULL, &m)
+          == TRANSCRIBE_ERR_FILE_NOT_FOUND);
     CHECK(m == NULL);
 
     /* {0} params -> BAD_STRUCT_SIZE. Distinct from INVALID_ARG so a
      * caller that forgot the INIT macro gets a targeted diagnostic. */
-    struct transcribe_model_params mp0 = {0};
+    struct transcribe_model_load_params mp0 = {0};
     m = (struct transcribe_model *)0xdeadbeef;
     CHECK(transcribe_model_load_file("ignored", &mp0, &m)
           == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
@@ -292,12 +296,12 @@ static void test_load_invalid(void) {
 }
 
 static void test_context_invalid(void) {
-    struct transcribe_context_params cp = TRANSCRIBE_CONTEXT_PARAMS_INIT;
-    struct transcribe_context *      c  = (struct transcribe_context *)0xdeadbeef;
+    struct transcribe_session_params cp = TRANSCRIBE_SESSION_PARAMS_INIT;
+    struct transcribe_session *      c  = (struct transcribe_session *)0xdeadbeef;
 
-    CHECK(transcribe_context_init(NULL, &cp, NULL)
+    CHECK(transcribe_session_init(NULL, &cp, NULL)
           == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_context_init(NULL, &cp, &c)
+    CHECK(transcribe_session_init(NULL, &cp, &c)
           == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(c == NULL);
 
@@ -307,21 +311,52 @@ static void test_context_invalid(void) {
      * without a real model; the dispatcher exercises the same code
      * path the size check uses when called with a valid model. */
 
-    transcribe_context_free(NULL);
+    transcribe_session_free(NULL);
 }
 
 static void test_run_invalid(void) {
-    struct transcribe_params rp     = TRANSCRIBE_PARAMS_INIT;
+    struct transcribe_run_params rp     = TRANSCRIBE_RUN_PARAMS_INIT;
     float                    pcm[8] = { 0.0f };
 
     CHECK(transcribe_run(NULL, pcm, 8, &rp)
           == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_run((struct transcribe_context *)0x1, NULL, 8, &rp)
+    CHECK(transcribe_run((struct transcribe_session *)0x1, NULL, 8, &rp)
           == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_run((struct transcribe_context *)0x1, pcm, 8, NULL)
+    /* NULL params is no longer an error (means "all defaults"), so it
+     * can't be probed with a fake session — it would proceed to
+     * dereference it. NULL-params-defaults is exercised end-to-end in the
+     * real-model smoke tests instead. */
+    /* n_samples must be strictly positive: both negative and zero are
+     * rejected before the session is dereferenced (matches stream_feed). */
+    CHECK(transcribe_run((struct transcribe_session *)0x1, pcm, -1, &rp)
           == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_run((struct transcribe_context *)0x1, pcm, -1, &rp)
+    CHECK(transcribe_run((struct transcribe_session *)0x1, pcm, 0, &rp)
           == TRANSCRIBE_ERR_INVALID_ARG);
+}
+
+static void test_open_invalid(void) {
+    struct transcribe_session * s = (struct transcribe_session *)0xdeadbeef;
+
+    /* NULL out_session -> INVALID_ARG. */
+    CHECK(transcribe_open("ignored", NULL, NULL, NULL)
+          == TRANSCRIBE_ERR_INVALID_ARG);
+
+    /* NULL path forwards to load_file -> INVALID_ARG; out_session cleared. */
+    CHECK(transcribe_open(NULL, NULL, NULL, &s)
+          == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(s == NULL);
+
+    /* NULL load/session params == defaults; missing file -> FILE_NOT_FOUND
+     * with no partial session leaked. */
+    s = (struct transcribe_session *)0xdeadbeef;
+    CHECK(transcribe_open("/__transcribe_smoke_does_not_exist__.gguf",
+                          NULL, NULL, &s)
+          == TRANSCRIBE_ERR_FILE_NOT_FOUND);
+    CHECK(s == NULL);
+
+    /* close / get_model are NULL-safe. */
+    transcribe_close(NULL);
+    CHECK(transcribe_get_model(NULL) == NULL);
 }
 
 static void test_model_introspection_null(void) {
@@ -451,15 +486,15 @@ static void test_timings_null(void) {
      * BAD_STRUCT_SIZE. */
     struct transcribe_timings tm = TRANSCRIBE_TIMINGS_INIT;
     CHECK(transcribe_get_timings(NULL, &tm) == TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_get_timings((const struct transcribe_context *)0x1, NULL)
+    CHECK(transcribe_get_timings((const struct transcribe_session *)0x1, NULL)
           == TRANSCRIBE_ERR_INVALID_ARG);
     struct transcribe_timings tm0 = {0};
-    CHECK(transcribe_get_timings((const struct transcribe_context *)0x1, &tm0)
+    CHECK(transcribe_get_timings((const struct transcribe_session *)0x1, &tm0)
           == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
 }
 
 static void test_result_accessors_null(void) {
-    const struct transcribe_context * ctx = NULL;
+    const struct transcribe_session * ctx = NULL;
 
     /* Top level. */
     CHECK_STR_EMPTY(transcribe_full_text(ctx));
@@ -524,7 +559,7 @@ static void test_stream_state_values(void) {
 }
 
 static void test_stream_accessors_null(void) {
-    const struct transcribe_context * ctx = NULL;
+    const struct transcribe_session * ctx = NULL;
     /* Every streaming accessor is safe to call on NULL and returns the
      * documented sentinel. */
     CHECK(transcribe_stream_get_state(ctx)             == TRANSCRIBE_STREAM_IDLE);
@@ -538,7 +573,7 @@ static void test_stream_accessors_null(void) {
 static void test_stream_entries_null(void) {
     /* NULL ctx into every entry point: begin/feed/finalize report
      * INVALID_ARG; reset is a no-op. */
-    struct transcribe_params        rp = TRANSCRIBE_PARAMS_INIT;
+    struct transcribe_run_params        rp = TRANSCRIBE_RUN_PARAMS_INIT;
     struct transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
     float                           pcm[1] = { 0.0f };
 
@@ -555,10 +590,10 @@ static void test_stream_entries_null(void) {
      * check fires before ctx is dereferenced, so passing a non-NULL
      * fake ctx pointer is fine here. */
     struct transcribe_stream_update upd0 = {0};
-    CHECK(transcribe_stream_feed((struct transcribe_context *)0x1,
+    CHECK(transcribe_stream_feed((struct transcribe_session *)0x1,
                                  pcm, 1, &upd0)
           == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
-    CHECK(transcribe_stream_finalize((struct transcribe_context *)0x1, &upd0)
+    CHECK(transcribe_stream_finalize((struct transcribe_session *)0x1, &upd0)
           == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
 }
 
@@ -571,6 +606,7 @@ int main(void) {
     test_load_invalid();
     test_context_invalid();
     test_run_invalid();
+    test_open_invalid();
     test_model_introspection_null();
     test_ext_check();
     test_result_accessors_null();

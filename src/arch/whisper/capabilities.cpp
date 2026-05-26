@@ -29,7 +29,7 @@ void apply_family_invariants(transcribe_model & model) {
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_SEGMENT;
 
     // Whisper run knobs are reached through transcribe_whisper_run_ext
-    // (via transcribe_params::family). Stage 2 lights up temperature
+    // (via transcribe_run_params::family). Stage 2 lights up temperature
     // fallback + long-form decoding + per-chunk decoding trace. Stage 1
     // already shipped cancellation (abort callback between chunks and
     // between decode steps). Stage 3 wires initial_prompt (text or

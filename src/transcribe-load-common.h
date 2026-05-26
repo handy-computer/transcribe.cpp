@@ -6,7 +6,7 @@
 // Every per-family load() walks the same three steps after the GGUF
 // catalog has been built:
 //
-//   1. Resolve a BackendPlan from transcribe_model_params::backend.
+//   1. Resolve a BackendPlan from transcribe_model_load_params::backend.
 //      (See transcribe-backend.h for the plan type.)
 //   2. Allocate a backend buffer for every tensor in ctx_meta on the
 //      primary backend from the plan.

@@ -66,7 +66,7 @@ bool file_exists(const std::string & path) {
 // false; the caller then bails so it doesn't deref nullptrs.
 bool load_and_init(const char *                  fixture_name,
                    struct transcribe_model **    out_model,
-                   struct transcribe_context **  out_ctx)
+                   struct transcribe_session **  out_ctx)
 {
     *out_model = nullptr;
     *out_ctx   = nullptr;
@@ -81,7 +81,7 @@ bool load_and_init(const char *                  fixture_name,
         return false;
     }
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp = transcribe_model_load_default_params();
     const transcribe_status load_st =
         transcribe_model_load_file(p.c_str(), &mp, out_model);
     if (load_st != TRANSCRIBE_OK || *out_model == nullptr) {
@@ -93,9 +93,9 @@ bool load_and_init(const char *                  fixture_name,
         return false;
     }
 
-    transcribe_context_params cp = transcribe_context_default_params();
+    transcribe_session_params cp = transcribe_session_default_params();
     const transcribe_status init_st =
-        transcribe_context_init(*out_model, &cp, out_ctx);
+        transcribe_session_init(*out_model, &cp, out_ctx);
     if (init_st != TRANSCRIBE_OK || *out_ctx == nullptr) {
         std::fprintf(stderr,
                      "FAIL context_init %s: status=%s, ctx=%p\n",
@@ -114,7 +114,7 @@ bool load_and_init(const char *                  fixture_name,
 // sentinel), and begin reports NOT_IMPLEMENTED.
 void test_supports_streaming_false() {
     struct transcribe_model *   model = nullptr;
-    struct transcribe_context * ctx   = nullptr;
+    struct transcribe_session * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal.gguf", &model, &ctx)) return;
 
     transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
@@ -131,7 +131,7 @@ void test_supports_streaming_false() {
     }
 
     transcribe_stream_params  sp = transcribe_stream_default_params();
-    transcribe_params         rp = transcribe_default_params();
+    transcribe_run_params         rp = transcribe_run_default_params();
     const transcribe_status   st = transcribe_stream_begin(ctx, &rp, &sp);
 
     CHECK(st == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
@@ -141,7 +141,7 @@ void test_supports_streaming_false() {
     CHECK(transcribe_stream_last_status(ctx)  == TRANSCRIBE_OK);
     CHECK(transcribe_stream_revision(ctx)     == 0);
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
 }
 
@@ -156,7 +156,7 @@ void test_supports_streaming_false() {
 // graph must actually support streaming" guard.
 void test_supports_streaming_true_variant_offline() {
     struct transcribe_model *   model = nullptr;
-    struct transcribe_context * ctx   = nullptr;
+    struct transcribe_session * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal_streaming.gguf", &model, &ctx)) return;
 
     transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
@@ -175,7 +175,7 @@ void test_supports_streaming_true_variant_offline() {
     }
 
     transcribe_stream_params  sp = transcribe_stream_default_params();
-    transcribe_params         rp = transcribe_default_params();
+    transcribe_run_params         rp = transcribe_run_default_params();
     const transcribe_status   st = transcribe_stream_begin(ctx, &rp, &sp);
 
     // Family-level rejection: caps says yes, the dispatcher's gates
@@ -187,7 +187,7 @@ void test_supports_streaming_true_variant_offline() {
     CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_FAILED);
     CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
 }
 
@@ -206,11 +206,11 @@ void test_supports_streaming_true_variant_offline() {
 // — that would mean begin's failure incorrectly left state at ACTIVE.
 void test_run_after_failed_begin_does_not_get_stuck() {
     struct transcribe_model *   model = nullptr;
-    struct transcribe_context * ctx   = nullptr;
+    struct transcribe_session * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal.gguf", &model, &ctx)) return;
 
     transcribe_stream_params  sp = transcribe_stream_default_params();
-    transcribe_params         rp = transcribe_default_params();
+    transcribe_run_params         rp = transcribe_run_default_params();
     CHECK(transcribe_stream_begin(ctx, &rp, &sp) ==
           TRANSCRIBE_ERR_NOT_IMPLEMENTED);
     CHECK(transcribe_stream_get_state(ctx) == TRANSCRIBE_STREAM_IDLE);
@@ -234,7 +234,7 @@ void test_run_after_failed_begin_does_not_get_stuck() {
     // State should still be IDLE — transcribe_run forces it on entry.
     CHECK(transcribe_stream_get_state(ctx) == TRANSCRIBE_STREAM_IDLE);
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
 }
 

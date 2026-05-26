@@ -50,11 +50,11 @@ bool file_exists(const std::string & path) {
     return ::stat(path.c_str(), &st) == 0;
 }
 
-int run_one_shot(transcribe_context *      ctx,
+int run_one_shot(transcribe_session *      ctx,
                  const std::vector<float> & pcm,
                  std::string &              out_text)
 {
-    transcribe_params rp = transcribe_default_params();
+    transcribe_run_params rp = transcribe_run_default_params();
     const transcribe_status st = transcribe_run(
         ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
     if (st != TRANSCRIBE_OK) {
@@ -68,14 +68,14 @@ int run_one_shot(transcribe_context *      ctx,
     return 0;
 }
 
-int run_streaming(transcribe_context *      ctx,
+int run_streaming(transcribe_session *      ctx,
                   const std::vector<float> & pcm,
                   int                        chunk_samples,
                   int                        min_decode_interval_ms,
                   int *                      out_n_partial_updates,
                   std::string &              out_text)
 {
-    transcribe_params       rp = TRANSCRIBE_PARAMS_INIT;
+    transcribe_run_params       rp = TRANSCRIBE_RUN_PARAMS_INIT;
     transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
     transcribe_moonshine_streaming_stream_ext ms =
         TRANSCRIBE_MOONSHINE_STREAMING_STREAM_EXT_INIT;
@@ -215,17 +215,17 @@ int main(int /*argc*/, char ** /*argv*/) {
         }
     }
 
-    transcribe_model_params  mp = transcribe_model_default_params();
-    transcribe_context_params cp = transcribe_context_default_params();
+    transcribe_model_load_params  mp = transcribe_model_load_default_params();
+    transcribe_session_params cp = transcribe_session_default_params();
 
     transcribe_model *   model = nullptr;
-    transcribe_context * ctx   = nullptr;
+    transcribe_session * ctx   = nullptr;
 
     if (transcribe_model_load_file(model_path, &mp, &model) != TRANSCRIBE_OK) {
         std::fprintf(stderr, "model load failed: %s\n", model_path);
         return 1;
     }
-    if (transcribe_context_init(model, &cp, &ctx) != TRANSCRIBE_OK) {
+    if (transcribe_session_init(model, &cp, &ctx) != TRANSCRIBE_OK) {
         std::fprintf(stderr, "context init failed\n");
         transcribe_model_free(model);
         return 1;
@@ -245,7 +245,7 @@ int main(int /*argc*/, char ** /*argv*/) {
     // Reference: one-shot transcribe_run.
     std::string ref_text;
     if (run_one_shot(ctx, pcm, ref_text) != 0) {
-        transcribe_context_free(ctx);
+        transcribe_session_free(ctx);
         transcribe_model_free(model);
         return 1;
     }
@@ -371,7 +371,7 @@ int main(int /*argc*/, char ** /*argv*/) {
         }
     }
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
 
     if (g_failures > 0) {

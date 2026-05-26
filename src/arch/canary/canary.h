@@ -1,7 +1,7 @@
 // arch/canary/canary.h - Canary multitask AED model and context types.
 //
 // This header is INTERNAL to src/arch/canary/. It defines the concrete
-// classes that derive from transcribe_model / transcribe_context for
+// classes that derive from transcribe_model / transcribe_session for
 // the NVIDIA Canary family (FastConformer encoder + Transformer decoder
 // with 4-slot or 5-slot multitask prompt).
 //
@@ -20,7 +20,7 @@
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -119,7 +119,7 @@ struct CanaryModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct CanaryContext final : public transcribe_context {
+struct CanarySession final : public transcribe_session {
     ggml_context *        compute_ctx = nullptr;
     ggml_backend_sched_t  sched       = nullptr;
     ggml_tensor *         encoder_out = nullptr;
@@ -142,8 +142,8 @@ struct CanaryContext final : public transcribe_context {
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
-    CanaryContext() = default;
-    ~CanaryContext() override;
+    CanarySession() = default;
+    ~CanarySession() override;
 };
 
 } // namespace transcribe::canary

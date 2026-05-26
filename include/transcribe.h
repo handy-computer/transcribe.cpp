@@ -7,12 +7,12 @@
  * - transcribe_model_* functions are thread-safe.
  * - A loaded model may be shared across any number of threads and used to
  *   create multiple contexts in parallel.
- * - A model must outlive every context created from it.
+ * - A model must outlive every session created from it.
  * - transcribe_model_free() is only valid after all derived contexts have
  *   been freed and no thread is still using the model.
- * - transcribe_context_* functions are not thread-safe.
- * - A context must be used by at most one thread at a time.
- * - A context may be moved between threads if no two threads ever use it
+ * - transcribe_session_* functions are not thread-safe.
+ * - A session must be used by at most one thread at a time.
+ * - A session may be moved between threads if no two threads ever use it
  *   concurrently.
  * - The log callback may be invoked from any thread (including ggml
  *   worker threads); the userdata pointer must be safe for concurrent
@@ -70,7 +70,7 @@
  *   extension selects family defaults.
  *
  * Results:
- * - Results are owned by the context and exposed via accessor functions.
+ * - Results are owned by the session and exposed via accessor functions.
  *   Calling transcribe_run() replaces the previous result. All accessors
  *   are safe to call before the first transcribe_run() and return safe
  *   sentinels ("", 0, NaN) when no result is present.
@@ -142,7 +142,7 @@ typedef enum {
     /*
      * Returned by transcribe_run when the caller's abort callback
      * returns true during the run. Partial results from chunks that
-     * completed before the abort are preserved on the context and
+     * completed before the abort are preserved on the session and
      * readable via the normal result accessors; transcribe_was_aborted
      * distinguishes partial-from-abort from complete.
      */
@@ -158,7 +158,7 @@ typedef enum {
     TRANSCRIBE_ERR_BAD_STRUCT_SIZE      = 14,
     /*
      * Reserved. Phase 2 ships warn-and-proceed semantics for
-     * transcribe_params::pnc: a non-DEFAULT value against a model that
+     * transcribe_run_params::pnc: a non-DEFAULT value against a model that
      * does not advertise transcribe_model_supports(model, TRANSCRIBE_FEATURE_PNC)
      * emits a WARN-level log message and proceeds with the model's
      * default behavior. This code is preserved at its assigned value
@@ -169,7 +169,7 @@ typedef enum {
     TRANSCRIBE_ERR_UNSUPPORTED_PNC      = 15,
     /*
      * Reserved. Symmetric with TRANSCRIBE_ERR_UNSUPPORTED_PNC for
-     * transcribe_params::itn. Not currently returned.
+     * transcribe_run_params::itn. Not currently returned.
      */
     TRANSCRIBE_ERR_UNSUPPORTED_ITN      = 16,
 } transcribe_status;
@@ -229,7 +229,7 @@ typedef enum {
 } transcribe_task;
 
 /*
- * Timestamp policy: transcribe_default_params() requests NONE for
+ * Timestamp policy: transcribe_run_default_params() requests NONE for
  * text-first transcription. AUTO is an opt-in "richest supported"
  * mode: it is treated as "equal to the model's max_timestamp_kind."
  * The dispatcher never rejects AUTO, and the per-family run() handler
@@ -240,7 +240,7 @@ typedef enum {
  * request is coarser-or-equal, the family handler emits only that
  * granularity and any finer per-run data is elided. The actual
  * granularity returned by a run is reported by
- * transcribe_returned_timestamp_kind(ctx).
+ * transcribe_returned_timestamp_kind(session).
  */
 typedef enum {
     TRANSCRIBE_TIMESTAMPS_NONE    = 0,
@@ -277,7 +277,7 @@ typedef enum {
  * to pre-check.
  *
  *   DEFAULT (0): the family's shipped default. Zero-init via
- *                TRANSCRIBE_PARAMS_INIT gives this value. The family
+ *                TRANSCRIBE_RUN_PARAMS_INIT gives this value. The family
  *                picks the value its model card published WER numbers
  *                against (canary: pnc on; others: family-specific).
  *   OFF:         explicitly disable runtime PNC. Supporting families
@@ -324,7 +324,7 @@ enum transcribe_itn_mode {
 /* ----------------------------------------------------------------------- */
 
 struct transcribe_model;
-struct transcribe_context;
+struct transcribe_session;
 
 /* ----------------------------------------------------------------------- */
 /* Family extensions                                                       */
@@ -469,21 +469,21 @@ typedef enum {
  *             matching device. There is no per-device selection in
  *             the current release.
  */
-struct transcribe_model_params {
+struct transcribe_model_load_params {
     size_t                     struct_size;
     transcribe_backend_request backend;
     int                        gpu_device;
 };
 
-#define TRANSCRIBE_MODEL_PARAMS_INIT                                       \
-    { sizeof(struct transcribe_model_params), /* struct_size            */ \
+#define TRANSCRIBE_MODEL_LOAD_PARAMS_INIT                                       \
+    { sizeof(struct transcribe_model_load_params), /* struct_size            */ \
       TRANSCRIBE_BACKEND_AUTO,                /* backend                */ \
       -1 }                                    /* gpu_device             */
 
-TRANSCRIBE_API struct transcribe_model_params transcribe_model_default_params(void);
+TRANSCRIBE_API struct transcribe_model_load_params transcribe_model_load_default_params(void);
 
 /*
- * Context init params.
+ * Session init params.
  *
  * n_threads: number of CPU threads for ops that run on CPU. 0 means
  *            "library picks a sensible default".
@@ -491,18 +491,18 @@ TRANSCRIBE_API struct transcribe_model_params transcribe_model_default_params(vo
  * kv_type:   data type for K/V activations in flash attention.
  *            AUTO (default) uses f16 for quantized models, f32 for f32.
  */
-struct transcribe_context_params {
+struct transcribe_session_params {
     size_t             struct_size;
     int                n_threads;
     transcribe_kv_type kv_type;
 };
 
-#define TRANSCRIBE_CONTEXT_PARAMS_INIT                                     \
-    { sizeof(struct transcribe_context_params), /* struct_size          */ \
+#define TRANSCRIBE_SESSION_PARAMS_INIT                                     \
+    { sizeof(struct transcribe_session_params), /* struct_size          */ \
       0,                                        /* n_threads            */ \
       TRANSCRIBE_KV_TYPE_AUTO }                 /* kv_type              */
 
-TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_params(void);
+TRANSCRIBE_API struct transcribe_session_params transcribe_session_default_params(void);
 
 /*
  * Per-run params.
@@ -552,7 +552,7 @@ TRANSCRIBE_API struct transcribe_context_params transcribe_context_default_param
  *              to probe whether the loaded model accepts a given kind
  *              before pointing `family` at it.
  */
-struct transcribe_params {
+struct transcribe_run_params {
     size_t                        struct_size;
 
     transcribe_task               task;
@@ -565,8 +565,8 @@ struct transcribe_params {
     const struct transcribe_ext * family;
 };
 
-#define TRANSCRIBE_PARAMS_INIT                                             \
-    { sizeof(struct transcribe_params), /* struct_size                  */ \
+#define TRANSCRIBE_RUN_PARAMS_INIT                                             \
+    { sizeof(struct transcribe_run_params), /* struct_size                  */ \
       TRANSCRIBE_TASK_TRANSCRIBE,       /* task                         */ \
       TRANSCRIBE_TIMESTAMPS_NONE,       /* timestamps                   */ \
       TRANSCRIBE_PNC_MODE_DEFAULT,      /* pnc                          */ \
@@ -576,7 +576,7 @@ struct transcribe_params {
       true,                             /* strip_special_tags           */ \
       NULL }                            /* family                       */
 
-TRANSCRIBE_API struct transcribe_params transcribe_default_params(void);
+TRANSCRIBE_API struct transcribe_run_params transcribe_run_default_params(void);
 
 /* ----------------------------------------------------------------------- */
 /* Capabilities                                                            */
@@ -609,7 +609,7 @@ TRANSCRIBE_API struct transcribe_params transcribe_default_params(void);
  *     three "gate" bools whose meaning is inseparable from neighboring
  *     fields (supports_streaming gates the streaming hint trio;
  *     supports_translate gates the task enum and target_language
- *     semantics on transcribe_params; supports_language_detect gates
+ *     semantics on transcribe_run_params; supports_language_detect gates
  *     the languages array and autodetect mode).
  *
  *   - Unallied behavioral toggles (initial prompt, temperature
@@ -638,11 +638,11 @@ struct transcribe_capabilities {
      *   supports_language_detect: gates the languages[] array's role.
      *     False means the autodetect path is unavailable; the listed
      *     languages (if any) are still the model's supported set when
-     *     the caller passes a hint via transcribe_params::language.
+     *     the caller passes a hint via transcribe_run_params::language.
      *
      *   supports_translate: gates TRANSCRIBE_TASK_TRANSLATE on
-     *     transcribe_params, plus the meaning of
-     *     transcribe_params::target_language. Hard-error gate; the
+     *     transcribe_run_params, plus the meaning of
+     *     transcribe_run_params::target_language. Hard-error gate; the
      *     dispatcher rejects TRANSLATE against models with
      *     supports_translate == false.
      *
@@ -724,7 +724,7 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(
  *
  *   PNC                  The model exposes a runtime toggle for
  *                        punctuation + capitalization via
- *                        transcribe_params::pnc. False does NOT mean
+ *                        transcribe_run_params::pnc. False does NOT mean
  *                        the model produces no PNC — only that the
  *                        caller cannot control whether PNC appears.
  *                        Non-DEFAULT pnc against a model where this
@@ -732,7 +732,7 @@ TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(
  *
  *   ITN                  The model exposes a runtime toggle for
  *                        inverse text normalization via
- *                        transcribe_params::itn. Same "can-control
+ *                        transcribe_run_params::itn. Same "can-control
  *                        vs does-emit" distinction as PNC; non-DEFAULT
  *                        itn against an unsupported model warns.
  *
@@ -796,33 +796,93 @@ TRANSCRIBE_API const char * transcribe_model_backend(const struct transcribe_mod
  * Load a GGUF model from disk. The _file suffix is preserved to leave
  * room for transcribe_model_load_buffer() later without renaming.
  *
+ * params may be NULL, which is equivalent to passing
+ * TRANSCRIBE_MODEL_LOAD_PARAMS_INIT (all library defaults). NULL is the
+ * version-proof way to ask for defaults: it carries no struct_size, so
+ * it always matches the running library. Note that a zero-initialized
+ * struct ({0}) is NOT the same as NULL — it claims struct_size == 0 and
+ * is rejected with TRANSCRIBE_ERR_BAD_STRUCT_SIZE. Use NULL for defaults
+ * or TRANSCRIBE_MODEL_LOAD_PARAMS_INIT to customize.
+ *
  * On success, *out_model is set and the caller owns it. On failure,
  * *out_model is set to NULL and a non-OK status is returned.
  */
 TRANSCRIBE_API transcribe_status transcribe_model_load_file(
     const char *                           path,
-    const struct transcribe_model_params * params,
+    const struct transcribe_model_load_params * params,
     struct transcribe_model **             out_model);
 
 /*
- * Free a model. Only valid after every context derived from this model
+ * Free a model. Only valid after every session derived from this model
  * has been freed and no thread is still using the model. Passing NULL
  * is a no-op.
  */
 TRANSCRIBE_API void transcribe_model_free(struct transcribe_model * model);
 
 /*
- * Initialize a transcription context bound to a loaded model. Multiple
- * contexts may be created from the same model in parallel; each context
- * is single-threaded.
+ * Initialize a transcription session bound to a loaded model. Multiple
+ * sessions may be created from the same model in parallel; each session
+ * is single-threaded. The model must outlive every session derived from
+ * it (the session borrows, but does not own, the model).
+ *
+ * params may be NULL for library defaults (equivalent to
+ * TRANSCRIBE_SESSION_PARAMS_INIT). See transcribe_model_load_file for the
+ * NULL-vs-{0} distinction.
  */
-TRANSCRIBE_API transcribe_status transcribe_context_init(
+TRANSCRIBE_API transcribe_status transcribe_session_init(
     struct transcribe_model *                model,
-    const struct transcribe_context_params * params,
-    struct transcribe_context **             out_ctx);
+    const struct transcribe_session_params * params,
+    struct transcribe_session **             out_session);
 
-/* Free a context. Passing NULL is a no-op. */
-TRANSCRIBE_API void transcribe_context_free(struct transcribe_context * ctx);
+/* Free a session created with transcribe_session_init. Does NOT free the
+ * model the session was bound to. Passing NULL is a no-op. */
+TRANSCRIBE_API void transcribe_session_free(struct transcribe_session * session);
+
+/*
+ * Convenience: load a model and open a session against it in one call,
+ * for the common "I just want to transcribe one stream" case. Bundles
+ * transcribe_model_load_file + transcribe_session_init.
+ *
+ * The returned session OWNS the model it loaded; transcribe_close frees
+ * both. To share one model across multiple sessions (e.g. one per
+ * thread), use the two-step transcribe_model_load_file +
+ * transcribe_session_init API instead — that is the only reason to reach
+ * past this function.
+ *
+ * load_params and session_params may each be NULL for library defaults.
+ *
+ * On success *out_session is set and the caller owns it. On failure
+ * *out_session is set to NULL and a non-OK status is returned (the same
+ * status transcribe_model_load_file / transcribe_session_init would
+ * return; no partial state leaks).
+ */
+TRANSCRIBE_API transcribe_status transcribe_open(
+    const char *                                path,
+    const struct transcribe_model_load_params * load_params,
+    const struct transcribe_session_params *    session_params,
+    struct transcribe_session **                out_session);
+
+/*
+ * Free a session, and — if it was created by transcribe_open — the model
+ * it owns. Safe to call on ANY session: one created via
+ * transcribe_session_init does not own its model, so transcribe_close
+ * frees only the session, exactly like transcribe_session_free. (The
+ * reverse is not symmetric: calling transcribe_session_free on a
+ * transcribe_open session frees the session but leaks the owned model.
+ * Pair open with close.) Passing NULL is a no-op.
+ */
+TRANSCRIBE_API void transcribe_close(struct transcribe_session * session);
+
+/*
+ * Borrow the model bound to a session. The returned pointer is owned by
+ * the library — do not free it — and remains valid for the session's
+ * lifetime. This lets convenience-path (transcribe_open) callers reach
+ * model introspection such as transcribe_model_backend() and the
+ * capabilities query without holding a separate model handle. Returns
+ * NULL if session is NULL.
+ */
+TRANSCRIBE_API const struct transcribe_model * transcribe_get_model(
+    const struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Run                                                                     */
@@ -832,22 +892,24 @@ TRANSCRIBE_API void transcribe_context_free(struct transcribe_context * ctx);
  * Run one batch transcription.
  *
  * pcm:        mono float32 PCM samples in [-1.0, 1.0] at 16 kHz.
- * n_samples:  number of samples in pcm.
- * params:     run params.
+ * n_samples:  number of samples in pcm. Must be strictly positive;
+ *             a non-positive count returns TRANSCRIBE_ERR_INVALID_ARG
+ *             (same rule as transcribe_stream_feed).
+ * params:     run params, or NULL for defaults.
  *
  * v1 supports only 16 kHz mono float32 PCM and does not link a
  * resampler; the caller is responsible for resampling external audio
  * before calling this function.
  *
- * On success, results are populated on the context and may be read via
+ * On success, results are populated on the session and may be read via
  * the accessors below. Calling transcribe_run() again replaces the
- * previous result on the same context.
+ * previous result on the same session.
  */
 TRANSCRIBE_API transcribe_status transcribe_run(
-    struct transcribe_context *      ctx,
+    struct transcribe_session *      session,
     const float *                    pcm,
     int                              n_samples,
-    const struct transcribe_params * params);
+    const struct transcribe_run_params * params);
 
 /* ----------------------------------------------------------------------- */
 /* Cancellation                                                            */
@@ -862,7 +924,7 @@ TRANSCRIBE_API transcribe_status transcribe_run(
  * Returning true aborts the in-flight run: transcribe_run returns
  * TRANSCRIBE_ERR_ABORTED and result accessors (transcribe_full_text,
  * transcribe_n_segments, etc.) expose the partial content from chunks
- * that completed before abort. Use transcribe_was_aborted(ctx) to
+ * that completed before abort. Use transcribe_was_aborted(session) to
  * distinguish partial-from-abort from complete.
  *
  * The next successful transcribe_run() replaces the result atomically,
@@ -875,35 +937,35 @@ TRANSCRIBE_API transcribe_status transcribe_run(
 typedef bool (*transcribe_abort_callback)(void * user_data);
 
 /*
- * Install or clear the abort callback for a context. Passing cb=NULL
+ * Install or clear the abort callback for a session. Passing cb=NULL
  * clears any previously installed callback. Safe to call before the
- * first transcribe_run. No-op if ctx is NULL.
+ * first transcribe_run. No-op if session is NULL.
  *
  * Not thread-safe with respect to an in-flight transcribe_run on the
- * same context — the context is single-threaded-at-a-time per the
+ * same session — the session is single-threaded-at-a-time per the
  * threading contract above. Callers that need to trigger abort from
  * another thread should do so by flipping state inside the callback's
  * user_data, not by swapping the callback itself.
  */
 TRANSCRIBE_API void transcribe_set_abort_callback(
-    struct transcribe_context *  ctx,
+    struct transcribe_session *  session,
     transcribe_abort_callback    cb,
     void *                       user_data);
 
 /*
  * True if the most recent transcribe_run was aborted by the installed
  * callback returning true. Reset to false at the top of each
- * transcribe_run. Returns false if ctx is NULL.
+ * transcribe_run. Returns false if session is NULL.
  */
-TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_context * ctx);
+TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Streaming                                                               */
 /* ----------------------------------------------------------------------- */
 
 /*
- * Streaming is a mode on transcribe_context, not a separate handle. A
- * context is in exactly one of four lifecycle states at any time, and
+ * Streaming is a mode on transcribe_session, not a separate handle. A
+ * session is in exactly one of four lifecycle states at any time, and
  * the result accessors (transcribe_full_text, segments, words, tokens)
  * return the current cumulative snapshot of the active stream.
  *
@@ -917,17 +979,17 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_context * ctx
  * text, timestamps, probabilities, or indices at or beyond the
  * committed-count boundary across calls.
  *
- * Cancellation reuses the existing context abort callback. The
+ * Cancellation reuses the existing session abort callback. The
  * callback is polled at chunk boundaries and decode-step boundaries
  * during feed/finalize; on cancellation the active call returns
  * TRANSCRIBE_ERR_ABORTED, partial results remain readable, and the
  * stream transitions to FAILED (transcribe_was_aborted distinguishes
  * caller cancellation from other terminal statuses).
  *
- * Multiple concurrent streams: use the existing model/context
+ * Multiple concurrent streams: use the existing model/session
  * threading model. Create multiple contexts from one loaded model,
- * then run at most one stream per context. The model is shared and
- * read-only; each context owns its own stream state.
+ * then run at most one stream per session. The model is shared and
+ * read-only; each session owns its own stream state.
  *
  * Streaming params (transcribe_stream_params) carry an optional,
  * kind-tagged family extension pointer. Family-specific extension
@@ -982,15 +1044,15 @@ TRANSCRIBE_API struct transcribe_stream_params
  *
  *   struct_size        Caller's sizeof(*this). Initialized via
  *                      TRANSCRIBE_STREAM_UPDATE_INIT (zero-fill).
- *   result_changed     The context result was modified by this call.
+ *   result_changed     The session result was modified by this call.
  *                      Inspect the accessors after the call to read
  *                      the new snapshot.
  *   is_final           True only on the finalize call's update. Set
  *                      by the dispatcher after the family hook
  *                      returns; family hooks cannot override.
  *   revision           Monotonic counter that increments whenever the
- *                      context result changes (mirrors
- *                      transcribe_stream_revision(ctx) after the call
+ *                      session result changes (mirrors
+ *                      transcribe_stream_revision(session) after the call
  *                      returns).
  *   input_received_ms  Total audio received by the stream since begin.
  *   audio_committed_ms Audio whose result is committed (corresponds
@@ -1001,7 +1063,7 @@ TRANSCRIBE_API struct transcribe_stream_params
  *                      may use this as a "drain" hint.
  *
  * update is nullable. Passing NULL means the caller will inspect the
- * context directly (revision + committed-count accessors). Audio
+ * session directly (revision + committed-count accessors). Audio
  * cursor fields are only available via this struct.
  *
  * Zero-means-absent contract: every field on this struct is designed
@@ -1025,13 +1087,13 @@ struct transcribe_stream_update {
     { sizeof(struct transcribe_stream_update) }
 
 /*
- * Begin a streaming run on ctx.
+ * Begin a streaming run on session.
  *
  * run_params and stream_params MUST be non-null (callers obtain
- * defaults from transcribe_default_params() and
+ * defaults from transcribe_run_default_params() and
  * transcribe_stream_default_params()).
  *
- * On success the context transitions IDLE/FINISHED/FAILED -> ACTIVE
+ * On success the session transitions IDLE/FINISHED/FAILED -> ACTIVE
  * and every result-visible field is cleared: text, segments, words,
  * tokens, detected language, stream revision, committed counts,
  * audio cursors, timings, was_aborted, and last stream status. The
@@ -1039,7 +1101,7 @@ struct transcribe_stream_update {
  * stream buffers held by the family are preserved.
  *
  * Returns:
- *   TRANSCRIBE_ERR_INVALID_ARG       NULL arg, ctx in ACTIVE state,
+ *   TRANSCRIBE_ERR_INVALID_ARG       NULL arg, session in ACTIVE state,
  *                                    out-of-range enum in run_params, or
  *                                    an extension whose kind is unknown
  *                                    to / not accepted by the loaded model.
@@ -1050,7 +1112,7 @@ struct transcribe_stream_update {
  *                                    transcribe_ext header. A family
  *                                    extension with a size below its
  *                                    kind's minimum is reported by the
- *                                    family hook after the context enters
+ *                                    family hook after the session enters
  *                                    ACTIVE.
  *                                    Use TRANSCRIBE_*_INIT macros to avoid.
  *   TRANSCRIBE_ERR_NOT_IMPLEMENTED   Model has no streaming hooks or
@@ -1071,7 +1133,7 @@ struct transcribe_stream_update {
  *
  * Failure semantics split at the family hook boundary:
  *
- *   Pre-hook failures leave the context's lifecycle state untouched —
+ *   Pre-hook failures leave the session's lifecycle state untouched —
  *   the call returns without entering ACTIVE and without clearing the
  *   previous result snapshot. These include unknown / unaccepted
  *   extension kinds and top-level struct_size failures.
@@ -1084,8 +1146,8 @@ struct transcribe_stream_update {
  *   typically empty.
  */
 TRANSCRIBE_API transcribe_status transcribe_stream_begin(
-    struct transcribe_context *              ctx,
-    const struct transcribe_params *         run_params,
+    struct transcribe_session *              session,
+    const struct transcribe_run_params *         run_params,
     const struct transcribe_stream_params *  stream_params);
 
 /*
@@ -1103,7 +1165,7 @@ TRANSCRIBE_API transcribe_status transcribe_stream_begin(
  * it before calling the family hook, so callers may rely on a clean
  * struct even on early-return error paths.
  *
- * Returns TRANSCRIBE_ERR_INVALID_ARG when ctx is NULL, when state
+ * Returns TRANSCRIBE_ERR_INVALID_ARG when session is NULL, when state
  * is not ACTIVE, or on malformed input. A terminal non-OK status
  * from the family hook transitions the stream to FAILED and is
  * preserved in transcribe_stream_last_status. TRANSCRIBE_ERR_ABORTED
@@ -1111,7 +1173,7 @@ TRANSCRIBE_API transcribe_status transcribe_stream_begin(
  * other failures.
  */
 TRANSCRIBE_API transcribe_status transcribe_stream_feed(
-    struct transcribe_context *        ctx,
+    struct transcribe_session *        session,
     const float *                      pcm,
     int                                n_samples,
     struct transcribe_stream_update *  update);
@@ -1120,49 +1182,49 @@ TRANSCRIBE_API transcribe_status transcribe_stream_feed(
  * Signal end of input. Flushes buffered audio, satisfies right-
  * context / lookahead requirements, and emits remaining text.
  *
- * On success the context transitions ACTIVE -> FINISHED. On a
- * terminal non-OK status the context transitions to FAILED and the
+ * On success the session transitions ACTIVE -> FINISHED. On a
+ * terminal non-OK status the session transitions to FAILED and the
  * status is preserved in transcribe_stream_last_status.
  *
- * Returns TRANSCRIBE_ERR_INVALID_ARG when ctx is NULL or state is
+ * Returns TRANSCRIBE_ERR_INVALID_ARG when session is NULL or state is
  * not ACTIVE.
  */
 TRANSCRIBE_API transcribe_status transcribe_stream_finalize(
-    struct transcribe_context *        ctx,
+    struct transcribe_session *        session,
     struct transcribe_stream_update *  update);
 
 /*
  * Abandon the current stream without finalizing.
  *
- * Always returns the context to IDLE and clears every result-visible
+ * Always returns the session to IDLE and clears every result-visible
  * field, every stream-snapshot counter, last_status, and the family's
  * per-utterance streaming state. Allocated stream buffers held by the
  * family are preserved for reuse — full memory release is
- * transcribe_context_free.
+ * transcribe_session_free.
  *
  * Reset from IDLE clears any stale result/snapshot from a previous
  * stream or run. Reset from FINISHED or FAILED clears the surviving
  * result text and snapshot counters as well.
  *
- * No-op if ctx is NULL.
+ * No-op if session is NULL.
  */
 TRANSCRIBE_API void transcribe_stream_reset(
-    struct transcribe_context * ctx);
+    struct transcribe_session * session);
 
 /*
  * Current stream lifecycle state. Returns TRANSCRIBE_STREAM_IDLE if
- * ctx is NULL.
+ * session is NULL.
  */
 TRANSCRIBE_API enum transcribe_stream_state
-    transcribe_stream_get_state(const struct transcribe_context * ctx);
+    transcribe_stream_get_state(const struct transcribe_session * session);
 
 /*
- * Monotonic revision counter. Increments whenever the context result
+ * Monotonic revision counter. Increments whenever the session result
  * changes during streaming. Reset to 0 by begin / reset / run.
- * Returns 0 if ctx is NULL.
+ * Returns 0 if session is NULL.
  */
 TRANSCRIBE_API int transcribe_stream_revision(
-    const struct transcribe_context * ctx);
+    const struct transcribe_session * session);
 
 /*
  * Committed-prefix counts. tokens[0 .. n_committed_tokens) is the
@@ -1171,14 +1233,14 @@ TRANSCRIBE_API int transcribe_stream_revision(
  * that only emit on finalize set committed counts equal to the
  * total counts on the finalize call.
  *
- * Return 0 if ctx is NULL.
+ * Return 0 if session is NULL.
  */
 TRANSCRIBE_API int transcribe_stream_n_committed_segments(
-    const struct transcribe_context * ctx);
+    const struct transcribe_session * session);
 TRANSCRIBE_API int transcribe_stream_n_committed_words(
-    const struct transcribe_context * ctx);
+    const struct transcribe_session * session);
 TRANSCRIBE_API int transcribe_stream_n_committed_tokens(
-    const struct transcribe_context * ctx);
+    const struct transcribe_session * session);
 
 /*
  * Last terminal status of the stream. Preserves the failing status
@@ -1186,11 +1248,11 @@ TRANSCRIBE_API int transcribe_stream_n_committed_tokens(
  * the caller can inspect it after the fact. Reset to TRANSCRIBE_OK
  * by begin / reset / run.
  *
- * Returns TRANSCRIBE_OK if ctx is NULL or no terminal status has
+ * Returns TRANSCRIBE_OK if session is NULL or no terminal status has
  * been recorded on the current stream.
  */
 TRANSCRIBE_API transcribe_status transcribe_stream_last_status(
-    const struct transcribe_context * ctx);
+    const struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Tokenization                                                            */
@@ -1234,11 +1296,11 @@ TRANSCRIBE_API int transcribe_tokenize(
 
 /*
  * Per-call timings collected by the most recent transcribe_run on a
- * context, plus the wall-clock load time of the model the context is
+ * session, plus the wall-clock load time of the model the session is
  * bound to. All values are in milliseconds.
  *
  *   load_ms    one-time wall-clock cost of transcribe_model_load_file,
- *              captured on the model and surfaced via every context
+ *              captured on the model and surfaced via every session
  *              derived from it. Not affected by transcribe_reset_timings
  *              (it's a model-scoped fact).
  *   mel_ms     time to compute the mel front-end on the most recent
@@ -1266,51 +1328,51 @@ struct transcribe_timings {
 #define TRANSCRIBE_TIMINGS_INIT { sizeof(struct transcribe_timings) }
 
 /*
- * Read the current timings from a context into caller-owned storage.
+ * Read the current timings from a session into caller-owned storage.
  * Safe to call before any transcribe_run; mel_ms / encode_ms /
  * decode_ms will be 0. load_ms is non-zero as soon as the underlying
  * model is loaded.
  *
  * Returns:
- *   TRANSCRIBE_ERR_INVALID_ARG     ctx or out_timings is NULL.
+ *   TRANSCRIBE_ERR_INVALID_ARG     session or out_timings is NULL.
  *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE out_timings->struct_size is 0 or
  *                                  smaller than the library's minimum.
  */
 TRANSCRIBE_API transcribe_status transcribe_get_timings(
-    const struct transcribe_context * ctx,
+    const struct transcribe_session * session,
     struct transcribe_timings *       out_timings);
 
 /*
  * Pretty-print the current timings to the registered log callback at
- * INFO level (or stderr if no callback is installed). No-op if ctx
+ * INFO level (or stderr if no callback is installed). No-op if session
  * is NULL.
  */
 TRANSCRIBE_API void
-transcribe_print_timings(const struct transcribe_context * ctx);
+transcribe_print_timings(const struct transcribe_session * session);
 
 /*
  * Reset the per-run timing accumulators (mel_ms, encode_ms,
  * decode_ms) to 0. Does NOT touch load_ms — that's a model-scoped
- * fact. No-op if ctx is NULL.
+ * fact. No-op if session is NULL.
  */
 TRANSCRIBE_API void
-transcribe_reset_timings(struct transcribe_context * ctx);
+transcribe_reset_timings(struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Result accessors - top level                                            */
 /* ----------------------------------------------------------------------- */
 
-TRANSCRIBE_API const char *               transcribe_full_text(const struct transcribe_context * ctx);
-TRANSCRIBE_API transcribe_timestamp_kind  transcribe_returned_timestamp_kind(const struct transcribe_context * ctx);
-TRANSCRIBE_API int                        transcribe_n_segments(const struct transcribe_context * ctx);
-TRANSCRIBE_API int                        transcribe_n_words(const struct transcribe_context * ctx);
-TRANSCRIBE_API int                        transcribe_n_tokens(const struct transcribe_context * ctx);
+TRANSCRIBE_API const char *               transcribe_full_text(const struct transcribe_session * session);
+TRANSCRIBE_API transcribe_timestamp_kind  transcribe_returned_timestamp_kind(const struct transcribe_session * session);
+TRANSCRIBE_API int                        transcribe_n_segments(const struct transcribe_session * session);
+TRANSCRIBE_API int                        transcribe_n_words(const struct transcribe_session * session);
+TRANSCRIBE_API int                        transcribe_n_tokens(const struct transcribe_session * session);
 
 /*
  * The language the model itself predicted on the most recent run, as a
  * short ISO code ("en", "zh", "yue", "ja", "ko", ...). Returns an empty
  * string when:
- *   - no successful run has happened on this context yet, or
+ *   - no successful run has happened on this session yet, or
  *   - the caller passed an explicit `params->language` hint (the
  *     library does not echo hints back through this field; callers
  *     already know what they asked for), or
@@ -1319,10 +1381,10 @@ TRANSCRIBE_API int                        transcribe_n_tokens(const struct trans
  *   - the family's LID head produced a non-language sentinel for this
  *     audio (e.g. SenseVoice's <|nospeech|>).
  *
- * Returned pointer is owned by the context and remains valid until the
- * next transcribe_run() or transcribe_context_free() call.
+ * Returned pointer is owned by the session and remains valid until the
+ * next transcribe_run() or transcribe_session_free() call.
  */
-TRANSCRIBE_API const char *               transcribe_detected_language(const struct transcribe_context * ctx);
+TRANSCRIBE_API const char *               transcribe_detected_language(const struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Result accessors - per-item rows                                        */
@@ -1334,10 +1396,10 @@ TRANSCRIBE_API const char *               transcribe_detected_language(const str
  * and a pointer to a TRANSCRIBE_*_INIT-initialized struct; the library
  * writes the row's fields into the caller's buffer.
  *
- * `text` pointers in these structs are ctx-owned and remain valid until
+ * `text` pointers in these structs are session-owned and remain valid until
  * the next transcribe_run() (one-shot) / transcribe_stream_begin()
- * (streaming) / transcribe_stream_reset() / transcribe_context_free()
- * call on the same context. Callers that want to hold the text past
+ * (streaming) / transcribe_stream_reset() / transcribe_session_free()
+ * call on the same session. Callers that want to hold the text past
  * those boundaries must copy the bytes.
  *
  * Out-of-range index (i < 0 or i >= the corresponding transcribe_n_*())
@@ -1360,7 +1422,7 @@ struct transcribe_segment {
     int          n_words;
     int          first_token;
     int          n_tokens;
-    const char * text;        /* ctx-owned; see lifetime note above */
+    const char * text;        /* session-owned; see lifetime note above */
 };
 
 #define TRANSCRIBE_SEGMENT_INIT { sizeof(struct transcribe_segment) }
@@ -1372,7 +1434,7 @@ struct transcribe_word {
     int          seg_index;
     int          first_token;
     int          n_tokens;
-    const char * text;        /* ctx-owned; see lifetime note above */
+    const char * text;        /* session-owned; see lifetime note above */
 };
 
 #define TRANSCRIBE_WORD_INIT { sizeof(struct transcribe_word) }
@@ -1396,7 +1458,7 @@ struct transcribe_token {
     int64_t      t1_ms;
     int          seg_index;
     int          word_index;
-    const char * text;        /* ctx-owned; see lifetime note above */
+    const char * text;        /* session-owned; see lifetime note above */
 };
 
 #define TRANSCRIBE_TOKEN_INIT { sizeof(struct transcribe_token) }
@@ -1409,24 +1471,24 @@ struct transcribe_token {
  *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE out->struct_size is 0 or smaller
  *                                  than the library's minimum.
  *   TRANSCRIBE_OK                  otherwise. The caller's struct is
- *                                  written when ctx is non-NULL, the
- *                                  context has a result, and i is in
+ *                                  written when session is non-NULL, the
+ *                                  session has a result, and i is in
  *                                  range; otherwise it stays as
  *                                  zero-initialized by INIT (text NULL,
  *                                  scalars 0).
  */
 TRANSCRIBE_API transcribe_status transcribe_get_segment(
-    const struct transcribe_context * ctx,
+    const struct transcribe_session * session,
     int                               i,
     struct transcribe_segment *       out);
 
 TRANSCRIBE_API transcribe_status transcribe_get_word(
-    const struct transcribe_context * ctx,
+    const struct transcribe_session * session,
     int                               i,
     struct transcribe_word *          out);
 
 TRANSCRIBE_API transcribe_status transcribe_get_token(
-    const struct transcribe_context * ctx,
+    const struct transcribe_session * session,
     int                               i,
     struct transcribe_token *         out);
 

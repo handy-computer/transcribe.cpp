@@ -1,7 +1,7 @@
 // arch/moonshine/moonshine.h - Moonshine ASR model and context types.
 //
 // This header is INTERNAL to src/arch/moonshine/. It defines the concrete
-// classes that derive from transcribe_model / transcribe_context for the
+// classes that derive from transcribe_model / transcribe_session for the
 // Moonshine ASR family (encoder-decoder transformer over raw 16 kHz PCM).
 //
 // Closest in-tree analog: src/arch/whisper/whisper.h. The two families
@@ -12,7 +12,7 @@
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
@@ -110,7 +110,7 @@ struct MoonshineModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct MoonshineContext final : public transcribe_context {
+struct MoonshineSession final : public transcribe_session {
     ggml_context *        compute_ctx = nullptr;
     ggml_backend_sched_t  sched       = nullptr;
 
@@ -145,8 +145,8 @@ struct MoonshineContext final : public transcribe_context {
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
-    MoonshineContext() = default;
-    ~MoonshineContext() override;
+    MoonshineSession() = default;
+    ~MoonshineSession() override;
 };
 
 } // namespace transcribe::moonshine

@@ -1,7 +1,7 @@
 // arch/granite/granite.h - IBM Granite Speech model and context types.
 //
 // INTERNAL to src/arch/granite/. Defines the concrete classes that
-// derive from transcribe_model / transcribe_context for the Granite
+// derive from transcribe_model / transcribe_session for the Granite
 // Speech family (audio-LLM: Conformer encoder + BLIP-2 Q-Former
 // projector + Granite-4 causal LM with audio-token injection).
 //
@@ -25,7 +25,7 @@
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -113,7 +113,7 @@ struct GraniteModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct GraniteContext final : public transcribe_context {
+struct GraniteSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
@@ -133,8 +133,8 @@ struct GraniteContext final : public transcribe_context {
     // the actual prompt+gen budget.
     transcribe::qwen3_lm::KvCache kv;
 
-    GraniteContext() = default;
-    ~GraniteContext() override;
+    GraniteSession() = default;
+    ~GraniteSession() override;
 };
 
 } // namespace transcribe::granite

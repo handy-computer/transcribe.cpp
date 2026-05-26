@@ -4,13 +4,13 @@
 // on a loaded model: state machine rejections, update zero-init,
 // nullable-update handling, transcribe_run rejection while ACTIVE,
 // reset behavior from each state, and the safe-sentinel returns of the
-// streaming accessors when ctx is NULL or in IDLE.
+// streaming accessors when session is NULL or in IDLE.
 //
 // Capability-gated paths (NOT_IMPLEMENTED for non-streaming families,
 // TRANSLATE rejection, language validation) require a real model and
 // land in Phase 3 against an existing non-streaming arch.
 
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-arch.h"
 #include "transcribe-model.h"
 #include "transcribe.h"
@@ -42,13 +42,13 @@ void test_accessors_on_null_ctx() {
 }
 
 void test_accessors_on_idle_ctx() {
-    transcribe_context ctx;
-    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_IDLE);
-    CHECK(transcribe_stream_revision(&ctx) == 0);
-    CHECK(transcribe_stream_n_committed_segments(&ctx) == 0);
-    CHECK(transcribe_stream_n_committed_words(&ctx) == 0);
-    CHECK(transcribe_stream_n_committed_tokens(&ctx) == 0);
-    CHECK(transcribe_stream_last_status(&ctx) == TRANSCRIBE_OK);
+    transcribe_session session;
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
+    CHECK(transcribe_stream_revision(&session) == 0);
+    CHECK(transcribe_stream_n_committed_segments(&session) == 0);
+    CHECK(transcribe_stream_n_committed_words(&session) == 0);
+    CHECK(transcribe_stream_n_committed_tokens(&session) == 0);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_OK);
 }
 
 void test_default_params() {
@@ -58,50 +58,55 @@ void test_default_params() {
 }
 
 void test_begin_null_args() {
-    // ctx == NULL
-    const transcribe_params rp = transcribe_default_params();
+    // session == NULL is still rejected.
+    const transcribe_run_params rp = transcribe_run_default_params();
     const transcribe_stream_params sp = transcribe_stream_default_params();
     CHECK(transcribe_stream_begin(nullptr, &rp, &sp) ==
           TRANSCRIBE_ERR_INVALID_ARG);
 
-    transcribe_context ctx;
-    CHECK(transcribe_stream_begin(&ctx, nullptr, &sp) ==
+    // NULL run/stream params now mean "all defaults", so they are no
+    // longer rejected as INVALID_ARG. With this model-less context the
+    // call proceeds past parameter validation to the model/capability
+    // gate (NOT_IMPLEMENTED); the point under test is that NULL params
+    // is accepted, not the downstream gate's exact code.
+    transcribe_session session;
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) !=
           TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_stream_begin(&ctx, &rp, nullptr) ==
+    CHECK(transcribe_stream_begin(&session, &rp, nullptr) !=
           TRANSCRIBE_ERR_INVALID_ARG);
 
     // None of these should have moved the context off IDLE.
-    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_IDLE);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
 }
 
 void test_begin_rejected_when_active() {
-    transcribe_context ctx;
-    ctx.stream_state = TRANSCRIBE_STREAM_ACTIVE;
+    transcribe_session session;
+    session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
 
-    const transcribe_params rp = transcribe_default_params();
+    const transcribe_run_params rp = transcribe_run_default_params();
     const transcribe_stream_params sp = transcribe_stream_default_params();
-    CHECK(transcribe_stream_begin(&ctx, &rp, &sp) ==
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
           TRANSCRIBE_ERR_INVALID_ARG);
     // Still ACTIVE — rejection must not clear lifecycle.
-    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_ACTIVE);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_ACTIVE);
 }
 
 void test_begin_no_model_returns_not_implemented() {
-    // ctx with no model still reaches the model/arch check.
-    transcribe_context ctx;
-    const transcribe_params rp = transcribe_default_params();
+    // session with no model still reaches the model/arch check.
+    transcribe_session session;
+    const transcribe_run_params rp = transcribe_run_default_params();
     const transcribe_stream_params sp = transcribe_stream_default_params();
-    CHECK(transcribe_stream_begin(&ctx, &rp, &sp) ==
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
           TRANSCRIBE_ERR_NOT_IMPLEMENTED);
-    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_IDLE);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
 }
 
 transcribe_status fake_stream_begin(
-    transcribe_context *              ctx,
-    const transcribe_params *         run_params,
+    transcribe_session *              session,
+    const transcribe_run_params *         run_params,
     const transcribe_stream_params *  stream_params)
 {
-    (void)ctx;
+    (void)session;
     (void)run_params;
     (void)stream_params;
     ++g_begin_calls;
@@ -109,12 +114,12 @@ transcribe_status fake_stream_begin(
 }
 
 transcribe_status fake_stream_feed(
-    transcribe_context *     ctx,
+    transcribe_session *     session,
     const float *            pcm,
     int                      n_samples,
     transcribe_stream_update * update)
 {
-    (void)ctx;
+    (void)session;
     (void)pcm;
     (void)n_samples;
     (void)update;
@@ -122,10 +127,10 @@ transcribe_status fake_stream_feed(
 }
 
 transcribe_status fake_stream_finalize(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     transcribe_stream_update * update)
 {
-    (void)ctx;
+    (void)session;
     (void)update;
     return TRANSCRIBE_OK;
 }
@@ -157,23 +162,23 @@ void test_begin_rejects_unknown_ext_kind_before_hook() {
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
-    transcribe_context ctx;
-    ctx.model        = &model;
-    ctx.has_result   = true;
-    ctx.full_text    = "previous result";
+    transcribe_session session;
+    session.model        = &model;
+    session.has_result   = true;
+    session.full_text    = "previous result";
 
-    transcribe_params rp = TRANSCRIBE_PARAMS_INIT;
+    transcribe_run_params rp = TRANSCRIBE_RUN_PARAMS_INIT;
     transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
     const transcribe_ext ext = { sizeof(transcribe_ext), 0x58585858u };
     sp.family = &ext;
 
     g_begin_calls = 0;
-    CHECK(transcribe_stream_begin(&ctx, &rp, &sp) ==
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
           TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(g_begin_calls == 0);
-    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_IDLE);
-    CHECK(ctx.has_result);
-    CHECK(ctx.full_text == "previous result");
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
+    CHECK(session.has_result);
+    CHECK(session.full_text == "previous result");
 }
 
 void test_begin_rejects_tiny_ext_before_hook() {
@@ -194,27 +199,27 @@ void test_begin_rejects_tiny_ext_before_hook() {
     model.caps.supports_streaming = true;
     model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
-    transcribe_context ctx;
-    ctx.model      = &model;
-    ctx.has_result = true;
-    ctx.full_text  = "previous result";
+    transcribe_session session;
+    session.model      = &model;
+    session.has_result = true;
+    session.full_text  = "previous result";
 
-    transcribe_params rp = TRANSCRIBE_PARAMS_INIT;
+    transcribe_run_params rp = TRANSCRIBE_RUN_PARAMS_INIT;
     transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
     transcribe_ext ext = { 0, 0 };
     sp.family = &ext;
 
     g_begin_calls = 0;
-    CHECK(transcribe_stream_begin(&ctx, &rp, &sp) ==
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
           TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
     CHECK(g_begin_calls == 0);
-    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_IDLE);
-    CHECK(ctx.has_result);
-    CHECK(ctx.full_text == "previous result");
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
+    CHECK(session.has_result);
+    CHECK(session.full_text == "previous result");
 }
 
 void test_feed_rejects_idle() {
-    transcribe_context ctx;
+    transcribe_session session;
     float pcm = 0.0f;
     transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
     upd.result_changed = true; // dirty sentinel — must be zeroed
@@ -222,7 +227,7 @@ void test_feed_rejects_idle() {
     upd.revision       = 42;
     upd.input_received_ms = 999;
 
-    CHECK(transcribe_stream_feed(&ctx, &pcm, 1, &upd) ==
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) ==
           TRANSCRIBE_ERR_INVALID_ARG);
     // Dispatcher zero-inits update before the state check returns,
     // preserving the caller's struct_size.
@@ -234,18 +239,18 @@ void test_feed_rejects_idle() {
 }
 
 void test_feed_rejects_finished_and_failed() {
-    transcribe_context ctx;
+    transcribe_session session;
     float pcm = 0.0f;
 
-    ctx.stream_state = TRANSCRIBE_STREAM_FINISHED;
-    CHECK(transcribe_stream_feed(&ctx, &pcm, 1, nullptr) ==
+    session.stream_state = TRANSCRIBE_STREAM_FINISHED;
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(ctx.stream_state == TRANSCRIBE_STREAM_FINISHED);
+    CHECK(session.stream_state == TRANSCRIBE_STREAM_FINISHED);
 
-    ctx.stream_state = TRANSCRIBE_STREAM_FAILED;
-    CHECK(transcribe_stream_feed(&ctx, &pcm, 1, nullptr) ==
+    session.stream_state = TRANSCRIBE_STREAM_FAILED;
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(ctx.stream_state == TRANSCRIBE_STREAM_FAILED);
+    CHECK(session.stream_state == TRANSCRIBE_STREAM_FAILED);
 }
 
 void test_feed_rejects_null_ctx_and_bad_input() {
@@ -253,49 +258,49 @@ void test_feed_rejects_null_ctx_and_bad_input() {
     CHECK(transcribe_stream_feed(nullptr, &pcm, 1, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
 
-    transcribe_context ctx;
-    ctx.stream_state = TRANSCRIBE_STREAM_ACTIVE;
+    transcribe_session session;
+    session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
 
     // Negative n_samples
-    CHECK(transcribe_stream_feed(&ctx, &pcm, -1, nullptr) ==
+    CHECK(transcribe_stream_feed(&session, &pcm, -1, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
     // Zero n_samples — polling without audio goes through the
     // accessors, not feed.
-    CHECK(transcribe_stream_feed(&ctx, &pcm, 0, nullptr) ==
+    CHECK(transcribe_stream_feed(&session, &pcm, 0, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
     // pcm NULL is rejected unconditionally, regardless of n_samples.
-    CHECK(transcribe_stream_feed(&ctx, nullptr, 16000, nullptr) ==
+    CHECK(transcribe_stream_feed(&session, nullptr, 16000, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
-    CHECK(transcribe_stream_feed(&ctx, nullptr, 0, nullptr) ==
+    CHECK(transcribe_stream_feed(&session, nullptr, 0, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
 
     // The ACTIVE state survives every malformed-input rejection
     // because the dispatcher returns before the family hook runs.
-    CHECK(transcribe_stream_get_state(&ctx) == TRANSCRIBE_STREAM_ACTIVE);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_ACTIVE);
 }
 
 void test_feed_active_no_hook_returns_not_implemented() {
-    transcribe_context ctx;
-    ctx.stream_state = TRANSCRIBE_STREAM_ACTIVE;
+    transcribe_session session;
+    session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
     float pcm = 0.0f;
     // No model → defensive NOT_IMPLEMENTED branch.
-    CHECK(transcribe_stream_feed(&ctx, &pcm, 1, nullptr) ==
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) ==
           TRANSCRIBE_ERR_NOT_IMPLEMENTED);
 }
 
 void test_finalize_rejects_non_active() {
-    transcribe_context ctx;
+    transcribe_session session;
 
     // IDLE
-    CHECK(transcribe_stream_finalize(&ctx, nullptr) ==
+    CHECK(transcribe_stream_finalize(&session, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
 
-    ctx.stream_state = TRANSCRIBE_STREAM_FINISHED;
-    CHECK(transcribe_stream_finalize(&ctx, nullptr) ==
+    session.stream_state = TRANSCRIBE_STREAM_FINISHED;
+    CHECK(transcribe_stream_finalize(&session, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
 
-    ctx.stream_state = TRANSCRIBE_STREAM_FAILED;
-    CHECK(transcribe_stream_finalize(&ctx, nullptr) ==
+    session.stream_state = TRANSCRIBE_STREAM_FAILED;
+    CHECK(transcribe_stream_finalize(&session, nullptr) ==
           TRANSCRIBE_ERR_INVALID_ARG);
 
     CHECK(transcribe_stream_finalize(nullptr, nullptr) ==
@@ -303,7 +308,7 @@ void test_finalize_rejects_non_active() {
 }
 
 void test_finalize_update_zeroinit() {
-    transcribe_context ctx;
+    transcribe_session session;
     transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
     upd.result_changed   = true;
     upd.is_final         = false; // will be cleared then forced true on success path
@@ -315,8 +320,8 @@ void test_finalize_update_zeroinit() {
     // struct (is_final is only forced true after a hook call, which
     // doesn't happen here — verify the early-return path leaves
     // update fully zeroed and preserves the caller's struct_size).
-    ctx.stream_state = TRANSCRIBE_STREAM_ACTIVE;
-    CHECK(transcribe_stream_finalize(&ctx, &upd) ==
+    session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
+    CHECK(transcribe_stream_finalize(&session, &upd) ==
           TRANSCRIBE_ERR_NOT_IMPLEMENTED);
     CHECK(upd.struct_size        == sizeof(transcribe_stream_update));
     CHECK(upd.result_changed     == false);
@@ -328,85 +333,85 @@ void test_finalize_update_zeroinit() {
 void test_reset_from_each_state() {
     // IDLE: no-op transition, must remain IDLE.
     {
-        transcribe_context ctx;
-        transcribe_stream_reset(&ctx);
-        CHECK(ctx.stream_state == TRANSCRIBE_STREAM_IDLE);
+        transcribe_session session;
+        transcribe_stream_reset(&session);
+        CHECK(session.stream_state == TRANSCRIBE_STREAM_IDLE);
     }
     // FINISHED: clears result + counters, returns to IDLE.
     {
-        transcribe_context ctx;
-        ctx.stream_state         = TRANSCRIBE_STREAM_FINISHED;
-        ctx.has_result           = true;
-        ctx.full_text            = "stale";
-        ctx.stream_revision      = 7;
-        ctx.n_committed_tokens   = 5;
-        ctx.stream_last_status   = TRANSCRIBE_ERR_OOM;
-        ctx.stream_audio_input_us = 12345;
-        transcribe_stream_reset(&ctx);
-        CHECK(ctx.stream_state          == TRANSCRIBE_STREAM_IDLE);
-        CHECK(ctx.has_result            == false);
-        CHECK(ctx.full_text.empty());
-        CHECK(ctx.stream_revision       == 0);
-        CHECK(ctx.n_committed_tokens    == 0);
-        CHECK(ctx.stream_last_status    == TRANSCRIBE_OK);
-        CHECK(ctx.stream_audio_input_us == 0);
+        transcribe_session session;
+        session.stream_state         = TRANSCRIBE_STREAM_FINISHED;
+        session.has_result           = true;
+        session.full_text            = "stale";
+        session.stream_revision      = 7;
+        session.n_committed_tokens   = 5;
+        session.stream_last_status   = TRANSCRIBE_ERR_OOM;
+        session.stream_audio_input_us = 12345;
+        transcribe_stream_reset(&session);
+        CHECK(session.stream_state          == TRANSCRIBE_STREAM_IDLE);
+        CHECK(session.has_result            == false);
+        CHECK(session.full_text.empty());
+        CHECK(session.stream_revision       == 0);
+        CHECK(session.n_committed_tokens    == 0);
+        CHECK(session.stream_last_status    == TRANSCRIBE_OK);
+        CHECK(session.stream_audio_input_us == 0);
     }
     // FAILED: same as FINISHED — clear everything, back to IDLE.
     {
-        transcribe_context ctx;
-        ctx.stream_state         = TRANSCRIBE_STREAM_FAILED;
-        ctx.stream_last_status   = TRANSCRIBE_ERR_ABORTED;
-        ctx.was_aborted          = true;
-        ctx.n_committed_segments = 3;
-        transcribe_stream_reset(&ctx);
-        CHECK(ctx.stream_state          == TRANSCRIBE_STREAM_IDLE);
-        CHECK(ctx.stream_last_status    == TRANSCRIBE_OK);
-        CHECK(ctx.was_aborted           == false);
-        CHECK(ctx.n_committed_segments  == 0);
+        transcribe_session session;
+        session.stream_state         = TRANSCRIBE_STREAM_FAILED;
+        session.stream_last_status   = TRANSCRIBE_ERR_ABORTED;
+        session.was_aborted          = true;
+        session.n_committed_segments = 3;
+        transcribe_stream_reset(&session);
+        CHECK(session.stream_state          == TRANSCRIBE_STREAM_IDLE);
+        CHECK(session.stream_last_status    == TRANSCRIBE_OK);
+        CHECK(session.was_aborted           == false);
+        CHECK(session.n_committed_segments  == 0);
     }
-    // NULL ctx — no-op.
+    // NULL session — no-op.
     transcribe_stream_reset(nullptr);
 }
 
 void test_run_rejected_while_active() {
-    transcribe_context ctx;
-    ctx.stream_state = TRANSCRIBE_STREAM_ACTIVE;
-    ctx.has_result   = true;
-    ctx.full_text    = "active stream result";
+    transcribe_session session;
+    session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
+    session.has_result   = true;
+    session.full_text    = "active stream result";
 
-    const transcribe_params rp = transcribe_default_params();
+    const transcribe_run_params rp = transcribe_run_default_params();
     float pcm = 0.0f;
-    const transcribe_status st = transcribe_run(&ctx, &pcm, 1, &rp);
+    const transcribe_status st = transcribe_run(&session, &pcm, 1, &rp);
     CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
     // Rejection must NOT clear the active stream's result snapshot.
-    CHECK(ctx.has_result);
-    CHECK(ctx.full_text == "active stream result");
-    CHECK(ctx.stream_state == TRANSCRIBE_STREAM_ACTIVE);
+    CHECK(session.has_result);
+    CHECK(session.full_text == "active stream result");
+    CHECK(session.stream_state == TRANSCRIBE_STREAM_ACTIVE);
 }
 
 void test_run_clears_stream_snapshot_from_finished() {
-    transcribe_context ctx;
-    ctx.stream_state         = TRANSCRIBE_STREAM_FINISHED;
-    ctx.stream_revision      = 12;
-    ctx.n_committed_tokens   = 4;
-    ctx.stream_last_status   = TRANSCRIBE_ERR_BACKEND;
-    ctx.stream_audio_input_us = 55555;
-    ctx.has_result           = true;
-    ctx.full_text            = "old run text";
+    transcribe_session session;
+    session.stream_state         = TRANSCRIBE_STREAM_FINISHED;
+    session.stream_revision      = 12;
+    session.n_committed_tokens   = 4;
+    session.stream_last_status   = TRANSCRIBE_ERR_BACKEND;
+    session.stream_audio_input_us = 55555;
+    session.has_result           = true;
+    session.full_text            = "old run text";
 
-    const transcribe_params rp = transcribe_default_params();
+    const transcribe_run_params rp = transcribe_run_default_params();
     float pcm = 0.0f;
     // No model → NOT_IMPLEMENTED, but clear_result + state reset must
     // have already run by the time we get here.
-    const transcribe_status st = transcribe_run(&ctx, &pcm, 1, &rp);
+    const transcribe_status st = transcribe_run(&session, &pcm, 1, &rp);
     CHECK(st == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
-    CHECK(ctx.has_result          == false);
-    CHECK(ctx.full_text.empty());
-    CHECK(ctx.stream_revision     == 0);
-    CHECK(ctx.n_committed_tokens  == 0);
-    CHECK(ctx.stream_last_status  == TRANSCRIBE_OK);
-    CHECK(ctx.stream_audio_input_us == 0);
-    CHECK(ctx.stream_state        == TRANSCRIBE_STREAM_IDLE);
+    CHECK(session.has_result          == false);
+    CHECK(session.full_text.empty());
+    CHECK(session.stream_revision     == 0);
+    CHECK(session.n_committed_tokens  == 0);
+    CHECK(session.stream_last_status  == TRANSCRIBE_OK);
+    CHECK(session.stream_audio_input_us == 0);
+    CHECK(session.stream_state        == TRANSCRIBE_STREAM_IDLE);
 }
 
 void test_clear_result_preserves_lifecycle() {
@@ -414,30 +419,30 @@ void test_clear_result_preserves_lifecycle() {
     // stream_state — only the streaming dispatcher transitions
     // lifecycle. Verify directly so a future refactor doesn't silently
     // tangle the two.
-    transcribe_context ctx;
-    ctx.stream_state       = TRANSCRIBE_STREAM_ACTIVE;
-    ctx.stream_revision    = 9;
-    ctx.n_committed_words  = 2;
-    ctx.has_result         = true;
-    ctx.full_text          = "snapshot";
+    transcribe_session session;
+    session.stream_state       = TRANSCRIBE_STREAM_ACTIVE;
+    session.stream_revision    = 9;
+    session.n_committed_words  = 2;
+    session.has_result         = true;
+    session.full_text          = "snapshot";
 
-    ctx.clear_result();
-    CHECK(ctx.stream_state         == TRANSCRIBE_STREAM_ACTIVE);
-    CHECK(ctx.has_result           == false);
-    CHECK(ctx.full_text.empty());
-    CHECK(ctx.stream_revision      == 0);
-    CHECK(ctx.n_committed_words    == 0);
+    session.clear_result();
+    CHECK(session.stream_state         == TRANSCRIBE_STREAM_ACTIVE);
+    CHECK(session.has_result           == false);
+    CHECK(session.full_text.empty());
+    CHECK(session.stream_revision      == 0);
+    CHECK(session.n_committed_words    == 0);
 }
 
 void test_last_status_survives_reads() {
-    transcribe_context ctx;
-    ctx.stream_state       = TRANSCRIBE_STREAM_FAILED;
-    ctx.stream_last_status = TRANSCRIBE_ERR_ABORTED;
+    transcribe_session session;
+    session.stream_state       = TRANSCRIBE_STREAM_FAILED;
+    session.stream_last_status = TRANSCRIBE_ERR_ABORTED;
 
-    CHECK(transcribe_stream_last_status(&ctx) == TRANSCRIBE_ERR_ABORTED);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_ABORTED);
     // Multiple reads do not consume or alter the value.
-    CHECK(transcribe_stream_last_status(&ctx) == TRANSCRIBE_ERR_ABORTED);
-    CHECK(ctx.stream_state == TRANSCRIBE_STREAM_FAILED);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_ABORTED);
+    CHECK(session.stream_state == TRANSCRIBE_STREAM_FAILED);
 }
 
 } // namespace

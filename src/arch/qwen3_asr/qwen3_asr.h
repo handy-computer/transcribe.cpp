@@ -1,7 +1,7 @@
 // arch/qwen3_asr/qwen3_asr.h - Qwen3-ASR model and context types.
 //
 // INTERNAL to src/arch/qwen3_asr/. Defines the concrete classes that
-// derive from transcribe_model / transcribe_context for the Qwen3-ASR
+// derive from transcribe_model / transcribe_session for the Qwen3-ASR
 // family (audio-LLM: audio encoder + Qwen3 causal LM with audio-token
 // injection).
 //
@@ -13,7 +13,7 @@
 
 #include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -113,7 +113,7 @@ struct QwenAsrModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct QwenAsrContext final : public transcribe_context {
+struct QwenAsrSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
@@ -127,8 +127,8 @@ struct QwenAsrContext final : public transcribe_context {
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
-    QwenAsrContext() = default;
-    ~QwenAsrContext() override;
+    QwenAsrSession() = default;
+    ~QwenAsrSession() override;
 };
 
 } // namespace transcribe::qwen3_asr

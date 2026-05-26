@@ -26,7 +26,7 @@
 //     test covers API behavior and structural correctness only.
 //   - The WAV path comes from TRANSCRIBE_TEST_AUDIO env var, falling
 //     back to samples/jfk.wav.
-//   - transcribe_model_params::backend is set to TRANSCRIBE_BACKEND_CPU
+//   - transcribe_model_load_params::backend is set to TRANSCRIBE_BACKEND_CPU
 //     before model load for deterministic results across platforms.
 //
 // CI never builds this -- it is a developer-local manual gate. The
@@ -182,7 +182,7 @@ int main() {
     // ---- Load model --------------------------------------------------
     const auto t_start = std::chrono::steady_clock::now();
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp = transcribe_model_load_default_params();
     mp.backend = TRANSCRIBE_BACKEND_CPU;  // strict CPU for cross-platform determinism
     struct transcribe_model * model = nullptr;
     {
@@ -221,11 +221,11 @@ int main() {
                  pcm.size(), static_cast<double>(pcm.size()) / 16000.0);
 
     // ---- Init context + run ------------------------------------------
-    transcribe_context_params cp = transcribe_context_default_params();
-    struct transcribe_context * ctx = nullptr;
+    transcribe_session_params cp = transcribe_session_default_params();
+    struct transcribe_session * ctx = nullptr;
     {
         const transcribe_status st =
-            transcribe_context_init(model, &cp, &ctx);
+            transcribe_session_init(model, &cp, &ctx);
         if (st != TRANSCRIBE_OK || ctx == nullptr) {
             std::fprintf(stderr, "cohere_e2e_smoke: ctx init: %s\n",
                          transcribe_status_string(st));
@@ -234,14 +234,14 @@ int main() {
         }
     }
 
-    transcribe_params rp = transcribe_default_params();
+    transcribe_run_params rp = transcribe_run_default_params();
     {
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         if (st != TRANSCRIBE_OK) {
             std::fprintf(stderr, "FAIL run: %s\n",
                          transcribe_status_string(st));
-            transcribe_context_free(ctx);
+            transcribe_session_free(ctx);
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
@@ -347,7 +347,7 @@ int main() {
     // is the "transcribe_run replaces the previous result" rule
     // from include/transcribe.h applied to the failure path.
     {
-        transcribe_params rp2 = transcribe_default_params();
+        transcribe_run_params rp2 = transcribe_run_default_params();
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -362,7 +362,7 @@ int main() {
         CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
     }
     {
-        transcribe_params rp2 = transcribe_default_params();
+        transcribe_run_params rp2 = transcribe_run_default_params();
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -372,7 +372,7 @@ int main() {
     }
 
     // ---- Teardown ----------------------------------------------------
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
 
     if (g_failures > 0) {

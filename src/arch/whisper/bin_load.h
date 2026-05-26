@@ -43,7 +43,7 @@ namespace transcribe::whisper {
 //   TRANSCRIBE_ERR_INVALID_ARG      - bad params
 //   TRANSCRIBE_ERR_BACKEND          - backend init failure
 transcribe_status load_from_bin(const char *                           path,
-                                const struct transcribe_model_params * params,
+                                const struct transcribe_model_load_params * params,
                                 struct transcribe_model **             out_model);
 
 } // namespace transcribe::whisper

@@ -16,7 +16,7 @@
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
@@ -110,7 +110,7 @@ struct MoonshineStreamingModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct MoonshineStreamingContext final : public transcribe_context {
+struct MoonshineStreamingSession final : public transcribe_session {
     ggml_context *        compute_ctx = nullptr;
     ggml_backend_sched_t  sched       = nullptr;
 
@@ -206,10 +206,10 @@ struct MoonshineStreamingContext final : public transcribe_context {
     // 0 means "decode on every encoder-frame advance". The finalize
     // path always runs one last decode regardless of this throttle.
     int32_t                           stream_min_decode_frames     = 0;
-    transcribe_params                 stream_run_params {};
+    transcribe_run_params                 stream_run_params {};
 
-    MoonshineStreamingContext() = default;
-    ~MoonshineStreamingContext() override;
+    MoonshineStreamingSession() = default;
+    ~MoonshineStreamingSession() override;
 };
 
 } // namespace transcribe::moonshine_streaming

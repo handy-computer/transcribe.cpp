@@ -20,7 +20,7 @@ void apply_family_invariants(transcribe_model & model) {
     // Feature bits: cancellation is wired at the run level. FunASR-Nano
     // exposes a runtime ITN toggle via the LLM system-prompt suffix
     // ("，不进行文本规整" appended on itn=false, omitted on itn=true).
-    // The generic transcribe_params::itn enum routes here. No PNC
+    // The generic transcribe_run_params::itn enum routes here. No PNC
     // runtime toggle.
     //
     // TODO(family doc): observe whether itn=true bundles

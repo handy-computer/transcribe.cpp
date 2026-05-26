@@ -16,7 +16,7 @@
 //
 // The Arch trait contains only the things that genuinely vary per
 // family. Lifecycle teardown (free_model / free_context) is handled
-// by virtual destructors on transcribe_model / transcribe_context,
+// by virtual destructors on transcribe_model / transcribe_session,
 // and the introspection accessors (capabilities, backend_string,
 // arch_string, variant_string) read directly from the base struct.
 
@@ -48,11 +48,11 @@ class Loader;
 //   handler returns a non-OK status.
 //
 //   init_context: same convention. On success *out_ctx points at a
-//   heap-allocated derived transcribe_context. The dispatcher has
+//   heap-allocated derived transcribe_session. The dispatcher has
 //   already validated that model and params are non-null.
 //
 //   Cleanup is NOT in the trait: the central dispatcher's
-//   transcribe_model_free / transcribe_context_free use `delete` against
+//   transcribe_model_free / transcribe_session_free use `delete` against
 //   the base, and the virtual destructors do the right thing.
 struct Arch {
     // The string compared against general.architecture in the GGUF KV.
@@ -61,19 +61,19 @@ struct Arch {
 
     transcribe_status (*load)(
         Loader &                               loader,
-        const transcribe_model_params *        params,
+        const transcribe_model_load_params *        params,
         struct transcribe_model **             out_model);
 
     transcribe_status (*init_context)(
         struct transcribe_model *              model,
-        const transcribe_context_params *      params,
-        struct transcribe_context **           out_ctx);
+        const transcribe_session_params *      params,
+        struct transcribe_session **           out_ctx);
 
     transcribe_status (*run)(
-        struct transcribe_context *            ctx,
+        struct transcribe_session *            ctx,
         const float *                          pcm,
         int                                    n_samples,
-        const transcribe_params *              params);
+        const transcribe_run_params *              params);
 
     // Optional streaming hooks. stream_begin / stream_feed /
     // stream_finalize form a required triple: a family that wants to
@@ -114,26 +114,26 @@ struct Arch {
     //     reuse). The dispatcher clears the result snapshot and
     //     forces stream_state back to IDLE around this call.
     transcribe_status (*stream_begin)(
-        struct transcribe_context *            ctx,
-        const transcribe_params *              run_params,
+        struct transcribe_session *            ctx,
+        const transcribe_run_params *              run_params,
         const transcribe_stream_params *       stream_params);
 
     transcribe_status (*stream_feed)(
-        struct transcribe_context *            ctx,
+        struct transcribe_session *            ctx,
         const float *                          pcm,
         int                                    n_samples,
         transcribe_stream_update *             update);
 
     transcribe_status (*stream_finalize)(
-        struct transcribe_context *            ctx,
+        struct transcribe_session *            ctx,
         transcribe_stream_update *             update);
 
     void (*stream_reset)(
-        struct transcribe_context *            ctx);
+        struct transcribe_session *            ctx);
 
     // Optional kind probe. Returns true when the loaded model variant
     // accepts the named extension kind on transcribe_stream_params::family
-    // (or, after Phase 2, transcribe_params::family). NULL means "no
+    // (or, after Phase 2, transcribe_run_params::family). NULL means "no
     // family extension kinds accepted" — the dispatcher's
     // transcribe_model_accepts_ext_kind() returns false in that case.
     //

@@ -1,7 +1,7 @@
 // arch/whisper/whisper.h - Whisper ASR model and context types.
 //
 // This header is INTERNAL to src/arch/whisper/. It defines the concrete
-// classes that derive from transcribe_model / transcribe_context for
+// classes that derive from transcribe_model / transcribe_session for
 // the Whisper ASR family (encoder-decoder transformer with cross-
 // attention decoder).
 //
@@ -14,7 +14,7 @@
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -304,7 +304,7 @@ struct WhisperModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct WhisperContext final : public transcribe_context {
+struct WhisperSession final : public transcribe_session {
     ggml_context *        compute_ctx      = nullptr;
     // Currently-allocated capacity of compute_ctx (mem_size). Used by
     // ensure_compute_ctx to decide between ggml_reset (cheap reuse)
@@ -360,8 +360,8 @@ struct WhisperContext final : public transcribe_context {
     // touch this buffer.
     std::vector<double> sample_scratch;
 
-    WhisperContext() = default;
-    ~WhisperContext() override;
+    WhisperSession() = default;
+    ~WhisperSession() override;
 };
 
 } // namespace transcribe::whisper

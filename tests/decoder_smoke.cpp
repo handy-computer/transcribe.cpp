@@ -141,7 +141,7 @@ int main() {
     }
 
     // ---- Load model ------------------------------------------------
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp = transcribe_model_load_default_params();
     struct transcribe_model * model = nullptr;
     {
         const transcribe_status st =
@@ -181,11 +181,11 @@ int main() {
     }
 
     // ---- Init context + run ----------------------------------------
-    transcribe_context_params cp = transcribe_context_default_params();
-    struct transcribe_context * ctx = nullptr;
+    transcribe_session_params cp = transcribe_session_default_params();
+    struct transcribe_session * ctx = nullptr;
     {
         const transcribe_status st =
-            transcribe_context_init(model, &cp, &ctx);
+            transcribe_session_init(model, &cp, &ctx);
         if (st != TRANSCRIBE_OK || ctx == nullptr) {
             std::fprintf(stderr, "decoder_smoke: ctx init: %s\n",
                          transcribe_status_string(st));
@@ -204,7 +204,7 @@ int main() {
     CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
     CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
 
-    transcribe_params rp = transcribe_default_params();
+    transcribe_run_params rp = transcribe_run_default_params();
     rp.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
     {
         const transcribe_status st =
@@ -212,7 +212,7 @@ int main() {
         if (st != TRANSCRIBE_OK) {
             std::fprintf(stderr, "decoder_smoke: run: %s\n",
                          transcribe_status_string(st));
-            transcribe_context_free(ctx);
+            transcribe_session_free(ctx);
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
@@ -367,7 +367,7 @@ int main() {
     // ceiling contract: the request is an upper bound, not an exact
     // match. The default run above already covered AUTO→TOKEN.
     {
-        transcribe_params rp2 = transcribe_default_params();
+        transcribe_run_params rp2 = transcribe_run_default_params();
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -404,7 +404,7 @@ int main() {
         CHECK(full2 != nullptr && full2[0] != '\0');
     }
     {
-        transcribe_params rp2 = transcribe_default_params();
+        transcribe_run_params rp2 = transcribe_run_default_params();
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -422,7 +422,7 @@ int main() {
         }
     }
     {
-        transcribe_params rp2 = transcribe_default_params();
+        transcribe_run_params rp2 = transcribe_run_default_params();
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -453,14 +453,14 @@ int main() {
     {
         // First, seed the context with a real successful run so
         // there is a previous result to clobber.
-        transcribe_params rp_ok = transcribe_default_params();
+        transcribe_run_params rp_ok = transcribe_run_default_params();
         rp_ok.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
         const transcribe_status st_ok =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_ok);
         CHECK(st_ok == TRANSCRIBE_OK);
         CHECK(transcribe_n_tokens(ctx) > 0);
 
-        transcribe_params rp_bad = transcribe_default_params();
+        transcribe_run_params rp_bad = transcribe_run_default_params();
         rp_bad.timestamps =
             static_cast<transcribe_timestamp_kind>(9999);
         const transcribe_status st_bad =
@@ -475,7 +475,7 @@ int main() {
     }
 
     // ---- Teardown --------------------------------------------------
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
 
     if (g_failures > 0) {

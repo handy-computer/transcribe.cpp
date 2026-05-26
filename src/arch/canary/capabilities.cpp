@@ -24,7 +24,7 @@ void apply_family_invariants(transcribe_model & model) {
 
     // Feature bits: cancellation is wired at the run level. Canary
     // exposes a runtime PNC toggle via the multitask prompt's pnc /
-    // nopnc token slot; the generic transcribe_params::pnc enum routes
+    // nopnc token slot; the generic transcribe_run_params::pnc enum routes
     // there. No runtime ITN control on canary, so FEATURE_ITN stays
     // unset and a non-DEFAULT itn against canary triggers the
     // advisory WARN.

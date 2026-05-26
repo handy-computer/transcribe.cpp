@@ -2,7 +2,7 @@
 // types.
 //
 // This header is INTERNAL to the Parakeet sources. It defines the
-// concrete classes that derive from transcribe_model / transcribe_context
+// concrete classes that derive from transcribe_model / transcribe_session
 // for this family. It is also visible to tests/transcribe_tokenizer_smoke
 // (via the test target's PRIVATE include path) so the test can pull a
 // const Tokenizer * out of a model loaded through the public C ABI
@@ -16,7 +16,7 @@
 
 #include "decoder.h"
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -113,7 +113,7 @@ struct ParakeetModel final : public transcribe_model {
     ggml_context *  ctx_meta = nullptr;
 
     // Runtime backend plan. Resolved at load() time from
-    // transcribe_model_params::backend via
+    // transcribe_model_load_params::backend via
     // transcribe::load_common::init_backends. See
     // transcribe-backend.h for the plan semantics. The plan's
     // `scheduler_list` owns the backends; the destructor frees
@@ -320,7 +320,7 @@ struct ParakeetStreamingDecoderState {
 // multi-backend scheduler that dispatches encoder graph ops to the
 // best available backend (GPU for matmuls, BLAS for CPU matmuls,
 // CPU for everything else).
-struct ParakeetContext final : public transcribe_context {
+struct ParakeetSession final : public transcribe_session {
     // Compute context: holds the cgraph and intermediate tensor
     // metadata. Created with no_alloc=true; data lives in the
     // sched-managed buffers. Reset at the start of every run() call.
@@ -346,11 +346,11 @@ struct ParakeetContext final : public transcribe_context {
     std::vector<TdtToken> raw_tokens;
 
     // Per-call timings (t_mel_us, t_encode_us, t_decode_us) live
-    // on the base transcribe_context now and are surfaced via the
+    // on the base transcribe_session now and are surfaced via the
     // public transcribe_get_timings API.
 
     // Phase 5: TDT decode result storage lives on the base
-    // (transcribe_context::tokens / words / segments / full_text /
+    // (transcribe_session::tokens / words / segments / full_text /
     // result_kind / has_result), populated by Parakeet::run during
     // decode. No per-family result fields here.
 
@@ -380,7 +380,7 @@ struct ParakeetContext final : public transcribe_context {
     // wipes lifecycle-agnostic snapshot state there, and the family
     // owns its per-utterance audio scratch.
     std::vector<float>   stream_pcm_buffer;
-    transcribe_params    stream_run_params {};
+    transcribe_run_params    stream_run_params {};
 
     // ---- M2 incremental streaming state (cache-aware) ----
     //
@@ -440,8 +440,8 @@ struct ParakeetContext final : public transcribe_context {
     int32_t buf_chunk_step = 0;
     bool    buf_active = false;
 
-    ParakeetContext() = default;
-    ~ParakeetContext() override;
+    ParakeetSession() = default;
+    ~ParakeetSession() override;
 };
 
 } // namespace transcribe::parakeet

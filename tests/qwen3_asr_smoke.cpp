@@ -131,7 +131,7 @@ int main() {
     // round-trip (ggml_backend_tensor_get + _set). Keeping the test on
     // CPU keeps the dependency narrow — no Metal/Vulkan runtime
     // required for default ctest.
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp = transcribe_model_load_default_params();
     mp.backend = TRANSCRIBE_BACKEND_CPU;
     struct transcribe_model * model = nullptr;
 
