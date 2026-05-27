@@ -1039,14 +1039,14 @@ transcribe_status run(
 
             const transcribe::Tokenizer & tok = cm->tok;
 
-            // strip_special_tags (default true): canary's vocab carries
-            // language/task/PNC control tokens at CONTROL type. They
-            // shouldn't appear after the prompt is consumed, but the
-            // strip is defensive — and only applied when the caller
-            // wants clean text. --raw-tokens / strip_special_tags=false
-            // exposes whatever the decoder emitted.
+            // keep_special_tags (default false → strip): canary's vocab
+            // carries language/task/PNC control tokens at CONTROL type.
+            // They shouldn't appear after the prompt is consumed, but the
+            // strip is defensive — and only applied when the caller wants
+            // clean text. --raw-tokens / keep_special_tags=true exposes
+            // whatever the decoder emitted.
             const bool strip =
-                (params == nullptr) ? true : params->strip_special_tags;
+                (params == nullptr) ? true : !params->keep_special_tags;
             std::vector<int> text_ids;
             if (strip) {
                 text_ids.reserve(generated_ids.size());

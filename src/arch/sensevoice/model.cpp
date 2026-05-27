@@ -497,7 +497,7 @@ transcribe_status run(
         // ALWAYS carry the raw piece — the per-token accessors expose
         // the unfiltered token stream so library callers can observe
         // language/event/emotion/itn control tokens regardless of
-        // strip_special_tags.
+        // keep_special_tags.
         cc->tokens.reserve(cc->token_ids.size());
         for (int id : cc->token_ids) {
             transcribe_session::TokenEntry te;
@@ -510,9 +510,9 @@ transcribe_status run(
 
         // Decode the full sequence into the segment / full_text fields.
         // The decode here may filter out CONTROL-typed tokens depending
-        // on strip_special_tags so the user-facing text is clean by
+        // on keep_special_tags so the user-facing text is clean by
         // default but the raw stream stays accessible above.
-        const bool strip = (params == nullptr) ? true : params->strip_special_tags;
+        const bool strip = (params == nullptr) ? true : !params->keep_special_tags;
         std::vector<int> ids_for_text;
         if (strip) {
             ids_for_text.reserve(cc->token_ids.size());

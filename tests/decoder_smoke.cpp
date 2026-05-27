@@ -141,7 +141,7 @@ int main() {
     }
 
     // ---- Load model ------------------------------------------------
-    transcribe_model_load_params mp = transcribe_model_load_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     struct transcribe_model * model = nullptr;
     {
         const transcribe_status st =
@@ -181,7 +181,7 @@ int main() {
     }
 
     // ---- Init context + run ----------------------------------------
-    transcribe_session_params cp = transcribe_session_default_params();
+    transcribe_session_params cp; transcribe_session_params_init(&cp);
     struct transcribe_session * ctx = nullptr;
     {
         const transcribe_status st =
@@ -204,7 +204,7 @@ int main() {
     CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
     CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
 
-    transcribe_run_params rp = transcribe_run_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     rp.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
     {
         const transcribe_status st =
@@ -246,7 +246,7 @@ int main() {
     int   prev_t0  = -1;
     int   n_with_p = 0;
     for (int i = 0; i < n_tokens; ++i) {
-        transcribe_token tok = TRANSCRIBE_TOKEN_INIT;
+        transcribe_token tok; transcribe_token_init(&tok);
         CHECK_EQ_INT(transcribe_get_token(ctx, i, &tok), TRANSCRIBE_OK);
 
         CHECK(tok.id >= 0);
@@ -279,7 +279,7 @@ int main() {
     int last_word_t1 = -1;
     int n_words_with_text = 0;
     for (int i = 0; i < n_words; ++i) {
-        transcribe_word wrd = TRANSCRIBE_WORD_INIT;
+        transcribe_word wrd; transcribe_word_init(&wrd);
         CHECK_EQ_INT(transcribe_get_word(ctx, i, &wrd), TRANSCRIBE_OK);
 
         CHECK(wrd.text != nullptr);
@@ -314,7 +314,7 @@ int main() {
     const int n_segments = transcribe_n_segments(ctx);
     CHECK_EQ_INT(n_segments, 1);
 
-    transcribe_segment seg0 = TRANSCRIBE_SEGMENT_INIT;
+    transcribe_segment seg0; transcribe_segment_init(&seg0);
     CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg0), TRANSCRIBE_OK);
 
     CHECK(seg0.text != nullptr);
@@ -332,24 +332,24 @@ int main() {
 
     // ---- Out-of-bounds accessors leave the caller's struct zero-init.
     {
-        transcribe_token oob = TRANSCRIBE_TOKEN_INIT;
+        transcribe_token oob; transcribe_token_init(&oob);
         CHECK_EQ_INT(transcribe_get_token(ctx, n_tokens, &oob), TRANSCRIBE_OK);
         CHECK(oob.text == nullptr);
         CHECK_EQ_INT(oob.id, 0);
         CHECK_EQ_INT(transcribe_get_token(ctx, -1, &oob), TRANSCRIBE_OK);
         CHECK(oob.text == nullptr);
 
-        transcribe_word oob_w = TRANSCRIBE_WORD_INIT;
+        transcribe_word oob_w; transcribe_word_init(&oob_w);
         CHECK_EQ_INT(transcribe_get_word(ctx, n_words, &oob_w), TRANSCRIBE_OK);
         CHECK_EQ_INT(oob_w.n_tokens, 0);
 
-        transcribe_segment oob_s = TRANSCRIBE_SEGMENT_INIT;
+        transcribe_segment oob_s; transcribe_segment_init(&oob_s);
         CHECK_EQ_INT(transcribe_get_segment(ctx, 5, &oob_s), TRANSCRIBE_OK);
         CHECK(oob_s.text == nullptr);
     }
 
     // ---- Timings ---------------------------------------------------
-    transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
+    transcribe_timings t; transcribe_timings_init(&t);
     CHECK(transcribe_get_timings(ctx, &t) == TRANSCRIBE_OK);
     std::fprintf(stdout,
                  "decoder_smoke: timings load=%.2f mel=%.2f encode=%.2f decode=%.2f\n",
@@ -367,7 +367,7 @@ int main() {
     // ceiling contract: the request is an upper bound, not an exact
     // match. The default run above already covered AUTO→TOKEN.
     {
-        transcribe_run_params rp2 = transcribe_run_default_params();
+        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -377,7 +377,7 @@ int main() {
         const int w_n_words = transcribe_n_words(ctx);
         CHECK(w_n_words > 0);
         if (w_n_words > 0) {
-            transcribe_word w0 = TRANSCRIBE_WORD_INIT;
+            transcribe_word w0; transcribe_word_init(&w0);
             CHECK_EQ_INT(transcribe_get_word(ctx, 0, &w0), TRANSCRIBE_OK);
             CHECK(w0.t1_ms >= w0.t0_ms);
         }
@@ -387,14 +387,14 @@ int main() {
         // word_n_tokens cannot index into a cleared table.
         CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         for (int i = 0; i < w_n_words; ++i) {
-            transcribe_word wi = TRANSCRIBE_WORD_INIT;
+            transcribe_word wi; transcribe_word_init(&wi);
             CHECK_EQ_INT(transcribe_get_word(ctx, i, &wi), TRANSCRIBE_OK);
             CHECK_EQ_INT(wi.first_token, 0);
             CHECK_EQ_INT(wi.n_tokens,    0);
         }
         // Segment's token back-references also zeroed.
         {
-            transcribe_segment s0 = TRANSCRIBE_SEGMENT_INIT;
+            transcribe_segment s0; transcribe_segment_init(&s0);
             CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
             CHECK_EQ_INT(s0.first_token, 0);
             CHECK_EQ_INT(s0.n_tokens,    0);
@@ -404,7 +404,7 @@ int main() {
         CHECK(full2 != nullptr && full2[0] != '\0');
     }
     {
-        transcribe_run_params rp2 = transcribe_run_default_params();
+        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -415,14 +415,14 @@ int main() {
         CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
         // Segment timings are still real at SEGMENT granularity.
         {
-            transcribe_segment s0 = TRANSCRIBE_SEGMENT_INIT;
+            transcribe_segment s0; transcribe_segment_init(&s0);
             CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
             CHECK(s0.t1_ms > s0.t0_ms);
             CHECK(s0.text != nullptr && s0.text[0] != '\0');
         }
     }
     {
-        transcribe_run_params rp2 = transcribe_run_default_params();
+        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -433,7 +433,7 @@ int main() {
         // Segment survives as the text carrier; its t0/t1 are zeroed.
         CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
         {
-            transcribe_segment s0 = TRANSCRIBE_SEGMENT_INIT;
+            transcribe_segment s0; transcribe_segment_init(&s0);
             CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
             CHECK_EQ_INT(s0.t0_ms, 0);
             CHECK_EQ_INT(s0.t1_ms, 0);
@@ -453,14 +453,14 @@ int main() {
     {
         // First, seed the context with a real successful run so
         // there is a previous result to clobber.
-        transcribe_run_params rp_ok = transcribe_run_default_params();
+        transcribe_run_params rp_ok; transcribe_run_params_init(&rp_ok);
         rp_ok.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
         const transcribe_status st_ok =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_ok);
         CHECK(st_ok == TRANSCRIBE_OK);
         CHECK(transcribe_n_tokens(ctx) > 0);
 
-        transcribe_run_params rp_bad = transcribe_run_default_params();
+        transcribe_run_params rp_bad; transcribe_run_params_init(&rp_bad);
         rp_bad.timestamps =
             static_cast<transcribe_timestamp_kind>(9999);
         const transcribe_status st_bad =

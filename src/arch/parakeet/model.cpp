@@ -3171,3 +3171,33 @@ extern const Arch arch = {
 };
 
 } // namespace transcribe::parakeet
+
+// ---------------------------------------------------------------------------
+// Public parakeet extension init functions (global scope, C linkage).
+// Defined here in family source so transcribe.cpp stays family-agnostic.
+// Each stamps the transcribe_ext header (size + kind) and the field
+// defaults; they are the single source of truth now that the INIT macros
+// are gone.
+// ---------------------------------------------------------------------------
+
+extern "C" void transcribe_parakeet_stream_ext_init(
+    struct transcribe_parakeet_stream_ext * p)
+{
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->ext.size          = sizeof(*p);
+    p->ext.kind          = TRANSCRIBE_EXT_KIND_PARAKEET_STREAM;
+    p->att_context_right = -1;  // model default (max accuracy / max latency)
+}
+
+extern "C" void transcribe_parakeet_buffered_stream_ext_init(
+    struct transcribe_parakeet_buffered_stream_ext * p)
+{
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->ext.size  = sizeof(*p);
+    p->ext.kind  = TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM;
+    p->left_ms   = -1;  // model default
+    p->chunk_ms  = -1;
+    p->right_ms  = -1;
+}

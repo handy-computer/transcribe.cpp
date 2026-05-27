@@ -1288,7 +1288,7 @@ transcribe_status whisper_run(
     // conditioning, temperature tuple, threshold checks,
     // max_initial_timestamp cap) live on a kind-tagged family
     // extension reached via transcribe_run_params::family. NULL selects
-    // TRANSCRIBE_WHISPER_RUN_EXT_INIT — Whisper's own shipping recipe.
+    // transcribe_whisper_run_ext_init() — Whisper's own shipping recipe.
     // The local `default_wp` must outlive the chunk loop because `wp`
     // aliases it.
     //
@@ -1323,7 +1323,7 @@ transcribe_status whisper_run(
     {
         return st;
     }
-    const transcribe_whisper_run_ext default_wp = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
+    transcribe_whisper_run_ext default_wp; transcribe_whisper_run_ext_init(&default_wp);
     const transcribe_whisper_run_ext * wp =
         (params != nullptr && params->family != nullptr)
             ? reinterpret_cast<const transcribe_whisper_run_ext *>(params->family)
@@ -1872,7 +1872,7 @@ transcribe_status whisper_run(
         // tier's output (HF does the same to avoid infinite loops).
         //
         // Thresholds use INF sentinels to mean "disabled"; see
-        // TRANSCRIBE_WHISPER_RUN_EXT_INIT and the header's DISABLED
+        // transcribe_whisper_run_ext_init() and the header's DISABLED
         // constants. `wp` and `rng` are hoisted to run scope above.
         std::vector<float> temperatures;
         temperatures.push_back(wp->temperature);
@@ -2600,7 +2600,7 @@ transcribe_status whisper_run(
         // no-speech gate saw; callers tracing a hallucination can map
         // an output segment back to the tier/metric that produced it.
         {
-            transcribe_whisper_chunk_trace trace = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+            transcribe_whisper_chunk_trace trace; transcribe_whisper_chunk_trace_init(&trace);
             trace.t0_ms               = time_offset_ms;
             trace.t1_ms               = time_offset_ms +
                                         static_cast<int64_t>(seek_num_frames) * 10;

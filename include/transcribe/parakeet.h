@@ -60,10 +60,9 @@ struct transcribe_parakeet_stream_ext {
     int32_t               att_context_right;
 };
 
-#define TRANSCRIBE_PARAKEET_STREAM_EXT_INIT                            \
-    { { sizeof(struct transcribe_parakeet_stream_ext),                 \
-        TRANSCRIBE_EXT_KIND_PARAKEET_STREAM },                         \
-      -1 /* att_context_right: model default */ }
+/* Fills ext.size/kind and att_context_right = -1 (model default). */
+TRANSCRIBE_API void transcribe_parakeet_stream_ext_init(
+    struct transcribe_parakeet_stream_ext * ext);
 
 /*
  * Chunked-attention (buffered) streaming knob (parakeet-unified-en-0.6b).
@@ -90,12 +89,9 @@ struct transcribe_parakeet_buffered_stream_ext {
     int32_t               right_ms;
 };
 
-#define TRANSCRIBE_PARAKEET_BUFFERED_STREAM_EXT_INIT                       \
-    { { sizeof(struct transcribe_parakeet_buffered_stream_ext),            \
-        TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM },                    \
-      -1, /* left_ms:  model default */                                    \
-      -1, /* chunk_ms: model default */                                    \
-      -1  /* right_ms: model default */ }
+/* Fills ext.size/kind and left/chunk/right_ms = -1 (model default). */
+TRANSCRIBE_API void transcribe_parakeet_buffered_stream_ext_init(
+    struct transcribe_parakeet_buffered_stream_ext * ext);
 
 #ifdef __cplusplus
 } /* extern "C" */

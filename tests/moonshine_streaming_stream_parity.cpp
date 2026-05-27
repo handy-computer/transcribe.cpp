@@ -54,7 +54,7 @@ int run_one_shot(transcribe_session *      ctx,
                  const std::vector<float> & pcm,
                  std::string &              out_text)
 {
-    transcribe_run_params rp = transcribe_run_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     const transcribe_status st = transcribe_run(
         ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
     if (st != TRANSCRIBE_OK) {
@@ -75,10 +75,10 @@ int run_streaming(transcribe_session *      ctx,
                   int *                      out_n_partial_updates,
                   std::string &              out_text)
 {
-    transcribe_run_params       rp = TRANSCRIBE_RUN_PARAMS_INIT;
-    transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
-    transcribe_moonshine_streaming_stream_ext ms =
-        TRANSCRIBE_MOONSHINE_STREAMING_STREAM_EXT_INIT;
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_moonshine_streaming_stream_ext ms;
+    transcribe_moonshine_streaming_stream_ext_init(&ms);
     ms.min_decode_interval_ms = min_decode_interval_ms;
     sp.family = &ms.ext;
     transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
@@ -98,7 +98,7 @@ int run_streaming(transcribe_session *      ctx,
     while (pos < pcm.size()) {
         const size_t take = std::min<size_t>(
             static_cast<size_t>(chunk_samples), pcm.size() - pos);
-        transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
+        transcribe_stream_update upd; transcribe_stream_update_init(&upd);
         st = transcribe_stream_feed(ctx, pcm.data() + pos,
                                     static_cast<int>(take), &upd);
         if (st != TRANSCRIBE_OK) {
@@ -147,7 +147,7 @@ int run_streaming(transcribe_session *      ctx,
         ++feed_count;
     }
 
-    transcribe_stream_update fin_upd = TRANSCRIBE_STREAM_UPDATE_INIT;
+    transcribe_stream_update fin_upd; transcribe_stream_update_init(&fin_upd);
     st = transcribe_stream_finalize(ctx, &fin_upd);
     if (st != TRANSCRIBE_OK) {
         std::fprintf(stderr,
@@ -215,8 +215,8 @@ int main(int /*argc*/, char ** /*argv*/) {
         }
     }
 
-    transcribe_model_load_params  mp = transcribe_model_load_default_params();
-    transcribe_session_params cp = transcribe_session_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_session_params cp; transcribe_session_params_init(&cp);
 
     transcribe_model *   model = nullptr;
     transcribe_session * ctx   = nullptr;
@@ -234,7 +234,7 @@ int main(int /*argc*/, char ** /*argv*/) {
     // Capabilities sanity: streaming must be advertised, lookahead and
     // chunk hints must be non-zero (Phase 4b-encoder publishes both).
     {
-        transcribe_capabilities caps = TRANSCRIBE_CAPABILITIES_INIT;
+        transcribe_capabilities caps; transcribe_capabilities_init(&caps);
         CHECK(transcribe_model_get_capabilities(model, &caps) == TRANSCRIBE_OK);
         CHECK(caps.supports_streaming);
         CHECK(caps.streaming_lookahead_ms     > 0);

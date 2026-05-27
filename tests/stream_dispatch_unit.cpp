@@ -52,15 +52,15 @@ void test_accessors_on_idle_ctx() {
 }
 
 void test_default_params() {
-    const transcribe_stream_params p = transcribe_stream_default_params();
+    transcribe_stream_params p; transcribe_stream_params_init(&p);
     CHECK(p.family == nullptr);
     CHECK(p.struct_size == sizeof(transcribe_stream_params));
 }
 
 void test_begin_null_args() {
     // session == NULL is still rejected.
-    const transcribe_run_params rp = transcribe_run_default_params();
-    const transcribe_stream_params sp = transcribe_stream_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
     CHECK(transcribe_stream_begin(nullptr, &rp, &sp) ==
           TRANSCRIBE_ERR_INVALID_ARG);
 
@@ -83,8 +83,8 @@ void test_begin_rejected_when_active() {
     transcribe_session session;
     session.stream_state = TRANSCRIBE_STREAM_ACTIVE;
 
-    const transcribe_run_params rp = transcribe_run_default_params();
-    const transcribe_stream_params sp = transcribe_stream_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
     CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
           TRANSCRIBE_ERR_INVALID_ARG);
     // Still ACTIVE — rejection must not clear lifecycle.
@@ -94,8 +94,8 @@ void test_begin_rejected_when_active() {
 void test_begin_no_model_returns_not_implemented() {
     // session with no model still reaches the model/arch check.
     transcribe_session session;
-    const transcribe_run_params rp = transcribe_run_default_params();
-    const transcribe_stream_params sp = transcribe_stream_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
     CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
           TRANSCRIBE_ERR_NOT_IMPLEMENTED);
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
@@ -167,8 +167,8 @@ void test_begin_rejects_unknown_ext_kind_before_hook() {
     session.has_result   = true;
     session.full_text    = "previous result";
 
-    transcribe_run_params rp = TRANSCRIBE_RUN_PARAMS_INIT;
-    transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
     const transcribe_ext ext = { sizeof(transcribe_ext), 0x58585858u };
     sp.family = &ext;
 
@@ -204,8 +204,8 @@ void test_begin_rejects_tiny_ext_before_hook() {
     session.has_result = true;
     session.full_text  = "previous result";
 
-    transcribe_run_params rp = TRANSCRIBE_RUN_PARAMS_INIT;
-    transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
     transcribe_ext ext = { 0, 0 };
     sp.family = &ext;
 
@@ -221,7 +221,7 @@ void test_begin_rejects_tiny_ext_before_hook() {
 void test_feed_rejects_idle() {
     transcribe_session session;
     float pcm = 0.0f;
-    transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
     upd.result_changed = true; // dirty sentinel — must be zeroed
     upd.is_final       = true;
     upd.revision       = 42;
@@ -309,7 +309,7 @@ void test_finalize_rejects_non_active() {
 
 void test_finalize_update_zeroinit() {
     transcribe_session session;
-    transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
     upd.result_changed   = true;
     upd.is_final         = false; // will be cleared then forced true on success path
     upd.revision         = 99;
@@ -379,7 +379,7 @@ void test_run_rejected_while_active() {
     session.has_result   = true;
     session.full_text    = "active stream result";
 
-    const transcribe_run_params rp = transcribe_run_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     float pcm = 0.0f;
     const transcribe_status st = transcribe_run(&session, &pcm, 1, &rp);
     CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
@@ -399,7 +399,7 @@ void test_run_clears_stream_snapshot_from_finished() {
     session.has_result           = true;
     session.full_text            = "old run text";
 
-    const transcribe_run_params rp = transcribe_run_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     float pcm = 0.0f;
     // No model → NOT_IMPLEMENTED, but clear_result + state reset must
     // have already run by the time we get here.

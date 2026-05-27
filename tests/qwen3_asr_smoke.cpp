@@ -131,7 +131,7 @@ int main() {
     // round-trip (ggml_backend_tensor_get + _set). Keeping the test on
     // CPU keeps the dependency narrow — no Metal/Vulkan runtime
     // required for default ctest.
-    transcribe_model_load_params mp = transcribe_model_load_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;
     struct transcribe_model * model = nullptr;
 
@@ -172,7 +172,7 @@ int main() {
     // trip; translate stays false (family invariant); max_timestamp
     // stays NONE (first port doesn't emit alignment).
     {
-        transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+        transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
         const bool caps_ok =
             transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
         const auto * caps = caps_ok ? &caps_buf : nullptr;

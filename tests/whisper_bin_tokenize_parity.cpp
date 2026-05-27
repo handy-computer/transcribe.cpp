@@ -107,7 +107,7 @@ int main() {
         return 77;
     }
 
-    transcribe_model_load_params mp = transcribe_model_load_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;
 
     transcribe_model * gguf = nullptr;

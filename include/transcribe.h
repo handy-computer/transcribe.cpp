@@ -229,7 +229,7 @@ typedef enum {
 } transcribe_task;
 
 /*
- * Timestamp policy: transcribe_run_default_params() requests NONE for
+ * Timestamp policy: transcribe_run_params_init() requests NONE for
  * text-first transcription. AUTO is an opt-in "richest supported"
  * mode: it is treated as "equal to the model's max_timestamp_kind."
  * The dispatcher never rejects AUTO, and the per-family run() handler
@@ -277,7 +277,7 @@ typedef enum {
  * to pre-check.
  *
  *   DEFAULT (0): the family's shipped default. Zero-init via
- *                TRANSCRIBE_RUN_PARAMS_INIT gives this value. The family
+ *                transcribe_run_params_init() gives this value. The family
  *                picks the value its model card published WER numbers
  *                against (canary: pnc on; others: family-specific).
  *   OFF:         explicitly disable runtime PNC. Supporting families
@@ -456,18 +456,41 @@ typedef enum {
 } transcribe_backend_request;
 
 /*
+ * Initialization of caller-owned params structs.
+ *
+ * Every params struct below is initialized by its transcribe_*_init()
+ * function, which fills sensible defaults and the struct_size field:
+ *
+ *     struct transcribe_run_params p;
+ *     transcribe_run_params_init(&p);   // defaults + struct_size
+ *     p.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
+ *
+ * Two shortcuts exist:
+ *   - Pass NULL wherever a `const struct transcribe_*_params *` is
+ *     accepted to get pure defaults without declaring a struct at all.
+ *   - Every field's default is its zero value, so `struct ... p = {0};`
+ *     is a valid (if non-canonical) way to default-initialize: the
+ *     library accepts struct_size == 0 on input params as "defaults".
+ *     The init function is still the recommended form.
+ *
+ * The init functions are one-argument by design: they assume the caller
+ * and library agree on the struct layout, which holds for the supported
+ * distribution model (the library is built/shipped with its consumers).
+ */
+
+/*
  * Model load params.
  *
  * backend:    which backend to request. See transcribe_backend_request
  *             for the semantics of each value. Default is AUTO.
  *
- * gpu_device: Reserved for future multi-device selection. MUST be
- *             set to -1 in 0.x; any other value returns
- *             TRANSCRIBE_ERR_INVALID_ARG. AUTO always picks the first
- *             device of the chosen kind in ggml's registry order;
- *             explicit METAL/VULKAN requests likewise pick the first
- *             matching device. There is no per-device selection in
- *             the current release.
+ * gpu_device: Reserved for future multi-device selection. 0 means
+ *             "auto / the first device of the chosen kind" and is the
+ *             default; any other value returns TRANSCRIBE_ERR_INVALID_ARG
+ *             in 0.x. AUTO always picks the first device of the chosen
+ *             kind in ggml's registry order; explicit METAL/VULKAN
+ *             requests likewise pick the first matching device. There is
+ *             no per-device selection in the current release.
  */
 struct transcribe_model_load_params {
     size_t                     struct_size;
@@ -475,12 +498,8 @@ struct transcribe_model_load_params {
     int                        gpu_device;
 };
 
-#define TRANSCRIBE_MODEL_LOAD_PARAMS_INIT                                       \
-    { sizeof(struct transcribe_model_load_params), /* struct_size            */ \
-      TRANSCRIBE_BACKEND_AUTO,                /* backend                */ \
-      -1 }                                    /* gpu_device             */
-
-TRANSCRIBE_API struct transcribe_model_load_params transcribe_model_load_default_params(void);
+TRANSCRIBE_API void transcribe_model_load_params_init(
+    struct transcribe_model_load_params * params);
 
 /*
  * Session init params.
@@ -497,12 +516,8 @@ struct transcribe_session_params {
     transcribe_kv_type kv_type;
 };
 
-#define TRANSCRIBE_SESSION_PARAMS_INIT                                     \
-    { sizeof(struct transcribe_session_params), /* struct_size          */ \
-      0,                                        /* n_threads            */ \
-      TRANSCRIBE_KV_TYPE_AUTO }                 /* kv_type              */
-
-TRANSCRIBE_API struct transcribe_session_params transcribe_session_default_params(void);
+TRANSCRIBE_API void transcribe_session_params_init(
+    struct transcribe_session_params * params);
 
 /*
  * Per-run params.
@@ -537,9 +552,11 @@ TRANSCRIBE_API struct transcribe_session_params transcribe_session_default_param
  *
  * target_language: target language for translation tasks, or NULL.
  *
- * strip_special_tags: strip special vocabulary tags (e.g. <|...|>) from
- *                     the returned text fields. Token-level accessors
- *                     still expose the raw token text.
+ * keep_special_tags: keep special vocabulary tags (e.g. <|...|>) in the
+ *                     returned text fields. Default (false) strips them
+ *                     for clean transcripts; set true to keep the raw
+ *                     tags. Token-level accessors always expose the raw
+ *                     token text regardless of this flag.
  *
  * family:      optional family-specific extension. NULL selects family
  *              defaults. The pointed-to object is caller-owned; the
@@ -561,22 +578,12 @@ struct transcribe_run_params {
     enum transcribe_itn_mode      itn;
     const char *                  language;
     const char *                  target_language;
-    bool                          strip_special_tags;
+    bool                          keep_special_tags;
     const struct transcribe_ext * family;
 };
 
-#define TRANSCRIBE_RUN_PARAMS_INIT                                             \
-    { sizeof(struct transcribe_run_params), /* struct_size                  */ \
-      TRANSCRIBE_TASK_TRANSCRIBE,       /* task                         */ \
-      TRANSCRIBE_TIMESTAMPS_NONE,       /* timestamps                   */ \
-      TRANSCRIBE_PNC_MODE_DEFAULT,      /* pnc                          */ \
-      TRANSCRIBE_ITN_MODE_DEFAULT,      /* itn                          */ \
-      NULL,                             /* language                     */ \
-      NULL,                             /* target_language              */ \
-      true,                             /* strip_special_tags           */ \
-      NULL }                            /* family                       */
-
-TRANSCRIBE_API struct transcribe_run_params transcribe_run_default_params(void);
+TRANSCRIBE_API void transcribe_run_params_init(
+    struct transcribe_run_params * params);
 
 /* ----------------------------------------------------------------------- */
 /* Capabilities                                                            */
@@ -675,12 +682,12 @@ struct transcribe_capabilities {
     int32_t                   streaming_lookahead_ms_min;
 };
 
-#define TRANSCRIBE_CAPABILITIES_INIT \
-    { sizeof(struct transcribe_capabilities) }
+TRANSCRIBE_API void transcribe_capabilities_init(
+    struct transcribe_capabilities * out);
 
 /*
  * Read model capabilities into caller-owned storage. The caller
- * initializes *out_caps via TRANSCRIBE_CAPABILITIES_INIT (zero-fill);
+ * initializes *out_caps via transcribe_capabilities_init() (zero-fill);
  * the library writes only the fields that fit and leaves tail bytes
  * beyond the caller's struct_size untouched.
  *
@@ -796,13 +803,11 @@ TRANSCRIBE_API const char * transcribe_model_backend(const struct transcribe_mod
  * Load a GGUF model from disk. The _file suffix is preserved to leave
  * room for transcribe_model_load_buffer() later without renaming.
  *
- * params may be NULL, which is equivalent to passing
- * TRANSCRIBE_MODEL_LOAD_PARAMS_INIT (all library defaults). NULL is the
- * version-proof way to ask for defaults: it carries no struct_size, so
- * it always matches the running library. Note that a zero-initialized
- * struct ({0}) is NOT the same as NULL — it claims struct_size == 0 and
- * is rejected with TRANSCRIBE_ERR_BAD_STRUCT_SIZE. Use NULL for defaults
- * or TRANSCRIBE_MODEL_LOAD_PARAMS_INIT to customize.
+ * params may be NULL for all library defaults. To customize, initialize
+ * a struct with transcribe_model_load_params_init() and set fields. A
+ * zero-initialized struct ({0}) is also accepted as "defaults" — input
+ * params treat struct_size == 0 as "defaults" — though the init function
+ * is the recommended form.
  *
  * On success, *out_model is set and the caller owns it. On failure,
  * *out_model is set to NULL and a non-OK status is returned.
@@ -825,9 +830,8 @@ TRANSCRIBE_API void transcribe_model_free(struct transcribe_model * model);
  * is single-threaded. The model must outlive every session derived from
  * it (the session borrows, but does not own, the model).
  *
- * params may be NULL for library defaults (equivalent to
- * TRANSCRIBE_SESSION_PARAMS_INIT). See transcribe_model_load_file for the
- * NULL-vs-{0} distinction.
+ * params may be NULL for library defaults, or initialize a struct with
+ * transcribe_session_params_init(). See transcribe_model_load_file.
  */
 TRANSCRIBE_API transcribe_status transcribe_session_init(
     struct transcribe_model *                model,
@@ -1011,7 +1015,7 @@ enum transcribe_stream_state {
  * Streaming run params.
  *
  * struct_size:                   sizeof(*this) captured by the caller.
- *                                Initialized via TRANSCRIBE_STREAM_PARAMS_INIT.
+ *                                Initialized via transcribe_stream_params_init().
  *
  * family:                        Optional family-specific extension. NULL
  *                                selects family defaults. The pointed-to
@@ -1032,18 +1036,14 @@ struct transcribe_stream_params {
     const struct transcribe_ext * family;
 };
 
-#define TRANSCRIBE_STREAM_PARAMS_INIT                                       \
-    { sizeof(struct transcribe_stream_params), /* struct_size            */ \
-      NULL }                                   /* family                 */
-
-TRANSCRIBE_API struct transcribe_stream_params
-    transcribe_stream_default_params(void);
+TRANSCRIBE_API void transcribe_stream_params_init(
+    struct transcribe_stream_params * params);
 
 /*
  * Optional per-call change metadata returned by feed/finalize.
  *
  *   struct_size        Caller's sizeof(*this). Initialized via
- *                      TRANSCRIBE_STREAM_UPDATE_INIT (zero-fill).
+ *                      transcribe_stream_update_init() (zero-fill).
  *   result_changed     The session result was modified by this call.
  *                      Inspect the accessors after the call to read
  *                      the new snapshot.
@@ -1068,7 +1068,7 @@ TRANSCRIBE_API struct transcribe_stream_params
  *
  * Zero-means-absent contract: every field on this struct is designed
  * so the zero value encodes "absent / unknown / false / none." This
- * is what makes the TRANSCRIBE_STREAM_UPDATE_INIT zero-fill safe for
+ * is what makes the transcribe_stream_update_init() zero-fill safe for
  * forward ABI: a new caller paired with an older library reads tail
  * fields the older library never wrote, and those bytes must remain
  * zero.
@@ -1083,15 +1083,15 @@ struct transcribe_stream_update {
     int64_t buffered_ms;
 };
 
-#define TRANSCRIBE_STREAM_UPDATE_INIT \
-    { sizeof(struct transcribe_stream_update) }
+TRANSCRIBE_API void transcribe_stream_update_init(
+    struct transcribe_stream_update * out);
 
 /*
  * Begin a streaming run on session.
  *
  * run_params and stream_params MUST be non-null (callers obtain
- * defaults from transcribe_run_default_params() and
- * transcribe_stream_default_params()).
+ * defaults from transcribe_run_params_init() and
+ * transcribe_stream_params_init()).
  *
  * On success the session transitions IDLE/FINISHED/FAILED -> ACTIVE
  * and every result-visible field is cleared: text, segments, words,
@@ -1312,7 +1312,7 @@ TRANSCRIBE_API int transcribe_tokenize(
  *              always 0 since the decoder isn't wired yet; phase 5
  *              fills this in.
  *
- * Output struct: caller initializes via TRANSCRIBE_TIMINGS_INIT (zero-
+ * Output struct: caller initializes via transcribe_timings_init() (zero-
  * fill); the library writes only the fields that fit within
  * struct_size. Every field is a numeric value where zero encodes
  * "unknown / not measured."
@@ -1325,7 +1325,7 @@ struct transcribe_timings {
     float  decode_ms;
 };
 
-#define TRANSCRIBE_TIMINGS_INIT { sizeof(struct transcribe_timings) }
+TRANSCRIBE_API void transcribe_timings_init(struct transcribe_timings * out);
 
 /*
  * Read the current timings from a session into caller-owned storage.
@@ -1425,7 +1425,7 @@ struct transcribe_segment {
     const char * text;        /* session-owned; see lifetime note above */
 };
 
-#define TRANSCRIBE_SEGMENT_INIT { sizeof(struct transcribe_segment) }
+TRANSCRIBE_API void transcribe_segment_init(struct transcribe_segment * out);
 
 struct transcribe_word {
     size_t       struct_size;
@@ -1437,7 +1437,7 @@ struct transcribe_word {
     const char * text;        /* session-owned; see lifetime note above */
 };
 
-#define TRANSCRIBE_WORD_INIT { sizeof(struct transcribe_word) }
+TRANSCRIBE_API void transcribe_word_init(struct transcribe_word * out);
 
 /*
  * transcribe_token::p is the per-token probability when the
@@ -1461,7 +1461,7 @@ struct transcribe_token {
     const char * text;        /* session-owned; see lifetime note above */
 };
 
-#define TRANSCRIBE_TOKEN_INIT { sizeof(struct transcribe_token) }
+TRANSCRIBE_API void transcribe_token_init(struct transcribe_token * out);
 
 /*
  * Read one segment / word / token row into caller-owned storage.

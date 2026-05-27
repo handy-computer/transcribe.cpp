@@ -1755,3 +1755,15 @@ extern const Arch arch = {
 };
 
 } // namespace transcribe::moonshine_streaming
+
+// Public moonshine-streaming extension init (global scope, C linkage).
+// Defined in family source so transcribe.cpp stays family-agnostic.
+extern "C" void transcribe_moonshine_streaming_stream_ext_init(
+    struct transcribe_moonshine_streaming_stream_ext * p)
+{
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->ext.size               = sizeof(*p);
+    p->ext.kind               = TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM;
+    p->min_decode_interval_ms = -1;  // family default
+}

@@ -81,7 +81,7 @@ bool load_and_init(const char *                  fixture_name,
         return false;
     }
 
-    transcribe_model_load_params mp = transcribe_model_load_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     const transcribe_status load_st =
         transcribe_model_load_file(p.c_str(), &mp, out_model);
     if (load_st != TRANSCRIBE_OK || *out_model == nullptr) {
@@ -93,7 +93,7 @@ bool load_and_init(const char *                  fixture_name,
         return false;
     }
 
-    transcribe_session_params cp = transcribe_session_default_params();
+    transcribe_session_params cp; transcribe_session_params_init(&cp);
     const transcribe_status init_st =
         transcribe_session_init(*out_model, &cp, out_ctx);
     if (init_st != TRANSCRIBE_OK || *out_ctx == nullptr) {
@@ -117,7 +117,7 @@ void test_supports_streaming_false() {
     struct transcribe_session * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal.gguf", &model, &ctx)) return;
 
-    transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
     const bool caps_ok =
         transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
     const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
@@ -130,8 +130,8 @@ void test_supports_streaming_false() {
         CHECK(caps->streaming_chunk_ms     == 0);
     }
 
-    transcribe_stream_params  sp = transcribe_stream_default_params();
-    transcribe_run_params         rp = transcribe_run_default_params();
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     const transcribe_status   st = transcribe_stream_begin(ctx, &rp, &sp);
 
     CHECK(st == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
@@ -159,7 +159,7 @@ void test_supports_streaming_true_variant_offline() {
     struct transcribe_session * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal_streaming.gguf", &model, &ctx)) return;
 
-    transcribe_capabilities caps_buf = TRANSCRIBE_CAPABILITIES_INIT;
+    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
     const bool caps_ok =
         transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
     const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
@@ -174,8 +174,8 @@ void test_supports_streaming_true_variant_offline() {
         CHECK(caps->streaming_chunk_ms     == 0);
     }
 
-    transcribe_stream_params  sp = transcribe_stream_default_params();
-    transcribe_run_params         rp = transcribe_run_default_params();
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     const transcribe_status   st = transcribe_stream_begin(ctx, &rp, &sp);
 
     // Family-level rejection: caps says yes, the dispatcher's gates
@@ -209,8 +209,8 @@ void test_run_after_failed_begin_does_not_get_stuck() {
     struct transcribe_session * ctx   = nullptr;
     if (!load_and_init("tokenizer_minimal.gguf", &model, &ctx)) return;
 
-    transcribe_stream_params  sp = transcribe_stream_default_params();
-    transcribe_run_params         rp = transcribe_run_default_params();
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     CHECK(transcribe_stream_begin(ctx, &rp, &sp) ==
           TRANSCRIBE_ERR_NOT_IMPLEMENTED);
     CHECK(transcribe_stream_get_state(ctx) == TRANSCRIBE_STREAM_IDLE);

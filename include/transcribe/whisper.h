@@ -68,7 +68,7 @@ enum transcribe_whisper_prompt_condition {
 
 /*
  * Whisper-family run knobs. Reached via transcribe_run_params::family.
- * NULL family selects TRANSCRIBE_WHISPER_RUN_EXT_INIT values (Whisper's
+ * NULL family selects transcribe_whisper_run_ext_init() values (Whisper's
  * own shipping recipe: temperature fallback on, compression-ratio /
  * avg-logprob / no-speech safety nets active). Callers that want HF
  * library-wide generate() behavior ("all thresholds disabled") set each
@@ -145,22 +145,9 @@ struct transcribe_whisper_run_ext {
     float           max_initial_timestamp;
 };
 
-#define TRANSCRIBE_WHISPER_RUN_EXT_INIT                                       \
-    { { sizeof(struct transcribe_whisper_run_ext),                            \
-        TRANSCRIBE_EXT_KIND_WHISPER_RUN },                                    \
-      NULL,                                       /* initial_prompt        */ \
-      NULL,                                       /* prompt_tokens         */ \
-      0,                                          /* n_prompt_tokens       */ \
-      TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT,    /* prompt_condition      */ \
-      false,                                      /* condition_on_prev_... */ \
-      223,                                        /* max_prev_context_t.   */ \
-      0.0f,                                       /* temperature           */ \
-      0.2f,                                       /* temperature_inc       */ \
-      2.4f,                                       /* compression_ratio_th. */ \
-      -1.0f,                                      /* logprob_thold         */ \
-      0.6f,                                       /* no_speech_thold       */ \
-      0u,                                         /* seed                  */ \
-      1.0f }                                      /* max_initial_timestamp */
+/* Fills ext.size/kind and the Whisper decoding recipe defaults. */
+TRANSCRIBE_API void transcribe_whisper_run_ext_init(
+    struct transcribe_whisper_run_ext * ext);
 
 /* ----------------------------------------------------------------------- */
 /* Whisper decoding trace                                                  */
@@ -177,7 +164,7 @@ struct transcribe_whisper_run_ext {
  * segment boundary. Segments carried in transcribe_n_segments() /
  * transcribe_segment_*() live inside these windows.
  *
- * Output struct: caller initializes via TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT
+ * Output struct: caller initializes via transcribe_whisper_chunk_trace_init()
  * (zero-fill). The library writes only fields that fit within struct_size
  * and never touches tail bytes beyond it; every field is designed so the
  * zero value means "absent / unknown / false."
@@ -194,8 +181,8 @@ struct transcribe_whisper_chunk_trace {
     int32_t  n_fallbacks;         /* tiers tried before accept (0 = tier 0 accepted) */
 };
 
-#define TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT \
-    { sizeof(struct transcribe_whisper_chunk_trace) }
+TRANSCRIBE_API void transcribe_whisper_chunk_trace_init(
+    struct transcribe_whisper_chunk_trace * out);
 
 /*
  * Number of chunk traces captured on the most recent successful run.

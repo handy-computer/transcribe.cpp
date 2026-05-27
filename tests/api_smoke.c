@@ -10,8 +10,9 @@
  *   3. Confirm the two real entry points return TRANSCRIBE_ERR_INVALID_ARG
  *      on bad input and TRANSCRIBE_ERR_NOT_IMPLEMENTED on otherwise-valid
  *      stub input.
- *   4. Confirm TRANSCRIBE_*_INIT macros populate sensible defaults and
- *      that zero-initialized structs are rejected with BAD_STRUCT_SIZE.
+ *   4. Confirm the params init functions populate sensible defaults,
+ *      that input params accept {0} / struct_size == 0 as defaults, and
+ *      that output structs still reject struct_size == 0 (BAD_STRUCT_SIZE).
  *   5. Confirm the transcribe_ext_check / transcribe_model_accepts_ext_kind
  *      surface behaves under the documented edge cases.
  *
@@ -111,20 +112,23 @@ static void test_log_set_null(void) {
 }
 
 static void test_init_macros(void) {
-    /* TRANSCRIBE_*_INIT must give back the same default values the
-     * legacy factories return. The factories themselves wrap the INIT
-     * macros, so the comparison is round-trip on every field. */
-    struct transcribe_model_load_params mp_macro = TRANSCRIBE_MODEL_LOAD_PARAMS_INIT;
+    /* Input params: the transcribe_*_params_init() functions fill every
+     * field with its default. Every default is the zero value, which is
+     * what makes `{0}` a valid defaults form too (tested separately). */
+    struct transcribe_model_load_params mp_macro;
+    transcribe_model_load_params_init(&mp_macro);
     CHECK(mp_macro.struct_size == sizeof(struct transcribe_model_load_params));
     CHECK(mp_macro.backend     == TRANSCRIBE_BACKEND_AUTO);
-    CHECK(mp_macro.gpu_device  == -1);
+    CHECK(mp_macro.gpu_device  == 0);
 
-    struct transcribe_session_params cp_macro = TRANSCRIBE_SESSION_PARAMS_INIT;
+    struct transcribe_session_params cp_macro;
+    transcribe_session_params_init(&cp_macro);
     CHECK(cp_macro.struct_size == sizeof(struct transcribe_session_params));
     CHECK(cp_macro.n_threads   == 0);
     CHECK(cp_macro.kv_type     == TRANSCRIBE_KV_TYPE_AUTO);
 
-    struct transcribe_run_params rp_macro = TRANSCRIBE_RUN_PARAMS_INIT;
+    struct transcribe_run_params rp_macro;
+    transcribe_run_params_init(&rp_macro);
     CHECK(rp_macro.struct_size        == sizeof(struct transcribe_run_params));
     CHECK(rp_macro.task               == TRANSCRIBE_TASK_TRANSCRIBE);
     CHECK(rp_macro.timestamps         == TRANSCRIBE_TIMESTAMPS_NONE);
@@ -132,17 +136,27 @@ static void test_init_macros(void) {
     CHECK(rp_macro.itn                == TRANSCRIBE_ITN_MODE_DEFAULT);
     CHECK(rp_macro.language           == NULL);
     CHECK(rp_macro.target_language    == NULL);
-    CHECK(rp_macro.strip_special_tags == true);
+    CHECK(rp_macro.keep_special_tags  == false);
     CHECK(rp_macro.family             == NULL);
 
-    struct transcribe_stream_params sp_macro = TRANSCRIBE_STREAM_PARAMS_INIT;
+    struct transcribe_stream_params sp_macro;
+    transcribe_stream_params_init(&sp_macro);
     CHECK(sp_macro.struct_size == sizeof(struct transcribe_stream_params));
     CHECK(sp_macro.family      == NULL);
+
+    /* {0} is a valid (non-canonical) defaults form for input params:
+     * every field's default is zero, and the entry points accept
+     * struct_size == 0. Spot-check that a zeroed struct reads as defaults
+     * and is accepted (the accept path is covered in test_*_invalid). */
+    struct transcribe_run_params rp_zero = {0};
+    CHECK(rp_zero.task              == TRANSCRIBE_TASK_TRANSCRIBE);
+    CHECK(rp_zero.keep_special_tags == false);
+    CHECK(rp_zero.struct_size       == 0);
 
     /* Output structs: struct_size set, rest zero-filled. The
      * zero-means-absent contract is what makes a new caller paired with
      * an older library see consistent tail-field reads. */
-    struct transcribe_stream_update upd_macro = TRANSCRIBE_STREAM_UPDATE_INIT;
+    struct transcribe_stream_update upd_macro; transcribe_stream_update_init(&upd_macro);
     CHECK(upd_macro.struct_size        == sizeof(struct transcribe_stream_update));
     CHECK(upd_macro.result_changed     == false);
     CHECK(upd_macro.is_final           == false);
@@ -151,7 +165,7 @@ static void test_init_macros(void) {
     CHECK(upd_macro.audio_committed_ms == 0);
     CHECK(upd_macro.buffered_ms        == 0);
 
-    struct transcribe_capabilities caps_macro = TRANSCRIBE_CAPABILITIES_INIT;
+    struct transcribe_capabilities caps_macro; transcribe_capabilities_init(&caps_macro);
     CHECK(caps_macro.struct_size                        == sizeof(struct transcribe_capabilities));
     CHECK(caps_macro.native_sample_rate                 == 0);
     CHECK(caps_macro.n_languages                        == 0);
@@ -160,7 +174,7 @@ static void test_init_macros(void) {
     CHECK(caps_macro.supports_translate                 == false);
     CHECK(caps_macro.supports_streaming                 == false);
 
-    struct transcribe_timings tm_macro = TRANSCRIBE_TIMINGS_INIT;
+    struct transcribe_timings tm_macro; transcribe_timings_init(&tm_macro);
     CHECK(tm_macro.struct_size == sizeof(struct transcribe_timings));
     CHECK(tm_macro.load_ms     == 0.0f);
     CHECK(tm_macro.mel_ms      == 0.0f);
@@ -168,27 +182,27 @@ static void test_init_macros(void) {
     CHECK(tm_macro.decode_ms   == 0.0f);
 
     /* Family extension INIT macros wire struct_size + kind correctly. */
-    struct transcribe_parakeet_stream_ext pk = TRANSCRIBE_PARAKEET_STREAM_EXT_INIT;
+    struct transcribe_parakeet_stream_ext pk; transcribe_parakeet_stream_ext_init(&pk);
     CHECK(pk.ext.size          == sizeof(struct transcribe_parakeet_stream_ext));
     CHECK(pk.ext.kind          == TRANSCRIBE_EXT_KIND_PARAKEET_STREAM);
     CHECK(pk.att_context_right == -1);
 
-    struct transcribe_parakeet_buffered_stream_ext pkb =
-        TRANSCRIBE_PARAKEET_BUFFERED_STREAM_EXT_INIT;
+    struct transcribe_parakeet_buffered_stream_ext pkb;
+    transcribe_parakeet_buffered_stream_ext_init(&pkb);
     CHECK(pkb.ext.size  == sizeof(struct transcribe_parakeet_buffered_stream_ext));
     CHECK(pkb.ext.kind  == TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM);
     CHECK(pkb.left_ms   == -1);
     CHECK(pkb.chunk_ms  == -1);
     CHECK(pkb.right_ms  == -1);
 
-    struct transcribe_moonshine_streaming_stream_ext ms =
-        TRANSCRIBE_MOONSHINE_STREAMING_STREAM_EXT_INIT;
+    struct transcribe_moonshine_streaming_stream_ext ms;
+    transcribe_moonshine_streaming_stream_ext_init(&ms);
     CHECK(ms.ext.size               == sizeof(struct transcribe_moonshine_streaming_stream_ext));
     CHECK(ms.ext.kind               == TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM);
     CHECK(ms.min_decode_interval_ms == -1);
 
-    struct transcribe_whisper_chunk_trace wtr =
-        TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+    struct transcribe_whisper_chunk_trace wtr;
+    transcribe_whisper_chunk_trace_init(&wtr);
     CHECK(wtr.struct_size == sizeof(struct transcribe_whisper_chunk_trace));
     CHECK(wtr.t0_ms       == 0);
     CHECK(wtr.t1_ms       == 0);
@@ -196,7 +210,7 @@ static void test_init_macros(void) {
 
     /* Whisper run extension: kind + size wired by the INIT macro, and
      * the field defaults match the family's shipping recipe. */
-    struct transcribe_whisper_run_ext wrx = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
+    struct transcribe_whisper_run_ext wrx; transcribe_whisper_run_ext_init(&wrx);
     CHECK(wrx.ext.size                  == sizeof(struct transcribe_whisper_run_ext));
     CHECK(wrx.ext.kind                  == TRANSCRIBE_EXT_KIND_WHISPER_RUN);
     CHECK(wrx.initial_prompt            == NULL);
@@ -253,7 +267,8 @@ static void test_log_set_publication(void) {
 }
 
 static void test_load_invalid(void) {
-    struct transcribe_model_load_params mp = TRANSCRIBE_MODEL_LOAD_PARAMS_INIT;
+    struct transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     struct transcribe_model *      m  = (struct transcribe_model *)0xdeadbeef;
 
     /* NULL out_model -> INVALID_ARG. */
@@ -265,22 +280,34 @@ static void test_load_invalid(void) {
           == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(m == NULL);
 
-    /* NULL params -> "all defaults", NOT an error. The call proceeds
-     * past parameter validation and fails only on the missing file,
-     * proving NULL was accepted as defaults. Contrast with {0} below,
-     * which claims struct_size == 0 and is rejected. */
+    /* NULL params -> "all defaults", NOT an error. Proceeds past param
+     * validation and fails only on the missing file. */
     m = (struct transcribe_model *)0xdeadbeef;
     CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf",
                                      NULL, &m)
           == TRANSCRIBE_ERR_FILE_NOT_FOUND);
     CHECK(m == NULL);
 
-    /* {0} params -> BAD_STRUCT_SIZE. Distinct from INVALID_ARG so a
-     * caller that forgot the INIT macro gets a targeted diagnostic. */
+    /* {0} params -> accepted as "defaults" for input params: struct_size
+     * == 0 is allowed and every field's zero value is its default, so the
+     * call proceeds to the load and fails only on the missing file. (This
+     * deliberately differs from output structs, where {0} stays an error.) */
     struct transcribe_model_load_params mp0 = {0};
     m = (struct transcribe_model *)0xdeadbeef;
-    CHECK(transcribe_model_load_file("ignored", &mp0, &m)
-          == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf",
+                                     &mp0, &m)
+          == TRANSCRIBE_ERR_FILE_NOT_FOUND);
+    CHECK(m == NULL);
+
+    /* gpu_device must be 0 (auto) in 0.x; any other value -> INVALID_ARG,
+     * checked before the file is touched. */
+    struct transcribe_model_load_params mp_dev;
+    transcribe_model_load_params_init(&mp_dev);
+    mp_dev.gpu_device = 1;
+    m = (struct transcribe_model *)0xdeadbeef;
+    CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf",
+                                     &mp_dev, &m)
+          == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(m == NULL);
 
     /* Otherwise-valid call against a path that does not exist on disk
@@ -296,7 +323,7 @@ static void test_load_invalid(void) {
 }
 
 static void test_context_invalid(void) {
-    struct transcribe_session_params cp = TRANSCRIBE_SESSION_PARAMS_INIT;
+    struct transcribe_session_params cp; transcribe_session_params_init(&cp);
     struct transcribe_session *      c  = (struct transcribe_session *)0xdeadbeef;
 
     CHECK(transcribe_session_init(NULL, &cp, NULL)
@@ -305,17 +332,15 @@ static void test_context_invalid(void) {
           == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(c == NULL);
 
-    /* {0} params would be BAD_STRUCT_SIZE, but the model==NULL check
-     * triggers INVALID_ARG first. Tested via a non-NULL params with a
-     * smaller-than-required struct_size below isn't reachable here
-     * without a real model; the dispatcher exercises the same code
-     * path the size check uses when called with a valid model. */
+    /* {0} session params are accepted as defaults (struct_size == 0 is
+     * allowed for input params); the model==NULL check is what yields
+     * INVALID_ARG here regardless of the params. */
 
     transcribe_session_free(NULL);
 }
 
 static void test_run_invalid(void) {
-    struct transcribe_run_params rp     = TRANSCRIBE_RUN_PARAMS_INIT;
+    struct transcribe_run_params rp; transcribe_run_params_init(&rp);
     float                    pcm[8] = { 0.0f };
 
     CHECK(transcribe_run(NULL, pcm, 8, &rp)
@@ -361,7 +386,7 @@ static void test_open_invalid(void) {
 
 static void test_model_introspection_null(void) {
     /* Per the contract, accessors are safe to call on NULL. */
-    struct transcribe_capabilities caps = TRANSCRIBE_CAPABILITIES_INIT;
+    struct transcribe_capabilities caps; transcribe_capabilities_init(&caps);
     /* Copy-out signature: NULL model -> INVALID_ARG; out buffer
      * untouched semantically (still zero-initialized by INIT). */
     CHECK(transcribe_model_get_capabilities(NULL, &caps)
@@ -395,7 +420,7 @@ static void test_ext_check(void) {
     CHECK(transcribe_ext_check(NULL, 0x12345678u, 8) == TRANSCRIBE_OK);
 
     /* Wrong kind -> INVALID_ARG. */
-    struct transcribe_parakeet_stream_ext pk = TRANSCRIBE_PARAKEET_STREAM_EXT_INIT;
+    struct transcribe_parakeet_stream_ext pk; transcribe_parakeet_stream_ext_init(&pk);
     CHECK(transcribe_ext_check(&pk.ext,
                                TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM,
                                sizeof(struct transcribe_parakeet_buffered_stream_ext))
@@ -409,7 +434,7 @@ static void test_ext_check(void) {
 
     /* Size too small even to cover the common header -> BAD_STRUCT_SIZE
      * before reading kind. */
-    struct transcribe_parakeet_stream_ext pk_tiny = TRANSCRIBE_PARAKEET_STREAM_EXT_INIT;
+    struct transcribe_parakeet_stream_ext pk_tiny; transcribe_parakeet_stream_ext_init(&pk_tiny);
     pk_tiny.ext.size = sizeof(struct transcribe_ext) - 1;
     CHECK(transcribe_ext_check(&pk_tiny.ext,
                                TRANSCRIBE_EXT_KIND_PARAKEET_STREAM,
@@ -417,7 +442,7 @@ static void test_ext_check(void) {
           == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
 
     /* Right kind but size too small -> BAD_STRUCT_SIZE. */
-    struct transcribe_parakeet_stream_ext pk_small = TRANSCRIBE_PARAKEET_STREAM_EXT_INIT;
+    struct transcribe_parakeet_stream_ext pk_small; transcribe_parakeet_stream_ext_init(&pk_small);
     pk_small.ext.size = sizeof(struct transcribe_ext); /* below the struct's prefix */
     CHECK(transcribe_ext_check(&pk_small.ext,
                                TRANSCRIBE_EXT_KIND_PARAKEET_STREAM,
@@ -454,7 +479,7 @@ static void test_whisper_chunk_trace_null(void) {
      * the caller's struct_size). */
     CHECK(transcribe_get_whisper_chunk_count(NULL) == 0);
 
-    struct transcribe_whisper_chunk_trace tr = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+    struct transcribe_whisper_chunk_trace tr; transcribe_whisper_chunk_trace_init(&tr);
     CHECK(transcribe_get_whisper_chunk_trace(NULL, 0, &tr) == TRANSCRIBE_OK);
     CHECK(tr.struct_size         == sizeof(struct transcribe_whisper_chunk_trace));
     CHECK(tr.t0_ms               == 0);
@@ -467,7 +492,7 @@ static void test_whisper_chunk_trace_null(void) {
     CHECK(tr.n_fallbacks         == 0);
 
     /* Out-of-range index against NULL succeeds the same way. */
-    struct transcribe_whisper_chunk_trace tr2 = TRANSCRIBE_WHISPER_CHUNK_TRACE_INIT;
+    struct transcribe_whisper_chunk_trace tr2; transcribe_whisper_chunk_trace_init(&tr2);
     CHECK(transcribe_get_whisper_chunk_trace(NULL, 42, &tr2) == TRANSCRIBE_OK);
     CHECK(tr2.t0_ms == 0);
 
@@ -484,7 +509,7 @@ static void test_whisper_chunk_trace_null(void) {
 static void test_timings_null(void) {
     /* NULL ctx -> INVALID_ARG. NULL out -> INVALID_ARG. {0} out ->
      * BAD_STRUCT_SIZE. */
-    struct transcribe_timings tm = TRANSCRIBE_TIMINGS_INIT;
+    struct transcribe_timings tm; transcribe_timings_init(&tm);
     CHECK(transcribe_get_timings(NULL, &tm) == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(transcribe_get_timings((const struct transcribe_session *)0x1, NULL)
           == TRANSCRIBE_ERR_INVALID_ARG);
@@ -504,7 +529,7 @@ static void test_result_accessors_null(void) {
     CHECK(transcribe_n_tokens(ctx)   == 0);
 
     /* Segment row: NULL ctx → OK, struct stays zero-init (text=NULL). */
-    struct transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+    struct transcribe_segment seg; transcribe_segment_init(&seg);
     CHECK(transcribe_get_segment(ctx, 0, &seg) == TRANSCRIBE_OK);
     CHECK(seg.struct_size == sizeof(struct transcribe_segment));
     CHECK(seg.text        == NULL);
@@ -516,7 +541,7 @@ static void test_result_accessors_null(void) {
     CHECK(seg.n_tokens    == 0);
 
     /* Word row. */
-    struct transcribe_word wrd = TRANSCRIBE_WORD_INIT;
+    struct transcribe_word wrd; transcribe_word_init(&wrd);
     CHECK(transcribe_get_word(ctx, 0, &wrd) == TRANSCRIBE_OK);
     CHECK(wrd.struct_size == sizeof(struct transcribe_word));
     CHECK(wrd.text        == NULL);
@@ -528,7 +553,7 @@ static void test_result_accessors_null(void) {
 
     /* Token row. p is 0.0f (not NaN) on the zero-init path; bindings
      * distinguish "row not present" via text==NULL, not via NaN-on-p. */
-    struct transcribe_token tok = TRANSCRIBE_TOKEN_INIT;
+    struct transcribe_token tok; transcribe_token_init(&tok);
     CHECK(transcribe_get_token(ctx, 0, &tok) == TRANSCRIBE_OK);
     CHECK(tok.struct_size == sizeof(struct transcribe_token));
     CHECK(tok.text        == NULL);
@@ -573,8 +598,8 @@ static void test_stream_accessors_null(void) {
 static void test_stream_entries_null(void) {
     /* NULL ctx into every entry point: begin/feed/finalize report
      * INVALID_ARG; reset is a no-op. */
-    struct transcribe_run_params        rp = TRANSCRIBE_RUN_PARAMS_INIT;
-    struct transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
+    struct transcribe_run_params rp; transcribe_run_params_init(&rp);
+    struct transcribe_stream_params sp; transcribe_stream_params_init(&sp);
     float                           pcm[1] = { 0.0f };
 
     CHECK(transcribe_stream_begin(NULL, &rp, &sp)

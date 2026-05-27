@@ -157,7 +157,7 @@ void run_case(transcribe_model *  model,
         return;
     }
 
-    transcribe_session_params cp = transcribe_session_default_params();
+    transcribe_session_params cp; transcribe_session_params_init(&cp);
     struct transcribe_session * ctx = nullptr;
     {
         const transcribe_status st =
@@ -171,7 +171,7 @@ void run_case(transcribe_model *  model,
         }
     }
 
-    transcribe_run_params rp = transcribe_run_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     {
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(),
@@ -245,7 +245,7 @@ int main() {
 
     const auto t_start = std::chrono::steady_clock::now();
 
-    transcribe_model_load_params mp = transcribe_model_load_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;
     struct transcribe_model * model = nullptr;
     {
@@ -287,7 +287,7 @@ int main() {
             return EXIT_FAILURE;
         }
 
-        transcribe_session_params cp = transcribe_session_default_params();
+        transcribe_session_params cp; transcribe_session_params_init(&cp);
         struct transcribe_session * ctx = nullptr;
         if (transcribe_session_init(model, &cp, &ctx) != TRANSCRIBE_OK ||
             ctx == nullptr)
@@ -302,7 +302,7 @@ int main() {
         // Accept path: force "en" on English audio and expect a
         // transcript within the same edit-distance tolerance as the
         // auto-detect jfk case.
-        transcribe_run_params rp_lang = transcribe_run_default_params();
+        transcribe_run_params rp_lang; transcribe_run_params_init(&rp_lang);
         rp_lang.language = "en";
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()),

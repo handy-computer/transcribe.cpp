@@ -23,13 +23,13 @@
 #include "transcribe.h"
 #include "transcribe/whisper.h"
 
+#include "transcribe-abi.h"
 #include "transcribe-arch.h"
 #include "transcribe-session.h"
 #include "transcribe-loader.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
 
-#include "arch/whisper/whisper.h"
 #include "arch/whisper/bin_load.h"
 
 #include <sys/stat.h>
@@ -229,43 +229,104 @@ static void transcribe_log_emit_or_stderr(
 }
 
 // ---------------------------------------------------------------------------
-// Params factories
+// Params init functions
 // ---------------------------------------------------------------------------
 //
-// Factories are retained alongside the new TRANSCRIBE_*_INIT macros so
-// existing 0.x callers keep working. The factories set struct_size to
-// the library's view of the struct, which is the correct value for
-// internal callers that pass the result straight back into the library;
-// caller-side use should prefer the INIT macros because sizeof in the
-// caller's TU is what makes the size-aware ABI work in the
-// shared-library case. Phase 5 removes these factories before v1.
+// Every input params struct is initialized by zero-filling and stamping
+// struct_size. This works because each field's documented default IS its
+// zero value (TASK_TRANSCRIBE, TIMESTAMPS_NONE, PNC/ITN_MODE_DEFAULT,
+// BACKEND_AUTO, KV_TYPE_AUTO are all 0; gpu_device 0 = auto; NULL
+// pointers; keep_special_tags false = strip). That invariant is also why
+// `struct ... p = {0};` is a valid (non-canonical) defaults form, and why
+// the input entry points accept struct_size == 0 as "defaults".
+//
+// These are one-argument by design: they assume the caller and library
+// agree on the struct layout, which holds for the supported build-with-
+// your-consumers distribution model. A caller passing a struct smaller
+// than the library's view would be a version-skew bug handled at release
+// time (soname), not in this API.
 
-extern "C" struct transcribe_model_load_params transcribe_model_load_default_params(void) {
-    struct transcribe_model_load_params p = TRANSCRIBE_MODEL_LOAD_PARAMS_INIT;
-    return p;
+extern "C" void transcribe_model_load_params_init(struct transcribe_model_load_params * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
 }
 
-extern "C" struct transcribe_session_params transcribe_session_default_params(void) {
-    struct transcribe_session_params p = TRANSCRIBE_SESSION_PARAMS_INIT;
-    return p;
+extern "C" void transcribe_session_params_init(struct transcribe_session_params * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
 }
 
-extern "C" struct transcribe_run_params transcribe_run_default_params(void) {
-    struct transcribe_run_params p = TRANSCRIBE_RUN_PARAMS_INIT;
-    return p;
+extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
 }
 
-extern "C" struct transcribe_stream_params
-transcribe_stream_default_params(void)
-{
-    struct transcribe_stream_params p = TRANSCRIBE_STREAM_PARAMS_INIT;
-    return p;
+extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
 }
+
+// ---------------------------------------------------------------------------
+// Output struct init functions
+// ---------------------------------------------------------------------------
+//
+// Output structs are caller-allocated buffers the library writes into,
+// bounded by min(caller struct_size, library size). The caller must
+// declare its buffer size via struct_size; these init functions do that
+// and zero-fill the rest. Every output field is designed so its zero
+// value means "absent / unknown / false / none", so a zeroed struct +
+// struct_size is the correct empty state. (Unlike input params, a {0}
+// output struct is NOT accepted by the accessors — struct_size == 0 there
+// is a real "you forgot to init the buffer" error.)
+
+extern "C" void transcribe_capabilities_init(struct transcribe_capabilities * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
+extern "C" void transcribe_timings_init(struct transcribe_timings * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
+extern "C" void transcribe_stream_update_init(struct transcribe_stream_update * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
+extern "C" void transcribe_segment_init(struct transcribe_segment * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
+extern "C" void transcribe_word_init(struct transcribe_word * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
+extern "C" void transcribe_token_init(struct transcribe_token * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
+// Whisper telemetry + run-extension init and chunk-trace accessors live
+// in arch/whisper/public.cpp (family source) so this dispatcher stays
+// family-agnostic, matching parakeet/moonshine.
 
 // The whisper/sensevoice/funasr_nano/canary per-family run-params
 // factories were removed in the Phase-2 migration:
 //   - whisper's knobs are now in transcribe_whisper_run_ext (reached via
-//     transcribe_run_params::family); use TRANSCRIBE_WHISPER_RUN_EXT_INIT.
+//     transcribe_run_params::family); use transcribe_whisper_run_ext_init().
 //   - sensevoice/funasr_nano `use_itn` collapsed into the generic
 //     transcribe_run_params::itn enum.
 //   - canary `pnc` collapsed into the generic transcribe_run_params::pnc enum.
@@ -344,22 +405,18 @@ constexpr size_t k_min_token_size =
     TRANSCRIBE_FIELD_END(transcribe_token, text);
 constexpr size_t k_min_timings_size =
     TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
-constexpr size_t k_min_whisper_chunk_trace_size =
-    TRANSCRIBE_FIELD_END(transcribe_whisper_chunk_trace, n_fallbacks);
+// k_min_whisper_chunk_trace_size lives in arch/whisper/public.cpp with
+// the chunk-trace accessor that uses it.
 
 #undef TRANSCRIBE_FIELD_END
 
-inline transcribe_status check_struct_size(size_t got, size_t want) {
-    if (got < want) {
-        return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
-    }
-    return TRANSCRIBE_OK;
-}
-
-void copy_out_prefix(void * dst, const void * src, size_t caller_size, size_t library_size) {
-    const size_t n = caller_size < library_size ? caller_size : library_size;
-    std::memcpy(dst, src, n);
-}
+// Size-aware ABI helpers (check_struct_size / check_input_struct_size /
+// copy_out_prefix) live in transcribe-abi.h so per-family public
+// accessors (arch/whisper/public.cpp) share one definition. Pull them
+// into this TU's unqualified scope so existing call sites are unchanged.
+using transcribe::check_struct_size;
+using transcribe::check_input_struct_size;
+using transcribe::copy_out_prefix;
 
 // Advisory pnc/itn warning. Emits a WARN log message when a non-DEFAULT
 // caller request hits a model that does not support runtime control of
@@ -440,28 +497,28 @@ extern "C" transcribe_status transcribe_model_load_file(
     // spelling of defaults — it carries no struct_size, so it always
     // matches the running library. A zeroed struct ({0}) is a different
     // thing: it claims struct_size == 0 and is rejected below.
-    struct transcribe_model_load_params params_defaults = TRANSCRIBE_MODEL_LOAD_PARAMS_INIT;
+    struct transcribe_model_load_params params_defaults; transcribe_model_load_params_init(&params_defaults);
     if (params == nullptr) {
         params = &params_defaults;
     }
-    if (const auto st = check_struct_size(params->struct_size, k_min_model_params_size);
+    if (const auto st = check_input_struct_size(params->struct_size, k_min_model_params_size);
         st != TRANSCRIBE_OK)
     {
         return st;
     }
 
-    // Reserved-field validation. gpu_device is documented in the
-    // public header as MUST-be-(-1) in 0.x, reserved for future
-    // multi-device selection. Reject anything else now so that
-    // callers who pass a stale "device 0" (or garbage) get a clean
-    // error today rather than a silent success followed by surprise
-    // behavior when we actually wire device selection up. A stderr
-    // line is included because "invalid argument" alone doesn't tell
-    // the caller which field tripped. When multi-device support
-    // lands this check relaxes to `< -1 || >= n_devices`.
-    if (params->gpu_device != -1) {
+    // Reserved-field validation. gpu_device is documented in the public
+    // header as 0 = auto/default in 0.x, reserved for future multi-device
+    // selection. 0 is the zero value so a {0} / default-initialized struct
+    // passes; reject anything else now so that callers who pass a stale
+    // explicit device index (or garbage) get a clean error today rather
+    // than a silent success followed by surprise behavior when we actually
+    // wire device selection up. A stderr line is included because "invalid
+    // argument" alone doesn't tell the caller which field tripped. When
+    // multi-device support lands this check relaxes to `< 0 || >= n_devices`.
+    if (params->gpu_device != 0) {
         std::fprintf(stderr,
-            "transcribe_model_load_file: gpu_device must be -1 in 0.x "
+            "transcribe_model_load_file: gpu_device must be 0 (auto) in 0.x "
             "(got %d); multi-device selection is reserved for a "
             "future release\n", params->gpu_device);
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -568,11 +625,11 @@ extern "C" transcribe_status transcribe_session_init(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     // NULL params means "all defaults" (see transcribe_model_load_file).
-    struct transcribe_session_params params_defaults = TRANSCRIBE_SESSION_PARAMS_INIT;
+    struct transcribe_session_params params_defaults; transcribe_session_params_init(&params_defaults);
     if (params == nullptr) {
         params = &params_defaults;
     }
-    if (const auto st = check_struct_size(params->struct_size, k_min_context_params_size);
+    if (const auto st = check_input_struct_size(params->struct_size, k_min_context_params_size);
         st != TRANSCRIBE_OK)
     {
         return st;
@@ -717,16 +774,16 @@ extern "C" transcribe_status transcribe_stream_begin(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     // NULL run/stream params each mean "all defaults".
-    struct transcribe_run_params    run_params_defaults    = TRANSCRIBE_RUN_PARAMS_INIT;
-    struct transcribe_stream_params stream_params_defaults = TRANSCRIBE_STREAM_PARAMS_INIT;
+    struct transcribe_run_params    run_params_defaults;    transcribe_run_params_init(&run_params_defaults);
+    struct transcribe_stream_params stream_params_defaults; transcribe_stream_params_init(&stream_params_defaults);
     if (run_params == nullptr)    { run_params = &run_params_defaults; }
     if (stream_params == nullptr) { stream_params = &stream_params_defaults; }
-    if (const auto st = check_struct_size(run_params->struct_size, k_min_run_params_size);
+    if (const auto st = check_input_struct_size(run_params->struct_size, k_min_run_params_size);
         st != TRANSCRIBE_OK)
     {
         return st;
     }
-    if (const auto st = check_struct_size(stream_params->struct_size, k_min_stream_params_size);
+    if (const auto st = check_input_struct_size(stream_params->struct_size, k_min_stream_params_size);
         st != TRANSCRIBE_OK)
     {
         return st;
@@ -964,61 +1021,6 @@ extern "C" transcribe_status transcribe_stream_last_status(
     return session->stream_last_status;
 }
 
-// Whisper-specific decoding trace accessors. The storage lives on
-// WhisperSession; we downcast via the model's arch name rather than
-// RTTI so non-RTTI builds keep working. Non-Whisper contexts and
-// out-of-range indices are defined as zeroed/empty returns.
-static const transcribe::whisper::WhisperSession *
-maybe_whisper_context(const struct transcribe_session * session)
-{
-    if (session == nullptr) return nullptr;
-    if (session->model == nullptr) return nullptr;
-    if (session->model->arch == nullptr) return nullptr;
-    const char * name = session->model->arch->name;
-    if (name == nullptr || std::strcmp(name, "whisper") != 0) {
-        return nullptr;
-    }
-    return static_cast<const transcribe::whisper::WhisperSession *>(session);
-}
-
-extern "C" int transcribe_get_whisper_chunk_count(
-    const struct transcribe_session * session)
-{
-    const auto * wc = maybe_whisper_context(session);
-    if (wc == nullptr) return 0;
-    return static_cast<int>(wc->chunk_traces.size());
-}
-
-extern "C" transcribe_status transcribe_get_whisper_chunk_trace(
-    const struct transcribe_session *       session,
-    int                                     i,
-    struct transcribe_whisper_chunk_trace * out_trace)
-{
-    if (out_trace == nullptr) {
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
-    if (const auto st = check_struct_size(out_trace->struct_size, k_min_whisper_chunk_trace_size);
-        st != TRANSCRIBE_OK)
-    {
-        return st;
-    }
-    const size_t caller_size = out_trace->struct_size;
-    transcribe_whisper_chunk_trace zero{};
-    zero.struct_size = caller_size;
-    copy_out_prefix(out_trace, &zero, caller_size, sizeof(zero));
-    const auto * wc = maybe_whisper_context(session);
-    if (wc == nullptr) {
-        return TRANSCRIBE_OK;
-    }
-    if (i < 0 || static_cast<size_t>(i) >= wc->chunk_traces.size()) {
-        return TRANSCRIBE_OK;
-    }
-    transcribe_whisper_chunk_trace staged = wc->chunk_traces[static_cast<size_t>(i)];
-    staged.struct_size = caller_size;
-    copy_out_prefix(out_trace, &staged, caller_size, sizeof(staged));
-    return TRANSCRIBE_OK;
-}
-
 extern "C" transcribe_status transcribe_run(
     struct transcribe_session *      session,
     const float *                    pcm,
@@ -1046,11 +1048,11 @@ extern "C" transcribe_status transcribe_run(
     // NULL params means "all defaults" (transcribe vs translate, no
     // timestamps, etc.). A well-formed default run is not a malformed
     // call, so it proceeds and replaces the previous result.
-    struct transcribe_run_params params_defaults = TRANSCRIBE_RUN_PARAMS_INIT;
+    struct transcribe_run_params params_defaults; transcribe_run_params_init(&params_defaults);
     if (params == nullptr) {
         params = &params_defaults;
     }
-    if (const auto st = check_struct_size(params->struct_size, k_min_run_params_size);
+    if (const auto st = check_input_struct_size(params->struct_size, k_min_run_params_size);
         st != TRANSCRIBE_OK)
     {
         return st;
@@ -1296,7 +1298,7 @@ transcribe_print_timings(const struct transcribe_session * session)
     if (session == nullptr) {
         return;
     }
-    struct transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
+    struct transcribe_timings t; transcribe_timings_init(&t);
     (void)transcribe_get_timings(session, &t);
     char buf[256];
 

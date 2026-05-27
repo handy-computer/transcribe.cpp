@@ -31,14 +31,14 @@ int main() {
     session.t_decode_us = 3000;
 
     float pcm = 0.0f;
-    transcribe_run_params params = transcribe_run_default_params();
+    transcribe_run_params params; transcribe_run_params_init(&params);
     const transcribe_status st = transcribe_run(&session, &pcm, 1, &params);
 
     CHECK(st == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
     CHECK(!session.has_result);
     CHECK(session.full_text.empty());
 
-    transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
+    transcribe_timings t; transcribe_timings_init(&t);
     CHECK(transcribe_get_timings(&session, &t) == TRANSCRIBE_OK);
     CHECK(t.mel_ms == 0.0f);
     CHECK(t.encode_ms == 0.0f);

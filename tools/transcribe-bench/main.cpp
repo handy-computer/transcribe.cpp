@@ -195,7 +195,7 @@ int main(int argc, char ** argv) {
     // transcribe_model_load_params::backend, which the per-family loader
     // consumes via transcribe::load_common::init_backends.
     if (!quiet) std::fprintf(stderr, "loading model %s\n", args.model_path.c_str());
-    struct transcribe_model_load_params mp = transcribe_model_load_default_params();
+    struct transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = args.backend;
     struct transcribe_model *      model = nullptr;
     if (const transcribe_status st =
@@ -208,7 +208,7 @@ int main(int argc, char ** argv) {
     const std::string backend = (backend_c && *backend_c) ? backend_c : "unknown";
 
     // Init context.
-    struct transcribe_session_params cp = transcribe_session_default_params();
+    struct transcribe_session_params cp; transcribe_session_params_init(&cp);
     cp.n_threads = args.n_threads;
     struct transcribe_session * ctx = nullptr;
     if (const transcribe_status st = transcribe_session_init(model, &cp, &ctx);
@@ -221,12 +221,12 @@ int main(int argc, char ** argv) {
     // load_ms is a model-scoped one-shot, captured before any run.
     double load_ms = 0.0;
     {
-        struct transcribe_timings load_tm = TRANSCRIBE_TIMINGS_INIT;
+        struct transcribe_timings load_tm; transcribe_timings_init(&load_tm);
         (void)transcribe_get_timings(ctx, &load_tm);
         load_ms = static_cast<double>(load_tm.load_ms);
     }
 
-    struct transcribe_run_params rp = transcribe_run_default_params();
+    struct transcribe_run_params rp; transcribe_run_params_init(&rp);
 
     // Warmup (untimed).
     for (int w = 0; w < args.warmup; ++w) {
@@ -262,7 +262,7 @@ int main(int argc, char ** argv) {
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
-        struct transcribe_timings after = TRANSCRIBE_TIMINGS_INIT;
+        struct transcribe_timings after; transcribe_timings_init(&after);
         (void)transcribe_get_timings(ctx, &after);
         iter_timings row;
         row.mel_ms    = static_cast<double>(after.mel_ms);
@@ -284,7 +284,7 @@ int main(int argc, char ** argv) {
     token_ids_csv.reserve(static_cast<size_t>(n_tokens) * 6);
     for (int i = 0; i < n_tokens; ++i) {
         if (i > 0) token_ids_csv.push_back(',');
-        struct transcribe_token tok = TRANSCRIBE_TOKEN_INIT;
+        struct transcribe_token tok; transcribe_token_init(&tok);
         (void)transcribe_get_token(ctx, i, &tok);
         char buf[16];
         std::snprintf(buf, sizeof(buf), "%d", tok.id);

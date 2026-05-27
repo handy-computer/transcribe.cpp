@@ -182,7 +182,7 @@ int main() {
     // ---- Load model --------------------------------------------------
     const auto t_start = std::chrono::steady_clock::now();
 
-    transcribe_model_load_params mp = transcribe_model_load_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;  // strict CPU for cross-platform determinism
     struct transcribe_model * model = nullptr;
     {
@@ -221,7 +221,7 @@ int main() {
                  pcm.size(), static_cast<double>(pcm.size()) / 16000.0);
 
     // ---- Init context + run ------------------------------------------
-    transcribe_session_params cp = transcribe_session_default_params();
+    transcribe_session_params cp; transcribe_session_params_init(&cp);
     struct transcribe_session * ctx = nullptr;
     {
         const transcribe_status st =
@@ -234,7 +234,7 @@ int main() {
         }
     }
 
-    transcribe_run_params rp = transcribe_run_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     {
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
@@ -280,7 +280,7 @@ int main() {
     }
 
     // ---- Verify timing -----------------------------------------------
-    transcribe_timings t = TRANSCRIBE_TIMINGS_INIT;
+    transcribe_timings t; transcribe_timings_init(&t);
     CHECK(transcribe_get_timings(ctx, &t) == TRANSCRIBE_OK);
     std::fprintf(stderr,
                  "cohere_e2e_smoke: timings load=%.2f mel=%.2f "
@@ -310,7 +310,7 @@ int main() {
 
     // At least one segment with non-empty text.
     if (n_segments > 0) {
-        transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+        transcribe_segment seg; transcribe_segment_init(&seg);
         CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
         CHECK(seg.text != nullptr && seg.text[0] != '\0');
     }
@@ -327,7 +327,7 @@ int main() {
     CHECK_EQ_INT(transcribe_n_words(ctx),  0);
     CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
     if (n_segments > 0) {
-        transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+        transcribe_segment seg; transcribe_segment_init(&seg);
         CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
         CHECK_EQ_INT(seg.n_words,  0);
         CHECK_EQ_INT(seg.n_tokens, 0);
@@ -347,7 +347,7 @@ int main() {
     // is the "transcribe_run replaces the previous result" rule
     // from include/transcribe.h applied to the failure path.
     {
-        transcribe_run_params rp2 = transcribe_run_default_params();
+        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
@@ -362,7 +362,7 @@ int main() {
         CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
     }
     {
-        transcribe_run_params rp2 = transcribe_run_default_params();
+        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
         rp2.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);

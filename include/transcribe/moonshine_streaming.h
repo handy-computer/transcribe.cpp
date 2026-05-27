@@ -50,10 +50,9 @@ struct transcribe_moonshine_streaming_stream_ext {
     int32_t               min_decode_interval_ms;
 };
 
-#define TRANSCRIBE_MOONSHINE_STREAMING_STREAM_EXT_INIT                    \
-    { { sizeof(struct transcribe_moonshine_streaming_stream_ext),         \
-        TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM },                 \
-      -1 /* min_decode_interval_ms: family default */ }
+/* Fills ext.size/kind and min_decode_interval_ms = -1 (family default). */
+TRANSCRIBE_API void transcribe_moonshine_streaming_stream_ext_init(
+    struct transcribe_moonshine_streaming_stream_ext * ext);
 
 #ifdef __cplusplus
 } /* extern "C" */

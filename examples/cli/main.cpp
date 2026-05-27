@@ -71,7 +71,7 @@ std::string segments_json(const transcribe_session * ctx) {
     std::string out = ",\"segments\":[";
     for (int s = 0; s < n_seg; ++s) {
         if (s > 0) out += ",";
-        struct transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+        struct transcribe_segment seg; transcribe_segment_init(&seg);
         (void)transcribe_get_segment(ctx, s, &seg);
         char head[96];
         std::snprintf(head, sizeof(head),
@@ -431,7 +431,7 @@ int main(int argc, char ** argv) {
         }
 
         // Load model once.
-        struct transcribe_model_load_params mp = transcribe_model_load_default_params();
+        struct transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
         mp.backend = args.backend;
         struct transcribe_model *      model = nullptr;
         const transcribe_status        load_st =
@@ -443,7 +443,7 @@ int main(int argc, char ** argv) {
         }
 
         // Init context once (reused across all files via run()).
-        struct transcribe_session_params cp = transcribe_session_default_params();
+        struct transcribe_session_params cp; transcribe_session_params_init(&cp);
         cp.n_threads = args.n_threads;
         cp.kv_type   = args.kv_type;
         struct transcribe_session *      ctx = nullptr;
@@ -456,7 +456,7 @@ int main(int argc, char ** argv) {
             return EXIT_FAILURE;
         }
 
-        struct transcribe_run_params rp = transcribe_run_default_params();
+        struct transcribe_run_params rp; transcribe_run_params_init(&rp);
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
         if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
@@ -475,7 +475,7 @@ int main(int argc, char ** argv) {
         // bytes outlive the per-file loop below; the library copies
         // initial_prompt/prompt_tokens before transcribe_run returns,
         // but rp aliases &wx.ext for the run call itself.
-        struct transcribe_whisper_run_ext wx = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
+        struct transcribe_whisper_run_ext wx; transcribe_whisper_run_ext_init(&wx);
         if (args.whisper_set) {
             if (!args.initial_prompt.empty()) {
                 wx.initial_prompt = args.initial_prompt.c_str();
@@ -490,14 +490,14 @@ int main(int argc, char ** argv) {
         }
 
         if (args.keep_special_tags) {
-            rp.strip_special_tags = false;
+            rp.keep_special_tags = true;
         }
 
         // Emit a batch header line once, before any per-file output. Carries
         // the one-shot load time so downstream WER tooling can record it
         // without parsing stderr. Per-file lines follow on subsequent lines.
         if (args.batch_jsonl) {
-            struct transcribe_timings load_tm = TRANSCRIBE_TIMINGS_INIT;
+            struct transcribe_timings load_tm; transcribe_timings_init(&load_tm);
             (void)transcribe_get_timings(ctx, &load_tm);
             std::printf("{\"type\":\"batch_header\",\"load_ms\":%.1f}\n",
                         (double)load_tm.load_ms);
@@ -531,11 +531,11 @@ int main(int argc, char ** argv) {
             // harness can measure cache-aware streaming output.
             transcribe_status run_st = TRANSCRIBE_OK;
             if (args.stream_chunk_ms > 0) {
-                struct transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
-                struct transcribe_parakeet_stream_ext pkt_sp =
-                    TRANSCRIBE_PARAKEET_STREAM_EXT_INIT;
-                struct transcribe_parakeet_buffered_stream_ext pkt_buf_sp =
-                    TRANSCRIBE_PARAKEET_BUFFERED_STREAM_EXT_INIT;
+                struct transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+                struct transcribe_parakeet_stream_ext pkt_sp;
+                transcribe_parakeet_stream_ext_init(&pkt_sp);
+                struct transcribe_parakeet_buffered_stream_ext pkt_buf_sp;
+                transcribe_parakeet_buffered_stream_ext_init(&pkt_buf_sp);
                 const bool want_cache_aware = (args.stream_att_right >= 0);
                 const bool want_buffered =
                     args.stream_buf_left_ms  >= 0 ||
@@ -563,7 +563,7 @@ int main(int argc, char ** argv) {
                         const size_t take = std::min<size_t>(
                             static_cast<size_t>(chunk_samples),
                             pcm.size() - pos);
-                        struct transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
+                        struct transcribe_stream_update upd; transcribe_stream_update_init(&upd);
                         run_st = transcribe_stream_feed(
                             ctx, pcm.data() + pos,
                             static_cast<int>(take), &upd);
@@ -571,7 +571,7 @@ int main(int argc, char ** argv) {
                         pos += take;
                     }
                     if (run_st == TRANSCRIBE_OK) {
-                        struct transcribe_stream_update fin_upd = TRANSCRIBE_STREAM_UPDATE_INIT;
+                        struct transcribe_stream_update fin_upd; transcribe_stream_update_init(&fin_upd);
                         run_st = transcribe_stream_finalize(ctx, &fin_upd);
                     }
                 }
@@ -597,7 +597,7 @@ int main(int argc, char ** argv) {
             // error tag, so downstream tools count them as silent
             // successes.
             if (args.batch_jsonl) {
-                struct transcribe_timings tm = TRANSCRIBE_TIMINGS_INIT;
+                struct transcribe_timings tm; transcribe_timings_init(&tm);
                 (void)transcribe_get_timings(ctx, &tm);
                 const std::string escaped  = json_escape(text);
                 const std::string segments = segments_json(ctx);
@@ -651,7 +651,7 @@ int main(int argc, char ** argv) {
     std::printf("  sample rate 16000 Hz mono float32\n");
 
     if (!args.model_path.empty()) {
-        struct transcribe_model_load_params mp = transcribe_model_load_default_params();
+        struct transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
         mp.backend = args.backend;
         struct transcribe_model *      model = nullptr;
         const transcribe_status        st =
@@ -664,7 +664,7 @@ int main(int argc, char ** argv) {
         }
         std::printf("  backend:    %s\n", transcribe_model_backend(model));
 
-        struct transcribe_session_params cp = transcribe_session_default_params();
+        struct transcribe_session_params cp; transcribe_session_params_init(&cp);
         cp.n_threads = args.n_threads;
         cp.kv_type   = args.kv_type;
         struct transcribe_session *      ctx = nullptr;
@@ -678,7 +678,7 @@ int main(int argc, char ** argv) {
             return EXIT_FAILURE;
         }
 
-        struct transcribe_run_params rp = transcribe_run_default_params();
+        struct transcribe_run_params rp; transcribe_run_params_init(&rp);
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
         if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
@@ -693,7 +693,7 @@ int main(int argc, char ** argv) {
                                      : TRANSCRIBE_PNC_MODE_OFF;
         }
 
-        struct transcribe_whisper_run_ext wx = TRANSCRIBE_WHISPER_RUN_EXT_INIT;
+        struct transcribe_whisper_run_ext wx; transcribe_whisper_run_ext_init(&wx);
         if (args.whisper_set) {
             if (!args.initial_prompt.empty()) {
                 wx.initial_prompt = args.initial_prompt.c_str();
@@ -708,7 +708,7 @@ int main(int argc, char ** argv) {
         }
 
         if (args.keep_special_tags) {
-            rp.strip_special_tags = false;
+            rp.keep_special_tags = true;
         }
 
         // Streaming demo: drive transcribe_stream_begin/feed/finalize
@@ -720,7 +720,7 @@ int main(int argc, char ** argv) {
         // false until the finalize call.
         transcribe_status run_st = TRANSCRIBE_OK;
         if (args.stream_chunk_ms > 0) {
-            struct transcribe_capabilities caps = TRANSCRIBE_CAPABILITIES_INIT;
+            struct transcribe_capabilities caps; transcribe_capabilities_init(&caps);
             const transcribe_status caps_st =
                 transcribe_model_get_capabilities(model, &caps);
             if (caps_st != TRANSCRIBE_OK || !caps.supports_streaming) {
@@ -738,11 +738,11 @@ int main(int argc, char ** argv) {
             std::printf("stream: chunk=%d ms (%d samples)\n",
                         args.stream_chunk_ms, chunk_samples);
 
-            struct transcribe_stream_params sp = TRANSCRIBE_STREAM_PARAMS_INIT;
-            struct transcribe_parakeet_stream_ext pkt_sp =
-                TRANSCRIBE_PARAKEET_STREAM_EXT_INIT;
-            struct transcribe_parakeet_buffered_stream_ext pkt_buf_sp =
-                TRANSCRIBE_PARAKEET_BUFFERED_STREAM_EXT_INIT;
+            struct transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+            struct transcribe_parakeet_stream_ext pkt_sp;
+            transcribe_parakeet_stream_ext_init(&pkt_sp);
+            struct transcribe_parakeet_buffered_stream_ext pkt_buf_sp;
+            transcribe_parakeet_buffered_stream_ext_init(&pkt_buf_sp);
             const bool want_cache_aware = (args.stream_att_right >= 0);
             const bool want_buffered =
                 args.stream_buf_left_ms  >= 0 ||
@@ -786,7 +786,7 @@ int main(int argc, char ** argv) {
                     const size_t take = std::min<size_t>(
                         static_cast<size_t>(chunk_samples),
                         pcm.size() - pos);
-                    struct transcribe_stream_update upd = TRANSCRIBE_STREAM_UPDATE_INIT;
+                    struct transcribe_stream_update upd; transcribe_stream_update_init(&upd);
                     run_st = transcribe_stream_feed(
                         ctx, pcm.data() + pos,
                         static_cast<int>(take), &upd);
@@ -811,7 +811,7 @@ int main(int argc, char ** argv) {
                     ++feed_n;
                 }
                 if (run_st == TRANSCRIBE_OK) {
-                    struct transcribe_stream_update fin_upd = TRANSCRIBE_STREAM_UPDATE_INIT;
+                    struct transcribe_stream_update fin_upd; transcribe_stream_update_init(&fin_upd);
                     run_st = transcribe_stream_finalize(ctx, &fin_upd);
                     std::printf("  finalize: status=%s "
                                 "revision=%d input=%lld ms committed=%lld ms\n",
@@ -846,7 +846,7 @@ int main(int argc, char ** argv) {
             if (n_seg > 0 && ret_kind != TRANSCRIBE_TIMESTAMPS_NONE) {
                 std::printf("segments: %d\n", n_seg);
                 for (int i = 0; i < n_seg; ++i) {
-                    struct transcribe_segment seg = TRANSCRIBE_SEGMENT_INIT;
+                    struct transcribe_segment seg; transcribe_segment_init(&seg);
                     (void)transcribe_get_segment(ctx, i, &seg);
                     std::printf("  [%7.2f -> %7.2f] %s\n",
                                 seg.t0_ms / 1000.0, seg.t1_ms / 1000.0,
@@ -858,7 +858,7 @@ int main(int argc, char ** argv) {
                 const int n_wrd = transcribe_n_words(ctx);
                 std::printf("words: %d\n", n_wrd);
                 for (int i = 0; i < n_wrd; ++i) {
-                    struct transcribe_word wrd = TRANSCRIBE_WORD_INIT;
+                    struct transcribe_word wrd; transcribe_word_init(&wrd);
                     (void)transcribe_get_word(ctx, i, &wrd);
                     std::printf("  [%7.2f -> %7.2f] %s\n",
                                 wrd.t0_ms / 1000.0, wrd.t1_ms / 1000.0,
@@ -869,7 +869,7 @@ int main(int argc, char ** argv) {
                 const int n_tok = transcribe_n_tokens(ctx);
                 std::printf("tokens: %d\n", n_tok);
                 for (int i = 0; i < n_tok; ++i) {
-                    struct transcribe_token tok = TRANSCRIBE_TOKEN_INIT;
+                    struct transcribe_token tok; transcribe_token_init(&tok);
                     (void)transcribe_get_token(ctx, i, &tok);
                     std::printf("  [%7.2f -> %7.2f] p=%.3f %s\n",
                                 tok.t0_ms / 1000.0, tok.t1_ms / 1000.0, tok.p,
@@ -881,7 +881,7 @@ int main(int argc, char ** argv) {
         transcribe_print_timings(ctx);
 
         {
-            struct transcribe_timings tm = TRANSCRIBE_TIMINGS_INIT;
+            struct transcribe_timings tm; transcribe_timings_init(&tm);
             (void)transcribe_get_timings(ctx, &tm);
             const double total_ms = tm.mel_ms + tm.encode_ms + tm.decode_ms;
             if (total_ms > 0.0 && duration_s > 0.0) {
