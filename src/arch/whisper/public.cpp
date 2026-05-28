@@ -98,7 +98,7 @@ extern "C" transcribe_status transcribe_get_whisper_chunk_trace(
     {
         return st;
     }
-    const size_t caller_size = out_trace->struct_size;
+    const uint64_t caller_size = out_trace->struct_size;
     transcribe_whisper_chunk_trace zero{};
     zero.struct_size = caller_size;
     copy_out_prefix(out_trace, &zero, caller_size, sizeof(zero));

@@ -236,9 +236,11 @@ static void transcribe_log_emit_or_stderr(
 // struct_size. This works because each field's documented default IS its
 // zero value (TASK_TRANSCRIBE, TIMESTAMPS_NONE, PNC/ITN_MODE_DEFAULT,
 // BACKEND_AUTO, KV_TYPE_AUTO are all 0; gpu_device 0 = auto; NULL
-// pointers; keep_special_tags false = strip). That invariant is also why
-// `struct ... p = {0};` is a valid (non-canonical) defaults form, and why
-// the input entry points accept struct_size == 0 as "defaults".
+// pointers; keep_special_tags false = strip). That invariant lets the
+// init functions stay as memset + stamp without per-field assignments.
+// `{0}` itself is NOT accepted as a defaults form — struct_size == 0 is
+// rejected — because uninitialized stack memory can silently hit the
+// zero case; callers reach defaults via NULL only.
 //
 // These are one-argument by design: they assume the caller and library
 // agree on the struct layout, which holds for the supported build-with-
@@ -338,7 +340,7 @@ extern "C" void transcribe_token_init(struct transcribe_token * p) {
 extern "C" transcribe_status transcribe_ext_check(
     const struct transcribe_ext * ext,
     uint32_t                      expected_kind,
-    size_t                        min_size)
+    uint64_t                      min_size)
 {
     if (ext == nullptr) {
         return TRANSCRIBE_OK;
@@ -357,6 +359,7 @@ extern "C" transcribe_status transcribe_ext_check(
 
 extern "C" bool transcribe_model_accepts_ext_kind(
     const struct transcribe_model * model,
+    transcribe_ext_slot             slot,
     uint32_t                        kind)
 {
     if (model == nullptr || model->arch == nullptr) {
@@ -365,7 +368,7 @@ extern "C" bool transcribe_model_accepts_ext_kind(
     if (model->arch->accepts_ext_kind == nullptr) {
         return false;
     }
-    return model->arch->accepts_ext_kind(model, kind);
+    return model->arch->accepts_ext_kind(model, slot, kind);
 }
 
 extern "C" bool transcribe_model_supports(
@@ -652,22 +655,33 @@ extern "C" transcribe_status transcribe_session_init(
 }
 
 extern "C" void transcribe_session_free(struct transcribe_session * session) {
-    // Same pattern as transcribe_model_free: virtual destructor on the
-    // base lets per-family contexts release their per-run state without
-    // a free callback in the Arch trait. Never touches session->model — a
-    // session created via transcribe_session_init borrows it.
+    // Free the session and, if it owns its model (transcribe_open path),
+    // free the model too. The owns_model flag is set only by
+    // transcribe_open; sessions created via the two-step
+    // transcribe_session_init borrow the model and leave it alone here.
+    //
+    // Capture before the session is destroyed; reading session->model
+    // after delete would be use-after-free.
+    if (session == nullptr) {
+        return;
+    }
+    struct transcribe_model * owned =
+        session->owns_model ? session->model : nullptr;
     delete session;
+    transcribe_model_free(owned);  // NULL is a no-op
 }
 
 // ---------------------------------------------------------------------------
 // Convenience: open / close / get_model
 // ---------------------------------------------------------------------------
 //
-// transcribe_open bundles load + session_init for the common
-// single-session case and hands back a session that OWNS its model.
-// transcribe_close is the symmetric teardown. These sit entirely on top
-// of the public two-step API — no internal shortcuts — so the convenience
-// lane and the explicit lane stay interchangeable.
+// transcribe_open bundles load + session_init for the common single-session
+// case and hands back a session that owns its model (owns_model = true).
+// transcribe_close is a thin alias for transcribe_session_free — both honor
+// owns_model and free the owned model after the session, so calling either
+// on an open()-created session does the right thing. Pre-1.0 the alias is
+// kept for source-compatibility; consumers should migrate to
+// transcribe_session_free.
 
 extern "C" transcribe_status transcribe_open(
     const char *                                path,
@@ -700,23 +714,18 @@ extern "C" transcribe_status transcribe_open(
         return st;
     }
 
-    // The convenience session owns the model it loaded; transcribe_close
-    // frees both. This is the only place owns_model is set.
+    // The convenience session owns the model it loaded; either
+    // transcribe_session_free or transcribe_close (its alias) will free
+    // both. This is the only place owns_model is set.
     session->owns_model = true;
     *out_session = session;
     return TRANSCRIBE_OK;
 }
 
 extern "C" void transcribe_close(struct transcribe_session * session) {
-    if (session == nullptr) {
-        return;
-    }
-    // Capture before the session is destroyed; reading session->model
-    // after delete would be use-after-free.
-    struct transcribe_model * owned =
-        session->owns_model ? session->model : nullptr;
+    // Alias for transcribe_session_free, kept for source compatibility
+    // with the prior split-API shape. Both honor owns_model.
     transcribe_session_free(session);
-    transcribe_model_free(owned);  // NULL is a no-op
 }
 
 extern "C" const struct transcribe_model * transcribe_get_model(
@@ -829,7 +838,11 @@ extern "C" transcribe_status transcribe_stream_begin(
         if (stream_params->family->size < sizeof(struct transcribe_ext)) {
             return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
         }
-        if (!transcribe_model_accepts_ext_kind(session->model, stream_params->family->kind)) {
+        if (!transcribe_model_accepts_ext_kind(
+                session->model,
+                TRANSCRIBE_EXT_SLOT_STREAM,
+                stream_params->family->kind))
+        {
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
     }
@@ -874,7 +887,7 @@ static transcribe_status prepare_stream_update(struct transcribe_stream_update *
     {
         return st;
     }
-    const size_t caller_size = update->struct_size;
+    const uint64_t caller_size = update->struct_size;
     transcribe_stream_update staged{};
     staged.struct_size = caller_size;
     copy_out_prefix(update, &staged, caller_size, sizeof(staged));
@@ -1079,7 +1092,11 @@ extern "C" transcribe_status transcribe_run(
         if (params->family->size < sizeof(struct transcribe_ext)) {
             return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
         }
-        if (!transcribe_model_accepts_ext_kind(session->model, params->family->kind)) {
+        if (!transcribe_model_accepts_ext_kind(
+                session->model,
+                TRANSCRIBE_EXT_SLOT_RUN,
+                params->family->kind))
+        {
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
     }
@@ -1177,11 +1194,11 @@ extern "C" transcribe_status transcribe_model_get_capabilities(
     // Preserve the caller-declared size, then write only the prefix
     // that fits in both the caller's buffer and this library's view;
     // any tail bytes stay as the caller initialized them (zero, by
-    // the INIT macro contract).
+    // the init function's zero-fill contract).
     //
     // Pointer fields written into the caller buffer (e.g. languages)
     // remain model-owned and valid until transcribe_model_free().
-    const size_t caller_size = out_caps->struct_size;
+    const uint64_t caller_size = out_caps->struct_size;
     transcribe_capabilities staged = model->caps;
     staged.struct_size = caller_size;
     copy_out_prefix(out_caps, &staged, caller_size, sizeof(staged));
@@ -1279,7 +1296,7 @@ extern "C" transcribe_status transcribe_get_timings(
     {
         return st;
     }
-    const size_t caller_size = out_timings->struct_size;
+    const uint64_t caller_size = out_timings->struct_size;
     transcribe_timings staged{};
     staged.struct_size = caller_size;
     if (session->model != nullptr) {
@@ -1407,7 +1424,7 @@ extern "C" transcribe_status transcribe_get_segment(
     {
         return st;
     }
-    const size_t caller_size = out->struct_size;
+    const uint64_t caller_size = out->struct_size;
     transcribe_segment zero{};
     zero.struct_size = caller_size;
     copy_out_prefix(out, &zero, caller_size, sizeof(zero));
@@ -1443,7 +1460,7 @@ extern "C" transcribe_status transcribe_get_word(
     {
         return st;
     }
-    const size_t caller_size = out->struct_size;
+    const uint64_t caller_size = out->struct_size;
     transcribe_word zero{};
     zero.struct_size = caller_size;
     copy_out_prefix(out, &zero, caller_size, sizeof(zero));
@@ -1478,7 +1495,7 @@ extern "C" transcribe_status transcribe_get_token(
     {
         return st;
     }
-    const size_t caller_size = out->struct_size;
+    const uint64_t caller_size = out->struct_size;
     transcribe_token zero{};
     zero.struct_size = caller_size;
     copy_out_prefix(out, &zero, caller_size, sizeof(zero));

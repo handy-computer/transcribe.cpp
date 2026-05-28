@@ -16,6 +16,7 @@ preambles, and Swift/ObjC module maps.
 When adding a new family extension, update:
 
 - `include/transcribe/<family>.h` with the typed struct, kind constant, and
-  INIT macro.
+  `transcribe_<family>_<name>_ext_init()` function declaration.
 - `include/transcribe/extensions.h` with one new include.
-- `docs/extension-kinds.md` with the registered FourCC value.
+- `docs/extension-kinds.md` with the registered FourCC value and the slot
+  (`RUN` or `STREAM`) the kind is legal on.

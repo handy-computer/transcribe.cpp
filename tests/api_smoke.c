@@ -10,11 +10,13 @@
  *   3. Confirm the two real entry points return TRANSCRIBE_ERR_INVALID_ARG
  *      on bad input and TRANSCRIBE_ERR_NOT_IMPLEMENTED on otherwise-valid
  *      stub input.
- *   4. Confirm the params init functions populate sensible defaults,
- *      that input params accept {0} / struct_size == 0 as defaults, and
- *      that output structs still reject struct_size == 0 (BAD_STRUCT_SIZE).
+ *   4. Confirm the params init functions populate sensible defaults
+ *      and that every caller-owned struct (input AND output) rejects
+ *      struct_size == 0 with BAD_STRUCT_SIZE — defaults are reached
+ *      via a NULL pointer, never via a zero-sized struct.
  *   5. Confirm the transcribe_ext_check / transcribe_model_accepts_ext_kind
- *      surface behaves under the documented edge cases.
+ *      surface behaves under the documented edge cases, including the
+ *      RUN/STREAM slot split.
  *
  * This test does NOT load a model. The contracts it asserts must remain
  * stable across implementation passes.
@@ -144,10 +146,13 @@ static void test_init_macros(void) {
     CHECK(sp_macro.struct_size == sizeof(struct transcribe_stream_params));
     CHECK(sp_macro.family      == NULL);
 
-    /* {0} is a valid (non-canonical) defaults form for input params:
-     * every field's default is zero, and the entry points accept
-     * struct_size == 0. Spot-check that a zeroed struct reads as defaults
-     * and is accepted (the accept path is covered in test_*_invalid). */
+    /* {0} is NOT accepted as a defaults shortcut in pre-1.0: a struct
+     * with struct_size == 0 is rejected with BAD_STRUCT_SIZE regardless
+     * of any other field's value. Defaults are reached by passing NULL
+     * where the entry point accepts a nullable params pointer. The
+     * field values below confirm only that aggregate zero-init still
+     * gives the documented zero-value field defaults — useful as a
+     * sanity check on the struct layout, not as a calling convention. */
     struct transcribe_run_params rp_zero = {0};
     CHECK(rp_zero.task              == TRANSCRIBE_TASK_TRANSCRIBE);
     CHECK(rp_zero.keep_special_tags == false);
@@ -181,7 +186,7 @@ static void test_init_macros(void) {
     CHECK(tm_macro.encode_ms   == 0.0f);
     CHECK(tm_macro.decode_ms   == 0.0f);
 
-    /* Family extension INIT macros wire struct_size + kind correctly. */
+    /* Family extension init functions wire struct_size + kind correctly. */
     struct transcribe_parakeet_stream_ext pk; transcribe_parakeet_stream_ext_init(&pk);
     CHECK(pk.ext.size          == sizeof(struct transcribe_parakeet_stream_ext));
     CHECK(pk.ext.kind          == TRANSCRIBE_EXT_KIND_PARAKEET_STREAM);
@@ -208,8 +213,8 @@ static void test_init_macros(void) {
     CHECK(wtr.t1_ms       == 0);
     CHECK(wtr.n_fallbacks == 0);
 
-    /* Whisper run extension: kind + size wired by the INIT macro, and
-     * the field defaults match the family's shipping recipe. */
+    /* Whisper run extension: kind + size wired by the init function,
+     * and the field defaults match the family's shipping recipe. */
     struct transcribe_whisper_run_ext wrx; transcribe_whisper_run_ext_init(&wrx);
     CHECK(wrx.ext.size                  == sizeof(struct transcribe_whisper_run_ext));
     CHECK(wrx.ext.kind                  == TRANSCRIBE_EXT_KIND_WHISPER_RUN);
@@ -288,15 +293,15 @@ static void test_load_invalid(void) {
           == TRANSCRIBE_ERR_FILE_NOT_FOUND);
     CHECK(m == NULL);
 
-    /* {0} params -> accepted as "defaults" for input params: struct_size
-     * == 0 is allowed and every field's zero value is its default, so the
-     * call proceeds to the load and fails only on the missing file. (This
-     * deliberately differs from output structs, where {0} stays an error.) */
+    /* {0} params (struct_size == 0) is REJECTED in pre-1.0: a struct
+     * with zero struct_size is treated as a forgot-to-init bug, not as
+     * a defaults shortcut, regardless of the rest of the field values.
+     * Defaults are reached by passing a NULL pointer (above). */
     struct transcribe_model_load_params mp0 = {0};
     m = (struct transcribe_model *)0xdeadbeef;
     CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf",
                                      &mp0, &m)
-          == TRANSCRIBE_ERR_FILE_NOT_FOUND);
+          == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
     CHECK(m == NULL);
 
     /* gpu_device must be 0 (auto) in 0.x; any other value -> INVALID_ARG,
@@ -332,9 +337,10 @@ static void test_context_invalid(void) {
           == TRANSCRIBE_ERR_INVALID_ARG);
     CHECK(c == NULL);
 
-    /* {0} session params are accepted as defaults (struct_size == 0 is
-     * allowed for input params); the model==NULL check is what yields
-     * INVALID_ARG here regardless of the params. */
+    /* model==NULL is checked before params, so it yields INVALID_ARG
+     * regardless of what the params look like. {0} params with struct_size
+     * == 0 would otherwise be rejected with BAD_STRUCT_SIZE (see the
+     * model-load smoke). */
 
     transcribe_session_free(NULL);
 }
@@ -400,9 +406,13 @@ static void test_model_introspection_null(void) {
     CHECK_STR_EMPTY(transcribe_model_variant_string(NULL));
     CHECK_STR_EMPTY(transcribe_model_backend(NULL));
 
-    /* The kind probe is safe on NULL and returns false. */
+    /* The kind probe is safe on NULL and returns false for any slot. */
     CHECK(transcribe_model_accepts_ext_kind(NULL,
+              TRANSCRIBE_EXT_SLOT_STREAM,
               TRANSCRIBE_EXT_KIND_PARAKEET_STREAM) == false);
+    CHECK(transcribe_model_accepts_ext_kind(NULL,
+              TRANSCRIBE_EXT_SLOT_RUN,
+              TRANSCRIBE_EXT_KIND_WHISPER_RUN) == false);
 
     /* The feature probe is also NULL-safe and returns false for every
      * known feature value plus any out-of-range enum. */

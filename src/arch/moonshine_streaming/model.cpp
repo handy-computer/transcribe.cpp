@@ -1735,8 +1735,11 @@ void stream_reset(transcribe_session * session) {
     cc->stream_prev_token_ids.clear();
 }
 
-bool accepts_ext_kind(const transcribe_model * model, uint32_t kind) {
+bool accepts_ext_kind(const transcribe_model * model,
+                      transcribe_ext_slot      slot,
+                      uint32_t                 kind) {
     (void) model;
+    if (slot != TRANSCRIBE_EXT_SLOT_STREAM) return false;
     return kind == TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM;
 }
 

@@ -162,6 +162,14 @@ def _pack_kv_uint32(key: str, value: int) -> bytes:
     )
 
 
+def _pack_kv_int32(key: str, value: int) -> bytes:
+    return (
+        _pack_string(key)
+        + struct.pack("<i", GGUF_TYPE_INT32)
+        + struct.pack("<i", value)
+    )
+
+
 def _pack_kv_bool(key: str, value: bool) -> bytes:
     # GGUF stores bool values as int8 on the wire (see gguf.h: "All bool
     # values are stored as int8_t").
@@ -478,34 +486,34 @@ def _parakeet_hparams_kv() -> list[bytes]:
 # Index list of (name, ne) pairs in the canonical order. The C++
 # parakeet_smoke test relies on the index of a few specific tensors so
 # it can assert exact first-element values via _f32_seq above.
-def _parakeet_pre_encode_F_prime(n_mels: int) -> int:
+def _parakeet_pre_encode_F_prime(n_mels: int, causal: bool = False) -> int:
     """Mirror of src/arch/parakeet/weights.cpp's pre_encode_F_prime
     lambda. The pre-encode subsampling stack is three stride-2 / k=3
     convs; the loader traces them on the configured padding so the
     flattened (channels × F') feed into the pre_encode.out linear
     matches both offline and cache-aware variants.
 
-    Offline parakeet (and the toy fixture here) has no causal context
-    KV, so the loader's offline branch applies: total per-axis pad =
-    (k-1)/2 + (k-1)/2 = 2 for k=3. The cache-aware (nemotron) branch
-    uses (k-1) + (s-1) = 3; no fixture in this generator emits that
-    KV today.
+    causal=False: offline / ChunkedLimitedWithRc branch. Total per-axis
+    pad = (k-1)/2 + (k-1)/2 = 2 for k=3.
+    causal=True: ChunkedLimited (cache-aware, nemotron) branch.
+    Total per-axis pad = (k-1) + (s-1) = 3 for k=3, s=2.
 
     For real parakeet sizes (n_mels=128) the offline trace produces
     F' = 16, matching the old `n_mels // subs` shortcut. For toy
-    sizes (n_mels=4) the trace produces F' = 1 while the shortcut
-    gives 2 — that divergence is why this function exists.
+    sizes (n_mels=4) the trace produces F' = 1 (offline) / F' = 2
+    (causal) while the shortcut gives 2 — that divergence is why
+    this function exists.
     """
     k = 3
     s = 2
-    total_pad = (k - 1) // 2 + (k - 1) // 2  # offline padding
+    total_pad = ((k - 1) + (s - 1)) if causal else ((k - 1) // 2 + (k - 1) // 2)
     dim = n_mels
     for _ in range(3):
         dim = ((dim + total_pad - k) // s) + 1
     return dim
 
 
-def _parakeet_tensor_descriptors() -> list[tuple[str, list[int]]]:
+def _parakeet_tensor_descriptors(causal_pre_encode: bool = False) -> list[tuple[str, list[int]]]:
     hp = PARAKEET_HP
     d_model      = hp["enc_d_model"]
     d_ff         = hp["enc_d_ff"]
@@ -515,7 +523,7 @@ def _parakeet_tensor_descriptors() -> list[tuple[str, list[int]]]:
     channels     = hp["enc_subsampling_channels"]
     n_mels       = hp["fe_num_mels"]
     subs         = hp["enc_subsampling_factor"]
-    pre_in       = channels * _parakeet_pre_encode_F_prime(n_mels)
+    pre_in       = channels * _parakeet_pre_encode_F_prime(n_mels, causal_pre_encode)
     n_layers     = hp["enc_n_layers"]
     pred_h       = hp["pred_hidden"]
     pred_v       = hp["pred_vocab"]
@@ -601,8 +609,8 @@ def _parakeet_tensor_descriptors() -> list[tuple[str, list[int]]]:
     return out
 
 
-def _parakeet_tensors() -> list[Tensor]:
-    descriptors = _parakeet_tensor_descriptors()
+def _parakeet_tensors(causal_pre_encode: bool = False) -> list[Tensor]:
+    descriptors = _parakeet_tensor_descriptors(causal_pre_encode=causal_pre_encode)
     tensors: list[Tensor] = []
     for idx, (name, ne) in enumerate(descriptors):
         n_elem = 1
@@ -1415,6 +1423,72 @@ def emit_fixtures(out_dir: Path) -> None:
                 _pack_kv_string("general.architecture", "parakeet"),
                 _pack_kv_string("stt.variant", "tdt-0.6b-stream-toy"),
                 _pack_kv_bool("stt.capability.streaming", True),
+                *tokenizer_kv,
+                *parakeet_hparams_kv,
+            ],
+            parakeet_tensors,
+        ),
+    )
+
+    # Cache-aware streaming variant (ChunkedLimited, nemotron-style).
+    # Adds the att_context_style + flat (left, right) menu so the
+    # parakeet stream_begin hook routes into the cache-aware path and
+    # reaches the att_context_right validation. Built specifically to
+    # exercise the "sentinel value < -1 is INVALID_ARG" reject; the
+    # encoder graph never runs because the test asserts rejection
+    # before any compute.
+    # Cache-aware uses the causal-pre-encode pad in the loader, which
+    # changes the expected pre_in dimension of enc.pre_encode.out.weight.
+    # Build a separate tensor list for this fixture so the shape check
+    # the loader runs at load time passes.
+    parakeet_tensors_causal = _parakeet_tensors(causal_pre_encode=True)
+    _write(
+        out_dir / "tokenizer_minimal_streaming_cache_aware.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "parakeet"),
+                _pack_kv_string("stt.variant", "tdt-0.6b-cache-aware-toy"),
+                _pack_kv_bool("stt.capability.streaming", True),
+                _pack_kv_string("stt.parakeet.encoder.att_context_style",
+                                "chunked_limited"),
+                # Menu mirrors nemotron-speech-streaming-en-0.6b:
+                # right ∈ {13, 6, 1, 0}, left = 70 throughout. Flat
+                # (left, right) pairs; choices[0] is the default.
+                _pack_kv_array_int32(
+                    "stt.parakeet.encoder.att_context_size_choices",
+                    [70, 13, 70, 6, 70, 1, 70, 0]),
+                _pack_kv_int32("stt.parakeet.encoder.att_context_left",  70),
+                _pack_kv_int32("stt.parakeet.encoder.att_context_right", 13),
+                *tokenizer_kv,
+                *parakeet_hparams_kv,
+            ],
+            parakeet_tensors_causal,
+        ),
+    )
+
+    # Chunked-attention buffered streaming variant (ChunkedLimitedWithRc,
+    # parakeet-unified-style). Adds the three context menus so the
+    # parakeet stream_begin hook routes into the buffered path and
+    # reaches the per-field ms validation. Same purpose as above:
+    # exercise rejection of sentinel values < -1.
+    _write(
+        out_dir / "tokenizer_minimal_streaming_buffered.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "parakeet"),
+                _pack_kv_string("stt.variant", "tdt-0.6b-buffered-toy"),
+                _pack_kv_bool("stt.capability.streaming", True),
+                _pack_kv_string("stt.parakeet.encoder.att_context_style",
+                                "chunked_limited_with_rc"),
+                # Mirrors parakeet-unified-en-0.6b's menu shape.
+                _pack_kv_array_int32(
+                    "stt.parakeet.encoder.att_chunk_left_choices",  [70]),
+                _pack_kv_array_int32(
+                    "stt.parakeet.encoder.att_chunk_chunk_choices", [1, 2, 7, 13]),
+                _pack_kv_array_int32(
+                    "stt.parakeet.encoder.att_chunk_right_choices", [0, 1, 2, 4, 7, 13]),
                 *tokenizer_kv,
                 *parakeet_hparams_kv,
             ],

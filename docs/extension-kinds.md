@@ -23,17 +23,32 @@ gets a new kind.
 - Document the accepting model variants in the family header next to
   the kind constant, not here. This file is just the value registry.
 
+## Slot
+
+Each kind is legal in exactly one API slot. The slot enumerator names the
+entry-point family whose `family` field the typed extension is pointed at:
+
+- `TRANSCRIBE_EXT_SLOT_RUN` — `transcribe_run_params::family`, validated
+  by `transcribe_run`.
+- `TRANSCRIBE_EXT_SLOT_STREAM` — `transcribe_stream_params::family`,
+  validated by `transcribe_stream_begin`.
+
+Mismatched-slot extensions are rejected with `TRANSCRIBE_ERR_INVALID_ARG`
+at the entry point. A future slot (e.g. `_SESSION`, `_MODEL_LOAD`,
+`_TOKENIZE`) would be one new enum value alongside an entry-point
+parameter; existing kinds keep their slot for life.
+
 ## Registry
 
-| Kind value     | FourCC | Symbol                                          | Family       | Header                          |
-| -------------- | ------ | ----------------------------------------------- | ------------ | ------------------------------- |
-| `0x54534B50`   | `PKST` | `TRANSCRIBE_EXT_KIND_PARAKEET_STREAM`           | parakeet     | `include/transcribe/parakeet.h` |
-| `0x53424B50`   | `PKBS` | `TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM`  | parakeet     | `include/transcribe/parakeet.h` |
-| `0x5453534D`   | `MSST` | `TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM` | moonshine_streaming | `include/transcribe/moonshine_streaming.h` |
-| `0x4E524857`   | `WHRN` | `TRANSCRIBE_EXT_KIND_WHISPER_RUN`               | whisper      | `include/transcribe/whisper.h`  |
+| Kind value     | FourCC | Slot     | Symbol                                          | Family       | Header                          |
+| -------------- | ------ | -------- | ----------------------------------------------- | ------------ | ------------------------------- |
+| `0x54534B50`   | `PKST` | `STREAM` | `TRANSCRIBE_EXT_KIND_PARAKEET_STREAM`           | parakeet     | `include/transcribe/parakeet.h` |
+| `0x53424B50`   | `PKBS` | `STREAM` | `TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM`  | parakeet     | `include/transcribe/parakeet.h` |
+| `0x5453534D`   | `MSST` | `STREAM` | `TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM` | moonshine_streaming | `include/transcribe/moonshine_streaming.h` |
+| `0x4E524857`   | `WHRN` | `RUN`    | `TRANSCRIBE_EXT_KIND_WHISPER_RUN`               | whisper      | `include/transcribe/whisper.h`  |
 
 Empty rows reserved for future allocations:
 
-| Kind value | FourCC | Symbol | Family | Header |
-| ---------- | ------ | ------ | ------ | ------ |
-| _next_     |        |        |        |        |
+| Kind value | FourCC | Slot | Symbol | Family | Header |
+| ---------- | ------ | ---- | ------ | ------ | ------ |
+| _next_     |        |      |        |        |        |

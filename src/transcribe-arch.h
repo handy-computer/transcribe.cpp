@@ -131,18 +131,27 @@ struct Arch {
     void (*stream_reset)(
         struct transcribe_session *            ctx);
 
-    // Optional kind probe. Returns true when the loaded model variant
-    // accepts the named extension kind on transcribe_stream_params::family
-    // (or, after Phase 2, transcribe_run_params::family). NULL means "no
-    // family extension kinds accepted" — the dispatcher's
-    // transcribe_model_accepts_ext_kind() returns false in that case.
+    // Optional kind+slot probe. Returns true when the loaded model
+    // variant accepts the named extension kind on the given slot
+    // (transcribe_run_params::family for _RUN, transcribe_stream_params::family
+    // for _STREAM). NULL means "no family extension kinds accepted in
+    // any slot" — the dispatcher's transcribe_model_accepts_ext_kind()
+    // returns false in that case.
     //
-    // Acceptance is per-loaded-variant, not per-family: e.g. parakeet
-    // returns true for PARAKEET_STREAM on cache-aware variants and for
-    // PARAKEET_BUFFERED_STREAM on chunked-attention variants, never both
-    // on the same loaded model.
+    // Acceptance is per-loaded-variant AND per-slot:
+    //   - parakeet returns true for (_STREAM, PARAKEET_STREAM) on
+    //     cache-aware variants and for (_STREAM, PARAKEET_BUFFERED_STREAM)
+    //     on chunked-attention variants — never both on the same loaded
+    //     model — and always false for the _RUN slot.
+    //   - moonshine_streaming returns true for
+    //     (_STREAM, MOONSHINE_STREAMING_STREAM) only.
+    //   - whisper returns true for (_RUN, WHISPER_RUN) only.
+    // A family that genuinely has no extension surface for a slot must
+    // return false rather than NULL'ing this hook; NULL is reserved for
+    // "no extension surface at all."
     bool (*accepts_ext_kind)(
         const struct transcribe_model *        model,
+        transcribe_ext_slot                    slot,
         uint32_t                               kind);
 };
 

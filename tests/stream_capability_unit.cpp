@@ -7,9 +7,11 @@
 //
 //   1. The default-capability path (no streaming KV in the GGUF, family
 //      default supports_streaming=false): caps.supports_streaming reads
-//      false, the new streaming_lookahead_ms / streaming_chunk_ms
-//      hint fields are zero-initialized, and transcribe_stream_begin
-//      returns NOT_IMPLEMENTED on the capability gate.
+//      false, the streaming_lookahead_ms / streaming_chunk_ms hint
+//      fields carry the -1 "not advertised" sentinel from the model
+//      base ctor (zero would be a real lookahead value), and
+//      transcribe_stream_begin returns NOT_IMPLEMENTED on the
+//      capability gate.
 //
 //   2. The KV-override path against a NON-STREAMING VARIANT (capability
 //      KV says streaming=true, but the variant's encoder hparams are
@@ -110,8 +112,9 @@ bool load_and_init(const char *                  fixture_name,
 }
 
 // Capability-default fixture: supports_streaming reads false, the
-// streaming timing hints are zero (the "unsupported or unknown"
-// sentinel), and begin reports NOT_IMPLEMENTED.
+// streaming timing hints carry the -1 "not advertised" sentinel set by
+// the model base constructor (the parakeet family never overwrites
+// them on a non-streaming variant), and begin reports NOT_IMPLEMENTED.
 void test_supports_streaming_false() {
     struct transcribe_model *   model = nullptr;
     struct transcribe_session * ctx   = nullptr;
@@ -124,10 +127,12 @@ void test_supports_streaming_false() {
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->supports_streaming     == false);
-        // New hint fields default to zero; the parakeet family does
-        // not advertise any specific lookahead or chunk size today.
-        CHECK(caps->streaming_lookahead_ms == 0);
-        CHECK(caps->streaming_chunk_ms     == 0);
+        // -1 "not advertised" sentinel from transcribe_model's base
+        // ctor; the parakeet family does not overwrite for non-streaming
+        // variants. Distinguishing -1 from 0 matters because 0 is a
+        // valid lookahead value (e.g. nemotron R=0).
+        CHECK(caps->streaming_lookahead_ms == -1);
+        CHECK(caps->streaming_chunk_ms     == -1);
     }
 
     transcribe_stream_params sp; transcribe_stream_params_init(&sp);
@@ -168,10 +173,13 @@ void test_supports_streaming_true_variant_offline() {
         // KV path works: the loader read stt.capability.streaming=true
         // and flipped the family default.
         CHECK(caps->supports_streaming     == true);
-        // Hint fields still zero — they live in apply_family_invariants,
-        // not in the capability KV reader, and parakeet leaves them at 0.
-        CHECK(caps->streaming_lookahead_ms == 0);
-        CHECK(caps->streaming_chunk_ms     == 0);
+        // Hint fields still carry the -1 "not advertised" sentinel
+        // from the model base ctor — they're populated by per-variant
+        // streaming-setup code in model.cpp, not by the capability KV
+        // reader, and this toy fixture's encoder is Regular, so the
+        // streaming-setup block never fires.
+        CHECK(caps->streaming_lookahead_ms == -1);
+        CHECK(caps->streaming_chunk_ms     == -1);
     }
 
     transcribe_stream_params sp; transcribe_stream_params_init(&sp);

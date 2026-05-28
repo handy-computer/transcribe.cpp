@@ -6,3 +6,4 @@
 add_subdirectory(common)
 add_subdirectory(cli)
 add_subdirectory(hello)
+add_subdirectory(hello_stream)

@@ -324,6 +324,35 @@ if(TRANSCRIBE_UV)
         COMMAND transcribe_stream_capability_unit)
     set_tests_properties(transcribe_stream_capability_unit PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # -------------------------------------------------------------------------
+    # Parakeet streaming extension sentinel-reject regression
+    # -------------------------------------------------------------------------
+    #
+    # Pins the per-field "< -1 sentinel returns INVALID_ARG" rule for
+    # both the cache-aware (transcribe_parakeet_stream_ext) and the
+    # chunked-attention buffered (transcribe_parakeet_buffered_stream_ext)
+    # streaming extensions. Uses toy ChunkedLimited and ChunkedLimitedWithRc
+    # fixtures so the parakeet stream_begin hook routes into each
+    # validation path; the rejection fires before any compute, so the
+    # toy fixtures without real weights are sufficient.
+    add_executable(transcribe_parakeet_stream_ext_reject_unit
+        parakeet_stream_ext_reject_unit.cpp)
+
+    target_link_libraries(transcribe_parakeet_stream_ext_reject_unit
+        PRIVATE transcribe)
+
+    target_compile_definitions(transcribe_parakeet_stream_ext_reject_unit PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_parakeet_stream_ext_reject_unit)
+
+    add_dependencies(transcribe_parakeet_stream_ext_reject_unit fixtures)
+
+    add_test(NAME transcribe_parakeet_stream_ext_reject_unit
+        COMMAND transcribe_parakeet_stream_ext_reject_unit)
+    set_tests_properties(transcribe_parakeet_stream_ext_reject_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------

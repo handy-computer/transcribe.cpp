@@ -137,9 +137,11 @@ transcribe_status fake_stream_finalize(
 
 bool fake_accepts_no_ext(
     const transcribe_model * model,
+    transcribe_ext_slot      slot,
     uint32_t                 kind)
 {
     (void)model;
+    (void)slot;
     (void)kind;
     return false;
 }

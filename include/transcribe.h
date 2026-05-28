@@ -43,27 +43,52 @@
  *   may add a properly synchronized reconfiguration entry point with
  *   stronger guarantees.
  *
- * Params and ABI stability:
+ * ABI stability (0.x):
+ * - This library is pre-1.0. The on-disk ABI MAY break between 0.x minor
+ *   releases. Consumers should rebuild against matching headers and
+ *   should not assume any layout, enum value, or symbol set is frozen.
+ *   The `struct_size` mechanism described below is forward-ABI scaffolding
+ *   we will lean on for the post-1.0 stable surface; treat it as a
+ *   compatibility hook in the making, not a stability promise today.
+ *
+ * Params (size-aware structs):
  * - Every caller-owned public struct crossing the ABI carries `struct_size`
  *   as field 0, both for inputs (params, family extensions) and outputs
- *   (capabilities, stream updates, timings, family telemetry).
- * - Callers MUST initialize each struct via its TRANSCRIBE_*_INIT macro.
- *   `{0}` is rejected with TRANSCRIBE_ERR_BAD_STRUCT_SIZE. INIT macros are
- *   positional aggregate-init forms; designated initializers are C99 but
- *   not standard C++ until C++20, so the macros stay positional and the
- *   field order is part of the ABI.
- * - For input structs the INIT macro spells out the default values for
- *   every field. For output structs the INIT macro sets `struct_size` and
- *   relies on C aggregate-init zero-fill for the rest; "absent / unknown
- *   / false / none" is encoded by zero on every output field.
- * - sizeof(struct ...) is evaluated in the caller's translation unit, so
- *   struct_size captures the caller's view: a newer library writes only
- *   the fields that fit and an older library never touches tail fields
- *   the new caller added. New fields are appended at the end of the
- *   struct; layout-incompatible changes are an ABI break.
+ *   (capabilities, stream updates, timings, family telemetry). The field
+ *   is `uint64_t` for platform-invariant layout across 32/64-bit ABIs.
+ * - Callers MUST initialize each struct via its transcribe_*_init()
+ *   function (or, for family extensions, the family's init function).
+ *   The init function fills sensible defaults and stamps `struct_size`.
+ *   `{0}` is NOT accepted as a defaults shortcut: a struct with
+ *   `struct_size == 0` is rejected with TRANSCRIBE_ERR_BAD_STRUCT_SIZE,
+ *   regardless of any other field's value. The only NULL-equivalent
+ *   defaults form is a literal NULL pointer where the entry point
+ *   accepts one (every public params pointer does).
+ * - For input structs the init function spells out the default values
+ *   for every field. For output structs the init function sets
+ *   `struct_size` and relies on zero-fill for the rest. The general
+ *   convention is "zero means absent / unknown / false / none," but
+ *   specific fields may use a different sentinel (e.g.
+ *   transcribe_capabilities::streaming_lookahead_ms uses -1 for "not
+ *   advertised" because 0 is a real value). Each field's doc spells out
+ *   its sentinel where it differs from the general rule.
+ * - sizeof(struct ...) is evaluated in the caller's translation unit,
+ *   so struct_size captures the caller's view of the layout. In 0.x
+ *   the library REQUIRES struct_size >= the library's current full size
+ *   for the struct (callers must rebuild against the headers shipped
+ *   with their library); a smaller struct_size returns
+ *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE. The forward direction is permitted
+ *   already: a newer caller with extra trailing fields the older
+ *   library doesn't know about is accepted, and the library only writes
+ *   what it knows so the caller's tail bytes stay as zero-init. The
+ *   reverse — older-caller / newer-library — is the post-1.0 goal of
+ *   the struct_size mechanism but is not implemented today; new fields
+ *   appended in 0.x require consumers to rebuild. Layout-incompatible
+ *   changes (reordering, retyping existing fields) are an ABI break
+ *   regardless and are allowed in 0.x without a deprecation cycle.
  * - Family-specific knobs are reached via an opaque, kind-tagged
  *   extension pointer (`struct transcribe_ext`). Callers probe whether
- *   the loaded model accepts a given extension kind via
+ *   the loaded model accepts a given extension kind in a given slot via
  *   transcribe_model_accepts_ext_kind(), then pass a pointer to a typed
  *   family extension struct (declared in include/transcribe/<family>.h)
  *   whose first field embeds `struct transcribe_ext`. NULL family
@@ -81,6 +106,31 @@
  *   library may assert; in release builds accessors return safe sentinels
  *   instead of reading invalid memory. Callers should bounds-check with
  *   the corresponding transcribe_n_*() accessor before indexing.
+ *
+ * Result text-pointer lifetime:
+ * - Every accessor that returns a `const char *` (transcribe_full_text,
+ *   transcribe_detected_language, and the `text` field of segment / word
+ *   / token rows copied out by transcribe_get_segment / _word / _token)
+ *   returns a borrowed pointer aliasing session-owned storage.
+ * - Offline path: the pointer is valid until the NEXT call to
+ *   transcribe_run / transcribe_stream_begin / transcribe_stream_reset
+ *   / transcribe_session_free on the same session. Read it, copy bytes
+ *   if you need them past the next mutating call, and otherwise discard.
+ * - Streaming path: the same caveat applies, AND every call to
+ *   transcribe_stream_feed or transcribe_stream_finalize MAY invalidate
+ *   ALL previously returned text pointers, including those for committed
+ *   rows. Streaming families rebuild result vectors and their underlying
+ *   string storage as the transcript advances; vector reallocation and
+ *   per-feed re-decodes can invalidate pointers wholesale, not just for
+ *   tentative-suffix rows. A consumer that holds text past the next feed
+ *   MUST copy the bytes out before the feed.
+ * - This is a footgun for the polling-and-cache pattern. Bindings that
+ *   marshal-and-copy at the FFI boundary (Python c_char_p, Go C.GoString,
+ *   Rust CStr::to_string, etc.) are safe by construction. A future
+ *   immutable snapshot API will give callers a stable view that survives
+ *   feeds without copying per-row; until that ships, the borrowed-pointer
+ *   accessors are the only path and the lifetime rule above is the
+ *   contract.
  */
 
 #ifndef TRANSCRIBE_H
@@ -152,8 +202,8 @@ typedef enum {
      * aware struct (params, stream params, capabilities out, timings
      * out, family extension) when the supplied struct_size is zero or
      * smaller than the minimum the call path requires. Distinct from
-     * INVALID_ARG so bindings can match on "caller forgot to use the
-     * TRANSCRIBE_*_INIT macro" specifically.
+     * INVALID_ARG so bindings can match on "caller forgot to call the
+     * transcribe_*_init function" specifically.
      */
     TRANSCRIBE_ERR_BAD_STRUCT_SIZE      = 14,
     /*
@@ -339,8 +389,11 @@ struct transcribe_session;
  *
  * Each family declares its extension struct in
  * include/transcribe/<family>.h with `struct transcribe_ext ext` as
- * field 0 and a TRANSCRIBE_<FAMILY>_<NAME>_EXT_INIT macro that fills
- * both `ext.size` and `ext.kind` from the caller's perspective.
+ * field 0 and a transcribe_<family>_<name>_ext_init() function that
+ * fills `ext.size`, `ext.kind`, and per-field defaults from the
+ * caller's perspective. `ext.size` is `uint64_t` so the family
+ * extension layout is platform-invariant across 32/64-bit ABIs;
+ * transcribe_ext_check() also takes `uint64_t` for `min_size`.
  *
  * Pointer-to-first-member is well-defined: because `ext` sits at
  * field 0, the address of the family struct equals the address of its
@@ -356,7 +409,7 @@ struct transcribe_session;
  * and kind values.
  */
 struct transcribe_ext {
-    size_t   size;
+    uint64_t size;
     uint32_t kind;
 };
 
@@ -380,25 +433,47 @@ struct transcribe_ext {
 TRANSCRIBE_API transcribe_status transcribe_ext_check(
     const struct transcribe_ext * ext,
     uint32_t                      expected_kind,
-    size_t                        min_size);
+    uint64_t                      min_size);
+
+/*
+ * Extension slot — the API surface a typed family extension is pointed
+ * at. Slot acceptance is a model-and-slot concern; the dispatcher
+ * validates `slot` matches the call site before delegating to the
+ * family. A stream-only extension pointed at transcribe_run_params is
+ * INVALID_ARG, not silently-ignored. Add new slots by appending to
+ * this enum (SESSION / MODEL_LOAD / TOKENIZE would each be one new
+ * value, no new probe function); do not renumber.
+ */
+typedef enum {
+    /* transcribe_run_params::family */
+    TRANSCRIBE_EXT_SLOT_RUN    = 0,
+    /* transcribe_stream_params::family */
+    TRANSCRIBE_EXT_SLOT_STREAM = 1,
+} transcribe_ext_slot;
 
 /*
  * Returns true when the loaded model variant accepts the named
- * extension kind. The probe is per-loaded-model-variant, not per-family
- * - a family may ship multiple extension kinds that apply to different
- * variants (e.g. parakeet streaming has cache-aware and chunked-
- * attention variants whose stream knobs are different kinds), and the
- * probe reflects what the specific loaded model can actually configure.
+ * extension kind in the given slot. The probe is per-loaded-model-
+ * variant AND per-slot — a family may ship multiple extension kinds
+ * that apply to different variants (e.g. parakeet streaming has
+ * cache-aware and chunked-attention variants whose stream knobs are
+ * different kinds), and the same kind may only be legal on one slot
+ * (a streaming extension on the RUN slot is not "ignored"; it is
+ * rejected by transcribe_run with INVALID_ARG).
  *
- * Returns false if model is NULL, if the model's family has no extension
- * surface at all, or if the kind is unknown.
+ * Returns false if model is NULL, if the model's family has no
+ * extension surface for the requested slot at all, or if the kind is
+ * unknown for that slot. The dispatcher's call-site validation always
+ * routes through this probe with the correct slot for the entry point.
  *
  * Callers should write intent-first probes ("does this model accept
- * the parakeet stream kind?"), not discovery loops over every known
- * kind.
+ * the parakeet stream kind on the STREAM slot?"), not discovery loops
+ * over every known kind. See docs/extension-kinds.md for the registered
+ * kinds and their slots.
  */
 TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(
     const struct transcribe_model * model,
+    transcribe_ext_slot             slot,
     uint32_t                        kind);
 
 /* ----------------------------------------------------------------------- */
@@ -465,13 +540,14 @@ typedef enum {
  *     transcribe_run_params_init(&p);   // defaults + struct_size
  *     p.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
  *
- * Two shortcuts exist:
- *   - Pass NULL wherever a `const struct transcribe_*_params *` is
- *     accepted to get pure defaults without declaring a struct at all.
- *   - Every field's default is its zero value, so `struct ... p = {0};`
- *     is a valid (if non-canonical) way to default-initialize: the
- *     library accepts struct_size == 0 on input params as "defaults".
- *     The init function is still the recommended form.
+ * Defaults shortcut: pass NULL wherever a `const struct transcribe_*_params *`
+ * is accepted to get pure defaults without declaring a struct at all.
+ * NULL is the only defaults form. A struct with `struct_size == 0` —
+ * including `struct X p = {0};` — is REJECTED with
+ * TRANSCRIBE_ERR_BAD_STRUCT_SIZE; this is deliberate so that
+ * uninitialized stack memory whose struct_size byte happens to be zero
+ * cannot silently masquerade as "all defaults." The init function (or
+ * NULL) is the only safe calling convention.
  *
  * The init functions are one-argument by design: they assume the caller
  * and library agree on the struct layout, which holds for the supported
@@ -493,7 +569,7 @@ typedef enum {
  *             no per-device selection in the current release.
  */
 struct transcribe_model_load_params {
-    size_t                     struct_size;
+    uint64_t                   struct_size;
     transcribe_backend_request backend;
     int                        gpu_device;
 };
@@ -511,7 +587,7 @@ TRANSCRIBE_API void transcribe_model_load_params_init(
  *            AUTO (default) uses f16 for quantized models, f32 for f32.
  */
 struct transcribe_session_params {
-    size_t             struct_size;
+    uint64_t           struct_size;
     int                n_threads;
     transcribe_kv_type kv_type;
 };
@@ -570,7 +646,7 @@ TRANSCRIBE_API void transcribe_session_params_init(
  *              before pointing `family` at it.
  */
 struct transcribe_run_params {
-    size_t                        struct_size;
+    uint64_t                      struct_size;
 
     transcribe_task               task;
     transcribe_timestamp_kind     timestamps;
@@ -630,7 +706,7 @@ TRANSCRIBE_API void transcribe_run_params_init(
  * Neither condition is in flight today.
  */
 struct transcribe_capabilities {
-    size_t                    struct_size;
+    uint64_t                  struct_size;
 
     int32_t                   native_sample_rate;
     int                       n_languages;
@@ -665,10 +741,20 @@ struct transcribe_capabilities {
      * Streaming timing hints. Consumer-facing advisories: callers may use
      * them to size their audio capture chunks or display latency budgets,
      * but transcribe_stream_feed accepts arbitrary sample counts and
-     * buffers internally. Zero means "unsupported or unknown" — a family
-     * that advertises supports_streaming may legitimately leave one or
-     * both fields zero if the value is not a fixed property of the model.
-     * supports_streaming remains the hard capability gate.
+     * buffers internally.
+     *
+     *   -1   "not advertised" — the model does not publish a stable
+     *        value for this hint. May coexist with supports_streaming
+     *        == true (parakeet-style buffered streaming whose menu of
+     *        configurable values is reached via a family extension and
+     *        whose generic hint isn't a single number).
+     *   >=0  real value in milliseconds. ZERO IS A VALID VALUE — e.g.
+     *        nemotron-speech-streaming-en-0.6b with att_context_right=0
+     *        legitimately advertises streaming_lookahead_ms_min = 0.
+     *        Callers must NOT treat zero as "unknown."
+     *
+     * supports_streaming remains the hard capability gate; these hints
+     * are descriptive metadata for callers that have already gated on it.
      *
      * For multi-lookahead models (e.g. nemotron-speech-streaming-en-0.6b),
      * streaming_lookahead_ms reports the default setting's lookahead and
@@ -677,9 +763,9 @@ struct transcribe_capabilities {
      * a family-specific stream extension. When the model has only one
      * setting the two fields are equal.
      */
-    int32_t                   streaming_lookahead_ms;
-    int32_t                   streaming_chunk_ms;
-    int32_t                   streaming_lookahead_ms_min;
+    int32_t                   streaming_lookahead_ms;      /* -1 = not advertised */
+    int32_t                   streaming_chunk_ms;          /* -1 = not advertised */
+    int32_t                   streaming_lookahead_ms_min;  /* -1 = not advertised */
 };
 
 TRANSCRIBE_API void transcribe_capabilities_init(
@@ -805,9 +891,9 @@ TRANSCRIBE_API const char * transcribe_model_backend(const struct transcribe_mod
  *
  * params may be NULL for all library defaults. To customize, initialize
  * a struct with transcribe_model_load_params_init() and set fields. A
- * zero-initialized struct ({0}) is also accepted as "defaults" — input
- * params treat struct_size == 0 as "defaults" — though the init function
- * is the recommended form.
+ * struct with struct_size == 0 (including `{0}`) is rejected with
+ * BAD_STRUCT_SIZE — defaults come from NULL, never from an uninitialized
+ * struct. See the "Params" section at the top of this header.
  *
  * On success, *out_model is set and the caller owns it. On failure,
  * *out_model is set to NULL and a non-OK status is returned.
@@ -838,8 +924,18 @@ TRANSCRIBE_API transcribe_status transcribe_session_init(
     const struct transcribe_session_params * params,
     struct transcribe_session **             out_session);
 
-/* Free a session created with transcribe_session_init. Does NOT free the
- * model the session was bound to. Passing NULL is a no-op. */
+/*
+ * Free a session.
+ *
+ * If the session was created via transcribe_open it owns the model it
+ * loaded; transcribe_session_free destroys the session and then frees
+ * the model in the same call. Sessions created via the two-step
+ * transcribe_session_init path borrow their model; this function leaves
+ * that model alone.
+ *
+ * The caller does not need to know which path created the session — both
+ * are handled correctly. Passing NULL is a no-op.
+ */
 TRANSCRIBE_API void transcribe_session_free(struct transcribe_session * session);
 
 /*
@@ -847,11 +943,11 @@ TRANSCRIBE_API void transcribe_session_free(struct transcribe_session * session)
  * for the common "I just want to transcribe one stream" case. Bundles
  * transcribe_model_load_file + transcribe_session_init.
  *
- * The returned session OWNS the model it loaded; transcribe_close frees
- * both. To share one model across multiple sessions (e.g. one per
- * thread), use the two-step transcribe_model_load_file +
- * transcribe_session_init API instead — that is the only reason to reach
- * past this function.
+ * The returned session OWNS the model it loaded; transcribe_session_free
+ * (or its alias transcribe_close) frees both. To share one model across
+ * multiple sessions (e.g. one per thread), use the two-step
+ * transcribe_model_load_file + transcribe_session_init API instead —
+ * that is the only reason to reach past this function.
  *
  * load_params and session_params may each be NULL for library defaults.
  *
@@ -867,13 +963,11 @@ TRANSCRIBE_API transcribe_status transcribe_open(
     struct transcribe_session **                out_session);
 
 /*
- * Free a session, and — if it was created by transcribe_open — the model
- * it owns. Safe to call on ANY session: one created via
- * transcribe_session_init does not own its model, so transcribe_close
- * frees only the session, exactly like transcribe_session_free. (The
- * reverse is not symmetric: calling transcribe_session_free on a
- * transcribe_open session frees the session but leaks the owned model.
- * Pair open with close.) Passing NULL is a no-op.
+ * Deprecated alias for transcribe_session_free, kept for source
+ * compatibility with the prior split open/close shape. Both honor
+ * owns_model and free the owned model when present, so a caller may use
+ * either with any session. New code should call transcribe_session_free
+ * directly. Passing NULL is a no-op.
  */
 TRANSCRIBE_API void transcribe_close(struct transcribe_session * session);
 
@@ -999,9 +1093,10 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * ses
  * kind-tagged family extension pointer. Family-specific extension
  * structs live in include/transcribe/<family>.h and are reached
  * intent-first: a caller that wants to set a parakeet streaming knob
- * probes transcribe_model_accepts_ext_kind for the parakeet stream kind
- * and, if accepted, points transcribe_stream_params::family at a
- * TRANSCRIBE_*_INIT-initialized extension struct.
+ * probes transcribe_model_accepts_ext_kind for the parakeet stream
+ * kind on TRANSCRIBE_EXT_SLOT_STREAM and, if accepted, points
+ * transcribe_stream_params::family at an extension struct initialized
+ * via that family's transcribe_<family>_<name>_ext_init() function.
  */
 
 enum transcribe_stream_state {
@@ -1032,7 +1127,7 @@ enum transcribe_stream_state {
  *                                given kind before pointing `family` at it.
  */
 struct transcribe_stream_params {
-    size_t                        struct_size;
+    uint64_t                      struct_size;
     const struct transcribe_ext * family;
 };
 
@@ -1074,7 +1169,7 @@ TRANSCRIBE_API void transcribe_stream_params_init(
  * zero.
  */
 struct transcribe_stream_update {
-    size_t  struct_size;
+    uint64_t struct_size;
     bool    result_changed;
     bool    is_final;
     int32_t revision;
@@ -1089,9 +1184,11 @@ TRANSCRIBE_API void transcribe_stream_update_init(
 /*
  * Begin a streaming run on session.
  *
- * run_params and stream_params MUST be non-null (callers obtain
- * defaults from transcribe_run_params_init() and
- * transcribe_stream_params_init()).
+ * run_params and stream_params may be NULL for library defaults
+ * (transcribe task, no timestamps, no family extension). To customize,
+ * initialize via transcribe_run_params_init() / transcribe_stream_params_init()
+ * and set fields. The "session==NULL is INVALID_ARG, struct_size==0 is
+ * BAD_STRUCT_SIZE" rules from the top-of-header "Params" block apply.
  *
  * On success the session transitions IDLE/FINISHED/FAILED -> ACTIVE
  * and every result-visible field is cleared: text, segments, words,
@@ -1101,20 +1198,23 @@ TRANSCRIBE_API void transcribe_stream_update_init(
  * stream buffers held by the family are preserved.
  *
  * Returns:
- *   TRANSCRIBE_ERR_INVALID_ARG       NULL arg, session in ACTIVE state,
- *                                    out-of-range enum in run_params, or
- *                                    an extension whose kind is unknown
- *                                    to / not accepted by the loaded model.
- *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE   run_params or stream_params has a
- *                                    struct_size below what this entry
- *                                    point requires, or stream_params->family
- *                                    is too small to contain a
- *                                    transcribe_ext header. A family
- *                                    extension with a size below its
- *                                    kind's minimum is reported by the
- *                                    family hook after the session enters
- *                                    ACTIVE.
- *                                    Use TRANSCRIBE_*_INIT macros to avoid.
+ *   TRANSCRIBE_ERR_INVALID_ARG       session NULL, session in ACTIVE
+ *                                    state, out-of-range enum in
+ *                                    run_params, or an extension whose
+ *                                    kind is unknown to / not accepted
+ *                                    by the loaded model on the
+ *                                    TRANSCRIBE_EXT_SLOT_STREAM slot.
+ *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE   non-null run_params or stream_params
+ *                                    has a struct_size below what this
+ *                                    entry point requires (including
+ *                                    struct_size == 0), or
+ *                                    stream_params->family is too small
+ *                                    to contain a transcribe_ext header.
+ *                                    A family extension with a size
+ *                                    below its kind's minimum is
+ *                                    reported by the family hook after
+ *                                    the session enters ACTIVE.
+ *                                    Use the init functions to avoid.
  *   TRANSCRIBE_ERR_NOT_IMPLEMENTED   Model has no streaming hooks or
  *                                    capabilities advertise
  *                                    supports_streaming == false.
@@ -1318,7 +1418,7 @@ TRANSCRIBE_API int transcribe_tokenize(
  * "unknown / not measured."
  */
 struct transcribe_timings {
-    size_t struct_size;
+    uint64_t struct_size;
     float  load_ms;
     float  mel_ms;
     float  encode_ms;
@@ -1381,8 +1481,10 @@ TRANSCRIBE_API int                        transcribe_n_tokens(const struct trans
  *   - the family's LID head produced a non-language sentinel for this
  *     audio (e.g. SenseVoice's <|nospeech|>).
  *
- * Returned pointer is owned by the session and remains valid until the
- * next transcribe_run() or transcribe_session_free() call.
+ * Returned pointer is owned by the session. See "Result text-pointer
+ * lifetime" at the top of this header for invalidation rules; in
+ * streaming mode every transcribe_stream_feed / _finalize call may
+ * invalidate it.
  */
 TRANSCRIBE_API const char *               transcribe_detected_language(const struct transcribe_session * session);
 
@@ -1393,14 +1495,18 @@ TRANSCRIBE_API const char *               transcribe_detected_language(const str
 /*
  * Per-item results are exposed as caller-owned copy-out structs. Three
  * accessors (transcribe_get_segment / _word / _token) take a row index
- * and a pointer to a TRANSCRIBE_*_INIT-initialized struct; the library
+ * and a pointer to an init-function-initialized struct; the library
  * writes the row's fields into the caller's buffer.
  *
- * `text` pointers in these structs are session-owned and remain valid until
- * the next transcribe_run() (one-shot) / transcribe_stream_begin()
- * (streaming) / transcribe_stream_reset() / transcribe_session_free()
- * call on the same session. Callers that want to hold the text past
- * those boundaries must copy the bytes.
+ * `text` pointers in these structs are session-owned. The full lifetime
+ * contract is in the "Result text-pointer lifetime" block at the top of
+ * this header; in short:
+ *   - One-shot path: valid until the next transcribe_run() /
+ *     transcribe_stream_begin() / transcribe_stream_reset() /
+ *     transcribe_session_free() call on the same session.
+ *   - Streaming path: ALSO invalidated by every transcribe_stream_feed()
+ *     and transcribe_stream_finalize() call, even for committed rows.
+ *     Copy the bytes before the next feed if you need to hold them.
  *
  * Out-of-range index (i < 0 or i >= the corresponding transcribe_n_*())
  * returns TRANSCRIBE_OK with the caller's struct left as zero-init:
@@ -1415,7 +1521,7 @@ TRANSCRIBE_API const char *               transcribe_detected_language(const str
  */
 
 struct transcribe_segment {
-    size_t       struct_size;
+    uint64_t     struct_size;
     int64_t      t0_ms;
     int64_t      t1_ms;
     int          first_word;
@@ -1428,7 +1534,7 @@ struct transcribe_segment {
 TRANSCRIBE_API void transcribe_segment_init(struct transcribe_segment * out);
 
 struct transcribe_word {
-    size_t       struct_size;
+    uint64_t     struct_size;
     int64_t      t0_ms;
     int64_t      t1_ms;
     int          seg_index;
@@ -1451,7 +1557,7 @@ TRANSCRIBE_API void transcribe_word_init(struct transcribe_word * out);
  * NaN); inspect `text != NULL` to distinguish a present row.
  */
 struct transcribe_token {
-    size_t       struct_size;
+    uint64_t     struct_size;
     int          id;
     float        p;
     int64_t      t0_ms;

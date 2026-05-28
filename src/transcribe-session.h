@@ -30,9 +30,11 @@ struct transcribe_session {
     transcribe_model * model = nullptr;
 
     // True only for sessions created via transcribe_open(), which loads
-    // and therefore owns its model. transcribe_close() frees the owned
-    // model after the session; transcribe_session_free() never does.
-    // Sessions created via transcribe_session_init() leave this false.
+    // and therefore owns its model. Both transcribe_session_free() and
+    // transcribe_close() (now an alias) read this flag and free the
+    // owned model after destroying the session. Sessions created via
+    // transcribe_session_init() leave this false and their model is
+    // freed independently by the caller via transcribe_model_free().
     bool owns_model = false;
 
     // Cached n_threads value the caller passed at init time. 0 means

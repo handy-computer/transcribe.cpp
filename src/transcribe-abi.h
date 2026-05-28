@@ -14,34 +14,36 @@
 
 namespace transcribe {
 
-// Strict size check for caller-owned OUTPUT structs (and any input that
-// has no "0 means defaults" relaxation): struct_size smaller than the
-// prefix the library relies on is rejected.
-inline transcribe_status check_struct_size(size_t got, size_t want) {
+// Strict size check for every caller-owned struct (inputs AND outputs):
+// struct_size smaller than the prefix the library relies on is rejected.
+// `0` is invalid — defaults are reached by passing NULL where the entry
+// point accepts a nullable params pointer, never by a zero-sized struct.
+inline transcribe_status check_struct_size(uint64_t got, uint64_t want) {
     if (got < want) {
         return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
     }
     return TRANSCRIBE_OK;
 }
 
-// Input params accept struct_size == 0 as "all defaults" (every input
-// field's default is its zero value). A non-zero size that is too small
-// to cover the relied-on prefix is still a caller error.
-inline transcribe_status check_input_struct_size(size_t got, size_t want) {
-    if (got == 0) {
-        return TRANSCRIBE_OK;
-    }
+// Kept as an alias for call-site readability ("this is an input params
+// struct"). Behavior is identical to check_struct_size: in pre-1.0 the
+// `0 means defaults` relaxation has been removed so that uninitialized
+// stack memory with a coincidentally-zero struct_size byte stops being
+// silently accepted as a defaults shortcut. Defaults come from NULL.
+inline transcribe_status check_input_struct_size(uint64_t got, uint64_t want) {
     return check_struct_size(got, want);
 }
 
 // Copy min(caller_size, library_size) bytes from a library-staged struct
 // into the caller's output buffer. The min() is the overflow guard: the
 // library never writes past what the caller declared, and never reads
-// past what it staged.
+// past what it staged. caller_size is uint64_t (matches the public
+// struct_size field type); library_size is size_t (always sizeof(T)).
 inline void copy_out_prefix(void * dst, const void * src,
-                            size_t caller_size, size_t library_size) {
-    const size_t n = caller_size < library_size ? caller_size : library_size;
-    std::memcpy(dst, src, n);
+                            uint64_t caller_size, size_t library_size) {
+    const uint64_t lib = static_cast<uint64_t>(library_size);
+    const uint64_t n   = caller_size < lib ? caller_size : lib;
+    std::memcpy(dst, src, static_cast<size_t>(n));
 }
 
 } // namespace transcribe

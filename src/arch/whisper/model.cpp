@@ -2861,14 +2861,17 @@ transcribe_status whisper_run(
     return TRANSCRIBE_OK;
 }
 
-// Kind probe: every whisper variant accepts the WHISPER_RUN run-extension
-// kind. There is currently no whisper variant that ships without the run
-// extension surface, so this is a flat "true for WHRN, false otherwise."
+// Kind+slot probe. Whisper ships only the WHISPER_RUN run-extension and
+// has no streaming surface, so the _STREAM slot is always false and the
+// _RUN slot accepts only WHISPER_RUN. There is currently no whisper
+// variant that ships without the run-ext surface.
 static bool whisper_accepts_ext_kind(
     const transcribe_model * model,
+    transcribe_ext_slot      slot,
     uint32_t                 kind)
 {
     (void) model;
+    if (slot != TRANSCRIBE_EXT_SLOT_RUN) return false;
     return kind == TRANSCRIBE_EXT_KIND_WHISPER_RUN;
 }
 

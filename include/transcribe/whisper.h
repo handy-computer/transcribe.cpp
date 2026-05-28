@@ -170,7 +170,7 @@ TRANSCRIBE_API void transcribe_whisper_run_ext_init(
  * zero value means "absent / unknown / false."
  */
 struct transcribe_whisper_chunk_trace {
-    size_t   struct_size;
+    uint64_t struct_size;
     int64_t  t0_ms;
     int64_t  t1_ms;
     float    temperature_used;    /* the tier that was accepted */
@@ -203,7 +203,8 @@ TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
  *   TRANSCRIBE_OK                  otherwise. The caller's struct is
  *                                  written when ctx is a Whisper context
  *                                  and i is in range; otherwise it is
- *                                  left as zero-initialized by INIT.
+ *                                  left as zero-initialized by the init
+ *                                  function.
  */
 TRANSCRIBE_API transcribe_status transcribe_get_whisper_chunk_trace(
     const struct transcribe_session *       ctx,

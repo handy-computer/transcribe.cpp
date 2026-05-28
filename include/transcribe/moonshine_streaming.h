@@ -3,8 +3,8 @@
  * extension surface.
  *
  * Includes transcribe.h; safe to include in C or C++ TUs. Holds the
- * Moonshine-Streaming stream extension struct, kind constant, and INIT
- * macro.
+ * Moonshine-Streaming stream extension struct, kind constant, and
+ * init function.
  *
  * Probe via transcribe_model_accepts_ext_kind before pointing
  * transcribe_stream_params::family at this struct.
@@ -36,8 +36,10 @@ extern "C" {
  *     less frequent tentative transcripts.
  *
  *     -1 (default): use the family default cadence.
+ *     < -1:         caller bug; transcribe_stream_begin returns
+ *                   TRANSCRIBE_ERR_INVALID_ARG.
  *      0:           decode on every stable encoder-frame advance.
- *     >0:           request at least this many milliseconds between
+ *     > 0:          request at least this many milliseconds between
  *                   partial decodes. Values below one encoder frame
  *                   are rounded up to one frame; other positive values
  *                   are rounded up to the next encoder-frame boundary.

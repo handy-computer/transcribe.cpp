@@ -3,7 +3,7 @@
  *
  * Includes transcribe.h; safe to include in C or C++ TUs. Holds the
  * streaming extension structs (cache-aware and chunked-attention
- * variants) and their kind constants and INIT macros.
+ * variants) and their kind constants and init functions.
  *
  * Acceptance is per-loaded-model-variant: nemotron-speech-streaming-en-0.6b
  * (cache-aware) accepts TRANSCRIBE_EXT_KIND_PARAKEET_STREAM and rejects
@@ -44,8 +44,11 @@ extern "C" {
  *     -1 (default): use the model's default setting (first entry of
  *                   att_context_size_choices = max-accuracy /
  *                   max-latency).
- *     >=0:          select the corresponding (left, att_context_right)
- *                   entry from the model's training menu.
+ *     < -1:         caller bug; transcribe_stream_begin returns
+ *                   TRANSCRIBE_ERR_INVALID_ARG.
+ *     >= 0:         select the corresponding (left, att_context_right)
+ *                   entry from the model's training menu. 0 is
+ *                   legitimate when 0-frame lookahead is in the menu.
  *                   transcribe_stream_begin returns
  *                   TRANSCRIBE_ERR_INVALID_ARG if the requested right
  *                   is not in the menu.
@@ -72,15 +75,26 @@ TRANSCRIBE_API void transcribe_parakeet_stream_ext_init(
  * expressed in 80ms encoder frames. The user picks the active tuple at
  * stream_begin time; the encoder re-runs over each new
  * [left | chunk | right] PCM window. Each field is in MILLISECONDS;
- * the runtime converts to encoder frames via the 80ms frame rate.
+ * the runtime converts to encoder frames at the model's frame rate.
  *
- * Use -1 (sentinel) on any field to get the model's "best accuracy"
- * default - L=5600 ms / C=1040 ms / R=1040 ms for unified-en-0.6b,
- * which the published WER numbers correspond to. Non-default tuples
- * are passed through to the encoder's set_default_att_context_size;
- * the runtime validates the resolved (L, C, R) against the model's
- * training menu (stt.parakeet.encoder.att_chunk_{left,chunk,right}_choices).
- * Tuples outside the menu return TRANSCRIBE_ERR_INVALID_ARG.
+ * Per-field sentinels (each field independently):
+ *
+ *   -1     "use the model default for this field." Unified-en-0.6b's
+ *          best-accuracy default is L=5600 ms / C=1040 ms / R=1040 ms,
+ *          which the published WER numbers correspond to.
+ *   < -1   caller bug; transcribe_stream_begin returns
+ *          TRANSCRIBE_ERR_INVALID_ARG.
+ *   0      a legitimate requested value when 0 frames is in the model's
+ *          menu for that field. Not all fields admit 0.
+ *   > 0    must be an exact positive multiple of the encoder frame size
+ *          (80 ms for every shipped FastConformer streaming variant).
+ *          A value that does not divide the frame returns
+ *          TRANSCRIBE_ERR_INVALID_ARG; the runtime never silently floors.
+ *
+ * After per-field resolution the (L, C, R) frame tuple is validated
+ * against the model's training menu
+ * (stt.parakeet.encoder.att_chunk_{left,chunk,right}_choices); tuples
+ * outside the menu return TRANSCRIBE_ERR_INVALID_ARG.
  */
 struct transcribe_parakeet_buffered_stream_ext {
     struct transcribe_ext ext;

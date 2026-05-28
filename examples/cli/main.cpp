@@ -483,7 +483,9 @@ int main(int argc, char ** argv) {
             wx.condition_on_prev_tokens = args.condition_on_prev_tokens;
             wx.prompt_condition         = args.prompt_condition;
             if (transcribe_model_accepts_ext_kind(
-                    model, TRANSCRIBE_EXT_KIND_WHISPER_RUN))
+                    model,
+                    TRANSCRIBE_EXT_SLOT_RUN,
+                    TRANSCRIBE_EXT_KIND_WHISPER_RUN))
             {
                 rp.family = &wx.ext;
             }
@@ -542,12 +544,16 @@ int main(int argc, char ** argv) {
                     args.stream_buf_chunk_ms >= 0 ||
                     args.stream_buf_right_ms >= 0;
                 if (want_cache_aware && transcribe_model_accepts_ext_kind(
-                        model, TRANSCRIBE_EXT_KIND_PARAKEET_STREAM))
+                        model,
+                        TRANSCRIBE_EXT_SLOT_STREAM,
+                        TRANSCRIBE_EXT_KIND_PARAKEET_STREAM))
                 {
                     pkt_sp.att_context_right = args.stream_att_right;
                     sp.family = &pkt_sp.ext;
                 } else if (want_buffered && transcribe_model_accepts_ext_kind(
-                        model, TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM))
+                        model,
+                        TRANSCRIBE_EXT_SLOT_STREAM,
+                        TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM))
                 {
                     pkt_buf_sp.left_ms  = args.stream_buf_left_ms;
                     pkt_buf_sp.chunk_ms = args.stream_buf_chunk_ms;
@@ -701,7 +707,9 @@ int main(int argc, char ** argv) {
             wx.condition_on_prev_tokens = args.condition_on_prev_tokens;
             wx.prompt_condition         = args.prompt_condition;
             if (transcribe_model_accepts_ext_kind(
-                    model, TRANSCRIBE_EXT_KIND_WHISPER_RUN))
+                    model,
+                    TRANSCRIBE_EXT_SLOT_RUN,
+                    TRANSCRIBE_EXT_KIND_WHISPER_RUN))
             {
                 rp.family = &wx.ext;
             }
@@ -749,14 +757,18 @@ int main(int argc, char ** argv) {
                 args.stream_buf_chunk_ms >= 0 ||
                 args.stream_buf_right_ms >= 0;
             if (want_cache_aware && transcribe_model_accepts_ext_kind(
-                    model, TRANSCRIBE_EXT_KIND_PARAKEET_STREAM))
+                    model,
+                    TRANSCRIBE_EXT_SLOT_STREAM,
+                    TRANSCRIBE_EXT_KIND_PARAKEET_STREAM))
             {
                 pkt_sp.att_context_right = args.stream_att_right;
                 sp.family = &pkt_sp.ext;
                 std::printf("stream: att_context_right=%d\n",
                             args.stream_att_right);
             } else if (want_buffered && transcribe_model_accepts_ext_kind(
-                    model, TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM))
+                    model,
+                    TRANSCRIBE_EXT_SLOT_STREAM,
+                    TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM))
             {
                 pkt_buf_sp.left_ms  = args.stream_buf_left_ms;
                 pkt_buf_sp.chunk_ms = args.stream_buf_chunk_ms;

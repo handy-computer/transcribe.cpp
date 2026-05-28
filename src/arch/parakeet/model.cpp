@@ -2473,15 +2473,40 @@ transcribe_status stream_begin(
             req_C_ms = px->chunk_ms;
             req_R_ms = px->right_ms;
         }
-        const int L_frames = (req_L_ms >= 0)
-            ? (req_L_ms / std::max(frame_ms, 1))
-            : default_L;
-        const int C_frames = (req_C_ms >= 0)
-            ? (req_C_ms / std::max(frame_ms, 1))
-            : default_C;
-        const int R_frames = (req_R_ms >= 0)
-            ? (req_R_ms / std::max(frame_ms, 1))
-            : default_R;
+        // Field sentinel semantics (matches the public ext doc):
+        //   req_ms == -1  -> use the model default for this field.
+        //   req_ms <  -1  -> caller bug; reject with INVALID_ARG.
+        //   req_ms ==  0  -> zero is a real requested value (when the
+        //                    model's menu contains 0 frames).
+        //   req_ms >   0  -> must be an exact multiple of the encoder
+        //                    frame size (80 ms on every shipped
+        //                    FastConformer streaming variant). Silently
+        //                    flooring (e.g. chunk_ms=100 → 1 frame at
+        //                    80ms = 80ms behavior) would give callers a
+        //                    different latency than they asked for.
+        const int safe_frame_ms = std::max(frame_ms, 1);
+        auto ms_to_exact_frames = [&](int req_ms, int default_frames,
+                                      int * out_frames) -> bool {
+            if (req_ms == -1) { *out_frames = default_frames; return true; }
+            if (req_ms <  -1) return false;
+            if (req_ms % safe_frame_ms != 0) return false;
+            *out_frames = req_ms / safe_frame_ms;
+            return true;
+        };
+        int L_frames = 0, C_frames = 0, R_frames = 0;
+        if (!ms_to_exact_frames(req_L_ms, default_L, &L_frames) ||
+            !ms_to_exact_frames(req_C_ms, default_C, &C_frames) ||
+            !ms_to_exact_frames(req_R_ms, default_R, &R_frames))
+        {
+            std::fprintf(stderr,
+                         "parakeet buffered: requested (L, C, R)_ms = "
+                         "(%d, %d, %d) is invalid. Use -1 on any field to "
+                         "select the model default; otherwise the value "
+                         "must be 0 or a positive exact multiple of the "
+                         "%d ms encoder frame.\n",
+                         req_L_ms, req_C_ms, req_R_ms, safe_frame_ms);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
 
         // Validate against the trained menu.
         auto contains = [](const std::vector<int32_t> & v, int x) -> bool {
@@ -2559,6 +2584,22 @@ transcribe_status stream_begin(
         if (family != nullptr) {
             const auto * px = reinterpret_cast<const transcribe_parakeet_stream_ext *>(family);
             const int requested = px->att_context_right;
+            // Field sentinel semantics:
+            //   requested == -1 -> model default (chosen_{right,left}
+            //                      already initialized from hparams above).
+            //   requested <  -1 -> caller bug; reject.
+            //   requested >= 0  -> validate against the training menu;
+            //                      0 is a legitimate value when 0-frame
+            //                      lookahead is in the menu (it is for
+            //                      nemotron-speech-streaming).
+            if (requested < -1) {
+                std::fprintf(stderr,
+                             "parakeet: att_context_right=%d is invalid; "
+                             "use -1 for the model default or >=0 to pick "
+                             "an entry from the model's training menu\n",
+                             requested);
+                return TRANSCRIBE_ERR_INVALID_ARG;
+            }
             if (requested >= 0) {
                 bool matched = false;
                 for (const auto & p : pm->hparams.enc_att_context_size_choices) {
@@ -3134,13 +3175,16 @@ void stream_reset(transcribe_session * session) {
     pc->stream_pcm_buffer.clear();
 }
 
-// Kind probe: reports which family extension kinds the loaded variant
-// accepts on transcribe_stream_params::family. Cache-aware variants
+// Kind+slot probe. Parakeet ships no run-slot extensions, so the _RUN
+// slot is always false. On the _STREAM slot, cache-aware variants
 // (ChunkedLimited) take the PARAKEET_STREAM kind; chunked-attention
 // variants (ChunkedLimitedWithRc) take the PARAKEET_BUFFERED_STREAM
 // kind. Offline-only Parakeet variants accept neither.
-bool accepts_ext_kind(const transcribe_model * model, uint32_t kind) {
+bool accepts_ext_kind(const transcribe_model * model,
+                      transcribe_ext_slot      slot,
+                      uint32_t                 kind) {
     if (model == nullptr) return false;
+    if (slot != TRANSCRIBE_EXT_SLOT_STREAM) return false;
     const auto * pm = static_cast<const ParakeetModel *>(model);
     switch (pm->hparams.enc_att_context_style) {
         case ParakeetHParams::AttContextStyle::ChunkedLimited:
