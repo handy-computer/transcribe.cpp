@@ -746,8 +746,12 @@ EncoderBuild build_encoder_graph_streaming(
     bparams.kv_type           = kv_type;
     bparams.use_flash         = true;
     bparams.policy            = policy;
-    bparams.att_context_left  = hp.enc_att_context_left;
-    bparams.att_context_right = hp.enc_att_context_right;
+    // No att_context_left/right here: ChunkedLimited derives the attention
+    // band entirely from attn_chunked_mask (built host-side in
+    // emit_streaming_chunk). build_conformer_block only reads
+    // att_context_left/right on the Regular (is_local) path, which this
+    // builder never takes — leaving them at the BlockParams defaults keeps
+    // the live source of truth (the mask) singular.
     bparams.att_context_style = conf::BlockParams::AttContextStyle::ChunkedLimited;
     bparams.attn_chunked_mask = eb.chunked_mask_in;
     bparams.conv_context_left  = hp.enc_conv_context_left;

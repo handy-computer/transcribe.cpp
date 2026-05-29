@@ -233,11 +233,25 @@ provisional thresholds (125 vs 107 over budget on R=13), but
 transcripts stay byte-equal end-to-end. Metal-specific tolerances
 would be a separate widening.
 
-Reproduce: `uv run --project scripts/envs/parakeet
-scripts/validate_streaming.py --hf-model
-nvidia/nemotron-speech-streaming-en-0.6b --gguf <F32>.gguf --audio
-samples/jfk.wav --out build/validate_streaming/nemotron/jfk --right 13
-6 1 0`.
+Reproduce (matches the calibration regime of
+`tests/tolerances/nemotron-speech-streaming-en-0.6b.streaming.json` —
+CPU 1-thread, F32, committed per-tensor tolerances — and exits non-zero
+on any tensor or transcript regression across the full R menu):
+
+```bash
+uv run --project scripts/envs/parakeet scripts/validate_streaming.py \
+    --hf-model nvidia/nemotron-speech-streaming-en-0.6b \
+    --gguf models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b-F32.gguf \
+    --audio samples/jfk.wav \
+    --out build/validate_streaming/nemotron/jfk \
+    --right 13 6 1 0 \
+    --backend cpu --threads 1 \
+    --tolerances tests/tolerances/nemotron-speech-streaming-en-0.6b.streaming.json
+```
+
+Omitting `--backend cpu --threads 1 --tolerances …` falls back to Metal
+and loose 1e-3 defaults, which surfaces the ~18 Metal-specific failures
+noted above and does not exercise the committed gate.
 
 ### Note on mel right-edge timing
 

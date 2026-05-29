@@ -1781,13 +1781,21 @@ transcribe_status emit_streaming_chunk(
     fill_streaming_pos_emb(pc, eb.pos_emb_in, hp.enc_d_model);
 
     // Build & upload chunked mask with cache-unfilled prefix masking.
+    // The mask band is a function of the (att_context_left, att_context_right)
+    // RESOLVED for this stream from the caller's latency selection, not the
+    // model-default hparams. They coincide today (left is invariant across
+    // the menu, and the per-chunk geometry derived from chosen_right keeps
+    // the default-R chunking accidentally equivalent on the new-frame rows),
+    // but reading the resolved values makes the mask correct by construction
+    // for any future variant whose menu breaks those invariants.
     const int T_virtual = static_cast<int>(eb.chunked_mask_in->ne[0]);
     const int T_cache   = hp.enc_att_context_left;
     const int T_q_new   = T_virtual - T_cache;
     fill_streaming_chunked_mask(
         eb.chunked_mask_in, T_virtual, T_cache,
         pc->stream_caches.channel_len,
-        hp.enc_att_context_left, hp.enc_att_context_right);
+        pc->stream_caches.att_context_left,
+        pc->stream_caches.att_context_right);
 
     // Thread count (same recipe as offline run()).
     {
