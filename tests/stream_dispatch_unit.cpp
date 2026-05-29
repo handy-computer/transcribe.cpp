@@ -15,13 +15,22 @@
 #include "transcribe-model.h"
 #include "transcribe.h"
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 
 namespace {
 
 int g_failures = 0;
 int g_begin_calls = 0;
+const char * g_feed_texts[8] = {};
+int g_n_feed_texts = 0;
+int g_feed_text_i = 0;
+const char * g_finalize_text = "";
+int64_t g_feed_audio_committed_us = 0;
+bool g_make_zero_time_token = false;
 
 #define CHECK(cond)                                                         \
     do {                                                                    \
@@ -132,6 +141,55 @@ transcribe_status fake_stream_finalize(
 {
     (void)session;
     (void)update;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status fake_sequence_stream_begin(
+    transcribe_session *              session,
+    const transcribe_run_params *     run_params,
+    const transcribe_stream_params *  stream_params)
+{
+    (void)session;
+    (void)run_params;
+    (void)stream_params;
+    g_feed_text_i = 0;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status fake_sequence_stream_feed(
+    transcribe_session *       session,
+    const float *              pcm,
+    int                        n_samples,
+    transcribe_stream_update * update)
+{
+    (void)pcm;
+    (void)n_samples;
+    (void)update;
+    if (g_feed_text_i < g_n_feed_texts) {
+        session->full_text = g_feed_texts[g_feed_text_i++];
+        session->has_result = true;
+        if (g_make_zero_time_token) {
+            session->tokens.clear();
+            transcribe_session::TokenEntry tok;
+            tok.text = session->full_text;
+            tok.t1_ms = 0;
+            session->tokens.push_back(tok);
+        }
+    }
+    session->stream_audio_committed_us = g_feed_audio_committed_us;
+    if (update != nullptr) {
+        update->audio_committed_ms = g_feed_audio_committed_us / 1000;
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status fake_sequence_stream_finalize(
+    transcribe_session *       session,
+    transcribe_stream_update * update)
+{
+    (void)update;
+    session->full_text = g_finalize_text != nullptr ? g_finalize_text : "";
+    session->has_result = true;
     return TRANSCRIBE_OK;
 }
 
@@ -525,6 +583,309 @@ void test_last_status_survives_reads() {
     CHECK(session.stream_state == TRANSCRIBE_STREAM_FAILED);
 }
 
+const transcribe::Arch & sequence_arch() {
+    static const transcribe::Arch arch = {
+        "fake-sequence-stream",
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        fake_sequence_stream_begin,
+        fake_sequence_stream_feed,
+        fake_sequence_stream_finalize,
+        nullptr,
+        fake_accepts_no_ext,
+    };
+    return arch;
+}
+
+void init_streaming_model(transcribe_model & model) {
+    model.arch = &sequence_arch();
+    model.caps.supports_streaming = true;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+}
+
+void test_stream_text_on_finalize_policy() {
+    transcribe_model model;
+    init_streaming_model(model);
+    transcribe_session session;
+    session.model = &model;
+
+    g_feed_texts[0] = "hello wor";
+    g_n_feed_texts = 1;
+    g_finalize_text = "hello world";
+    g_feed_audio_committed_us = 123000;
+    g_make_zero_time_token = false;
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE;
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
+
+    float pcm = 0.0f;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(upd.result_changed);
+    CHECK(!upd.committed_changed);
+    CHECK(upd.tentative_changed);
+    CHECK(upd.audio_committed_ms == 0);
+    CHECK(transcribe_stream_n_committed_tokens(&session) == 0);
+
+    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.full_text, "hello wor") == 0);
+    CHECK(std::strcmp(text.committed_text, "") == 0);
+    CHECK(std::strcmp(text.tentative_text, "hello wor") == 0);
+
+    transcribe_stream_update fin; transcribe_stream_update_init(&fin);
+    CHECK(transcribe_stream_finalize(&session, &fin) == TRANSCRIBE_OK);
+    CHECK(fin.is_final);
+    CHECK(fin.result_changed);
+    CHECK(fin.committed_changed);
+    CHECK(fin.tentative_changed);
+    transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.full_text, "hello world") == 0);
+    CHECK(std::strcmp(text.committed_text, "hello world") == 0);
+    CHECK(std::strcmp(text.tentative_text, "") == 0);
+}
+
+void test_stream_text_stable_prefix_does_not_rewrite_committed() {
+    transcribe_model model;
+    init_streaming_model(model);
+    transcribe_session session;
+    session.model = &model;
+
+    g_feed_texts[0] = "hello wor";
+    g_feed_texts[1] = "hello world";
+    g_feed_texts[2] = "hullo world!";
+    g_n_feed_texts = 3;
+    g_finalize_text = "hullo world!!";
+    g_feed_audio_committed_us = 0;
+    g_make_zero_time_token = false;
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    sp.stable_prefix_agreement_n = 2;
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
+
+    float pcm = 0.0f;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.committed_text, "") == 0);
+    CHECK(std::strcmp(text.tentative_text, "hello wor") == 0);
+
+    transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(upd.committed_changed);
+    transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.full_text, "hello world") == 0);
+    CHECK(std::strcmp(text.committed_text, "hello wor") == 0);
+    CHECK(std::strcmp(text.tentative_text, "ld") == 0);
+
+    transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(!upd.committed_changed);
+    CHECK(upd.tentative_changed);
+    transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.full_text, "hullo world!") == 0);
+    CHECK(std::strcmp(text.committed_text, "hello wor") == 0);
+    CHECK(std::strcmp(text.tentative_text, "ld!") == 0);
+
+    transcribe_stream_update fin; transcribe_stream_update_init(&fin);
+    CHECK(transcribe_stream_finalize(&session, &fin) == TRANSCRIBE_OK);
+    CHECK(!fin.committed_changed);
+    CHECK(fin.tentative_changed);
+    transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.full_text, "hullo world!!") == 0);
+    CHECK(std::strcmp(text.committed_text, "hello wor") == 0);
+    CHECK(std::strcmp(text.tentative_text, "") == 0);
+    CHECK(text.full_text_bytes == std::strlen("hullo world!!"));
+    CHECK(text.raw_tentative_start_bytes == text.full_text_bytes);
+}
+
+void test_stream_text_stable_prefix_floors_utf8_boundary() {
+    transcribe_model model;
+    init_streaming_model(model);
+    transcribe_session session;
+    session.model = &model;
+
+    static const char cafe_acute[] = "caf\303\251"; // cafe + U+00E9
+    static const char cafe_circ[]  = "caf\303\252"; // cafe + U+00EA
+    g_feed_texts[0] = cafe_acute;
+    g_feed_texts[1] = cafe_circ;
+    g_n_feed_texts = 2;
+    g_finalize_text = cafe_circ;
+    g_feed_audio_committed_us = 0;
+    g_make_zero_time_token = false;
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    sp.stable_prefix_agreement_n = 2;
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
+
+    float pcm = 0.0f;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+
+    transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(upd.committed_changed);
+
+    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.full_text, cafe_circ) == 0);
+    CHECK(std::strcmp(text.committed_text, "caf") == 0);
+    CHECK(text.committed_text_bytes == 3);
+    CHECK(std::strcmp(text.tentative_text, "\303\252") == 0);
+    CHECK(text.raw_tentative_start_bytes == 3);
+}
+
+void test_old_stream_params_ignores_new_tail_fields() {
+    transcribe_model model;
+    init_streaming_model(model);
+    transcribe_session session;
+    session.model = &model;
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    sp.struct_size = offsetof(transcribe_stream_params, commit_policy);
+    sp.commit_policy =
+        static_cast<transcribe_stream_commit_policy>(99);
+    sp.stable_prefix_agreement_n = 99;
+    sp.commit_holdback_ms = -99;
+
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
+    CHECK(session.stream_commit_policy == TRANSCRIBE_STREAM_COMMIT_AUTO);
+    CHECK(session.stream_stable_prefix_agreement_n == 0);
+    CHECK(session.stream_commit_holdback_ms == 0);
+}
+
+void test_stream_text_stable_prefix_intentionally_commits_partial_words() {
+    transcribe_model model;
+    init_streaming_model(model);
+    transcribe_session session;
+    session.model = &model;
+
+    g_feed_texts[0] = "turn le";
+    g_feed_texts[1] = "turn left";
+    g_n_feed_texts = 2;
+    g_finalize_text = "turn left";
+    g_feed_audio_committed_us = 0;
+    g_make_zero_time_token = false;
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    sp.stable_prefix_agreement_n = 2;
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
+
+    float pcm = 0.0f;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+
+    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.committed_text, "turn le") == 0);
+    CHECK(std::strcmp(text.tentative_text, "ft") == 0);
+}
+
+void test_stream_update_old_prefix_tail_untouched() {
+    transcribe_model model;
+    init_streaming_model(model);
+    transcribe_session session;
+    session.model = &model;
+
+    g_feed_texts[0] = "old prefix";
+    g_n_feed_texts = 1;
+    g_finalize_text = "old prefix";
+    g_feed_audio_committed_us = 0;
+    g_make_zero_time_token = false;
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE;
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
+
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    upd.struct_size = offsetof(transcribe_stream_update, committed_changed);
+    upd.committed_changed = true;
+    upd.tentative_changed = false;
+
+    float pcm = 0.0f;
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(upd.result_changed);
+    CHECK(upd.revision == transcribe_stream_revision(&session));
+    CHECK(upd.committed_changed == true);
+    CHECK(upd.tentative_changed == false);
+}
+
+void test_stream_holdback_ignores_missing_token_timestamps() {
+    transcribe_model model;
+    init_streaming_model(model);
+    transcribe_session session;
+    session.model = &model;
+
+    g_feed_texts[0] = "holdback ok";
+    g_feed_texts[1] = "holdback ok";
+    g_n_feed_texts = 2;
+    g_finalize_text = "holdback ok";
+    g_feed_audio_committed_us = 0;
+    g_make_zero_time_token = true;
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    sp.commit_policy = TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX;
+    sp.stable_prefix_agreement_n = 2;
+    sp.commit_holdback_ms = 500;
+    CHECK(transcribe_stream_begin(&session, nullptr, &sp) == TRANSCRIBE_OK);
+
+    float pcm = 0.0f;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(upd.committed_changed);
+
+    transcribe_stream_text text; transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(&session, &text) == TRANSCRIBE_OK);
+    CHECK(std::strcmp(text.committed_text, "holdback ok") == 0);
+    CHECK(std::strcmp(text.tentative_text, "") == 0);
+
+    g_make_zero_time_token = false;
+}
+
+void test_begin_rejects_bad_commit_params_before_clear() {
+    transcribe_session session;
+    session.has_result = true;
+    session.full_text = "previous";
+
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    sp.commit_policy = static_cast<transcribe_stream_commit_policy>(99);
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
+          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(session.has_result);
+    CHECK(session.full_text == "previous");
+
+    transcribe_stream_params_init(&sp);
+    sp.stable_prefix_agreement_n = 33;
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
+          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(session.has_result);
+    CHECK(session.full_text == "previous");
+
+    transcribe_stream_params_init(&sp);
+    sp.commit_holdback_ms = -1;
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
+          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(session.has_result);
+    CHECK(session.full_text == "previous");
+}
+
 } // namespace
 
 int main() {
@@ -548,5 +909,13 @@ int main() {
     test_run_clears_stream_snapshot_from_finished();
     test_clear_result_preserves_lifecycle();
     test_last_status_survives_reads();
+    test_stream_text_on_finalize_policy();
+    test_stream_text_stable_prefix_does_not_rewrite_committed();
+    test_stream_text_stable_prefix_floors_utf8_boundary();
+    test_stream_text_stable_prefix_intentionally_commits_partial_words();
+    test_stream_update_old_prefix_tail_untouched();
+    test_old_stream_params_ignores_new_tail_fields();
+    test_stream_holdback_ignores_missing_token_timestamps();
+    test_begin_rejects_bad_commit_params_before_clear();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

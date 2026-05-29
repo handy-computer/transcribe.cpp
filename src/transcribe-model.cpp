@@ -42,6 +42,13 @@ void transcribe_session::clear_result() {
     stream_last_status        = TRANSCRIBE_OK;
     stream_audio_input_us     = 0;
     stream_audio_committed_us = 0;
+    stream_commit_policy      = TRANSCRIBE_STREAM_COMMIT_AUTO;
+    stream_stable_prefix_agreement_n = 0;
+    stream_commit_holdback_ms = 0;
+    stream_committed_text.clear();
+    stream_tentative_text.clear();
+    stream_raw_tentative_start_bytes = 0;
+    stream_raw_history.clear();
 }
 
 void transcribe_model::set_languages(std::vector<std::string> langs) {

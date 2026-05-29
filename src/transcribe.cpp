@@ -34,6 +34,7 @@
 
 #include <sys/stat.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <climits>
@@ -303,6 +304,12 @@ extern "C" void transcribe_stream_update_init(struct transcribe_stream_update * 
     p->struct_size = sizeof(*p);
 }
 
+extern "C" void transcribe_stream_text_init(struct transcribe_stream_text * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
 extern "C" void transcribe_segment_init(struct transcribe_segment * p) {
     if (p == nullptr) { return; }
     std::memset(p, 0, sizeof(*p));
@@ -396,8 +403,20 @@ constexpr size_t k_min_run_params_size =
     TRANSCRIBE_FIELD_END(transcribe_run_params, family);
 constexpr size_t k_min_stream_params_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_params, family);
+constexpr size_t k_stream_params_commit_policy_size =
+    TRANSCRIBE_FIELD_END(transcribe_stream_params, commit_policy);
+constexpr size_t k_stream_params_agreement_n_size =
+    TRANSCRIBE_FIELD_END(transcribe_stream_params, stable_prefix_agreement_n);
+constexpr size_t k_stream_params_holdback_ms_size =
+    TRANSCRIBE_FIELD_END(transcribe_stream_params, commit_holdback_ms);
 constexpr size_t k_min_stream_update_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_update, buffered_ms);
+constexpr size_t k_stream_update_committed_changed_size =
+    TRANSCRIBE_FIELD_END(transcribe_stream_update, committed_changed);
+constexpr size_t k_stream_update_tentative_changed_size =
+    TRANSCRIBE_FIELD_END(transcribe_stream_update, tentative_changed);
+constexpr size_t k_min_stream_text_size =
+    TRANSCRIBE_FIELD_END(transcribe_stream_text, raw_tentative_start_bytes);
 constexpr size_t k_min_capabilities_size =
     TRANSCRIBE_FIELD_END(transcribe_capabilities, supports_streaming);
 constexpr size_t k_min_segment_size =
@@ -420,6 +439,298 @@ constexpr size_t k_min_timings_size =
 using transcribe::check_struct_size;
 using transcribe::check_input_struct_size;
 using transcribe::copy_out_prefix;
+
+static bool has_field(uint64_t struct_size, size_t field_end) {
+    return struct_size >= static_cast<uint64_t>(field_end);
+}
+
+static bool valid_stream_commit_policy(transcribe_stream_commit_policy policy) {
+    switch (policy) {
+        case TRANSCRIBE_STREAM_COMMIT_AUTO:
+        case TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE:
+        case TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX:
+            return true;
+    }
+    return false;
+}
+
+static size_t utf8_floor_boundary(const std::string & s, size_t pos) {
+    if (pos >= s.size()) {
+        return s.size();
+    }
+    while (pos > 0 &&
+           (static_cast<unsigned char>(s[pos]) & 0xC0u) == 0x80u)
+    {
+        --pos;
+    }
+    return pos;
+}
+
+static size_t common_prefix_bytes(const std::string & a,
+                                  const std::string & b) {
+    const size_t n = std::min(a.size(), b.size());
+    size_t i = 0;
+    while (i < n && a[i] == b[i]) {
+        ++i;
+    }
+    return utf8_floor_boundary(a, i);
+}
+
+static bool starts_with_bytes(const std::string & s,
+                              const std::string & prefix) {
+    return s.size() >= prefix.size() &&
+           s.compare(0, prefix.size(), prefix) == 0;
+}
+
+static size_t token_prefix_raw_bytes(const transcribe_session * session,
+                                     int n_tokens) {
+    if (session == nullptr || n_tokens <= 0 || session->tokens.empty()) {
+        return 0;
+    }
+    const int capped =
+        std::min<int>(n_tokens, static_cast<int>(session->tokens.size()));
+    std::string prefix;
+    prefix.reserve(session->full_text.size());
+    for (int i = 0; i < capped; ++i) {
+        prefix += session->tokens[static_cast<size_t>(i)].text;
+    }
+    if (starts_with_bytes(session->full_text, prefix)) {
+        return prefix.size();
+    }
+    return common_prefix_bytes(session->full_text, prefix);
+}
+
+static size_t family_candidate_raw_prefix_bytes(
+    const transcribe_session * session) {
+    if (session == nullptr || !session->has_result) {
+        return 0;
+    }
+    if (session->n_committed_tokens > 0) {
+        return token_prefix_raw_bytes(session, session->n_committed_tokens);
+    }
+    if (session->n_committed_words > 0 &&
+        session->n_committed_words >= static_cast<int>(session->words.size()))
+    {
+        return session->full_text.size();
+    }
+    if (session->n_committed_segments > 0 &&
+        session->n_committed_segments >= static_cast<int>(session->segments.size()))
+    {
+        return session->full_text.size();
+    }
+    return 0;
+}
+
+static size_t holdback_limited_raw_prefix_bytes(
+    const transcribe_session * session,
+    size_t                     candidate_bytes)
+{
+    if (session == nullptr || session->stream_commit_holdback_ms <= 0 ||
+        session->tokens.empty())
+    {
+        return candidate_bytes;
+    }
+    bool has_token_timing = false;
+    for (const auto & tok : session->tokens) {
+        if (tok.t1_ms > 0) {
+            has_token_timing = true;
+            break;
+        }
+    }
+    if (!has_token_timing) {
+        return candidate_bytes;
+    }
+    const int64_t cutoff_ms =
+        (session->stream_audio_committed_us / 1000LL) -
+        static_cast<int64_t>(session->stream_commit_holdback_ms);
+    if (cutoff_ms <= 0) {
+        return 0;
+    }
+
+    std::string prefix;
+    prefix.reserve(session->full_text.size());
+    for (const auto & tok : session->tokens) {
+        if (tok.t1_ms <= 0 || tok.t1_ms > cutoff_ms) {
+            break;
+        }
+        prefix += tok.text;
+        if (prefix.size() >= candidate_bytes) {
+            return candidate_bytes;
+        }
+    }
+    if (starts_with_bytes(session->full_text, prefix)) {
+        return std::min(candidate_bytes, prefix.size());
+    }
+    return std::min(candidate_bytes,
+                    common_prefix_bytes(session->full_text, prefix));
+}
+
+static size_t stable_prefix_candidate_raw_bytes(transcribe_session * session) {
+    if (session == nullptr || !session->has_result) {
+        return 0;
+    }
+    uint32_t agreement_n = session->stream_stable_prefix_agreement_n;
+    if (agreement_n == 0) {
+        agreement_n = 2;
+    }
+    if (agreement_n <= 1) {
+        return session->full_text.size();
+    }
+
+    session->stream_raw_history.push_back(session->full_text);
+    while (session->stream_raw_history.size() > agreement_n) {
+        session->stream_raw_history.pop_front();
+    }
+    if (session->stream_raw_history.size() < agreement_n) {
+        return 0;
+    }
+
+    size_t prefix_n = session->stream_raw_history.front().size();
+    for (const auto & text : session->stream_raw_history) {
+        prefix_n = std::min(prefix_n,
+                            common_prefix_bytes(
+                                session->stream_raw_history.front(), text));
+    }
+    return utf8_floor_boundary(session->full_text, prefix_n);
+}
+
+static bool append_committed_raw_prefix(transcribe_session * session,
+                                        size_t              candidate_bytes)
+{
+    if (session == nullptr || !session->has_result) {
+        return false;
+    }
+    const std::string & raw = session->full_text;
+    const size_t old_boundary = utf8_floor_boundary(
+        raw, std::min<size_t>(
+                 static_cast<size_t>(session->stream_raw_tentative_start_bytes),
+                 raw.size()));
+    const size_t candidate = utf8_floor_boundary(
+        raw, std::min(candidate_bytes, raw.size()));
+    if (candidate <= old_boundary) {
+        return false;
+    }
+    if (old_boundary != session->stream_committed_text.size()) {
+        return false;
+    }
+    if (raw.compare(0, old_boundary,
+                    session->stream_committed_text.data(),
+                    old_boundary) != 0)
+    {
+        return false;
+    }
+    session->stream_committed_text.append(
+        raw.data() + old_boundary, candidate - old_boundary);
+    session->stream_raw_tentative_start_bytes =
+        static_cast<uint64_t>(candidate);
+    return true;
+}
+
+static bool finalize_committed_text(transcribe_session * session) {
+    if (session == nullptr || !session->has_result) {
+        return false;
+    }
+    if (session->stream_commit_policy == TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE ||
+        session->stream_committed_text.empty())
+    {
+        const bool changed =
+            session->stream_committed_text != session->full_text;
+        session->stream_committed_text = session->full_text;
+        session->stream_raw_tentative_start_bytes =
+            static_cast<uint64_t>(session->full_text.size());
+        return changed;
+    }
+    if (!starts_with_bytes(session->full_text, session->stream_committed_text)) {
+        session->stream_raw_tentative_start_bytes =
+            static_cast<uint64_t>(session->full_text.size());
+        return false;
+    }
+    const size_t old_n = session->stream_committed_text.size();
+    if (session->full_text.size() > old_n) {
+        session->stream_committed_text.append(
+            session->full_text.data() + old_n,
+            session->full_text.size() - old_n);
+        session->stream_raw_tentative_start_bytes =
+            static_cast<uint64_t>(session->full_text.size());
+        return true;
+    }
+    session->stream_raw_tentative_start_bytes =
+        static_cast<uint64_t>(session->full_text.size());
+    return false;
+}
+
+struct StreamTextDelta {
+    bool committed_changed = false;
+    bool tentative_changed = false;
+};
+
+static StreamTextDelta apply_stream_text_policy(
+    transcribe_session * session,
+    bool                 is_finalize)
+{
+    StreamTextDelta delta;
+    if (session == nullptr) {
+        return delta;
+    }
+    const std::string prev_committed = session->stream_committed_text;
+    const std::string prev_tentative = session->stream_tentative_text;
+
+    if (is_finalize) {
+        delta.committed_changed = finalize_committed_text(session);
+        session->stream_tentative_text.clear();
+    } else if (session->has_result) {
+        size_t candidate = 0;
+        switch (session->stream_commit_policy) {
+            case TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE:
+                candidate = 0;
+                break;
+            case TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX:
+                candidate = stable_prefix_candidate_raw_bytes(session);
+                candidate = holdback_limited_raw_prefix_bytes(session, candidate);
+                break;
+            case TRANSCRIBE_STREAM_COMMIT_AUTO:
+            default:
+                candidate = family_candidate_raw_prefix_bytes(session);
+                break;
+        }
+        delta.committed_changed =
+            append_committed_raw_prefix(session, candidate);
+
+        const size_t boundary = utf8_floor_boundary(
+            session->full_text,
+            std::min<size_t>(
+                static_cast<size_t>(session->stream_raw_tentative_start_bytes),
+                session->full_text.size()));
+        session->stream_tentative_text.assign(
+            session->full_text.data() + boundary,
+            session->full_text.size() - boundary);
+    } else {
+        session->stream_tentative_text.clear();
+    }
+
+    delta.committed_changed =
+        delta.committed_changed ||
+        session->stream_committed_text != prev_committed;
+    delta.tentative_changed =
+        session->stream_tentative_text != prev_tentative;
+    return delta;
+}
+
+static void publish_stream_update_tail(
+    transcribe_stream_update * update,
+    bool                       committed_changed,
+    bool                       tentative_changed)
+{
+    if (update == nullptr) {
+        return;
+    }
+    if (has_field(update->struct_size, k_stream_update_committed_changed_size)) {
+        update->committed_changed = committed_changed;
+    }
+    if (has_field(update->struct_size, k_stream_update_tentative_changed_size)) {
+        update->tentative_changed = tentative_changed;
+    }
+}
 
 // Advisory pnc/itn warning. Emits a WARN log message when a non-DEFAULT
 // caller request hits a model that does not support runtime control of
@@ -764,8 +1075,9 @@ extern "C" bool transcribe_was_aborted(const struct transcribe_session * session
 // stream_state == ACTIVE on entry to begin/feed/finalize and never
 // observe transitions themselves. Hooks own the per-utterance result
 // data on the context and may freely mutate tokens/words/segments,
-// committed counts, audio cursors, and stream_revision; the
-// dispatcher owns lifecycle state and last_status.
+// low-level candidate committed counts, audio cursors, and
+// stream_revision; the dispatcher owns lifecycle state, last_status, and
+// the public committed/tentative text view.
 //
 // The result snapshot and lifecycle state are deliberately separate.
 // clear_result() (called by both begin and transcribe_run) wipes the
@@ -796,6 +1108,34 @@ extern "C" transcribe_status transcribe_stream_begin(
         st != TRANSCRIBE_OK)
     {
         return st;
+    }
+    transcribe_stream_commit_policy commit_policy =
+        TRANSCRIBE_STREAM_COMMIT_AUTO;
+    uint32_t stable_prefix_agreement_n = 0;
+    int32_t commit_holdback_ms = 0;
+    if (has_field(stream_params->struct_size,
+                  k_stream_params_commit_policy_size))
+    {
+        commit_policy = stream_params->commit_policy;
+    }
+    if (!valid_stream_commit_policy(commit_policy)) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (has_field(stream_params->struct_size,
+                  k_stream_params_agreement_n_size))
+    {
+        stable_prefix_agreement_n = stream_params->stable_prefix_agreement_n;
+        if (stable_prefix_agreement_n > 32) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+    if (has_field(stream_params->struct_size,
+                  k_stream_params_holdback_ms_size))
+    {
+        commit_holdback_ms = stream_params->commit_holdback_ms;
+        if (commit_holdback_ms < 0) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
     }
     if (session->stream_state == TRANSCRIBE_STREAM_ACTIVE) {
         // Caller must finalize or reset before starting a new stream.
@@ -873,6 +1213,9 @@ extern "C" transcribe_status transcribe_stream_begin(
     session->t_decode_us = 0;
     session->was_aborted = false;
     session->stream_state = TRANSCRIBE_STREAM_ACTIVE;
+    session->stream_commit_policy = commit_policy;
+    session->stream_stable_prefix_agreement_n = stable_prefix_agreement_n;
+    session->stream_commit_holdback_ms = commit_holdback_ms;
 
     const transcribe_status st = session->model->arch->stream_begin(
         session, run_params, stream_params);
@@ -937,11 +1280,52 @@ extern "C" transcribe_status transcribe_stream_feed(
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
 
+    const int32_t prev_revision = session->stream_revision;
+    const std::string prev_full_text = session->full_text;
+    const bool prev_has_result = session->has_result;
+
     const transcribe_status st = session->model->arch->stream_feed(
         session, pcm, n_samples, update);
     if (st != TRANSCRIBE_OK) {
         session->stream_state       = TRANSCRIBE_STREAM_FAILED;
         session->stream_last_status = st;
+        return st;
+    }
+    const StreamTextDelta text_delta =
+        apply_stream_text_policy(session, /*is_finalize=*/false);
+    if (session->stream_commit_policy ==
+        TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE)
+    {
+        session->n_committed_tokens   = 0;
+        session->n_committed_words    = 0;
+        session->n_committed_segments = 0;
+    }
+    const bool raw_changed =
+        session->has_result != prev_has_result ||
+        session->full_text != prev_full_text;
+    const bool observable_changed =
+        raw_changed || text_delta.committed_changed ||
+        text_delta.tentative_changed ||
+        (update != nullptr && update->result_changed);
+    if (observable_changed &&
+        session->stream_revision == prev_revision)
+    {
+        session->stream_revision += 1;
+    }
+    if (update != nullptr) {
+        update->result_changed =
+            update->result_changed ||
+            observable_changed ||
+            session->stream_revision != prev_revision;
+        update->revision = session->stream_revision;
+        if (session->stream_commit_policy ==
+            TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE)
+        {
+            update->audio_committed_ms = 0;
+        }
+        publish_stream_update_tail(
+            update, text_delta.committed_changed,
+            text_delta.tentative_changed);
     }
     return st;
 }
@@ -965,6 +1349,10 @@ extern "C" transcribe_status transcribe_stream_finalize(
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
 
+    const int32_t prev_revision = session->stream_revision;
+    const std::string prev_full_text = session->full_text;
+    const bool prev_has_result = session->has_result;
+
     const transcribe_status st = session->model->arch->stream_finalize(session, update);
     if (update != nullptr) {
         // Force is_final true regardless of family hook return; the
@@ -976,6 +1364,30 @@ extern "C" transcribe_status transcribe_stream_finalize(
         session->stream_state       = TRANSCRIBE_STREAM_FAILED;
         session->stream_last_status = st;
         return st;
+    }
+    const StreamTextDelta text_delta =
+        apply_stream_text_policy(session, /*is_finalize=*/true);
+    const bool raw_changed =
+        session->has_result != prev_has_result ||
+        session->full_text != prev_full_text;
+    const bool observable_changed =
+        raw_changed || text_delta.committed_changed ||
+        text_delta.tentative_changed ||
+        (update != nullptr && update->result_changed);
+    if (observable_changed &&
+        session->stream_revision == prev_revision)
+    {
+        session->stream_revision += 1;
+    }
+    if (update != nullptr) {
+        update->result_changed =
+            update->result_changed ||
+            observable_changed ||
+            session->stream_revision != prev_revision;
+        update->revision = session->stream_revision;
+        publish_stream_update_tail(
+            update, text_delta.committed_changed,
+            text_delta.tentative_changed);
     }
     session->stream_state = TRANSCRIBE_STREAM_FINISHED;
     return TRANSCRIBE_OK;
@@ -1045,6 +1457,42 @@ extern "C" transcribe_status transcribe_stream_last_status(
         return TRANSCRIBE_OK;
     }
     return session->stream_last_status;
+}
+
+extern "C" transcribe_status transcribe_stream_get_text(
+    const struct transcribe_session * session,
+    struct transcribe_stream_text *   out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_stream_text_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const uint64_t caller_size = out->struct_size;
+    transcribe_stream_text staged{};
+    staged.struct_size = caller_size;
+    if (session != nullptr && session->has_result) {
+        staged.full_text = session->full_text.c_str();
+        staged.full_text_bytes =
+            static_cast<uint64_t>(session->full_text.size());
+        staged.committed_text = session->stream_committed_text.c_str();
+        staged.committed_text_bytes =
+            static_cast<uint64_t>(session->stream_committed_text.size());
+        staged.tentative_text = session->stream_tentative_text.c_str();
+        staged.tentative_text_bytes =
+            static_cast<uint64_t>(session->stream_tentative_text.size());
+        staged.raw_tentative_start_bytes =
+            session->stream_raw_tentative_start_bytes;
+    } else {
+        staged.full_text = "";
+        staged.committed_text = "";
+        staged.tentative_text = "";
+    }
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
 }
 
 extern "C" transcribe_status transcribe_run(

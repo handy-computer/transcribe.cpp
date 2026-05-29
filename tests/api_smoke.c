@@ -145,6 +145,9 @@ static void test_init_macros(void) {
     transcribe_stream_params_init(&sp_macro);
     CHECK(sp_macro.struct_size == sizeof(struct transcribe_stream_params));
     CHECK(sp_macro.family      == NULL);
+    CHECK(sp_macro.commit_policy == TRANSCRIBE_STREAM_COMMIT_AUTO);
+    CHECK(sp_macro.stable_prefix_agreement_n == 0);
+    CHECK(sp_macro.commit_holdback_ms == 0);
 
     /* {0} is NOT accepted as a defaults shortcut in pre-1.0: a struct
      * with struct_size == 0 is rejected with BAD_STRUCT_SIZE regardless
@@ -169,6 +172,18 @@ static void test_init_macros(void) {
     CHECK(upd_macro.input_received_ms  == 0);
     CHECK(upd_macro.audio_committed_ms == 0);
     CHECK(upd_macro.buffered_ms        == 0);
+    CHECK(upd_macro.committed_changed  == false);
+    CHECK(upd_macro.tentative_changed  == false);
+
+    struct transcribe_stream_text text_macro; transcribe_stream_text_init(&text_macro);
+    CHECK(text_macro.struct_size == sizeof(struct transcribe_stream_text));
+    CHECK(text_macro.full_text == NULL);
+    CHECK(text_macro.full_text_bytes == 0);
+    CHECK(text_macro.committed_text == NULL);
+    CHECK(text_macro.committed_text_bytes == 0);
+    CHECK(text_macro.tentative_text == NULL);
+    CHECK(text_macro.tentative_text_bytes == 0);
+    CHECK(text_macro.raw_tentative_start_bytes == 0);
 
     struct transcribe_capabilities caps_macro; transcribe_capabilities_init(&caps_macro);
     CHECK(caps_macro.struct_size                        == sizeof(struct transcribe_capabilities));
@@ -591,6 +606,9 @@ static void test_stream_state_values(void) {
     CHECK(TRANSCRIBE_STREAM_ACTIVE   == 1);
     CHECK(TRANSCRIBE_STREAM_FINISHED == 2);
     CHECK(TRANSCRIBE_STREAM_FAILED   == 3);
+    CHECK(TRANSCRIBE_STREAM_COMMIT_AUTO == 0);
+    CHECK(TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE == 1);
+    CHECK(TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX == 2);
 }
 
 static void test_stream_accessors_null(void) {
@@ -603,6 +621,18 @@ static void test_stream_accessors_null(void) {
     CHECK(transcribe_stream_n_committed_words(ctx)     == 0);
     CHECK(transcribe_stream_n_committed_tokens(ctx)    == 0);
     CHECK(transcribe_stream_last_status(ctx)           == TRANSCRIBE_OK);
+
+    struct transcribe_stream_text text; transcribe_stream_text_init(&text);
+    CHECK(transcribe_stream_get_text(ctx, &text) == TRANSCRIBE_OK);
+    CHECK(text.full_text != NULL);
+    CHECK(text.full_text[0] == '\0');
+    CHECK(text.full_text_bytes == 0);
+    CHECK(text.committed_text != NULL);
+    CHECK(text.committed_text[0] == '\0');
+    CHECK(text.committed_text_bytes == 0);
+    CHECK(text.tentative_text != NULL);
+    CHECK(text.tentative_text[0] == '\0');
+    CHECK(text.tentative_text_bytes == 0);
 }
 
 static void test_stream_entries_null(void) {
@@ -630,6 +660,12 @@ static void test_stream_entries_null(void) {
           == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
     CHECK(transcribe_stream_finalize((struct transcribe_session *)0x1, &upd0)
           == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+
+    struct transcribe_stream_text text0 = {0};
+    CHECK(transcribe_stream_get_text(NULL, &text0)
+          == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+    CHECK(transcribe_stream_get_text(NULL, NULL)
+          == TRANSCRIBE_ERR_INVALID_ARG);
 }
 
 int main(void) {

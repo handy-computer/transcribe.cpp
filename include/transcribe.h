@@ -74,18 +74,14 @@
  *   spells out its sentinel where it differs from the general rule.
  * - sizeof(struct ...) is evaluated in the caller's translation unit,
  *   so struct_size captures the caller's view of the layout. In 0.x
- *   the library REQUIRES struct_size >= the library's current full size
- *   for the struct (callers must rebuild against the headers shipped
- *   with their library); a smaller struct_size returns
- *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE. The forward direction is permitted
- *   already: a newer caller with extra trailing fields the older
- *   library doesn't know about is accepted, and the library only writes
- *   what it knows so the caller's tail bytes stay as zero-init. The
- *   reverse — older-caller / newer-library — is the post-1.0 goal of
- *   the struct_size mechanism but is not implemented today; new fields
- *   appended in 0.x require consumers to rebuild. Layout-incompatible
- *   changes (reordering, retyping existing fields) are an ABI break
- *   regardless and are allowed in 0.x without a deprecation cycle.
+ *   the library requires struct_size >= the minimum prefix needed by the
+ *   entry point. New trailing fields can be appended without raising that
+ *   minimum when the library can safely treat their absence as zero/default.
+ *   A newer caller with extra trailing fields the older library doesn't
+ *   know about is accepted, and the library only writes what it knows so
+ *   the caller's tail bytes stay as zero-init. Layout-incompatible changes
+ *   (reordering, retyping existing fields) are an ABI break regardless and
+ *   are allowed in 0.x without a deprecation cycle.
  * - Family-specific knobs are reached via an opaque, kind-tagged
  *   extension pointer (`struct transcribe_ext`). Callers probe whether
  *   the loaded model accepts a given extension kind in a given slot via
@@ -116,21 +112,17 @@
  *   transcribe_run / transcribe_stream_begin / transcribe_stream_reset
  *   / transcribe_session_free on the same session. Read it, copy bytes
  *   if you need them past the next mutating call, and otherwise discard.
- * - Streaming path: the same caveat applies, AND every call to
- *   transcribe_stream_feed or transcribe_stream_finalize MAY invalidate
- *   ALL previously returned text pointers, including those for committed
- *   rows. Streaming families rebuild result vectors and their underlying
- *   string storage as the transcript advances; vector reallocation and
- *   per-feed re-decodes can invalidate pointers wholesale, not just for
- *   tentative-suffix rows. A consumer that holds text past the next feed
- *   MUST copy the bytes out before the feed.
- * - This is a footgun for the polling-and-cache pattern. Bindings that
- *   marshal-and-copy at the FFI boundary (Python c_char_p, Go C.GoString,
- *   Rust CStr::to_string, etc.) are safe by construction. A future
- *   immutable snapshot API will give callers a stable view that survives
- *   feeds without copying per-row; until that ships, the borrowed-pointer
- *   accessors are the only path and the lifetime rule above is the
- *   contract.
+ * - Streaming path: transcribe_full_text and row `text` pointers are raw
+ *   model snapshot views and may be replaced by every feed/finalize call.
+ *   Use transcribe_stream_get_text() for the UI-facing committed/tentative
+ *   text views. Its committed_text pointer remains stable until the next
+ *   stream mutation, and its bytes are append-only for the life of the
+ *   stream.
+ * - Bindings that marshal-and-copy at the FFI boundary (Python c_char_p,
+ *   Go C.GoString, Rust CStr::to_string, etc.) are safe by construction
+ *   regardless of the committed/tentative distinction, and remain the
+ *   recommended pattern for any binding that surfaces results as owned
+ *   strings in the host language.
  */
 
 #ifndef TRANSCRIBE_H
@@ -1052,17 +1044,21 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * ses
  * Streaming is a mode on transcribe_session, not a separate handle. A
  * session is in exactly one of four lifecycle states at any time, and
  * the result accessors (transcribe_full_text, segments, words, tokens)
- * return the current cumulative snapshot of the active stream.
+ * return the current raw model snapshot of the active stream.
  *
- * Result snapshot semantics during an active stream:
+ * Text semantics during an active stream:
  *
- *   result = committed prefix + tentative suffix
+ *   full_text      = raw current model hypothesis
+ *   committed_text = append-only UI/input prefix
+ *   tentative_text = volatile raw suffix after raw_tentative_start_bytes
+ *   display_text   = committed_text + tentative_text
  *
  * The committed-count accessors (transcribe_stream_n_committed_*)
- * identify the stable prefix; everything past the boundary may be
- * replaced on the next feed/finalize call. Consumers MUST NOT cache
- * text, timestamps, probabilities, or indices at or beyond the
- * committed-count boundary across calls.
+ * remain as low-level raw row boundary hints for consumers that inspect
+ * tokens/words/segments. UI consumers should prefer
+ * transcribe_stream_get_text(), because committed_text is independent
+ * from the raw hypothesis and may not be a prefix of full_text after the
+ * model revises already-committed text.
  *
  * Streaming timestamp note: unlike transcribe_run(), an active stream
  * may keep token rows populated (transcribe_n_tokens > 0) even when the
@@ -1110,6 +1106,26 @@ enum transcribe_stream_state {
 };
 
 /*
+ * Generic public commitment policy. Families still own model-specific
+ * streaming mechanics (chunk sizes, cache windows, decoder throttles);
+ * this enum controls when the session's UI-facing committed_text grows.
+ *
+ * AUTO:        Use the family/default policy.
+ * ON_FINALIZE: During feed calls committed_text stays empty and the raw
+ *              hypothesis is exposed as tentative_text. Finalize commits
+ *              the final raw text because no earlier bytes were committed.
+ * STABLE_PREFIX:
+ *              Commit only a raw prefix accepted by the generic stable-
+ *              prefix policy. committed_text is append-only and finalize
+ *              never rewrites previously committed bytes.
+ */
+typedef enum {
+    TRANSCRIBE_STREAM_COMMIT_AUTO          = 0,
+    TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE   = 1,
+    TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX = 2,
+} transcribe_stream_commit_policy;
+
+/*
  * Streaming run params.
  *
  * struct_size:                   sizeof(*this) captured by the caller.
@@ -1128,10 +1144,27 @@ enum transcribe_stream_state {
  *                                Use transcribe_model_accepts_ext_kind to
  *                                probe whether the loaded model accepts a
  *                                given kind before pointing `family` at it.
+ *
+ * commit_policy:                 Generic UI-facing commitment policy.
+ *                                Zero-init/default is AUTO.
+ *
+ * stable_prefix_agreement_n:      For STABLE_PREFIX, number of consecutive
+ *                                raw hypotheses that must agree on a prefix
+ *                                before it is appended to committed_text.
+ *                                0 selects the library default.
+ *
+ * commit_holdback_ms:             For STABLE_PREFIX, optional best-effort
+ *                                delay before committing recent text when
+ *                                token timing is available. 0 selects the
+ *                                library default, currently no time
+ *                                holdback; negative values are invalid.
  */
 struct transcribe_stream_params {
     uint64_t                      struct_size;
     const struct transcribe_ext * family;
+    transcribe_stream_commit_policy commit_policy;
+    uint32_t                      stable_prefix_agreement_n;
+    int32_t                       commit_holdback_ms;
 };
 
 TRANSCRIBE_API void transcribe_stream_params_init(
@@ -1145,10 +1178,9 @@ TRANSCRIBE_API void transcribe_stream_params_init(
  *   result_changed     True when any observable property of the
  *                      snapshot changed on this call: the text vectors
  *                      (tokens / words / segments / full_text), the
- *                      committed-prefix counts, or a lifecycle
- *                      transition that semantically promotes the
- *                      snapshot (finalize moves tentative output to
- *                      committed even when the text is byte-identical).
+ *                      committed/tentative text views, committed raw
+ *                      row boundary hints, or a lifecycle transition
+ *                      that semantically closes the stream.
  *                      Inspect the accessors after the call to read
  *                      the new snapshot. Treat result_changed as a
  *                      strict subset of `revision changed`: if
@@ -1160,20 +1192,28 @@ TRANSCRIBE_API void transcribe_stream_params_init(
  *   revision           Monotonic snapshot counter. Advances whenever
  *                      any observable property of the result changes
  *                      under the rules described for `result_changed`,
- *                      including the finalize commit-promotion case
- *                      where text is unchanged but committed counts or
+ *                      including finalize cases where text is unchanged
+ *                      but the committed/tentative stream view or
  *                      lifecycle moved. Mirrors
  *                      transcribe_stream_revision(session) after the
  *                      call returns. UI consumers should diff against
  *                      the previous value rather than treating each
  *                      bump as "text changed."
  *   input_received_ms  Total audio received by the stream since begin.
- *   audio_committed_ms Audio whose result is committed (corresponds
- *                      to the committed-prefix boundary).
+ *   audio_committed_ms Family-reported audio progress / drain hint.
+ *                      It is not a byte boundary into committed_text.
+ *                      ON_FINALIZE reports 0 during feed calls because
+ *                      committed_text is empty until finalize.
  *   buffered_ms        Audio still buffered inside the family's
  *                      streaming state (frontend carry +
  *                      lookahead/right-context requirement). Caller
  *                      may use this as a "drain" hint.
+ *   committed_changed True when committed_text changed on this call.
+ *                      committed_text is append-only for the life of
+ *                      the stream; a true value means bytes were appended
+ *                      or, for ON_FINALIZE with no prior committed bytes,
+ *                      the final raw text was installed.
+ *   tentative_changed True when tentative_text changed on this call.
  *
  * update is nullable. Passing NULL means the caller will inspect the
  * session directly (revision + committed-count accessors). Audio
@@ -1194,10 +1234,57 @@ struct transcribe_stream_update {
     int64_t input_received_ms;
     int64_t audio_committed_ms;
     int64_t buffered_ms;
+    bool    committed_changed;
+    bool    tentative_changed;
 };
 
 TRANSCRIBE_API void transcribe_stream_update_init(
     struct transcribe_stream_update * out);
+
+/*
+ * UI-facing stream text snapshot.
+ *
+ * full_text is the raw current model hypothesis, matching
+ * transcribe_full_text(session). During ACTIVE it may rewrite anywhere.
+ *
+ * committed_text is the API-stable display/input prefix. Once bytes are
+ * exposed through committed_text they are never rewritten by later feed or
+ * finalize calls on this stream. They remain until begin/reset/free.
+ *
+ * tentative_text is the volatile raw suffix after raw_tentative_start_bytes.
+ * It may be replaced on every feed. UI consumers that want no committed
+ * flicker render committed_text + tentative_text; consumers that want the
+ * model's current truth render full_text.
+ *
+ * On successful stream_finalize, tentative_text is empty. For ON_FINALIZE,
+ * committed_text becomes final full_text. For policies that committed bytes
+ * before finalize, finalize only appends compatible remaining suffix bytes;
+ * if final full_text disagrees with already committed_text, committed_text
+ * is not silently rewritten and full_text remains the authoritative raw
+ * final transcript.
+ *
+ * All pointers are borrowed session-owned storage. They remain valid until
+ * the next transcribe_stream_feed / transcribe_stream_finalize /
+ * transcribe_stream_begin / transcribe_stream_reset / transcribe_run /
+ * transcribe_session_free on the same session.
+ */
+struct transcribe_stream_text {
+    uint64_t struct_size;
+    const char * full_text;
+    uint64_t     full_text_bytes;
+    const char * committed_text;
+    uint64_t     committed_text_bytes;
+    const char * tentative_text;
+    uint64_t     tentative_text_bytes;
+    uint64_t     raw_tentative_start_bytes;
+};
+
+TRANSCRIBE_API void transcribe_stream_text_init(
+    struct transcribe_stream_text * out);
+
+TRANSCRIBE_API transcribe_status transcribe_stream_get_text(
+    const struct transcribe_session * session,
+    struct transcribe_stream_text *   out);
 
 /*
  * Begin a streaming run on session.
@@ -1294,9 +1381,9 @@ TRANSCRIBE_API transcribe_status transcribe_stream_begin(
  * pcm must be non-null and n_samples must be strictly greater than
  * zero. Polling the stream without supplying audio is unsupported —
  * use the stream accessors (transcribe_stream_revision,
- * transcribe_stream_n_committed_*, transcribe_stream_last_status,
- * transcribe_stream_get_state) to inspect state without progressing
- * the stream.
+ * transcribe_stream_get_text, transcribe_stream_n_committed_*,
+ * transcribe_stream_last_status, transcribe_stream_get_state) to inspect
+ * state without progressing the stream.
  *
  * update is nullable; when non-null the dispatcher zero-initializes
  * it before calling the family hook, so callers may rely on a clean
@@ -1371,11 +1458,12 @@ TRANSCRIBE_API int transcribe_stream_revision(
     const struct transcribe_session * session);
 
 /*
- * Committed-prefix counts. tokens[0 .. n_committed_tokens) is the
- * stable prefix; everything beyond may be replaced on the next
- * feed/finalize. The same holds for words and segments. Families
- * that only emit on finalize set committed counts equal to the
- * total counts on the finalize call.
+ * Low-level raw row boundary hints. In older streaming APIs these were
+ * the primary committed-prefix interface. They remain useful for callers
+ * that inspect raw token/word/segment rows, but the strong API-stable
+ * display contract is now transcribe_stream_get_text(). A committed text
+ * prefix may be independent from the current raw rows after the model
+ * revises already-committed bytes.
  *
  * Return 0 if session is NULL.
  */
@@ -1548,9 +1636,11 @@ TRANSCRIBE_API const char *               transcribe_detected_language(const str
  *   - One-shot path: valid until the next transcribe_run() /
  *     transcribe_stream_begin() / transcribe_stream_reset() /
  *     transcribe_session_free() call on the same session.
- *   - Streaming path: ALSO invalidated by every transcribe_stream_feed()
- *     and transcribe_stream_finalize() call, even for committed rows.
- *     Copy the bytes before the next feed if you need to hold them.
+ *   - Streaming path: row `text` aliases the raw model snapshot and may
+ *     be invalidated by every transcribe_stream_feed() /
+ *     transcribe_stream_finalize() call. Copy it before the next feed if
+ *     you need to hold it. Use transcribe_stream_get_text() for
+ *     API-stable committed/provisional display text.
  *
  * Out-of-range index (i < 0 or i >= the corresponding transcribe_n_*())
  * returns TRANSCRIBE_OK with the caller's struct left as zero-init:

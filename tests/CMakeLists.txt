@@ -463,6 +463,24 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
 endif()
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_stream_committed_pointer_stability
+        stream_committed_pointer_stability.cpp)
+
+    target_link_libraries(transcribe_stream_committed_pointer_stability
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_stream_committed_pointer_stability PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_stream_committed_pointer_stability)
+
+    add_test(NAME transcribe_stream_committed_pointer_stability
+        COMMAND transcribe_stream_committed_pointer_stability)
+    set_tests_properties(transcribe_stream_committed_pointer_stability PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_executable(transcribe_decoder_smoke
         decoder_smoke.cpp)
 

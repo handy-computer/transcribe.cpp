@@ -18,6 +18,7 @@
 #include "transcribe.h"
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -100,6 +101,7 @@ struct transcribe_session {
     std::vector<WordEntry>       words;
     std::vector<SegmentEntry>    segments;
     std::string                  full_text;
+
     // ISO short code the model itself predicted on this run, populated
     // only when the caller did NOT pass a language hint (auto/null) and
     // the family actually ran a detection step. Empty string means
@@ -158,6 +160,20 @@ struct transcribe_session {
     transcribe_status            stream_last_status   = TRANSCRIBE_OK;
     int64_t                      stream_audio_input_us     = 0;
     int64_t                      stream_audio_committed_us = 0;
+    transcribe_stream_commit_policy stream_commit_policy =
+        TRANSCRIBE_STREAM_COMMIT_AUTO;
+    uint32_t                     stream_stable_prefix_agreement_n = 0;
+    int32_t                      stream_commit_holdback_ms        = 0;
+
+    // UI-facing streaming text state. `full_text` above remains the raw
+    // model hypothesis. `stream_committed_text` is the append-only public
+    // display/input prefix; `stream_tentative_text` is the current raw
+    // suffix after `stream_raw_tentative_start_bytes`. The raw history is
+    // used by the generic STABLE_PREFIX policy.
+    std::string                  stream_committed_text;
+    std::string                  stream_tentative_text;
+    uint64_t                     stream_raw_tentative_start_bytes = 0;
+    std::deque<std::string>      stream_raw_history;
 
     void clear_result();
 

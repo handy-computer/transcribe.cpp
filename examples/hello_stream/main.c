@@ -73,34 +73,28 @@ static float * load_wav_mono(const char * path, int * out_n_samples,
 }
 // --------------------------------------------------------------------------
 
-// Print the current cumulative transcript plus the committed/tentative
-// token counts so the streaming contract is visible. The committed
-// prefix (tokens[0 .. n_committed_tokens)) is stable; everything beyond
-// may be replaced on the next feed/finalize.
+// Print the current UI-facing stream text split.
 //
 // IMPORTANT lifetime rule: the `text` pointer returned by
-// transcribe_full_text (and the `text` field on every transcribe_get_*
-// row) is valid only until the next transcribe_stream_feed or
-// transcribe_stream_finalize call. Use it immediately, like the
-// printf() below, and let it go out of scope. If you need to hold
-// transcript text past the next feed — for a UI render loop on
-// another thread, a queued message, a binding object — copy the
+// transcribe_stream_get_text is valid only until the next
+// transcribe_stream_feed or transcribe_stream_finalize call. Use it
+// immediately, like the printf() below, and let it go out of scope. If
+// you need to hold transcript text past the next feed — for a UI render
+// loop on another thread, a queued message, a binding object — copy the
 // bytes out before continuing.
 //
-// Per-family note: some families populate per-token .text fragments
-// (parakeet RNN-T), others write only the assembled full_text
-// (moonshine_streaming). Both populate transcribe_full_text the same
-// way, so this example prints full_text and exposes the boundary via
-// the committed-count accessor.
 static void print_partial(struct transcribe_session * session) {
-    const char * text       = transcribe_full_text(session);
-    const int n_total       = transcribe_n_tokens(session);
-    const int n_committed   = transcribe_stream_n_committed_tokens(session);
-    if (text == NULL || *text == '\0') {
+    struct transcribe_stream_text text;
+    transcribe_stream_text_init(&text);
+    if (transcribe_stream_get_text(session, &text) != TRANSCRIBE_OK ||
+        text.full_text == NULL || *text.full_text == '\0')
+    {
         return;
     }
-    printf("    text=\"%s\"  (tokens: %d committed / %d total)\n",
-           text, n_committed, n_total);
+    printf("    committed=\"%s\" tentative=\"%s\" raw=\"%s\"\n",
+           text.committed_text ? text.committed_text : "",
+           text.tentative_text ? text.tentative_text : "",
+           text.full_text ? text.full_text : "");
     fflush(stdout);
 }
 
@@ -181,9 +175,8 @@ int main(int argc, char ** argv) {
 
     // 5. Feed PCM in fixed-size chunks. After each feed, inspect the
     //    update struct. result_changed says "the cumulative transcript
-    //    moved"; the accessors then read the new snapshot. The
-    //    committed-vs-tentative split is exposed by
-    //    transcribe_stream_n_committed_tokens vs transcribe_n_tokens.
+    //    moved"; transcribe_stream_get_text then reads the UI-facing
+    //    committed/tentative split.
     const int chunk_samples = chunk_ms * 16000 / 1000;
     int pos = 0;
     int feed_idx = 0;
@@ -214,9 +207,9 @@ int main(int argc, char ** argv) {
     }
 
     // 6. Flush. finalize forces a last decode if needed, satisfies
-    //    right-context / lookahead, marks every emitted row as
-    //    committed, and transitions the stream to FINISHED. After
-    //    finalize, transcribe_full_text is the canonical transcript.
+    //    right-context / lookahead, closes tentative_text, and transitions
+    //    the stream to FINISHED. After finalize, full_text remains the raw
+    //    model transcript while committed_text remains append-only.
     if (st == TRANSCRIBE_OK) {
         struct transcribe_stream_update fin;
         transcribe_stream_update_init(&fin);
@@ -229,8 +222,7 @@ int main(int argc, char ** argv) {
                    fin.revision,
                    (long long) fin.input_received_ms,
                    (long long) fin.audio_committed_ms);
-            const char * text = transcribe_full_text(session);
-            printf("final: %s\n", (text && *text) ? text : "(empty)");
+            print_partial(session);
         }
     }
 

@@ -24,18 +24,18 @@ for the full contract. The binding-relevant rule:
 - **Offline path:** the pointer is valid until the next `transcribe_run` /
   `transcribe_stream_begin` / `transcribe_stream_reset` / `transcribe_session_free`
   on the same session.
-- **Streaming path:** in addition, *every* `transcribe_stream_feed` and
-  `transcribe_stream_finalize` call MAY invalidate *all* previously returned
-  text pointers — including those for already-committed rows. Streaming
-  families rebuild their result storage as the transcript advances.
+- **Streaming path:** raw result pointers, including `transcribe_full_text`
+  and row `text` fields, may be replaced by every
+  `transcribe_stream_feed` / `transcribe_stream_finalize` call. Bindings that
+  need UI-stable streaming text should use `transcribe_stream_get_text()` and
+  expose owned copies of `committed_text` and `tentative_text`.
 
-A binding therefore **must copy the bytes at the FFI boundary** and must not
-expose lazy/borrowed pointers over a streaming result that outlive the next
-feed. The marshal-and-copy idioms each language already uses make this
+The simplest safe rule for a binding is to **copy the bytes at the FFI
+boundary**, which the marshal-and-copy idioms each language already uses make
 automatic: Python `ctypes.c_char_p` / `.decode()`, Go `C.GoString`, Rust
-`CStr::to_str().to_owned()`, Swift `String(cString:)`. A binding that wraps the
-pointer without copying (e.g. a zero-copy view object) is unsafe in streaming
-mode and must not be generated.
+`CStr::to_str().to_owned()`, Swift `String(cString:)`. A binding that instead
+hands out a zero-copy view must scope it to the current callback/update turn
+and document that it dies at the next stream mutation.
 
 When adding a new family extension, update:
 
