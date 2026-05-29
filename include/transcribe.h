@@ -1077,6 +1077,22 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * ses
  * text, timestamps, probabilities, or indices at or beyond the
  * committed-count boundary across calls.
  *
+ * Streaming timestamp note: unlike transcribe_run(), an active stream
+ * may keep token rows populated (transcribe_n_tokens > 0) even when the
+ * run was started with timestamps == TRANSCRIBE_TIMESTAMPS_NONE, because
+ * the committed/tentative progress boundary is token-indexed and the
+ * incremental-commit accessors need the token rows to exist. The
+ * timestamps request is validated against the model's capabilities at
+ * transcribe_stream_begin (a request finer than the model's max is
+ * rejected there), but it is NOT an instruction to elide structural
+ * token rows from the streaming result. Whether those rows carry real
+ * per-token timestamps is a separate question answered by the family:
+ * a family with no token-level alignment (e.g. moonshine_streaming) can
+ * honestly populate token rows for the progress boundary while
+ * transcribe_returned_timestamp_kind() still reports NONE. Always use
+ * transcribe_returned_timestamp_kind() to discover the finest timestamp
+ * fields actually populated; do not infer it from transcribe_n_tokens().
+ *
  * Cancellation reuses the existing session abort callback. The
  * callback is polled at chunk boundaries and decode-step boundaries
  * during feed/finalize; on cancellation the active call returns
@@ -1139,16 +1155,31 @@ TRANSCRIBE_API void transcribe_stream_params_init(
  *
  *   struct_size        Caller's sizeof(*this). Initialized via
  *                      transcribe_stream_update_init() (zero-fill).
- *   result_changed     The session result was modified by this call.
+ *   result_changed     True when any observable property of the
+ *                      snapshot changed on this call: the text vectors
+ *                      (tokens / words / segments / full_text), the
+ *                      committed-prefix counts, or a lifecycle
+ *                      transition that semantically promotes the
+ *                      snapshot (finalize moves tentative output to
+ *                      committed even when the text is byte-identical).
  *                      Inspect the accessors after the call to read
- *                      the new snapshot.
+ *                      the new snapshot. Treat result_changed as a
+ *                      strict subset of `revision changed`: if
+ *                      `revision` advanced you can assume
+ *                      `result_changed` is also true.
  *   is_final           True only on the finalize call's update. Set
  *                      by the dispatcher after the family hook
  *                      returns; family hooks cannot override.
- *   revision           Monotonic counter that increments whenever the
- *                      session result changes (mirrors
- *                      transcribe_stream_revision(session) after the call
- *                      returns).
+ *   revision           Monotonic snapshot counter. Advances whenever
+ *                      any observable property of the result changes
+ *                      under the rules described for `result_changed`,
+ *                      including the finalize commit-promotion case
+ *                      where text is unchanged but committed counts or
+ *                      lifecycle moved. Mirrors
+ *                      transcribe_stream_revision(session) after the
+ *                      call returns. UI consumers should diff against
+ *                      the previous value rather than treating each
+ *                      bump as "text changed."
  *   input_received_ms  Total audio received by the stream since begin.
  *   audio_committed_ms Audio whose result is committed (corresponds
  *                      to the committed-prefix boundary).
@@ -1209,11 +1240,13 @@ TRANSCRIBE_API void transcribe_stream_update_init(
  *                                    entry point requires (including
  *                                    struct_size == 0), or
  *                                    stream_params->family is too small
- *                                    to contain a transcribe_ext header.
- *                                    A family extension with a size
- *                                    below its kind's minimum is
- *                                    reported by the family hook after
- *                                    the session enters ACTIVE.
+ *                                    to contain a transcribe_ext header,
+ *                                    or (for a family that implements the
+ *                                    preflight, see below) a family
+ *                                    extension whose size is below its
+ *                                    kind's minimum. All of these are
+ *                                    reported before the previous result
+ *                                    snapshot is cleared.
  *                                    Use the init functions to avoid.
  *   TRANSCRIBE_ERR_NOT_IMPLEMENTED   Model has no streaming hooks or
  *                                    capabilities advertise
@@ -1231,19 +1264,36 @@ TRANSCRIBE_API void transcribe_stream_update_init(
  *                                    run_params->language not in the
  *                                    model's declared language list.
  *
- * Failure semantics split at the family hook boundary:
+ * Failure semantics — three stages, split by whether the previous
+ * result snapshot survives:
  *
- *   Pre-hook failures leave the session's lifecycle state untouched —
- *   the call returns without entering ACTIVE and without clearing the
- *   previous result snapshot. These include unknown / unaccepted
- *   extension kinds and top-level struct_size failures.
+ *   1. Dispatcher preflight. Top-level argument checks run first:
+ *      NULL session, ACTIVE-state rejection, struct_size failures,
+ *      out-of-range run_params enums, unknown / unaccepted extension
+ *      kind for the STREAM slot, TRANSLATE, granularity finer than the
+ *      model's max, and unsupported language. On failure the call
+ *      returns without entering ACTIVE and WITHOUT clearing the
+ *      previous result snapshot. Lifecycle state is untouched.
  *
- *   Family-hook failures (any non-OK status returned by the family's
- *   stream_begin hook after the dispatcher has already cleared the
- *   snapshot and entered ACTIVE) transition the stream to FAILED and
- *   preserve the status in transcribe_stream_last_status. The result
- *   snapshot in this case is whatever the hook wrote before failing —
- *   typically empty.
+ *   2. Family preflight (optional, via the family's stream_validate
+ *      hook). For families that implement it, family-specific value
+ *      checks — e.g. a streaming extension field outside the model's
+ *      trained menu, or below its kind's minimum size — run here, still
+ *      BEFORE the snapshot is cleared and BEFORE the lifecycle moves.
+ *      A non-OK return is delivered to the caller with the previous
+ *      result snapshot fully preserved and no FAILED transition, so a
+ *      caller-side config typo cannot destroy the prior utterance's
+ *      transcript. A family that does not implement stream_validate
+ *      defers these checks to stage 3.
+ *
+ *   3. Post-clear stream_begin. Once stages 1-2 pass, the dispatcher
+ *      clears the result snapshot, enters ACTIVE, and calls the
+ *      family's stream_begin hook. Any non-OK status from this point
+ *      (config a non-preflighting family only catches here, allocation
+ *      failure, etc.) transitions the stream to FAILED and preserves
+ *      the status in transcribe_stream_last_status. The result snapshot
+ *      in this case is whatever the hook wrote before failing —
+ *      typically empty.
  */
 TRANSCRIBE_API transcribe_status transcribe_stream_begin(
     struct transcribe_session *              session,
@@ -1319,9 +1369,16 @@ TRANSCRIBE_API enum transcribe_stream_state
     transcribe_stream_get_state(const struct transcribe_session * session);
 
 /*
- * Monotonic revision counter. Increments whenever the session result
- * changes during streaming. Reset to 0 by begin / reset / run.
- * Returns 0 if session is NULL.
+ * Monotonic snapshot revision counter. Advances whenever any observable
+ * property of the streaming result changes: text vectors (tokens /
+ * words / segments / full_text), committed-prefix counts, or a
+ * lifecycle transition that promotes the snapshot (finalize moves
+ * tentative output to committed even when the text is unchanged).
+ * Reset to 0 by begin / reset / run. Returns 0 if session is NULL.
+ *
+ * Diff against the previous value when redrawing — a bump does not
+ * by itself mean the visible text changed; it means "something about
+ * the snapshot moved, re-read the accessors."
  */
 TRANSCRIBE_API int transcribe_stream_revision(
     const struct transcribe_session * session);

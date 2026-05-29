@@ -88,11 +88,26 @@ struct Arch {
     //
     // Hook responsibilities:
     //
+    //   stream_validate (optional): pre-flight validation of family-
+    //     specific parameters and stream_params->family extension values.
+    //     Called BEFORE the dispatcher clears the previous result
+    //     snapshot and BEFORE the lifecycle moves out of its current
+    //     state. Must be pure: zero mutation of ctx or model. On non-OK
+    //     return the dispatcher returns the status to the caller with
+    //     the previous result snapshot fully preserved and the stream
+    //     lifecycle untouched (no FAILED transition). Families that
+    //     accept extension structs SHOULD validate enum-from-menu and
+    //     value-shape rules here so a caller typo does not destroy the
+    //     prior utterance's transcript.
+    //
     //   stream_begin: install per-utterance state on the derived
-    //     context. The central dispatcher has already validated
-    //     params, cleared the result snapshot, and set ctx->stream_state
-    //     to ACTIVE. On non-OK return the dispatcher transitions to
-    //     FAILED and preserves the status in stream_last_status.
+    //     context. The central dispatcher has already run
+    //     stream_validate (if any), cleared the result snapshot, and
+    //     set ctx->stream_state to ACTIVE. On non-OK return the
+    //     dispatcher transitions to FAILED and preserves the status in
+    //     stream_last_status.  Families MAY repeat cheap validation
+    //     here as defense in depth, but the canonical place to reject
+    //     bad caller input is stream_validate.
     //
     //   stream_feed: consume the PCM (n_samples may be 0) and update
     //     the result vectors / committed counts / audio cursors on
@@ -113,6 +128,11 @@ struct Arch {
     //     buffered audio contents (keeping allocated buffers for
     //     reuse). The dispatcher clears the result snapshot and
     //     forces stream_state back to IDLE around this call.
+    transcribe_status (*stream_validate)(
+        const struct transcribe_session *      ctx,
+        const transcribe_run_params *          run_params,
+        const transcribe_stream_params *       stream_params);
+
     transcribe_status (*stream_begin)(
         struct transcribe_session *            ctx,
         const transcribe_run_params *              run_params,

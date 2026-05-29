@@ -2882,6 +2882,7 @@ extern const Arch arch = {
     /* .load             = */ whisper_load,
     /* .init_context     = */ whisper_init_context,
     /* .run              = */ whisper_run,
+    /* .stream_validate  = */ nullptr,
     /* .stream_begin     = */ nullptr,
     /* .stream_feed      = */ nullptr,
     /* .stream_finalize  = */ nullptr,

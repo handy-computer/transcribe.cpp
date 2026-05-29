@@ -146,12 +146,30 @@ bool fake_accepts_no_ext(
     return false;
 }
 
+int g_validate_calls = 0;
+
+// stream_validate that always rejects, modeling a family preflight that
+// found a bad extension value. Must run BEFORE the dispatcher clears the
+// snapshot; must NOT lead to stream_begin being called.
+transcribe_status fake_stream_validate_reject(
+    const transcribe_session *        session,
+    const transcribe_run_params *     run_params,
+    const transcribe_stream_params *  stream_params)
+{
+    (void)session;
+    (void)run_params;
+    (void)stream_params;
+    ++g_validate_calls;
+    return TRANSCRIBE_ERR_INVALID_ARG;
+}
+
 void test_begin_rejects_unknown_ext_kind_before_hook() {
     const transcribe::Arch arch = {
         "fake-stream",
         nullptr,
         nullptr,
         nullptr,
+        nullptr,                  // stream_validate
         fake_stream_begin,
         fake_stream_feed,
         fake_stream_finalize,
@@ -189,6 +207,7 @@ void test_begin_rejects_tiny_ext_before_hook() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,                  // stream_validate
         fake_stream_begin,
         fake_stream_feed,
         fake_stream_finalize,
@@ -218,6 +237,65 @@ void test_begin_rejects_tiny_ext_before_hook() {
     CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
     CHECK(session.has_result);
     CHECK(session.full_text == "previous result");
+}
+
+// A family preflight (stream_validate) that rejects must behave like the
+// other pre-hook failures: the previous result snapshot is preserved, the
+// lifecycle stays put (no FAILED transition), and stream_begin is never
+// called. This pins the dispatcher contract that lets a family validate
+// extension values before the snapshot is cleared (see transcribe-arch.h
+// stream_validate). Without it, a caller-side config typo would destroy
+// the prior utterance's transcript.
+void test_begin_family_preflight_reject_preserves_snapshot() {
+    const transcribe::Arch arch = {
+        "fake-stream",
+        nullptr,
+        nullptr,
+        nullptr,
+        fake_stream_validate_reject,  // stream_validate rejects
+        fake_stream_begin,
+        fake_stream_feed,
+        fake_stream_finalize,
+        nullptr,
+        fake_accepts_no_ext,
+    };
+
+    transcribe_model model;
+    model.arch = &arch;
+    model.caps.supports_streaming = true;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+
+    // Seed a session that previously FAILED, carrying a non-OK
+    // last_status and a partial snapshot. Using a non-OK seed (rather
+    // than the default OK) is deliberate: it proves the dispatcher
+    // leaves last_status UNTOUCHED on a preflight reject, not that it
+    // forces OK. A test that started from OK could not tell the two
+    // apart.
+    transcribe_session session;
+    session.model              = &model;
+    session.has_result         = true;
+    session.full_text          = "previous result";
+    session.stream_state       = TRANSCRIBE_STREAM_FAILED;     // a prior failed stream
+    session.stream_last_status = TRANSCRIBE_ERR_BACKEND;       // its failing status
+
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+
+    g_validate_calls = 0;
+    g_begin_calls    = 0;
+    CHECK(transcribe_stream_begin(&session, &rp, &sp) ==
+          TRANSCRIBE_ERR_INVALID_ARG);
+    // Preflight ran, begin did not.
+    CHECK(g_validate_calls == 1);
+    CHECK(g_begin_calls    == 0);
+    // Snapshot preserved, lifecycle untouched (NOT cleared, NOT moved).
+    CHECK(session.has_result);
+    CHECK(session.full_text == "previous result");
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_FAILED);
+    // last_status untouched — the prior non-OK value survives a
+    // pre-clear rejection unchanged (the dispatcher does not reset it
+    // to OK, nor overwrite it with the rejection's status).
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_BACKEND);
 }
 
 void test_feed_rejects_idle() {
@@ -458,6 +536,7 @@ int main() {
     test_begin_no_model_returns_not_implemented();
     test_begin_rejects_unknown_ext_kind_before_hook();
     test_begin_rejects_tiny_ext_before_hook();
+    test_begin_family_preflight_reject_preserves_snapshot();
     test_feed_rejects_idle();
     test_feed_rejects_finished_and_failed();
     test_feed_rejects_null_ctx_and_bad_input();

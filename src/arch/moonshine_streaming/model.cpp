@@ -951,17 +951,23 @@ transcribe_status decode_from_kv_cache(
         // Per-token entries. Moonshine-Streaming doesn't carry
         // per-token timestamps or probabilities — leave them at the
         // zero sentinel. seg_index = 0 because every decode emits a
-        // single segment.
+        // single segment. text is decoded one id at a time to honor
+        // the public contract that token accessors expose raw token
+        // text (see include/transcribe.h on keep_special_tags); the
+        // committed-prefix accessors would otherwise hand bindings
+        // empty strings.
         cc->tokens.reserve(cc->tokens.size() +
                            static_cast<size_t>(n_generated));
         for (int i = 0; i < n_generated; ++i) {
+            const int32_t id = generated_ids[static_cast<size_t>(i)];
             transcribe_session::TokenEntry tok;
-            tok.id         = generated_ids[static_cast<size_t>(i)];
+            tok.id         = id;
             tok.p          = 0.0f;
             tok.t0_ms      = 0;
             tok.t1_ms      = 0;
             tok.seg_index  = 0;
             tok.word_index = -1;
+            tok.text       = cm->tok.decode(&id, 1);
             cc->tokens.push_back(std::move(tok));
         }
 
@@ -1251,6 +1257,63 @@ int longest_common_prefix_in_tokens(
 // the tiny variant; smaller values (e.g. 80 ms) push it to 5×+.
 constexpr int k_default_min_decode_interval_ms = 240;
 
+// Pure resolver for the Moonshine-Streaming decode-throttle knob.
+// Validates the stream_params->family extension's universal shape and
+// the min_decode_interval_ms sentinel rule, then resolves the effective
+// milliseconds value (family default when -1 / absent). Reads only the
+// caller-owned stream_params; mutates nothing. Shared by stream_validate
+// (pre-flight, before the dispatcher clears the snapshot) and stream_begin
+// (defense in depth, where the resolved value configures session state).
+//
+//   ext NULL / -1   -> family default (k_default_min_decode_interval_ms)
+//   < -1            -> TRANSCRIBE_ERR_INVALID_ARG
+//   >= 0            -> the requested value (0 = decode every advance)
+transcribe_status resolve_min_decode_interval_ms(
+    const transcribe_stream_params * stream_params,
+    int32_t *                        out_min_decode_ms)
+{
+    int32_t min_decode_ms = k_default_min_decode_interval_ms;
+    const transcribe_ext * family =
+        stream_params != nullptr ? stream_params->family : nullptr;
+    if (const transcribe_status st = transcribe_ext_check(
+            family,
+            TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM,
+            sizeof(struct transcribe_moonshine_streaming_stream_ext));
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (family != nullptr) {
+        const auto * mx =
+            reinterpret_cast<const transcribe_moonshine_streaming_stream_ext *>(family);
+        if (mx->min_decode_interval_ms < -1) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (mx->min_decode_interval_ms >= 0) {
+            min_decode_ms = mx->min_decode_interval_ms;
+        }
+    }
+    *out_min_decode_ms = min_decode_ms;
+    return TRANSCRIBE_OK;
+}
+
+// Pure pre-flight: reject malformed family stream config BEFORE the
+// dispatcher clears the previous result snapshot, so a caller typo does
+// not destroy the prior utterance's transcript. Mutates nothing.
+transcribe_status stream_validate(
+    const transcribe_session *        session,
+    const transcribe_run_params *     /*run_params*/,
+    const transcribe_stream_params *  stream_params)
+{
+    const auto * cc = static_cast<const MoonshineStreamingSession *>(session);
+    const auto * cm = static_cast<const MoonshineStreamingModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    int32_t min_decode_ms = 0;
+    return resolve_min_decode_interval_ms(stream_params, &min_decode_ms);
+}
+
 transcribe_status stream_begin(
     transcribe_session *              session,
     const transcribe_run_params *         run_params,
@@ -1260,6 +1323,20 @@ transcribe_status stream_begin(
     auto * cm = static_cast<MoonshineStreamingModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Resolve + validate the throttle knob first. The same helper runs in
+    // stream_validate, so the dispatcher has already rejected bad caller
+    // input before clearing the previous result; the call here is defense
+    // in depth and also produces the value we configure state from. Doing
+    // it before any mutation keeps stream_begin's own failure path from
+    // half-clearing buffers on an input the preflight somehow missed.
+    int32_t min_decode_ms = k_default_min_decode_interval_ms;
+    if (const transcribe_status st = resolve_min_decode_interval_ms(
+            stream_params, &min_decode_ms);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
     }
 
     transcribe::debug::init();
@@ -1282,31 +1359,8 @@ transcribe_status stream_begin(
     cc->stream_samples_per_enc_frame  = samples_per_encoder_frame(hp);
     cc->stream_run_params             = *run_params;
 
-    // Resolve the per-stream decode-throttle knob from the Moonshine-
-    // Streaming family extension. Sentinel -1 selects the family default.
-    // Convert milliseconds to encoder frames using the model's actual
-    // frame rate (samples_per_enc_frame / sample_rate).
-    int32_t min_decode_ms = k_default_min_decode_interval_ms;
-    const transcribe_ext * family =
-        stream_params != nullptr ? stream_params->family : nullptr;
-    if (const transcribe_status st = transcribe_ext_check(
-            family,
-            TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM,
-            sizeof(struct transcribe_moonshine_streaming_stream_ext));
-        st != TRANSCRIBE_OK)
-    {
-        return st;
-    }
-    if (family != nullptr) {
-        const auto * mx =
-            reinterpret_cast<const transcribe_moonshine_streaming_stream_ext *>(family);
-        if (mx->min_decode_interval_ms < -1) {
-            return TRANSCRIBE_ERR_INVALID_ARG;
-        }
-        if (mx->min_decode_interval_ms >= 0) {
-            min_decode_ms = mx->min_decode_interval_ms;
-        }
-    }
+    // Convert the resolved throttle interval to encoder frames using the
+    // model's actual frame rate (samples_per_enc_frame / sample_rate).
     const int64_t spf = cc->stream_samples_per_enc_frame > 0
                           ? cc->stream_samples_per_enc_frame : 1;
     const int64_t min_decode_samples =
@@ -1750,6 +1804,7 @@ extern const Arch arch = {
     /* .load             = */ load,
     /* .init_context     = */ init_context,
     /* .run              = */ run,
+    /* .stream_validate  = */ stream_validate,
     /* .stream_begin     = */ stream_begin,
     /* .stream_feed      = */ stream_feed,
     /* .stream_finalize  = */ stream_finalize,

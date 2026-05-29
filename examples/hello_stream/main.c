@@ -78,13 +78,20 @@ static float * load_wav_mono(const char * path, int * out_n_samples,
 // prefix (tokens[0 .. n_committed_tokens)) is stable; everything beyond
 // may be replaced on the next feed/finalize.
 //
+// IMPORTANT lifetime rule: the `text` pointer returned by
+// transcribe_full_text (and the `text` field on every transcribe_get_*
+// row) is valid only until the next transcribe_stream_feed or
+// transcribe_stream_finalize call. Use it immediately, like the
+// printf() below, and let it go out of scope. If you need to hold
+// transcript text past the next feed — for a UI render loop on
+// another thread, a queued message, a binding object — copy the
+// bytes out before continuing.
+//
 // Per-family note: some families populate per-token .text fragments
-// (parakeet RNN-T), others write only the assembled cc->full_text
+// (parakeet RNN-T), others write only the assembled full_text
 // (moonshine_streaming). Both populate transcribe_full_text the same
 // way, so this example prints full_text and exposes the boundary via
-// the committed-count accessor. Bindings that need a token-text split
-// can iterate transcribe_get_token(); those text pointers follow the
-// same lifetime contract (copy bytes before the next feed).
+// the committed-count accessor.
 static void print_partial(struct transcribe_session * session) {
     const char * text       = transcribe_full_text(session);
     const int n_total       = transcribe_n_tokens(session);

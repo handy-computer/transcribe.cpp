@@ -186,14 +186,16 @@ void test_supports_streaming_true_variant_offline() {
     transcribe_run_params rp; transcribe_run_params_init(&rp);
     const transcribe_status   st = transcribe_stream_begin(ctx, &rp, &sp);
 
-    // Family-level rejection: caps says yes, the dispatcher's gates
-    // pass, but the parakeet stream_begin hook refuses because the
-    // toy fixture's encoder is Regular (full attention), not
-    // ChunkedLimited. Post-hook rejection → state is FAILED and the
-    // status is preserved on the context.
+    // Family-level pre-flight rejection: caps says yes, the
+    // dispatcher's gates pass, but parakeet's stream_validate hook
+    // refuses because the toy fixture's encoder is Regular (full
+    // attention), not ChunkedLimited. Pre-flight rejection runs
+    // before clear_result and any state transition, so the lifecycle
+    // stays IDLE and last_status is untouched — semantically
+    // equivalent to a caps.supports_streaming = false rejection.
     CHECK(st == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
-    CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_FAILED);
-    CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
+    CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_IDLE);
+    CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_OK);
 
     transcribe_session_free(ctx);
     transcribe_model_free(model);

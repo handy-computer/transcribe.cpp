@@ -1929,6 +1929,13 @@ transcribe_status emit_streaming_chunk(
 // populated during streaming — those derive from richer logic in the
 // offline run() result builder and are deferred to stream_finalize
 // (or omitted entirely for the first M2 cut).
+//
+// result_kind is TOKEN whenever any tokens are present: each TokenEntry
+// gets real t0_ms / t1_ms from step_at_emit, so the snapshot is honest
+// at token granularity. Words/segments stay empty until finalize, but
+// a caller that asked for WORD or SEGMENT timestamps already passed the
+// max_timestamp_kind gate at begin time (Parakeet advertises TOKEN as
+// its max), so TOKEN here is the strongest honest answer we can give.
 void rebuild_streaming_result_text(ParakeetSession * pc,
                                    const ParakeetModel * pm)
 {
@@ -1969,7 +1976,7 @@ void rebuild_streaming_result_text(ParakeetSession * pc,
     pc->full_text = pm->tok.decode(all_ids.data(),
                                       static_cast<int>(all_ids.size()));
     pc->has_result  = true;
-    pc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+    pc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 }
 
 // ----- Buffered streaming (parakeet-unified-en-0.6b) -----------------
@@ -2401,6 +2408,196 @@ transcribe_status emit_buffered_chunk(
     return TRANSCRIBE_OK;
 }
 
+// Pure validation of the buffered-stream extension. Resolves (L, C, R)
+// to encoder frames using the same sentinel semantics stream_begin uses
+// to configure the buffered path; emits the same stderr diagnostics on
+// rejection. Does NOT touch pc->buf_*. Output pointers are only written
+// on TRANSCRIBE_OK return.
+transcribe_status resolve_buffered_stream_geom(
+    const ParakeetModel *             pm,
+    const transcribe_stream_params *  stream_params,
+    int *                             out_L_frames,
+    int *                             out_C_frames,
+    int *                             out_R_frames)
+{
+    const int frame_ms =
+        (pm->hparams.enc_subsampling_factor * pm->hparams.fe_hop_length * 1000) /
+        std::max(pm->hparams.fe_sample_rate, 1);
+
+    auto max_in = [](const std::vector<int32_t> & v) -> int32_t {
+        int32_t best = 0;
+        for (auto x : v) if (x > best) best = x;
+        return best;
+    };
+    const int default_L = static_cast<int>(max_in(pm->hparams.enc_att_chunk_left_choices));
+    const int default_C = static_cast<int>(max_in(pm->hparams.enc_att_chunk_chunk_choices));
+    const int default_R = static_cast<int>(max_in(pm->hparams.enc_att_chunk_right_choices));
+
+    int req_L_ms = -1, req_C_ms = -1, req_R_ms = -1;
+    const transcribe_ext * family = stream_params != nullptr ? stream_params->family : nullptr;
+    if (const transcribe_status st = transcribe_ext_check(
+            family,
+            TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM,
+            sizeof(struct transcribe_parakeet_buffered_stream_ext));
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (family != nullptr) {
+        const auto * px = reinterpret_cast<const transcribe_parakeet_buffered_stream_ext *>(family);
+        req_L_ms = px->left_ms;
+        req_C_ms = px->chunk_ms;
+        req_R_ms = px->right_ms;
+    }
+    const int safe_frame_ms = std::max(frame_ms, 1);
+    auto ms_to_exact_frames = [&](int req_ms, int default_frames,
+                                  int * out_frames) -> bool {
+        if (req_ms == -1) { *out_frames = default_frames; return true; }
+        if (req_ms <  -1) return false;
+        if (req_ms % safe_frame_ms != 0) return false;
+        *out_frames = req_ms / safe_frame_ms;
+        return true;
+    };
+    int L_frames = 0, C_frames = 0, R_frames = 0;
+    if (!ms_to_exact_frames(req_L_ms, default_L, &L_frames) ||
+        !ms_to_exact_frames(req_C_ms, default_C, &C_frames) ||
+        !ms_to_exact_frames(req_R_ms, default_R, &R_frames))
+    {
+        std::fprintf(stderr,
+                     "parakeet buffered: requested (L, C, R)_ms = "
+                     "(%d, %d, %d) is invalid. Use -1 on any field to "
+                     "select the model default; otherwise the value "
+                     "must be 0 or a positive exact multiple of the "
+                     "%d ms encoder frame.\n",
+                     req_L_ms, req_C_ms, req_R_ms, safe_frame_ms);
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    auto contains = [](const std::vector<int32_t> & v, int x) -> bool {
+        for (auto y : v) if (y == x) return true;
+        return false;
+    };
+    if (!contains(pm->hparams.enc_att_chunk_left_choices, L_frames) ||
+        !contains(pm->hparams.enc_att_chunk_chunk_choices, C_frames) ||
+        !contains(pm->hparams.enc_att_chunk_right_choices, R_frames))
+    {
+        std::fprintf(stderr,
+                     "parakeet buffered: requested (L, C, R) = (%d, %d, %d) "
+                     "encoder frames not in model menu. "
+                     "Allowed L=", L_frames, C_frames, R_frames);
+        for (auto v : pm->hparams.enc_att_chunk_left_choices)  std::fprintf(stderr, "%d,", v);
+        std::fprintf(stderr, " C=");
+        for (auto v : pm->hparams.enc_att_chunk_chunk_choices) std::fprintf(stderr, "%d,", v);
+        std::fprintf(stderr, " R=");
+        for (auto v : pm->hparams.enc_att_chunk_right_choices) std::fprintf(stderr, "%d,", v);
+        std::fprintf(stderr, "\n");
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (C_frames < 1) return TRANSCRIBE_ERR_INVALID_ARG;
+
+    *out_L_frames = L_frames;
+    *out_C_frames = C_frames;
+    *out_R_frames = R_frames;
+    return TRANSCRIBE_OK;
+}
+
+// Pure validation of the cache-aware-stream extension. Resolves the
+// active (att_context_left, att_context_right) for the stream from the
+// model's training menu. Does NOT touch pc->*. Output pointers are only
+// written on TRANSCRIBE_OK return.
+transcribe_status resolve_cache_aware_stream_geom(
+    const ParakeetModel *             pm,
+    const transcribe_stream_params *  stream_params,
+    int *                             out_chosen_left,
+    int *                             out_chosen_right)
+{
+    int chosen_right = pm->hparams.enc_att_context_right;
+    int chosen_left  = pm->hparams.enc_att_context_left;
+
+    const transcribe_ext * family = stream_params != nullptr ? stream_params->family : nullptr;
+    if (const transcribe_status st = transcribe_ext_check(
+            family,
+            TRANSCRIBE_EXT_KIND_PARAKEET_STREAM,
+            sizeof(struct transcribe_parakeet_stream_ext));
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (family != nullptr) {
+        const auto * px = reinterpret_cast<const transcribe_parakeet_stream_ext *>(family);
+        const int requested = px->att_context_right;
+        if (requested < -1) {
+            std::fprintf(stderr,
+                         "parakeet: att_context_right=%d is invalid; "
+                         "use -1 for the model default or >=0 to pick "
+                         "an entry from the model's training menu\n",
+                         requested);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        if (requested >= 0) {
+            bool matched = false;
+            for (const auto & p : pm->hparams.enc_att_context_size_choices) {
+                if (p.second == requested) {
+                    chosen_right = p.second;
+                    chosen_left  = p.first;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                std::fprintf(stderr,
+                             "parakeet: requested att_context_right=%d "
+                             "not in model's training menu; available: ",
+                             requested);
+                for (const auto & p : pm->hparams.enc_att_context_size_choices) {
+                    std::fprintf(stderr, "%d ", p.second);
+                }
+                std::fprintf(stderr, "\n");
+                return TRANSCRIBE_ERR_INVALID_ARG;
+            }
+        }
+    }
+
+    *out_chosen_left  = chosen_left;
+    *out_chosen_right = chosen_right;
+    return TRANSCRIBE_OK;
+}
+
+// Pre-flight: validate caller-supplied extension fields without mutating
+// session or model state. Called by the dispatcher BEFORE clear_result,
+// so a rejection here leaves the previous utterance's snapshot intact.
+// stream_begin re-runs the same resolvers as defense in depth and uses
+// their parsed outputs to configure per-stream state.
+transcribe_status stream_validate(
+    const transcribe_session *        session,
+    const transcribe_run_params *     /*run_params*/,
+    const transcribe_stream_params *  stream_params)
+{
+    const auto * pc = static_cast<const ParakeetSession *>(session);
+    const auto * pm = static_cast<const ParakeetModel *>(pc->model);
+    if (pm == nullptr || pm->plan.scheduler_list.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const bool is_chunked_limited =
+        (pm->hparams.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimited);
+    const bool is_chunked_with_rc =
+        (pm->hparams.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc);
+    if (!is_chunked_limited && !is_chunked_with_rc) {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+
+    if (is_chunked_with_rc) {
+        int L = 0, C = 0, R = 0;
+        return resolve_buffered_stream_geom(pm, stream_params, &L, &C, &R);
+    }
+
+    int left = 0, right = 0;
+    return resolve_cache_aware_stream_geom(pm, stream_params, &left, &right);
+}
+
 transcribe_status stream_begin(
     transcribe_session *              session,
     const transcribe_run_params *         run_params,
@@ -2440,96 +2637,18 @@ transcribe_status stream_begin(
     // joint reuse the existing greedy-streaming decoder so the only
     // new state is the runtime (L, C, R) geometry and the LSTM carry.
     if (is_chunked_with_rc) {
-        // Resolve (L, C, R) in milliseconds from the caller; -1 sentinels
-        // → "use model defaults". Defaults are the highest-accuracy
-        // tuple = the max value of each choices list (matches the model
-        // card's first row for parakeet-unified-en-0.6b).
-        const int frame_ms =
-            (pm->hparams.enc_subsampling_factor * pm->hparams.fe_hop_length * 1000) /
-            std::max(pm->hparams.fe_sample_rate, 1);
-
-        auto max_in = [](const std::vector<int32_t> & v) -> int32_t {
-            int32_t best = 0;
-            for (auto x : v) if (x > best) best = x;
-            return best;
-        };
-        const int default_L = static_cast<int>(max_in(pm->hparams.enc_att_chunk_left_choices));
-        const int default_C = static_cast<int>(max_in(pm->hparams.enc_att_chunk_chunk_choices));
-        const int default_R = static_cast<int>(max_in(pm->hparams.enc_att_chunk_right_choices));
-
-        int req_L_ms = -1, req_C_ms = -1, req_R_ms = -1;
-        const transcribe_ext * family = stream_params != nullptr ? stream_params->family : nullptr;
-        if (const transcribe_status st = transcribe_ext_check(
-                family,
-                TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM,
-                sizeof(struct transcribe_parakeet_buffered_stream_ext));
+        // Resolve and validate (L, C, R) in encoder frames. The same
+        // helper runs in stream_validate, so the dispatcher has
+        // already rejected bad caller input before clearing the
+        // previous result; the call here is defense in depth and
+        // also produces the parsed values we configure state from.
+        int L_frames = 0, C_frames = 0, R_frames = 0;
+        if (const transcribe_status st = resolve_buffered_stream_geom(
+                pm, stream_params, &L_frames, &C_frames, &R_frames);
             st != TRANSCRIBE_OK)
         {
             return st;
         }
-        if (family != nullptr) {
-            const auto * px = reinterpret_cast<const transcribe_parakeet_buffered_stream_ext *>(family);
-            req_L_ms = px->left_ms;
-            req_C_ms = px->chunk_ms;
-            req_R_ms = px->right_ms;
-        }
-        // Field sentinel semantics (matches the public ext doc):
-        //   req_ms == -1  -> use the model default for this field.
-        //   req_ms <  -1  -> caller bug; reject with INVALID_ARG.
-        //   req_ms ==  0  -> zero is a real requested value (when the
-        //                    model's menu contains 0 frames).
-        //   req_ms >   0  -> must be an exact multiple of the encoder
-        //                    frame size (80 ms on every shipped
-        //                    FastConformer streaming variant). Silently
-        //                    flooring (e.g. chunk_ms=100 → 1 frame at
-        //                    80ms = 80ms behavior) would give callers a
-        //                    different latency than they asked for.
-        const int safe_frame_ms = std::max(frame_ms, 1);
-        auto ms_to_exact_frames = [&](int req_ms, int default_frames,
-                                      int * out_frames) -> bool {
-            if (req_ms == -1) { *out_frames = default_frames; return true; }
-            if (req_ms <  -1) return false;
-            if (req_ms % safe_frame_ms != 0) return false;
-            *out_frames = req_ms / safe_frame_ms;
-            return true;
-        };
-        int L_frames = 0, C_frames = 0, R_frames = 0;
-        if (!ms_to_exact_frames(req_L_ms, default_L, &L_frames) ||
-            !ms_to_exact_frames(req_C_ms, default_C, &C_frames) ||
-            !ms_to_exact_frames(req_R_ms, default_R, &R_frames))
-        {
-            std::fprintf(stderr,
-                         "parakeet buffered: requested (L, C, R)_ms = "
-                         "(%d, %d, %d) is invalid. Use -1 on any field to "
-                         "select the model default; otherwise the value "
-                         "must be 0 or a positive exact multiple of the "
-                         "%d ms encoder frame.\n",
-                         req_L_ms, req_C_ms, req_R_ms, safe_frame_ms);
-            return TRANSCRIBE_ERR_INVALID_ARG;
-        }
-
-        // Validate against the trained menu.
-        auto contains = [](const std::vector<int32_t> & v, int x) -> bool {
-            for (auto y : v) if (y == x) return true;
-            return false;
-        };
-        if (!contains(pm->hparams.enc_att_chunk_left_choices, L_frames) ||
-            !contains(pm->hparams.enc_att_chunk_chunk_choices, C_frames) ||
-            !contains(pm->hparams.enc_att_chunk_right_choices, R_frames))
-        {
-            std::fprintf(stderr,
-                         "parakeet buffered: requested (L, C, R) = (%d, %d, %d) "
-                         "encoder frames not in model menu. "
-                         "Allowed L=", L_frames, C_frames, R_frames);
-            for (auto v : pm->hparams.enc_att_chunk_left_choices)  std::fprintf(stderr, "%d,", v);
-            std::fprintf(stderr, " C=");
-            for (auto v : pm->hparams.enc_att_chunk_chunk_choices) std::fprintf(stderr, "%d,", v);
-            std::fprintf(stderr, " R=");
-            for (auto v : pm->hparams.enc_att_chunk_right_choices) std::fprintf(stderr, "%d,", v);
-            std::fprintf(stderr, "\n");
-            return TRANSCRIBE_ERR_INVALID_ARG;
-        }
-        if (C_frames < 1) return TRANSCRIBE_ERR_INVALID_ARG;
 
         const int subsampling_factor = pm->hparams.enc_subsampling_factor;
         const int hop                = pm->hparams.fe_hop_length;
@@ -2565,64 +2684,15 @@ transcribe_status stream_begin(
     pc->buf_active = false;
 
     // Resolve the active (att_context_left, att_context_right) for this
-    // stream. Multi-lookahead models advertise a menu via
-    // hp.enc_att_context_size_choices; the caller picks one via the
-    // PARAKEET_STREAM family extension's att_context_right field
-    // (-1 = model default = choices[0]).
-    int chosen_right = pm->hparams.enc_att_context_right;
-    int chosen_left  = pm->hparams.enc_att_context_left;
+    // stream. Same helper runs in stream_validate; rerunning here is
+    // defense in depth and also extracts the values we use to configure
+    // the per-stream caches.
+    int chosen_left = 0, chosen_right = 0;
+    if (const transcribe_status st = resolve_cache_aware_stream_geom(
+            pm, stream_params, &chosen_left, &chosen_right);
+        st != TRANSCRIBE_OK)
     {
-        const transcribe_ext * family = stream_params != nullptr ? stream_params->family : nullptr;
-        if (const transcribe_status st = transcribe_ext_check(
-                family,
-                TRANSCRIBE_EXT_KIND_PARAKEET_STREAM,
-                sizeof(struct transcribe_parakeet_stream_ext));
-            st != TRANSCRIBE_OK)
-        {
-            return st;
-        }
-        if (family != nullptr) {
-            const auto * px = reinterpret_cast<const transcribe_parakeet_stream_ext *>(family);
-            const int requested = px->att_context_right;
-            // Field sentinel semantics:
-            //   requested == -1 -> model default (chosen_{right,left}
-            //                      already initialized from hparams above).
-            //   requested <  -1 -> caller bug; reject.
-            //   requested >= 0  -> validate against the training menu;
-            //                      0 is a legitimate value when 0-frame
-            //                      lookahead is in the menu (it is for
-            //                      nemotron-speech-streaming).
-            if (requested < -1) {
-                std::fprintf(stderr,
-                             "parakeet: att_context_right=%d is invalid; "
-                             "use -1 for the model default or >=0 to pick "
-                             "an entry from the model's training menu\n",
-                             requested);
-                return TRANSCRIBE_ERR_INVALID_ARG;
-            }
-            if (requested >= 0) {
-                bool matched = false;
-                for (const auto & p : pm->hparams.enc_att_context_size_choices) {
-                    if (p.second == requested) {
-                        chosen_right = p.second;
-                        chosen_left  = p.first;
-                        matched = true;
-                        break;
-                    }
-                }
-                if (!matched) {
-                    std::fprintf(stderr,
-                                 "parakeet: requested att_context_right=%d "
-                                 "not in model's training menu; available: ",
-                                 requested);
-                    for (const auto & p : pm->hparams.enc_att_context_size_choices) {
-                        std::fprintf(stderr, "%d ", p.second);
-                    }
-                    std::fprintf(stderr, "\n");
-                    return TRANSCRIBE_ERR_INVALID_ARG;
-                }
-            }
-        }
+        return st;
     }
 
     pc->stream_pcm_buffer.clear();
@@ -3207,6 +3277,7 @@ extern const Arch arch = {
     /* .load             = */ load,
     /* .init_context     = */ init_context,
     /* .run              = */ run,
+    /* .stream_validate  = */ stream_validate,
     /* .stream_begin     = */ stream_begin,
     /* .stream_feed      = */ stream_feed,
     /* .stream_finalize  = */ stream_finalize,

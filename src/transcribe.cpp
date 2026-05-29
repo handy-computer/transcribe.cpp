@@ -853,6 +853,19 @@ extern "C" transcribe_status transcribe_stream_begin(
     // contract is undisturbed.
     warn_unsupported_advisory(session->model, run_params);
 
+    // Optional family preflight: validates extension field values
+    // (e.g. parakeet's (L, C, R) menu) without mutating state. On
+    // non-OK return the previous snapshot and lifecycle are preserved
+    // so a caller-side typo does not destroy the prior utterance.
+    if (session->model->arch->stream_validate != nullptr) {
+        if (const transcribe_status st = session->model->arch->stream_validate(
+                session, run_params, stream_params);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+    }
+
     // All checks pass — clear the previous snapshot and hand off.
     session->clear_result();
     session->t_mel_us    = 0;

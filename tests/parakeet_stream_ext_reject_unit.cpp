@@ -19,9 +19,12 @@
 //
 // This test reaches both paths against the synthetic
 // tokenizer_minimal_streaming_{cache_aware,buffered}.gguf fixtures.
-// The rejection fires inside parakeet's stream_begin hook BEFORE any
-// compute graph is built, so the toy fixtures without real weights
-// are sufficient.
+// The rejection fires inside parakeet's stream_validate hook BEFORE
+// the dispatcher clears the previous result snapshot or transitions
+// the stream lifecycle out of IDLE, so the toy fixtures without real
+// weights are sufficient. Pre-flight rejection also means the session
+// stays IDLE (not FAILED) and last_status is untouched — that is the
+// public contract for caller-side option mistakes.
 
 #include "transcribe.h"
 #include "transcribe/parakeet.h"
@@ -120,13 +123,13 @@ void test_cache_aware_rejects_sub_sentinel() {
 
     const transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
     CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
-    // Post-hook rejection: dispatcher transitions to FAILED and the
-    // status is preserved on the session.
-    CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_FAILED);
-    CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_ERR_INVALID_ARG);
+    // Pre-flight rejection: dispatcher returns the error before clear
+    // or any state transition, so the session stays IDLE with
+    // last_status untouched.
+    CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_IDLE);
+    CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_OK);
 
     // Also try a strongly negative value to confirm the boundary.
-    transcribe_stream_reset(ctx);
     ext.att_context_right = -42;
     sp.family = &ext.ext;
     const transcribe_status st2 = transcribe_stream_begin(ctx, &rp, &sp);
@@ -151,7 +154,6 @@ void test_buffered_rejects_sub_sentinel() {
     transcribe_run_params rp; transcribe_run_params_init(&rp);
 
     auto try_reject = [&](int32_t L, int32_t C, int32_t R) {
-        transcribe_stream_reset(ctx);
         transcribe_parakeet_buffered_stream_ext ext;
         transcribe_parakeet_buffered_stream_ext_init(&ext);
         ext.left_ms  = L;
@@ -161,8 +163,9 @@ void test_buffered_rejects_sub_sentinel() {
         sp.family = &ext.ext;
         const transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
         CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
-        CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_FAILED);
-        CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_ERR_INVALID_ARG);
+        // Pre-flight rejection leaves lifecycle / last_status untouched.
+        CHECK(transcribe_stream_get_state(ctx)   == TRANSCRIBE_STREAM_IDLE);
+        CHECK(transcribe_stream_last_status(ctx) == TRANSCRIBE_OK);
     };
 
     // Each field independently triggers the reject. The other two are
