@@ -80,19 +80,11 @@ struct transcribe_model {
     // derived from this model — load time is a model-scoped fact.
     int64_t t_load_us = 0;
 
-    // The base default-constructs the public capabilities struct
-    // (zero-fill) and then writes -1 to the streaming timing hints.
-    // -1 is the "not advertised" sentinel; per-family load() overwrites
-    // with the real value when the variant declares one. Keeping the
-    // sentinel in the base means every family inherits the default
-    // without per-family duplication, and a future family that adds
-    // streaming hints doesn't have to remember to handle the not-set
-    // case explicitly.
-    transcribe_model() {
-        caps.streaming_lookahead_ms     = -1;
-        caps.streaming_chunk_ms         = -1;
-        caps.streaming_lookahead_ms_min = -1;
-    }
+    // Default-constructs every member via its in-class initializer
+    // (caps is zero-filled by `caps{}`). Explicitly defaulted because
+    // the deleted copy/move declarations below otherwise suppress the
+    // implicit default constructor.
+    transcribe_model() = default;
     virtual ~transcribe_model();
 
     transcribe_model(const transcribe_model &)             = delete;

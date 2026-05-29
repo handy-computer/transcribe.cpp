@@ -779,13 +779,6 @@ int main(int argc, char ** argv) {
                             args.stream_buf_chunk_ms,
                             args.stream_buf_right_ms);
             }
-            // Print the streaming capability hints so users see what
-            // the model offers before the first feed.
-            std::printf(
-                "stream: caps chunk_ms=%d lookahead_ms=%d lookahead_ms_min=%d\n",
-                caps.streaming_chunk_ms,
-                caps.streaming_lookahead_ms,
-                caps.streaming_lookahead_ms_min);
             run_st = transcribe_stream_begin(ctx, &rp, &sp);
             if (run_st != TRANSCRIBE_OK) {
                 std::fprintf(stderr,

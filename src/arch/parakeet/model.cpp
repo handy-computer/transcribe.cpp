@@ -547,56 +547,12 @@ transcribe_status load(
         !m->hparams.enc_att_chunk_left_choices.empty() &&
         !m->hparams.enc_att_chunk_chunk_choices.empty() &&
         !m->hparams.enc_att_chunk_right_choices.empty();
-    if (buffered_streaming) {
+    // supports_streaming is the generic gate; the configurable
+    // streaming geometry (the (left, chunk, right) menu for buffered,
+    // the att_context_right menu for cache-aware) is reached via the
+    // parakeet stream extensions, not advertised as flat caps fields.
+    if (buffered_streaming || cache_aware_streaming) {
         m->caps.supports_streaming = true;
-        const int frame_ms =
-            (m->hparams.enc_subsampling_factor * m->hparams.fe_hop_length * 1000) /
-            std::max(m->hparams.fe_sample_rate, 1);
-        auto max_in = [](const std::vector<int32_t> & v) {
-            int32_t best = 0; for (auto x : v) if (x > best) best = x; return best;
-        };
-        auto min_in = [](const std::vector<int32_t> & v) {
-            int32_t best = INT32_MAX; for (auto x : v) if (x < best) best = x;
-            return best == INT32_MAX ? 0 : best;
-        };
-        const int default_C = max_in(m->hparams.enc_att_chunk_chunk_choices);
-        const int default_R = max_in(m->hparams.enc_att_chunk_right_choices);
-        const int min_R     = min_in(m->hparams.enc_att_chunk_right_choices);
-        m->caps.streaming_chunk_ms         = default_C * frame_ms;
-        m->caps.streaming_lookahead_ms     = default_R * frame_ms;
-        m->caps.streaming_lookahead_ms_min = min_R * frame_ms;
-    }
-    if (cache_aware_streaming)
-    {
-        m->caps.supports_streaming = true;
-
-        // Streaming timing hints. Encoder frame rate is
-        // subsampling_factor * hop_length / sample_rate (== 80ms for
-        // every shipped FastConformer streaming model).
-        //
-        //   chunk_ms     = (1 + att_context_right_default) * frame_ms
-        //                  -- derived from setup_streaming_params'
-        //                     chunk_size = sampling_frames * (1 + lookahead).
-        //   lookahead_ms = att_context_right_default * frame_ms
-        //   lookahead_ms_min = min(R) over choices * frame_ms
-        //                  -- the fastest setting the user can pick
-        //                     via transcribe_parakeet_stream_ext.
-        //
-        // hop_length / sample_rate is fixed by NeMo's preprocessor at
-        // 10ms (160 / 16000). The expression below uses integer math
-        // exactly so streaming_chunk_ms == 80 for nemotron, not 79.
-        const int frame_ms =
-            (m->hparams.enc_subsampling_factor * m->hparams.fe_hop_length * 1000) /
-            std::max(m->hparams.fe_sample_rate, 1);
-        m->caps.streaming_chunk_ms =
-            (1 + m->hparams.enc_att_context_right) * frame_ms;
-        m->caps.streaming_lookahead_ms =
-            m->hparams.enc_att_context_right * frame_ms;
-        int32_t min_right = m->hparams.enc_att_context_right;
-        for (const auto & p : m->hparams.enc_att_context_size_choices) {
-            if (p.second < min_right) min_right = p.second;
-        }
-        m->caps.streaming_lookahead_ms_min = min_right * frame_ms;
     }
 
     // Construct the mel front-end now that hparams are available.

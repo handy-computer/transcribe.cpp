@@ -53,10 +53,10 @@ extern "C" {
  *                   TRANSCRIBE_ERR_INVALID_ARG if the requested right
  *                   is not in the menu.
  *
- *     Inspect transcribe_capabilities::streaming_lookahead_ms to see
- *     the default's lookahead in milliseconds, and
- *     transcribe_capabilities::streaming_lookahead_ms_min to see the
- *     fastest setting the model supports.
+ *     The published menu and the lookahead (in milliseconds) each
+ *     entry corresponds to are documented in the model's family doc
+ *     (docs/models/nemotron-speech-streaming-en-0.6b.md); -1 selects
+ *     the model's default (max-accuracy / max-latency) entry.
  */
 struct transcribe_parakeet_stream_ext {
     struct transcribe_ext ext;

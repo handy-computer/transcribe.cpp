@@ -231,15 +231,11 @@ int main(int /*argc*/, char ** /*argv*/) {
         return 1;
     }
 
-    // Capabilities sanity: streaming must be advertised, lookahead and
-    // chunk hints must be non-zero (Phase 4b-encoder publishes both).
+    // Capabilities sanity: streaming must be advertised via the gate.
     {
         transcribe_capabilities caps; transcribe_capabilities_init(&caps);
         CHECK(transcribe_model_get_capabilities(model, &caps) == TRANSCRIBE_OK);
         CHECK(caps.supports_streaming);
-        CHECK(caps.streaming_lookahead_ms     > 0);
-        CHECK(caps.streaming_chunk_ms         > 0);
-        CHECK(caps.streaming_lookahead_ms_min > 0);
     }
 
     // Reference: one-shot transcribe_run.

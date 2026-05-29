@@ -68,10 +68,10 @@
  *   for every field. For output structs the init function sets
  *   `struct_size` and relies on zero-fill for the rest. The general
  *   convention is "zero means absent / unknown / false / none," but
- *   specific fields may use a different sentinel (e.g.
- *   transcribe_capabilities::streaming_lookahead_ms uses -1 for "not
- *   advertised" because 0 is a real value). Each field's doc spells out
- *   its sentinel where it differs from the general rule.
+ *   specific fields may use a different sentinel (e.g. a family stream
+ *   extension's transcribe_parakeet_stream_ext::att_context_right uses
+ *   -1 for "model default" because 0 is a real value). Each field's doc
+ *   spells out its sentinel where it differs from the general rule.
  * - sizeof(struct ...) is evaluated in the caller's translation unit,
  *   so struct_size captures the caller's view of the layout. In 0.x
  *   the library REQUIRES struct_size >= the library's current full size
@@ -730,42 +730,29 @@ struct transcribe_capabilities {
      *     supports_translate == false.
      *
      *   supports_streaming: gates the streaming entry points
-     *     (transcribe_stream_*) plus the streaming hint trio below.
-     *     Hard-error gate at transcribe_stream_begin.
+     *     (transcribe_stream_*). Hard-error gate at
+     *     transcribe_stream_begin. Streaming configuration and any
+     *     latency hints are family-specific and live on the family
+     *     stream extension, not on this struct.
      */
     bool                      supports_language_detect;
     bool                      supports_translate;
     bool                      supports_streaming;
 
     /*
-     * Streaming timing hints. Consumer-facing advisories: callers may use
-     * them to size their audio capture chunks or display latency budgets,
-     * but transcribe_stream_feed accepts arbitrary sample counts and
-     * buffers internally.
-     *
-     *   -1   "not advertised" — the model does not publish a stable
-     *        value for this hint. May coexist with supports_streaming
-     *        == true (parakeet-style buffered streaming whose menu of
-     *        configurable values is reached via a family extension and
-     *        whose generic hint isn't a single number).
-     *   >=0  real value in milliseconds. ZERO IS A VALID VALUE — e.g.
-     *        nemotron-speech-streaming-en-0.6b with att_context_right=0
-     *        legitimately advertises streaming_lookahead_ms_min = 0.
-     *        Callers must NOT treat zero as "unknown."
-     *
-     * supports_streaming remains the hard capability gate; these hints
-     * are descriptive metadata for callers that have already gated on it.
-     *
-     * For multi-lookahead models (e.g. nemotron-speech-streaming-en-0.6b),
-     * streaming_lookahead_ms reports the default setting's lookahead and
-     * streaming_lookahead_ms_min reports the fastest setting available.
-     * When the two differ the caller can pick a lower-latency setting via
-     * a family-specific stream extension. When the model has only one
-     * setting the two fields are equal.
+     * Streaming timing hints intentionally do NOT live here. Streaming
+     * configuration is irreducibly family-specific (cache-aware
+     * right-context frames, buffered (left, chunk, right) tuples,
+     * autoregressive decode throttles), and any single generic number
+     * is a lossy projection of a family menu whose authoritative,
+     * selectable form lives in the family stream extension
+     * (include/transcribe/<family>.h) and the family doc
+     * (docs/models/<variant>.md). supports_streaming above is the
+     * generic gate ("can this model stream?"); "how, and with what
+     * latency tradeoffs?" is answered by the family extension. If a real
+     * consumer ever needs a generic latency menu, the right shape is a
+     * dedicated streaming-preset enumeration query, not flat fields here.
      */
-    int32_t                   streaming_lookahead_ms;      /* -1 = not advertised */
-    int32_t                   streaming_chunk_ms;          /* -1 = not advertised */
-    int32_t                   streaming_lookahead_ms_min;  /* -1 = not advertised */
 };
 
 TRANSCRIBE_API void transcribe_capabilities_init(

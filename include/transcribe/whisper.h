@@ -189,7 +189,7 @@ TRANSCRIBE_API void transcribe_whisper_chunk_trace_init(
  * Returns 0 before any run or on non-Whisper contexts.
  */
 TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
-    const struct transcribe_session * ctx);
+    const struct transcribe_session * session);
 
 /*
  * Read the trace at index [0, count) into caller-owned storage.
@@ -201,13 +201,13 @@ TRANSCRIBE_API int transcribe_get_whisper_chunk_count(
  *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE out_trace->struct_size is 0 or
  *                                  smaller than the library's minimum.
  *   TRANSCRIBE_OK                  otherwise. The caller's struct is
- *                                  written when ctx is a Whisper context
+ *                                  written when session is a Whisper context
  *                                  and i is in range; otherwise it is
  *                                  left as zero-initialized by the init
  *                                  function.
  */
 TRANSCRIBE_API transcribe_status transcribe_get_whisper_chunk_trace(
-    const struct transcribe_session *       ctx,
+    const struct transcribe_session *       session,
     int                                     i,
     struct transcribe_whisper_chunk_trace * out_trace);
 

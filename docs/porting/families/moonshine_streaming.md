@@ -201,12 +201,13 @@ uv run scripts/wer/score.py reports/wer/moonshine-streaming-tiny-REF.test-clean.
   cross-KV produces a live partial transcript. The committed prefix
   is the longest token-id prefix that re-appeared identically in two
   consecutive feeds; the tentative suffix may be revised by later
-  feeds. `stream_finalize` commits everything. Capability hints
-  `streaming_lookahead_ms = 240`, `streaming_chunk_ms = 80`,
-  `streaming_lookahead_ms_min = 240` reflect the cumulative
-  right-context across the encoder's `(L=16, R∈{4,0}) × 6`
-  sliding-window stack at 50 Hz (20 ms/frame). See
-  "Streaming validation strategy" below.
+  feeds. `stream_finalize` commits everything. The streaming latency
+  profile — ≈240 ms cumulative encoder right-context (the
+  `(L=16, R∈{4,0}) × 6` sliding-window stack at 50 Hz, 20 ms/frame),
+  natural 20 ms emit unit, family-recommended 80 ms feed cadence — is
+  documented here rather than advertised as capability fields; the
+  generic `supports_streaming` gate is the only streaming flag on
+  `transcribe_capabilities`. See "Streaming validation strategy" below.
 - VAD / diarization: no.
 
 ## Upstream benchmarks (from model card, Open ASR results table)
@@ -390,8 +391,8 @@ In all cases the **final** transcript at `stream_finalize` matches
 and CPU cost change.
 
 This knob exclusively affects how often per-feed partial transcripts
-fire; it does not change the `streaming_lookahead_ms = 240` floor on
-when audio can first contribute to a stable encoder frame.
+fire; it does not change the ≈240 ms right-context floor on when audio
+can first contribute to a stable encoder frame.
 
 Validation tiers (proposal terminology):
 

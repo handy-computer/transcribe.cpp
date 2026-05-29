@@ -399,7 +399,7 @@ constexpr size_t k_min_stream_params_size =
 constexpr size_t k_min_stream_update_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_update, buffered_ms);
 constexpr size_t k_min_capabilities_size =
-    TRANSCRIBE_FIELD_END(transcribe_capabilities, streaming_lookahead_ms_min);
+    TRANSCRIBE_FIELD_END(transcribe_capabilities, supports_streaming);
 constexpr size_t k_min_segment_size =
     TRANSCRIBE_FIELD_END(transcribe_segment, text);
 constexpr size_t k_min_word_size =
@@ -1122,16 +1122,39 @@ extern "C" transcribe_status transcribe_run(
     // NOT_IMPLEMENTED path will signal that more directly.
     if (session->model != nullptr) {
         warn_unsupported_advisory(session->model, params);
+
+        // Pre-clear run-param validation. A caller-side param bug
+        // (out-of-range enum, timestamp granularity finer than the
+        // model's max, unsupported language, or TRANSLATE against a
+        // model that doesn't support it) must NOT wipe the previous
+        // result snapshot — the same contract transcribe_stream_begin
+        // honors for its run params. These checks read model->caps and
+        // are therefore guarded by model != null; the degenerate
+        // model-null case falls through to the post-clear
+        // NOT_IMPLEMENTED path, which keeps its existing snapshot-wipe
+        // behavior.
+        if (const transcribe_status st = validate_run_params_common(session, params);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+        if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
+            !session->model->caps.supports_translate)
+        {
+            return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
+        }
     }
 
     // Result-replacement contract: everything past this point either
     // succeeds and writes a fresh result, or fails and leaves the
     // context in the documented "no result" sentinel state. Clear
-    // eagerly so every downstream rejection path — NOT_IMPLEMENTED on
-    // an incomplete arch, INVALID_ARG on an out-of-range enum,
-    // UNSUPPORTED_TASK / _TIMESTAMPS / _LANGUAGE on a capability
-    // mismatch — inherits the sentinel without each branch having
-    // to remember to call clear_result() itself.
+    // eagerly so the one remaining downstream rejection path —
+    // NOT_IMPLEMENTED on an incomplete arch — inherits the sentinel
+    // without having to remember to call clear_result() itself.
+    // Caller-param rejections (enum range, timestamp ceiling,
+    // language, TRANSLATE support) are validated ABOVE, before this
+    // clear, so a malformed call preserves the previous snapshot
+    // exactly as transcribe_stream_begin does.
     //
     // Per-family run() handlers call clear_result() again after
     // their own front-matter checks succeed; that call is now
@@ -1152,33 +1175,6 @@ extern "C" transcribe_status transcribe_run(
         session->model->arch->run == nullptr)
     {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
-    }
-
-    // Centralized run-param validation. The per-family run() handlers
-    // can assume the params struct has been sanity-checked here, so
-    // they don't need to repeat the enum-range, capability, or
-    // language-list checks. Anything still family-local — tokenizer-
-    // vocabulary constraints, prompt-template quirks, target_language
-    // handling for TRANSLATE — continues to live inside the family's
-    // run() handler.
-    //
-    if (const transcribe_status st = validate_run_params_common(session, params);
-        st != TRANSCRIBE_OK)
-    {
-        return st;
-    }
-
-    // Reject TRANSLATE for models that don't declare support. The
-    // capability is set per-arch in apply_family_invariants and may
-    // be overridden by stt.capability.* KV. Models that DO support
-    // translate may still validate target_language inside their own
-    // run() handler against the model-specific language list. This
-    // check runs after enum-range validation in the shared helper so
-    // a garbage task value still reports as ERR_INVALID_ARG.
-    if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
-        !session->model->caps.supports_translate)
-    {
-        return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
     }
 
     return session->model->arch->run(session, pcm, n_samples, params);
