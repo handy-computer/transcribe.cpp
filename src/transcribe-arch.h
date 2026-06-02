@@ -191,10 +191,10 @@ struct Arch {
     // guarantee only extends to what this hook actually checks. A family
     // that defers some value checks to its run() handler trades them out
     // of the guarantee: a correctly-shaped but semantically-malformed ext
-    // can still be rejected post-clear. Whisper currently validates only
-    // the per-kind minimum ext size here (transcribe_ext_check against the
-    // full ext struct) and leaves its prompt-semantics checks in run(); see
-    // docs/follow-ups.md.
+    // can still be rejected post-clear. Whisper validates only the per-kind
+    // minimum ext size here (transcribe_ext_check against the full ext
+    // struct) and intentionally leaves its prompt-semantics checks in run()
+    // — an accepted gap on the one-shot path; see docs/follow-ups.md.
     //
     // Placed last in the struct so families that do not accept a _RUN ext
     // can leave it value-initialized to NULL; the dispatcher skips a NULL

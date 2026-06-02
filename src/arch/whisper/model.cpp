@@ -2887,13 +2887,17 @@ static bool whisper_accepts_ext_kind(
 // Scope: this validates ext SHAPE only. Whisper's run-ext VALUE checks —
 // prompt_condition=ALL_SEGMENTS without condition_on_prev_tokens, a
 // prompt_tokens list that re-includes <|startofprev|>, and an
-// initial_prompt carrying disallowed special tokens — still live in
-// whisper_run() and therefore reject AFTER the snapshot is cleared. The
-// initial_prompt check is interleaved with prompt tokenization, so
-// hoisting these into a pure pre-clear validator means a second scan pass;
-// that restructuring is deferred (docs/follow-ups.md) rather than done
-// mid-port. Until then, a semantically-malformed (but correctly-sized)
-// whisper run ext does clear the prior transcript.
+// initial_prompt carrying disallowed special tokens — live in whisper_run()
+// and reject AFTER the snapshot is cleared, so a semantically-malformed (but
+// correctly-sized) whisper run ext does clear the prior transcript.
+//
+// This is an intentional, accepted gap, not pending work. A malformed run
+// ext is a caller programming error surfaced as INVALID_ARG; the run() path
+// is one-shot (each call yields a fresh complete result the caller has
+// already consumed), so unlike the streaming families there is no
+// accumulating transcript to protect. The cost/benefit of hoisting the
+// value checks here does not justify it. See docs/follow-ups.md for the
+// full rationale should this ever need revisiting.
 static transcribe_status whisper_run_validate(
     const transcribe_session *   ctx,
     const transcribe_run_params * params)

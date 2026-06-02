@@ -1562,10 +1562,11 @@ extern "C" transcribe_status transcribe_run(
     // *value* validation to its run() handler, in which case a
     // correctly-shaped but semantically-malformed ext can still be
     // rejected after the snapshot is cleared. Whisper does exactly this
-    // for its prompt-semantics checks (see whisper_run_validate and the
-    // follow-up in docs/follow-ups.md); a family wanting full pre-clear
-    // safety should validate values in run_validate, the way parakeet's
-    // stream_validate vets its (L,C,R) menu.
+    // for its prompt-semantics checks — an intentional, accepted gap on
+    // the one-shot run() path (see whisper_run_validate and
+    // docs/follow-ups.md). A family wanting full pre-clear safety should
+    // validate values in run_validate, the way parakeet's stream_validate
+    // vets its (L,C,R) menu.
     if (params->family != nullptr &&
         session->model != nullptr && session->model->arch != nullptr)
     {
