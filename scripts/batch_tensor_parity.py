@@ -75,11 +75,27 @@ def main() -> int:
     ap.add_argument("--backend", default="cpu")
     ap.add_argument("--tol", type=float, default=0.0,
                     help="max abs diff allowed (0 = bit-exact, the CPU expectation)")
+    ap.add_argument("--dump-name", default="dec.enc_out",
+                    help="dump basename: single-shot writes <name>, the batched "
+                         "run writes <name>.b{i} per utterance. parakeet uses "
+                         "dec.enc_out; sensevoice (no host decoder) uses "
+                         "ctc.log_probs.")
+    ap.add_argument("--no-flash", dest="no_flash", action="store_true",
+                    default=None,
+                    help="force TRANSCRIBE_NO_FLASH=1 on both paths (parakeet "
+                         "needs this for a bit-exact gate; sensevoice runs flash "
+                         "on both same-length paths so it is not required)")
     args = ap.parse_args()
 
     for p in (args.model, args.wav, args.cli):
         if not Path(p).exists():
             raise SystemExit(f"missing: {p}")
+
+    # parakeet's bit-exact gate needs manual attention on both paths (flash
+    # casts the rel-pos mask to F16); sensevoice has no rel-pos mask and runs
+    # flash on both same-length paths, so the env is a harmless no-op there.
+    no_flash = True if args.no_flash is None else args.no_flash
+    env = {"TRANSCRIBE_NO_FLASH": "1"} if no_flash else None
 
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
@@ -87,24 +103,24 @@ def main() -> int:
         batch_dir = td / "batch"
         single_dir.mkdir(); batch_dir.mkdir()
 
-        # Single-shot, manual attention (TRANSCRIBE_NO_FLASH).
+        # Single-shot.
         run(args.cli, args.model, [str(args.wav)], single_dir, args.backend,
-            extra_env={"TRANSCRIBE_NO_FLASH": "1"})
+            extra_env=env)
 
         # Batched run of B copies (same length -> the real fused encoder).
         list_file = td / "list.txt"
         list_file.write_text("\n".join([str(args.wav)] * args.batch) + "\n")
         run(args.cli, args.model,
             ["--batch", str(list_file), "--batch-size", str(args.batch)],
-            batch_dir, args.backend, extra_env={"TRANSCRIBE_NO_FLASH": "1"})
+            batch_dir, args.backend, extra_env=env)
 
-        single = load(single_dir, "dec.enc_out")
-        print(f"single-shot enc_out: {single.size} elems  "
+        single = load(single_dir, args.dump_name)
+        print(f"single-shot {args.dump_name}: {single.size} elems  "
               f"rms={np.sqrt((single**2).mean()):.4e}")
 
         ok = True
         for i in range(args.batch):
-            b = load(batch_dir, f"dec.enc_out.b{i}")
+            b = load(batch_dir, f"{args.dump_name}.b{i}")
             if b.size != single.size:
                 print(f"  [FAIL] utt {i}: size {b.size} != {single.size}")
                 ok = False

@@ -45,6 +45,7 @@
 #include "transcribe/parakeet.h"
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -1756,26 +1757,35 @@ transcribe_status run_batch(
     // non-positive samples / mel failure) means we cannot pack a clean batch
     // tensor, so we fall back to the per-utterance path for the whole call
     // (rare; keeps the batch tensor rectangular and the masks well-defined).
+    // The mel front-end is pure host code with no cross-utterance state, so
+    // the B extractions run in parallel across CPU workers (see
+    // transcribe::parallel_for_all) — frequently the dominant wall cost once
+    // the encoder is on a fast accelerator. n_mels is constant across
+    // utterances; collect it per-index to avoid a shared write.
     std::vector<std::vector<float>> mels(static_cast<size_t>(n));
     std::vector<int>                nf(static_cast<size_t>(n), 0);
-    int  n_mels   = 0;
-    bool any_fail = false;
+    std::vector<int>                n_mels_per(static_cast<size_t>(n), 0);
     const int64_t t_mel_start = ggml_time_us();
-    for (int i = 0; i < n; ++i) {
-        if (pcm[i] == nullptr || n_samples[i] <= 0) { any_fail = true; break; }
-        int this_mels = 0, this_frames = 0;
-        const transcribe_status st = pm->mel->compute(
-            pcm[i], static_cast<size_t>(n_samples[i]),
-            mels[i], this_mels, this_frames);
-        if (st != TRANSCRIBE_OK || this_frames <= 0) { any_fail = true; break; }
-        nf[i]  = this_frames;
-        n_mels = this_mels;
-    }
+    const bool all_ok = transcribe::parallel_for_all(
+        n, pc->n_threads, [&](int i) -> bool {
+            if (pcm[i] == nullptr || n_samples[i] <= 0) return false;
+            int this_mels = 0, this_frames = 0;
+            const transcribe_status st = pm->mel->compute(
+                pcm[i], static_cast<size_t>(n_samples[i]),
+                mels[i], this_mels, this_frames);
+            if (st != TRANSCRIBE_OK || this_frames <= 0) return false;
+            nf[i]         = this_frames;
+            n_mels_per[i] = this_mels;
+            return true;
+        });
     const int64_t total_mel_us = ggml_time_us() - t_mel_start;
 
-    if (!any_fail) {
-        int T_max = 0;
-        for (int i = 0; i < n; ++i) T_max = std::max(T_max, nf[i]);
+    if (all_ok) {
+        int T_max = 0, n_mels = 0;
+        for (int i = 0; i < n; ++i) {
+            T_max  = std::max(T_max, nf[i]);
+            n_mels = std::max(n_mels, n_mels_per[i]);
+        }
         return run_batch_encode(pc, pm, mels, nf, n_mels, T_max,
                                 total_mel_us, params);
     }

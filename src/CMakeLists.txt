@@ -27,6 +27,7 @@ add_library(transcribe
     transcribe-load-common.cpp
     transcribe-weights-util.cpp
     transcribe-bin-loader.cpp
+    transcribe-batch-util.cpp
     conformer/conformer.cpp
     sanm/sanm.cpp
     qwen3_lm/qwen3_lm.cpp
