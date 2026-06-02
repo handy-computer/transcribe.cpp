@@ -99,6 +99,7 @@ const transcribe::Arch & run_validate_arch() {
         nullptr,                 // load
         nullptr,                 // init_context
         fake_run,
+        nullptr,                 // run_batch
         nullptr,                 // stream_validate
         nullptr,                 // stream_begin
         nullptr,                 // stream_feed

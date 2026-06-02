@@ -102,6 +102,42 @@ struct transcribe_session {
     std::vector<SegmentEntry>    segments;
     std::string                  full_text;
 
+    // -----------------------------------------------------------------
+    // Offline batch results (transcribe_run_batch).
+    //
+    // The scratch fields above (tokens / words / segments / full_text /
+    // detected_language / result_kind / has_result) remain the single
+    // "current result" slot that every per-family run() writes into and
+    // that the legacy single-shot accessors read. Batch results are a
+    // separate vector so a per-family run() needs no change to participate
+    // in the generic serial-fallback batch path: the dispatcher calls
+    // run() once per utterance and snapshots the scratch slot into one
+    // ResultSet here. A family with a real batched run_batch() hook writes
+    // these entries directly.
+    //
+    // Source-of-truth rule for the public accessors:
+    //   - batch_results non-empty  -> the batch accessors index it, and
+    //     the scratch slot is restored to mirror batch_results[0] so the
+    //     legacy single accessors stay coherent (they show utterance 0).
+    //   - batch_results empty      -> single-shot mode; the batch
+    //     accessors synthesize index 0 from the scratch slot.
+    // batch_results is cleared at the top of every transcribe_run and
+    // transcribe_run_batch (NOT by clear_result, which only wipes the
+    // scratch slot and streaming snapshot so a per-utterance run() inside
+    // the fallback loop does not erase already-accumulated entries).
+    struct ResultSet {
+        std::vector<TokenEntry>   tokens;
+        std::vector<WordEntry>    words;
+        std::vector<SegmentEntry> segments;
+        std::string               full_text;
+        std::string               detected_language;
+        transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        bool                      has_result   = false;
+        transcribe_status         status       = TRANSCRIBE_OK;
+    };
+
+    std::vector<ResultSet>       batch_results;
+
     // ISO short code the model itself predicted on this run, populated
     // only when the caller did NOT pass a language hint (auto/null) and
     // the family actually ran a detection step. Empty string means

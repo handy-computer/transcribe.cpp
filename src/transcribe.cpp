@@ -1503,7 +1503,13 @@ extern "C" transcribe_status transcribe_stream_get_text(
     return TRANSCRIBE_OK;
 }
 
-extern "C" transcribe_status transcribe_run(
+// Shared one-utterance run body. Does NOT touch session->batch_results, so
+// the batch dispatcher can call it once per utterance inside a loop without
+// erasing already-accumulated entries; the public transcribe_run wrapper
+// below clears batch_results once before delegating here. Every early
+// return preserves the previous result snapshot exactly as the original
+// transcribe_run contract documented (see the inline comments).
+static transcribe_status run_one_inner(
     struct transcribe_session *      session,
     const float *                    pcm,
     int                              n_samples,
@@ -1666,6 +1672,205 @@ extern "C" transcribe_status transcribe_run(
     }
 
     return session->model->arch->run(session, pcm, n_samples, params);
+}
+
+extern "C" transcribe_status transcribe_run(
+    struct transcribe_session *      session,
+    const float *                    pcm,
+    int                              n_samples,
+    const struct transcribe_run_params * params)
+{
+    // Single-shot is the n == 1 case of batching. A well-formed single run
+    // resets the batch-result view so the transcribe_batch_* accessors fall
+    // back to reading the scratch slot as utterance 0.
+    //
+    // Guard the deref with the SAME pre-deref conditions run_one_inner uses
+    // (non-null session + non-null pcm + positive n_samples). A malformed
+    // call must not touch the session at all — the API smoke test probes
+    // this with a fake (session *)0x1 and a NULL pcm / non-positive
+    // n_samples, expecting INVALID_ARG with no dereference.
+    if (session != nullptr && pcm != nullptr && n_samples > 0) {
+        session->batch_results.clear();
+    }
+    return run_one_inner(session, pcm, n_samples, params);
+}
+
+// ---------------------------------------------------------------------------
+// Batch run (offline)
+// ---------------------------------------------------------------------------
+//
+// transcribe_run_batch validates the shared run_params ONCE, then either
+// delegates to the family's batched run_batch() fast path or falls back to
+// run_one_inner() per utterance. Either way the result is N entries in
+// session->batch_results read back via the transcribe_batch_* accessors.
+
+namespace {
+
+// Copy the session's scratch result slot into a ResultSet snapshot.
+transcribe_session::ResultSet snapshot_scratch_result(
+    const transcribe_session * s, transcribe_status status)
+{
+    transcribe_session::ResultSet rs;
+    rs.tokens            = s->tokens;
+    rs.words             = s->words;
+    rs.segments          = s->segments;
+    rs.full_text         = s->full_text;
+    rs.detected_language = s->detected_language;
+    rs.result_kind       = s->result_kind;
+    rs.has_result        = s->has_result;
+    rs.status            = status;
+    return rs;
+}
+
+// Restore the scratch slot from a ResultSet so the legacy single-result
+// accessors stay coherent after a batch run (they reflect utterance 0).
+void restore_scratch_from_result(
+    transcribe_session * s, const transcribe_session::ResultSet & rs)
+{
+    s->tokens            = rs.tokens;
+    s->words             = rs.words;
+    s->segments          = rs.segments;
+    s->full_text         = rs.full_text;
+    s->detected_language = rs.detected_language;
+    s->result_kind       = rs.result_kind;
+    s->has_result        = rs.has_result;
+}
+
+} // namespace
+
+extern "C" transcribe_status transcribe_run_batch(
+    struct transcribe_session *          session,
+    const float * const *                pcm,
+    const int *                          n_samples,
+    int                                  n,
+    const struct transcribe_run_params * params)
+{
+    // Top-level argument shape. The arrays themselves must be present and
+    // n strictly positive; an individual malformed utterance (pcm[i] NULL
+    // or n_samples[i] <= 0) is a per-utterance failure handled in the loop,
+    // not a whole-batch error. As with transcribe_run, these checks do not
+    // mutate the session, so a malformed call preserves the prior result.
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    struct transcribe_run_params params_defaults; transcribe_run_params_init(&params_defaults);
+    if (params == nullptr) {
+        params = &params_defaults;
+    }
+    if (const auto st = check_input_struct_size(params->struct_size, k_min_run_params_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (session->stream_state == TRANSCRIBE_STREAM_ACTIVE) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Shared-param validation, ONCE, mirroring transcribe_run's pre-clear
+    // gates (ext shape/kind, pnc/itn advisory, enum range, timestamp
+    // ceiling, language, TRANSLATE support, run_validate). A rejection here
+    // preserves the previous result snapshot — nothing has been cleared.
+    if (params->family != nullptr &&
+        session->model != nullptr && session->model->arch != nullptr)
+    {
+        if (params->family->size < sizeof(struct transcribe_ext)) {
+            return TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
+        }
+        if (!transcribe_model_accepts_ext_kind(
+                session->model, TRANSCRIBE_EXT_SLOT_RUN, params->family->kind))
+        {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+    }
+    if (session->model != nullptr) {
+        warn_unsupported_advisory(session->model, params);
+        if (const transcribe_status st = validate_run_params_common(session, params);
+            st != TRANSCRIBE_OK)
+        {
+            return st;
+        }
+        if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
+            !session->model->caps.supports_translate)
+        {
+            return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
+        }
+        if (session->model->arch != nullptr &&
+            session->model->arch->run_validate != nullptr)
+        {
+            if (const transcribe_status st =
+                    session->model->arch->run_validate(session, params);
+                st != TRANSCRIBE_OK)
+            {
+                return st;
+            }
+        }
+    }
+
+    if (session->model == nullptr || session->model->arch == nullptr ||
+        session->model->arch->run == nullptr)
+    {
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
+
+    // Past this point we commit to producing a fresh batch result.
+    session->clear_result();
+    session->t_mel_us    = 0;
+    session->t_encode_us = 0;
+    session->t_decode_us = 0;
+    session->was_aborted = false;
+    session->stream_state = TRANSCRIBE_STREAM_IDLE;
+    session->batch_results.clear();
+
+    // Fast path: a family with a batched compute graph owns the whole loop.
+    if (session->model->arch->run_batch != nullptr) {
+        const transcribe_status st =
+            session->model->arch->run_batch(session, pcm, n_samples, n, params);
+        // Keep the legacy single accessors coherent with utterance 0.
+        if (!session->batch_results.empty()) {
+            restore_scratch_from_result(session, session->batch_results.front());
+        }
+        return st;
+    }
+
+    // Generic serial fallback: run each utterance in turn and snapshot it.
+    // Correct for every family; only the per-dispatch device throughput of
+    // a real run_batch() is forgone.
+    session->batch_results.reserve(static_cast<size_t>(n));
+    transcribe_status batch_status = TRANSCRIBE_OK;
+    for (int i = 0; i < n; ++i) {
+        if (session->poll_abort()) {
+            batch_status = TRANSCRIBE_ERR_ABORTED;
+            break;
+        }
+        // run_one_inner clears the scratch slot and writes this utterance's
+        // result; it re-validates the shared params (idempotent) and
+        // validates this utterance's pcm[i] / n_samples[i].
+        const transcribe_status st =
+            run_one_inner(session, pcm[i], n_samples[i], params);
+        if (st == TRANSCRIBE_OK) {
+            session->batch_results.push_back(
+                snapshot_scratch_result(session, st));
+        } else {
+            // Malformed-input early returns preserve the previous scratch
+            // slot, so do NOT snapshot it — record an explicit empty
+            // failure for this utterance instead.
+            transcribe_session::ResultSet rs;
+            rs.status = st;
+            session->batch_results.push_back(std::move(rs));
+            if (st == TRANSCRIBE_ERR_ABORTED) {
+                batch_status = TRANSCRIBE_ERR_ABORTED;
+                break;
+            }
+        }
+    }
+
+    // Restore the scratch slot to mirror utterance 0 for the legacy
+    // single-result accessors. clear_result() if the batch is somehow empty
+    // (n >= 1 guarantees at least one entry, but be defensive).
+    if (!session->batch_results.empty()) {
+        restore_scratch_from_result(session, session->batch_results.front());
+    }
+    return batch_status;
 }
 
 // ---------------------------------------------------------------------------
@@ -2002,6 +2207,241 @@ extern "C" transcribe_status transcribe_get_token(
         return TRANSCRIBE_OK;
     }
     const auto & t = session->tokens[static_cast<size_t>(i)];
+    transcribe_token staged{};
+    staged.struct_size = caller_size;
+    staged.id          = t.id;
+    staged.p           = t.p;
+    staged.t0_ms       = t.t0_ms;
+    staged.t1_ms       = t.t1_ms;
+    staged.seg_index   = t.seg_index;
+    staged.word_index  = t.word_index;
+    staged.text        = t.text.c_str();
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Batch result accessors
+// ---------------------------------------------------------------------------
+//
+// These index session->batch_results when a batch run populated it, and
+// otherwise synthesize utterance 0 from the scratch slot so a single
+// transcribe_run is the n == 1 case. The copy-out row accessors share the
+// same staging shape as the single-result accessors above; only the source
+// vector differs (batch ResultSet rows vs the scratch slot).
+
+namespace {
+
+// Non-owning view of one utterance's result. valid == false means "no such
+// utterance / empty result" and the accessors return their safe sentinels.
+struct BatchResultView {
+    const std::vector<transcribe_session::TokenEntry> *   tokens   = nullptr;
+    const std::vector<transcribe_session::WordEntry> *    words    = nullptr;
+    const std::vector<transcribe_session::SegmentEntry> * segments = nullptr;
+    const std::string *       full_text         = nullptr;
+    const std::string *       detected_language = nullptr;
+    transcribe_timestamp_kind result_kind       = TRANSCRIBE_TIMESTAMPS_NONE;
+    bool                      valid             = false;
+};
+
+int batch_result_count(const transcribe_session * s) {
+    if (s == nullptr) {
+        return 0;
+    }
+    if (!s->batch_results.empty()) {
+        return static_cast<int>(s->batch_results.size());
+    }
+    return s->has_result ? 1 : 0;
+}
+
+BatchResultView batch_result_view(const transcribe_session * s, int i) {
+    BatchResultView v;
+    if (s == nullptr || i < 0) {
+        return v;
+    }
+    if (!s->batch_results.empty()) {
+        if (static_cast<size_t>(i) >= s->batch_results.size()) {
+            return v;
+        }
+        const auto & rs = s->batch_results[static_cast<size_t>(i)];
+        if (!rs.has_result) {
+            return v;  // individually-failed / empty utterance
+        }
+        v.tokens            = &rs.tokens;
+        v.words             = &rs.words;
+        v.segments          = &rs.segments;
+        v.full_text         = &rs.full_text;
+        v.detected_language = &rs.detected_language;
+        v.result_kind       = rs.result_kind;
+        v.valid             = true;
+        return v;
+    }
+    if (i == 0 && s->has_result) {
+        v.tokens            = &s->tokens;
+        v.words             = &s->words;
+        v.segments          = &s->segments;
+        v.full_text         = &s->full_text;
+        v.detected_language = &s->detected_language;
+        v.result_kind       = s->result_kind;
+        v.valid             = true;
+    }
+    return v;
+}
+
+} // namespace
+
+extern "C" int transcribe_batch_n_results(const struct transcribe_session * session) {
+    return batch_result_count(session);
+}
+
+extern "C" transcribe_status transcribe_batch_status(
+    const struct transcribe_session * session, int i)
+{
+    if (session == nullptr || i < 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (!session->batch_results.empty()) {
+        if (static_cast<size_t>(i) >= session->batch_results.size()) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        return session->batch_results[static_cast<size_t>(i)].status;
+    }
+    if (i == 0 && session->has_result) {
+        return TRANSCRIBE_OK;
+    }
+    return TRANSCRIBE_ERR_INVALID_ARG;
+}
+
+extern "C" const char * transcribe_batch_full_text(
+    const struct transcribe_session * session, int i)
+{
+    const BatchResultView v = batch_result_view(session, i);
+    return v.valid ? v.full_text->c_str() : "";
+}
+
+extern "C" const char * transcribe_batch_detected_language(
+    const struct transcribe_session * session, int i)
+{
+    const BatchResultView v = batch_result_view(session, i);
+    return v.valid ? v.detected_language->c_str() : "";
+}
+
+extern "C" transcribe_timestamp_kind transcribe_batch_returned_timestamp_kind(
+    const struct transcribe_session * session, int i)
+{
+    const BatchResultView v = batch_result_view(session, i);
+    return v.valid ? v.result_kind : TRANSCRIBE_TIMESTAMPS_NONE;
+}
+
+extern "C" int transcribe_batch_n_segments(
+    const struct transcribe_session * session, int i)
+{
+    const BatchResultView v = batch_result_view(session, i);
+    return v.valid ? static_cast<int>(v.segments->size()) : 0;
+}
+
+extern "C" int transcribe_batch_n_words(
+    const struct transcribe_session * session, int i)
+{
+    const BatchResultView v = batch_result_view(session, i);
+    return v.valid ? static_cast<int>(v.words->size()) : 0;
+}
+
+extern "C" int transcribe_batch_n_tokens(
+    const struct transcribe_session * session, int i)
+{
+    const BatchResultView v = batch_result_view(session, i);
+    return v.valid ? static_cast<int>(v.tokens->size()) : 0;
+}
+
+extern "C" transcribe_status transcribe_batch_get_segment(
+    const struct transcribe_session * session, int i, int j,
+    struct transcribe_segment * out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_segment_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const uint64_t caller_size = out->struct_size;
+    transcribe_segment zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+    const BatchResultView v = batch_result_view(session, i);
+    if (!v.valid || j < 0 || static_cast<size_t>(j) >= v.segments->size()) {
+        return TRANSCRIBE_OK;
+    }
+    const auto & s = (*v.segments)[static_cast<size_t>(j)];
+    transcribe_segment staged{};
+    staged.struct_size = caller_size;
+    staged.t0_ms       = s.t0_ms;
+    staged.t1_ms       = s.t1_ms;
+    staged.first_word  = s.first_word;
+    staged.n_words     = s.n_words;
+    staged.first_token = s.first_token;
+    staged.n_tokens    = s.n_tokens;
+    staged.text        = s.text.c_str();
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
+
+extern "C" transcribe_status transcribe_batch_get_word(
+    const struct transcribe_session * session, int i, int j,
+    struct transcribe_word * out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_word_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const uint64_t caller_size = out->struct_size;
+    transcribe_word zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+    const BatchResultView v = batch_result_view(session, i);
+    if (!v.valid || j < 0 || static_cast<size_t>(j) >= v.words->size()) {
+        return TRANSCRIBE_OK;
+    }
+    const auto & w = (*v.words)[static_cast<size_t>(j)];
+    transcribe_word staged{};
+    staged.struct_size = caller_size;
+    staged.t0_ms       = w.t0_ms;
+    staged.t1_ms       = w.t1_ms;
+    staged.seg_index   = w.seg_index;
+    staged.first_token = w.first_token;
+    staged.n_tokens    = w.n_tokens;
+    staged.text        = w.text.c_str();
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
+
+extern "C" transcribe_status transcribe_batch_get_token(
+    const struct transcribe_session * session, int i, int j,
+    struct transcribe_token * out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_token_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    const uint64_t caller_size = out->struct_size;
+    transcribe_token zero{};
+    zero.struct_size = caller_size;
+    copy_out_prefix(out, &zero, caller_size, sizeof(zero));
+    const BatchResultView v = batch_result_view(session, i);
+    if (!v.valid || j < 0 || static_cast<size_t>(j) >= v.tokens->size()) {
+        return TRANSCRIBE_OK;
+    }
+    const auto & t = (*v.tokens)[static_cast<size_t>(j)];
     transcribe_token staged{};
     staged.struct_size = caller_size;
     staged.id          = t.id;

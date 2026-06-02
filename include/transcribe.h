@@ -989,6 +989,73 @@ TRANSCRIBE_API transcribe_status transcribe_run(
     const struct transcribe_run_params * params);
 
 /* ----------------------------------------------------------------------- */
+/* Batch run (offline)                                                     */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Run N offline transcriptions in one call.
+ *
+ * This is a throughput entry point: families with a batched compute path
+ * (today: see the per-family docs) process all N utterances in a single
+ * device dispatch, which can roughly double throughput on a GPU that a
+ * single utterance underutilizes. Families without a batched path still
+ * work — the library falls back to running each utterance in turn — so
+ * every model accepts this call; only the speedup is family-dependent.
+ *
+ * This is the offline counterpart to transcribe_run; it is NOT a streaming
+ * primitive. transcribe_run is exactly the n == 1 case.
+ *
+ *   session:    a session in a non-ACTIVE-stream state. As with
+ *               transcribe_run, a session is single-threaded: do not call
+ *               this concurrently with any other call on the same session.
+ *   pcm:        array of n pointers, each to mono float32 PCM in [-1, 1]
+ *               at 16 kHz. pcm[i] is the i-th utterance.
+ *   n_samples:  array of n sample counts; n_samples[i] is the length of
+ *               pcm[i].
+ *   n:          number of utterances. Must be strictly positive.
+ *   params:     run params shared by every utterance in the batch, or
+ *               NULL for defaults. v1 applies one params (task, language
+ *               hint, timestamps, ...) to the whole batch; per-utterance
+ *               params is a future extension.
+ *
+ * Variable-length utterances are handled by the library: a batched family
+ * pads the batch to its longest utterance internally and masks the padding.
+ * Grouping utterances of similar length per call ("bucketing") minimizes
+ * wasted compute but is not required.
+ *
+ * Result model: results are read back with the transcribe_batch_* accessors
+ * below, indexed by utterance. transcribe_batch_n_results() returns the
+ * count. The legacy single-result accessors (transcribe_full_text, etc.)
+ * alias utterance 0 after a batch run. A subsequent transcribe_run clears
+ * the batch results.
+ *
+ * Return value is the WHOLE-BATCH status:
+ *   TRANSCRIBE_OK                  the dispatch ran. Per-utterance success
+ *                                  or failure is read via
+ *                                  transcribe_batch_status(session, i); a
+ *                                  malformed single utterance (pcm[i] NULL
+ *                                  or n_samples[i] <= 0) fails only that
+ *                                  utterance and is reported there.
+ *   TRANSCRIBE_ERR_INVALID_ARG     session / pcm / n_samples NULL, n <= 0,
+ *                                  or the session is in an ACTIVE stream.
+ *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE params->struct_size below the minimum.
+ *   TRANSCRIBE_ERR_NOT_IMPLEMENTED the model has no run path at all.
+ *   ... plus the same shared-param rejections as transcribe_run
+ *       (TRANSCRIBE_ERR_UNSUPPORTED_TASK / _TIMESTAMPS / _LANGUAGE), which
+ *       apply to the whole batch and are reported before any utterance
+ *       runs (the previous result snapshot is preserved on these).
+ *   TRANSCRIBE_ERR_ABORTED         the abort callback fired; utterances
+ *                                  completed before the abort are retained
+ *                                  and readable via the batch accessors.
+ */
+TRANSCRIBE_API transcribe_status transcribe_run_batch(
+    struct transcribe_session *          session,
+    const float * const *                pcm,
+    const int *                          n_samples,
+    int                                  n,
+    const struct transcribe_run_params * params);
+
+/* ----------------------------------------------------------------------- */
 /* Cancellation                                                            */
 /* ----------------------------------------------------------------------- */
 
@@ -1750,6 +1817,100 @@ TRANSCRIBE_API transcribe_status transcribe_get_word(
 TRANSCRIBE_API transcribe_status transcribe_get_token(
     const struct transcribe_session * session,
     int                               i,
+    struct transcribe_token *         out);
+
+/* ----------------------------------------------------------------------- */
+/* Batch result accessors                                                  */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Read back the per-utterance results produced by transcribe_run_batch.
+ * These mirror the single-result accessors above with a leading utterance
+ * index `i` in [0, transcribe_batch_n_results(session)).
+ *
+ * After a successful transcribe_run, n_results is 1 and index 0 is the
+ * single result, so callers may use either accessor family interchangeably
+ * for the n == 1 case. After transcribe_run_batch, index 0 also aliases
+ * the legacy single-result accessors.
+ *
+ * Lifetime and out-of-range rules match the single-result accessors:
+ *   - Returned `const char *` and row `text` pointers are session-owned
+ *     and valid until the next transcribe_run / transcribe_run_batch /
+ *     transcribe_stream_begin / transcribe_stream_reset /
+ *     transcribe_session_free on the same session.
+ *   - An out-of-range utterance index `i`, or an out-of-range row index
+ *     `j`, yields a safe sentinel: "" / 0 / NaN for scalar returns, and a
+ *     zero-initialized struct (text == NULL) for the copy-out accessors,
+ *     which still return TRANSCRIBE_OK (struct-size faults and a NULL
+ *     `out` return their usual non-OK codes).
+ */
+
+/*
+ * Number of per-utterance results available. 0 before any run, or if
+ * session is NULL. 1 after a successful transcribe_run. n after
+ * transcribe_run_batch with n utterances (including utterances that
+ * failed individually — those report a non-OK transcribe_batch_status and
+ * empty rows).
+ */
+TRANSCRIBE_API int transcribe_batch_n_results(
+    const struct transcribe_session * session);
+
+/*
+ * Per-utterance terminal status. TRANSCRIBE_OK when utterance i produced a
+ * result; otherwise the status that failed that utterance (e.g.
+ * TRANSCRIBE_ERR_INVALID_ARG for a malformed input, or a backend error).
+ * Returns TRANSCRIBE_ERR_INVALID_ARG if session is NULL or i is out of
+ * range.
+ */
+TRANSCRIBE_API transcribe_status transcribe_batch_status(
+    const struct transcribe_session * session,
+    int                               i);
+
+TRANSCRIBE_API const char * transcribe_batch_full_text(
+    const struct transcribe_session * session,
+    int                               i);
+
+TRANSCRIBE_API transcribe_timestamp_kind transcribe_batch_returned_timestamp_kind(
+    const struct transcribe_session * session,
+    int                               i);
+
+TRANSCRIBE_API const char * transcribe_batch_detected_language(
+    const struct transcribe_session * session,
+    int                               i);
+
+TRANSCRIBE_API int transcribe_batch_n_segments(
+    const struct transcribe_session * session,
+    int                               i);
+
+TRANSCRIBE_API int transcribe_batch_n_words(
+    const struct transcribe_session * session,
+    int                               i);
+
+TRANSCRIBE_API int transcribe_batch_n_tokens(
+    const struct transcribe_session * session,
+    int                               i);
+
+/*
+ * Copy out row `j` of utterance `i`. The struct is initialized exactly as
+ * for transcribe_get_segment / _word / _token (caller calls the matching
+ * _init first); the only difference is the utterance index `i`.
+ */
+TRANSCRIBE_API transcribe_status transcribe_batch_get_segment(
+    const struct transcribe_session * session,
+    int                               i,
+    int                               j,
+    struct transcribe_segment *       out);
+
+TRANSCRIBE_API transcribe_status transcribe_batch_get_word(
+    const struct transcribe_session * session,
+    int                               i,
+    int                               j,
+    struct transcribe_word *          out);
+
+TRANSCRIBE_API transcribe_status transcribe_batch_get_token(
+    const struct transcribe_session * session,
+    int                               i,
+    int                               j,
     struct transcribe_token *         out);
 
 #ifdef __cplusplus

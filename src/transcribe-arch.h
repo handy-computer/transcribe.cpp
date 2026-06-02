@@ -75,6 +75,41 @@ struct Arch {
         int                                    n_samples,
         const transcribe_run_params *              params);
 
+    // Optional offline batch fast path. When non-null, transcribe_run_batch
+    // delegates here to process all `n` utterances in a single dispatch
+    // (e.g. a batched encoder graph) for device-level throughput. When
+    // null, the central dispatcher falls back to calling run() once per
+    // utterance and snapshotting each result, so EVERY family supports the
+    // batch API for correctness regardless of whether it wires this hook;
+    // a family opts into the fast path by implementing it.
+    //
+    // Contract:
+    //   - The dispatcher has already validated the shared run_params
+    //     (struct size, _RUN-slot ext shape/kind, enum range, timestamp
+    //     ceiling, language, TRANSLATE support, run_validate) ONCE and
+    //     cleared both the scratch result slot and ctx->batch_results.
+    //   - pcm[i] / n_samples[i] are the i-th utterance (i in [0, n)).
+    //     16 kHz mono float32, same as run(). The hook is responsible for
+    //     per-utterance input validation (pcm[i] == null or
+    //     n_samples[i] <= 0 is a per-utterance failure, recorded as a
+    //     non-OK ResultSet::status with has_result == false, NOT a
+    //     whole-batch error).
+    //   - The hook MUST push exactly `n` entries onto ctx->batch_results,
+    //     one per utterance in order, and SHOULD leave the scratch slot
+    //     mirroring batch_results[0] on return (the dispatcher also
+    //     enforces this). Poll ctx->poll_abort() between utterances /
+    //     decode steps; on abort, return TRANSCRIBE_ERR_ABORTED with the
+    //     utterances completed so far retained in batch_results.
+    //   - The function return value is the whole-batch status: OK when the
+    //     dispatch ran (per-utterance failures live in each ResultSet),
+    //     non-OK only for whole-batch faults (OOM, abort, backend error).
+    transcribe_status (*run_batch)(
+        struct transcribe_session *            ctx,
+        const float * const *                  pcm,
+        const int *                            n_samples,
+        int                                    n,
+        const transcribe_run_params *              params);
+
     // Optional streaming hooks. stream_begin / stream_feed /
     // stream_finalize form a required triple: a family that wants to
     // support streaming MUST wire all three. The dispatcher checks

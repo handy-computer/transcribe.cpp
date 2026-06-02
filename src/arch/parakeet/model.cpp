@@ -3223,6 +3223,7 @@ extern const Arch arch = {
     /* .load             = */ load,
     /* .init_context     = */ init_context,
     /* .run              = */ run,
+    /* .run_batch        = */ nullptr,
     /* .stream_validate  = */ stream_validate,
     /* .stream_begin     = */ stream_begin,
     /* .stream_feed      = */ stream_feed,
