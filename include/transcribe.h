@@ -1055,10 +1055,13 @@ TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * ses
  *
  * The committed-count accessors (transcribe_stream_n_committed_*)
  * remain as low-level raw row boundary hints for consumers that inspect
- * tokens/words/segments. UI consumers should prefer
- * transcribe_stream_get_text(), because committed_text is independent
- * from the raw hypothesis and may not be a prefix of full_text after the
- * model revises already-committed text.
+ * tokens/words/segments. They are monotonic commitment high-water marks
+ * and may exceed the current raw row counts after the model revises or
+ * shrinks its latest hypothesis; clamp them to transcribe_n_* before
+ * indexing current raw rows. UI consumers should prefer
+ * transcribe_stream_get_text(), because committed_text is independent from
+ * the raw hypothesis and may not be a prefix of full_text after the model
+ * revises already-committed text.
  *
  * Streaming timestamp note: unlike transcribe_run(), an active stream
  * may keep token rows populated (transcribe_n_tokens > 0) even when the
@@ -1110,13 +1113,19 @@ enum transcribe_stream_state {
  * streaming mechanics (chunk sizes, cache windows, decoder throttles);
  * this enum controls when the session's UI-facing committed_text grows.
  *
- * AUTO:        Use the family/default policy.
+ * AUTO:        Use the dispatcher-selected stable-prefix implementation
+ *              for the model family. Current streaming families use a
+ *              family-provided boundary; future families fall back to
+ *              the generic text-agreement implementation until they are
+ *              assigned an explicit default.
  * ON_FINALIZE: During feed calls committed_text stays empty and the raw
  *              hypothesis is exposed as tentative_text. Finalize commits
  *              the final raw text because no earlier bytes were committed.
  * STABLE_PREFIX:
- *              Commit only a raw prefix accepted by the generic stable-
- *              prefix policy. committed_text is append-only and finalize
+ *              Commit only a raw prefix accepted by the selected stable-
+ *              prefix implementation. Known families may use token-id or
+ *              native commit boundaries; others use generic text
+ *              agreement. committed_text is append-only and finalize
  *              never rewrites previously committed bytes.
  */
 typedef enum {
@@ -1148,23 +1157,22 @@ typedef enum {
  * commit_policy:                 Generic UI-facing commitment policy.
  *                                Zero-init/default is AUTO.
  *
- * stable_prefix_agreement_n:      For STABLE_PREFIX, number of consecutive
- *                                raw hypotheses that must agree on a prefix
- *                                before it is appended to committed_text.
- *                                0 selects the library default.
- *
- * commit_holdback_ms:             For STABLE_PREFIX, optional best-effort
- *                                delay before committing recent text when
- *                                token timing is available. 0 selects the
- *                                library default, currently no time
- *                                holdback; negative values are invalid.
+ * stable_prefix_agreement_n:      For STABLE_PREFIX and AUTO implementations
+ *                                based on repeated hypotheses, number of
+ *                                consecutive text or token-id hypotheses that
+ *                                must agree on a prefix before it is appended
+ *                                to committed_text. Families with native
+ *                                irreversible commit boundaries may ignore
+ *                                this field. 0 selects the library default
+ *                                (currently 3): a prefix must reproduce
+ *                                across three consecutive hypotheses before
+ *                                it is committed.
  */
 struct transcribe_stream_params {
     uint64_t                      struct_size;
     const struct transcribe_ext * family;
     transcribe_stream_commit_policy commit_policy;
     uint32_t                      stable_prefix_agreement_n;
-    int32_t                       commit_holdback_ms;
 };
 
 TRANSCRIBE_API void transcribe_stream_params_init(
@@ -1255,6 +1263,18 @@ TRANSCRIBE_API void transcribe_stream_update_init(
  * It may be replaced on every feed. UI consumers that want no committed
  * flicker render committed_text + tentative_text; consumers that want the
  * model's current truth render full_text.
+ *
+ * committed_text is best-effort, not a correctness guarantee. For models
+ * that re-attend over a growing audio context (e.g. moonshine_streaming),
+ * the raw hypothesis can revise a byte that was already committed. Because
+ * committed_text is append-only it is NOT rolled back: when full_text
+ * diverges before the committed boundary, committed_text + tentative_text
+ * no longer reconstruct full_text, so the committed/tentative seam is
+ * transiently incoherent mid-stream. full_text is the authoritative raw
+ * hypothesis at all times; committed_text trades that authority for a
+ * flicker-free, append-only prefix. Consumers needing exact truth should
+ * render full_text. Raising stable_prefix_agreement_n makes a wrong commit
+ * less likely at the cost of committing later.
  *
  * On successful stream_finalize, tentative_text is empty. For ON_FINALIZE,
  * committed_text becomes final full_text. For policies that committed bytes

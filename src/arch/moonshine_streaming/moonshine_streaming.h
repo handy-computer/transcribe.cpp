@@ -25,6 +25,7 @@
 #include "ggml-backend.h"
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -190,11 +191,10 @@ struct MoonshineStreamingSession final : public transcribe_session {
     // stream_feed / stream_finalize skip a redundant decode when no
     // new encoder frames have been committed since the previous one.
     int32_t                           stream_last_decoded_T        = 0;
-    // Previous decode's token id sequence, used to compute the
-    // longest common prefix that's safe to mark committed across
-    // feeds. Reset at stream_begin; updated after every successful
-    // partial decode.
-    std::vector<int32_t>              stream_prev_token_ids;
+    // Recent partial-decode token id sequences, used to compute the
+    // longest common prefix that's safe to mark committed across feeds.
+    // Reset at stream_begin; updated after every successful partial decode.
+    std::deque<std::vector<int32_t>>  stream_token_id_history;
     // Geometry, resolved at stream_begin (constant per stream).
     int32_t                           stream_L_total_frames        = 0;
     int32_t                           stream_R_total_frames        = 0;

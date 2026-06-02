@@ -1150,10 +1150,11 @@ transcribe_status run(
 //   cross-KV. Tokens emitted on feed N may shift on feed N+1 as more
 //   audio arrives (the model isn't trained for partial cross-attn).
 //   We mark as committed the longest token-id prefix that's IDENTICAL
-//   to the previous feed's decode — that's the substring the model
-//   has now produced consistently across two cross-KV sizes and is
-//   unlikely to revise. Tokens past the divergence point are
-//   tentative; consumers should treat them as preview-only.
+//   across the last stable_prefix_agreement_n partial decodes (default
+//   3). That's the substring the model has now produced consistently
+//   across multiple cross-KV sizes and is unlikely to revise. Tokens
+//   past the divergence point are tentative; consumers should treat
+//   them as preview-only.
 //
 //   n_committed_tokens advances monotonically. n_committed_words /
 //   n_committed_segments stay at 0 mid-stream (we don't track
@@ -1228,23 +1229,70 @@ transcribe_status decode_partial(
     return TRANSCRIBE_OK;
 }
 
-// Compute how many leading token ids of the new decode agree with the
-// previous decode. The matching prefix is considered "committed" — it
-// reproduced under a larger cross-KV, so it's unlikely to change
-// again. Returns the prefix length in tokens.
-int longest_common_prefix_in_tokens(
-    const std::vector<transcribe_session::TokenEntry> & new_tokens,
-    const std::vector<int32_t> &                        prev_ids)
+std::vector<int32_t> token_ids_from_rows(
+    const std::vector<transcribe_session::TokenEntry> & tokens)
 {
-    const int n_new  = static_cast<int>(new_tokens.size());
-    const int n_prev = static_cast<int>(prev_ids.size());
-    const int bound  = std::min(n_new, n_prev);
+    std::vector<int32_t> ids;
+    ids.reserve(tokens.size());
+    for (const auto & tok : tokens) {
+        ids.push_back(tok.id);
+    }
+    return ids;
+}
+
+int longest_common_prefix_in_token_ids(
+    const std::vector<int32_t> & a,
+    const std::vector<int32_t> & b)
+{
+    const int bound =
+        std::min(static_cast<int>(a.size()), static_cast<int>(b.size()));
     int prefix = 0;
-    while (prefix < bound &&
-           new_tokens[static_cast<size_t>(prefix)].id ==
-               prev_ids[static_cast<size_t>(prefix)])
-    {
+    while (prefix < bound && a[static_cast<size_t>(prefix)] ==
+                                  b[static_cast<size_t>(prefix)]) {
         ++prefix;
+    }
+    return prefix;
+}
+
+uint32_t token_stable_prefix_agreement_n(
+    const MoonshineStreamingSession * cc)
+{
+    // Library default when the caller leaves stable_prefix_agreement_n at
+    // 0; documented as "currently 3" on transcribe_stream_params.
+    static constexpr uint32_t k_default_stable_prefix_agreement_n = 3;
+    uint32_t agreement_n = cc != nullptr
+        ? cc->stream_stable_prefix_agreement_n
+        : 0;
+    return agreement_n == 0 ? k_default_stable_prefix_agreement_n
+                            : agreement_n;
+}
+
+// Compute how many leading token ids agree across the last N partial
+// decodes. The matching prefix is considered "committed" — it
+// reproduced under multiple cross-KV sizes, so it's unlikely to change
+// again. Returns the prefix length in tokens.
+int stable_token_prefix_from_history(
+    MoonshineStreamingSession *        cc,
+    const std::vector<int32_t> &       current_ids)
+{
+    const uint32_t agreement_n = token_stable_prefix_agreement_n(cc);
+    if (agreement_n <= 1) {
+        return static_cast<int>(current_ids.size());
+    }
+
+    cc->stream_token_id_history.push_back(current_ids);
+    while (cc->stream_token_id_history.size() > agreement_n) {
+        cc->stream_token_id_history.pop_front();
+    }
+    if (cc->stream_token_id_history.size() < agreement_n) {
+        return 0;
+    }
+
+    const auto & base = cc->stream_token_id_history.front();
+    int prefix = static_cast<int>(base.size());
+    for (const auto & ids : cc->stream_token_id_history) {
+        prefix = std::min(
+            prefix, longest_common_prefix_in_token_ids(base, ids));
     }
     return prefix;
 }
@@ -1352,7 +1400,7 @@ transcribe_status stream_begin(
                                         std::vector<float>{});
     cc->stream_T_emitted              = 0;
     cc->stream_last_decoded_T         = 0;
-    cc->stream_prev_token_ids.clear();
+    cc->stream_token_id_history.clear();
     cc->stream_L_total_frames         = cumulative_left_context(hp);
     cc->stream_R_total_frames         = cumulative_right_context(hp);
     cc->stream_frontend_pad_frames    = k_frontend_pad_enc_frames;
@@ -1607,25 +1655,16 @@ transcribe_status stream_feed(
                 return st;
             }
 
-            // Commit prefix: tokens that re-appeared identically in
-            // this decode vs the previous one are stable enough to
-            // mark as committed. Tokens past the divergence point
-            // remain tentative.
-            const int commit_prefix = longest_common_prefix_in_tokens(
-                cc->tokens, cc->stream_prev_token_ids);
+            // Commit prefix: tokens that re-appeared identically across
+            // the configured agreement window are stable enough to mark
+            // as committed. Tokens past the divergence point remain
+            // tentative.
+            const std::vector<int32_t> current_ids =
+                token_ids_from_rows(cc->tokens);
+            const int commit_prefix =
+                stable_token_prefix_from_history(cc, current_ids);
             if (commit_prefix > cc->n_committed_tokens) {
                 cc->n_committed_tokens = commit_prefix;
-            }
-
-            // Cache this decode's ids for the next feed's prefix
-            // comparison. n_committed_words / n_committed_segments
-            // stay at 0 mid-stream — we don't model per-word
-            // boundaries, and there's exactly one segment per
-            // decode; both are committed at finalize.
-            cc->stream_prev_token_ids.clear();
-            cc->stream_prev_token_ids.reserve(cc->tokens.size());
-            for (const auto & tok : cc->tokens) {
-                cc->stream_prev_token_ids.push_back(tok.id);
             }
 
             if (cc->full_text != prev_full_text) {
@@ -1750,13 +1789,13 @@ transcribe_status stream_finalize(
     }
 
     // Commit the entire result at finalize: tokens, words, and
-    // segments all become committed. The previous-token-ids cache
+    // segments all become committed. The partial token-id history
     // is now consumed and can be discarded.
     cc->stream_audio_committed_us = cc->stream_audio_input_us;
     cc->n_committed_tokens        = static_cast<int>(cc->tokens.size());
     cc->n_committed_words         = static_cast<int>(cc->words.size());
     cc->n_committed_segments      = static_cast<int>(cc->segments.size());
-    cc->stream_prev_token_ids.clear();
+    cc->stream_token_id_history.clear();
     if (cc->full_text != prev_full_text) {
         cc->stream_revision += 1;
     } else {
@@ -1786,7 +1825,7 @@ void stream_reset(transcribe_session * session) {
     for (auto & v : cc->stream_cross_v_committed) v.clear();
     cc->stream_T_emitted      = 0;
     cc->stream_last_decoded_T = 0;
-    cc->stream_prev_token_ids.clear();
+    cc->stream_token_id_history.clear();
 }
 
 bool accepts_ext_kind(const transcribe_model * model,

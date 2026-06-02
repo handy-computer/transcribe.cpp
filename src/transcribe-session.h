@@ -163,7 +163,6 @@ struct transcribe_session {
     transcribe_stream_commit_policy stream_commit_policy =
         TRANSCRIBE_STREAM_COMMIT_AUTO;
     uint32_t                     stream_stable_prefix_agreement_n = 0;
-    int32_t                      stream_commit_holdback_ms        = 0;
 
     // UI-facing streaming text state. `full_text` above remains the raw
     // model hypothesis. `stream_committed_text` is the append-only public

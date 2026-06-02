@@ -8,12 +8,22 @@ PCM window, applies the adapter on the new emit slice, projects
 cross-attention K/V per layer, then re-decodes the transcript from
 BOS — so callers see a live tentative transcript that grows and
 self-corrects as audio arrives. The longest token-id prefix that
-re-appeared identically in two consecutive feeds is marked
-committed; tokens past the divergence stay tentative until the next
-feed confirms them or `stream_finalize` commits everything. Final
-transcript parity with `transcribe_run` is validated by
-`transcribe_moonshine_streaming_stream_parity` across chunk sizes
-1, 20, 40, 80, 160, 500, 1000 ms.
+re-appeared identically across the last `stable_prefix_agreement_n`
+feeds (default 3) is marked committed; tokens past the divergence
+stay tentative until later feeds confirm them or `stream_finalize`
+commits everything. Final transcript parity with `transcribe_run` is
+validated by `transcribe_moonshine_streaming_stream_parity` across
+chunk sizes 1, 20, 40, 80, 160, 500, 1000 ms.
+
+Because the decoder re-attends over a growing cross-attention context,
+a token that was committed on an earlier feed can still change in the
+raw hypothesis later. `committed_text` is append-only and is **not**
+rolled back, so when `full_text` revises a committed byte the
+committed/tentative seam is transiently incoherent (committed_text +
+tentative_text no longer reconstruct full_text). `committed_text` is
+therefore best-effort for this family; `full_text` is the authoritative
+raw hypothesis. Raising `stable_prefix_agreement_n` reduces the chance
+of a wrong commit at the cost of committing later.
 
 ## Identity
 

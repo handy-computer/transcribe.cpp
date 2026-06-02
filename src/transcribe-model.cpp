@@ -44,7 +44,6 @@ void transcribe_session::clear_result() {
     stream_audio_committed_us = 0;
     stream_commit_policy      = TRANSCRIBE_STREAM_COMMIT_AUTO;
     stream_stable_prefix_agreement_n = 0;
-    stream_commit_holdback_ms = 0;
     stream_committed_text.clear();
     stream_tentative_text.clear();
     stream_raw_tentative_start_bytes = 0;

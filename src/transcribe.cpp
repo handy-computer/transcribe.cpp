@@ -407,8 +407,6 @@ constexpr size_t k_stream_params_commit_policy_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_params, commit_policy);
 constexpr size_t k_stream_params_agreement_n_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_params, stable_prefix_agreement_n);
-constexpr size_t k_stream_params_holdback_ms_size =
-    TRANSCRIBE_FIELD_END(transcribe_stream_params, commit_holdback_ms);
 constexpr size_t k_min_stream_update_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_update, buffered_ms);
 constexpr size_t k_stream_update_committed_changed_size =
@@ -454,6 +452,41 @@ static bool valid_stream_commit_policy(transcribe_stream_commit_policy policy) {
     return false;
 }
 
+enum class StreamStablePrefixImpl {
+    GenericTextAgreement,
+    FamilyTokenAgreement,
+    FamilyNativeCommit,
+};
+
+static StreamStablePrefixImpl stream_stable_prefix_impl_for_arch(
+    const transcribe::Arch * arch)
+{
+    // Single source of truth for the stable-prefix implementation used by
+    // AUTO and explicit STABLE_PREFIX. Add new streaming families here
+    // deliberately; otherwise they use the generic text-agreement fallback.
+    struct Entry {
+        const char *           arch_name;
+        StreamStablePrefixImpl impl;
+    };
+    static constexpr Entry k_defaults[] = {
+        // Parakeet publishes native committed chunks; agreement_n does not
+        // add useful evidence on top of the family-provided boundary.
+        { "parakeet",            StreamStablePrefixImpl::FamilyNativeCommit },
+        // Moonshine re-decodes the full prefix and its family boundary is
+        // token-id agreement; the family applies stable_prefix_agreement_n.
+        { "moonshine_streaming", StreamStablePrefixImpl::FamilyTokenAgreement },
+    };
+
+    const char * name =
+        arch != nullptr && arch->name != nullptr ? arch->name : "";
+    for (const Entry & entry : k_defaults) {
+        if (std::strcmp(name, entry.arch_name) == 0) {
+            return entry.impl;
+        }
+    }
+    return StreamStablePrefixImpl::GenericTextAgreement;
+}
+
 static size_t utf8_floor_boundary(const std::string & s, size_t pos) {
     if (pos >= s.size()) {
         return s.size();
@@ -497,6 +530,15 @@ static size_t token_prefix_raw_bytes(const transcribe_session * session,
     if (starts_with_bytes(session->full_text, prefix)) {
         return prefix.size();
     }
+    if (!prefix.empty() && prefix.front() == ' ' &&
+        (session->full_text.empty() || session->full_text.front() != ' '))
+    {
+        const std::string normalized_prefix = prefix.substr(1);
+        if (starts_with_bytes(session->full_text, normalized_prefix)) {
+            return normalized_prefix.size();
+        }
+        return common_prefix_bytes(session->full_text, normalized_prefix);
+    }
     return common_prefix_bytes(session->full_text, prefix);
 }
 
@@ -521,57 +563,18 @@ static size_t family_candidate_raw_prefix_bytes(
     return 0;
 }
 
-static size_t holdback_limited_raw_prefix_bytes(
-    const transcribe_session * session,
-    size_t                     candidate_bytes)
+static size_t generic_text_stable_prefix_candidate_raw_bytes(
+    transcribe_session * session)
 {
-    if (session == nullptr || session->stream_commit_holdback_ms <= 0 ||
-        session->tokens.empty())
-    {
-        return candidate_bytes;
-    }
-    bool has_token_timing = false;
-    for (const auto & tok : session->tokens) {
-        if (tok.t1_ms > 0) {
-            has_token_timing = true;
-            break;
-        }
-    }
-    if (!has_token_timing) {
-        return candidate_bytes;
-    }
-    const int64_t cutoff_ms =
-        (session->stream_audio_committed_us / 1000LL) -
-        static_cast<int64_t>(session->stream_commit_holdback_ms);
-    if (cutoff_ms <= 0) {
-        return 0;
-    }
-
-    std::string prefix;
-    prefix.reserve(session->full_text.size());
-    for (const auto & tok : session->tokens) {
-        if (tok.t1_ms <= 0 || tok.t1_ms > cutoff_ms) {
-            break;
-        }
-        prefix += tok.text;
-        if (prefix.size() >= candidate_bytes) {
-            return candidate_bytes;
-        }
-    }
-    if (starts_with_bytes(session->full_text, prefix)) {
-        return std::min(candidate_bytes, prefix.size());
-    }
-    return std::min(candidate_bytes,
-                    common_prefix_bytes(session->full_text, prefix));
-}
-
-static size_t stable_prefix_candidate_raw_bytes(transcribe_session * session) {
     if (session == nullptr || !session->has_result) {
         return 0;
     }
+    // Library default when the caller leaves stable_prefix_agreement_n at
+    // 0; documented as "currently 3" on transcribe_stream_params.
+    static constexpr uint32_t k_default_stable_prefix_agreement_n = 3;
     uint32_t agreement_n = session->stream_stable_prefix_agreement_n;
     if (agreement_n == 0) {
-        agreement_n = 2;
+        agreement_n = k_default_stable_prefix_agreement_n;
     }
     if (agreement_n <= 1) {
         return session->full_text.size();
@@ -592,6 +595,24 @@ static size_t stable_prefix_candidate_raw_bytes(transcribe_session * session) {
                                 session->stream_raw_history.front(), text));
     }
     return utf8_floor_boundary(session->full_text, prefix_n);
+}
+
+static size_t selected_stable_prefix_candidate_raw_bytes(
+    transcribe_session * session)
+{
+    if (session == nullptr) {
+        return 0;
+    }
+    const transcribe::Arch * arch =
+        session->model != nullptr ? session->model->arch : nullptr;
+    switch (stream_stable_prefix_impl_for_arch(arch)) {
+        case StreamStablePrefixImpl::FamilyTokenAgreement:
+        case StreamStablePrefixImpl::FamilyNativeCommit:
+            return family_candidate_raw_prefix_bytes(session);
+        case StreamStablePrefixImpl::GenericTextAgreement:
+            return generic_text_stable_prefix_candidate_raw_bytes(session);
+    }
+    return 0;
 }
 
 static bool append_committed_raw_prefix(transcribe_session * session,
@@ -685,12 +706,9 @@ static StreamTextDelta apply_stream_text_policy(
                 candidate = 0;
                 break;
             case TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX:
-                candidate = stable_prefix_candidate_raw_bytes(session);
-                candidate = holdback_limited_raw_prefix_bytes(session, candidate);
-                break;
             case TRANSCRIBE_STREAM_COMMIT_AUTO:
             default:
-                candidate = family_candidate_raw_prefix_bytes(session);
+                candidate = selected_stable_prefix_candidate_raw_bytes(session);
                 break;
         }
         delta.committed_changed =
@@ -729,6 +747,43 @@ static void publish_stream_update_tail(
     }
     if (has_field(update->struct_size, k_stream_update_tentative_changed_size)) {
         update->tentative_changed = tentative_changed;
+    }
+}
+
+// Compute the observable-change verdict, advance the revision counter
+// when the result moved, and publish revision / result_changed /
+// committed_changed / tentative_changed onto the caller's update. Shared
+// verbatim by feed and finalize so the result_changed semantics live in
+// exactly one place; the path-specific work (ON_FINALIZE counter zeroing
+// and audio_committed_ms on feed, is_final and the lifecycle transition
+// on finalize) stays in the callers.
+static void publish_observable_delta(
+    transcribe_session *       session,
+    transcribe_stream_update * update,
+    int32_t                    prev_revision,
+    const std::string &        prev_full_text,
+    bool                       prev_has_result,
+    const StreamTextDelta &    text_delta)
+{
+    const bool raw_changed =
+        session->has_result != prev_has_result ||
+        session->full_text != prev_full_text;
+    const bool observable_changed =
+        raw_changed || text_delta.committed_changed ||
+        text_delta.tentative_changed ||
+        (update != nullptr && update->result_changed);
+    if (observable_changed && session->stream_revision == prev_revision) {
+        session->stream_revision += 1;
+    }
+    if (update != nullptr) {
+        update->result_changed =
+            update->result_changed ||
+            observable_changed ||
+            session->stream_revision != prev_revision;
+        update->revision = session->stream_revision;
+        publish_stream_update_tail(
+            update, text_delta.committed_changed,
+            text_delta.tentative_changed);
     }
 }
 
@@ -1112,7 +1167,6 @@ extern "C" transcribe_status transcribe_stream_begin(
     transcribe_stream_commit_policy commit_policy =
         TRANSCRIBE_STREAM_COMMIT_AUTO;
     uint32_t stable_prefix_agreement_n = 0;
-    int32_t commit_holdback_ms = 0;
     if (has_field(stream_params->struct_size,
                   k_stream_params_commit_policy_size))
     {
@@ -1126,14 +1180,6 @@ extern "C" transcribe_status transcribe_stream_begin(
     {
         stable_prefix_agreement_n = stream_params->stable_prefix_agreement_n;
         if (stable_prefix_agreement_n > 32) {
-            return TRANSCRIBE_ERR_INVALID_ARG;
-        }
-    }
-    if (has_field(stream_params->struct_size,
-                  k_stream_params_holdback_ms_size))
-    {
-        commit_holdback_ms = stream_params->commit_holdback_ms;
-        if (commit_holdback_ms < 0) {
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
     }
@@ -1215,7 +1261,6 @@ extern "C" transcribe_status transcribe_stream_begin(
     session->stream_state = TRANSCRIBE_STREAM_ACTIVE;
     session->stream_commit_policy = commit_policy;
     session->stream_stable_prefix_agreement_n = stable_prefix_agreement_n;
-    session->stream_commit_holdback_ms = commit_holdback_ms;
 
     const transcribe_status st = session->model->arch->stream_begin(
         session, run_params, stream_params);
@@ -1300,32 +1345,13 @@ extern "C" transcribe_status transcribe_stream_feed(
         session->n_committed_words    = 0;
         session->n_committed_segments = 0;
     }
-    const bool raw_changed =
-        session->has_result != prev_has_result ||
-        session->full_text != prev_full_text;
-    const bool observable_changed =
-        raw_changed || text_delta.committed_changed ||
-        text_delta.tentative_changed ||
-        (update != nullptr && update->result_changed);
-    if (observable_changed &&
-        session->stream_revision == prev_revision)
-    {
-        session->stream_revision += 1;
-    }
-    if (update != nullptr) {
-        update->result_changed =
-            update->result_changed ||
-            observable_changed ||
-            session->stream_revision != prev_revision;
-        update->revision = session->stream_revision;
-        if (session->stream_commit_policy ==
+    publish_observable_delta(session, update, prev_revision,
+                             prev_full_text, prev_has_result, text_delta);
+    if (update != nullptr &&
+        session->stream_commit_policy ==
             TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE)
-        {
-            update->audio_committed_ms = 0;
-        }
-        publish_stream_update_tail(
-            update, text_delta.committed_changed,
-            text_delta.tentative_changed);
+    {
+        update->audio_committed_ms = 0;
     }
     return st;
 }
@@ -1367,28 +1393,8 @@ extern "C" transcribe_status transcribe_stream_finalize(
     }
     const StreamTextDelta text_delta =
         apply_stream_text_policy(session, /*is_finalize=*/true);
-    const bool raw_changed =
-        session->has_result != prev_has_result ||
-        session->full_text != prev_full_text;
-    const bool observable_changed =
-        raw_changed || text_delta.committed_changed ||
-        text_delta.tentative_changed ||
-        (update != nullptr && update->result_changed);
-    if (observable_changed &&
-        session->stream_revision == prev_revision)
-    {
-        session->stream_revision += 1;
-    }
-    if (update != nullptr) {
-        update->result_changed =
-            update->result_changed ||
-            observable_changed ||
-            session->stream_revision != prev_revision;
-        update->revision = session->stream_revision;
-        publish_stream_update_tail(
-            update, text_delta.committed_changed,
-            text_delta.tentative_changed);
-    }
+    publish_observable_delta(session, update, prev_revision,
+                             prev_full_text, prev_has_result, text_delta);
     session->stream_state = TRANSCRIBE_STREAM_FINISHED;
     return TRANSCRIBE_OK;
 }
@@ -1485,7 +1491,9 @@ extern "C" transcribe_status transcribe_stream_get_text(
         staged.tentative_text_bytes =
             static_cast<uint64_t>(session->stream_tentative_text.size());
         staged.raw_tentative_start_bytes =
-            session->stream_raw_tentative_start_bytes;
+            std::min<uint64_t>(
+                session->stream_raw_tentative_start_bytes,
+                staged.full_text_bytes);
     } else {
         staged.full_text = "";
         staged.committed_text = "";

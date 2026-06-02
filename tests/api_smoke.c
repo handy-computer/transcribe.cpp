@@ -147,7 +147,6 @@ static void test_init_macros(void) {
     CHECK(sp_macro.family      == NULL);
     CHECK(sp_macro.commit_policy == TRANSCRIBE_STREAM_COMMIT_AUTO);
     CHECK(sp_macro.stable_prefix_agreement_n == 0);
-    CHECK(sp_macro.commit_holdback_ms == 0);
 
     /* {0} is NOT accepted as a defaults shortcut in pre-1.0: a struct
      * with struct_size == 0 is rejected with BAD_STRUCT_SIZE regardless

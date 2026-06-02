@@ -8,8 +8,14 @@
 //   2. revision is non-decreasing across feeds and finalize.
 //   3. n_committed_tokens is non-decreasing across feeds, and equals
 //      transcribe_n_tokens after finalize (everything committed).
-//   4. Whenever result_changed=true at feed i, the full_text differs
-//      from the previous feed's snapshot.
+//   4. Whenever result_changed=true at feed i, at least one observable
+//      text view (full_text, committed_text, or tentative_text) differs
+//      from the previous reported snapshot. Note that full_text can be
+//      byte-identical across feeds while a token is promoted from
+//      tentative to committed: result_changed legitimately fires on that
+//      committed/tentative boundary move (see transcribe_stream_update
+//      result_changed in transcribe.h), so this checks the full observable
+//      surface, not full_text alone.
 //   5. A post-stream transcribe_run still produces the same text
 //      (no residual context state corrupting one-shot reuse).
 //
@@ -94,7 +100,9 @@ int run_streaming(transcribe_session *      ctx,
     size_t pos               = 0;
     int    last_revision     = 0;
     int    last_committed    = 0;
-    std::string last_text;
+    std::string last_full;
+    std::string last_committed_text;
+    std::string last_tentative;
     while (pos < pcm.size()) {
         const size_t take = std::min<size_t>(
             static_cast<size_t>(chunk_samples), pcm.size() - pos);
@@ -125,19 +133,41 @@ int run_streaming(transcribe_session *      ctx,
                          last_committed, committed_now);
             ++g_failures;
         }
-        // When the family signals result_changed, the visible text
-        // must actually differ from the last snapshot.
+        // When the family signals result_changed, at least one observable
+        // text view must actually differ from the last reported snapshot.
+        // A committed<-tentative promotion changes committed_text /
+        // tentative_text even when full_text is byte-identical, so check
+        // the whole surface rather than full_text alone.
         if (upd.result_changed) {
-            const char * t = transcribe_full_text(ctx);
-            const std::string cur = (t == nullptr) ? "" : t;
-            if (cur == last_text) {
+            transcribe_stream_text txt; transcribe_stream_text_init(&txt);
+            if (transcribe_stream_get_text(ctx, &txt) != TRANSCRIBE_OK) {
                 std::fprintf(stderr,
-                             "FAIL feed[%d] result_changed=true but text "
-                             "unchanged ('%s')\n",
-                             feed_count, cur.c_str());
+                             "FAIL feed[%d] get_text failed after "
+                             "result_changed\n", feed_count);
                 ++g_failures;
+            } else {
+                const std::string full =
+                    (txt.full_text == nullptr) ? "" : txt.full_text;
+                const std::string committed =
+                    (txt.committed_text == nullptr) ? "" : txt.committed_text;
+                const std::string tentative =
+                    (txt.tentative_text == nullptr) ? "" : txt.tentative_text;
+                if (full == last_full &&
+                    committed == last_committed_text &&
+                    tentative == last_tentative)
+                {
+                    std::fprintf(stderr,
+                                 "FAIL feed[%d] result_changed=true but "
+                                 "full/committed/tentative all unchanged "
+                                 "(full='%s' committed='%s' tentative='%s')\n",
+                                 feed_count, full.c_str(),
+                                 committed.c_str(), tentative.c_str());
+                    ++g_failures;
+                }
+                last_full           = full;
+                last_committed_text = committed;
+                last_tentative      = tentative;
             }
-            last_text = cur;
             ++n_partial_updates;
         }
 
