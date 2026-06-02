@@ -168,25 +168,34 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
                                        dilation, /*d1=*/0,
                                        /*is_2D=*/false,
                                        /*dst_type=*/kernel->type);
+    // im2col ne = [IC*K, OW, N].
 
-    // Reshape im2col to [IC*K, OW*N] and kernel to [IC*K, OC] for
-    // mul_mat. ggml_mul_mat returns ne = [OW*N, OC].
-    ggml_tensor * result = ggml_mul_mat(ctx,
-        ggml_reshape_2d(ctx, im2col,
-                        im2col->ne[0],
-                        im2col->ne[2] * im2col->ne[1]),
-        ggml_reshape_2d(ctx, kernel,
-                        kernel->ne[0] * kernel->ne[1],
-                        kernel->ne[2]));
+    const int64_t N = im2col->ne[2];
+    ggml_tensor * kernel_2d = ggml_reshape_2d(ctx, kernel,
+                                              kernel->ne[0] * kernel->ne[1],
+                                              kernel->ne[2]);  // [IC*K, OC]
 
-    // Reshape back to [OW, OC, N]. The semantic is the same as
-    // ggml_conv_1d's final reshape; this matches the [time,
-    // channels, batch] layout the conformer module expects.
-    result = ggml_reshape_3d(ctx, result,
-                             im2col->ne[1],
-                             kernel->ne[2],
-                             im2col->ne[2]);
-    return result;
+    if (N == 1) {
+        // Single-shot path (bit-identical to the pre-batch code): flatten
+        // OW*N (== OW) and reshape the [OW, OC] result back to [OW, OC, 1].
+        ggml_tensor * result = ggml_mul_mat(ctx,
+            ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[1]),
+            kernel_2d);  // [OW, OC]
+        result = ggml_reshape_3d(ctx, result,
+                                 im2col->ne[1], kernel->ne[2], 1);
+        return result;
+    }
+
+    // Batched path. Flattening OW*N interleaves batch with width
+    // (ow_n = b*OW + ow), so a [OW*N, OC] -> [OW, OC, N] reshape would
+    // mislabel memory. Instead mul_mat the 3-D im2col directly: the kernel
+    // (ne[2]=1) broadcasts across the batch, giving [OC, OW, N], then
+    // permute to the [OW, OC, N] = [time, channels, batch] convention. The
+    // per-element dot products match the N==1 path exactly (same reduction
+    // over IC*K), so each utterance is bit-identical to single-shot.
+    ggml_tensor * result = ggml_mul_mat(ctx, kernel_2d, im2col);  // [OC, OW, N]
+    result = ggml_cont(ctx, ggml_permute(ctx, result, 1, 0, 2, 3));
+    return result;  // [OW, OC, N]
 }
 
 // f32-friendly 2D depthwise conv. Mirrors ggml_conv_2d_dw exactly
