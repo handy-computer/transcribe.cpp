@@ -154,6 +154,15 @@ def main() -> int:
                    help="transcribe-cli binary")
     p.add_argument("--out", type=Path, default=None,
                    help="Output report file (default: auto-derived)")
+    p.add_argument("--batch-size", type=int, default=0,
+                   help="Group N utterances per transcribe_run_batch call "
+                        "(offline batched encoder). 0/1 = per-file serial. "
+                        "Pair with --sort-by-length for efficiency.")
+    p.add_argument("--sort-by-length", action="store_true",
+                   help="Sort the manifest by audio duration before batching "
+                        "so each batch groups similar-length clips (the "
+                        "batched encoder pads to the group max). Output is "
+                        "keyed by file, so id mapping is preserved.")
     p.add_argument("--backend",
                    choices=("auto", "cpu", "cpu_accel", "metal", "vulkan"),
                    default=None,
@@ -248,18 +257,38 @@ def main() -> int:
     for e in manifest:
         audio_to_entry[e["audio"]] = e
 
+    # Optional length-sort for efficient batching. The batched encoder pads
+    # every utterance in a group to the group's longest clip, so grouping
+    # similar-length clips avoids wasted compute. Output is keyed by audio
+    # path (audio_to_entry), so reordering the batch list is safe.
+    batch_order = manifest
+    if args.sort_by_length and args.batch_size and args.batch_size > 1:
+        import wave
+
+        def _dur(e: dict) -> float:
+            try:
+                with wave.open(e["audio"]) as w:
+                    return w.getnframes() / float(w.getframerate())
+            except Exception:
+                return 0.0
+
+        batch_order = sorted(manifest, key=_dur)
+
+    bs = args.batch_size if args.batch_size and args.batch_size > 1 else 1
     print(f"model:    {args.model}")
     print(f"manifest: {args.manifest} ({total} utterances)")
     print(f"language: {args.language or '(default)'}")
     print(f"output:   {out_path}")
-    print(f"mode:     batch (single process, model loads once)")
+    print(f"mode:     batch (single process, model loads once); "
+          f"batch_size={bs}"
+          f"{' length-sorted' if (bs > 1 and args.sort_by_length) else ''}")
 
     # Write the batch file list (one wav path per line).
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".list", delete=False
     ) as tf:
         batch_path = tf.name
-        for e in manifest:
+        for e in batch_order:
             tf.write(e["audio"] + "\n")
 
     # Invoke transcribe-cli in batch mode.
@@ -269,6 +298,8 @@ def main() -> int:
         "--batch", batch_path,
         "--batch-jsonl",
     ]
+    if args.batch_size and args.batch_size > 1:
+        cmd += ["--batch-size", str(args.batch_size)]
     if args.backend:
         cmd += ["--backend", args.backend]
     if args.kv_type:
@@ -303,6 +334,7 @@ def main() -> int:
 
     n_done = 0
     n_errors = 0
+    sum_mel = sum_encode = sum_decode = 0.0
 
     with open(out_path, "w") as fout:
         assert proc.stdout is not None
@@ -345,6 +377,9 @@ def main() -> int:
             )
             if out_entry.get("error"):
                 n_errors += 1
+            sum_mel += out_entry["mel_ms"]
+            sum_encode += out_entry["encode_ms"]
+            sum_decode += out_entry["decode_ms"]
 
             fout.write(json.dumps(out_entry) + "\n")
             fout.flush()
@@ -366,6 +401,16 @@ def main() -> int:
 
     print(f"\ndone. {n_done} utterances in {wall:.1f}s "
           f"({n_done/wall:.1f} utt/s), {n_errors} errors")
+    # Stage breakdown. encode is the (amortized) GPU encoder; decode is the
+    # host-side search. With batching, encode/utt shrinks while decode/utt
+    # stays flat, so this shows where the wall actually goes as B grows.
+    stage_total = sum_mel + sum_encode + sum_decode
+    if stage_total > 0:
+        print(f"stage totals (sum of per-utt): "
+              f"mel {sum_mel/1000:.2f}s  encode {sum_encode/1000:.2f}s  "
+              f"decode {sum_decode/1000:.2f}s  "
+              f"(encode {100*sum_encode/stage_total:.0f}% / "
+              f"decode {100*sum_decode/stage_total:.0f}%)")
     print(f"report: {out_path}")
     return 0 if proc.returncode == 0 else 1
 

@@ -134,9 +134,38 @@ struct transcribe_session {
         transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         bool                      has_result   = false;
         transcribe_status         status       = TRANSCRIBE_OK;
+        // Per-utterance timings (us). For a batched run the encoder is one
+        // shared dispatch, so a family amortizes its total encode time across
+        // the batch (sum over utterances == the real batch encode time);
+        // decode is genuinely per-utterance. Lets transcribe_batch_get_timings
+        // expose where time goes (encoder vs host decode) per utterance.
+        int64_t                   t_mel_us     = 0;
+        int64_t                   t_encode_us  = 0;
+        int64_t                   t_decode_us  = 0;
     };
 
     std::vector<ResultSet>       batch_results;
+
+    // Snapshot the current scratch result slot (the fields above that a
+    // per-family run() populates) into a standalone ResultSet. Used by the
+    // batch dispatcher's serial fallback and by family run_batch() hooks to
+    // capture each utterance's result. `st` records the per-utterance
+    // terminal status.
+    ResultSet capture_result(transcribe_status st = TRANSCRIBE_OK) const {
+        ResultSet rs;
+        rs.tokens            = tokens;
+        rs.words             = words;
+        rs.segments          = segments;
+        rs.full_text         = full_text;
+        rs.detected_language = detected_language;
+        rs.result_kind       = result_kind;
+        rs.has_result        = has_result;
+        rs.status            = st;
+        rs.t_mel_us          = t_mel_us;
+        rs.t_encode_us       = t_encode_us;
+        rs.t_decode_us       = t_decode_us;
+        return rs;
+    }
 
     // ISO short code the model itself predicted on this run, populated
     // only when the caller did NOT pass a language hint (auto/null) and

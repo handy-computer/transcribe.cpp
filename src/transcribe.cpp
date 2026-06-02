@@ -2454,3 +2454,42 @@ extern "C" transcribe_status transcribe_batch_get_token(
     copy_out_prefix(out, &staged, caller_size, sizeof(staged));
     return TRANSCRIBE_OK;
 }
+
+extern "C" transcribe_status transcribe_batch_get_timings(
+    const struct transcribe_session * session, int i,
+    struct transcribe_timings * out)
+{
+    if (session == nullptr || out == nullptr || i < 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_timings_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    int64_t mel_us = 0, enc_us = 0, dec_us = 0;
+    if (!session->batch_results.empty()) {
+        if (static_cast<size_t>(i) >= session->batch_results.size()) {
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        const auto & rs = session->batch_results[static_cast<size_t>(i)];
+        mel_us = rs.t_mel_us; enc_us = rs.t_encode_us; dec_us = rs.t_decode_us;
+    } else if (i == 0) {
+        mel_us = session->t_mel_us;
+        enc_us = session->t_encode_us;
+        dec_us = session->t_decode_us;
+    } else {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    const uint64_t caller_size = out->struct_size;
+    transcribe_timings staged{};
+    staged.struct_size = caller_size;
+    if (session->model != nullptr) {
+        staged.load_ms = static_cast<float>(session->model->t_load_us) / 1000.0f;
+    }
+    staged.mel_ms    = static_cast<float>(mel_us) / 1000.0f;
+    staged.encode_ms = static_cast<float>(enc_us) / 1000.0f;
+    staged.decode_ms = static_cast<float>(dec_us) / 1000.0f;
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}

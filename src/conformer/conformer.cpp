@@ -341,33 +341,40 @@ ggml_tensor * conv_module(ggml_context *      ctx,
     }
 
     const int64_t d_model = x->ne[0];
+    // Utterance batch lives at ne[2] of the [d_model, T, B] activation.
+    // B == 1 for single-shot (parakeet / cohere today); the offline
+    // batched encoder passes B > 1. Every view/reshape below threads B so
+    // the B == 1 path is bit-identical to the pre-batch code.
+    const int64_t B = x->ne[2];
 
     if (policy.direct_pw) {
-        // Pointwise conv 1 as direct mul_mat in [d_model, T] layout.
+        // Pointwise conv 1 as direct mul_mat in [d_model, T, B] layout.
         // Kernel ne=[1, d_model, 2*d_model] → reshape to [d_model, 2*d_model].
         {
             ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pw1_w,
                                                 d_model, 2 * d_model);
-            x = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T]
+            x = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T, B]
             if (b.conv_pw1_b != nullptr) {
                 x = ggml_add(ctx, x, b.conv_pw1_b);
             }
         }
 
-        // GLU: split ne[0] in half, gate * sigmoid(value).
+        // GLU: split ne[0] in half, gate * sigmoid(value). The views carry
+        // the batch axis (ne[2]) so the split is per-utterance.
         {
             const int64_t T    = x->ne[1];
             const int64_t half = x->ne[0] / 2;
-            ggml_tensor * gate  = ggml_view_2d(ctx, x, half, T,
-                                               x->nb[1], /*offset=*/0);
-            ggml_tensor * value = ggml_view_2d(ctx, x, half, T,
-                                               x->nb[1],
+            ggml_tensor * gate  = ggml_view_3d(ctx, x, half, T, B,
+                                               x->nb[1], x->nb[2],
+                                               /*offset=*/0);
+            ggml_tensor * value = ggml_view_3d(ctx, x, half, T, B,
+                                               x->nb[1], x->nb[2],
                                                half * ggml_element_size(x));
             x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
         }
-        // x ne = [d_model, T]
+        // x ne = [d_model, T, B]
 
-        // Transpose for depthwise conv: [d_model, T] -> [T, d_model].
+        // Transpose for depthwise conv: [d_model, T, B] -> [T, d_model, B].
         x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     } else {
         // Fallback: im2col path in [T, d_model] layout.
@@ -469,21 +476,22 @@ ggml_tensor * conv_module(ggml_context *      ctx,
     }
     const int padding_op = symmetric_pad ? pad_left : 0;
     if (policy.direct_dw_in_block) {
-        // Fused single-op depthwise conv (no im2col). Input is [T, d_model]
-        // from the transpose above. Reshape to 4D [T, 1, d_model, 1] for
-        // ggml_conv_2d_dw_direct which expects [W, H, C, N].
-        // Kernel [k, 1, d_model] → [k, 1, 1, d_model] (KW, KH, 1, C).
+        // Fused single-op depthwise conv (no im2col). Input is [T, d_model, B]
+        // from the transpose above. Reshape to 4D [T, 1, d_model, B] for
+        // ggml_conv_2d_dw_direct which expects [W, H, C, N] (N == B, the
+        // utterance batch). Kernel [k, 1, d_model] → [k, 1, 1, d_model].
         ggml_tensor * knl = ggml_reshape_4d(ctx, b.conv_dw_w,
                                             conv_kernel, 1, 1, d_model);
         ggml_tensor * data = ggml_reshape_4d(ctx, x,
-                                             x->ne[0], 1, x->ne[1], 1);
+                                             x->ne[0], 1, x->ne[1], B);
         x = ggml_conv_2d_dw_direct(ctx, knl, data,
                                    /*s0=*/1, /*s1=*/1,
                                    /*p0=*/padding_op, /*p1=*/0,
                                    /*d0=*/1, /*d1=*/1);
-        // Output: [T_out, 1, d_model, 1] → [T, d_model].
-        x = ggml_reshape_2d(ctx, x, x->ne[0], x->ne[2]);
+        // Output: [T_out, 1, d_model, B] → [T_out, d_model, B].
+        x = ggml_reshape_3d(ctx, x, x->ne[0], x->ne[2], x->ne[3]);
     } else {
+        // im2col depthwise (cohere on Metal/CPU); single-utterance only.
         x = conv_1d_dw_f32(ctx, b.conv_dw_w, x,
                            /*s=*/1, /*p=*/padding_op, /*d=*/1);
     }
@@ -577,6 +585,22 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T_q      = x->ne[1];
     const int64_t pos_len  = pos_emb->ne[1];
+    // Utterance batch at ne[2] of the [d_model, T, B] activation. After the
+    // head split below the batch moves to ne[3] (heads take ne[2]). When
+    // batched we force the manual attention path: ggml_flash_attn_ext's
+    // additive mask (matrix_bd, which is content-dependent and therefore
+    // differs per utterance) is not validated for a per-batch ne[3] here,
+    // whereas the manual mul_mat + soft_max path broadcasts over the batch
+    // cleanly. Single-shot (B == 1) keeps its existing flash path exactly.
+    const int64_t B         = x->ne[2];
+    // Flash attention works batched: ggml_flash_attn_ext accepts the
+    // per-utterance rel-pos mask at ne[3] == B, and the batched encoder
+    // output is bit-identical to single-shot flash (verified on CPU and
+    // Metal). So the batch axis does not change the attention path.
+    // TRANSCRIBE_NO_FLASH=1 forces the manual mul_mat + soft_max path for
+    // both single-shot and batched (used by the bit-exact CPU tensor gate,
+    // since flash casts the rel-pos mask to F16 while manual stays F32).
+    const bool    flash     = use_flash;
 
     // Local-attention bookkeeping. With both window sides non-negative
     // in the Regular style, pos_emb arrives at the smaller
@@ -604,24 +628,27 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     // ----- Split heads --------------------------------------------
     // pos_bias_u/v broadcast onto [head_dim, n_head, T, 1] BEFORE
     // the permute that moves T past n_head.
-    q = ggml_reshape_4d(ctx, q, head_dim, n_head, T_q, 1);
+    // Head split carries the batch axis at ne[3]: [head_dim, n_head, T, B].
+    q = ggml_reshape_4d(ctx, q, head_dim, n_head, T_q, B);
     ggml_tensor * q_u = ggml_add(ctx, q, b.attn_pos_u);
     ggml_tensor * q_v = ggml_add(ctx, q, b.attn_pos_v);
 
-    // All of Q, K, V need [head_dim, T, n_head, 1] for flash_attn.
-    // The permute is a zero-cost view (no data copy). flash_attn_ext
-    // accesses data via strides, so contiguous materialization (cont)
-    // is not required for q_u/k/v. q_v and p still need cont because
-    // they feed into mul_mat for the position score computation.
+    // All of Q, K, V need [head_dim, T, n_head, B] for the attention. The
+    // permute is a zero-cost view (no data copy). flash_attn_ext accesses
+    // data via strides, so contiguous materialization (cont) is not
+    // required for q_u/k/v. q_v and p still need cont because they feed
+    // into mul_mat for the position score computation.
     q_u = ggml_permute(ctx, q_u, 0, 2, 1, 3);
     q_v = ggml_cont(ctx, ggml_permute(ctx, q_v, 0, 2, 1, 3));
 
-    k = ggml_reshape_4d(ctx, k, head_dim, n_head, T_q, 1);
+    k = ggml_reshape_4d(ctx, k, head_dim, n_head, T_q, B);
     k = ggml_permute(ctx, k, 0, 2, 1, 3);
 
-    v = ggml_reshape_4d(ctx, v, head_dim, n_head, T_q, 1);
+    v = ggml_reshape_4d(ctx, v, head_dim, n_head, T_q, B);
     v = ggml_permute(ctx, v, 0, 2, 1, 3);
 
+    // Position scores are batch-independent (pos_emb has no batch axis), so
+    // p keeps ne[3] == 1 and broadcasts across the batch in the mul_mat.
     p = ggml_reshape_4d(ctx, p, head_dim, n_head, pos_len, 1);
     p = ggml_cont(ctx, ggml_permute(ctx, p, 0, 2, 1, 3));
 
@@ -644,13 +671,13 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         const int top_pad = static_cast<int>(T_q) - 1 - W_left;
         if (top_pad > 0) {
             ggml_tensor * top_template = ggml_new_tensor_4d(
-                ctx, GGML_TYPE_F32, top_pad, T_q, n_head, 1);
+                ctx, GGML_TYPE_F32, top_pad, T_q, n_head, B);
             ggml_tensor * top = ggml_fill(ctx, top_template, -INFINITY);
             matrix_bd = ggml_concat(ctx, top, matrix_bd, /*dim=*/0);
         } else if (top_pad < 0) {
             const int kept = static_cast<int>(matrix_bd->ne[0]) + top_pad;
             matrix_bd = ggml_view_4d(ctx, matrix_bd,
-                                     kept, T_q, n_head, 1,
+                                     kept, T_q, n_head, B,
                                      matrix_bd->nb[1], matrix_bd->nb[2],
                                      matrix_bd->nb[3],
                                      (-top_pad) * matrix_bd->nb[0]);
@@ -659,13 +686,13 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         const int bot_pad = static_cast<int>(T_q) - 1 - W_right;
         if (bot_pad > 0) {
             ggml_tensor * bot_template = ggml_new_tensor_4d(
-                ctx, GGML_TYPE_F32, bot_pad, T_q, n_head, 1);
+                ctx, GGML_TYPE_F32, bot_pad, T_q, n_head, B);
             ggml_tensor * bot = ggml_fill(ctx, bot_template, -INFINITY);
             matrix_bd = ggml_concat(ctx, matrix_bd, bot, /*dim=*/0);
         } else if (bot_pad < 0) {
             const int kept = static_cast<int>(matrix_bd->ne[0]) + bot_pad;
             matrix_bd = ggml_view_4d(ctx, matrix_bd,
-                                     kept, T_q, n_head, 1,
+                                     kept, T_q, n_head, B,
                                      matrix_bd->nb[1], matrix_bd->nb[2],
                                      matrix_bd->nb[3], /*offset=*/0);
             matrix_bd = ggml_cont(ctx, matrix_bd);
@@ -674,7 +701,7 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
 
     matrix_bd = rel_shift(ctx, matrix_bd);
     matrix_bd = ggml_view_4d(ctx, matrix_bd,
-                             T_q, T_q, n_head, 1,
+                             T_q, T_q, n_head, B,
                              matrix_bd->nb[1], matrix_bd->nb[2],
                              matrix_bd->nb[3], /*offset=*/0);
     // The view is non-contiguous (nb[1] stays at parent's
@@ -682,7 +709,7 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     // ggml_scale which wants full contiguity, so cont there. The
     // manual path only feeds matrix_bd into ggml_add(kq, matrix_bd),
     // which handles contiguous-rows inputs on both CPU and Metal.
-    if (use_flash) {
+    if (flash) {
         matrix_bd = ggml_cont(ctx, matrix_bd);
     }
 
@@ -695,9 +722,18 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         matrix_bd = ggml_add(ctx, matrix_bd, params.attn_chunked_mask);
     }
 
+    // Variable-length batch key-padding mask. [T_k, 1, 1, B] additive
+    // (-INF on padded keys) broadcasts over queries and heads. Added here
+    // so it applies on both the flash and manual paths (matrix_bd is the
+    // flash mask and the manual additive bias alike). -INF / 0 are
+    // scale-invariant, so adding before the flash pre-scale is fine.
+    if (params.attn_pad_mask != nullptr) {
+        matrix_bd = ggml_add(ctx, matrix_bd, params.attn_pad_mask);
+    }
+
     ggml_tensor * o;
 
-    if (use_flash) {
+    if (flash) {
         matrix_bd = ggml_scale(ctx, matrix_bd, scale);
         matrix_bd = ggml_cast(ctx, matrix_bd, GGML_TYPE_F16);
 
@@ -756,7 +792,9 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         o = ggml_permute(ctx, o, 0, 2, 1, 3);
         o = ggml_cont(ctx, o);
     }
-    o = ggml_reshape_2d(ctx, o, d_model, T_q);
+    // Collapse heads back to d_model, keeping the batch at ne[2].
+    // reshape_3d with B == 1 is equivalent to the prior reshape_2d.
+    o = ggml_reshape_3d(ctx, o, d_model, T_q, B);
 
     // ----- Output linear -----------------------------------------
     o = ggml_mul_mat(ctx, b.attn_out_w, o);
@@ -950,8 +988,26 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                ggml_tensor *         mel_in,
                                const ConvPolicy &    policy,
                                const char *          name_prefix,
-                               const char *          error_tag)
+                               const char *          error_tag,
+                               PreEncodeValidMasks * valid_masks)
 {
+    // Utterance batch and a helper that, in the masked-subsampling path,
+    // zeros each conv intermediate's padded time region after a ReLU. The
+    // mask is a graph input ne=[1, H_stage, 1, B] broadcasting over freq
+    // (ne[0]) and channels (ne[2]); the driver fills it per utterance. `slot`
+    // receives the allocated handle. No-op when valid_masks is null.
+    const int64_t pe_batch = mel_in->ne[3];
+    auto apply_valid_mask = [&](ggml_tensor * x, ggml_tensor ** slot,
+                                const char * mname) -> ggml_tensor * {
+        if (valid_masks == nullptr) return x;
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                             1, x->ne[1], 1, pe_batch);
+        ggml_set_name(m, mname);
+        ggml_set_input(m);
+        *slot = m;
+        return ggml_mul(ctx, x, m);
+    };
+
     // Transpose the mel input from its natural [T_mel, n_mels, 1, 1]
     // layout (matching the C++ row-major MelFrontend buffer) to
     // [n_mels, T_mel, 1, 1] = [W=F, H=T, IC, N] which is what
@@ -1016,6 +1072,8 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = name_prefixed(x, name_prefix, "conv0");
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu0");
+    x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s1 : nullptr,
+                         "pre_encode.valid_mask.s1");
 
     // conv2 (depthwise: channels -> channels, groups=channels, k=3 s=2)
     // See conv_2d_dw_f32 above for the Metal backstory on why the
@@ -1044,6 +1102,8 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = name_prefixed(x, name_prefix, "conv3");
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu3");
+    x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s2 : nullptr,
+                         "pre_encode.valid_mask.s2");
 
     // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
     x = pad_causal(x);
@@ -1069,6 +1129,8 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = name_prefixed(x, name_prefix, "conv6");
     x = ggml_relu(ctx, x);
     x = name_prefixed(x, name_prefix, "relu6");
+    x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s3 : nullptr,
+                         "pre_encode.valid_mask.s3");
 
     // At this point ne = [F'=16, T_enc, channels=256, 1] where
     // T_enc = floor(T_mel / 8) (with the per-conv floor formula).
@@ -1087,6 +1149,11 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     const int64_t F_prime = x->ne[0];
     const int64_t T_enc   = x->ne[1];
     const int64_t C       = x->ne[2];
+    // Utterance batch rides the conv "N" axis (ne[3]) through the whole
+    // stem; after the flatten + linear below it lands on the activation's
+    // ne[2] == B convention the conformer blocks expect. B == 1 for
+    // single-shot, so the 3-D reshape collapses to the prior 2-D shape.
+    const int64_t B       = x->ne[3];
     const int64_t pre_encode_in = F_prime * C;
 
     // Sanity check against the catalog: the linear layer expects
@@ -1109,7 +1176,8 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = name_prefixed(x, name_prefix, "permuted");
     x = ggml_cont(ctx, x);
     x = name_prefixed(x, name_prefix, "flat_pre");
-    x = ggml_reshape_2d(ctx, x, pre_encode_in, T_enc);
+    // [F', C, T_enc, B] -> [F'*C, T_enc, B]. B at ne[2] after the collapse.
+    x = ggml_reshape_3d(ctx, x, pre_encode_in, T_enc, B);
     x = name_prefixed(x, name_prefix, "flat");
 
     // Linear projection to d_model. ggml_mul_mat(W, x):

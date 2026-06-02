@@ -637,15 +637,20 @@ int main(int argc, char ** argv) {
                             err_field += json_escape(transcribe_status_string(ust));
                             err_field += "\"";
                         }
-                        // Per-utterance timings are not captured in batch
-                        // results (a documented v1 gap); emit zeros. Wall-clock
-                        // throughput is measured by the bench harness instead.
+                        // Per-utterance timings: the batched encoder time is
+                        // amortized across the batch, decode is real per-utt,
+                        // so summing across utterances gives the true encode vs
+                        // decode split for the whole batched run.
+                        struct transcribe_timings tm; transcribe_timings_init(&tm);
+                        (void)transcribe_batch_get_timings(
+                            ctx, static_cast<int>(k), &tm);
                         std::printf("{\"file\":\"%s\",\"text\":\"%s\"%s,"
                                     "\"mel_ms\":%.1f,\"encode_ms\":%.1f,"
                                     "\"decode_ms\":%.1f%s}\n",
                                     wav.c_str(), escaped.c_str(),
                                     segments.c_str(),
-                                    0.0, 0.0, 0.0,
+                                    (double)tm.mel_ms, (double)tm.encode_ms,
+                                    (double)tm.decode_ms,
                                     err_field.c_str());
                     } else {
                         std::printf("[%zu/%zu] %s",

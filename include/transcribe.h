@@ -1913,6 +1913,24 @@ TRANSCRIBE_API transcribe_status transcribe_batch_get_token(
     int                               j,
     struct transcribe_token *         out);
 
+/*
+ * Per-utterance timings for a batched run. Mirrors transcribe_get_timings but
+ * indexed by utterance. load_ms is the model-scoped load time (same for every
+ * utterance). mel_ms / encode_ms / decode_ms are this utterance's stage times;
+ * for a batched encoder the encode_ms is the shared batch encode time
+ * amortized across the batch (so the sum over utterances equals the real batch
+ * encode time), while decode_ms is the genuine per-utterance host-decode cost.
+ * This is what lets a caller see how run time splits between the GPU encoder
+ * and the host decoder as batch size grows.
+ *
+ * Returns TRANSCRIBE_ERR_INVALID_ARG on NULL args or out-of-range i,
+ * TRANSCRIBE_ERR_BAD_STRUCT_SIZE on an uninitialized out struct.
+ */
+TRANSCRIBE_API transcribe_status transcribe_batch_get_timings(
+    const struct transcribe_session * session,
+    int                               i,
+    struct transcribe_timings *       out);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

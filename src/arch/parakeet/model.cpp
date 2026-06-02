@@ -755,6 +755,273 @@ transcribe_status init_context(
 //   cache_last_time / RNNT predictor carry), the streaming hooks
 //   will diverge from this helper and an empirical stream-vs-batch
 //   parity test becomes meaningful.
+// Host-side TDT/RNNT/CTC decode + public result-hierarchy build for a
+// single utterance's encoder output. Shared by the single-shot path
+// (run_one_shot_inner) and the batched path (run_batch_inner). `enc` is
+// the row-major [T_enc, d_enc] encoder activation for ONE utterance;
+// utt_index >= 0 tags the optional tensor dump per utterance, -1 for the
+// single-shot name. Writes the session scratch result slot (tokens /
+// words / segments / full_text / result_kind / has_result).
+static transcribe_status decode_and_populate(
+    ParakeetSession *             pc,
+    ParakeetModel *               pm,
+    const transcribe_run_params * params,
+    const float *                 enc,
+    int                           T_enc,
+    int                           d_enc,
+    int                           utt_index)
+{
+    std::string dump_name = "dec.enc_out";
+    if (utt_index >= 0) {
+        dump_name += ".b" + std::to_string(utt_index);
+    }
+    // Optional dump of the encoder output as the decoder sees it,
+    // so the bring-up loop can verify the readback is faithful
+    // before chasing decoder bugs.
+    if (transcribe::debug::enabled()) {
+        const long long shape[2] = { T_enc, d_enc };
+        transcribe::debug::dump_host_f32(
+            dump_name.c_str(), enc,
+            static_cast<long long>(T_enc) * static_cast<long long>(d_enc),
+            shape, 2, "decoder.enc_out");
+    }
+
+    pc->raw_tokens.clear();
+    const int64_t t_dec_start = ggml_time_us();
+    {
+        transcribe_status st = TRANSCRIBE_OK;
+        switch (pm->host_decoder.head_kind) {
+            case HostHeadKind::TDT:
+                st = decode_tdt_greedy(pm->host_decoder, enc,
+                                       T_enc, d_enc, pc->raw_tokens);
+                break;
+            case HostHeadKind::RNNT:
+                st = decode_rnnt_greedy(pm->host_decoder, enc,
+                                        T_enc, d_enc, pc->raw_tokens);
+                break;
+            case HostHeadKind::CTC:
+                st = decode_ctc_greedy(pm->host_decoder, enc,
+                                       T_enc, d_enc, pc->raw_tokens);
+                break;
+        }
+        if (st != TRANSCRIBE_OK) return st;
+    }
+    pc->t_decode_us = ggml_time_us() - t_dec_start;
+
+    // ----- Build the public result hierarchy ----------------------
+    //
+    // Conversion: each emitted token's `step_at_emit` is an encoder
+    // frame index. The encoder downsamples by `subsampling_factor`
+    // relative to the mel hop, so one encoder frame corresponds to
+    // `subsampling_factor * hop_length / sample_rate` seconds of
+    // audio. For Parakeet 0.6B v2/v3 that's 8 * 160 / 16000 = 0.08 s
+    // per frame, i.e. 80 ms.
+    const double frame_to_ms =
+        1000.0 *
+        static_cast<double>(pm->hparams.enc_subsampling_factor) *
+        static_cast<double>(pm->hparams.fe_hop_length) /
+        static_cast<double>(pm->hparams.fe_sample_rate);
+
+    // SentencePiece word-boundary marker U+2581 ("▁"). UTF-8 bytes
+    // 0xE2 0x96 0x81. A token whose decoded text starts with the
+    // marker opens a new word; otherwise it extends the current
+    // word. We use the raw NeMo piece (not the post-decode "▁ →
+    // space" form) because the post-decode form leads with a space
+    // and that's a fragile thing to compare against — the raw
+    // piece's leading 3 UTF-8 bytes are unambiguous.
+    constexpr const char k_sp_marker[] = "\xE2\x96\x81";
+    constexpr int        k_sp_marker_len = 3;
+
+    const transcribe::Tokenizer & tok = pm->tok;
+
+    pc->tokens.reserve(pc->raw_tokens.size());
+    for (const TdtToken & rt : pc->raw_tokens) {
+        transcribe_session::TokenEntry te;
+        te.id    = rt.id;
+        te.p     = rt.p;
+        te.t0_ms = static_cast<int64_t>(
+            std::llround(frame_to_ms * static_cast<double>(rt.step_at_emit)));
+        // Per-token duration: clamp the duration_frames=0 case to a
+        // visually-distinct minimum of 0 ms (== t0). The result is a
+        // "point in time" token with no width.
+        const double end_frame =
+            static_cast<double>(rt.step_at_emit) +
+            static_cast<double>(rt.duration_frames);
+        te.t1_ms = static_cast<int64_t>(std::llround(frame_to_ms * end_frame));
+        // Decode just this single token to get its visible text
+        // fragment. The decoder strips the SentencePiece marker via
+        // Tokenizer::decode (▁ → space), so the leading character
+        // for word-starting tokens is an ASCII space.
+        te.text  = tok.decode(&rt.id, 1);
+        // seg_index / word_index filled below.
+        pc->tokens.push_back(std::move(te));
+    }
+
+    // Word + segment construction. v1 produces a single segment
+    // covering the entire clip; words are split on SentencePiece
+    // marker boundaries. Empty result → no segment, no words, no
+    // text — exactly what the public accessors return as their
+    // safe-sentinel state when there are no tokens.
+    if (!pc->tokens.empty()) {
+        // Single segment.
+        transcribe_session::SegmentEntry seg;
+        seg.t0_ms       = pc->tokens.front().t0_ms;
+        seg.t1_ms       = pc->tokens.back().t1_ms;
+        seg.first_token = 0;
+        seg.n_tokens    = static_cast<int>(pc->tokens.size());
+        seg.first_word  = 0;
+        // n_words filled after we count words below.
+
+        // Walk the raw token ids again to detect word boundaries.
+        // The first token always opens word 0; a token whose raw
+        // piece begins with the SentencePiece marker opens a new
+        // word. Continuation tokens (no marker) extend the current
+        // word.
+        transcribe_session::WordEntry  cur_word;
+        bool                        cur_word_open = false;
+
+        auto open_new_word = [&](int token_index, const transcribe_session::TokenEntry & tk) {
+            if (cur_word_open) {
+                cur_word.t1_ms   = pc->tokens[static_cast<size_t>(token_index - 1)].t1_ms;
+                cur_word.n_tokens = token_index - cur_word.first_token;
+                pc->words.push_back(std::move(cur_word));
+                cur_word = transcribe_session::WordEntry{};
+            }
+            cur_word.t0_ms       = tk.t0_ms;
+            cur_word.first_token = token_index;
+            cur_word.seg_index   = 0;
+            cur_word_open        = true;
+        };
+
+        for (size_t i = 0; i < pc->tokens.size(); ++i) {
+            const auto & tk        = pc->tokens[i];
+            const auto & raw_piece = tok.token(tk.id); // empty if id OOR
+            const bool starts_word =
+                (i == 0) ||
+                (raw_piece.size() >= static_cast<size_t>(k_sp_marker_len) &&
+                 std::memcmp(raw_piece.data(), k_sp_marker, k_sp_marker_len) == 0);
+            if (starts_word) {
+                open_new_word(static_cast<int>(i), tk);
+            }
+            // Whether we just opened a new word or not, the current
+            // word now contains this token. seg/word back-pointers:
+            pc->tokens[i].seg_index  = 0;
+            pc->tokens[i].word_index = static_cast<int>(pc->words.size());
+        }
+        // Close out the trailing word.
+        if (cur_word_open) {
+            cur_word.t1_ms    = pc->tokens.back().t1_ms;
+            cur_word.n_tokens = static_cast<int>(pc->tokens.size()) - cur_word.first_token;
+            pc->words.push_back(std::move(cur_word));
+        }
+
+        // Materialize each word's text via the tokenizer (so the
+        // SentencePiece "▁ → space" substitution runs on the whole
+        // span at once, including any mid-word continuation
+        // pieces). The leading space from a word-opener token is
+        // trimmed: a "word" should not include its own leading
+        // space.
+        std::vector<int> id_buf;
+        for (auto & wd : pc->words) {
+            id_buf.clear();
+            id_buf.reserve(static_cast<size_t>(wd.n_tokens));
+            for (int j = 0; j < wd.n_tokens; ++j) {
+                id_buf.push_back(pc->tokens[static_cast<size_t>(wd.first_token + j)].id);
+            }
+            std::string text = tok.decode(id_buf.data(), wd.n_tokens);
+            if (!text.empty() && text.front() == ' ') {
+                text.erase(text.begin());
+            }
+            wd.text = std::move(text);
+        }
+
+        seg.n_words = static_cast<int>(pc->words.size());
+
+        // Build the full text for the segment via the tokenizer
+        // (one decode call over every id, so the SentencePiece
+        // substitution sees the whole sequence).
+        std::vector<int> all_ids;
+        all_ids.reserve(pc->tokens.size());
+        for (const auto & tk : pc->tokens) all_ids.push_back(tk.id);
+        std::string full = tok.decode(all_ids.data(),
+                                      static_cast<int>(all_ids.size()));
+        if (!full.empty() && full.front() == ' ') {
+            full.erase(full.begin());
+        }
+        seg.text       = full;
+        pc->full_text  = std::move(full);
+        pc->segments.push_back(std::move(seg));
+
+        // Parakeet TDT produces token-level timestamps from the
+        // encoder frame indices (each emitted token's
+        // step_at_emit). Word and segment timestamps are derived
+        // by aggregating contained tokens. TOKEN is therefore the
+        // family's max_timestamp_kind, and everything above has
+        // already been populated at TOKEN granularity.
+        //
+        // Clamp to the caller's requested ceiling. AUTO resolves to
+        // the family max (TOKEN). A coarser request elides the
+        // finer levels: WORD drops the token list, SEGMENT drops
+        // tokens+words, NONE drops tokens+words and zeros the
+        // segment's t0/t1 so nothing dresses up as alignment data
+        // the caller did not ask for.
+        //
+        // The dispatcher has already rejected any request finer
+        // than TOKEN, so after the AUTO resolution below, eff is in
+        // {NONE, SEGMENT, WORD, TOKEN}.
+        transcribe_timestamp_kind eff = params->timestamps;
+        if (eff == TRANSCRIBE_TIMESTAMPS_AUTO) {
+            eff = pm->caps.max_timestamp_kind; // = TOKEN for parakeet
+        }
+        if (eff == TRANSCRIBE_TIMESTAMPS_NONE) {
+            // Keep the segment and its text, but drop alignment
+            // data. Tokens + words are a finer granularity than
+            // the caller asked for; segment timings are alignment
+            // too, so zero them.
+            pc->tokens.clear();
+            pc->words.clear();
+            auto & s = pc->segments.back();
+            s.t0_ms      = 0;
+            s.t1_ms      = 0;
+            s.first_word = 0;
+            s.n_words    = 0;
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        } else if (eff == TRANSCRIBE_TIMESTAMPS_SEGMENT) {
+            // Keep segment timings, drop token + word tables.
+            pc->tokens.clear();
+            pc->words.clear();
+            auto & s = pc->segments.back();
+            s.first_word  = 0;
+            s.n_words     = 0;
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        } else if (eff == TRANSCRIBE_TIMESTAMPS_WORD) {
+            // Keep segment + word timings, drop the token table.
+            // Every back-reference into the cleared token table
+            // must also be zeroed so a caller iterating words or
+            // the segment can never index into a now-empty
+            // pc->tokens. The word_* / segment_* accessors return
+            // safe sentinels when n_tokens == 0, which is the
+            // documented behavior for "coarser than requested."
+            pc->tokens.clear();
+            for (auto & w : pc->words) {
+                w.first_token = 0;
+                w.n_tokens    = 0;
+            }
+            auto & s = pc->segments.back();
+            s.first_token = 0;
+            s.n_tokens    = 0;
+        }
+        // TRANSCRIBE_TIMESTAMPS_TOKEN: nothing to elide.
+
+        pc->result_kind = eff;
+        pc->has_result  = true;
+    }
+
+    return TRANSCRIBE_OK;
+}
+
 static transcribe_status run_one_shot_inner(
     ParakeetSession *         pc,
     ParakeetModel *           pm,
@@ -1129,251 +1396,8 @@ static transcribe_status run_one_shot_inner(
     ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
                             pc->enc_host.size() * sizeof(float));
 
-    // Optional dump of the encoder output as the decoder sees it,
-    // so the bring-up loop can verify the readback is faithful
-    // before chasing decoder bugs.
-    if (transcribe::debug::enabled()) {
-        const long long shape[2] = { T_enc, d_enc };
-        transcribe::debug::dump_host_f32(
-            "dec.enc_out", pc->enc_host.data(),
-            static_cast<long long>(pc->enc_host.size()),
-            shape, 2, "decoder.enc_out");
-    }
-
-    pc->raw_tokens.clear();
-    const int64_t t_dec_start = ggml_time_us();
-    {
-        transcribe_status st = TRANSCRIBE_OK;
-        switch (pm->host_decoder.head_kind) {
-            case HostHeadKind::TDT:
-                st = decode_tdt_greedy(pm->host_decoder, pc->enc_host.data(),
-                                       T_enc, d_enc, pc->raw_tokens);
-                break;
-            case HostHeadKind::RNNT:
-                st = decode_rnnt_greedy(pm->host_decoder, pc->enc_host.data(),
-                                        T_enc, d_enc, pc->raw_tokens);
-                break;
-            case HostHeadKind::CTC:
-                st = decode_ctc_greedy(pm->host_decoder, pc->enc_host.data(),
-                                       T_enc, d_enc, pc->raw_tokens);
-                break;
-        }
-        if (st != TRANSCRIBE_OK) return st;
-    }
-    pc->t_decode_us = ggml_time_us() - t_dec_start;
-
-    // ----- Build the public result hierarchy ----------------------
-    //
-    // Conversion: each emitted token's `step_at_emit` is an encoder
-    // frame index. The encoder downsamples by `subsampling_factor`
-    // relative to the mel hop, so one encoder frame corresponds to
-    // `subsampling_factor * hop_length / sample_rate` seconds of
-    // audio. For Parakeet 0.6B v2/v3 that's 8 * 160 / 16000 = 0.08 s
-    // per frame, i.e. 80 ms.
-    const double frame_to_ms =
-        1000.0 *
-        static_cast<double>(pm->hparams.enc_subsampling_factor) *
-        static_cast<double>(pm->hparams.fe_hop_length) /
-        static_cast<double>(pm->hparams.fe_sample_rate);
-
-    // SentencePiece word-boundary marker U+2581 ("▁"). UTF-8 bytes
-    // 0xE2 0x96 0x81. A token whose decoded text starts with the
-    // marker opens a new word; otherwise it extends the current
-    // word. We use the raw NeMo piece (not the post-decode "▁ →
-    // space" form) because the post-decode form leads with a space
-    // and that's a fragile thing to compare against — the raw
-    // piece's leading 3 UTF-8 bytes are unambiguous.
-    constexpr const char k_sp_marker[] = "\xE2\x96\x81";
-    constexpr int        k_sp_marker_len = 3;
-
-    const transcribe::Tokenizer & tok = pm->tok;
-
-    pc->tokens.reserve(pc->raw_tokens.size());
-    for (const TdtToken & rt : pc->raw_tokens) {
-        transcribe_session::TokenEntry te;
-        te.id    = rt.id;
-        te.p     = rt.p;
-        te.t0_ms = static_cast<int64_t>(
-            std::llround(frame_to_ms * static_cast<double>(rt.step_at_emit)));
-        // Per-token duration: clamp the duration_frames=0 case to a
-        // visually-distinct minimum of 0 ms (== t0). The result is a
-        // "point in time" token with no width.
-        const double end_frame =
-            static_cast<double>(rt.step_at_emit) +
-            static_cast<double>(rt.duration_frames);
-        te.t1_ms = static_cast<int64_t>(std::llround(frame_to_ms * end_frame));
-        // Decode just this single token to get its visible text
-        // fragment. The decoder strips the SentencePiece marker via
-        // Tokenizer::decode (▁ → space), so the leading character
-        // for word-starting tokens is an ASCII space.
-        te.text  = tok.decode(&rt.id, 1);
-        // seg_index / word_index filled below.
-        pc->tokens.push_back(std::move(te));
-    }
-
-    // Word + segment construction. v1 produces a single segment
-    // covering the entire clip; words are split on SentencePiece
-    // marker boundaries. Empty result → no segment, no words, no
-    // text — exactly what the public accessors return as their
-    // safe-sentinel state when there are no tokens.
-    if (!pc->tokens.empty()) {
-        // Single segment.
-        transcribe_session::SegmentEntry seg;
-        seg.t0_ms       = pc->tokens.front().t0_ms;
-        seg.t1_ms       = pc->tokens.back().t1_ms;
-        seg.first_token = 0;
-        seg.n_tokens    = static_cast<int>(pc->tokens.size());
-        seg.first_word  = 0;
-        // n_words filled after we count words below.
-
-        // Walk the raw token ids again to detect word boundaries.
-        // The first token always opens word 0; a token whose raw
-        // piece begins with the SentencePiece marker opens a new
-        // word. Continuation tokens (no marker) extend the current
-        // word.
-        transcribe_session::WordEntry  cur_word;
-        bool                        cur_word_open = false;
-
-        auto open_new_word = [&](int token_index, const transcribe_session::TokenEntry & tk) {
-            if (cur_word_open) {
-                cur_word.t1_ms   = pc->tokens[static_cast<size_t>(token_index - 1)].t1_ms;
-                cur_word.n_tokens = token_index - cur_word.first_token;
-                pc->words.push_back(std::move(cur_word));
-                cur_word = transcribe_session::WordEntry{};
-            }
-            cur_word.t0_ms       = tk.t0_ms;
-            cur_word.first_token = token_index;
-            cur_word.seg_index   = 0;
-            cur_word_open        = true;
-        };
-
-        for (size_t i = 0; i < pc->tokens.size(); ++i) {
-            const auto & tk        = pc->tokens[i];
-            const auto & raw_piece = tok.token(tk.id); // empty if id OOR
-            const bool starts_word =
-                (i == 0) ||
-                (raw_piece.size() >= static_cast<size_t>(k_sp_marker_len) &&
-                 std::memcmp(raw_piece.data(), k_sp_marker, k_sp_marker_len) == 0);
-            if (starts_word) {
-                open_new_word(static_cast<int>(i), tk);
-            }
-            // Whether we just opened a new word or not, the current
-            // word now contains this token. seg/word back-pointers:
-            pc->tokens[i].seg_index  = 0;
-            pc->tokens[i].word_index = static_cast<int>(pc->words.size());
-        }
-        // Close out the trailing word.
-        if (cur_word_open) {
-            cur_word.t1_ms    = pc->tokens.back().t1_ms;
-            cur_word.n_tokens = static_cast<int>(pc->tokens.size()) - cur_word.first_token;
-            pc->words.push_back(std::move(cur_word));
-        }
-
-        // Materialize each word's text via the tokenizer (so the
-        // SentencePiece "▁ → space" substitution runs on the whole
-        // span at once, including any mid-word continuation
-        // pieces). The leading space from a word-opener token is
-        // trimmed: a "word" should not include its own leading
-        // space.
-        std::vector<int> id_buf;
-        for (auto & wd : pc->words) {
-            id_buf.clear();
-            id_buf.reserve(static_cast<size_t>(wd.n_tokens));
-            for (int j = 0; j < wd.n_tokens; ++j) {
-                id_buf.push_back(pc->tokens[static_cast<size_t>(wd.first_token + j)].id);
-            }
-            std::string text = tok.decode(id_buf.data(), wd.n_tokens);
-            if (!text.empty() && text.front() == ' ') {
-                text.erase(text.begin());
-            }
-            wd.text = std::move(text);
-        }
-
-        seg.n_words = static_cast<int>(pc->words.size());
-
-        // Build the full text for the segment via the tokenizer
-        // (one decode call over every id, so the SentencePiece
-        // substitution sees the whole sequence).
-        std::vector<int> all_ids;
-        all_ids.reserve(pc->tokens.size());
-        for (const auto & tk : pc->tokens) all_ids.push_back(tk.id);
-        std::string full = tok.decode(all_ids.data(),
-                                      static_cast<int>(all_ids.size()));
-        if (!full.empty() && full.front() == ' ') {
-            full.erase(full.begin());
-        }
-        seg.text       = full;
-        pc->full_text  = std::move(full);
-        pc->segments.push_back(std::move(seg));
-
-        // Parakeet TDT produces token-level timestamps from the
-        // encoder frame indices (each emitted token's
-        // step_at_emit). Word and segment timestamps are derived
-        // by aggregating contained tokens. TOKEN is therefore the
-        // family's max_timestamp_kind, and everything above has
-        // already been populated at TOKEN granularity.
-        //
-        // Clamp to the caller's requested ceiling. AUTO resolves to
-        // the family max (TOKEN). A coarser request elides the
-        // finer levels: WORD drops the token list, SEGMENT drops
-        // tokens+words, NONE drops tokens+words and zeros the
-        // segment's t0/t1 so nothing dresses up as alignment data
-        // the caller did not ask for.
-        //
-        // The dispatcher has already rejected any request finer
-        // than TOKEN, so after the AUTO resolution below, eff is in
-        // {NONE, SEGMENT, WORD, TOKEN}.
-        transcribe_timestamp_kind eff = params->timestamps;
-        if (eff == TRANSCRIBE_TIMESTAMPS_AUTO) {
-            eff = pm->caps.max_timestamp_kind; // = TOKEN for parakeet
-        }
-        if (eff == TRANSCRIBE_TIMESTAMPS_NONE) {
-            // Keep the segment and its text, but drop alignment
-            // data. Tokens + words are a finer granularity than
-            // the caller asked for; segment timings are alignment
-            // too, so zero them.
-            pc->tokens.clear();
-            pc->words.clear();
-            auto & s = pc->segments.back();
-            s.t0_ms      = 0;
-            s.t1_ms      = 0;
-            s.first_word = 0;
-            s.n_words    = 0;
-            s.first_token = 0;
-            s.n_tokens    = 0;
-        } else if (eff == TRANSCRIBE_TIMESTAMPS_SEGMENT) {
-            // Keep segment timings, drop token + word tables.
-            pc->tokens.clear();
-            pc->words.clear();
-            auto & s = pc->segments.back();
-            s.first_word  = 0;
-            s.n_words     = 0;
-            s.first_token = 0;
-            s.n_tokens    = 0;
-        } else if (eff == TRANSCRIBE_TIMESTAMPS_WORD) {
-            // Keep segment + word timings, drop the token table.
-            // Every back-reference into the cleared token table
-            // must also be zeroed so a caller iterating words or
-            // the segment can never index into a now-empty
-            // pc->tokens. The word_* / segment_* accessors return
-            // safe sentinels when n_tokens == 0, which is the
-            // documented behavior for "coarser than requested."
-            pc->tokens.clear();
-            for (auto & w : pc->words) {
-                w.first_token = 0;
-                w.n_tokens    = 0;
-            }
-            auto & s = pc->segments.back();
-            s.first_token = 0;
-            s.n_tokens    = 0;
-        }
-        // TRANSCRIBE_TIMESTAMPS_TOKEN: nothing to elide.
-
-        pc->result_kind = eff;
-        pc->has_result  = true;
-    }
-
-    return TRANSCRIBE_OK;
+    return decode_and_populate(pc, pm, params, pc->enc_host.data(),
+                               T_enc, d_enc, /*utt_index=*/-1);
 }
 
 // One-shot entry point. Validates session/pm, clears the previous result
@@ -1406,6 +1430,371 @@ transcribe_status run(
 
     pc->clear_result();
     return run_one_shot_inner(pc, pm, pcm, n_samples, params);
+}
+
+// ---------------------------------------------------------------------------
+// Offline batch (transcribe_run_batch)
+// ---------------------------------------------------------------------------
+//
+// Batches B same-length utterances through ONE encoder graph (n_batch == B,
+// the batch riding the activation's ne[2] axis — see the conformer helpers)
+// in a single device dispatch, then host-decodes each utterance's encoder
+// slice. The mel front-end, decoder, and result-build are identical to the
+// single-shot path; only the encoder is fused. Utterances of differing
+// length fall back to the per-utterance path (variable-length batching pads
+// + masks the overhang — a separate change). Either way every utterance's
+// result is captured into session->batch_results in order.
+
+// Build + compute the batched encoder for `n` utterances, then decode each
+// into session->batch_results. Every entry of `mels` is the raw mel-major
+// [n_mels, nf[b]] buffer; this packs them into a [T_max, n_mels, 1, n] graph
+// input, zero-padding each along time to the batch's T_max. When utterances
+// differ in length it also builds + fills the variable-length masks (attn
+// key-padding + conv valid-frame) so each utterance's padded tail cannot
+// corrupt its real frames, and decodes each at its own T_enc. Same-length
+// batches (every nf == T_max) skip the masks and are bit-identical to
+// single-shot.
+static int pre_encode_t_out(int in) {
+    // One stride-2, kernel-3, pad-1 conv: floor((in + 2 - 3)/2) + 1.
+    return (in - 1) / 2 + 1;
+}
+
+static transcribe_status run_batch_encode(
+    ParakeetSession *                       pc,
+    ParakeetModel *                         pm,
+    const std::vector<std::vector<float>> & mels,
+    const std::vector<int> &                nf,
+    int                                     n_mels,
+    int                                     T_max,
+    int64_t                                 total_mel_us,
+    const transcribe_run_params *           params)
+{
+    const int n = static_cast<int>(mels.size());
+    bool var_len = false;
+    for (int b = 0; b < n; ++b) {
+        if (nf[b] != T_max) { var_len = true; break; }
+    }
+
+    // Pack mels into [T_max, n_mels, 1, n], zero-padding each along time.
+    // Source is mel-major [n_mels, nf[b]] (src[m*nf + t]); destination slab
+    // for utterance b is [T_max, n_mels] at offset b*n_mels*T_max
+    // (dst[m*T_max + t]).
+    const size_t per = static_cast<size_t>(n_mels) * static_cast<size_t>(T_max);
+    pc->mel_buf.assign(per * static_cast<size_t>(n), 0.0f);
+    for (int b = 0; b < n; ++b) {
+        const int nb = nf[b];
+        const float * src = mels[b].data();
+        float * dst = pc->mel_buf.data() + static_cast<size_t>(b) * per;
+        for (int m = 0; m < n_mels; ++m) {
+            std::copy(src + static_cast<size_t>(m) * nb,
+                      src + static_cast<size_t>(m) * nb + nb,
+                      dst + static_cast<size_t>(m) * T_max);
+        }
+    }
+
+    if (pc->compute_ctx != nullptr) {
+        ggml_free(pc->compute_ctx);
+        pc->compute_ctx = nullptr;
+    }
+    pc->encoder_out = nullptr;
+    {
+        ggml_init_params init_params {};
+        init_params.mem_size   = 4 * 1024 * 1024;
+        init_params.mem_buffer = nullptr;
+        init_params.no_alloc   = true;
+        pc->compute_ctx = ggml_init(init_params);
+        if (pc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+
+    ggml_type resolved_kv = GGML_TYPE_COUNT;
+    if (pc->kv_type == TRANSCRIBE_KV_TYPE_F32) resolved_kv = GGML_TYPE_F32;
+    if (pc->kv_type == TRANSCRIBE_KV_TYPE_F16) resolved_kv = GGML_TYPE_F16;
+
+    EncoderBuild eb = build_encoder_graph(
+        pc->compute_ctx, pm->weights, pm->hparams, T_max,
+        resolved_kv, pm->backend.c_str(), /*buf_mask=*/nullptr,
+        /*n_batch=*/n, /*batch_var_len=*/var_len);
+    if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    if (pc->sched == nullptr) {
+        pc->sched = ggml_backend_sched_new(
+            pm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(pm->plan.scheduler_list.size()),
+            /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
+        if (pc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(pc->sched);
+    if (!ggml_backend_sched_alloc_graph(pc->sched, eb.graph)) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    ggml_backend_tensor_set(eb.mel_in, pc->mel_buf.data(),
+                            0, pc->mel_buf.size() * sizeof(float));
+
+    const int d_enc = static_cast<int>(eb.out->ne[0]);
+    const int T_enc = static_cast<int>(eb.out->ne[1]);
+    if (d_enc <= 0 || T_enc <= 0) return TRANSCRIBE_ERR_GGUF;
+
+    // Per-utterance valid encoder-frame count (the same subsample the conv
+    // stack applies: 3 stride-2 convs on the time axis).
+    std::vector<int> real_tenc(static_cast<size_t>(n), T_enc);
+    if (var_len) {
+        for (int b = 0; b < n; ++b) {
+            int t = nf[b];
+            t = pre_encode_t_out(t);
+            t = pre_encode_t_out(t);
+            t = pre_encode_t_out(t);
+            real_tenc[b] = std::min(t, T_enc);
+        }
+        // Attention key-padding mask [T_enc, 1, 1, n]: 0 on real keys,
+        // -INF on padded keys. Row-major host buffer index b*T_enc + k.
+        if (eb.attn_pad_mask_in != nullptr) {
+            std::vector<float> am(static_cast<size_t>(T_enc) * n);
+            for (int b = 0; b < n; ++b) {
+                for (int k = 0; k < T_enc; ++k) {
+                    am[static_cast<size_t>(b) * T_enc + k] =
+                        (k < real_tenc[b]) ? 0.0f
+                                           : -std::numeric_limits<float>::infinity();
+                }
+            }
+            ggml_backend_tensor_set(eb.attn_pad_mask_in, am.data(),
+                                    0, am.size() * sizeof(float));
+        }
+        // Conv valid-frame mask [T_enc, 1, n, 1]: 1 on real frames, 0 on
+        // padded. Host buffer index b*T_enc + t.
+        if (eb.conv_pad_mask_in != nullptr) {
+            std::vector<float> cm(static_cast<size_t>(T_enc) * n);
+            for (int b = 0; b < n; ++b) {
+                for (int t = 0; t < T_enc; ++t) {
+                    cm[static_cast<size_t>(b) * T_enc + t] =
+                        (t < real_tenc[b]) ? 1.0f : 0.0f;
+                }
+            }
+            ggml_backend_tensor_set(eb.conv_pad_mask_in, cm.data(),
+                                    0, cm.size() * sizeof(float));
+        }
+
+        // Pre-encode valid-frame masks (masked subsampling). One per ReLU
+        // stage; the valid time length at stage k is the per-utterance mel
+        // length downsampled k times by the (in-1)/2+1 conv formula. Each
+        // mask is ne=[1, H_stage, 1, n] -> host index b*H_stage + h.
+        auto fill_pe_mask = [&](ggml_tensor * mask, int n_down) {
+            if (mask == nullptr) return;
+            const int H = static_cast<int>(mask->ne[1]);
+            std::vector<float> mb(static_cast<size_t>(H) * n, 0.0f);
+            for (int b = 0; b < n; ++b) {
+                int v = nf[b];
+                for (int d = 0; d < n_down; ++d) v = pre_encode_t_out(v);
+                if (v > H) v = H;
+                for (int h = 0; h < v; ++h) {
+                    mb[static_cast<size_t>(b) * H + h] = 1.0f;
+                }
+            }
+            ggml_backend_tensor_set(mask, mb.data(), 0, mb.size() * sizeof(float));
+        };
+        fill_pe_mask(eb.pre_encode_mask_s1_in, 1);  // after relu0
+        fill_pe_mask(eb.pre_encode_mask_s2_in, 2);  // after relu3
+        fill_pe_mask(eb.pre_encode_mask_s3_in, 3);  // after relu6
+    }
+
+    // Positional embedding (batch-independent; depends only on T_enc).
+    if (eb.pos_emb_in != nullptr) {
+        const int d_model = pm->hparams.enc_d_model;
+        const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
+        const bool is_chunked =
+            (pm->hparams.enc_att_context_style ==
+                 ParakeetHParams::AttContextStyle::ChunkedLimited);
+        const bool is_local_pe =
+            (!is_chunked) &&
+            (pm->hparams.enc_att_context_left >= 0 &&
+             pm->hparams.enc_att_context_right >= 0);
+        const int zero_index = is_local_pe
+            ? pm->hparams.enc_att_context_left
+            : (pos_len - 1) / 2;
+        pc->pos_buf.assign(static_cast<size_t>(pos_len) * d_model, 0.0f);
+        pc->pos_div_term.resize(static_cast<size_t>(d_model / 2));
+        const float ln_10000 = std::log(10000.0f);
+        for (int k = 0; k < d_model / 2; ++k) {
+            pc->pos_div_term[static_cast<size_t>(k)] =
+                std::exp(static_cast<float>(2 * k) *
+                         (-ln_10000 / static_cast<float>(d_model)));
+        }
+        for (int i = 0; i < pos_len; ++i) {
+            const float pos = static_cast<float>(zero_index - i);
+            float * row = pc->pos_buf.data() + static_cast<size_t>(i) * d_model;
+            for (int k = 0; k < d_model / 2; ++k) {
+                const float div = pc->pos_div_term[static_cast<size_t>(k)];
+                row[2 * k]     = std::sin(pos * div);
+                row[2 * k + 1] = std::cos(pos * div);
+            }
+        }
+        ggml_backend_tensor_set(eb.pos_emb_in, pc->pos_buf.data(),
+                                0, pc->pos_buf.size() * sizeof(float));
+    }
+
+    // ChunkedLimited attention mask (cache-aware variants). Allocated by
+    // build_encoder_graph when the model declares chunked attention; the
+    // single-shot path fills it and the batched path must too (otherwise the
+    // input is uninitialized and corrupts every attention score). The pattern
+    // depends only on T_enc, which the whole batch shares, so one mask
+    // broadcasts across the batch. Mirrors run_one_shot_inner.
+    if (eb.chunked_mask_in != nullptr) {
+        const int Tk          = static_cast<int>(eb.chunked_mask_in->ne[0]);
+        const int chunk_size  = pm->hparams.enc_att_context_right + 1;
+        const int left_chunks = (chunk_size > 0)
+            ? (pm->hparams.enc_att_context_left / chunk_size) : 0;
+        std::vector<float> mask_buf(static_cast<size_t>(Tk) * Tk);
+        for (int q = 0; q < Tk; ++q) {
+            const int q_chunk = (chunk_size > 0) ? (q / chunk_size) : 0;
+            const int k_min_chunk =
+                (q_chunk - left_chunks > 0) ? (q_chunk - left_chunks) : 0;
+            const int k_min = k_min_chunk * chunk_size;
+            const int k_max = (q_chunk + 1) * chunk_size;
+            float * row = mask_buf.data() + static_cast<size_t>(q) * Tk;
+            for (int k = 0; k < Tk; ++k) {
+                row[k] = (k >= k_min && k < k_max)
+                    ? 0.0f : -std::numeric_limits<float>::infinity();
+            }
+        }
+        ggml_backend_tensor_set(eb.chunked_mask_in, mask_buf.data(),
+                                0, mask_buf.size() * sizeof(float));
+    }
+
+    {
+        int n_threads = pc->n_threads;
+        if (n_threads <= 0) {
+            n_threads = std::min(8, std::max(1, static_cast<int>(
+                std::thread::hardware_concurrency())));
+        }
+        for (int i = 0; i < ggml_backend_sched_get_n_backends(pc->sched); ++i) {
+            ggml_backend_t be = ggml_backend_sched_get_backend(pc->sched, i);
+            ggml_backend_dev_t dev = ggml_backend_get_device(be);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (reg == nullptr) continue;
+            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+            if (fn != nullptr) fn(be, n_threads);
+        }
+    }
+
+    const int64_t t_enc_start = ggml_time_us();
+    if (const ggml_status gs =
+            ggml_backend_sched_graph_compute(pc->sched, eb.graph);
+        gs != GGML_STATUS_SUCCESS)
+    {
+        std::fprintf(stderr, "parakeet run_batch: graph_compute failed (%d)\n",
+                     static_cast<int>(gs));
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    pc->t_encode_us = ggml_time_us() - t_enc_start;
+
+    // Bisect dump (debug only): the batched encoder intermediates as full
+    // [d_model, T_max, n] tensors, so a batched-vs-single divergence can be
+    // located per stage. Gated on TRANSCRIBE_DUMP_ALL_BLOCKS.
+    if (transcribe::debug::enabled() &&
+        std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr)
+    {
+        if (eb.dumps.pre_encode_out != nullptr) {
+            transcribe::debug::dump_tensor("enc.pre_encode.out",
+                                           eb.dumps.pre_encode_out,
+                                           "encoder.pre_encode");
+        }
+        for (size_t i = 0; i < eb.dumps.all_block_outs.size(); ++i) {
+            ggml_tensor * t = eb.dumps.all_block_outs[i];
+            if (t == nullptr) continue;
+            char name[64];
+            std::snprintf(name, sizeof(name), "enc.block.%zu.out", i);
+            transcribe::debug::dump_tensor(name, t, "encoder.block.bisect");
+        }
+    }
+
+    const size_t utt_elems = static_cast<size_t>(d_enc) * static_cast<size_t>(T_enc);
+    pc->enc_host.resize(utt_elems * static_cast<size_t>(n));
+    ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
+                            pc->enc_host.size() * sizeof(float));
+
+    // Per-utterance timing attribution: the encoder is ONE shared dispatch,
+    // so amortize its total compute (and the total mel cost) across the batch
+    // — the sum over utterances then equals the real batch encode / mel time.
+    // Decode is genuinely per-utterance (decode_and_populate sets t_decode_us).
+    const int64_t enc_per_utt = pc->t_encode_us / std::max(1, n);
+    const int64_t mel_per_utt = total_mel_us / std::max(1, n);
+    for (int b = 0; b < n; ++b) {
+        if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        pc->clear_result();
+        const float * enc_b = pc->enc_host.data() + static_cast<size_t>(b) * utt_elems;
+        const transcribe_status st = decode_and_populate(
+            pc, pm, params, enc_b, real_tenc[b], d_enc, /*utt_index=*/b);
+        auto rs = pc->capture_result(st);   // rs.t_decode_us == this utt's decode
+        rs.t_mel_us    = mel_per_utt;
+        rs.t_encode_us = enc_per_utt;
+        pc->batch_results.push_back(std::move(rs));
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status run_batch(
+    transcribe_session *          session,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params)
+{
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    auto * pc = static_cast<ParakeetSession *>(session);
+    auto * pm = static_cast<ParakeetModel *>(pc->model);
+    if (pm == nullptr || pm->plan.scheduler_list.empty() || !pm->mel.has_value()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    transcribe::debug::init();
+
+    // Compute each utterance's mel. A malformed utterance (null pcm /
+    // non-positive samples / mel failure) means we cannot pack a clean batch
+    // tensor, so we fall back to the per-utterance path for the whole call
+    // (rare; keeps the batch tensor rectangular and the masks well-defined).
+    std::vector<std::vector<float>> mels(static_cast<size_t>(n));
+    std::vector<int>                nf(static_cast<size_t>(n), 0);
+    int  n_mels   = 0;
+    bool any_fail = false;
+    const int64_t t_mel_start = ggml_time_us();
+    for (int i = 0; i < n; ++i) {
+        if (pcm[i] == nullptr || n_samples[i] <= 0) { any_fail = true; break; }
+        int this_mels = 0, this_frames = 0;
+        const transcribe_status st = pm->mel->compute(
+            pcm[i], static_cast<size_t>(n_samples[i]),
+            mels[i], this_mels, this_frames);
+        if (st != TRANSCRIBE_OK || this_frames <= 0) { any_fail = true; break; }
+        nf[i]  = this_frames;
+        n_mels = this_mels;
+    }
+    const int64_t total_mel_us = ggml_time_us() - t_mel_start;
+
+    if (!any_fail) {
+        int T_max = 0;
+        for (int i = 0; i < n; ++i) T_max = std::max(T_max, nf[i]);
+        return run_batch_encode(pc, pm, mels, nf, n_mels, T_max,
+                                total_mel_us, params);
+    }
+
+    // Per-utterance fallback (also the malformed-input path).
+    for (int i = 0; i < n; ++i) {
+        if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        if (pcm[i] == nullptr || n_samples[i] <= 0) {
+            transcribe_session::ResultSet rs;
+            rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            pc->batch_results.push_back(std::move(rs));
+            continue;
+        }
+        pc->clear_result();
+        const transcribe_status st =
+            run_one_shot_inner(pc, pm, pcm[i], n_samples[i], params);
+        pc->batch_results.push_back(pc->capture_result(st));
+    }
+    return TRANSCRIBE_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -3223,7 +3612,7 @@ extern const Arch arch = {
     /* .load             = */ load,
     /* .init_context     = */ init_context,
     /* .run              = */ run,
-    /* .run_batch        = */ nullptr,
+    /* .run_batch        = */ run_batch,
     /* .stream_validate  = */ stream_validate,
     /* .stream_begin     = */ stream_begin,
     /* .stream_feed      = */ stream_feed,

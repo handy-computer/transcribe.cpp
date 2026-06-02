@@ -261,6 +261,15 @@ struct BlockParams {
     // compute buffer is allocated. Ignored for AttContextStyle::Regular.
     ggml_tensor * attn_chunked_mask = nullptr;
 
+    // Optional key-padding mask for variable-length offline batching.
+    // Shape [T_k, 1, 1, B] F32 (0 on real keys, -INF on padded keys);
+    // broadcasts across queries (ne[1]) and heads (ne[2]) and is added
+    // onto the attention score matrix in rel_pos_mhsa before flash /
+    // soft_max, exactly like attn_chunked_mask. Null for single-shot and
+    // same-length batches. Keeps a real query from attending to another
+    // utterance's padded tail frames.
+    ggml_tensor * attn_pad_mask = nullptr;
+
     // Depthwise conv padding. -1 / -1 means "centred (k-1)/2" on both
     // sides (every offline variant). Otherwise the depthwise conv
     // uses (conv_context_left, conv_context_right) directly. NeMo's
@@ -502,6 +511,29 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
                                     const BlockParams &   params,
                                     const BlockObserver * obs = nullptr);
 
+// Per-stage valid-frame masks for variable-length offline batching of the
+// pre_encode conv stem. Zero-padding utterances to a common length is NOT
+// transparent through this conv stack: the convs carry bias + ReLU, so the
+// padded region becomes non-zero after the first conv and then leaks into
+// each utterance's last VALID frame via the next stride-2 conv's receptive
+// field — corrupting exactly the boundary frame (it flips trailing CTC
+// tokens). The fix (NeMo's masked subsampling) is to zero each conv
+// intermediate's padded time region after every ReLU so the next conv sees
+// zeros beyond each utterance's boundary, exactly like a standalone run.
+//
+// When a non-null PreEncodeValidMasks is passed, build_pre_encode allocates
+// three time-valid mask graph inputs (one per ReLU stage) sized
+// ne=[1, H_stage, 1, B] (broadcast over freq + channels), applies them, and
+// writes the handles back here for the driver to fill (1.0 on valid frames,
+// 0.0 on padded). Only meaningful for the non-causal (offline) pre_encode;
+// the caller should skip it for causal/streaming variants whose output-length
+// formula differs.
+struct PreEncodeValidMasks {
+    ggml_tensor * mask_s1 = nullptr;  // after relu0
+    ggml_tensor * mask_s2 = nullptr;  // after relu3
+    ggml_tensor * mask_s3 = nullptr;  // after relu6
+};
+
 // DwStridingSubsampling pre_encode stack. Returns the final
 // [d_model, T_enc, 1, 1] tensor or nullptr on a shape-sanity failure.
 // `name_prefix`, if non-null, is used to attach ggml_set_name() calls
@@ -510,11 +542,15 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
 //
 // Uses pe.out_w->ne[0] as a final d_model sanity check. `error_tag`
 // supplies the family name used in the diagnostic on shape mismatch.
+//
+// valid_masks (optional): when non-null, enables the masked-subsampling path
+// above and is filled with the three mask input handles.
 ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                const PreEncodeView & pe,
                                ggml_tensor *         mel_in,
                                const ConvPolicy &    policy,
                                const char *          name_prefix,
-                               const char *          error_tag);
+                               const char *          error_tag,
+                               PreEncodeValidMasks * valid_masks = nullptr);
 
 } // namespace transcribe::conformer

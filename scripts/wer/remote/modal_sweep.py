@@ -394,16 +394,26 @@ def list_ggufs(repos: list[str]) -> list[tuple[str, list[str]]]:
 # ---------------------------------------------------------------------------
 
 def _hyp_cache_paths(model_file: str, dataset_spec: str,
-                     n_utts: int | None) -> tuple[str, str]:
-    """Deterministic Volume paths for the (model, dataset, subset) tuple.
+                     n_utts: int | None,
+                     batch_size: int = 1,
+                     sort_by_length: bool = True) -> tuple[str, str]:
+    """Deterministic Volume paths for the (model, dataset, subset, batch,
+    sort) tuple.
 
     Keyed under HYP_FP (source + run.py + ingest.py); changes to any of
-    these invalidate the cache. Dispatcher edits do not. Returns
+    these invalidate the cache. Dispatcher edits do not. batch_size and the
+    sort flag are part of the key because, while the hyp text is identical,
+    the summary's wall_s / rtf are not (length-sorting changes how much
+    padding each batch wastes). The default sorted case carries no extra
+    tag so it stays compatible with already-cached entries. Returns
     (hyp_jsonl_path, summary_json_path).
     """
     slug = model_file.replace(".gguf", "")
     subset_tag = "full" if n_utts is None else f"n{n_utts}"
-    base = f"/data/wer/hyps/{HYP_FP}/{slug}.{dataset_id(dataset_spec)}.{subset_tag}"
+    bs_tag = "" if batch_size <= 1 else f".b{batch_size}"
+    sort_tag = "" if sort_by_length else ".nosort"
+    base = (f"/data/wer/hyps/{HYP_FP}/{slug}."
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 
@@ -440,6 +450,8 @@ def _run_wer_impl(
     dataset_spec: str,
     n_utts: int | None,
     build_dir: str,
+    batch_size: int = 1,
+    sort_by_length: bool = True,
 ) -> dict:
     """Run scripts/wer/run.py on `n_utts` (or full manifest) and return the
     hyp JSONL contents + a summary dict back to the dispatcher.
@@ -452,7 +464,8 @@ def _run_wer_impl(
 
     # Cache lookup first; skips _prepare_work + model download + run.py entirely
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
-    cache_hyp, cache_sum = _hyp_cache_paths(model_file, dataset_spec, n_utts)
+    cache_hyp, cache_sum = _hyp_cache_paths(
+        model_file, dataset_spec, n_utts, batch_size, sort_by_length)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         print(f"[wer] cache hit: {cache_hyp}")
@@ -509,6 +522,10 @@ def _run_wer_impl(
         "--manifest", subset_path,
         "--out", hyp_path,
     ]
+    if batch_size and batch_size > 1:
+        cmd += ["--batch-size", str(batch_size)]
+        if sort_by_length:
+            cmd += ["--sort-by-length"]
     print(f"[wer] $ {' '.join(cmd)}")
     t0 = time.time()
     rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
@@ -528,6 +545,19 @@ def _run_wer_impl(
                 audio_s += w.getnframes() / w.getframerate()
 
     hyp_jsonl = open(hyp_path).read()
+    # Stage totals (sum of per-utt ms) so the dispatcher can show where the
+    # wall goes: amortized GPU encode vs host decode.
+    mel_ms = enc_ms = dec_ms = 0.0
+    for line in hyp_jsonl.splitlines():
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("type") == "batch_header":
+            continue
+        mel_ms += d.get("mel_ms", 0) or 0
+        enc_ms += d.get("encode_ms", 0) or 0
+        dec_ms += d.get("decode_ms", 0) or 0
     gpu = subprocess.check_output(
         ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
         text=True,
@@ -540,6 +570,11 @@ def _run_wer_impl(
         "audio_s": audio_s,
         "wall_s": wall_s,
         "rtf_wall": audio_s / wall_s if wall_s > 0 else 0.0,
+        "utt_per_s": subset_count / wall_s if wall_s > 0 else 0.0,
+        "batch_size": batch_size,
+        "mel_s": mel_ms / 1000.0,
+        "encode_s": enc_ms / 1000.0,
+        "decode_s": dec_ms / 1000.0,
         "gpu": gpu,
     }
     print(f"[wer] done: {summary}")
@@ -579,9 +614,12 @@ def _register_runner(gpu_id: str):
         model_file: str,
         dataset_spec: str = "librispeech:test-clean",
         n_utts: int | None = None,
+        batch_size: int = 1,
+        sort_by_length: bool = True,
     ) -> dict:
         return _run_wer_impl(
             model_repo, model_file, dataset_spec, n_utts, build_dir,
+            batch_size=batch_size, sort_by_length=sort_by_length,
         )
 
     runner.__name__ = name
@@ -773,6 +811,125 @@ def sweep(
         print(f"\nskipped: {len(skipped)} entries (listed at config time above)")
     print(f"\nscore locally:  for f in reports/wer/*.{dataset_id(dataset)}.jsonl; "
           f"do uv run scripts/wer/score.py \"$f\"; done")
+
+
+@app.local_entrypoint()
+def batch_sweep(
+    model: str,
+    quant: str = "F16",
+    dataset: str = "librispeech:test-clean",
+    gpu: str = "L40S",
+    n_utts: int = 128,
+    batch_sizes: str = "1,2,4,8,16",
+    sort_by_length: bool = True,
+    clean: bool = False,
+) -> None:
+    """Throughput sweep of transcribe_run_batch across batch sizes for ONE
+    model+quant on one GPU.
+
+    The batched encoder is numerically validated (hyp text is identical
+    across batch sizes), so this measures only wall / RTF / utt-per-s per
+    batch size — WER is unchanged. Each run length-sorts the manifest so a
+    batch groups similar-length clips (the encoder pads to the group max).
+
+    --model        hf_card slug or HF repo path (ONE model).
+    --quant        substring picking ONE quant filename (default F16).
+    --dataset      librispeech:<split> or fleurs:<bcp47>.
+    --gpu          Modal CUDA SKU (default L40S).
+    --n-utts        utterances per run (default 128).
+    --batch-sizes   comma list (default 1,2,4,8,16).
+    --sort-by-length  group similar-length clips per batch (default True).
+                    Pass --no-sort-by-length to measure the naive case where
+                    the manifest order is arbitrary and each batch pads to its
+                    longest clip (shows the cost of NOT bucketing).
+    --clean         force a clean build.
+
+      modal run scripts/wer/remote/modal_sweep.py::batch_sweep \\
+          --model parakeet-tdt-0.6b-v2 --gpu L40S --n-utts 128 \\
+          --batch-sizes 1,2,4,8,16
+    """
+    repo, fns = _resolve_model(model)
+    if fns is None:
+        fns = dict(list_ggufs.remote([repo])).get(repo, [])
+    fns = [f for f in fns if quant in f]
+    if not fns:
+        raise SystemExit(f"no quant matching {quant!r} for {model} in {repo}")
+    model_file = sorted(fns, key=len)[0]  # shortest matching filename
+    sizes = [int(s) for s in batch_sizes.split(",") if s.strip()]
+
+    runner = _GPU_FNS.get(gpu)
+    if runner is None:
+        raise SystemExit(
+            f"--gpu {gpu!r} not registered; choose: {sorted(_GPU_FNS)}")
+    arch = GPU_TO_ARCH[gpu]
+    build_dir = _build_dir(gpu)
+
+    print("==================== batch_sweep config ====================")
+    print(f"  model    = {model_file}  (repo {repo})")
+    print(f"  dataset  = {dataset}")
+    print(f"  gpu      = {gpu}")
+    print(f"  n_utts   = {n_utts}")
+    print(f"  batches  = {sizes}")
+    print(f"  sort     = {'length-sorted' if sort_by_length else 'NAIVE (unsorted)'}")
+    print("============================================================")
+
+    print(f">>> build (arch sm_{arch} -> {build_dir})")
+    build.remote(arch=arch, build_dir=build_dir, clean=clean)
+    print(f">>> prefetch dataset ({dataset})")
+    prefetch_dataset.remote(dataset)
+
+    n = None if n_utts < 0 else n_utts
+    # Launch all batch sizes in parallel (each its own container).
+    futs = [(bs, runner.spawn(repo, model_file, dataset, n, bs, sort_by_length))
+            for bs in sizes]
+
+    rows: list[tuple] = []
+    hyp_written = False
+    for bs, fut in futs:
+        try:
+            res = fut.get()
+            s = res["summary"]
+            rows.append((bs, s["n_utts"], s["audio_s"], s["wall_s"],
+                         s["rtf_wall"], s.get("utt_per_s", 0.0),
+                         s.get("encode_s", 0.0), s.get("decode_s", 0.0)))
+            tag = "CACHED" if res.get("cached") else "OK"
+            print(f"  [{tag}] b{bs}: wall {s['wall_s']:.1f}s  "
+                  f"RTF {s['rtf_wall']:.1f}x  {s.get('utt_per_s', 0.0):.1f} utt/s  "
+                  f"(encode {s.get('encode_s', 0.0):.1f}s / "
+                  f"decode {s.get('decode_s', 0.0):.1f}s)")
+            if not hyp_written:
+                _write_hyp(res["hyp_jsonl"], model_file, dataset)
+                hyp_written = True
+        except Exception as e:
+            print(f"  [FAIL] b{bs}: {e} (check Modal dashboard for stderr)")
+
+    if not rows:
+        raise SystemExit("no successful runs")
+
+    rows.sort()
+    base_wall = next((w for b, _, _, w, _, _, _, _ in rows if b == 1), None)
+    print("\n========== batch throughput sweep ==========")
+    print(f"{'n_batch':>7} {'n_utts':>6} {'audio_s':>9} {'wall_s':>8} "
+          f"{'rtf':>7} {'utt/s':>7} {'enc_s':>7} {'dec_s':>7} {'speedup':>8}")
+    for b, nn, aud, wall, rtf, ups, enc, dec in rows:
+        sp = (base_wall / wall) if (base_wall and wall > 0) else 0.0
+        print(f"{b:>7} {nn:>6} {aud:>9.1f} {wall:>8.1f} {rtf:>7.1f} "
+              f"{ups:>7.1f} {enc:>7.1f} {dec:>7.1f} {sp:>7.2f}x")
+
+    sort_suffix = "" if sort_by_length else "_nosort"
+    out = (pathlib.Path(REPO) / "reports" / "perf" / gpu.lower() /
+           f"{model_file.replace('.gguf', '')}_batch_wer_{gpu.lower()}{sort_suffix}.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(
+        [{"n_batch": b, "n_utts": nn, "audio_s": aud, "wall_s": wall,
+          "rtf_wall": rtf, "utt_per_s": ups, "encode_s": enc, "decode_s": dec,
+          "gpu": gpu}
+         for b, nn, aud, wall, rtf, ups, enc, dec in rows], indent=2) + "\n")
+    print(f"\nwrote {out}")
+    print("WER is identical across batch sizes; score the hyp once:")
+    print(f"  uv run scripts/wer/score.py "
+          f"reports/wer/{model_file.replace('.gguf', '')}."
+          f"{dataset_id(dataset)}.jsonl")
 
 
 @app.local_entrypoint()
