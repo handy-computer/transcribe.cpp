@@ -18,7 +18,9 @@ void apply_family_invariants(transcribe_model & model) {
     // stt.capability.{lang_detect,translate}=false and overwrite.
     caps.supports_language_detect = true;
     caps.supports_translate       = true;
-    caps.supports_streaming       = false;
+    // supports_streaming stays at its zero-init default (false); whisper
+    // has no streaming hooks. Left implicit to match the other
+    // non-streaming families rather than restating the default here.
 
     // Segment timestamps via the timestamp-token stream (<|t=0.00|> …
     // <|t=30.00|>, ids 50364+). Word-level timestamps via DTW over

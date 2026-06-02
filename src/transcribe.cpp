@@ -1547,14 +1547,25 @@ extern "C" transcribe_status transcribe_run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Pre-clear family-extension validation. A malformed run ext must
-    // NOT wipe the previous result snapshot — the snapshot-clearing
-    // semantics below are reserved for well-formed calls. Mirrors the
-    // transcribe_stream_begin contract for stream_params->family. The
-    // kind-accept probe needs a valid model; when model is null we
-    // skip the pre-clear check and let the post-clear NOT_IMPLEMENTED
-    // path handle it (the existing snapshot-wipe-on-NOT_IMPLEMENTED
-    // contract is preserved).
+    // Pre-clear family-extension SHAPE validation: a run ext with a bad
+    // transcribe_ext header size or a kind the model does not accept must
+    // NOT wipe the previous result snapshot. (The family's run_validate
+    // hook, run below after the run-param checks, additionally enforces
+    // the per-kind minimum struct size.) Mirrors the transcribe_stream_begin
+    // contract for stream_params->family. The kind-accept probe needs a
+    // valid model; when model is null we skip the pre-clear check and let
+    // the post-clear NOT_IMPLEMENTED path handle it (the existing
+    // snapshot-wipe-on-NOT_IMPLEMENTED contract is preserved).
+    //
+    // NOTE the limit of this guarantee: it covers ext *shape* (size/kind)
+    // and the run-param checks below. A family is free to defer deeper
+    // *value* validation to its run() handler, in which case a
+    // correctly-shaped but semantically-malformed ext can still be
+    // rejected after the snapshot is cleared. Whisper does exactly this
+    // for its prompt-semantics checks (see whisper_run_validate and the
+    // follow-up in docs/follow-ups.md); a family wanting full pre-clear
+    // safety should validate values in run_validate, the way parakeet's
+    // stream_validate vets its (L,C,R) menu.
     if (params->family != nullptr &&
         session->model != nullptr && session->model->arch != nullptr)
     {
@@ -1598,6 +1609,26 @@ extern "C" transcribe_status transcribe_run(
             !session->model->caps.supports_translate)
         {
             return TRANSCRIBE_ERR_UNSUPPORTED_TASK;
+        }
+
+        // Family run-ext validation (the _RUN analogue of stream_validate),
+        // the final pre-clear gate. Runs AFTER the run-param checks above,
+        // mirroring transcribe_stream_begin's ordering (dispatcher param
+        // checks, then the family validate hook, then clear). The family
+        // alone knows its per-kind minimum struct size; whisper enforces
+        // that here. A non-OK return preserves the previous snapshot. A
+        // family with no _RUN ext leaves this hook NULL. Called regardless
+        // of whether params->family is set (whisper's hook treats a NULL
+        // family as "defaults", returning OK).
+        if (session->model->arch != nullptr &&
+            session->model->arch->run_validate != nullptr)
+        {
+            if (const transcribe_status st =
+                    session->model->arch->run_validate(session, params);
+                st != TRANSCRIBE_OK)
+            {
+                return st;
+            }
         }
     }
 

@@ -198,19 +198,9 @@ struct ParakeetModel final : public transcribe_model {
 //     the streaming-mask offset so unfilled prefix rows are masked
 //     out until the cache fills.
 //
-//   mel_history             [n_mels, mel_hist_frames] f32 row-major
-//     Last N mel frames of the previous chunk, prepended to the next
-//     chunk's mel feed so the (non-causal) dw_striding subsample has
-//     correct left context (NeMo's pre_encode_cache_size mechanism).
-//
-//   pcm_remainder           variable-length f32
-//     PCM tail samples (< hop_length) from the previous feed; carried
-//     so the mel frontend operates on full hop-aligned frames.
-//
 // Sizes for nemotron-speech-streaming-en-0.6b at att_context_size=[70,13]:
 //   T_cache         = 70           (att_context_left)
 //   k_minus_1       = 8            (conv_kernel - 1)
-//   mel_hist_frames = 9            (subsampling_factor + 1)
 //   n_layer         = 24, d_model = 1024
 //   Total cache buffer ~7.5 MB.
 struct ParakeetStreamingCaches {
@@ -224,15 +214,6 @@ struct ParakeetStreamingCaches {
     std::vector<ggml_tensor *> last_time;
 
     int32_t channel_len = 0;
-
-    // Host-side carries. mel_history is row-major [n_mels, mel_hist_frames]
-    // matching MelFrontend's output. Sized at init; the contents
-    // are zeroed on each fresh stream_begin and rotate in-place per
-    // chunk.
-    std::vector<float> mel_history;
-    int                mel_hist_frames = 0;
-
-    std::vector<float> pcm_remainder;
 
     // Absolute mel-frame cursor across the whole stream — used to
     // anchor token / segment timestamps to original-audio time even

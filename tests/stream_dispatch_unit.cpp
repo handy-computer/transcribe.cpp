@@ -1127,6 +1127,249 @@ void test_begin_rejects_bad_commit_params_before_clear() {
     CHECK(session.full_text == "previous");
 }
 
+// ---------------------------------------------------------------------------
+// Mid-stream failure / cancellation coverage.
+//
+// The fake hooks above always succeed; these exercise the dispatcher's
+// ACTIVE -> FAILED transition, stream_last_status preservation, and the
+// TRANSCRIBE_ERR_ABORTED / was_aborted distinction, none of which the
+// success-only sequence hooks reach.
+// ---------------------------------------------------------------------------
+
+bool g_abort_flag = false;
+
+bool abort_cb_returns_flag(void * userdata) {
+    (void)userdata;
+    return g_abort_flag;
+}
+
+// Writes a partial result, then fails — models a family that produced
+// some output before hitting a terminal error mid-feed. The partial
+// snapshot must remain readable (the dispatcher does not clear it on the
+// failure path).
+transcribe_status fake_failing_stream_feed(
+    transcribe_session *       session,
+    const float *              pcm,
+    int                        n_samples,
+    transcribe_stream_update * update)
+{
+    (void)pcm;
+    (void)n_samples;
+    (void)update;
+    session->full_text  = "partial before failure";
+    session->has_result = true;
+    return TRANSCRIBE_ERR_BACKEND;
+}
+
+transcribe_status fake_failing_stream_finalize(
+    transcribe_session *       session,
+    transcribe_stream_update * update)
+{
+    (void)session;
+    (void)update;
+    return TRANSCRIBE_ERR_BACKEND;
+}
+
+// Polls the session abort callback the way a real family hook must. When
+// the callback fires, poll_abort() sets session->was_aborted and we
+// return the terminal ABORTED status; otherwise the feed succeeds.
+transcribe_status fake_aborting_stream_feed(
+    transcribe_session *       session,
+    const float *              pcm,
+    int                        n_samples,
+    transcribe_stream_update * update)
+{
+    (void)pcm;
+    (void)n_samples;
+    (void)update;
+    if (session->poll_abort()) {
+        return TRANSCRIBE_ERR_ABORTED;
+    }
+    session->full_text  = "ok chunk";
+    session->has_result = true;
+    return TRANSCRIBE_OK;
+}
+
+const transcribe::Arch & failing_arch() {
+    static const transcribe::Arch arch = {
+        "fake-failing-stream",
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        fake_stream_begin,           // begin succeeds -> ACTIVE
+        fake_failing_stream_feed,
+        fake_failing_stream_finalize,
+        nullptr,
+        fake_accepts_no_ext,
+    };
+    return arch;
+}
+
+const transcribe::Arch & aborting_arch() {
+    static const transcribe::Arch arch = {
+        "fake-aborting-stream",
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        fake_stream_begin,
+        fake_aborting_stream_feed,
+        fake_stream_finalize,
+        nullptr,
+        fake_accepts_no_ext,
+    };
+    return arch;
+}
+
+void setup_streaming_model(transcribe_model & model, const transcribe::Arch & arch) {
+    model.arch = &arch;
+    model.caps.supports_streaming = true;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+}
+
+void test_feed_failure_transitions_to_failed() {
+    transcribe_model model;
+    setup_streaming_model(model, failing_arch());
+    transcribe_session session;
+    session.model = &model;
+
+    CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_ACTIVE);
+
+    float pcm = 0.0f;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_ERR_BACKEND);
+
+    // ACTIVE -> FAILED, terminal status preserved, partial result readable.
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_FAILED);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_BACKEND);
+    CHECK(session.full_text == "partial before failure");
+    // Not a caller abort.
+    CHECK(transcribe_was_aborted(&session) == false);
+    // update was zero-inited by the dispatcher and never marked final on a
+    // failure path.
+    CHECK(upd.is_final == false);
+
+    // A FAILED stream rejects further feeds and the terminal status survives
+    // the rejected call.
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, nullptr) ==
+          TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_FAILED);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_BACKEND);
+
+    // reset re-arms: status back to OK, lifecycle back to IDLE.
+    transcribe_stream_reset(&session);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_IDLE);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_OK);
+}
+
+void test_finalize_failure_transitions_to_failed() {
+    transcribe_model model;
+    setup_streaming_model(model, failing_arch());
+    transcribe_session session;
+    session.model = &model;
+
+    // Begin only (no feed — failing_arch's feed would fail first); finalize
+    // an ACTIVE stream and let the family hook fail.
+    CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+    CHECK(transcribe_stream_finalize(&session, &upd) == TRANSCRIBE_ERR_BACKEND);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_FAILED);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_BACKEND);
+    // is_final marks the call site, not success: the dispatcher forces it
+    // true on any finalize call (including a failed one) so a caller can
+    // tell a finalize-originated update from a feed-originated one.
+    CHECK(upd.is_final == true);
+}
+
+void test_feed_abort_sets_was_aborted() {
+    transcribe_model model;
+    setup_streaming_model(model, aborting_arch());
+    transcribe_session session;
+    session.model = &model;
+    transcribe_set_abort_callback(&session, abort_cb_returns_flag, nullptr);
+
+    CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
+
+    float pcm = 0.0f;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+
+    // First feed: callback says "don't abort" -> succeeds, not aborted.
+    g_abort_flag = false;
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_ACTIVE);
+    CHECK(transcribe_was_aborted(&session) == false);
+
+    // Second feed: callback fires -> ABORTED, FAILED, was_aborted set, and the
+    // terminal status is ABORTED (distinguishable from a plain backend error).
+    g_abort_flag = true;
+    CHECK(transcribe_stream_feed(&session, &pcm, 1, &upd) == TRANSCRIBE_ERR_ABORTED);
+    CHECK(transcribe_stream_get_state(&session) == TRANSCRIBE_STREAM_FAILED);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_ERR_ABORTED);
+    CHECK(transcribe_was_aborted(&session) == true);
+    // Partial output from the successful first feed is still readable.
+    CHECK(session.full_text == "ok chunk");
+
+    // begin re-arms was_aborted for a fresh stream.
+    g_abort_flag = false;
+    CHECK(transcribe_stream_begin(&session, nullptr, nullptr) == TRANSCRIBE_OK);
+    CHECK(transcribe_was_aborted(&session) == false);
+    CHECK(transcribe_stream_last_status(&session) == TRANSCRIBE_OK);
+}
+
+// Two sessions derived from one shared, read-only model must keep fully
+// independent stream lifecycles — the documented concurrency contract
+// (one stream per session; advancing or finalizing one never disturbs the
+// other).
+void test_two_sessions_independent_streams() {
+    transcribe_model model;
+    setup_streaming_model(model, aborting_arch());
+
+    transcribe_session a;
+    transcribe_session b;
+    a.model = &model;
+    b.model = &model;
+    // Only b installs an abort callback; a must stay unaffected when b is
+    // cancelled below.
+    transcribe_set_abort_callback(&b, abort_cb_returns_flag, nullptr);
+    g_abort_flag = false;
+
+    float pcm = 0.0f;
+    transcribe_stream_update upd; transcribe_stream_update_init(&upd);
+
+    // A enters ACTIVE; B is untouched.
+    CHECK(transcribe_stream_begin(&a, nullptr, nullptr) == TRANSCRIBE_OK);
+    CHECK(transcribe_stream_get_state(&a) == TRANSCRIBE_STREAM_ACTIVE);
+    CHECK(transcribe_stream_get_state(&b) == TRANSCRIBE_STREAM_IDLE);
+
+    CHECK(transcribe_stream_feed(&a, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    const int a_rev = transcribe_stream_revision(&a);
+    CHECK(a_rev > 0);
+    CHECK(transcribe_stream_revision(&b) == 0);
+
+    // B begins and advances independently; A stays ACTIVE with its own
+    // revision unchanged by B's progress.
+    CHECK(transcribe_stream_begin(&b, nullptr, nullptr) == TRANSCRIBE_OK);
+    CHECK(transcribe_stream_feed(&b, &pcm, 1, &upd) == TRANSCRIBE_OK);
+    CHECK(transcribe_stream_get_state(&a) == TRANSCRIBE_STREAM_ACTIVE);
+    CHECK(transcribe_stream_revision(&a) == a_rev);
+
+    // Finalizing A moves only A to FINISHED; B remains ACTIVE.
+    CHECK(transcribe_stream_finalize(&a, &upd) == TRANSCRIBE_OK);
+    CHECK(transcribe_stream_get_state(&a) == TRANSCRIBE_STREAM_FINISHED);
+    CHECK(transcribe_stream_get_state(&b) == TRANSCRIBE_STREAM_ACTIVE);
+
+    // Aborting B's stream leaves A's FINISHED result intact.
+    g_abort_flag = true;
+    CHECK(transcribe_stream_feed(&b, &pcm, 1, &upd) == TRANSCRIBE_ERR_ABORTED);
+    CHECK(transcribe_stream_get_state(&b) == TRANSCRIBE_STREAM_FAILED);
+    CHECK(transcribe_was_aborted(&b) == true);
+    CHECK(transcribe_stream_get_state(&a) == TRANSCRIBE_STREAM_FINISHED);
+    CHECK(transcribe_was_aborted(&a) == false);
+    g_abort_flag = false;
+}
+
 } // namespace
 
 int main() {
@@ -1164,5 +1407,9 @@ int main() {
     test_stream_update_old_prefix_tail_untouched();
     test_old_stream_params_ignores_new_tail_fields();
     test_begin_rejects_bad_commit_params_before_clear();
+    test_feed_failure_transitions_to_failed();
+    test_finalize_failure_transitions_to_failed();
+    test_feed_abort_sets_was_aborted();
+    test_two_sessions_independent_streams();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

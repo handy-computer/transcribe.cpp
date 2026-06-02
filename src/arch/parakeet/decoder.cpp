@@ -1062,6 +1062,21 @@ transcribe_status decode_rnnt_greedy_streaming(
     if (enc_out == nullptr || T_enc_new <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    // This driver implements pure RNN-T greedy search: every non-blank
+    // advances the predictor by one symbol and every blank advances the
+    // encoder frame by exactly one. A TDT head's duration predictions
+    // would be silently ignored here (collapsing every blank to a single
+    // frame) and a CTC head carries no predictor state at all. Both of
+    // today's streaming parakeet variants are RNN-T, so this only guards
+    // a hypothetical future TDT/CTC streaming model — but it fails loud at
+    // the exact point of mis-decode rather than emitting wrong tokens.
+    if (w.head_kind != HostHeadKind::RNNT) {
+        std::fprintf(stderr,
+                     "parakeet decoder (rnnt-stream): streaming decode "
+                     "requires an RNN-T head; this model's head is not "
+                     "RNN-T\n");
+        return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
+    }
     if (d_enc != w.joint.d_enc) {
         std::fprintf(stderr,
                      "parakeet decoder (rnnt-stream): enc d_model mismatch "

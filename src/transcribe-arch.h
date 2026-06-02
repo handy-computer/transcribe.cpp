@@ -173,6 +173,35 @@ struct Arch {
         const struct transcribe_model *        model,
         transcribe_ext_slot                    slot,
         uint32_t                               kind);
+
+    // Optional pre-clear validation for the one-shot transcribe_run path,
+    // the _RUN-slot analogue of stream_validate. The dispatcher calls it
+    // as the LAST gate before clear_result wipes the previous snapshot,
+    // and AFTER its own pre-clear checks: run_params struct size, the
+    // _RUN-slot ext header size + kind acceptance, and the run-param
+    // checks (enum range, timestamp ceiling, language, TRANSLATE support).
+    // Must be pure: zero mutation of ctx or model. On non-OK return the
+    // dispatcher returns the status with the previous result snapshot
+    // fully preserved, so a rejected run ext cannot destroy the prior
+    // transcript.
+    //
+    // Scope of the snapshot-preservation guarantee: a family SHOULD put
+    // its run-ext value validation here (the way parakeet's stream_validate
+    // vets its (L,C,R) menu) so a caller typo is caught pre-clear. The
+    // guarantee only extends to what this hook actually checks. A family
+    // that defers some value checks to its run() handler trades them out
+    // of the guarantee: a correctly-shaped but semantically-malformed ext
+    // can still be rejected post-clear. Whisper currently validates only
+    // the per-kind minimum ext size here (transcribe_ext_check against the
+    // full ext struct) and leaves its prompt-semantics checks in run(); see
+    // docs/follow-ups.md.
+    //
+    // Placed last in the struct so families that do not accept a _RUN ext
+    // can leave it value-initialized to NULL; the dispatcher skips a NULL
+    // hook and the generic header-size + kind checks remain in force.
+    transcribe_status (*run_validate)(
+        const struct transcribe_session *      ctx,
+        const transcribe_run_params *          params);
 };
 
 // Look up an architecture by name. Returns nullptr if no registered

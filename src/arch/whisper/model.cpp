@@ -1293,10 +1293,11 @@ transcribe_status whisper_run(
     // aliases it.
     //
     // The dispatcher has already validated that, if params->family is
-    // non-null, its size+kind pass transcribe_model_accepts_ext_kind.
-    // We call transcribe_ext_check here for the per-family size
-    // assertion (rejects callers with a too-small ext struct on the
-    // family-owned minimum).
+    // non-null, its header size+kind pass transcribe_model_accepts_ext_kind
+    // AND that the per-family minimum size passes whisper_run_validate
+    // (the pre-clear hook). We repeat transcribe_ext_check here as defense
+    // in depth right before casting the pointer; by this point it can only
+    // succeed, but keeping it makes the cast locally self-guarding.
     //
     // Pointer-field lifetimes (initial_prompt, prompt_tokens) are
     // documented in include/transcribe/whisper.h: the library copies
@@ -2875,6 +2876,35 @@ static bool whisper_accepts_ext_kind(
     return kind == TRANSCRIBE_EXT_KIND_WHISPER_RUN;
 }
 
+// Pre-clear validation for the _RUN slot (see Arch::run_validate). Pure:
+// it only inspects params->family. The dispatcher has already confirmed
+// the ext header size and that WHISPER_RUN is accepted; here we enforce
+// the per-kind minimum (the full transcribe_whisper_run_ext) before the
+// previous result snapshot is cleared, so a too-small run ext is rejected
+// without destroying the prior transcript. whisper_run repeats this check
+// (defense in depth) right before it casts the pointer.
+//
+// Scope: this validates ext SHAPE only. Whisper's run-ext VALUE checks —
+// prompt_condition=ALL_SEGMENTS without condition_on_prev_tokens, a
+// prompt_tokens list that re-includes <|startofprev|>, and an
+// initial_prompt carrying disallowed special tokens — still live in
+// whisper_run() and therefore reject AFTER the snapshot is cleared. The
+// initial_prompt check is interleaved with prompt tokenization, so
+// hoisting these into a pure pre-clear validator means a second scan pass;
+// that restructuring is deferred (docs/follow-ups.md) rather than done
+// mid-port. Until then, a semantically-malformed (but correctly-sized)
+// whisper run ext does clear the prior transcript.
+static transcribe_status whisper_run_validate(
+    const transcribe_session *   ctx,
+    const transcribe_run_params * params)
+{
+    (void) ctx;
+    return transcribe_ext_check(
+        params != nullptr ? params->family : nullptr,
+        TRANSCRIBE_EXT_KIND_WHISPER_RUN,
+        sizeof(struct transcribe_whisper_run_ext));
+}
+
 } // namespace
 
 extern const Arch arch = {
@@ -2888,6 +2918,7 @@ extern const Arch arch = {
     /* .stream_finalize  = */ nullptr,
     /* .stream_reset     = */ nullptr,
     /* .accepts_ext_kind = */ whisper_accepts_ext_kind,
+    /* .run_validate     = */ whisper_run_validate,
 };
 
 } // namespace transcribe::whisper

@@ -277,7 +277,7 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(ParakeetModel & m) {
 constexpr const char k_default_variant[] = "tdt-0.6b-v2";
 
 // Allocate the streaming encoder caches (cache_last_channel,
-// cache_last_time, mel_history). Called lazily on the first
+// cache_last_time). Called lazily on the first
 // stream_begin for ChunkedLimited variants. Layout matches NeMo's
 // get_initial_cache_state exactly: see ParakeetStreamingCaches in
 // parakeet.h for shapes and the per-variant sizing rule.
@@ -302,14 +302,6 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
     const int    k_minus_1 = hp.enc_conv_context_left >= 0
                              ? hp.enc_conv_context_left
                              : (hp.enc_conv_kernel - 1);
-    // mel_hist = pre_encode_cache_size carried across chunks
-    // (subsampling_factor + 1 for FastConformer's 2-conv ConvSubsampling
-    // stack, which is what every streaming variant ships today). Prefer
-    // the GGUF KV; fall back to the derived value for legacy GGUFs that
-    // predate the streaming.pre_encode_cache_size KV.
-    const int    mel_hist  = hp.enc_stream_pre_encode_cache_size > 0
-                             ? hp.enc_stream_pre_encode_cache_size
-                             : hp.enc_subsampling_factor + 1;
 
     if (n_layer <= 0 || d_model <= 0 || T_cache <= 0 || k_minus_1 <= 0) {
         std::fprintf(stderr,
@@ -367,13 +359,6 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
         return TRANSCRIBE_ERR_BACKEND;
     }
 
-    // Host-side carries. mel_history is row-major [n_mels, mel_hist]
-    // (matching MelFrontend's output layout). pcm_remainder starts
-    // empty; it grows up to hop_length - 1 samples between feeds.
-    pc->stream_caches.mel_hist_frames = mel_hist;
-    pc->stream_caches.mel_history.assign(
-        static_cast<size_t>(hp.fe_num_mels) * mel_hist, 0.0f);
-    pc->stream_caches.pcm_remainder.clear();
     pc->stream_caches.channel_len         = 0;
     pc->stream_caches.mel_frames_consumed = 0;
 
@@ -393,9 +378,6 @@ void zero_streaming_caches(ParakeetSession * pc) {
     pc->stream_caches.channel_len         = 0;
     pc->stream_caches.mel_frames_consumed = 0;
     pc->stream_caches.pcm_start_sample    = 0;
-    std::fill(pc->stream_caches.mel_history.begin(),
-              pc->stream_caches.mel_history.end(), 0.0f);
-    pc->stream_caches.pcm_remainder.clear();
 }
 
 // Reset the streaming decoder state (LSTM h/c, prev token, frame
