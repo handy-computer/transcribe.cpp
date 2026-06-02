@@ -38,13 +38,13 @@ namespace transcribe::funasr_nano {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   FunAsrNanoModel>);
-static_assert(std::is_base_of_v<transcribe_context, FunAsrNanoContext>);
+static_assert(std::is_base_of_v<transcribe_session, FunAsrNanoSession>);
 
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-FunAsrNanoContext::~FunAsrNanoContext() {
+FunAsrNanoSession::~FunAsrNanoSession() {
     kv_cache.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
@@ -216,7 +216,7 @@ transcribe_status build_funasr_nano_prompt(const transcribe::Tokenizer & tok,
     return TRANSCRIBE_OK;
 }
 
-void apply_thread_policy(FunAsrNanoContext * cc) {
+void apply_thread_policy(FunAsrNanoSession * cc) {
     int n_threads = cc->n_threads;
     if (n_threads <= 0) {
         n_threads = std::min(8, std::max(1, static_cast<int>(
@@ -239,7 +239,7 @@ void apply_thread_policy(FunAsrNanoContext * cc) {
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -250,7 +250,7 @@ transcribe_status load(
     m->variant   = loader.variant().empty() ? k_default_variant : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -383,12 +383,12 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) return TRANSCRIBE_ERR_INVALID_ARG;
 
-    auto cc = std::make_unique<FunAsrNanoContext>();
+    auto cc = std::make_unique<FunAsrNanoSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
@@ -423,16 +423,16 @@ transcribe_status init_context(
 // ---------------------------------------------------------------------------
 
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * cc = static_cast<FunAsrNanoContext *>(ctx);
+    auto * cc = static_cast<FunAsrNanoSession *>(session);
     auto * cm = static_cast<FunAsrNanoModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty() ||
         cm->frontend == nullptr)
@@ -617,10 +617,19 @@ transcribe_status run(
         compute_fake_token_len(T_lfr, hp.adaptor_use_low_frame_rate);
 
     const char * lang = (params != nullptr) ? params->language : nullptr;
-    const bool use_itn =
-        (params != nullptr && params->funasr_nano != nullptr)
-            ? params->funasr_nano->use_itn
-            : false;
+    // Generic transcribe_run_params::itn routes here. DEFAULT maps to the
+    // family's shipping default (use_itn=false; matches the upstream
+    // `itn=False` Python path). OFF / ON override explicitly. The
+    // dispatcher's advisory WARN only fires when supports_itn == false;
+    // funasr_nano advertises supports_itn = true, so no WARN here.
+    bool use_itn = false;
+    if (params != nullptr) {
+        switch (params->itn) {
+            case TRANSCRIBE_ITN_MODE_DEFAULT: use_itn = false; break;
+            case TRANSCRIBE_ITN_MODE_OFF:     use_itn = false; break;
+            case TRANSCRIBE_ITN_MODE_ON:      use_itn = true;  break;
+        }
+    }
 
     std::vector<int32_t> prompt_ids;
     int fbank_beg = 0;
@@ -869,7 +878,7 @@ transcribe_status run(
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result = true;
 
-    transcribe_context::SegmentEntry seg {};
+    transcribe_session::SegmentEntry seg {};
     seg.text  = transcript;
     seg.t0_ms = 0;
     seg.t1_ms = static_cast<int64_t>(n_samples) * 1000
@@ -882,10 +891,16 @@ transcribe_status run(
 } // namespace
 
 extern const Arch arch = {
-    /* .name         = */ "funasr_nano",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name             = */ "funasr_nano",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .stream_validate  = */ nullptr,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::funasr_nano

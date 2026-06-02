@@ -5,13 +5,13 @@ hf_repo: ibm-granite/granite-speech-4.1-2b-nar
 target_repo: handy-computer/granite-speech-4.1-2b-nar-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/granite-speech-4.1-2b-nar.md
 
-upstream_commit: 7d20732
-pin_date: 2026-05-17
+upstream_commit: 99a4df9
+pin_date: 2026-05-24
 
 validation:
   reference: Transformers
-  commit: 275332d
-  date: 2026-05-17
+  commit: c53af2c
+  date: 2026-05-24
 
 license: apache-2.0
 license_display: Apache-2.0
@@ -50,39 +50,40 @@ wer:
   source: LibriSpeech test-clean
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances).
-    BF16 reference baseline (re-run locally): 1.29% — matches the upstream
-    model card exactly. Text normalizer: Whisper `EnglishTextNormalizer`, the
+    BF16 reference baseline (transformers `model.transcribe`, MPS, re-run
+    locally): 1.28% — matches the upstream model card's 1.29% to within
+    sampling noise. Text normalizer: Whisper `EnglishTextNormalizer`, the
     same normalizer Open ASR Leaderboard uses. Reference reproduction
-    required monkey-patching
-    `transformers.models.granite.modeling_granite.create_causal_mask` to
-    `None` to bypass an unconditional causal mask in eager attention; with
-    that patch, eager matches the upstream `flash-attn-2` bidirectional
-    semantics. The transcribe.cpp runtime implements bidirectional attention
-    natively; this note only matters if you reproduce the reference on a host
-    without flash-attn-2.
+    follows the model card path verbatim (`AutoProcessor` +
+    `AutoModel.transcribe` + `processor.batch_decode`) at HF revision
+    `99a4df9` (single-file `modeling_granite_speech_nar.py` snapshot, the
+    README's canonical target); no mask patching is required because the
+    NAR LM uses `create_bidirectional_mask()` natively. F16, Q8_0, and
+    Q6_K all match BF16's 1.29%; Q5_K_M dips slightly to 1.25% (within
+    overlapping CIs).
 
 quants:
   - name: BF16
     filename: granite-speech-4.1-2b-nar-BF16.gguf
-    size: 4.51 GB
+    size: 4.20 GB
     wer: 1.29%
   - name: F16
     filename: granite-speech-4.1-2b-nar-F16.gguf
-    size: 4.52 GB
+    size: 4.21 GB
     wer: 1.29%
   - name: Q8_0
     filename: granite-speech-4.1-2b-nar-Q8_0.gguf
-    size: 2.50 GB
+    size: 2.33 GB
     wer: 1.29%
   - name: Q6_K
     filename: granite-speech-4.1-2b-nar-Q6_K.gguf
-    size: 1.98 GB
+    size: 1.84 GB
     wer: 1.29%
   - name: Q5_K_M
     filename: granite-speech-4.1-2b-nar-Q5_K_M.gguf
-    size: 1.78 GB
-    wer: 1.28%
+    size: 1.66 GB
+    wer: 1.25%
   - name: Q4_K_M
     filename: granite-speech-4.1-2b-nar-Q4_K_M.gguf
-    size: 1.56 GB
-    wer: 1.34%
+    size: 1.45 GB
+    wer: 1.35%

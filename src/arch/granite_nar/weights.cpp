@@ -59,6 +59,17 @@ transcribe_status read_granite_nar_hparams(const gguf_context * gguf,
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.output_dim", kTag, hp.enc_output_dim); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.bpe_output_dim", kTag, hp.enc_bpe_output_dim); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.bpe_pool_window", kTag, hp.enc_bpe_pool_window); st != TRANSCRIBE_OK) return st;
+    // bpe_blank_id is a NEW key (added when we re-finalized against the
+    // 99a4df9 snapshot). Older GGUFs (converted before this change) won't
+    // have it; default to 0 to preserve the legacy decode scheme.
+    {
+        int32_t tmp = 0;
+        if (read_required_u32_kv(gguf, "stt.granite_nar.encoder.bpe_blank_id", kTag, tmp) == TRANSCRIBE_OK) {
+            hp.enc_bpe_blank_id = tmp;
+        } else {
+            hp.enc_bpe_blank_id = 0;
+        }
+    }
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.self_cond_layer", kTag, hp.enc_self_cond_layer); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.feedforward_mult", kTag, hp.enc_feedforward_mult); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.conv_kernel_size", kTag, hp.enc_conv_kernel_size); st != TRANSCRIBE_OK) return st;

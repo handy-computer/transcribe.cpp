@@ -192,10 +192,10 @@ int main(int argc, char ** argv) {
     const double sample_duration_s = static_cast<double>(pcm.size()) / 16000.0;
 
     // Load model. --backend propagates directly to
-    // transcribe_model_params::backend, which the per-family loader
+    // transcribe_model_load_params::backend, which the per-family loader
     // consumes via transcribe::load_common::init_backends.
     if (!quiet) std::fprintf(stderr, "loading model %s\n", args.model_path.c_str());
-    struct transcribe_model_params mp = transcribe_model_default_params();
+    struct transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = args.backend;
     struct transcribe_model *      model = nullptr;
     if (const transcribe_status st =
@@ -208,10 +208,10 @@ int main(int argc, char ** argv) {
     const std::string backend = (backend_c && *backend_c) ? backend_c : "unknown";
 
     // Init context.
-    struct transcribe_context_params cp = transcribe_context_default_params();
+    struct transcribe_session_params cp; transcribe_session_params_init(&cp);
     cp.n_threads = args.n_threads;
-    struct transcribe_context * ctx = nullptr;
-    if (const transcribe_status st = transcribe_context_init(model, &cp, &ctx);
+    struct transcribe_session * ctx = nullptr;
+    if (const transcribe_status st = transcribe_session_init(model, &cp, &ctx);
         st != TRANSCRIBE_OK) {
         std::fprintf(stderr, "error: context init: %s\n", transcribe_status_string(st));
         transcribe_model_free(model);
@@ -219,9 +219,14 @@ int main(int argc, char ** argv) {
     }
 
     // load_ms is a model-scoped one-shot, captured before any run.
-    const double load_ms = static_cast<double>(transcribe_get_timings(ctx).load_ms);
+    double load_ms = 0.0;
+    {
+        struct transcribe_timings load_tm; transcribe_timings_init(&load_tm);
+        (void)transcribe_get_timings(ctx, &load_tm);
+        load_ms = static_cast<double>(load_tm.load_ms);
+    }
 
-    struct transcribe_params rp = transcribe_default_params();
+    struct transcribe_run_params rp; transcribe_run_params_init(&rp);
 
     // Warmup (untimed).
     for (int w = 0; w < args.warmup; ++w) {
@@ -231,7 +236,7 @@ int main(int argc, char ** argv) {
             st != TRANSCRIBE_OK) {
             std::fprintf(stderr, "error: warmup %d: %s\n",
                          w + 1, transcribe_status_string(st));
-            transcribe_context_free(ctx);
+            transcribe_session_free(ctx);
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
@@ -253,11 +258,12 @@ int main(int argc, char ** argv) {
         if (st != TRANSCRIBE_OK) {
             std::fprintf(stderr, "error: run %d: %s\n",
                          it + 1, transcribe_status_string(st));
-            transcribe_context_free(ctx);
+            transcribe_session_free(ctx);
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
-        const struct transcribe_timings after = transcribe_get_timings(ctx);
+        struct transcribe_timings after; transcribe_timings_init(&after);
+        (void)transcribe_get_timings(ctx, &after);
         iter_timings row;
         row.mel_ms    = static_cast<double>(after.mel_ms);
         row.encode_ms = static_cast<double>(after.encode_ms);
@@ -278,8 +284,10 @@ int main(int argc, char ** argv) {
     token_ids_csv.reserve(static_cast<size_t>(n_tokens) * 6);
     for (int i = 0; i < n_tokens; ++i) {
         if (i > 0) token_ids_csv.push_back(',');
+        struct transcribe_token tok; transcribe_token_init(&tok);
+        (void)transcribe_get_token(ctx, i, &tok);
         char buf[16];
-        std::snprintf(buf, sizeof(buf), "%d", transcribe_token_id(ctx, i));
+        std::snprintf(buf, sizeof(buf), "%d", tok.id);
         token_ids_csv.append(buf);
     }
 
@@ -358,7 +366,7 @@ int main(int argc, char ** argv) {
         std::fwrite(out.data(), 1, out.size(), stdout);
     }
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
     return exit_code;
 }

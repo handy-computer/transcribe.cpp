@@ -106,7 +106,7 @@ void check_load(const char *      fixture_name,
                 transcribe_status expected) {
     const std::string p = g_fixtures_dir + "/" + fixture_name;
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     // Sentinel so we can verify the loader clears out_model on every
     // failure path, not just on success.
     struct transcribe_model * m = (struct transcribe_model *)0xdeadbeef;
@@ -139,7 +139,7 @@ void check_load(const char *      fixture_name,
 // from ERR_GGUF. The leading slash + sentinel-y name avoids any chance
 // of colliding with a real file the developer happens to have.
 void test_missing_path() {
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     struct transcribe_model * m = (struct transcribe_model *)0xdeadbeef;
 
     const transcribe_status st = transcribe_model_load_file(
@@ -163,7 +163,7 @@ void test_missing_path() {
 // TRANSCRIBE_ERR_GGUF means. We use the fixtures directory itself,
 // which is guaranteed to exist by the build dependency on `fixtures`.
 void test_directory_path() {
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     struct transcribe_model * m = (struct transcribe_model *)0xdeadbeef;
 
     const transcribe_status st = transcribe_model_load_file(

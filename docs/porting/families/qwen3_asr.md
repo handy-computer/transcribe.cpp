@@ -132,7 +132,7 @@ Bridge validation:
 Things the first port intentionally does not do; tracked as follow-
 up work rather than shipped-and-broken.
 
-- **Language hinting is rejected.** `transcribe_params.language == NULL`
+- **Language hinting is rejected.** `transcribe_run_params.language == NULL`
   is the supported mode and triggers the model's built-in auto-detect
   (it prefixes the transcript with `language X`, which we strip before
   returning). Any non-null hint, including a language in the

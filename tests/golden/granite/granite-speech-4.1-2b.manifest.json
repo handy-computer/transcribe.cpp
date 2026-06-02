@@ -10,7 +10,8 @@
     "kind": "transformers",
     "source": "https://github.com/huggingface/transformers",
     "revision": "v5.8.1",
-    "entrypoint": "scripts/dump_reference_granite_transformers.py"
+    "entrypoint": "scripts/dump_reference_granite_transformers.py",
+    "dump_args": ["--instruction", "transcribe the speech with proper punctuation and capitalization."]
   },
   "expected_dtype": "bfloat16",
   "dtype_source": "config",

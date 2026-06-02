@@ -1,13 +1,13 @@
 // arch/cohere/cohere.h - Cohere ASR model and context types.
 //
 // This header is INTERNAL to src/arch/cohere/. It defines the concrete
-// classes that derive from transcribe_model / transcribe_context for
+// classes that derive from transcribe_model / transcribe_session for
 // the Cohere ASR family (encoder-decoder conformer + transformer).
 
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -32,7 +32,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::cohere {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // ---------------------------------------------------------------------------
 // KV cache for the autoregressive decoder.
@@ -143,7 +143,7 @@ struct CohereModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct CohereContext final : public transcribe_context {
+struct CohereSession final : public transcribe_session {
     ggml_context *        compute_ctx    = nullptr;
     ggml_backend_sched_t  sched          = nullptr;
     ggml_tensor *         encoder_out    = nullptr;
@@ -176,8 +176,8 @@ struct CohereContext final : public transcribe_context {
     bool               encoder_use_flash = true;
     bool               decoder_use_flash = true;
 
-    CohereContext() = default;
-    ~CohereContext() override;
+    CohereSession() = default;
+    ~CohereSession() override;
 };
 
 } // namespace transcribe::cohere

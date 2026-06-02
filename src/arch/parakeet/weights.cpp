@@ -76,6 +76,89 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_left",  kFamilyTag, -1, hp.enc_att_context_left);  st != TRANSCRIBE_OK) return st;
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_right", kFamilyTag, -1, hp.enc_att_context_right); st != TRANSCRIBE_OK) return st;
 
+    // Multi-lookahead training menu (cache-aware streaming models). Flat
+    // int32 array [L0,R0,L1,R1,...]; index 0 must equal (att_context_left,
+    // att_context_right). Optional — absent for offline GGUFs, in which
+    // case we synthesize a one-element list from the scalar fields so
+    // call sites read uniformly.
+    {
+        std::vector<int32_t> flat;
+        switch (read_int32_array_kv(gguf, "stt.parakeet.encoder.att_context_size_choices", flat)) {
+            case KvResult::Ok:
+                if (flat.empty() || (flat.size() % 2) != 0) {
+                    std::fprintf(stderr,
+                                 "parakeet: stt.parakeet.encoder.att_context_size_choices "
+                                 "has odd length %zu (expected pairs)\n", flat.size());
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                hp.enc_att_context_size_choices.clear();
+                hp.enc_att_context_size_choices.reserve(flat.size() / 2);
+                for (size_t i = 0; i + 1 < flat.size(); i += 2) {
+                    hp.enc_att_context_size_choices.emplace_back(flat[i], flat[i + 1]);
+                }
+                if (hp.enc_att_context_size_choices.front().first  != hp.enc_att_context_left ||
+                    hp.enc_att_context_size_choices.front().second != hp.enc_att_context_right)
+                {
+                    std::fprintf(stderr,
+                                 "parakeet: att_context_size_choices[0] = (%d, %d) "
+                                 "but att_context_left/right = (%d, %d); "
+                                 "GGUF is inconsistent\n",
+                                 hp.enc_att_context_size_choices.front().first,
+                                 hp.enc_att_context_size_choices.front().second,
+                                 hp.enc_att_context_left, hp.enc_att_context_right);
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                break;
+            case KvResult::Absent:
+                // Synthesize from the scalar fields. For full-attention
+                // GGUFs (-1, -1) this still produces a one-element list;
+                // streaming code paths gate on att_context_style anyway.
+                hp.enc_att_context_size_choices.clear();
+                hp.enc_att_context_size_choices.emplace_back(
+                    hp.enc_att_context_left, hp.enc_att_context_right);
+                break;
+            case KvResult::BadType:
+                std::fprintf(stderr,
+                             "parakeet: stt.parakeet.encoder.att_context_size_choices "
+                             "has wrong type (expected int32 array)\n");
+                return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    // Chunked-limited-with-rc training menu (buffered streaming variants).
+    // Three independent int32 arrays carrying the L / C / R choices the
+    // model was trained against. Absent for non-buffered-streaming GGUFs;
+    // when present they're a structured triple read into the hparams
+    // and the runtime picks one entry from each at stream_begin time.
+    {
+        auto read_menu = [&](const char * key, std::vector<int32_t> & out) -> transcribe_status {
+            std::vector<int32_t> raw;
+            switch (read_int32_array_kv(gguf, key, raw)) {
+                case KvResult::Ok:
+                    out = std::move(raw);
+                    return TRANSCRIBE_OK;
+                case KvResult::Absent:
+                    out.clear();
+                    return TRANSCRIBE_OK;
+                case KvResult::BadType:
+                    std::fprintf(stderr,
+                                 "parakeet: %s has wrong type "
+                                 "(expected int32 array)\n", key);
+                    return TRANSCRIBE_ERR_GGUF;
+            }
+            return TRANSCRIBE_ERR_GGUF;
+        };
+        if (auto st = read_menu("stt.parakeet.encoder.att_chunk_left_choices",
+                                hp.enc_att_chunk_left_choices);
+            st != TRANSCRIBE_OK) return st;
+        if (auto st = read_menu("stt.parakeet.encoder.att_chunk_chunk_choices",
+                                hp.enc_att_chunk_chunk_choices);
+            st != TRANSCRIBE_OK) return st;
+        if (auto st = read_menu("stt.parakeet.encoder.att_chunk_right_choices",
+                                hp.enc_att_chunk_right_choices);
+            st != TRANSCRIBE_OK) return st;
+    }
+
     // Attention context style. Optional with default "regular" so legacy
     // GGUFs (every variant before nemotron-speech-streaming-en-0.6b)
     // stay on the existing local/full path.
@@ -91,10 +174,25 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
             hp.enc_att_context_style = ParakeetHParams::AttContextStyle::Regular;
         } else if (style == "chunked_limited") {
             hp.enc_att_context_style = ParakeetHParams::AttContextStyle::ChunkedLimited;
+        } else if (style == "chunked_limited_with_rc") {
+            hp.enc_att_context_style = ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc;
+            if (hp.enc_att_chunk_left_choices.empty()  ||
+                hp.enc_att_chunk_chunk_choices.empty() ||
+                hp.enc_att_chunk_right_choices.empty())
+            {
+                std::fprintf(stderr,
+                             "parakeet: att_context_style=chunked_limited_with_rc "
+                             "requires non-empty att_chunk_{left,chunk,right}_choices "
+                             "arrays in the GGUF; got %zu/%zu/%zu entries\n",
+                             hp.enc_att_chunk_left_choices.size(),
+                             hp.enc_att_chunk_chunk_choices.size(),
+                             hp.enc_att_chunk_right_choices.size());
+                return TRANSCRIBE_ERR_GGUF;
+            }
         } else {
             std::fprintf(stderr,
                          "parakeet: unsupported att_context_style \"%s\" "
-                         "(allowed: regular, chunked_limited)\n",
+                         "(allowed: regular, chunked_limited, chunked_limited_with_rc)\n",
                          style.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -125,6 +223,28 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                          norm_type.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
+    }
+
+    // Cache-aware streaming pre-encode constants. Optional — both KVs
+    // are emitted only by streaming-trained variants. Default 0 (means
+    // "non-streaming"); the streaming code paths gate on both > 0.
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.streaming.pre_encode_cache_size",
+                                         kFamilyTag, 0, hp.enc_stream_pre_encode_cache_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.streaming.drop_extra_pre_encoded",
+                                         kFamilyTag, 0, hp.enc_stream_drop_extra_pre_encoded);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.streaming.sampling_frames_first",
+                                         kFamilyTag, 0, hp.enc_stream_sampling_frames_first);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
     }
 
     // Head kind dispatch. Optional KV with default "tdt" so legacy
@@ -494,19 +614,32 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
 
     // The flattened "freq" axis going into pre_encode.out is
     // (subsampling_channels * F') where F' is the freq dim after the
-    // three stride-2 convs. Offline variants use symmetric (k-1)/2
-    // padding and end up at F' = n_mels / subsampling_factor (e.g.
-    // 128 → 64 → 32 → 16, then 256 * 16 = 4096). Cache-aware
-    // streaming variants (nemotron) use CausalConv2D with
-    // (left=k-1, right=stride-1) on both axes; for k=3 / s=2 / p=0
-    // the freq trail is 128 → 65 → 33 → 17, giving 256 * 17 = 4352.
-    // We compute the actual F' by tracing the three conv ops on the
-    // configured padding so a single formula handles both cases.
+    // three stride-2 convs. The pre-encode convs are k=3, s=2 (NeMo's
+    // dw_striding stack); their padding tracks NeMo's
+    // `encoder.causal_downsampling` flag, NOT the conformer's
+    // conv_context_size (which is the kernel-9 conv-module's context
+    // and lives in hp.enc_conv_context_{left,right}). The two are
+    // unrelated.
+    //
+    //   causal_downsampling=false (every offline variant and the
+    //     buffered-streaming parakeet-unified-en-0.6b): symmetric
+    //     (k-1)/2 padding on both sides. 128 → 64 → 32 → 16; 256*16
+    //     = 4096.
+    //   causal_downsampling=true  (cache-aware streaming variants,
+    //     i.e. nemotron-speech-streaming-en-0.6b): CausalConv2D with
+    //     (left=k-1, right=stride-1) on both axes. 128 → 65 → 33 →
+    //     17; 256*17 = 4352.
+    //
+    // We don't currently emit the boolean to GGUF; we infer it from
+    // the attention style. Only ChunkedLimited (2-tuple, cache-aware)
+    // implies causal pre-encode. Regular (offline full / local) and
+    // ChunkedLimitedWithRc (3-tuple buffered) both use non-causal.
     auto pre_encode_F_prime = [&]() {
-        const bool causal = (hp.enc_conv_context_left  >= 0 &&
-                             hp.enc_conv_context_right >= 0);
+        const bool causal =
+            (hp.enc_att_context_style ==
+                 ParakeetHParams::AttContextStyle::ChunkedLimited);
         const int k = 3, s = 2;
-        // Total per-axis pad: (k-1)/2 + (k-1)/2 = k-1 = 2 for offline;
+        // Total per-axis pad: (k-1)/2 + (k-1)/2 = k-1 = 2 for non-causal;
         // (k-1) + (s-1) = 3 for causal.
         const int total_pad = causal ? ((k - 1) + (s - 1))
                                      : ((k - 1) / 2 + (k - 1) / 2);

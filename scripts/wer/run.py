@@ -166,6 +166,27 @@ def main() -> int:
                    choices=("auto", "none", "segment", "word", "token"),
                    default="none",
                    help="Timestamp granularity passthrough (default: none)")
+    p.add_argument("--stream-chunk-ms", type=int, default=0,
+                   help="When > 0, drive each utterance through the "
+                        "streaming API in N-ms chunks. Requires a model "
+                        "that advertises supports_streaming.")
+    p.add_argument("--stream-att-right", type=int, default=None,
+                   help="Parakeet streaming: pick a right-context "
+                        "(lookahead) setting from the model's training "
+                        "menu. Ignored unless --stream-chunk-ms > 0.")
+    p.add_argument("--stream-buf-left-ms", type=int, default=None,
+                   help="Parakeet-unified buffered streaming: override "
+                        "the left-context size in ms. Ignored unless "
+                        "--stream-chunk-ms > 0 and the model is "
+                        "buffered-streaming capable.")
+    p.add_argument("--stream-buf-chunk-ms", type=int, default=None,
+                   help="Parakeet-unified buffered streaming: override "
+                        "the chunk size in ms. Ignored unless "
+                        "--stream-chunk-ms > 0.")
+    p.add_argument("--stream-buf-right-ms", type=int, default=None,
+                   help="Parakeet-unified buffered streaming: override "
+                        "the right-context (lookahead) size in ms. "
+                        "Ignored unless --stream-chunk-ms > 0.")
     args = p.parse_args()
 
     # Resolve --dataset first (may run ingest.py). --dataset takes
@@ -255,6 +276,16 @@ def main() -> int:
     if args.language:
         cmd += ["--language", args.language]
     cmd += ["--timestamps", args.timestamps]
+    if args.stream_chunk_ms > 0:
+        cmd += ["--stream-chunk-ms", str(args.stream_chunk_ms)]
+        if args.stream_att_right is not None:
+            cmd += ["--stream-att-right", str(args.stream_att_right)]
+        if args.stream_buf_left_ms is not None:
+            cmd += ["--stream-buf-left-ms", str(args.stream_buf_left_ms)]
+        if args.stream_buf_chunk_ms is not None:
+            cmd += ["--stream-buf-chunk-ms", str(args.stream_buf_chunk_ms)]
+        if args.stream_buf_right_ms is not None:
+            cmd += ["--stream-buf-right-ms", str(args.stream_buf_right_ms)]
     print(f"  $ {' '.join(cmd[:6])} ...")
 
     t_start = time.monotonic()

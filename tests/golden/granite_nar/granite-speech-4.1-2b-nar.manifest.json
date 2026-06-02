@@ -4,14 +4,14 @@
   "variant": "granite-speech-4.1-2b-nar",
   "source_model": {
     "hf_repo": "ibm-granite/granite-speech-4.1-2b-nar",
-    "hf_revision": "7d20732df04d097262c4ecd8fe7f34ec2b3e6c42"
+    "hf_revision": "99a4df9007ac5682f9daa093fb7008ff606e9a5d"
   },
   "reference": {
     "kind": "transformers",
     "source": "https://huggingface.co/ibm-granite/granite-speech-4.1-2b-nar",
-    "revision": "7d20732df04d097262c4ecd8fe7f34ec2b3e6c42",
+    "revision": "99a4df9007ac5682f9daa093fb7008ff606e9a5d",
     "entrypoint": "scripts/dump_reference_granite_nar_transformers.py",
-    "comment": "trust_remote_code: NLEConfig + NLENARDecoder + EncoderProjectorQFormer + NLECTCEncoder + NLEConformerBlock + Tokenizer all live in the HF repo. attn_implementation=eager so is_causal=False on every llm layer yields the bidirectional forward (flash-attn isn't available on Apple)."
+    "comment": "trust_remote_code: GraniteSpeechNarConfig + GraniteSpeechNarForASR + GraniteSpeechNarProjector + GraniteSpeechNarCTCEncoder + Conformer blocks live in modeling_granite_speech_nar.py at the pinned revision. The dumper mirrors the model card README path (AutoProcessor + AutoModel + model.transcribe). attn_implementation=eager on CPU (no flash-attn on Apple); the NAR LM uses create_bidirectional_mask() natively, so no mask-helper patching is needed."
   },
   "expected_dtype": "bfloat16",
   "dtype_source": "config",

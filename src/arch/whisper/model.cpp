@@ -45,7 +45,7 @@ namespace transcribe::whisper {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   WhisperModel>);
-static_assert(std::is_base_of_v<transcribe_context, WhisperContext>);
+static_assert(std::is_base_of_v<transcribe_session, WhisperSession>);
 
 WhisperModel::~WhisperModel() {
     if (ctx_meta != nullptr) {
@@ -66,7 +66,7 @@ WhisperModel::~WhisperModel() {
     plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
-WhisperContext::~WhisperContext() {
+WhisperSession::~WhisperSession() {
     kv_cache.free();
     enc_out.free();
     if (sched != nullptr) {
@@ -209,7 +209,7 @@ constexpr const char k_default_variant[] = "whisper";
 // loop. The free + malloc churn was visible in the per-step build
 // timer (~30 us per step on tiny F16) plus allocator pressure on
 // very long inputs.
-bool ensure_compute_ctx(WhisperContext * cc, size_t mem) {
+bool ensure_compute_ctx(WhisperSession * cc, size_t mem) {
     if (cc->compute_ctx != nullptr) {
         if (cc->compute_ctx_size >= mem) {
             ggml_reset(cc->compute_ctx);
@@ -347,7 +347,7 @@ bool whisper_perf_enabled() {
 
 transcribe_status whisper_load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -485,7 +485,7 @@ transcribe_status whisper_load(
 
     // Capabilities: apply family invariants, then let the GGUF KV
     // override, then install the language list from general.languages.
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -556,21 +556,21 @@ transcribe_status whisper_load(
 
 transcribe_status whisper_init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto cc = std::make_unique<WhisperContext>();
+    auto cc = std::make_unique<WhisperSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
     // Whisper defaults: both encoder and decoder flash-on. Head dim for
     // whisper-tiny is 64 (d_model=384, 6 heads); supported on every
-    // backend we ship. See WhisperContext for the rationale.
+    // backend we ship. See WhisperSession for the rationale.
     cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(
@@ -606,7 +606,7 @@ namespace {
 // short-form) and for the first chunk in long-form; false otherwise
 // so the long-form loop does not overwrite dumps from the first chunk.
 transcribe_status run_whisper_encoder_on_window(
-    WhisperContext * cc,
+    WhisperSession * cc,
     WhisperModel *   cm,
     const float *    mel_data,
     int              n_mels,
@@ -986,16 +986,16 @@ transcribe_status load_mel_from_ref(const char *         ref_dir,
 } // namespace
 
 transcribe_status whisper_run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * cc = static_cast<WhisperContext *>(ctx);
+    auto * cc = static_cast<WhisperSession *>(session);
     auto * cm = static_cast<WhisperModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1267,7 +1267,7 @@ transcribe_status whisper_run(
         }
 
         if (!want_segment_timestamps) {
-            transcribe_context::SegmentEntry seg {};
+            transcribe_session::SegmentEntry seg {};
             seg.text = text;
             cc->segments.push_back(std::move(seg));
         }
@@ -1282,12 +1282,30 @@ transcribe_status whisper_run(
         }
     };
 
-    // Run-scoped Whisper params pointer + RNG.
+    // Run-scoped Whisper run-ext pointer + RNG.
     //
-    // The params pointer is hoisted here so per-chunk state (temperature
-    // tuple, threshold checks, max_initial_timestamp cap) all read from a
-    // single source. NULL selects the library defaults; the local
-    // `default_wp` must outlive the chunk loop because `wp` aliases it.
+    // The whisper-specific knobs (initial prompt, prompt-token
+    // conditioning, temperature tuple, threshold checks,
+    // max_initial_timestamp cap) live on a kind-tagged family
+    // extension reached via transcribe_run_params::family. NULL selects
+    // transcribe_whisper_run_ext_init() — Whisper's own shipping recipe.
+    // The local `default_wp` must outlive the chunk loop because `wp`
+    // aliases it.
+    //
+    // The dispatcher has already validated that, if params->family is
+    // non-null, its header size+kind pass transcribe_model_accepts_ext_kind
+    // AND that the per-family minimum size passes whisper_run_validate
+    // (the pre-clear hook). We repeat transcribe_ext_check here as defense
+    // in depth right before casting the pointer; by this point it can only
+    // succeed, but keeping it makes the cast locally self-guarding.
+    //
+    // Pointer-field lifetimes (initial_prompt, prompt_tokens) are
+    // documented in include/transcribe/whisper.h: the library copies
+    // the referenced data into context state before transcribe_run
+    // returns; the caller may free the underlying buffers immediately
+    // after the call. Whisper realizes that contract by tokenizing
+    // initial_prompt into prev_ids below and by reading prompt_tokens
+    // into the same vector — neither pointer is retained.
     //
     // RNG must be run-scoped, not chunk-scoped. HF does not reset its
     // sampler between chunks (generation_whisper.py threads a single
@@ -1298,11 +1316,19 @@ transcribe_status whisper_run(
     // is meant to achieve (reproducible long-form transcripts). When
     // seed == 0 we draw an OS entropy sample once and then let the
     // single rng advance monotonically across chunks and tiers.
-    const transcribe_whisper_params default_wp =
-        transcribe_whisper_default_params();
-    const transcribe_whisper_params * wp =
-        (params != nullptr && params->whisper != nullptr)
-            ? params->whisper : &default_wp;
+    if (const transcribe_status st = transcribe_ext_check(
+            params != nullptr ? params->family : nullptr,
+            TRANSCRIBE_EXT_KIND_WHISPER_RUN,
+            sizeof(struct transcribe_whisper_run_ext));
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    transcribe_whisper_run_ext default_wp; transcribe_whisper_run_ext_init(&default_wp);
+    const transcribe_whisper_run_ext * wp =
+        (params != nullptr && params->family != nullptr)
+            ? reinterpret_cast<const transcribe_whisper_run_ext *>(params->family)
+            : &default_wp;
     std::mt19937 rng(wp->seed != 0 ? wp->seed : std::random_device{}());
 
     // ===== Stage 3: prompt + condition_on_prev_tokens setup =============
@@ -1367,7 +1393,7 @@ transcribe_status whisper_run(
             std::fprintf(stderr,
                          "whisper run: prompt_tokens must not include "
                          "<|startofprev|> (id %d) at index 0; the library "
-                         "prepends it. See transcribe_whisper_params docs.\n",
+                         "prepends it. See transcribe_whisper_run_ext docs.\n",
                          prev_sot_id);
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
@@ -1847,7 +1873,7 @@ transcribe_status whisper_run(
         // tier's output (HF does the same to avoid infinite loops).
         //
         // Thresholds use INF sentinels to mean "disabled"; see
-        // transcribe_whisper_default_params() and the header's DISABLED
+        // transcribe_whisper_run_ext_init() and the header's DISABLED
         // constants. `wp` and `rng` are hoisted to run scope above.
         std::vector<float> temperatures;
         temperatures.push_back(wp->temperature);
@@ -2575,7 +2601,7 @@ transcribe_status whisper_run(
         // no-speech gate saw; callers tracing a hallucination can map
         // an output segment back to the tier/metric that produced it.
         {
-            transcribe_whisper_chunk_trace trace = {};
+            transcribe_whisper_chunk_trace trace; transcribe_whisper_chunk_trace_init(&trace);
             trace.t0_ms               = time_offset_ms;
             trace.t1_ms               = time_offset_ms +
                                         static_cast<int64_t>(seek_num_frames) * 10;
@@ -2718,7 +2744,7 @@ transcribe_status whisper_run(
                     static_cast<int64_t>(last_tok - timestamp_begin);
 
                 if (want_segment_timestamps) {
-                    transcribe_context::SegmentEntry seg {};
+                    transcribe_session::SegmentEntry seg {};
                     seg.t0_ms = time_offset_ms + start_ts_pos * 20;
                     seg.t1_ms = time_offset_ms + end_ts_pos   * 20;
                     if (seg.t1_ms < seg.t0_ms) seg.t1_ms = seg.t0_ms;
@@ -2760,7 +2786,7 @@ transcribe_status whisper_run(
                 }
             }
             if (want_segment_timestamps && gn > 0) {
-                transcribe_context::SegmentEntry seg {};
+                transcribe_session::SegmentEntry seg {};
                 seg.t0_ms = time_offset_ms;
                 seg.t1_ms = time_offset_ms + last_ts_pos * 20;
                 seg.text  = decode_range(0, gn);
@@ -2836,13 +2862,67 @@ transcribe_status whisper_run(
     return TRANSCRIBE_OK;
 }
 
+// Kind+slot probe. Whisper ships only the WHISPER_RUN run-extension and
+// has no streaming surface, so the _STREAM slot is always false and the
+// _RUN slot accepts only WHISPER_RUN. There is currently no whisper
+// variant that ships without the run-ext surface.
+static bool whisper_accepts_ext_kind(
+    const transcribe_model * model,
+    transcribe_ext_slot      slot,
+    uint32_t                 kind)
+{
+    (void) model;
+    if (slot != TRANSCRIBE_EXT_SLOT_RUN) return false;
+    return kind == TRANSCRIBE_EXT_KIND_WHISPER_RUN;
+}
+
+// Pre-clear validation for the _RUN slot (see Arch::run_validate). Pure:
+// it only inspects params->family. The dispatcher has already confirmed
+// the ext header size and that WHISPER_RUN is accepted; here we enforce
+// the per-kind minimum (the full transcribe_whisper_run_ext) before the
+// previous result snapshot is cleared, so a too-small run ext is rejected
+// without destroying the prior transcript. whisper_run repeats this check
+// (defense in depth) right before it casts the pointer.
+//
+// Scope: this validates ext SHAPE only. Whisper's run-ext VALUE checks —
+// prompt_condition=ALL_SEGMENTS without condition_on_prev_tokens, a
+// prompt_tokens list that re-includes <|startofprev|>, and an
+// initial_prompt carrying disallowed special tokens — live in whisper_run()
+// and reject AFTER the snapshot is cleared, so a semantically-malformed (but
+// correctly-sized) whisper run ext does clear the prior transcript.
+//
+// This is an intentional, accepted gap, not pending work. A malformed run
+// ext is a caller programming error surfaced as INVALID_ARG; the run() path
+// is one-shot (each call yields a fresh complete result the caller has
+// already consumed), so unlike the streaming families there is no
+// accumulating transcript to protect. The cost/benefit of hoisting the
+// value checks here does not justify it. See docs/follow-ups.md for the
+// full rationale should this ever need revisiting.
+static transcribe_status whisper_run_validate(
+    const transcribe_session *   ctx,
+    const transcribe_run_params * params)
+{
+    (void) ctx;
+    return transcribe_ext_check(
+        params != nullptr ? params->family : nullptr,
+        TRANSCRIBE_EXT_KIND_WHISPER_RUN,
+        sizeof(struct transcribe_whisper_run_ext));
+}
+
 } // namespace
 
 extern const Arch arch = {
-    /* .name         = */ "whisper",
-    /* .load         = */ whisper_load,
-    /* .init_context = */ whisper_init_context,
-    /* .run          = */ whisper_run,
+    /* .name             = */ "whisper",
+    /* .load             = */ whisper_load,
+    /* .init_context     = */ whisper_init_context,
+    /* .run              = */ whisper_run,
+    /* .stream_validate  = */ nullptr,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ whisper_accepts_ext_kind,
+    /* .run_validate     = */ whisper_run_validate,
 };
 
 } // namespace transcribe::whisper

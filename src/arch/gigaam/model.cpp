@@ -45,9 +45,9 @@ namespace transcribe::gigaam {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   GigaamModel>);
-static_assert(std::is_base_of_v<transcribe_context, GigaamContext>);
+static_assert(std::is_base_of_v<transcribe_session, GigaamSession>);
 
-GigaamContext::~GigaamContext() {
+GigaamSession::~GigaamSession() {
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -83,7 +83,7 @@ namespace {
 constexpr const char k_default_variant[] = "gigaam-v3-e2e-rnnt";
 
 transcribe_status load(Loader &                         loader,
-                       const transcribe_model_params *  params,
+                       const transcribe_model_load_params *  params,
                        transcribe_model **              out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -95,7 +95,7 @@ transcribe_status load(Loader &                         loader,
     m->variant = loader.variant().empty() ? k_default_variant : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -175,12 +175,12 @@ transcribe_status load(Loader &                         loader,
 }
 
 transcribe_status init_context(transcribe_model *                model,
-                               const transcribe_context_params * params,
-                               transcribe_context **             out_ctx)
+                               const transcribe_session_params * params,
+                               transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) return TRANSCRIBE_ERR_INVALID_ARG;
 
-    auto gc = std::make_unique<GigaamContext>();
+    auto gc = std::make_unique<GigaamSession>();
     gc->model     = model;
     gc->n_threads = params->n_threads;
     gc->kv_type   = params->kv_type;
@@ -238,16 +238,16 @@ transcribe_status load_ref_mel(const std::string & dir,
 
 } // namespace
 
-transcribe_status run(transcribe_context *      ctx,
+transcribe_status run(transcribe_session *      session,
                       const float *             pcm,
                       int                       n_samples,
-                      const transcribe_params *)
+                      const transcribe_run_params *)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * gc = static_cast<GigaamContext *>(ctx);
+    auto * gc = static_cast<GigaamSession *>(session);
     auto * gm = static_cast<GigaamModel *>(gc->model);
     if (gm == nullptr || gm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -449,7 +449,7 @@ transcribe_status run(transcribe_context *      ctx,
         gc->tokens.clear();
         gc->tokens.reserve(tokens.size());
         for (size_t i = 0; i < tokens.size(); ++i) {
-            transcribe_context::TokenEntry te{};
+            transcribe_session::TokenEntry te{};
             te.id    = tokens[i];
             te.text  = gm->tok.token(tokens[i]);
             te.t0_ms = static_cast<int64_t>(frames[i]) * 40;
@@ -464,10 +464,16 @@ transcribe_status run(transcribe_context *      ctx,
 } // namespace
 
 const Arch arch = {
-    /*.name         =*/ "gigaam",
-    /*.load         =*/ load,
-    /*.init_context =*/ init_context,
-    /*.run          =*/ run,
+    /*.name             =*/ "gigaam",
+    /*.load             =*/ load,
+    /*.init_context     =*/ init_context,
+    /*.run              =*/ run,
+    /*.stream_validate  =*/ nullptr,
+    /*.stream_begin     =*/ nullptr,
+    /*.stream_feed      =*/ nullptr,
+    /*.stream_finalize  =*/ nullptr,
+    /*.stream_reset     =*/ nullptr,
+    /*.accepts_ext_kind =*/ nullptr,
 };
 
 } // namespace transcribe::gigaam

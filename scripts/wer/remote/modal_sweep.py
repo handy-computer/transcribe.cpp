@@ -88,13 +88,24 @@ def _source_fingerprint(root: pathlib.Path) -> str:
     # Mirrors the add_local_dir(ignore=...) list. envs is the big one:
     # scripts/envs/<family>/ contains tens of thousands of vendored Python
     # files. Pruning at traversal time keeps this function sub-second.
+    #
+    # `skip_dir_prefixes` mirrors the glob patterns in add_local_dir's
+    # ignore list ("build-*/**", ...) — the bare set above only catches
+    # literal name matches, which leaves stale `build-vulkan/`,
+    # `build-san/`, etc. visible to the laptop while the container's
+    # add_local_dir excludes them. The two enumerators must agree or
+    # the build-cache lookup downstream looks at a different SRC_FP
+    # than the build wrote.
     skip_dirs = {"build", ".cache", ".git", ".venv", "__pycache__",
                  "reports", "models", "samples", "envs", "node_modules"}
+    skip_dir_prefixes = ("build-",)
     h = hashlib.sha256()
     entries: list[tuple[str, pathlib.Path]] = []
     for dirpath, dirnames, filenames in os.walk(root, topdown=True):
         dirnames[:] = [d for d in dirnames
-                       if d not in skip_dirs and not d.startswith(".")]
+                       if d not in skip_dirs
+                       and not d.startswith(".")
+                       and not any(d.startswith(p) for p in skip_dir_prefixes)]
         for fn in filenames:
             p = pathlib.Path(dirpath, fn)
             entries.append((str(p.relative_to(root)), p))

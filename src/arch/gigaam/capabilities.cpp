@@ -8,7 +8,9 @@
 
 namespace transcribe::gigaam {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     // GigaAM-v3's FeatureExtractor is a fixed 16 kHz mel bank for every
     // published variant. The CLI rejects non-16 kHz audio at load time.
     caps.native_sample_rate = 16000;
@@ -21,13 +23,11 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // honest timestamp resolution is per-token.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 
-    // No initial-prompt / temperature-fallback / long-form: those belong
-    // to autoregressive families. Cancellation is honored at the top of
-    // each run() so callers can short-circuit a long audio.
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
+    // Cancellation is honored at the top of each run() so callers can
+    // short-circuit a long audio. No initial-prompt / temperature
+    // fallback / long-form chunker; those belong to autoregressive
+    // families. No runtime PNC/ITN toggle.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
 } // namespace transcribe::gigaam

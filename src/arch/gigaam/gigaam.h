@@ -18,7 +18,7 @@
 #include "decoder.h"
 #include "mel.h"
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
@@ -41,7 +41,7 @@ namespace transcribe::gigaam {
 // Family defaults — applied before read_capability_kv runs. Defined in
 // capabilities.cpp. KV-driven overrides take precedence per the
 // project-wide convention.
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // Concrete model. Owns the ggml_context that holds every weight tensor's
 // data buffer, and any per-family precomputed buffers we may add later
@@ -72,7 +72,7 @@ struct GigaamModel final : public transcribe_model {
 
 // Concrete context. One scheduler + compute_ctx lifecycle per context,
 // mirroring parakeet.
-struct GigaamContext final : public transcribe_context {
+struct GigaamSession final : public transcribe_session {
     ggml_context *        compute_ctx = nullptr;
     ggml_backend_sched_t  sched       = nullptr;
 
@@ -86,8 +86,8 @@ struct GigaamContext final : public transcribe_context {
 
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
-    GigaamContext() = default;
-    ~GigaamContext() override;
+    GigaamSession() = default;
+    ~GigaamSession() override;
 };
 
 } // namespace transcribe::gigaam

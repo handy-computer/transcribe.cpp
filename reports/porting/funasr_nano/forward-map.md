@@ -67,7 +67,7 @@ Adaptor block deviations from qwen3_asr encoder block:
 
 | Capability | Reference behavior | C++ API behavior | Family-doc Capability Validation row |
 |------------|--------------------|------------------|--------------------------------------|
-| Transcribe (explicit en) | `auto.generate(language="en", itn=False)` → prompt = `语音转写成en，不进行文本规整：` | `transcribe_params{language="en"}` builds the same prompt | row "Transcribe / explicit en" |
+| Transcribe (explicit en) | `auto.generate(language="en", itn=False)` → prompt = `语音转写成en，不进行文本规整：` | `transcribe_run_params{language="en"}` builds the same prompt | row "Transcribe / explicit en" |
 | Transcribe (explicit zh / ja) | same template, swap language code | same | rows "Transcribe / zh" and "Transcribe / ja" |
 | Transcribe (auto / no hint) | `auto.generate(language=None)` → prompt = `语音转写：` | `language=nullptr` falls through to no-language template | row "Transcribe / auto" |
 | ITN | `itn=True` removes the `，不进行文本规整` suffix from the prompt | flag through `params->use_itn` (mirrors `sensevoice` shape) | row "ITN" |

@@ -22,7 +22,7 @@
 // GPUs).
 //
 // This header is INTERNAL to src/arch/parakeet/. The public C ABI
-// only sees ParakeetContext::result populated by Parakeet::run.
+// only sees ParakeetSession::result populated by Parakeet::run.
 
 #pragma once
 
@@ -207,6 +207,29 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
                                      int                        T_enc,
                                      int                        d_enc,
                                      std::vector<TdtToken> &    out_tokens);
+
+// Streaming variant of RNN-T greedy decode. Consumes T_enc_new
+// encoder frames (the chunk just produced by the streaming encoder
+// graph) and APPENDS the emitted tokens to out_tokens. LSTM state and
+// previous-token id are carried across calls via state_io and
+// last_token_io. frame_offset is the absolute encoder-frame index of
+// the first frame in this chunk (so emitted tokens'
+// step_at_emit lands in stream-wide coordinates).
+//
+// state_io must have been reset to a fresh "start of sequence" state
+// at stream_begin (LstmState::reset for n_layers, pred_hidden, plus
+// last_token_io = -1 for the SOS embedding zero).
+//
+// No timing log is printed (per-chunk noise on the CLI).
+transcribe_status decode_rnnt_greedy_streaming(
+    const HostDecoderWeights & w,
+    const float *              enc_out,
+    int                        T_enc_new,
+    int                        d_enc,
+    LstmState &                state_io,
+    int &                      last_token_io,
+    int                        frame_offset,
+    std::vector<TdtToken> &    out_tokens);
 
 // Run CTC greedy decode end-to-end. Per-frame: logits = W @ enc[t] + b,
 // argmax. The collapse rule is "drop adjacent duplicates, then drop

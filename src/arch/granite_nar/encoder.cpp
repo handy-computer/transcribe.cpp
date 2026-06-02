@@ -296,6 +296,14 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
         const auto & b = weights.enc_blocks[i];
 
         x = macaron(ctx, x, b, /*is_ff1=*/true);
+        // Sub-step dump: post-FF1 residual on block 0. Used by
+        // validate.py to localize bf16-cascade drift within the
+        // first conformer block.
+        if (i == 0) {
+            named(x, "enc.block.0.post_ff1");
+            eb.dumps.block_0_post_ff1 = x;
+            transcribe::debug::mark_tensor_for_dump(x);
+        }
 
         const transcribe::granite_conformer::ShawAttnWeights shaw_w {
             b.norm_attn_w, b.norm_attn_b,
@@ -310,14 +318,29 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
             kLayerNormEps);
         if (attn_out == nullptr) return eb;
         x = ggml_add(ctx, x, attn_out);
+        if (i == 0) {
+            named(x, "enc.block.0.post_attn");
+            eb.dumps.block_0_post_attn = x;
+            transcribe::debug::mark_tensor_for_dump(x);
+        }
 
         ggml_tensor * conv_out = conv_module(
             ctx, x, b,
             b.conv_bn_fused_scale, b.conv_bn_fused_bias,
             conv_k, static_cast<int>(inner_dim));
         x = ggml_add(ctx, x, conv_out);
+        if (i == 0) {
+            named(x, "enc.block.0.post_conv");
+            eb.dumps.block_0_post_conv = x;
+            transcribe::debug::mark_tensor_for_dump(x);
+        }
 
         x = macaron(ctx, x, b, /*is_ff1=*/false);
+        if (i == 0) {
+            named(x, "enc.block.0.post_ff2");
+            eb.dumps.block_0_post_ff2 = x;
+            transcribe::debug::mark_tensor_for_dump(x);
+        }
         x = layer_norm(ctx, x, b.norm_post_w, b.norm_post_b);
 
         // Per-block dump taps. The reference dumper hooks the layer
@@ -353,6 +376,16 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
         if ((i + 1) == bypass_after) {
             ggml_tensor * cl = ggml_mul_mat(ctx, weights.enc_top.ctc_proj_w, x);
             cl = ggml_add(ctx, cl, weights.enc_top.ctc_proj_b);
+            // This is mid_logits in the reference modeling code:
+            //   mid_logits = encoder.out(dropout(hidden))  at self_conditioning_layer
+            // — the only place the char-CTC head is invoked by the model
+            // forward. Dump it here as `enc.ctc_logits` so the C++ and ref
+            // dumps capture the same semantic tensor.
+            named(cl, "enc.ctc_logits");
+            eb.ctc_logits = cl;
+            eb.dumps.ctc_logits = cl;
+            ggml_set_output(cl);
+            transcribe::debug::mark_tensor_for_dump(cl);
             ggml_tensor * cs = ggml_soft_max(ctx, cl);
             // Slice the blank-token probability (channel 0). cs ne =
             // [n_ctc_vocab, T_enc]; view a [1, T_enc] window at offset 0
@@ -388,16 +421,6 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
             transcribe::debug::mark_tensor_for_dump(x);
         }
     }
-
-    // Frame-level CTC head on the final hidden (x is post block N-1,
-    // including any bypass interactions through residuals).
-    ggml_tensor * ctc_logits = ggml_mul_mat(ctx, weights.enc_top.ctc_proj_w, x);
-    ctc_logits = ggml_add(ctx, ctc_logits, weights.enc_top.ctc_proj_b);
-    named(ctc_logits, "enc.ctc_logits");
-    eb.ctc_logits = ctc_logits;
-    eb.dumps.ctc_logits = ctc_logits;
-    ggml_set_output(ctc_logits);
-    transcribe::debug::mark_tensor_for_dump(ctc_logits);
 
     // Frame-level BPE CTC head (the pool happens host-side).
     ggml_tensor * ctc_bpe = nullptr;
@@ -437,6 +460,10 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     if (eb.mid_blank_probs) ggml_build_forward_expand(eb.graph, eb.mid_blank_probs);
     if (eb.dumps.input_linear_out) ggml_build_forward_expand(eb.graph, eb.dumps.input_linear_out);
     if (eb.dumps.block_0_out)      ggml_build_forward_expand(eb.graph, eb.dumps.block_0_out);
+    if (eb.dumps.block_0_post_ff1)  ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_ff1);
+    if (eb.dumps.block_0_post_attn) ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_attn);
+    if (eb.dumps.block_0_post_conv) ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_conv);
+    if (eb.dumps.block_0_post_ff2)  ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_ff2);
     if (eb.dumps.block_mid_pre)    ggml_build_forward_expand(eb.graph, eb.dumps.block_mid_pre);
     if (eb.dumps.block_mid_post)   ggml_build_forward_expand(eb.graph, eb.dumps.block_mid_post);
     if (eb.dumps.block_last_out)   ggml_build_forward_expand(eb.graph, eb.dumps.block_last_out);
@@ -508,14 +535,18 @@ void compute_bpe_ctc_initial_hypothesis(
             }
         }
         if (argmax != blank_id && argmax != prev) {
-            // The BPE CTC head outputs (1 + n_llm_vocab) probabilities
-            // where index 0 is the blank token and indices 1.. correspond
-            // to LLM token ids shifted by 1. The reference applies
-            // `collapsed[collapsed != 0] - 1` to remove blank and shift
-            // back into the LLM token id space — we do the same here so
-            // the resulting hypothesis ids are directly indexable into
-            // the LLM embed table.
-            out_token_ids.push_back(argmax - 1);
+            // Two BPE-CTC schemes are in flight depending on the GGUF's
+            // source snapshot:
+            //   - Old (bpe_output_dim = vocab_size + 1, blank_id = 0):
+            //     channel 0 is a synthetic blank, channels 1..N hold the
+            //     LLM token ids — we recover the LLM id with `argmax - 1`.
+            //   - New (bpe_output_dim = vocab_size, blank_id = BOS=100257):
+            //     channels ARE the LLM ids directly; the blank channel IS
+            //     one of them (the BOS id). No shift needed.
+            // The two are distinguished by blank_id alone: id 0 means the
+            // old scheme, anything else means the new direct-id scheme.
+            const int shift = (blank_id == 0) ? 1 : 0;
+            out_token_ids.push_back(argmax - shift);
         }
         prev = argmax;
     }

@@ -91,7 +91,7 @@ struct transcribe_model * load_or_fail(const char * fixture_name,
                                        const char * expected_variant)
 {
     const std::string p = g_fixtures_dir + "/" + fixture_name;
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     struct transcribe_model * model = nullptr;
     const transcribe_status st = transcribe_model_load_file(p.c_str(), &mp, &model);
     if (st != TRANSCRIBE_OK) {
@@ -122,7 +122,10 @@ struct transcribe_model * load_or_fail(const char * fixture_name,
         }
     }
 
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->native_sample_rate == 16000);
@@ -210,7 +213,10 @@ void test_v2_fixture() {
         load_or_fail("tokenizer_minimal.gguf", "tdt-0.6b-v2");
     if (model == nullptr) return;
 
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->supports_language_detect == false);
@@ -243,7 +249,10 @@ void test_v3_fixture() {
         load_or_fail("tokenizer_minimal_v3.gguf", "tdt-0.6b-v3");
     if (model == nullptr) return;
 
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         // Capability KV overrode the family default.
@@ -273,7 +282,7 @@ void test_v3_fixture() {
 }
 
 // ---------------------------------------------------------------------------
-// n_threads validation in transcribe_context_init (Finding 3)
+// n_threads validation in transcribe_session_init (Finding 3)
 // ---------------------------------------------------------------------------
 //
 // Negative n_threads is undefined input per the public header (0 means
@@ -284,10 +293,10 @@ void test_n_threads_validation() {
         load_or_fail("tokenizer_minimal.gguf", "tdt-0.6b-v2");
     if (model == nullptr) return;
 
-    transcribe_context_params cp = transcribe_context_default_params();
+    transcribe_session_params cp; transcribe_session_params_init(&cp);
     cp.n_threads = -1;
-    struct transcribe_context * ctx = (struct transcribe_context *)0xdeadbeef;
-    const transcribe_status st = transcribe_context_init(model, &cp, &ctx);
+    struct transcribe_session * ctx = (struct transcribe_session *)0xdeadbeef;
+    const transcribe_status st = transcribe_session_init(model, &cp, &ctx);
     if (st != TRANSCRIBE_ERR_INVALID_ARG) {
         std::fprintf(stderr,
                      "FAIL n_threads<0: expected INVALID_ARG, got %s\n",
@@ -303,7 +312,7 @@ void test_n_threads_validation() {
     // Sanity: n_threads == 0 (library default) succeeds.
     cp.n_threads = 0;
     ctx = nullptr;
-    const transcribe_status st_ok = transcribe_context_init(model, &cp, &ctx);
+    const transcribe_status st_ok = transcribe_session_init(model, &cp, &ctx);
     if (st_ok != TRANSCRIBE_OK) {
         std::fprintf(stderr,
                      "FAIL n_threads=0: expected OK, got %s\n",
@@ -314,7 +323,7 @@ void test_n_threads_validation() {
         std::fprintf(stderr, "FAIL n_threads=0: ctx pointer not set\n");
         ++g_failures;
     }
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
 
     transcribe_model_free(model);
 }

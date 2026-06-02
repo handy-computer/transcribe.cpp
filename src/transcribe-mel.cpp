@@ -826,14 +826,20 @@ transcribe_status MelFrontend::compute(
     // normalization. This matches the Cohere reference
     // (processing_cohere_asr.py get_seq_len / normalize_batch).
     //
-    // When pad_mode is "reflect" (Parakeet), all n_frames frames
-    // are valid and used for normalization.
+    // When pad_mode is "reflect" (Parakeet / Canary), all n_frames
+    // frames are valid and used for normalization. Empirically,
+    // unconditionally treating the trailing frame as a center-pad
+    // artifact regresses long-form Canary decode (e.g. test-clean
+    // 672-122797-0008, 30.8s, drops into a "the boy was a man of
+    // the world" loop). NeMo's FilterbankFeatures masks per seq_len
+    // computed from the raw sample count, but for reflect-padded
+    // single-segment offline runs that seq_len == n_frames so no
+    // masking happens — keep the pad_mode gate to preserve that.
     //
     // resize() instead of assign(): the loop below writes every
     // element exactly once, so the zero-fill that assign() would do
     // is dead work.
-    const bool mask_last = (cfg_.pad_mode == "constant") ||
-                           cfg_.nemo_mask_trailing_frame;
+    const bool mask_last = (cfg_.pad_mode == "constant");
     const int  n_norm    = mask_last ? (n_frames - 1) : n_frames;
 
     out_mel.resize(

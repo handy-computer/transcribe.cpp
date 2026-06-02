@@ -1,9 +1,9 @@
-// transcribe-context.h - internal base class for the public opaque
-// transcribe_context handle.
+// transcribe-session.h - internal base class for the public opaque
+// transcribe_session handle.
 //
 // Mirror of transcribe-model.h. Same Option B layout: a small base owned
 // by the central dispatch, derived per-family contexts owning everything
-// else. The base has a virtual destructor so transcribe_context_free()
+// else. The base has a virtual destructor so transcribe_session_free()
 // can `delete ctx;` polymorphically.
 //
 // The result storage is on the BASE because it's family-agnostic: the
@@ -18,16 +18,25 @@
 #include "transcribe.h"
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
 struct transcribe_model;
 
-struct transcribe_context {
-    // The model this context was constructed from. Borrowed pointer:
+struct transcribe_session {
+    // The model this session was constructed from. Borrowed pointer:
     // the caller is required (per the public threading contract) to keep
-    // the model alive for the lifetime of every derived context.
+    // the model alive for the lifetime of every derived session.
     transcribe_model * model = nullptr;
+
+    // True only for sessions created via transcribe_open(), which loads
+    // and therefore owns its model. Both transcribe_session_free() and
+    // transcribe_close() (now an alias) read this flag and free the
+    // owned model after destroying the session. Sessions created via
+    // transcribe_session_init() leave this false and their model is
+    // freed independently by the caller via transcribe_model_free().
+    bool owns_model = false;
 
     // Cached n_threads value the caller passed at init time. 0 means
     // "library picks a sensible default" (matches the factory).
@@ -92,6 +101,7 @@ struct transcribe_context {
     std::vector<WordEntry>       words;
     std::vector<SegmentEntry>    segments;
     std::string                  full_text;
+
     // ISO short code the model itself predicted on this run, populated
     // only when the caller did NOT pass a language hint (auto/null) and
     // the family actually ran a detection step. Empty string means
@@ -126,13 +136,51 @@ struct transcribe_context {
         return false;
     }
 
+    // -----------------------------------------------------------------
+    // Streaming state.
+    //
+    // Lifecycle (stream_state) is separated from result snapshot so
+    // that clear_result() — which is called by both transcribe_run and
+    // transcribe_stream_begin — can wipe per-call data without churning
+    // the IDLE/ACTIVE/FINISHED/FAILED state machine. The dispatcher
+    // manages stream_state explicitly at begin/feed/finalize/reset.
+    //
+    // The snapshot fields below (revision, committed counts,
+    // last_status, audio cursors) ARE cleared by clear_result so that
+    // a fresh transcribe_run starts with zeroed streaming bookkeeping
+    // and a streaming caller does not see stale counters across runs.
+    //
+    // Audio cursors are us-precision; the public stream_update struct
+    // exposes them as ms.
+    transcribe_stream_state      stream_state          = TRANSCRIBE_STREAM_IDLE;
+    int32_t                      stream_revision      = 0;
+    int                          n_committed_segments = 0;
+    int                          n_committed_words    = 0;
+    int                          n_committed_tokens   = 0;
+    transcribe_status            stream_last_status   = TRANSCRIBE_OK;
+    int64_t                      stream_audio_input_us     = 0;
+    int64_t                      stream_audio_committed_us = 0;
+    transcribe_stream_commit_policy stream_commit_policy =
+        TRANSCRIBE_STREAM_COMMIT_AUTO;
+    uint32_t                     stream_stable_prefix_agreement_n = 0;
+
+    // UI-facing streaming text state. `full_text` above remains the raw
+    // model hypothesis. `stream_committed_text` is the append-only public
+    // display/input prefix; `stream_tentative_text` is the current raw
+    // suffix after `stream_raw_tentative_start_bytes`. The raw history is
+    // used by the generic STABLE_PREFIX policy.
+    std::string                  stream_committed_text;
+    std::string                  stream_tentative_text;
+    uint64_t                     stream_raw_tentative_start_bytes = 0;
+    std::deque<std::string>      stream_raw_history;
+
     void clear_result();
 
-    transcribe_context() = default;
-    virtual ~transcribe_context();
+    transcribe_session() = default;
+    virtual ~transcribe_session();
 
-    transcribe_context(const transcribe_context &)             = delete;
-    transcribe_context & operator=(const transcribe_context &) = delete;
-    transcribe_context(transcribe_context &&)                  = delete;
-    transcribe_context & operator=(transcribe_context &&)      = delete;
+    transcribe_session(const transcribe_session &)             = delete;
+    transcribe_session & operator=(const transcribe_session &) = delete;
+    transcribe_session(transcribe_session &&)                  = delete;
+    transcribe_session & operator=(transcribe_session &&)      = delete;
 };

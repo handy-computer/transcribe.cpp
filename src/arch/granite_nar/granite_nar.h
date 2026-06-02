@@ -11,7 +11,7 @@
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -33,7 +33,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::granite_nar {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 struct GraniteNarModel final : public transcribe_model {
     Tokenizer        tok;
@@ -56,7 +56,7 @@ struct GraniteNarModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct GraniteNarContext final : public transcribe_context {
+struct GraniteNarSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
@@ -74,8 +74,8 @@ struct GraniteNarContext final : public transcribe_context {
     bool encoder_use_flash = false;
     bool decoder_use_flash = false;  // bidirectional path doesn't use flash-attn KV cache
 
-    GraniteNarContext() = default;
-    ~GraniteNarContext() override;
+    GraniteNarSession() = default;
+    ~GraniteNarSession() override;
 };
 
 } // namespace transcribe::granite_nar

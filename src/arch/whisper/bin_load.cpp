@@ -507,7 +507,7 @@ transcribe_status resolve_tensors(
 void apply_caps_and_languages(WhisperModel &                                  m,
                               const transcribe::bin_loader::WhisperBinModel & bm)
 {
-    apply_family_invariants(m.caps);
+    apply_family_invariants(m);
 
     if (!bm.is_multilingual) {
         m.caps.supports_language_detect = false;
@@ -615,7 +615,7 @@ transcribe_status install_tokenizer(WhisperModel &                              
 } // namespace
 
 transcribe_status load_from_bin(const char *                           path,
-                                const struct transcribe_model_params * params,
+                                const struct transcribe_model_load_params * params,
                                 struct transcribe_model **             out_model)
 {
     if (out_model == nullptr || path == nullptr || params == nullptr) {

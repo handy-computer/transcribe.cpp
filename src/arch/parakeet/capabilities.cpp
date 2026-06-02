@@ -41,7 +41,9 @@
 
 namespace transcribe::parakeet {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     // Parakeet's feature extractor is a fixed 16 kHz mel bank (NeMo
     // AudioToMelSpectrogramPreprocessor). Every published variant — v2
     // English and v3 multilingual — uses it. The CLI rejects non-
@@ -64,11 +66,9 @@ void apply_family_invariants(transcribe_capabilities & caps) {
 
     // Abort callback is honored at the top of each run. Other
     // long-form / temperature-fallback / initial-prompt features
-    // belong to autoregressive families and don't apply here.
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
+    // belong to autoregressive families and don't apply here. No
+    // runtime PNC/ITN control.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
 } // namespace transcribe::parakeet

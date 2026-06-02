@@ -40,9 +40,9 @@ namespace transcribe::moonshine {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   MoonshineModel>);
-static_assert(std::is_base_of_v<transcribe_context, MoonshineContext>);
+static_assert(std::is_base_of_v<transcribe_session, MoonshineSession>);
 
-MoonshineContext::~MoonshineContext() {
+MoonshineSession::~MoonshineSession() {
     kv_cache.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
@@ -135,16 +135,16 @@ namespace {
 
 constexpr const char k_default_variant[] = "moonshine";
 
-extern transcribe_status load        (Loader &, const transcribe_model_params *,
+extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
-extern transcribe_status init_context(transcribe_model *, const transcribe_context_params *,
-                                      transcribe_context **);
-extern transcribe_status run         (transcribe_context *, const float *, int,
-                                      const transcribe_params *);
+extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
+                                      transcribe_session **);
+extern transcribe_status run         (transcribe_session *, const float *, int,
+                                      const transcribe_run_params *);
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -157,7 +157,7 @@ transcribe_status load(
                                           : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -219,18 +219,18 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    auto cc = std::make_unique<MoonshineContext>();
+    auto cc = std::make_unique<MoonshineSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
-    // See MoonshineContext for why decoder FA is Metal-only-off.
+    // See MoonshineSession for why decoder FA is Metal-only-off.
     auto * cm = static_cast<MoonshineModel *>(model);
     const bool is_metal =
         (cm->plan.primary_kind == transcribe::BackendKind::Metal);
@@ -244,7 +244,7 @@ transcribe_status init_context(
 }
 
 // Set per-backend thread count from cc->n_threads (with a sensible default).
-void apply_thread_policy(MoonshineContext * cc) {
+void apply_thread_policy(MoonshineSession * cc) {
     int n_threads = cc->n_threads;
     if (n_threads <= 0) {
         n_threads = std::min(8, std::max(1, static_cast<int>(
@@ -261,7 +261,7 @@ void apply_thread_policy(MoonshineContext * cc) {
     }
 }
 
-bool ensure_compute_ctx(MoonshineContext * cc, size_t mem_size) {
+bool ensure_compute_ctx(MoonshineSession * cc, size_t mem_size) {
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
@@ -277,9 +277,9 @@ bool ensure_compute_ctx(MoonshineContext * cc, size_t mem_size) {
 // Search compute_ctx for a tensor by name. Used to locate the causal
 // mask input tensor when the prompt pass needs one. Cohere uses the
 // same trick.
-ggml_tensor * find_tensor_by_name(ggml_context * ctx, const char * name) {
-    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr;
-         t = ggml_get_next_tensor(ctx, t))
+ggml_tensor * find_tensor_by_name(ggml_context * gctx, const char * name) {
+    for (ggml_tensor * t = ggml_get_first_tensor(gctx); t != nullptr;
+         t = ggml_get_next_tensor(gctx, t))
     {
         if (std::strcmp(t->name, name) == 0) return t;
     }
@@ -287,17 +287,17 @@ ggml_tensor * find_tensor_by_name(ggml_context * ctx, const char * name) {
 }
 
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
     (void)params;
 
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    auto * cc = static_cast<MoonshineContext *>(ctx);
+    auto * cc = static_cast<MoonshineSession *>(session);
     auto * cm = static_cast<MoonshineModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -719,7 +719,7 @@ transcribe_status run(
             full.erase(full.begin());
         }
 
-        transcribe_context::SegmentEntry seg;
+        transcribe_session::SegmentEntry seg;
         seg.t0_ms       = 0;
         seg.t1_ms       = 0;
         seg.first_token = 0;
@@ -740,10 +740,16 @@ transcribe_status run(
 } // namespace
 
 extern const Arch arch = {
-    /* .name         = */ "moonshine",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name             = */ "moonshine",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .stream_validate  = */ nullptr,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::moonshine

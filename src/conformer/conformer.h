@@ -268,12 +268,74 @@ struct BlockParams {
     int conv_context_left  = -1;
     int conv_context_right = -1;
 
+    // Optional post-GLU valid-frame mask for the conv module. Shape
+    // [T, 1, 1, 1], values 1.0 for valid frames and 0.0 for padded
+    // overhang. NeMo applies pad_mask after pointwise_conv1+GLU and
+    // before the depthwise convolution; null keeps the historical path.
+    ggml_tensor * conv_pad_mask = nullptr;
+
     // Conv-module normalisation choice. BatchNorm uses fused scale +
     // bias precomputed at load time (BlockView::conv_bn_fused_*).
     // LayerNorm computes per-channel mean/std at inference and uses
     // BlockView::conv_ln_* as the affine scale/bias.
     enum class ConvNormType { BatchNorm, LayerNorm };
     ConvNormType conv_norm_type = ConvNormType::BatchNorm;
+
+    // ---- Streaming (cache-aware) inputs/outputs ----
+    //
+    // All four pointers are nullptr in offline mode and the block
+    // runs the existing graph topology. When non-null, the block
+    // runs the streaming path:
+    //
+    //   streaming_channel_in   per-layer cache_last_channel tensor
+    //     from the previous chunk (persistent backend buffer). Shape
+    //     [d_model, T_cache, 1, 1]. Concat-prepended onto the post-
+    //     attn-LN x before Q/K/V projection ("virtual T" approach):
+    //     the block runs attention on T_virtual = T_cache + T_q_new
+    //     positions and slices the output to the last T_q_new rows.
+    //
+    //   streaming_channel_out  output tensor (allocated by the caller
+    //     in the per-call compute_ctx) that rel_pos_mhsa fills via
+    //     ggml_cpy with the tail of x_norm (size T_q_new, the new
+    //     cache slot per NeMo's q_keep_size = T_new rule with
+    //     cache_drop_size = 0). After graph_compute, the driver
+    //     rotates this into the persistent cache buffer.
+    //
+    //   streaming_time_in      per-layer cache_last_time tensor from
+    //     the previous chunk. Shape [k_minus_1, d_model, 1, 1].
+    //     Replaces the zero left-pad in the depthwise conv (the
+    //     causal pad on streaming variants is (k-1, 0); the k-1 left
+    //     frames are now the previous chunk's post-pw1+GLU tail).
+    //
+    //   streaming_time_out     output tensor (compute_ctx) that
+    //     conv_module fills with the last k_minus_1 frames of the
+    //     post-pw1+GLU input (which becomes the next chunk's left
+    //     pad).
+    //
+    // The pos_emb tensor (passed separately to rel_pos_mhsa) and the
+    // attn_chunked_mask (above) are sized for the virtual T when
+    // streaming, not the offline T_enc. The caller is responsible for
+    // building them at the correct size.
+    ggml_tensor * streaming_channel_in  = nullptr;
+    ggml_tensor * streaming_channel_out = nullptr;
+    ggml_tensor * streaming_time_in     = nullptr;
+    ggml_tensor * streaming_time_out    = nullptr;
+
+    // When streaming, the number of new (post-pre-encode) encoder
+    // frames being produced this call. Used to:
+    //   - slice rel_pos_mhsa's attention output back to the new rows
+    //   - decide the source slice for streaming_channel_out / _time_out
+    // Ignored in offline mode (streaming_channel_in == nullptr).
+    int streaming_T_q_new = 0;
+
+    // Graph the helpers use to forward-expand their cache-write cpy
+    // nodes. The streaming cache outputs are SIDE outputs (not
+    // reachable from the encoder's `out` tensor), so they have to be
+    // added to the graph explicitly. The caller sets this to the
+    // graph it'll later run on; the helpers do
+    // ggml_build_forward_expand(streaming_graph, cpy_node) when they
+    // emit a cache write. Required when streaming_*_out is non-null.
+    ggml_cgraph * streaming_graph = nullptr;
 };
 
 // ===========================================================================
@@ -365,10 +427,12 @@ ggml_tensor * add_conv_bias(ggml_context * ctx,
 // Sub-blocks (exposed for families that hand-build a block)
 // ===========================================================================
 
-// Convolution sub-block: pointwise -> GLU -> depthwise -> BN/LN ->
-// SiLU -> pointwise. Operates on post-LayerNorm input; the LN is
-// applied by the caller. Reads BlockParams::conv_context_{left,right}
-// (depthwise padding) and BlockParams::conv_norm_type (BN vs LN).
+// Convolution sub-block: pointwise -> GLU -> optional valid-frame mask
+// -> depthwise -> BN/LN -> SiLU -> pointwise. Operates on post-LayerNorm
+// input; the LN is applied by the caller. Reads
+// BlockParams::conv_context_{left,right} (depthwise padding),
+// BlockParams::conv_pad_mask, and BlockParams::conv_norm_type
+// (BN vs LN).
 ggml_tensor * conv_module(ggml_context *      ctx,
                           ggml_tensor *       x,
                           const BlockView &   b,

@@ -37,6 +37,26 @@ that methodology, not a numerical drift in the port.
 
 Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped for this variant.
 
+### Streaming vs offline parity (Q8_0)
+
+The streaming session API (`transcribe_stream_begin/feed/finalize`)
+produces a final transcript at parity with the offline one-shot path
+on Q8_0:
+
+| Mode | WER | Sub / Del / Ins | CLI errors |
+| --- | ---: | ---: | ---: |
+| Offline (one-shot)                | **4.52%** | 1764 / 250 / 383 | 0 |
+| Streaming `--stream-chunk-ms 500` | **4.54%** | 1772 / 252 / 381 | 0 |
+
+The +0.02 pp delta is 8 extra word errors across ~52 000 reference
+words, sitting comfortably inside the 95% confidence interval overlap
+([4.22%, 4.88%] vs [4.22%, 4.90%]) and well below any reasonable
+regression threshold. The residual comes from PCM trimming during
+streaming producing tiny float-precision differences in the encoder
+output at the left-context boundary, which occasionally flip a single
+argmax late in the AR decode. Reports:
+`reports/wer/moonshine-streaming-tiny-Q8_0.test-clean.{offline,stream-500ms}.score.json`.
+
 ## Quick Start
 
 ```bash

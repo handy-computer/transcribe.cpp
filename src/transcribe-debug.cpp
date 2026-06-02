@@ -34,6 +34,16 @@ bool        g_initialized = false;
 bool        g_enabled     = false;
 std::string g_dump_dir;
 
+// Name prefix stack. push_name_prefix appends, pop_name_prefix removes
+// the last. The effective prefix is the top of the stack. Used to
+// scope per-chunk intermediate dumps in buffered streaming.
+std::vector<std::string> g_name_prefix_stack;
+
+std::string make_prefixed_name(const char * name) {
+    if (g_name_prefix_stack.empty()) return std::string(name);
+    return g_name_prefix_stack.back() + name;
+}
+
 // Reject filenames containing path separators or other characters
 // that would let a caller escape the dump dir. The encoder will
 // generate names like "enc.pre_encode.out" or "enc.block.0.attn" —
@@ -126,6 +136,16 @@ const char * dump_dir() {
     return enabled() ? g_dump_dir.c_str() : nullptr;
 }
 
+void push_name_prefix(const char * prefix) {
+    if (!enabled() || prefix == nullptr) return;
+    g_name_prefix_stack.emplace_back(prefix);
+}
+
+void pop_name_prefix() {
+    if (!enabled()) return;
+    if (!g_name_prefix_stack.empty()) g_name_prefix_stack.pop_back();
+}
+
 void mark_tensor_for_dump(ggml_tensor * tensor) {
     if (enabled() && tensor != nullptr) {
         ggml_set_output(tensor);
@@ -202,9 +222,12 @@ void dump_tensor(const char *        name,
     }
     const double vmean = vsum / static_cast<double>(n_elem);
 
-    // Build paths.
-    const std::string f32_path  = g_dump_dir + "/" + name + ".f32";
-    const std::string json_path = g_dump_dir + "/" + name + ".json";
+    // Build paths. Honors the active name prefix (push_name_prefix /
+    // pop_name_prefix) so callers can scope dumps without rewriting
+    // tensor names in the graph builders.
+    const std::string full_name = make_prefixed_name(name);
+    const std::string f32_path  = g_dump_dir + "/" + full_name + ".f32";
+    const std::string json_path = g_dump_dir + "/" + full_name + ".json";
 
     // Write the .f32 first; if that fails, don't bother with the
     // sidecar (an unpaired sidecar is more confusing than no dump
@@ -319,8 +342,9 @@ void dump_host_f32(const char *      name,
     }
     const double vmean = vsum / static_cast<double>(n_elem);
 
-    const std::string f32_path  = g_dump_dir + "/" + name + ".f32";
-    const std::string json_path = g_dump_dir + "/" + name + ".json";
+    const std::string full_name = make_prefixed_name(name);
+    const std::string f32_path  = g_dump_dir + "/" + full_name + ".f32";
+    const std::string json_path = g_dump_dir + "/" + full_name + ".json";
 
     {
         std::ofstream f32(f32_path, std::ios::binary | std::ios::trunc);
@@ -346,7 +370,7 @@ void dump_host_f32(const char *      name,
             return;
         }
         js << "{\n";
-        js << "  \"name\": \"" << name << "\",\n";
+        js << "  \"name\": \"" << full_name << "\",\n";
         if (stage != nullptr && stage[0] != '\0') {
             js << "  \"stage\": \"" << stage << "\",\n";
         }

@@ -1,14 +1,16 @@
 // arch/granite_nar/encoder.h - NLE Conformer encoder + BPE CTC head.
 //
-// Reference: NLENARConformerEncoder in the IBM Granite Speech NLE HF
-// repo's modeling_nle.py. Structurally identical to the AR granite
-// encoder (block-local Shaw self-attention, conv_expansion=2 GLU, mid-
-// layer self-conditioned CTC bypass) plus two NLE-only additions:
+// Reference: GraniteSpeechNarCTCEncoder in modeling_granite_speech_nar.py
+// from the IBM Granite Speech NAR HF repo. Structurally identical to the
+// AR granite encoder (block-local Shaw self-attention, conv_expansion=2
+// GLU, mid-layer self-conditioned CTC bypass) plus two NAR-only additions:
 //
-//   1. A BPE CTC head (1024 → 100353) over a posterior-weighted
-//      window=4 pool of valid frames. We expose the raw frame-level
-//      logits (1024→348) as `enc.ctc_logits` for validate.py — the
-//      pooled BPE head is computed host-side at run time.
+//   1. A BPE CTC head (1024 → 100352) over a posterior-weighted
+//      window=4 pool of valid frames. We expose the bypass-step char-CTC
+//      mid_logits (1024 → 348) as `enc.ctc_logits` — the exact tensor
+//      the reference model computes at self_conditioning_layer for the
+//      self-conditioning residual. The pooled BPE head is computed
+//      host-side at run time.
 //   2. All-hidden-states capture: the projector consumes 4 encoder
 //      hidden states (post-LN, pre-bypass at the chosen layer
 //      boundaries; indices [4, 8, 12, -1] 1-indexed → layer outputs
@@ -73,6 +75,11 @@ struct EncoderBuild {
                                                    // (== `enc.block.8.out`)
         ggml_tensor * block_last_out   = nullptr;  // block (N-1)
         ggml_tensor * ctc_logits       = nullptr;  // == ctc_logits, named
+        // Block-0 sub-step taps for bf16-cascade drift localization.
+        ggml_tensor * block_0_post_ff1  = nullptr;
+        ggml_tensor * block_0_post_attn = nullptr;
+        ggml_tensor * block_0_post_conv = nullptr;
+        ggml_tensor * block_0_post_ff2  = nullptr;
     } dumps;
 
     int n_blocks_local = 0;

@@ -45,9 +45,9 @@ namespace transcribe::qwen3_asr {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   QwenAsrModel>);
-static_assert(std::is_base_of_v<transcribe_context, QwenAsrContext>);
+static_assert(std::is_base_of_v<transcribe_session, QwenAsrSession>);
 
-QwenAsrContext::~QwenAsrContext() {
+QwenAsrSession::~QwenAsrSession() {
     kv_cache.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
@@ -89,7 +89,7 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
 
 transcribe_status load(
     Loader &                         loader,
-    const transcribe_model_params *  params,
+    const transcribe_model_load_params *  params,
     transcribe_model **              out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -100,7 +100,7 @@ transcribe_status load(
     m->variant   = loader.variant().empty() ? k_default_variant : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -243,7 +243,7 @@ transcribe_status load(
     }
     gguf_free(gguf_data);
 
-    // Pack gate+up into a separate ctx + backend buffer so the FFN
+    // Pack gate+up into a separate session + backend buffer so the FFN
     // can run a single mul_mat instead of two. ctx_meta is sized
     // exactly for GGUF file tensors with no headroom, so packed
     // tensors live in their own context owned by `qwen3_lm::pack_gate_up`.
@@ -273,14 +273,14 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto cc = std::make_unique<QwenAsrContext>();
+    auto cc = std::make_unique<QwenAsrSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
@@ -551,16 +551,16 @@ void pack_mel_chunks(const float *         mel,       // [n_mels, T_mel]
 }
 
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * cc = static_cast<QwenAsrContext *>(ctx);
+    auto * cc = static_cast<QwenAsrSession *>(session);
     auto * cm = static_cast<QwenAsrModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1181,7 +1181,7 @@ transcribe_status run(
     cc->full_text = transcript_text;
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result  = true;
-    transcribe_context::SegmentEntry seg {};
+    transcribe_session::SegmentEntry seg {};
     seg.text  = transcript_text;
     seg.t0_ms = 0;
     seg.t1_ms = static_cast<int64_t>(n_samples) * 1000
@@ -1194,10 +1194,16 @@ transcribe_status run(
 } // namespace
 
 extern const Arch arch = {
-    /* .name         = */ "qwen3_asr",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name             = */ "qwen3_asr",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .stream_validate  = */ nullptr,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::qwen3_asr

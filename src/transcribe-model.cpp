@@ -11,7 +11,7 @@
 //      every consumer for no benefit.
 
 #include "transcribe-model.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 
 #include <utility>
 
@@ -20,9 +20,9 @@
 transcribe_model::~transcribe_model() = default;
 
 // Same anchoring trick for the context base.
-transcribe_context::~transcribe_context() = default;
+transcribe_session::~transcribe_session() = default;
 
-void transcribe_context::clear_result() {
+void transcribe_session::clear_result() {
     tokens.clear();
     words.clear();
     segments.clear();
@@ -30,6 +30,24 @@ void transcribe_context::clear_result() {
     detected_language.clear();
     result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     has_result  = false;
+
+    // Stream snapshot — lifecycle (stream_state) is NOT touched here;
+    // the streaming dispatcher manages IDLE/ACTIVE/FINISHED/FAILED
+    // explicitly. Everything else is per-utterance bookkeeping that
+    // belongs with the result it describes.
+    stream_revision           = 0;
+    n_committed_segments      = 0;
+    n_committed_words         = 0;
+    n_committed_tokens        = 0;
+    stream_last_status        = TRANSCRIBE_OK;
+    stream_audio_input_us     = 0;
+    stream_audio_committed_us = 0;
+    stream_commit_policy      = TRANSCRIBE_STREAM_COMMIT_AUTO;
+    stream_stable_prefix_agreement_n = 0;
+    stream_committed_text.clear();
+    stream_tentative_text.clear();
+    stream_raw_tentative_start_bytes = 0;
+    stream_raw_history.clear();
 }
 
 void transcribe_model::set_languages(std::vector<std::string> langs) {

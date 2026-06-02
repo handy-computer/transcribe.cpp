@@ -398,15 +398,61 @@ ggml_tensor * conv_module(ggml_context *      ctx,
         x = ggml_cont(ctx, x);
     }
 
+    // NeMo zeros padded-overhang frames after pointwise_conv1 + GLU and
+    // before the depthwise convolution. Without this, buffered streaming
+    // overhang frames can leak backward through the conv kernel.
+    if (params.conv_pad_mask != nullptr) {
+        x = ggml_mul(ctx, x, params.conv_pad_mask);
+    }
+
     // Depthwise conv: kernel size from hparams, groups=d_model. The
     // ggml depthwise ops accept a single symmetric padding value on
     // each axis; for asymmetric padding (causal: [k-1, 0]) we prepend
     // / append zero-frames along the time axis explicitly and call the
     // op with p0=0. At this point x has ne = [T, d_model, 1, 1] (the
     // permute above moved T into ne[0]), so we concat along dim 0.
+    //
+    // Streaming carry: when params.streaming_time_in is set, the left
+    // pad is the previous chunk's last (k-1) post-pw1+GLU frames
+    // (NeMo's cache_last_time) instead of zeros. The new cache slot
+    // for the next chunk is the LAST pad_left frames of the
+    // concatenated (prev_cache, current_x) sequence — NeMo's
+    //   cache_next = concat(prev_cache, x)[-pad_left:]
+    // which works regardless of whether T_now >= pad_left. The
+    // earlier "tail of x" formulation broke at small chunk sizes
+    // (R<13 in nemotron-streaming produces T_q_new < pad_left=8).
     const bool symmetric_pad = (pad_left == pad_right);
     if (!symmetric_pad) {
-        if (pad_left > 0) {
+        const bool streaming = (params.streaming_time_in != nullptr);
+
+        if (streaming) {
+            if (pad_left > 0) {
+                // streaming_time_in has ne = [pad_left, d_model, 1, 1]
+                // (matches the zero-pad shape on this axis).
+                x = ggml_concat(ctx, params.streaming_time_in, x, /*dim=*/0);
+            }
+
+            // After the concat, x ne = [pad_left + T_now, d_model, 1, 1].
+            // Take the LAST pad_left frames as the next-chunk cache slot.
+            // pad_left always <= x->ne[0] here because the concat above
+            // contributes exactly pad_left frames of prev_cache.
+            if (params.streaming_time_out != nullptr &&
+                params.streaming_graph != nullptr)
+            {
+                const int64_t T_padded = x->ne[0];
+                ggml_tensor * tail = ggml_view_4d(
+                    ctx, x,
+                    pad_left, x->ne[1], x->ne[2], x->ne[3],
+                    x->nb[1], x->nb[2], x->nb[3],
+                    (T_padded - pad_left) * x->nb[0]);
+                ggml_tensor * cpy = ggml_cpy(ctx, tail,
+                                             params.streaming_time_out);
+                // Cache writes are SIDE outputs of the encoder graph:
+                // not reachable from `eb.out`, so the scheduler won't
+                // schedule them unless we expand them explicitly.
+                ggml_build_forward_expand(params.streaming_graph, cpy);
+            }
+        } else if (pad_left > 0) {
             ggml_tensor * pad_l = ggml_new_tensor_4d(ctx, x->type,
                                                      pad_left, x->ne[1],
                                                      x->ne[2], x->ne[3]);
@@ -746,10 +792,92 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
     notify("after_ff1", x);
 
     // Self-attention with relative position. Full residual.
+    //
+    // Streaming carry (params.streaming_channel_in != nullptr):
+    //   1. Compute the new cache as
+    //        new_cache = concat(prev_cache[T_q_new:], x_norm)
+    //      and cpy it into streaming_channel_out (per NeMo:
+    //      q_keep_size = T_q_new with cache_drop_size = 0; the cache
+    //      stays at size T_cache).
+    //   2. Virtualize x_norm for the attention call:
+    //        x_norm_virtual = concat(prev_cache, x_norm)
+    //      so rel_pos_mhsa runs on T_virtual = T_cache + T_q_new
+    //      positions. The pos_emb and chunked_mask the caller built
+    //      are sized for T_virtual.
+    //   3. Slice the attention output to the last T_q_new rows so it
+    //      lines up with the running residual (which still has
+    //      T_q_new frames).
+    //
+    // T_q_new is taken from the running x's ne[1] (x is the post-pre-
+    // encode + post-FF1 running tensor; its time dim hasn't changed
+    // yet at this point).
     {
+        const bool streaming = (params.streaming_channel_in != nullptr);
+        const int64_t T_q_new = streaming ? x->ne[1] : 0;
+        const int64_t T_cache = streaming
+            ? params.streaming_channel_in->ne[1]
+            : 0;
         ggml_tensor * x_norm = layer_norm(ctx, x,
                                           b.norm_attn_w, b.norm_attn_b);
+
+        if (streaming) {
+            // Emit the new cache slot before we virtualize x_norm
+            // for attention. Source: prev_cache tail (T_cache - T_q_new
+            // rows) concatenated with this chunk's x_norm (T_q_new
+            // rows) — total T_cache rows along ne[1].
+            //
+            // For T_q_new < T_cache (the common case; nemotron has
+            // T_q_new=12, T_cache=70), prev_cache_tail is a [d_model,
+            // T_cache - T_q_new] view. For T_q_new >= T_cache the
+            // new cache is just the last T_cache rows of x_norm — not
+            // exercised today but the guard is cheap.
+            if (params.streaming_channel_out != nullptr &&
+                params.streaming_graph != nullptr)
+            {
+                ggml_tensor * new_cache = nullptr;
+                if (T_q_new < T_cache) {
+                    ggml_tensor * prev_tail = ggml_view_2d(
+                        ctx, params.streaming_channel_in,
+                        params.streaming_channel_in->ne[0],
+                        T_cache - T_q_new,
+                        params.streaming_channel_in->nb[1],
+                        /*offset=*/T_q_new *
+                            params.streaming_channel_in->nb[1]);
+                    new_cache = ggml_concat(ctx, prev_tail, x_norm,
+                                            /*dim=*/1);
+                } else {
+                    // x_norm holds at least T_cache rows — take its
+                    // last T_cache.
+                    new_cache = ggml_view_2d(
+                        ctx, x_norm,
+                        x_norm->ne[0], T_cache,
+                        x_norm->nb[1],
+                        (T_q_new - T_cache) * x_norm->nb[1]);
+                }
+                ggml_tensor * cpy = ggml_cpy(ctx, new_cache,
+                                             params.streaming_channel_out);
+                ggml_build_forward_expand(params.streaming_graph, cpy);
+            }
+
+            // Virtual-T attention: prepend the previous cache to
+            // x_norm and let rel_pos_mhsa run as usual.
+            x_norm = ggml_concat(ctx, params.streaming_channel_in,
+                                 x_norm, /*dim=*/1);
+        }
+
         ggml_tensor * attn_out = rel_pos_mhsa(ctx, x_norm, pos_emb, b, params);
+
+        if (streaming) {
+            // attn_out: [d_model, T_virtual]. Slice to last T_q_new.
+            const int64_t T_virt = attn_out->ne[1];
+            attn_out = ggml_view_2d(
+                ctx, attn_out,
+                attn_out->ne[0], T_q_new,
+                attn_out->nb[1],
+                (T_virt - T_q_new) * attn_out->nb[1]);
+            attn_out = ggml_cont(ctx, attn_out);
+        }
+
         x = ggml_add(ctx, x, attn_out);
     }
     notify("after_attn", x);

@@ -58,13 +58,13 @@ namespace transcribe::canary_qwen {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   CanaryQwenModel>);
-static_assert(std::is_base_of_v<transcribe_context, CanaryQwenContext>);
+static_assert(std::is_base_of_v<transcribe_session, CanaryQwenSession>);
 
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-CanaryQwenContext::~CanaryQwenContext() {
+CanaryQwenSession::~CanaryQwenSession() {
     kv_cache.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
@@ -508,12 +508,12 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
 // Loader entry points (forward-declared so we can register `arch` after).
 // ---------------------------------------------------------------------------
 
-extern transcribe_status load        (Loader &, const transcribe_model_params *,
+extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
-extern transcribe_status init_context(transcribe_model *, const transcribe_context_params *,
-                                      transcribe_context **);
-extern transcribe_status run         (transcribe_context *, const float *, int,
-                                      const transcribe_params *);
+extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
+                                      transcribe_session **);
+extern transcribe_status run         (transcribe_session *, const float *, int,
+                                      const transcribe_run_params *);
 
 // ---------------------------------------------------------------------------
 // load
@@ -521,7 +521,7 @@ extern transcribe_status run         (transcribe_context *, const float *, int,
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -532,7 +532,7 @@ transcribe_status load(
     m->variant   = loader.variant().empty() ? k_default_variant : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -580,12 +580,6 @@ transcribe_status load(
         // the window family.
         cfg.window_type  = "hann_symmetric";
         cfg.normalize    = m->hparams.fe_normalize;
-        // SALM feeds the LM directly off the normalized mel; the LM is
-        // brittle to the trailing-frame distributional shift that NeMo's
-        // FilterbankFeatures.forward zeros out. Match NeMo: compute
-        // mean/std over the first floor(n_samples / hop) frames and zero
-        // the trailing pad frame.
-        cfg.nemo_mask_trailing_frame = true;
 
         // Pull baked filterbank/window from GGUF if present.
         using R = load_common::ReadF32Result;
@@ -697,12 +691,12 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) return TRANSCRIBE_ERR_INVALID_ARG;
 
-    auto cc = std::make_unique<CanaryQwenContext>();
+    auto cc = std::make_unique<CanaryQwenSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
@@ -744,7 +738,7 @@ transcribe_status init_context(
 // run
 // ---------------------------------------------------------------------------
 
-void apply_thread_policy(CanaryQwenContext * cc) {
+void apply_thread_policy(CanaryQwenSession * cc) {
     int n_threads = cc->n_threads;
     if (n_threads <= 0) {
         n_threads = std::min(8, std::max(1, static_cast<int>(
@@ -792,16 +786,16 @@ void build_relpos_emb_host(std::vector<float> & pos_buf,
     }
 }
 
-transcribe_status run(transcribe_context *      context,
+transcribe_status run(transcribe_session *      context,
                       const float *             pcm,
                       int                       n_samples,
-                      const transcribe_params * params)
+                      const transcribe_run_params * params)
 {
     if (context == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * cc = static_cast<CanaryQwenContext *>(context);
+    auto * cc = static_cast<CanaryQwenSession *>(context);
     auto * cm = static_cast<CanaryQwenModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty() || !cm->mel.has_value()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1256,7 +1250,7 @@ transcribe_status run(transcribe_context *      context,
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result  = true;
 
-    transcribe_context::SegmentEntry seg {};
+    transcribe_session::SegmentEntry seg {};
     seg.text  = transcript;
     seg.t0_ms = 0;
     seg.t1_ms = static_cast<int64_t>(n_samples) * 1000
@@ -1269,10 +1263,16 @@ transcribe_status run(transcribe_context *      context,
 } // namespace
 
 extern const Arch arch = {
-    /* .name         = */ "canary_qwen",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name             = */ "canary_qwen",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .stream_validate  = */ nullptr,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::canary_qwen

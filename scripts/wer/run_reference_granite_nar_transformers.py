@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-run_reference_granite_nar_transformers.py — IBM Granite NLE (NAR) WER baseline.
+run_reference_granite_nar_transformers.py — IBM Granite Speech NAR
+WER baseline against `ibm-granite/granite-speech-4.1-2b-nar`.
 
-Loads `ibm-granite/granite-speech-4.1-2b-nar` via the upstream
-NLENARDecoder modeling code (trust_remote_code=True) and runs the
-single-pass NAR forward over a WER manifest. Writes run.py-compatible
-JSONL so scripts/wer/score.py can score it like the C++ port report.
-
-The NAR decode is one forward (encoder + projector + bidirectional LLM
-+ CTC head) — no autoregressive token loop and no generation config.
+Mirrors the README inference path (AutoProcessor + AutoModel +
+model.transcribe + processor.batch_decode) over a WER manifest. Writes
+scripts/wer/score.py-compatible JSONL records.
 
 Usage (from repo root):
 
     uv run --project scripts/envs/granite_nar \\
       scripts/wer/run_reference_granite_nar_transformers.py \\
         --model ibm-granite/granite-speech-4.1-2b-nar \\
-        --manifest samples/wer/test-clean.manifest.jsonl \\
+        --revision 99a4df9007ac5682f9daa093fb7008ff606e9a5d \\
+        --manifest samples/wer/test-clean.512.manifest.jsonl \\
+        --device mps \\
         --out reports/wer/granite-speech-4.1-2b-nar-REF.test-clean.jsonl
 """
 
@@ -25,7 +24,6 @@ import argparse
 import json
 import sys
 import time
-import types
 from pathlib import Path
 
 
@@ -38,14 +36,17 @@ def main() -> int:
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--model", required=True,
                    help="HF repo id or local directory.")
-    p.add_argument("--revision", default=None)
+    p.add_argument("--revision", default=None,
+                   help="HF revision (commit hash) to pin against drift")
     p.add_argument("--device", default="cpu",
-                   help="torch device (default: cpu; pass 'mps' on Apple).")
+                   choices=["cpu", "mps", "cuda"])
     p.add_argument("--torch-threads", type=int, default=4)
     p.add_argument("--dtype", default="bf16",
                    choices=["bf16", "f16", "f32"])
+    p.add_argument("--attn-impl", default="eager",
+                   choices=["eager", "sdpa", "flash_attention_2"])
     p.add_argument("--language", default=None,
-                   help="Ignored (NAR is single-task ASR).")
+                   help="Ignored (NAR is single-task multilingual ASR).")
     p.add_argument("--limit", type=int, default=0)
     args = p.parse_args()
 
@@ -58,10 +59,9 @@ def main() -> int:
     if args.torch_threads > 0:
         torch.set_num_threads(args.torch_threads)
         torch.set_num_interop_threads(1)
-
     import soundfile as sf
     import transformers
-    from transformers import AutoConfig, AutoFeatureExtractor, AutoModel
+    from transformers import AutoModel, AutoProcessor
 
     local_only = Path(args.model).is_dir()
     revision = args.revision if not local_only else None
@@ -69,63 +69,24 @@ def main() -> int:
              "f16":  torch.float16,
              "f32":  torch.float32}[args.dtype]
 
+    rev_text = f", revision={revision}" if revision else ""
     print(
-        f"loading: {args.model}  (transformers {transformers.__version__}, "
-        f"device={args.device}, dtype={args.dtype})"
+        f"loading {args.model} (transformers {transformers.__version__}, "
+        f"device={args.device}{rev_text}, dtype={args.dtype})..."
     )
     t0 = time.monotonic()
 
-    feature_extractor = AutoFeatureExtractor.from_pretrained(
+    processor = AutoProcessor.from_pretrained(
         args.model, revision=revision,
         trust_remote_code=True, local_files_only=local_only,
     )
-    cfg = AutoConfig.from_pretrained(
-        args.model, revision=revision,
-        trust_remote_code=True, local_files_only=local_only,
-    )
-    if hasattr(cfg, "attn_implementation"):
-        cfg.attn_implementation = "sdpa"
-
-    # Force bidirectional attention without flash-attn-2.
-    #
-    # transformers' GraniteModel.forward unconditionally builds a causal
-    # mask via create_causal_mask() and passes it to every attention
-    # layer as attention_mask. Both eager and sdpa then apply it, so
-    # is_causal=False on the layers is ineffective — the mask wins.
-    # flash_attention_2 is the only backend that bypasses this path
-    # entirely, which is why modeling_nle.py asserts it.
-    #
-    # Patching create_causal_mask to return None lets sdpa see
-    # attention_mask=None + module.is_causal=False (NLE sets this) and
-    # compute a true bidirectional attention. Same effect for eager.
-    from transformers.models.granite import modeling_granite as _granite_mod
-    _granite_mod.create_causal_mask = lambda **kw: None
-    print("patched transformers.models.granite.modeling_granite."
-          "create_causal_mask -> None  (forces bidirectional)")
-
     model = AutoModel.from_pretrained(
-        args.model, config=cfg, revision=revision,
+        args.model, revision=revision,
         trust_remote_code=True, local_files_only=local_only,
-        dtype=dtype, attn_implementation="eager",
-    ).eval().to(args.device)
+        dtype=dtype, attn_implementation=args.attn_impl,
+        device_map=args.device,
+    ).eval()
 
-    # The flash-attn assert in modeling_nle.py only checks
-    # `self.config.attn_implementation == "flash_attention_2"`. Bypass
-    # the assert (we've made sdpa bidirectional via the mask patch).
-    original_forward = model.forward.__func__
-
-    def patched_forward(self, *fargs, **fkwargs):
-        c = self.config
-        if c.attn_implementation != "flash_attention_2":
-            saved = c.attn_implementation
-            c.attn_implementation = "flash_attention_2"
-            try:
-                return original_forward(self, *fargs, **fkwargs)
-            finally:
-                c.attn_implementation = saved
-        return original_forward(self, *fargs, **fkwargs)
-
-    model.forward = types.MethodType(patched_forward, model)
     load_ms = (time.monotonic() - t0) * 1000
 
     with open(args.manifest) as f:
@@ -146,8 +107,11 @@ def main() -> int:
             "load_ms": round(load_ms, 1),
             "framework": "transformers",
             "model": args.model,
+            "revision": args.revision,
             "language": args.language,
             "dtype": args.dtype,
+            "attn_impl": args.attn_impl,
+            "device": args.device,
         }) + "\n")
         fout.flush()
 
@@ -167,20 +131,14 @@ def main() -> int:
                     raise RuntimeError(
                         f"granite_nar expects 16kHz; got {sr}Hz"
                     )
-                feats = feature_extractor(
-                    [torch.from_numpy(pcm)], device=args.device
-                )
-                input_features = feats["input_features"].to(args.device)
-                attention_mask = feats["attention_mask"].to(args.device)
+                waveform = torch.from_numpy(pcm)
+                inputs = processor([waveform], device=args.device)
 
                 with torch.inference_mode():
-                    gen_out = model.generate(
-                        input_features=input_features,
-                        attention_mask=attention_mask,
-                    )
-                # NAR returns text_preds directly (single-pass CTC decode).
-                text_preds = getattr(gen_out, "text_preds", None) or []
-                hyp_text = (text_preds[0] if text_preds else "").strip()
+                    output = model.transcribe(**inputs)
+
+                transcriptions = processor.batch_decode(output.preds)
+                hyp_text = (transcriptions[0] if transcriptions else "").strip()
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 n_errors += 1
