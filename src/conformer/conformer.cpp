@@ -242,6 +242,31 @@ ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,
                              int            padding,
                              int            dilation)
 {
+    // Offline batch: data ne=[W, C, B] with B>1. The im2col path below
+    // collapses the batch axis (its final reshape hardcodes ne[2]=1), so
+    // route B>1 through the direct depthwise-2D op (W, H=1, C, N=B), which
+    // threads the utterance batch at ne[3]. This keeps the B==1 path —
+    // every current caller (parakeet/cohere single-shot, AR granite) —
+    // byte-identical to the pre-batch code.
+    const int64_t B = data->ne[2];
+    if (B > 1) {
+        const int64_t k = kernel->ne[0];
+        const int64_t C = data->ne[1];
+        // ggml_conv_2d_dw_direct misbehaves for non-f32 kernels (see the
+        // canary_qwen note); the depthwise kernel is tiny, so cast to f32.
+        ggml_tensor * knl = kernel;
+        if (knl->type != GGML_TYPE_F32) {
+            knl = ggml_cast(ctx, knl, GGML_TYPE_F32);
+        }
+        knl = ggml_reshape_4d(ctx, knl, k, 1, 1, C);
+        ggml_tensor * d4 = ggml_reshape_4d(ctx, data, data->ne[0], 1, C, B);
+        ggml_tensor * o = ggml_conv_2d_dw_direct(ctx, knl, d4,
+                                                 /*s0=*/stride, /*s1=*/1,
+                                                 /*p0=*/padding, /*p1=*/0,
+                                                 /*d0=*/dilation, /*d1=*/1);
+        return ggml_reshape_3d(ctx, o, o->ne[0], C, B);  // [W_out, C, B]
+    }
+
     // The depthwise wrapper reshapes the data into a 2D image with
     // H=1 so the same im2col path can be reused. ggml_conv_1d_dw
     // does this; we replicate it here with the dst_type override.
