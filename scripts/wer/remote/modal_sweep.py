@@ -179,7 +179,7 @@ image = (
     )
     .apt_install(
         "build-essential", "cmake", "ninja-build", "git", "ca-certificates",
-        "zlib1g-dev", "libopenblas-dev", "curl", "tar", "rsync",
+        "zlib1g-dev", "libopenblas-dev", "curl", "tar", "rsync", "ccache",
     )
     .pip_install("huggingface_hub", "pyyaml")
     .run_commands(
@@ -190,7 +190,7 @@ image = (
         REPO,
         "/src",
         ignore=[
-            "build/**", "build-*/**", "models/**",
+            "build/**", "build-*/**", "models/**", "tmp/**",
             "samples/wer/raw/**", "samples/wer/librispeech-*/**",
             "samples/wer/fleurs-*/**", "samples/wer/*.manifest.jsonl",
             "reports/**",
@@ -206,6 +206,10 @@ image = (
 build_vol = modal.Volume.from_name("transcribe-build", create_if_missing=True)
 hf_vol = modal.Volume.from_name("hf-cache", create_if_missing=True)
 data_vol = modal.Volume.from_name("transcribe-data", create_if_missing=True)
+# Compiler cache: survives build-dir rotation so ggml's TUs aren't recompiled
+# on every source edit. Content-addressed -> the binary is identical to a
+# clean build; only what actually changed runs through the compiler.
+ccache_vol = modal.Volume.from_name("transcribe-ccache", create_if_missing=True)
 
 app = modal.App("transcribe-wer-remote")
 
@@ -300,7 +304,8 @@ def _replace_with_symlink(link: str, target: str) -> None:
 # 1. Build (CPU container; nvcc does not need a GPU).
 # ---------------------------------------------------------------------------
 
-@app.function(image=image, timeout=1800, volumes={"/build": build_vol})
+@app.function(image=image, timeout=1800,
+              volumes={"/build": build_vol, "/root/.cache/ccache": ccache_vol})
 def build(arch: str, build_dir: str, clean: bool = False) -> None:
     """Build transcribe-cli with CUDA on a Modal Volume.
 
@@ -315,6 +320,30 @@ def build(arch: str, build_dir: str, clean: bool = False) -> None:
     if clean and os.path.exists(build_dir):
         print(f"[build] clean=True; removing {build_dir}")
         shutil.rmtree(build_dir)
+
+    # ccache env. The build dir (/build/cuda-<SRC_FP>-sm<arch>) rotates on every
+    # source edit and shows up in compile commands (generated-header -I paths,
+    # output dirs), which would bust the cache. BASEDIR rewrites absolute paths
+    # under /build to cwd-relative and NOHASHDIR drops cwd from the hash, so an
+    # unchanged ggml TU hashes the same across rotations -> cache hit. The cache
+    # itself lives on the ccache Volume, shared across all builds.
+    ccache_dir = "/root/.cache/ccache"
+    # Cache storage lives on the Volume, but ccache's temp dir must be on local
+    # disk: the Volume filesystem rejects the hardlink() ccache uses while
+    # capturing preprocessor output ("Operation not permitted").
+    ccache_tmp = "/tmp/ccache-tmp"
+    os.makedirs(ccache_dir, exist_ok=True)
+    os.makedirs(ccache_tmp, exist_ok=True)
+    env = {
+        **os.environ,
+        "CCACHE_DIR": ccache_dir,
+        "CCACHE_TEMPDIR": ccache_tmp,
+        "CCACHE_BASEDIR": "/build",
+        "CCACHE_NOHASHDIR": "1",
+        "CCACHE_COMPILERCHECK": "content",
+        "CCACHE_MAXSIZE": "10G",
+    }
+    subprocess.check_call(["ccache", "--zero-stats"], env=env)
     # cmake reads /src directly (read-only mount) and only writes to build_dir,
     # so this is the one function that does not need a /work mirror.
     subprocess.check_call([
@@ -323,11 +352,16 @@ def build(arch: str, build_dir: str, clean: bool = False) -> None:
         "-DTRANSCRIBE_CUDA=ON",
         "-DTRANSCRIBE_BUILD_TESTS=OFF",
         f"-DCMAKE_CUDA_ARCHITECTURES={arch}",
-    ])
+        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+        "-DCMAKE_CUDA_COMPILER_LAUNCHER=ccache",
+    ], env=env)
     subprocess.check_call([
         "cmake", "--build", build_dir, "--target", "transcribe-cli",
         "-j", str(os.cpu_count()),
-    ])
+    ], env=env)
+    subprocess.run(["ccache", "--show-stats", "--verbose"], env=env)
+    ccache_vol.commit()
     build_vol.commit()
     assert os.path.exists(cli_path)
     print(f"[build] {cli_path} ready")
@@ -607,7 +641,7 @@ def _register_runner(gpu_id: str):
     Modal needs both a distinct Python name per registration AND a module-level
     attribute binding so the container can re-import the function by name."""
     name = f"run_wer_{gpu_id.lower().replace('-', '_')}"
-    build_dir = _build_dir(gpu_id)
+    default_build_dir = _build_dir(gpu_id)
 
     def runner(
         model_repo: str,
@@ -616,9 +650,15 @@ def _register_runner(gpu_id: str):
         n_utts: int | None = None,
         batch_size: int = 1,
         sort_by_length: bool = True,
+        build_dir: str | None = None,
     ) -> dict:
+        # Prefer the build_dir the local entrypoint computed and built into:
+        # SRC_FP can drift between the laptop and the container, so recomputing
+        # it here (default_build_dir) risks pointing at a dir build() never
+        # wrote. The local value is the single source of truth.
         return _run_wer_impl(
-            model_repo, model_file, dataset_spec, n_utts, build_dir,
+            model_repo, model_file, dataset_spec, n_utts,
+            build_dir or default_build_dir,
             batch_size=batch_size, sort_by_length=sort_by_length,
         )
 
@@ -675,12 +715,14 @@ def _resolve_model(spec: str) -> tuple[str, list[str] | None]:
     return target_repo, filenames
 
 
-def _write_hyp(hyp_jsonl: str, model_file: str, dataset_spec: str) -> pathlib.Path:
+def _write_hyp(hyp_jsonl: str, model_file: str, dataset_spec: str,
+               batch_size: int | None = None) -> pathlib.Path:
     out_dir = pathlib.Path(REPO) / "reports" / "wer"
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = model_file.replace(".gguf", "")
     ds = dataset_id(dataset_spec)
-    out_path = out_dir / f"{slug}.{ds}.jsonl"
+    bs_tag = "" if batch_size is None else f".b{batch_size}"
+    out_path = out_dir / f"{slug}.{ds}{bs_tag}.jsonl"
     out_path.write_text(hyp_jsonl)
     return out_path
 
@@ -771,7 +813,8 @@ def sweep(
 
     print(f">>> launching {len(cells)} {gpu} containers in parallel...")
     n = None if n_utts < 0 else n_utts
-    futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n))
+    futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
+                             build_dir=build_dir))
             for c in cells]
 
     rows, failures = [], []
@@ -879,12 +922,14 @@ def batch_sweep(
     prefetch_dataset.remote(dataset)
 
     n = None if n_utts < 0 else n_utts
-    # Launch all batch sizes in parallel (each its own container).
-    futs = [(bs, runner.spawn(repo, model_file, dataset, n, bs, sort_by_length))
+    # Launch all batch sizes in parallel (each its own container). Pass the
+    # locally-computed build_dir so the runner reads exactly what build() wrote.
+    futs = [(bs, runner.spawn(repo, model_file, dataset, n, bs, sort_by_length,
+                              build_dir))
             for bs in sizes]
 
     rows: list[tuple] = []
-    hyp_written = False
+    hyp_paths: list[tuple[int, pathlib.Path]] = []
     for bs, fut in futs:
         try:
             res = fut.get()
@@ -897,9 +942,10 @@ def batch_sweep(
                   f"RTF {s['rtf_wall']:.1f}x  {s.get('utt_per_s', 0.0):.1f} utt/s  "
                   f"(encode {s.get('encode_s', 0.0):.1f}s / "
                   f"decode {s.get('decode_s', 0.0):.1f}s)")
-            if not hyp_written:
-                _write_hyp(res["hyp_jsonl"], model_file, dataset)
-                hyp_written = True
+            # Write a hyp per batch size so WER can be scored and compared
+            # independently (verifies the "identical across batch sizes" claim).
+            p = _write_hyp(res["hyp_jsonl"], model_file, dataset, batch_size=bs)
+            hyp_paths.append((bs, p))
         except Exception as e:
             print(f"  [FAIL] b{bs}: {e} (check Modal dashboard for stderr)")
 
@@ -926,10 +972,9 @@ def batch_sweep(
           "gpu": gpu}
          for b, nn, aud, wall, rtf, ups, enc, dec in rows], indent=2) + "\n")
     print(f"\nwrote {out}")
-    print("WER is identical across batch sizes; score the hyp once:")
-    print(f"  uv run scripts/wer/score.py "
-          f"reports/wer/{model_file.replace('.gguf', '')}."
-          f"{dataset_id(dataset)}.jsonl")
+    print("score each batch's hyp to confirm WER is unchanged:")
+    for bs, p in sorted(hyp_paths):
+        print(f"  uv run scripts/wer/score.py {p}")
 
 
 @app.local_entrypoint()
