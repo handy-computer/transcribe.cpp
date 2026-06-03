@@ -269,8 +269,12 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
                                  int                                 n_mel_frames,
                                  ggml_type                           kv_type,
                                  const char *                        backend_name,
-                                 const BufferedStreamMaskOverride *  buf_mask)
+                                 const BufferedStreamMaskOverride *  buf_mask,
+                                 int                                 n_batch,
+                                 bool                                batch_var_len)
 {
+    if (n_batch < 1) n_batch = 1;
+    const bool var_len_masks = batch_var_len && n_batch > 1;
     // Per-family dispatch policy. Parakeet keeps the historical split
     // where the in-block depthwise uses the direct path on every
     // backend but the pre_encode depthwise uses the f32-friendly
@@ -324,11 +328,14 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         return eb;
     }
 
-    // Mel input handle. ne=[T_mel, n_mels, 1, 1] matches the C++
-    // MelFrontend's row-major [n_mels, n_frames] storage byte for
-    // byte (see the layout cheat sheet at the top of the file).
-    eb.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
-                                   n_mel_frames, hp.fe_num_mels);
+    // Mel input handle. ne=[T_mel, n_mels, 1, n_batch] matches the C++
+    // MelFrontend's row-major [n_mels, n_frames] storage byte for byte
+    // (see the layout cheat sheet at the top of the file); utterance b is
+    // the contiguous [n_mel_frames * n_mels] slab at offset
+    // b * n_mel_frames * n_mels. For n_batch == 1 this is identical to the
+    // prior 2-D [T_mel, n_mels] tensor.
+    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                   n_mel_frames, hp.fe_num_mels, 1, n_batch);
     if (eb.mel_in == nullptr) {
         std::fprintf(stderr,
                      "parakeet encoder: failed to allocate mel_in tensor\n");
@@ -343,11 +350,24 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     // freed. No-op in normal builds.
     transcribe::debug::mark_tensor_for_dump(eb.mel_in);
 
-    // Build the pre_encode subgraph.
+    // Build the pre_encode subgraph. For variable-length offline batching we
+    // enable masked subsampling (zero each conv intermediate's padded time
+    // region so an utterance's boundary frame matches a standalone run). Only
+    // the non-causal pre-encode is masked here — the causal/streaming stem
+    // has a different per-stage length formula and its boundary frame does
+    // not flip decoded tokens in practice.
+    conf::PreEncodeValidMasks pe_masks;
+    const bool mask_pre_encode = var_len_masks && !policy.causal_pre_encode;
     ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode),
                                              eb.mel_in, policy,
                                              /*name_prefix=*/"enc.pre_encode",
-                                             /*error_tag=*/"parakeet");
+                                             /*error_tag=*/"parakeet",
+                                             mask_pre_encode ? &pe_masks : nullptr);
+    if (mask_pre_encode) {
+        eb.pre_encode_mask_s1_in = pe_masks.mask_s1;
+        eb.pre_encode_mask_s2_in = pe_masks.mask_s2;
+        eb.pre_encode_mask_s3_in = pe_masks.mask_s3;
+    }
     if (x == nullptr) {
         // build_pre_encode already logged the diagnostic.
         return eb;
@@ -458,12 +478,42 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
             eb.conv_pad_mask_in = conv_pad_mask_in;
         }
 
+        // Variable-length batch masks. When batching utterances of differing
+        // length we pad every mel to a common T_max; these two masks keep
+        // each utterance's padded tail from corrupting its real frames:
+        //   - attn_pad_mask_in [T_enc, 1, 1, n_batch]: additive (-INF on
+        //     padded keys) so real queries never attend to padded keys.
+        //   - conv_pad_mask_in [T_enc, 1, n_batch, 1]: 0/1 valid-frame mask
+        //     that zeroes padded frames after pw1+GLU and before the
+        //     depthwise conv (same role as the buffered-streaming mask, but
+        //     per utterance). Reuses the conv_pad_mask_in field since the
+        //     buffered path is mutually exclusive with offline batching.
+        ggml_tensor * attn_pad_mask_in = nullptr;
+        if (var_len_masks) {
+            attn_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                                  T_enc, 1, 1, n_batch);
+            ggml_set_name(attn_pad_mask_in, "attn.pad_mask.in");
+            ggml_set_input(attn_pad_mask_in);
+            eb.attn_pad_mask_in = attn_pad_mask_in;
+
+            conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                                  T_enc, 1, n_batch, 1);
+            ggml_set_name(conv_pad_mask_in, "conv.pad_mask.batch.in");
+            ggml_set_input(conv_pad_mask_in);
+            eb.conv_pad_mask_in = conv_pad_mask_in;
+        }
+
         conf::BlockParams bparams {};
         bparams.d_model           = hp.enc_d_model;
         bparams.n_head            = hp.enc_n_heads;
         bparams.conv_kernel       = hp.enc_conv_kernel;
         bparams.kv_type           = kv_type;
-        bparams.use_flash         = true;
+        // Flash attention by default. Flash batches correctly (the batched
+        // encoder output is bit-identical to single-shot flash), so the batch
+        // axis does not change the path. TRANSCRIBE_NO_FLASH=1 forces the
+        // manual F32 mul_mat + soft_max path — used by the bit-exact CPU
+        // tensor gate (flash casts the rel-pos mask to F16, manual stays F32).
+        bparams.use_flash         = (std::getenv("TRANSCRIBE_NO_FLASH") == nullptr);
         bparams.policy            = policy;
         bparams.att_context_left  = hp.enc_att_context_left;
         bparams.att_context_right = hp.enc_att_context_right;
@@ -471,6 +521,7 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
             ? conf::BlockParams::AttContextStyle::ChunkedLimited
             : conf::BlockParams::AttContextStyle::Regular;
         bparams.attn_chunked_mask = chunked_mask_in;
+        bparams.attn_pad_mask      = attn_pad_mask_in;
         bparams.conv_context_left  = hp.enc_conv_context_left;
         bparams.conv_context_right = hp.enc_conv_context_right;
         bparams.conv_pad_mask      = conv_pad_mask_in;

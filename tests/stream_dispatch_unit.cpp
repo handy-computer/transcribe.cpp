@@ -256,6 +256,7 @@ void test_begin_rejects_unknown_ext_kind_before_hook() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,  // run_batch
         nullptr,                  // stream_validate
         fake_stream_begin,
         fake_stream_feed,
@@ -294,6 +295,7 @@ void test_begin_rejects_tiny_ext_before_hook() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,  // run_batch
         nullptr,                  // stream_validate
         fake_stream_begin,
         fake_stream_feed,
@@ -339,6 +341,7 @@ void test_begin_family_preflight_reject_preserves_snapshot() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,                      // run_batch
         fake_stream_validate_reject,  // stream_validate rejects
         fake_stream_begin,
         fake_stream_feed,
@@ -618,6 +621,7 @@ const transcribe::Arch & sequence_arch() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,                  // run_batch
         nullptr,
         fake_sequence_stream_begin,
         fake_sequence_stream_feed,
@@ -634,6 +638,7 @@ const transcribe::Arch & sequence_arch_named_parakeet() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,                  // run_batch
         nullptr,
         fake_sequence_stream_begin,
         fake_sequence_stream_feed,
@@ -650,6 +655,7 @@ const transcribe::Arch & sequence_arch_named_moonshine_streaming() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,                  // run_batch
         nullptr,
         fake_sequence_stream_begin,
         fake_sequence_stream_feed,
@@ -1196,6 +1202,7 @@ const transcribe::Arch & failing_arch() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,                     // run_batch
         nullptr,
         fake_stream_begin,           // begin succeeds -> ACTIVE
         fake_failing_stream_feed,
@@ -1212,6 +1219,7 @@ const transcribe::Arch & aborting_arch() {
         nullptr,
         nullptr,
         nullptr,
+        nullptr,                  // run_batch
         nullptr,
         fake_stream_begin,
         fake_aborting_stream_feed,

@@ -12,6 +12,7 @@
 #include "weights.h"
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -36,6 +37,7 @@
 #include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -185,8 +187,83 @@ bool kv_cache_init(WhisperKvCache & cache,
     ggml_backend_buffer_clear(cache.buffer, 0);
 
     cache.n_ctx     = n_ctx;
+    cache.n_batch   = 1;
     cache.T_enc     = T_enc;
     cache.T_enc_pad = T_enc_pad;
+    cache.n         = 0;
+    cache.head      = 0;
+    cache.cross_populated = false;
+
+    return true;
+}
+
+bool kv_cache_init_batched(WhisperKvCache & cache,
+                           ggml_backend_t   backend,
+                           int              n_ctx,
+                           int              T_enc,
+                           int              d_model,
+                           int              n_layer,
+                           int              n_batch,
+                           ggml_type        kv_type)
+{
+    if (n_batch <= 1) {
+        // Degenerate batch — defer to the single-shot layout so callers
+        // that accidentally pass n_batch==1 stay byte-identical.
+        return kv_cache_init(cache, backend, n_ctx, T_enc, d_model,
+                             n_layer, kv_type);
+    }
+    if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
+        std::fprintf(stderr,
+                     "whisper kv_cache(batched): unsupported kv_type=%d\n",
+                     static_cast<int>(kv_type));
+        return false;
+    }
+
+    cache.free();
+
+    const size_t ctx_size = 4 * ggml_tensor_overhead() + 256;
+    ggml_init_params params {};
+    params.mem_size   = ctx_size;
+    params.mem_buffer = nullptr;
+    params.no_alloc   = true;
+
+    cache.ctx = ggml_init(params);
+    if (cache.ctx == nullptr) {
+        std::fprintf(stderr, "whisper kv_cache(batched): ggml_init failed\n");
+        return false;
+    }
+
+    // No 256-row cross pad in the batched layout: every short-form
+    // utterance has T_enc == 1500 and the batched cross graph writes the
+    // full slab; the per-utterance cross-pad mask gates invalid columns.
+    const int64_t self_elements =
+        static_cast<int64_t>(d_model) * n_ctx * n_batch * n_layer;
+    const int64_t cross_elements =
+        static_cast<int64_t>(d_model) * T_enc * n_batch * n_layer;
+
+    cache.self_k  = ggml_new_tensor_1d(cache.ctx, kv_type, self_elements);
+    cache.self_v  = ggml_new_tensor_1d(cache.ctx, kv_type, self_elements);
+    cache.cross_k = ggml_new_tensor_1d(cache.ctx, kv_type, cross_elements);
+    cache.cross_v = ggml_new_tensor_1d(cache.ctx, kv_type, cross_elements);
+
+    ggml_set_name(cache.self_k,  "kv_self_k_b");
+    ggml_set_name(cache.self_v,  "kv_self_v_b");
+    ggml_set_name(cache.cross_k, "kv_cross_k_b");
+    ggml_set_name(cache.cross_v, "kv_cross_v_b");
+
+    cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
+    if (cache.buffer == nullptr) {
+        std::fprintf(stderr, "whisper kv_cache(batched): buffer alloc failed\n");
+        ggml_free(cache.ctx);
+        cache.ctx = nullptr;
+        return false;
+    }
+    ggml_backend_buffer_clear(cache.buffer, 0);
+
+    cache.n_ctx     = n_ctx;
+    cache.n_batch   = n_batch;
+    cache.T_enc     = T_enc;
+    cache.T_enc_pad = T_enc;   // no extra pad in batched layout
     cache.n         = 0;
     cache.head      = 0;
     cache.cross_populated = false;
@@ -985,6 +1062,240 @@ transcribe_status load_mel_from_ref(const char *         ref_dir,
 
 } // namespace
 
+namespace {
+
+// Whisper timestamp logits processor — shared by the serial whisper_run and
+// the batched whisper_run_batch so the per-step masking is identical by
+// construction. Mirrors transformers' WhisperTimeStampLogitsProcessor; see
+// the rule-by-rule rationale at the (former) lambda site. Mutates `logits`
+// in place; no-op when want_segment_timestamps is false.
+void apply_whisper_timestamp_rules(
+    std::vector<float> &         logits,
+    const std::vector<int32_t> & generated_ids,
+    bool                         want_segment_timestamps,
+    int                          no_timestamps_token_id,
+    int                          timestamp_begin,
+    int64_t                      vocab_size,
+    int                          eos_id,
+    int                          max_initial_timestamp_index)
+{
+    if (!want_segment_timestamps) {
+        return;
+    }
+    auto token_is_timestamp = [&](int id) {
+        return id >= timestamp_begin && id < static_cast<int>(vocab_size);
+    };
+    if (no_timestamps_token_id >= 0 && no_timestamps_token_id < vocab_size) {
+        logits[static_cast<size_t>(no_timestamps_token_id)] = -INFINITY;
+    }
+
+    const bool last_ts =
+        !generated_ids.empty() && token_is_timestamp(generated_ids.back());
+    const bool penult_ts =
+        generated_ids.size() < 2 ||
+        token_is_timestamp(generated_ids[generated_ids.size() - 2]);
+
+    if (last_ts) {
+        if (penult_ts) {
+            for (int i = timestamp_begin; i < static_cast<int>(vocab_size); ++i) {
+                logits[static_cast<size_t>(i)] = -INFINITY;
+            }
+        } else {
+            const int mask_hi = std::min(eos_id, static_cast<int>(vocab_size));
+            for (int i = 0; i < mask_hi; ++i) {
+                logits[static_cast<size_t>(i)] = -INFINITY;
+            }
+        }
+    }
+
+    int last_ts_id = -1;
+    for (auto it = generated_ids.rbegin(); it != generated_ids.rend(); ++it) {
+        if (token_is_timestamp(*it)) { last_ts_id = *it; break; }
+    }
+    if (last_ts_id >= 0) {
+        const int ts_low = (last_ts && !penult_ts) ? last_ts_id : last_ts_id + 1;
+        const int clamp_hi = std::min(ts_low, static_cast<int>(vocab_size));
+        for (int i = timestamp_begin; i < clamp_hi; ++i) {
+            logits[static_cast<size_t>(i)] = -INFINITY;
+        }
+    }
+
+    if (generated_ids.empty()) {
+        for (int i = 0; i < timestamp_begin; ++i) {
+            logits[static_cast<size_t>(i)] = -INFINITY;
+        }
+        if (max_initial_timestamp_index >= 0) {
+            const int last_allowed = timestamp_begin + max_initial_timestamp_index;
+            for (int i = last_allowed + 1; i < static_cast<int>(vocab_size); ++i) {
+                logits[static_cast<size_t>(i)] = -INFINITY;
+            }
+        }
+    }
+
+    float max_ts = -INFINITY;
+    for (int i = timestamp_begin; i < static_cast<int>(vocab_size); ++i) {
+        max_ts = std::max(max_ts, logits[static_cast<size_t>(i)]);
+    }
+    float ts_logsumexp = -INFINITY;
+    if (std::isfinite(max_ts)) {
+        double sum = 0.0;
+        for (int i = timestamp_begin; i < static_cast<int>(vocab_size); ++i) {
+            const float v = logits[static_cast<size_t>(i)];
+            if (std::isfinite(v)) sum += std::exp(static_cast<double>(v - max_ts));
+        }
+        if (sum > 0.0) ts_logsumexp = max_ts + static_cast<float>(std::log(sum));
+    }
+    float max_text = -INFINITY;
+    for (int i = 0; i < timestamp_begin; ++i) {
+        max_text = std::max(max_text, logits[static_cast<size_t>(i)]);
+    }
+    if (ts_logsumexp > max_text) {
+        for (int i = 0; i < timestamp_begin; ++i) {
+            logits[static_cast<size_t>(i)] = -INFINITY;
+        }
+    }
+}
+
+// Result of _retrieve_segment: the emitted segments (only when timestamps
+// requested), the per-segment token slices used to seed the next chunk's
+// prev-context, and how far `seek` should advance (long-form only).
+struct WhisperSegmentResult {
+    std::vector<transcribe_session::SegmentEntry> segments;
+    std::vector<std::vector<int32_t>>             prev_chunk_segments;
+    int                                           segment_offset_frames = 0;
+};
+
+// Port of HF generation_whisper.py:_retrieve_segment, shared by serial +
+// batched decode. Pure: reads generated_ids + the tokenizer, returns the
+// segments/slices/offset instead of mutating session state. See the call
+// sites for the rule rationale. (For short-form callers time_offset_ms is 0
+// and only `.segments` is consumed.)
+WhisperSegmentResult whisper_retrieve_segment(
+    const std::vector<int32_t> &  generated_ids,
+    const transcribe::Tokenizer & tok,
+    int64_t                       time_offset_ms,
+    int                           seek_num_frames,
+    bool                          want_segment_timestamps,
+    int                           timestamp_begin,
+    int64_t                       vocab_size)
+{
+    WhisperSegmentResult out;
+    out.segment_offset_frames = seek_num_frames;
+
+    auto token_is_timestamp = [&](int id) {
+        return id >= timestamp_begin && id < static_cast<int>(vocab_size);
+    };
+    auto trim_ascii = [](std::string s) {
+        size_t start = 0;
+        while (start < s.size() &&
+               (s[start] == ' ' || s[start] == '\t' ||
+                s[start] == '\n' || s[start] == '\r')) ++start;
+        size_t end = s.size();
+        while (end > start &&
+               (s[end - 1] == ' ' || s[end - 1] == '\t' ||
+                s[end - 1] == '\n' || s[end - 1] == '\r')) --end;
+        return s.substr(start, end - start);
+    };
+    auto decode_range = [&](int begin, int end) -> std::string {
+        if (begin >= end) return std::string();
+        std::vector<int> ids_int;
+        ids_int.reserve(static_cast<size_t>(end - begin));
+        for (int i = begin; i < end; ++i) {
+            const int32_t id = generated_ids[i];
+            if (id >= 0 && id < 50257 && !token_is_timestamp(id))
+                ids_int.push_back(id);
+        }
+        if (ids_int.empty()) return std::string();
+        return trim_ascii(tok.decode(ids_int.data(),
+                                     static_cast<int>(ids_int.size())));
+    };
+
+    const int gn = static_cast<int>(generated_ids.size());
+
+    std::vector<int> slices;
+    for (int i = 0; i + 1 < gn; ++i) {
+        if (token_is_timestamp(generated_ids[i]) &&
+            token_is_timestamp(generated_ids[i + 1]))
+        {
+            slices.push_back(i + 1);
+        }
+    }
+    const bool single_timestamp_ending =
+        gn >= 2 &&
+        !token_is_timestamp(generated_ids[gn - 2]) &&
+         token_is_timestamp(generated_ids[gn - 1]);
+
+    if (!slices.empty()) {
+        if (single_timestamp_ending) slices.push_back(gn);
+        else                         slices.back() += 1;
+
+        int last_slice = 0;
+        for (size_t k = 0; k < slices.size(); ++k) {
+            const int current_slice = slices[k];
+            const bool is_last = (k + 1 == slices.size());
+            if (current_slice <= last_slice) { last_slice = current_slice; continue; }
+            const int32_t first_tok = generated_ids[last_slice];
+            if (!token_is_timestamp(first_tok)) { last_slice = current_slice; continue; }
+            const int end_token_idx =
+                (!is_last || single_timestamp_ending) ? current_slice - 1
+                                                      : current_slice - 2;
+            if (end_token_idx < last_slice || end_token_idx >= gn) {
+                last_slice = current_slice; continue;
+            }
+            const int32_t last_tok = generated_ids[end_token_idx];
+            if (!token_is_timestamp(last_tok)) { last_slice = current_slice; continue; }
+            const int64_t start_ts_pos = static_cast<int64_t>(first_tok - timestamp_begin);
+            const int64_t end_ts_pos   = static_cast<int64_t>(last_tok - timestamp_begin);
+
+            if (want_segment_timestamps) {
+                transcribe_session::SegmentEntry seg {};
+                seg.t0_ms = time_offset_ms + start_ts_pos * 20;
+                seg.t1_ms = time_offset_ms + end_ts_pos   * 20;
+                if (seg.t1_ms < seg.t0_ms) seg.t1_ms = seg.t0_ms;
+                seg.text  = decode_range(last_slice, current_slice);
+                if (!seg.text.empty()) out.segments.push_back(std::move(seg));
+            }
+            out.prev_chunk_segments.emplace_back(
+                generated_ids.begin() + last_slice,
+                generated_ids.begin() + current_slice);
+            last_slice = current_slice;
+        }
+
+        if (single_timestamp_ending) {
+            out.segment_offset_frames = seek_num_frames;
+        } else if (last_slice >= 2 && last_slice - 2 < gn &&
+                   token_is_timestamp(generated_ids[last_slice - 2]))
+        {
+            const int last_ts_pos = generated_ids[last_slice - 2] - timestamp_begin;
+            out.segment_offset_frames = last_ts_pos * 2;  // input_stride = 2
+        }
+    } else {
+        int64_t last_ts_pos = static_cast<int64_t>(seek_num_frames) / 2;
+        for (int i = gn - 1; i >= 0; --i) {
+            if (token_is_timestamp(generated_ids[i]) &&
+                generated_ids[i] != timestamp_begin)
+            {
+                last_ts_pos = static_cast<int64_t>(generated_ids[i] - timestamp_begin);
+                break;
+            }
+        }
+        if (want_segment_timestamps && gn > 0) {
+            transcribe_session::SegmentEntry seg {};
+            seg.t0_ms = time_offset_ms;
+            seg.t1_ms = time_offset_ms + last_ts_pos * 20;
+            seg.text  = decode_range(0, gn);
+            if (!seg.text.empty()) out.segments.push_back(std::move(seg));
+        }
+        if (gn > 0)
+            out.prev_chunk_segments.emplace_back(generated_ids.begin(),
+                                                 generated_ids.end());
+        out.segment_offset_frames = seek_num_frames;
+    }
+    return out;
+}
+
+} // namespace
+
 transcribe_status whisper_run(
     transcribe_session *      session,
     const float *             pcm,
@@ -1746,119 +2057,10 @@ transcribe_status whisper_run(
         //      timestamp_begin + max_initial_timestamp_index (HF
         //      logits_process.py:2040-2042).
         auto apply_timestamp_rules = [&](std::vector<float> & logits) {
-            if (!want_segment_timestamps) {
-                return;
-            }
-            if (cm->hparams.no_timestamps_token_id >= 0 &&
-                cm->hparams.no_timestamps_token_id < vocab_size)
-            {
-                logits[static_cast<size_t>(cm->hparams.no_timestamps_token_id)] =
-                    -INFINITY;
-            }
-
-            const bool last_ts =
-                !generated_ids.empty() &&
-                token_is_timestamp(generated_ids.back());
-            const bool penult_ts =
-                generated_ids.size() < 2 ||
-                token_is_timestamp(generated_ids[generated_ids.size() - 2]);
-
-            if (last_ts) {
-                if (penult_ts) {
-                    for (int i = timestamp_begin;
-                         i < static_cast<int>(vocab_size); ++i)
-                    {
-                        logits[static_cast<size_t>(i)] = -INFINITY;
-                    }
-                } else {
-                    // <text TS> pair opening: next token must either
-                    // close the pair with another TS or terminate with
-                    // EOS. HF mirrors this at logits_process.py:2018-2023
-                    // as `scores_processed[k, :eos_token_id] = -inf` —
-                    // upper bound is eos_id (exclusive), NOT
-                    // timestamp_begin. Using timestamp_begin here would
-                    // mask EOS and also mask the special-token band
-                    // [eos_id+1, timestamp_begin) — but EOS is the
-                    // correctness-critical one: without it a chunk that
-                    // naturally wants to end on a single timestamp
-                    // cannot terminate, which hurts single_timestamp_ending
-                    // detection in _retrieve_segment.
-                    const int mask_hi = std::min(
-                        eos_id, static_cast<int>(vocab_size));
-                    for (int i = 0; i < mask_hi; ++i) {
-                        logits[static_cast<size_t>(i)] = -INFINITY;
-                    }
-                }
-            }
-
-            int last_ts_id = -1;
-            for (auto it = generated_ids.rbegin();
-                 it != generated_ids.rend(); ++it)
-            {
-                if (token_is_timestamp(*it)) { last_ts_id = *it; break; }
-            }
-            if (last_ts_id >= 0) {
-                const int ts_low = (last_ts && !penult_ts)
-                                       ? last_ts_id : last_ts_id + 1;
-                const int clamp_hi = std::min(ts_low,
-                                              static_cast<int>(vocab_size));
-                for (int i = timestamp_begin; i < clamp_hi; ++i) {
-                    logits[static_cast<size_t>(i)] = -INFINITY;
-                }
-            }
-
-            if (generated_ids.empty()) {
-                for (int i = 0; i < timestamp_begin; ++i) {
-                    logits[static_cast<size_t>(i)] = -INFINITY;
-                }
-                // HF logits_process.py:2040-2042: on the first
-                // generated token only, after forcing a timestamp, cap
-                // the allowed timestamp to timestamp_begin +
-                // max_initial_timestamp_index so the initial cut cannot
-                // land later than max_initial_timestamp seconds.
-                if (max_initial_timestamp_index >= 0) {
-                    const int last_allowed =
-                        timestamp_begin + max_initial_timestamp_index;
-                    for (int i = last_allowed + 1;
-                         i < static_cast<int>(vocab_size); ++i)
-                    {
-                        logits[static_cast<size_t>(i)] = -INFINITY;
-                    }
-                }
-            }
-
-            float max_ts = -INFINITY;
-            for (int i = timestamp_begin;
-                 i < static_cast<int>(vocab_size); ++i)
-            {
-                max_ts = std::max(max_ts, logits[static_cast<size_t>(i)]);
-            }
-            float ts_logsumexp = -INFINITY;
-            if (std::isfinite(max_ts)) {
-                double sum = 0.0;
-                for (int i = timestamp_begin;
-                     i < static_cast<int>(vocab_size); ++i)
-                {
-                    const float v = logits[static_cast<size_t>(i)];
-                    if (std::isfinite(v)) {
-                        sum += std::exp(static_cast<double>(v - max_ts));
-                    }
-                }
-                if (sum > 0.0) {
-                    ts_logsumexp =
-                        max_ts + static_cast<float>(std::log(sum));
-                }
-            }
-            float max_text = -INFINITY;
-            for (int i = 0; i < timestamp_begin; ++i) {
-                max_text = std::max(max_text,
-                                    logits[static_cast<size_t>(i)]);
-            }
-            if (ts_logsumexp > max_text) {
-                for (int i = 0; i < timestamp_begin; ++i) {
-                    logits[static_cast<size_t>(i)] = -INFINITY;
-                }
-            }
+            apply_whisper_timestamp_rules(
+                logits, generated_ids, want_segment_timestamps,
+                cm->hparams.no_timestamps_token_id, timestamp_begin,
+                vocab_size, eos_id, max_initial_timestamp_index);
         };
 
         int next_id = 0;
@@ -1935,6 +2137,7 @@ transcribe_status whisper_run(
         const int n_layers = cm->hparams.dec_n_layers;
         const bool need_init =
             cc->kv_cache.ctx == nullptr ||
+            cc->kv_cache.n_batch != 1 ||
             cc->kv_cache.n_ctx != n_ctx_decoder ||
             cc->kv_cache.T_enc != T_enc_local;
         if (need_init) {
@@ -2650,156 +2853,15 @@ transcribe_status whisper_run(
         // so generated_ids carries no ts tokens → "no pairs" branch,
         // full-chunk advance, no per-chunk segment emission (we gate
         // on want_segment_timestamps).
-        auto trim_ascii = [](std::string s) {
-            size_t start = 0;
-            while (start < s.size() &&
-                   (s[start] == ' ' || s[start] == '\t' ||
-                    s[start] == '\n' || s[start] == '\r'))
-            {
-                ++start;
-            }
-            size_t end = s.size();
-            while (end > start &&
-                   (s[end - 1] == ' ' || s[end - 1] == '\t' ||
-                    s[end - 1] == '\n' || s[end - 1] == '\r'))
-            {
-                --end;
-            }
-            return s.substr(start, end - start);
-        };
-        auto decode_range = [&](int begin, int end) -> std::string {
-            if (begin >= end) return std::string();
-            std::vector<int> ids_int;
-            ids_int.reserve(static_cast<size_t>(end - begin));
-            for (int i = begin; i < end; ++i) {
-                const int32_t id = generated_ids[i];
-                if (id >= 0 && id < 50257 && !token_is_timestamp(id)) {
-                    ids_int.push_back(id);
-                }
-            }
-            if (ids_int.empty()) return std::string();
-            return trim_ascii(cm->tok.decode(
-                ids_int.data(), static_cast<int>(ids_int.size())));
-        };
-
-        const int gn = static_cast<int>(generated_ids.size());
-        int segment_offset_frames = seek_num_frames;
-        std::vector<std::vector<int32_t>> prev_chunk_segments;
-
-        // Collect indices where generated_ids[i] and [i+1] are both
-        // timestamps. slices[k] = i+1 (one past the first ts of the
-        // pair), mirroring HF's timestamp_segment_indices.add_(1).
-        std::vector<int> slices;
-        for (int i = 0; i + 1 < gn; ++i) {
-            if (token_is_timestamp(generated_ids[i]) &&
-                token_is_timestamp(generated_ids[i + 1]))
-            {
-                slices.push_back(i + 1);
-            }
+        WhisperSegmentResult seg_res = whisper_retrieve_segment(
+            generated_ids, cm->tok, time_offset_ms, seek_num_frames,
+            want_segment_timestamps, timestamp_begin, vocab_size);
+        for (auto & seg : seg_res.segments) {
+            cc->segments.push_back(std::move(seg));
         }
-        const bool single_timestamp_ending =
-            gn >= 2 &&
-            !token_is_timestamp(generated_ids[gn - 2]) &&
-             token_is_timestamp(generated_ids[gn - 1]);
-
-        if (!slices.empty()) {
-            if (single_timestamp_ending) {
-                slices.push_back(gn);
-            } else {
-                slices.back() += 1;
-            }
-
-            int last_slice = 0;
-            for (size_t k = 0; k < slices.size(); ++k) {
-                const int current_slice = slices[k];
-                const bool is_last = (k + 1 == slices.size());
-                if (current_slice <= last_slice) {
-                    last_slice = current_slice;
-                    continue;
-                }
-                const int32_t first_tok = generated_ids[last_slice];
-                if (!token_is_timestamp(first_tok)) {
-                    // Segment doesn't open with a ts (shouldn't happen
-                    // under the timestamp-rule logits processor, but
-                    // guard anyway).
-                    last_slice = current_slice;
-                    continue;
-                }
-                const int end_token_idx =
-                    (!is_last || single_timestamp_ending)
-                        ? current_slice - 1
-                        : current_slice - 2;
-                if (end_token_idx < last_slice || end_token_idx >= gn) {
-                    last_slice = current_slice;
-                    continue;
-                }
-                const int32_t last_tok = generated_ids[end_token_idx];
-                if (!token_is_timestamp(last_tok)) {
-                    last_slice = current_slice;
-                    continue;
-                }
-                const int64_t start_ts_pos =
-                    static_cast<int64_t>(first_tok - timestamp_begin);
-                const int64_t end_ts_pos =
-                    static_cast<int64_t>(last_tok - timestamp_begin);
-
-                if (want_segment_timestamps) {
-                    transcribe_session::SegmentEntry seg {};
-                    seg.t0_ms = time_offset_ms + start_ts_pos * 20;
-                    seg.t1_ms = time_offset_ms + end_ts_pos   * 20;
-                    if (seg.t1_ms < seg.t0_ms) seg.t1_ms = seg.t0_ms;
-                    seg.text  = decode_range(last_slice, current_slice);
-                    if (!seg.text.empty()) {
-                        cc->segments.push_back(std::move(seg));
-                    }
-                }
-                prev_chunk_segments.emplace_back(
-                    generated_ids.begin() + last_slice,
-                    generated_ids.begin() + current_slice);
-
-                last_slice = current_slice;
-            }
-
-            if (single_timestamp_ending) {
-                segment_offset_frames = seek_num_frames;
-            } else if (last_slice >= 2 && last_slice - 2 < gn &&
-                       token_is_timestamp(generated_ids[last_slice - 2]))
-            {
-                const int last_ts_pos =
-                    generated_ids[last_slice - 2] - timestamp_begin;
-                // input_stride = 2 (encoder conv2 downsamples by 2).
-                segment_offset_frames = last_ts_pos * 2;
-            }
-        } else {
-            // No consecutive pairs → treat the chunk as one segment.
-            // Default end time: seek_num_frames of 10ms each. If any
-            // non-first timestamp was emitted, prefer its position.
-            int64_t last_ts_pos =
-                static_cast<int64_t>(seek_num_frames) / 2;  // frames / (ts_unit / frame_unit) = /2
-            for (int i = gn - 1; i >= 0; --i) {
-                if (token_is_timestamp(generated_ids[i]) &&
-                    generated_ids[i] != timestamp_begin)
-                {
-                    last_ts_pos =
-                        static_cast<int64_t>(generated_ids[i] - timestamp_begin);
-                    break;
-                }
-            }
-            if (want_segment_timestamps && gn > 0) {
-                transcribe_session::SegmentEntry seg {};
-                seg.t0_ms = time_offset_ms;
-                seg.t1_ms = time_offset_ms + last_ts_pos * 20;
-                seg.text  = decode_range(0, gn);
-                if (!seg.text.empty()) {
-                    cc->segments.push_back(std::move(seg));
-                }
-            }
-            if (gn > 0) {
-                prev_chunk_segments.emplace_back(generated_ids.begin(),
-                                                 generated_ids.end());
-            }
-            segment_offset_frames = seek_num_frames;
-        }
+        int segment_offset_frames = seg_res.segment_offset_frames;
+        std::vector<std::vector<int32_t>> & prev_chunk_segments =
+            seg_res.prev_chunk_segments;
 
         // Stage 3 — update prev-context history for later chunks.
         //
@@ -2862,6 +2924,705 @@ transcribe_status whisper_run(
     return TRANSCRIBE_OK;
 }
 
+// ===========================================================================
+// Offline batched decode (transcribe_run_batch)
+// ===========================================================================
+//
+// Whisper is encoder-decoder with self + cross attention (the cohere /
+// canary / moonshine pattern), so it batches the same way: the encoder
+// stays SERIAL per utterance (compute-bound — the granite lesson) while the
+// memory-bandwidth-bound autoregressive DECODE is batched across B
+// utterances in lockstep, amortizing the per-step weight reads.
+//
+// Whisper's decode loop is far richer than its siblings (temperature
+// fallback, timestamp rules, no-speech skip, long-form seek), so the
+// batched fast path covers only the common, parity-exact case and PEELS
+// everything else to the proven serial whisper_run():
+//
+//   batched  : short-form (<= 30 s) utterances at tier 0 (temperature 0 =
+//              greedy argmax), TIMESTAMPS_NONE, no initial_prompt.
+//   serial   : long-form, segment-timestamps, temperature > 0, prompt /
+//              prompt_tokens, invalid inputs, AND any batched utterance
+//              whose tier-0 output fails the fallback thresholds
+//              (compression-ratio / avg-logprob / no-speech-skip) — those
+//              re-run through whisper_run so the temperature ladder is
+//              applied exactly as in serial.
+//
+// For a clip that passes tier 0 (the overwhelming common case for clean
+// speech) the batched greedy argmax is bit-for-bit the serial tier-0
+// result, so batch_parity holds; anything that would diverge is run
+// serially and therefore trivially matches.
+
+// Serial fallback: run each utterance through whisper_run and snapshot it.
+transcribe_status whisper_run_batch_serial(
+    WhisperSession *              cc,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params)
+{
+    for (int i = 0; i < n; ++i) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        const transcribe_status st =
+            (pcm[i] == nullptr || n_samples[i] <= 0)
+                ? TRANSCRIBE_ERR_INVALID_ARG
+                : whisper_run(cc, pcm[i], n_samples[i], params);
+        if (st == TRANSCRIBE_OK) {
+            cc->batch_results.push_back(cc->capture_result(st));
+        } else {
+            transcribe_session::ResultSet rs; rs.status = st;
+            cc->batch_results.push_back(std::move(rs));
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status whisper_run_batch(
+    transcribe_session *          session,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params)
+{
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    auto * cc = static_cast<WhisperSession *>(session);
+    auto * cm = static_cast<WhisperModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty() || !cm->mel.has_value()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Resolve the whisper run-ext (NULL → shipping defaults).
+    if (const transcribe_status st = transcribe_ext_check(
+            params != nullptr ? params->family : nullptr,
+            TRANSCRIBE_EXT_KIND_WHISPER_RUN,
+            sizeof(struct transcribe_whisper_run_ext));
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    transcribe_whisper_run_ext default_wp; transcribe_whisper_run_ext_init(&default_wp);
+    const transcribe_whisper_run_ext * wp =
+        (params != nullptr && params->family != nullptr)
+            ? reinterpret_cast<const transcribe_whisper_run_ext *>(params->family)
+            : &default_wp;
+
+    // ---- Global gates: only what the batched graph genuinely can't do. ----
+    // Segment timestamps, temperature>0 fallback, and initial_prompt are now
+    // all handled in-batch; what still peels the WHOLE call to serial is the
+    // device/topology constraints + word timestamps (unsupported) + the
+    // ALL_SEGMENTS-without-condition error (let serial surface it).
+    const bool primary_is_gpu =
+        cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
+        cm->plan.primary_kind != transcribe::BackendKind::Accel &&
+        cm->plan.primary_kind != transcribe::BackendKind::Unknown;
+    const transcribe_timestamp_kind req_ts =
+        params != nullptr ? params->timestamps : TRANSCRIBE_TIMESTAMPS_NONE;
+    const bool want_ts =
+        req_ts == TRANSCRIBE_TIMESTAMPS_AUTO ||
+        req_ts == TRANSCRIBE_TIMESTAMPS_SEGMENT;
+    if (n == 1 || !cc->decoder_use_flash || !primary_is_gpu ||
+        transcribe::debug::enabled() || req_ts == TRANSCRIBE_TIMESTAMPS_WORD ||
+        (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS &&
+         !wp->condition_on_prev_tokens))
+    {
+        return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+    }
+
+    transcribe::debug::init();
+    const auto & hp = cm->hparams;
+    const int     d_model     = hp.dec_d_model;
+    const int     n_layer     = hp.dec_n_layers;
+    const int64_t vocab_size  = hp.dec_vocab_size;
+    const int     eos_id      = cm->tok.eos_id() >= 0 ? cm->tok.eos_id() : 50257;
+    const int     timestamp_begin   = hp.no_timestamps_token_id + 1;
+    const int     no_speech_token_id = hp.no_timestamps_token_id - 1;
+    const int     n_ctx_decoder = hp.dec_max_target_positions;
+    const int     n_mels        = hp.enc_num_mel_bins;
+    const int     n_mel_frames_per_chunk =
+        hp.fe_nb_max_frames > 0 ? hp.fe_nb_max_frames : 3000;
+    const int     n_samples_per_chunk =
+        hp.fe_n_samples > 0 ? hp.fe_n_samples : 480000;
+    const bool    is_multilingual = cm->caps.supports_language_detect;
+    constexpr int k_max_new = 256;
+    // Short-form: PCM padded to one 30s window, so the whole chunk is one
+    // seek of n_mel_frames_per_chunk frames at time offset 0.
+    const int     seek_num_frames = n_mel_frames_per_chunk;
+
+    // Task token (multilingual only). Non-resolvable → whole-batch serial.
+    int32_t task_token = -1;
+    if (is_multilingual) {
+        task_token = (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE)
+                         ? hp.translate_token_id : hp.transcribe_token_id;
+        if (task_token < 0) {
+            return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+        }
+    } else if (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE) {
+        return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+    }
+
+    // Optional language hint (uniform). Unresolvable → serial.
+    int32_t lang_hint = -1;
+    if (params != nullptr && params->language != nullptr &&
+        params->language[0] != '\0')
+    {
+        const std::string lang_code = params->language;
+        if (!is_multilingual) {
+            if (lang_code != "en")
+                return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+        } else {
+            for (size_t i = 0; i < cm->lang_codes.size(); ++i)
+                if (cm->lang_codes[i] == lang_code) { lang_hint = cm->lang_token_ids[i]; break; }
+            if (lang_hint < 0)
+                return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+        }
+    }
+
+    // ---- Shared prev-context prefix from initial_prompt / prompt_tokens. ----
+    // Uniform across the batch (one run_params). Happy-path only: any malformed
+    // prompt routes the whole call to serial, which surfaces the exact error.
+    int32_t prev_sot_id = hp.prev_sot_token_id;
+    if (prev_sot_id < 0) prev_sot_id = cm->tok.find("<|startofprev|>");
+    const bool prompt_requested =
+        (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) ||
+        (wp->initial_prompt != nullptr && wp->initial_prompt[0] != '\0');
+    std::vector<int32_t> prev_tokens;
+    if (prompt_requested) {
+        if (prev_sot_id < 0)
+            return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+        const int max_prev_cap = wp->max_prev_context_tokens > 0
+                                     ? wp->max_prev_context_tokens
+                                     : (hp.dec_max_target_positions / 2 - 1);
+        std::vector<int32_t> ptext;
+        if (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) {
+            if (wp->prompt_tokens[0] == prev_sot_id)
+                return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+            ptext.assign(wp->prompt_tokens, wp->prompt_tokens + wp->n_prompt_tokens);
+        } else {
+            std::string s(wp->initial_prompt);
+            auto issp = [](char c){ return c==' '||c=='\t'||c=='\n'||c=='\r'; };
+            size_t a = 0, b = s.size();
+            while (a < b && issp(s[a])) ++a;
+            while (b > a && issp(s[b-1])) --b;
+            if (b > a) {
+                std::string text(" "); text.append(s.data() + a, b - a);
+                for (size_t i = 0; i + 1 < text.size(); ) {
+                    if (text[i] == '<' && text[i+1] == '|') {
+                        const size_t end = text.find("|>", i + 2);
+                        if (end != std::string::npos) {
+                            std::string piece = text.substr(i, end + 2 - i);
+                            if (cm->tok.find(piece) >= eos_id)
+                                return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+                            i = end + 2; continue;
+                        }
+                    }
+                    ++i;
+                }
+                if (cm->tok.encode(text, ptext) != TRANSCRIBE_OK)
+                    return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+                for (int32_t id : ptext)
+                    if (id >= eos_id)
+                        return whisper_run_batch_serial(cc, pcm, n_samples, n, params);
+            }
+        }
+        if (static_cast<int>(ptext.size()) > max_prev_cap)
+            ptext.erase(ptext.begin(), ptext.end() - max_prev_cap);
+        if (!ptext.empty()) {
+            prev_tokens.push_back(prev_sot_id);
+            prev_tokens.insert(prev_tokens.end(), ptext.begin(), ptext.end());
+        }
+    }
+    const int sot_index = static_cast<int>(prev_tokens.size());
+
+    // Temperature ladder (same recipe as serial). Tier 0 == wp->temperature.
+    std::vector<float> temperatures;
+    temperatures.push_back(wp->temperature);
+    if (wp->temperature_inc > 0.0f) {
+        for (float T = wp->temperature + wp->temperature_inc;
+             T <= 1.0f + 1e-4f; T += wp->temperature_inc)
+            temperatures.push_back(T);
+    }
+    const int max_initial_timestamp_index =
+        (std::isfinite(wp->max_initial_timestamp) && wp->max_initial_timestamp >= 0.0f)
+            ? static_cast<int>(std::floor(
+                  static_cast<double>(wp->max_initial_timestamp) / 0.02))
+            : -1;
+
+    // Per-utterance result slots, filled in input order, pushed at the end.
+    std::vector<transcribe_session::ResultSet> results(static_cast<size_t>(n));
+    std::vector<char> have_result(static_cast<size_t>(n), 0);
+    std::vector<char> needs_serial(static_cast<size_t>(n), 0);
+
+    // ---- Pass 0: classify + parallel mel for batchable (short-form) inputs. ----
+    std::vector<char> valid(static_cast<size_t>(n), 0);
+    std::vector<std::vector<float>> mel_chunks(static_cast<size_t>(n));  // [frames, n_mels]
+    for (int b = 0; b < n; ++b) {
+        if (pcm[b] == nullptr || n_samples[b] <= 0) {
+            results[b].status = TRANSCRIBE_ERR_INVALID_ARG; have_result[b] = 1; continue;
+        }
+        if (n_samples[b] > n_samples_per_chunk) { needs_serial[b] = 1; continue; }
+        valid[b] = 1;
+    }
+    int n_threads = cc->n_threads;
+    if (n_threads <= 0) n_threads = std::min(8, std::max(1,
+        static_cast<int>(std::thread::hardware_concurrency())));
+    int64_t mel_us = 0, enc_us = 0, dec_us = 0;
+    const int64_t t_mel0 = ggml_time_us();
+    transcribe::parallel_for_all(n, n_threads, [&](int b) {
+        if (!valid[b]) return true;
+        std::vector<float> pcm_work(static_cast<size_t>(n_samples_per_chunk), 0.0f);
+        const int n_copy = std::min(n_samples[b], n_samples_per_chunk);
+        std::memcpy(pcm_work.data(), pcm[b], static_cast<size_t>(n_copy) * sizeof(float));
+        std::vector<float> mel_mn; int nm = 0, nf = 0;
+        if (cm->mel->compute(pcm_work.data(), pcm_work.size(), mel_mn, nm, nf,
+                             /*n_threads=*/1) != TRANSCRIBE_OK || nm != n_mels || nf <= 0)
+        { valid[b] = 0; return true; }
+        std::vector<float> & chunk = mel_chunks[b];
+        chunk.assign(static_cast<size_t>(nm) * nf, 0.0f);
+        for (int t = 0; t < nf; ++t)
+            for (int m = 0; m < nm; ++m)
+                chunk[static_cast<size_t>(t) * nm + m] = mel_mn[static_cast<size_t>(m) * nf + t];
+        return true;
+    });
+    mel_us += ggml_time_us() - t_mel0;
+    for (int b = 0; b < n; ++b)
+        if (!needs_serial[b] && !have_result[b] && !valid[b]) needs_serial[b] = 1;
+
+    // ---- Pass 1: serial per-utterance encoder + (optional) lang detect + prompt. ----
+    std::vector<std::vector<float>> enc_hosts(static_cast<size_t>(n));
+    std::vector<int> T_enc(static_cast<size_t>(n), 0);
+    std::vector<std::vector<int32_t>> prompts(static_cast<size_t>(n));
+    std::vector<std::string> det_lang(static_cast<size_t>(n));
+    int T_enc_max = 0;
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) continue;
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        int T_enc_local = 0;
+        const int64_t t_e0 = ggml_time_us();
+        if (run_whisper_encoder_on_window(cc, cm, mel_chunks[b].data(), n_mels,
+                                          n_mel_frames_per_chunk,
+                                          /*allow_dumps=*/false, T_enc_local) != TRANSCRIBE_OK
+            || T_enc_local <= 0)
+        { valid[b] = 0; needs_serial[b] = 1; continue; }
+        enc_us += ggml_time_us() - t_e0;
+
+        const int d_enc = cc->enc_out.d_model;
+        enc_hosts[b].resize(static_cast<size_t>(d_enc) * T_enc_local);
+        ggml_backend_tensor_get(cc->enc_out.tensor, enc_hosts[b].data(), 0,
+                                enc_hosts[b].size() * sizeof(float));
+        T_enc[b] = T_enc_local;
+        T_enc_max = std::max(T_enc_max, T_enc_local);
+
+        int32_t lang_token = lang_hint;
+        if (is_multilingual && lang_token < 0 && !cm->lang_token_ids.empty()) {
+            cc->enc_host.resize(enc_hosts[b].size());
+            std::memcpy(cc->enc_host.data(), enc_hosts[b].data(),
+                        enc_hosts[b].size() * sizeof(float));
+            if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+            DecoderBuild det = build_decoder_prefill_graph(
+                cc->compute_ctx, cm->weights, hp, /*seq_len=*/1, T_enc_local,
+                cc->decoder_use_flash);
+            if (det.out == nullptr || det.graph == nullptr) return TRANSCRIBE_ERR_GGUF;
+            ggml_backend_sched_reset(cc->sched);
+            if (!ggml_backend_sched_alloc_graph(cc->sched, det.graph)) return TRANSCRIBE_ERR_GGUF;
+            const int32_t sot = hp.decoder_start_token_id;
+            ggml_backend_tensor_set(det.token_ids_in, &sot, 0, sizeof(int32_t));
+            ggml_backend_tensor_set(det.encoder_out_in, cc->enc_host.data(), 0,
+                                    cc->enc_host.size() * sizeof(float));
+            if (det.causal_mask_in != nullptr) {
+                const float zero = 0.0f;
+                ggml_backend_tensor_set(det.causal_mask_in, &zero, 0, sizeof(float));
+            }
+            if (ggml_backend_sched_graph_compute(cc->sched, det.graph) != GGML_STATUS_SUCCESS)
+                return TRANSCRIBE_ERR_GGUF;
+            std::vector<float> ll(static_cast<size_t>(vocab_size));
+            ggml_backend_tensor_get(det.dumps.logits_raw, ll.data(), 0,
+                                    static_cast<size_t>(vocab_size) * sizeof(float));
+            float best = -INFINITY; int best_idx = -1;
+            for (size_t i = 0; i < cm->lang_token_ids.size(); ++i) {
+                const int32_t id = cm->lang_token_ids[i];
+                if (id >= 0 && id < static_cast<int>(vocab_size) &&
+                    ll[static_cast<size_t>(id)] > best)
+                { best = ll[static_cast<size_t>(id)]; lang_token = id; best_idx = static_cast<int>(i); }
+            }
+            if (best_idx >= 0 && static_cast<size_t>(best_idx) < cm->lang_codes.size())
+                det_lang[b] = cm->lang_codes[static_cast<size_t>(best_idx)];
+        }
+        if (is_multilingual && lang_token < 0) { valid[b] = 0; needs_serial[b] = 1; continue; }
+
+        // Per-utterance prompt: prev_tokens + SOT [lang task] [notimestamps?].
+        std::vector<int32_t> & pr = prompts[b];
+        pr = prev_tokens;
+        pr.push_back(hp.decoder_start_token_id);
+        if (is_multilingual) { pr.push_back(lang_token); pr.push_back(task_token); }
+        if (!want_ts) pr.push_back(hp.no_timestamps_token_id);
+    }
+
+    int prompt_len = -1, n_batch_active = 0;
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) continue;
+        if (prompt_len < 0) prompt_len = static_cast<int>(prompts[b].size());
+        ++n_batch_active;
+    }
+    if (n_batch_active == 0 || T_enc_max <= 0) {
+        for (int b = 0; b < n; ++b) {
+            if (have_result[b]) continue;
+            const transcribe_status st =
+                (pcm[b] == nullptr || n_samples[b] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG
+                                                         : whisper_run(cc, pcm[b], n_samples[b], params);
+            results[b] = (st == TRANSCRIBE_OK) ? cc->capture_result(st)
+                                               : transcribe_session::ResultSet{};
+            results[b].status = st; have_result[b] = 1;
+        }
+        for (int b = 0; b < n; ++b) cc->batch_results.push_back(std::move(results[b]));
+        return TRANSCRIBE_OK;
+    }
+
+    const int B = n;
+
+    // ---- Allocate the batched KV cache. ----
+    int max_n_kv = 256;
+    while (max_n_kv < prompt_len + k_max_new) max_n_kv *= 2;
+    if (max_n_kv > n_ctx_decoder) max_n_kv = n_ctx_decoder;
+
+    ggml_type kv_type_g;
+    if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type_g = GGML_TYPE_F32;
+    else if (cc->kv_type == TRANSCRIBE_KV_TYPE_F16) kv_type_g = GGML_TYPE_F16;
+    else {
+        const ggml_tensor * probe = !cm->weights.dec_blocks.empty()
+            ? cm->weights.dec_blocks[0].self_q_w : nullptr;
+        kv_type_g = (probe != nullptr && probe->type == GGML_TYPE_F32)
+                        ? GGML_TYPE_F32 : GGML_TYPE_F16;
+    }
+    if (cc->kv_cache.buffer != nullptr &&
+        (cc->kv_cache.n_batch != B || cc->kv_cache.T_enc != T_enc_max ||
+         cc->kv_cache.n_ctx != max_n_kv))
+        cc->kv_cache.free();
+    if (cc->kv_cache.buffer == nullptr) {
+        if (!kv_cache_init_batched(cc->kv_cache, cm->plan.primary, max_n_kv,
+                                   T_enc_max, d_model, n_layer, B, kv_type_g))
+        { std::fprintf(stderr, "whisper run_batch: kv_cache_init_batched failed\n");
+          return TRANSCRIBE_ERR_BACKEND; }
+    } else {
+        ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
+        cc->kv_cache.n = 0; cc->kv_cache.head = 0; cc->kv_cache.cross_populated = false;
+    }
+
+    auto new_compute_ctx = [&](size_t mem) -> bool {
+        if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+        cc->compute_ctx_size = 0;
+        ggml_init_params ip {}; ip.mem_size = mem; ip.mem_buffer = nullptr; ip.no_alloc = true;
+        cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx != nullptr) cc->compute_ctx_size = mem;
+        return cc->compute_ctx != nullptr;
+    };
+
+    const int64_t t_dec0 = ggml_time_us();
+
+    // ---- Batched cross-attention K/V (tier-invariant; computed once). ----
+    {
+        if (!new_compute_ctx(16 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+        DecoderBuild cross = build_cross_kv_graph_batched(
+            cc->compute_ctx, cm->weights, hp, cc->kv_cache, T_enc_max, B);
+        if (cross.graph == nullptr) return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) return TRANSCRIBE_ERR_GGUF;
+        std::vector<float> packed(static_cast<size_t>(d_model) * T_enc_max * B, 0.0f);
+        for (int b = 0; b < n; ++b) {
+            if (!valid[b]) continue;
+            std::memcpy(packed.data() + static_cast<size_t>(b) * T_enc_max * d_model,
+                        enc_hosts[b].data(),
+                        static_cast<size_t>(d_model) * T_enc[b] * sizeof(float));
+        }
+        ggml_backend_tensor_set(cross.encoder_out_in, packed.data(), 0,
+                                packed.size() * sizeof(float));
+        if (ggml_backend_sched_graph_compute(cc->sched, cross.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        cc->kv_cache.cross_populated = true;
+    }
+
+    // ---- Batched step graph + growing self-attention window. ----
+    const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-INFINITY);
+
+    std::vector<ggml_fp16_t> cmask(static_cast<size_t>(T_enc_max) * B, f16_ninf);
+    for (int b = 0; b < n; ++b) {
+        const int real = valid[b] ? T_enc[b] : 1;
+        ggml_fp16_t * base = cmask.data() + static_cast<size_t>(b) * T_enc_max;
+        std::fill(base, base + std::min(real, T_enc_max), f16_zero);
+    }
+
+    int kv_window = 64;
+    while (kv_window > max_n_kv) kv_window /= 2;
+    if (kv_window < 1) kv_window = max_n_kv;
+
+    StepBuildBatched sb {};
+    auto rebuild_step = [&](int win) -> bool {
+        if (!new_compute_ctx(32 * 1024 * 1024)) return false;
+        sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp,
+                                      cc->kv_cache, win, T_enc_max, B, cc->decoder_use_flash);
+        if (sb.graph == nullptr || sb.logits_out == nullptr) return false;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return false;
+        ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0,
+                                cmask.size() * sizeof(ggml_fp16_t));
+        return true;
+    };
+    if (!rebuild_step(kv_window)) return TRANSCRIBE_ERR_GGUF;
+
+    std::vector<ggml_fp16_t> smask(static_cast<size_t>(kv_window) * B, f16_ninf);
+    std::vector<int32_t> tok_buf(B, 0), pos_buf(B, 0);
+    std::vector<int64_t> kvidx_buf(B, 0);
+    std::vector<float>   logits_host(static_cast<size_t>(vocab_size) * B);
+
+    auto run_step = [&](int posv) -> transcribe_status {
+        for (int b = 0; b < n; ++b) {
+            pos_buf[b] = posv; kvidx_buf[b] = posv;
+            smask[static_cast<size_t>(b) * kv_window + posv] = f16_zero;
+        }
+        ggml_backend_tensor_set(sb.token_ids_in, tok_buf.data(), 0, B * sizeof(int32_t));
+        ggml_backend_tensor_set(sb.pos_ids_in,  pos_buf.data(), 0, B * sizeof(int32_t));
+        ggml_backend_tensor_set(sb.kv_idx_in,   kvidx_buf.data(), 0, B * sizeof(int64_t));
+        ggml_backend_tensor_set(sb.self_mask_in, smask.data(), 0,
+                                smask.size() * sizeof(ggml_fp16_t));
+        if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_OK;
+    };
+    auto read_logits = [&]() {
+        ggml_backend_tensor_get(sb.logits_out, logits_host.data(), 0,
+                                static_cast<size_t>(vocab_size) * B * sizeof(float));
+    };
+    auto ensure_window = [&](int posv) -> bool {
+        if (posv + 1 <= kv_window) return true;
+        int win = kv_window;
+        while (win < posv + 1 && win < max_n_kv) win *= 2;
+        if (win > max_n_kv) win = max_n_kv;
+        if (win == kv_window) return true;
+        std::vector<ggml_fp16_t> wider(static_cast<size_t>(win) * B, f16_ninf);
+        for (int b = 0; b < n; ++b)
+            std::fill(wider.data() + static_cast<size_t>(b) * win,
+                      wider.data() + static_cast<size_t>(b) * win + posv, f16_zero);
+        smask.swap(wider);
+        kv_window = win;
+        return rebuild_step(kv_window);
+    };
+
+    std::vector<float> lb(static_cast<size_t>(vocab_size));
+    auto suppress_row = [&](std::vector<float> & lg, bool begin) {
+        for (int32_t id : hp.suppress_tokens)
+            if (id >= 0 && id < vocab_size) lg[static_cast<size_t>(id)] = -INFINITY;
+        if (begin)
+            for (int32_t id : hp.begin_suppress_tokens)
+                if (id >= 0 && id < vocab_size) lg[static_cast<size_t>(id)] = -INFINITY;
+    };
+    auto token_is_timestamp = [&](int id) {
+        return id >= timestamp_begin && id < static_cast<int>(vocab_size);
+    };
+
+    // Per-utterance working + accepted state.
+    std::vector<std::vector<int32_t>> gen(static_cast<size_t>(n)), gen_text(static_cast<size_t>(n));
+    std::vector<double> sumlp(static_cast<size_t>(n), 0.0);
+    std::vector<int>    nlp(static_cast<size_t>(n), 0);
+    std::vector<char>   fin(static_cast<size_t>(n), 0), hit_eos(static_cast<size_t>(n), 0);
+    std::vector<int32_t> next_tok(static_cast<size_t>(n), 0);
+    std::vector<float>  ns_prob(static_cast<size_t>(n), 0.0f);
+    std::vector<std::vector<int32_t>> acc_gen(static_cast<size_t>(n)), acc_gen_text(static_cast<size_t>(n));
+    std::vector<char>   acc_hit_eos(static_cast<size_t>(n), 0);
+    std::vector<char>   accepted_done(static_cast<size_t>(n), 0);
+    std::vector<std::mt19937> rng(static_cast<size_t>(n));
+    {
+        const uint32_t base_seed = wp->seed != 0 ? wp->seed : 0x5733B17Eu;
+        for (int b = 0; b < n; ++b)
+            rng[b].seed(base_seed + static_cast<uint32_t>(b));
+    }
+
+    auto sample_one = [&](int b, float T, bool begin) -> int {
+        const float * row = logits_host.data() + static_cast<size_t>(b) * vocab_size;
+        std::memcpy(lb.data(), row, static_cast<size_t>(vocab_size) * sizeof(float));
+        suppress_row(lb, begin);
+        apply_whisper_timestamp_rules(lb, gen[b], want_ts, hp.no_timestamps_token_id,
+                                      timestamp_begin, vocab_size, eos_id,
+                                      max_initial_timestamp_index);
+        float lp = 0.0f; int id;
+        if (T <= 0.0f) {
+            id = sample_argmax_and_logprob(lb, &lp);
+        } else {
+            id = sample_from_logits(lb, T, rng[b], &cc->sample_scratch);
+            lp = logprob_of_token_hf(lb, id, T);
+        }
+        sumlp[b] += lp; nlp[b] += 1;
+        return id;
+    };
+
+    // Decode one temperature tier over all valid slots (lockstep). Fills the
+    // working state; the caller reads metrics for the still-active utterances.
+    auto decode_tier = [&](float T, size_t ti) -> transcribe_status {
+        std::fill(smask.begin(), smask.end(), f16_ninf);
+        for (int b = 0; b < n; ++b) {
+            gen[b].clear(); gen_text[b].clear();
+            sumlp[b] = 0.0; nlp[b] = 0; hit_eos[b] = 0;
+            fin[b] = !valid[b]; next_tok[b] = 0;
+        }
+        int pos = 0;
+        for (; pos < prompt_len; ++pos) {
+            if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+            if (!ensure_window(pos)) return TRANSCRIBE_ERR_GGUF;
+            for (int b = 0; b < n; ++b) tok_buf[b] = valid[b] ? prompts[b][pos] : eos_id;
+            if (run_step(pos) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+            if (ti == 0 && pos == sot_index && no_speech_token_id >= 0 &&
+                no_speech_token_id < static_cast<int>(vocab_size))
+            {
+                read_logits();
+                for (int b = 0; b < n; ++b) {
+                    if (!valid[b]) continue;
+                    const float * row = logits_host.data() + static_cast<size_t>(b) * vocab_size;
+                    float max_l = -INFINITY;
+                    for (int i = 0; i < vocab_size; ++i)
+                        if (std::isfinite(row[i]) && row[i] > max_l) max_l = row[i];
+                    double sum = 0.0, ns = 0.0;
+                    if (std::isfinite(max_l))
+                        for (int i = 0; i < vocab_size; ++i)
+                            if (std::isfinite(row[i])) {
+                                const double e = std::exp(static_cast<double>(row[i] - max_l));
+                                sum += e; if (i == no_speech_token_id) ns = e;
+                            }
+                    ns_prob[b] = (sum > 0.0) ? static_cast<float>(ns / sum) : 0.0f;
+                }
+            }
+        }
+        read_logits();
+        for (int b = 0; b < n; ++b) {
+            if (!valid[b]) continue;
+            const int id = sample_one(b, T, /*begin=*/true);
+            next_tok[b] = id;
+            if (id == eos_id) { fin[b] = 1; hit_eos[b] = 1; }
+            else { gen[b].push_back(id);
+                   if (!token_is_timestamp(id) && id >= 0 && id < 50257) gen_text[b].push_back(id); }
+        }
+        for (int produced = 1; produced < k_max_new; ++produced, ++pos) {
+            if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+            bool all_done = true;
+            for (int b = 0; b < n; ++b) if (!fin[b]) { all_done = false; break; }
+            if (all_done || pos + 1 > max_n_kv) break;
+            if (!ensure_window(pos)) return TRANSCRIBE_ERR_GGUF;
+            for (int b = 0; b < n; ++b) tok_buf[b] = fin[b] ? eos_id : next_tok[b];
+            if (run_step(pos) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+            read_logits();
+            for (int b = 0; b < n; ++b) {
+                if (fin[b]) continue;
+                const int id = sample_one(b, T, /*begin=*/false);
+                next_tok[b] = id;
+                if (id == eos_id) { fin[b] = 1; hit_eos[b] = 1; }
+                else { gen[b].push_back(id);
+                       if (!token_is_timestamp(id) && id >= 0 && id < 50257) gen_text[b].push_back(id); }
+            }
+        }
+        return TRANSCRIBE_OK;
+    };
+
+    // ---- Tier loop with batched fallback ladder. ----
+    const int valid_count = std::max(1, n_batch_active);
+    auto trim_ws = [](std::string s) {
+        size_t a = 0, b = s.size();
+        auto sp = [](char c){ return c==' '||c=='\t'||c=='\n'||c=='\r'; };
+        while (a < b && sp(s[a])) ++a;
+        while (b > a && sp(s[b-1])) --b;
+        return s.substr(a, b - a);
+    };
+    auto finalize = [&](int b, const std::vector<int32_t> & g,
+                        const std::vector<int32_t> & gt) {
+        transcribe_session::ResultSet rs;
+        std::vector<int> tids(gt.begin(), gt.end());
+        std::string text = tids.empty() ? std::string()
+            : trim_ws(cm->tok.decode(tids.data(), static_cast<int>(tids.size())));
+        if (want_ts) {
+            WhisperSegmentResult sr = whisper_retrieve_segment(
+                g, cm->tok, /*time_offset_ms=*/0, seek_num_frames,
+                /*want_segment_timestamps=*/true, timestamp_begin, vocab_size);
+            rs.segments = std::move(sr.segments);
+            rs.result_kind = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+        } else {
+            transcribe_session::SegmentEntry seg {}; seg.text = text;
+            rs.segments.push_back(std::move(seg));
+            rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        }
+        rs.full_text = text;
+        rs.detected_language = det_lang[b];
+        rs.has_result = true; rs.status = TRANSCRIBE_OK;
+        rs.t_mel_us = mel_us / valid_count;
+        rs.t_encode_us = enc_us / valid_count;
+        rs.t_decode_us = dec_us / valid_count;
+        results[b] = std::move(rs); have_result[b] = 1; accepted_done[b] = 1;
+    };
+
+    for (size_t ti = 0; ti < temperatures.size(); ++ti) {
+        bool any_active = false;
+        for (int b = 0; b < n; ++b) if (valid[b] && !accepted_done[b]) { any_active = true; break; }
+        if (!any_active) break;
+
+        const transcribe_status st = decode_tier(temperatures[ti], ti);
+        if (st != TRANSCRIBE_OK) return st;
+
+        for (int b = 0; b < n; ++b) {
+            if (!valid[b] || accepted_done[b]) continue;
+            std::vector<int32_t> comp_tail = gen[b];
+            if (hit_eos[b]) comp_tail.push_back(static_cast<int32_t>(eos_id));
+            const float comp_ratio = compute_compression_ratio_hf(comp_tail, vocab_size);
+            const float avg_lp = nlp[b] > 0 ? static_cast<float>(sumlp[b] / nlp[b])
+                                            : -std::numeric_limits<float>::infinity();
+            // Record this tier's output (last tier wins if none accepts).
+            acc_gen[b] = gen[b]; acc_gen_text[b] = gen_text[b]; acc_hit_eos[b] = hit_eos[b];
+
+            const bool comp_ok = comp_ratio <= wp->compression_ratio_thold;
+            const bool lp_ok   = avg_lp >= wp->logprob_thold;
+            const bool ns_skip = ns_prob[b] > wp->no_speech_thold && avg_lp < wp->logprob_thold;
+            if (ns_skip) {
+                finalize(b, std::vector<int32_t>{}, std::vector<int32_t>{});
+            } else if (comp_ok && lp_ok) {
+                finalize(b, acc_gen[b], acc_gen_text[b]);
+            }
+            // else: escalate to the next tier.
+        }
+    }
+    // Tiers exhausted: keep the last-tier output for anyone still unaccepted.
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b] || accepted_done[b]) continue;
+        finalize(b, acc_gen[b], acc_gen_text[b]);
+    }
+    dec_us += ggml_time_us() - t_dec0;
+    // Patch decode timings now that dec_us is known (finalize ran earlier).
+    for (int b = 0; b < n; ++b)
+        if (valid[b]) results[b].t_decode_us = dec_us / valid_count;
+
+    // ---- Serial fallback for long-form / mel-failed / invalid-encode. ----
+    for (int b = 0; b < n; ++b) {
+        if (have_result[b] || !needs_serial[b]) continue;
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        const transcribe_status st =
+            (pcm[b] == nullptr || n_samples[b] <= 0) ? TRANSCRIBE_ERR_INVALID_ARG
+                                                     : whisper_run(cc, pcm[b], n_samples[b], params);
+        if (st == TRANSCRIBE_OK) results[b] = cc->capture_result(st);
+        else { results[b] = transcribe_session::ResultSet{}; results[b].status = st; }
+        have_result[b] = 1;
+    }
+
+    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+        int n_serial = 0; for (int b = 0; b < n; ++b) n_serial += needs_serial[b] ? 1 : 0;
+        std::fprintf(stderr,
+            "whisper run_batch: n=%d batched=%d serial=%d tiers=%d want_ts=%d "
+            "T_enc_max=%d kv_window=%d (cap %d) prompt=%d\n"
+            "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
+            n, n_batch_active, n_serial, static_cast<int>(temperatures.size()),
+            want_ts ? 1 : 0, T_enc_max, kv_window, max_n_kv, prompt_len,
+            mel_us / 1000.0, enc_us / 1000.0, n_batch_active, dec_us / 1000.0);
+    }
+
+    for (int b = 0; b < n; ++b) cc->batch_results.push_back(std::move(results[b]));
+    return TRANSCRIBE_OK;
+}
+
 // Kind+slot probe. Whisper ships only the WHISPER_RUN run-extension and
 // has no streaming surface, so the _STREAM slot is always false and the
 // _RUN slot accepts only WHISPER_RUN. There is currently no whisper
@@ -2916,6 +3677,7 @@ extern const Arch arch = {
     /* .load             = */ whisper_load,
     /* .init_context     = */ whisper_init_context,
     /* .run              = */ whisper_run,
+    /* .run_batch        = */ whisper_run_batch,
     /* .stream_validate  = */ nullptr,
     /* .stream_begin     = */ nullptr,
     /* .stream_feed      = */ nullptr,

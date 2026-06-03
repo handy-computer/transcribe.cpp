@@ -63,7 +63,12 @@ struct CanaryKvCache {
     int n_ctx = 0;
     int n     = 0;
     int head  = 0;
-    int T_enc = 0;
+    int T_enc = 0;   // T_enc_max for a batched cache (shorter utts padded)
+
+    // Utterance batch width. 1 for single-shot; > 1 for the offline batched
+    // decoder. Self slab (layer, b) at (b + n_batch*layer)*n_ctx*hidden;
+    // cross slab (layer, b) at (b + n_batch*layer)*T_enc*hidden.
+    int n_batch = 1;
 
     bool cross_populated = false;
 
@@ -82,6 +87,7 @@ struct CanaryKvCache {
         cross_v = nullptr;
         n = 0;
         head = 0;
+        n_batch = 1;
         cross_populated = false;
     }
 };
@@ -93,6 +99,17 @@ bool kv_cache_init(CanaryKvCache & cache,
                    int             n_state,
                    int             n_layer,
                    ggml_type       kv_type);
+
+// Batched variant: self [n_state·n_ctx·n_batch·n_layer], cross
+// [n_state·T_enc·n_batch·n_layer]. n_batch == 1 is layout-identical.
+bool kv_cache_init_batched(CanaryKvCache & cache,
+                           ggml_backend_t  backend,
+                           int             n_ctx,
+                           int             T_enc,
+                           int             n_state,
+                           int             n_layer,
+                           int             n_batch,
+                           ggml_type       kv_type);
 
 struct CanaryModel final : public transcribe_model {
     Tokenizer       tok;

@@ -12,6 +12,7 @@
 #include "weights.h"
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -128,6 +129,53 @@ bool kv_cache_init(MoonshineKvCache & cache,
     cache.head            = 0;
     cache.cross_populated = false;
 
+    return true;
+}
+
+bool kv_cache_init_batched(MoonshineKvCache & cache,
+                           ggml_backend_t     backend,
+                           int                n_ctx,
+                           int                T_enc,
+                           int                d_model,
+                           int                n_layer,
+                           int                n_batch,
+                           ggml_type          kv_type)
+{
+    if (n_batch <= 1) {
+        if (!kv_cache_init(cache, backend, n_ctx, T_enc, d_model, n_layer, kv_type))
+            return false;
+        cache.n_batch = 1;
+        return true;
+    }
+    if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
+        std::fprintf(stderr, "moonshine kv_cache(batched): unsupported kv_type\n");
+        return false;
+    }
+    const size_t ctx_size = 4 * ggml_tensor_overhead() + 256;
+    ggml_init_params params { ctx_size, nullptr, /*no_alloc=*/true };
+    cache.ctx = ggml_init(params);
+    if (cache.ctx == nullptr) return false;
+
+    const int64_t self_elements =
+        static_cast<int64_t>(d_model) * n_layer * n_ctx * n_batch;
+    const int64_t cross_elements =
+        static_cast<int64_t>(d_model) * n_layer * T_enc * n_batch;
+    cache.self_k  = ggml_new_tensor_1d(cache.ctx, kv_type, self_elements);
+    cache.self_v  = ggml_new_tensor_1d(cache.ctx, kv_type, self_elements);
+    cache.cross_k = ggml_new_tensor_1d(cache.ctx, kv_type, cross_elements);
+    cache.cross_v = ggml_new_tensor_1d(cache.ctx, kv_type, cross_elements);
+    ggml_set_name(cache.self_k,  "kv_self_k");
+    ggml_set_name(cache.self_v,  "kv_self_v");
+    ggml_set_name(cache.cross_k, "kv_cross_k");
+    ggml_set_name(cache.cross_v, "kv_cross_v");
+
+    cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
+    if (cache.buffer == nullptr) {
+        ggml_free(cache.ctx); cache.ctx = nullptr; return false;
+    }
+    ggml_backend_buffer_clear(cache.buffer, 0);
+    cache.n_ctx = n_ctx; cache.T_enc = T_enc; cache.n = 0; cache.head = 0;
+    cache.n_batch = n_batch; cache.cross_populated = false;
     return true;
 }
 
@@ -737,6 +785,261 @@ transcribe_status run(
     return TRANSCRIBE_OK;
 }
 
+// ===========================================================================
+// Offline batched decode (transcribe_run_batch). Mirrors src/arch/cohere +
+// canary. Encoder serial per utterance (compute-bound; moonshine has no mel
+// frontend to parallelize — raw PCM passthrough); decode (self+cross attn,
+// partial RoPE) batched. Requires the flash step path, so on Metal — where
+// moonshine defaults decoder flash OFF (head_dim_padded unsupported) — this
+// falls back to serial; it engages on Vulkan/CUDA. See
+// docs/batching-autoregressive-plan.md.
+// ===========================================================================
+
+transcribe_status encode_one_to_host(
+    MoonshineSession * cc, MoonshineModel * cm,
+    const float * pcm, int n_samples,
+    std::vector<float> & enc_out, int & T_enc_out, int64_t & enc_us)
+{
+    if (pcm == nullptr || n_samples <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
+    const auto & hp = cm->hparams;
+
+    if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+    EncoderBuild eb = build_encoder_graph(
+        cc->compute_ctx, cm->weights, hp, n_samples, cc->encoder_use_flash);
+    if (eb.audio_in == nullptr || eb.out == nullptr || eb.graph == nullptr)
+        return TRANSCRIBE_ERR_GGUF;
+    const int T_enc = eb.T_enc;
+    if (T_enc <= 0) return TRANSCRIBE_ERR_GGUF;
+
+    if (cc->sched == nullptr) {
+        cc->sched = ggml_backend_sched_new(
+            cm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
+        if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+
+    ggml_backend_tensor_set(eb.audio_in, pcm, 0,
+                            static_cast<size_t>(n_samples) * sizeof(float));
+    {
+        std::vector<int32_t> enc_pos_ids(static_cast<size_t>(T_enc));
+        for (int i = 0; i < T_enc; ++i) enc_pos_ids[i] = i;
+        ggml_backend_tensor_set(eb.pos_ids_in, enc_pos_ids.data(), 0,
+                                enc_pos_ids.size() * sizeof(int32_t));
+    }
+    apply_thread_policy(cc);
+
+    const int64_t t0 = ggml_time_us();
+    if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS)
+        return TRANSCRIBE_ERR_GGUF;
+    enc_us += ggml_time_us() - t0;
+
+    const int d_model = hp.dec_d_model;
+    enc_out.assign(static_cast<size_t>(d_model) * T_enc, 0.0f);
+    ggml_backend_tensor_get(eb.out, enc_out.data(), 0, enc_out.size() * sizeof(float));
+    T_enc_out = T_enc;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status run_batch_serial(MoonshineSession * cc,
+                                   const float * const * pcm,
+                                   const int * n_samples, int n,
+                                   const transcribe_run_params * params) {
+    for (int i = 0; i < n; ++i) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        const transcribe_status st =
+            (pcm[i] == nullptr || n_samples[i] <= 0)
+                ? TRANSCRIBE_ERR_INVALID_ARG
+                : run(cc, pcm[i], n_samples[i], params);
+        if (st == TRANSCRIBE_OK) {
+            cc->batch_results.push_back(cc->capture_result(st));
+        } else {
+            transcribe_session::ResultSet rs; rs.status = st;
+            cc->batch_results.push_back(std::move(rs));
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status run_batch(
+    transcribe_session *          session,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params)
+{
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0)
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    auto * cc = static_cast<MoonshineSession *>(session);
+    auto * cm = static_cast<MoonshineModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty())
+        return TRANSCRIBE_ERR_INVALID_ARG;
+
+    const bool primary_is_gpu =
+        cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
+        cm->plan.primary_kind != transcribe::BackendKind::Accel &&
+        cm->plan.primary_kind != transcribe::BackendKind::Unknown;
+    // The batched path always uses flash, even on Metal where moonshine
+    // defaults decoder flash OFF for single-shot (base's head_dim_padded=56
+    // CPU-spills). At B>1 the flash path still beats serial (measured: tiny
+    // ~1.7×, base ~1.17×), so we don't gate on cc->decoder_use_flash here —
+    // the batched step graph below is built with use_flash=true unconditionally.
+    if (n == 1 || !primary_is_gpu || transcribe::debug::enabled())
+        return run_batch_serial(cc, pcm, n_samples, n, params);
+
+    transcribe::debug::init();
+    const auto & hp = cm->hparams;
+    const int d_model = hp.dec_d_model;
+    const int n_layer = hp.dec_n_layers;
+    const int decoder_start = hp.decoder_start_token_id;
+    const int32_t eos = hp.eos_token_id;
+    const int max_pos = hp.dec_max_position_embeddings;
+
+    // ----- Serial per-utterance encoder (no mel; raw PCM) -----
+    std::vector<char> valid(n, 0);
+    std::vector<std::vector<float>> enc_hosts(n);
+    std::vector<int> T_enc(n, 0);
+    int T_enc_max = 0;
+    int64_t enc_us = 0;
+    for (int b = 0; b < n; ++b) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        if (pcm[b] == nullptr || n_samples[b] <= 0) continue;
+        if (encode_one_to_host(cc, cm, pcm[b], n_samples[b],
+                               enc_hosts[b], T_enc[b], enc_us) != TRANSCRIBE_OK
+            || T_enc[b] <= 0) continue;
+        valid[b] = 1;
+        T_enc_max = std::max(T_enc_max, T_enc[b]);
+    }
+    if (T_enc_max <= 0) {
+        for (int b = 0; b < n; ++b) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+        }
+        return TRANSCRIBE_OK;
+    }
+
+    // ----- Batched KV cache -----
+    int max_n_kv = 64;
+    while (max_n_kv < max_pos) max_n_kv *= 2;
+    // Match serial run(): default the cache to F32 (AUTO), F16 only on
+    // explicit request. moonshine's reference regime is F32, and ggml's
+    // Metal backend lacks a working kernel_pad_f16 for the head-dim pad.
+    ggml_type kv_type = GGML_TYPE_F32;
+    if (cc->kv_type == TRANSCRIBE_KV_TYPE_F16) kv_type = GGML_TYPE_F16;
+    if (cc->kv_cache.buffer != nullptr &&
+        (cc->kv_cache.n_batch != n || cc->kv_cache.T_enc != T_enc_max ||
+         cc->kv_cache.n_ctx != max_n_kv))
+        cc->kv_cache.free();
+    if (cc->kv_cache.buffer == nullptr) {
+        if (!kv_cache_init_batched(cc->kv_cache, cm->plan.primary,
+                                   max_n_kv, T_enc_max, d_model, n_layer, n, kv_type)) {
+            std::fprintf(stderr, "moonshine run_batch: kv_cache_init_batched failed\n");
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+    } else {
+        ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
+        cc->kv_cache.n = 0; cc->kv_cache.head = 0; cc->kv_cache.cross_populated = false;
+    }
+
+    const int64_t t_dec0 = ggml_time_us();
+
+    // ----- Batched cross-attention K/V -----
+    {
+        if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+        DecoderBuild cross = build_cross_kv_graph_batched(
+            cc->compute_ctx, cm->weights, hp, cc->kv_cache, T_enc_max, n);
+        if (cross.graph == nullptr) return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) return TRANSCRIBE_ERR_GGUF;
+        std::vector<float> packed(static_cast<size_t>(d_model) * T_enc_max * n, 0.0f);
+        for (int b = 0; b < n; ++b) {
+            if (!valid[b]) continue;
+            std::memcpy(packed.data() + static_cast<size_t>(b) * T_enc_max * d_model,
+                        enc_hosts[b].data(),
+                        static_cast<size_t>(d_model) * T_enc[b] * sizeof(float));
+        }
+        ggml_backend_tensor_set(cross.encoder_out_in, packed.data(), 0,
+                                packed.size() * sizeof(float));
+        if (ggml_backend_sched_graph_compute(cc->sched, cross.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        cc->kv_cache.cross_populated = true;
+    }
+
+    // ----- Batched step graph + shared greedy step loop -----
+    // moonshine is the degenerate enc-dec case: a single decoder_start prompt
+    // token and a fixed read window (self-KV spans the whole sequence, so
+    // init_window == max_n_kv and the shared driver never grows it).
+    const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-INFINITY);
+    std::vector<ggml_fp16_t> cmask(static_cast<size_t>(T_enc_max) * n, f16_ninf);
+    for (int b = 0; b < n; ++b) {
+        const int real = valid[b] ? T_enc[b] : 1;
+        ggml_fp16_t * base = cmask.data() + static_cast<size_t>(b) * T_enc_max;
+        std::fill(base, base + std::min(real, T_enc_max), f16_zero);
+    }
+
+    StepBuildBatched sb {};
+    auto rebuild = [&](int win, transcribe::EncDecStepIO & io) -> bool {
+        if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) return false;
+        sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp,
+                                      cc->kv_cache, win, T_enc_max, n, /*use_flash=*/true);
+        if (sb.graph == nullptr || sb.argmax_out == nullptr) return false;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return false;
+        ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0,
+                                cmask.size() * sizeof(ggml_fp16_t));
+        io.token_ids = sb.token_ids_in;
+        io.pos_ids   = sb.pos_ids_in;
+        io.kv_idx    = sb.kv_idx_in;
+        io.self_mask = sb.self_mask_in;
+        io.argmax    = sb.argmax_out;
+        io.graph     = sb.graph;
+        return true;
+    };
+
+    const std::vector<int32_t> prompt_ids = { static_cast<int32_t>(decoder_start) };
+    std::vector<std::vector<int32_t>> generated(n);
+    if (const transcribe_status st = transcribe::run_batched_encdec_step_loop(
+            cc, cc->sched, rebuild, prompt_ids, /*prompt_len=*/1,
+            /*init_window=*/max_n_kv, /*max_new=*/max_pos, max_n_kv,
+            static_cast<int32_t>(eos), n, valid, generated);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const int64_t dec_us = ggml_time_us() - t_dec0;
+
+    // ----- Capture -----
+    const int valid_count = std::max(1, static_cast<int>(
+        std::count(valid.begin(), valid.end(), char(1))));
+    for (int b = 0; b < n; ++b) {
+        transcribe_session::ResultSet rs;
+        if (!valid[b]) { rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+                         cc->batch_results.push_back(std::move(rs)); continue; }
+        std::string full = cm->tok.decode(generated[b].data(),
+                                          static_cast<int>(generated[b].size()));
+        if (!full.empty() && full.front() == ' ') full.erase(full.begin());
+        transcribe_session::SegmentEntry seg {};
+        seg.t0_ms = 0; seg.t1_ms = 0; seg.text = full;
+        rs.segments.push_back(std::move(seg));
+        rs.full_text = full;
+        rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        rs.has_result = true; rs.status = TRANSCRIBE_OK;
+        rs.t_mel_us = 0;
+        rs.t_encode_us = enc_us / valid_count;
+        rs.t_decode_us = dec_us / valid_count;
+        cc->batch_results.push_back(std::move(rs));
+    }
+
+    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+        std::fprintf(stderr,
+            "moonshine run_batch: n=%d T_enc_max=%d max_n_kv=%d\n"
+            "  enc=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
+            n, T_enc_max, max_n_kv, enc_us / 1000.0, n, dec_us / 1000.0);
+    }
+    return TRANSCRIBE_OK;
+}
+
 } // namespace
 
 extern const Arch arch = {
@@ -744,6 +1047,7 @@ extern const Arch arch = {
     /* .load             = */ load,
     /* .init_context     = */ init_context,
     /* .run              = */ run,
+    /* .run_batch        = */ run_batch,
     /* .stream_validate  = */ nullptr,
     /* .stream_begin     = */ nullptr,
     /* .stream_feed      = */ nullptr,

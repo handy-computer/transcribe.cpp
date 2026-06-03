@@ -22,13 +22,13 @@ on 2026-04-26.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F16    | [whisper-large-v3-turbo-F16.gguf](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-F16.gguf) | 1.51 GB | 2.01% |
-| Q8_0   | [whisper-large-v3-turbo-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q8_0.gguf) | 845 MB | 2.01% |
+| F16    | [whisper-large-v3-turbo-F16.gguf](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-F16.gguf) | 1.51 GB | 2.09% |
+| Q8_0   | [whisper-large-v3-turbo-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q8_0.gguf) | 845 MB | 2.02% |
 | Q6_K   | [whisper-large-v3-turbo-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q6_K.gguf) | 660 MB | 2.01% |
-| Q5_K_M | [whisper-large-v3-turbo-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q5_K_M.gguf) | 591 MB | 2.03% |
+| Q5_K_M | [whisper-large-v3-turbo-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q5_K_M.gguf) | 591 MB | 2.05% |
 | Q4_K_M | [whisper-large-v3-turbo-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf/resolve/main/whisper-large-v3-turbo-Q4_K_M.gguf) | 511 MB | 2.04% |
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 2.10%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions can shift corpus WER by ~0.1pp between runs, mostly driven by short-clip hallucination outcomes on the noise floor.
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with the pinned short-form recipe: greedy decode, timestamps off (`<|notimestamps|>`), and language forced to `en` — see [WER methodology](../tools/wer.md#methodology-pinned-recipe). Captured on a single CUDA (L40S) run at batch size 1; quantization, backend, and batching are all generally WER-neutral.
 
 ## Quick Start
 

@@ -102,6 +102,71 @@ struct transcribe_session {
     std::vector<SegmentEntry>    segments;
     std::string                  full_text;
 
+    // -----------------------------------------------------------------
+    // Offline batch results (transcribe_run_batch).
+    //
+    // The scratch fields above (tokens / words / segments / full_text /
+    // detected_language / result_kind / has_result) remain the single
+    // "current result" slot that every per-family run() writes into and
+    // that the legacy single-shot accessors read. Batch results are a
+    // separate vector so a per-family run() needs no change to participate
+    // in the generic serial-fallback batch path: the dispatcher calls
+    // run() once per utterance and snapshots the scratch slot into one
+    // ResultSet here. A family with a real batched run_batch() hook writes
+    // these entries directly.
+    //
+    // Source-of-truth rule for the public accessors:
+    //   - batch_results non-empty  -> the batch accessors index it, and
+    //     the scratch slot is restored to mirror batch_results[0] so the
+    //     legacy single accessors stay coherent (they show utterance 0).
+    //   - batch_results empty      -> single-shot mode; the batch
+    //     accessors synthesize index 0 from the scratch slot.
+    // batch_results is cleared at the top of every transcribe_run and
+    // transcribe_run_batch (NOT by clear_result, which only wipes the
+    // scratch slot and streaming snapshot so a per-utterance run() inside
+    // the fallback loop does not erase already-accumulated entries).
+    struct ResultSet {
+        std::vector<TokenEntry>   tokens;
+        std::vector<WordEntry>    words;
+        std::vector<SegmentEntry> segments;
+        std::string               full_text;
+        std::string               detected_language;
+        transcribe_timestamp_kind result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        bool                      has_result   = false;
+        transcribe_status         status       = TRANSCRIBE_OK;
+        // Per-utterance timings (us). For a batched run the encoder is one
+        // shared dispatch, so a family amortizes its total encode time across
+        // the batch (sum over utterances == the real batch encode time);
+        // decode is genuinely per-utterance. Lets transcribe_batch_get_timings
+        // expose where time goes (encoder vs host decode) per utterance.
+        int64_t                   t_mel_us     = 0;
+        int64_t                   t_encode_us  = 0;
+        int64_t                   t_decode_us  = 0;
+    };
+
+    std::vector<ResultSet>       batch_results;
+
+    // Snapshot the current scratch result slot (the fields above that a
+    // per-family run() populates) into a standalone ResultSet. Used by the
+    // batch dispatcher's serial fallback and by family run_batch() hooks to
+    // capture each utterance's result. `st` records the per-utterance
+    // terminal status.
+    ResultSet capture_result(transcribe_status st = TRANSCRIBE_OK) const {
+        ResultSet rs;
+        rs.tokens            = tokens;
+        rs.words             = words;
+        rs.segments          = segments;
+        rs.full_text         = full_text;
+        rs.detected_language = detected_language;
+        rs.result_kind       = result_kind;
+        rs.has_result        = has_result;
+        rs.status            = st;
+        rs.t_mel_us          = t_mel_us;
+        rs.t_encode_us       = t_encode_us;
+        rs.t_decode_us       = t_decode_us;
+        return rs;
+    }
+
     // ISO short code the model itself predicted on this run, populated
     // only when the caller did NOT pass a language hint (auto/null) and
     // the family actually ran a detection step. Empty string means

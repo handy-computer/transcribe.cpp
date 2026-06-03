@@ -86,12 +86,41 @@ std::string segments_json(const transcribe_session * ctx) {
     return out;
 }
 
+// Batch variant: segments JSON for utterance `i` of a transcribe_run_batch
+// result, using the indexed transcribe_batch_* accessors.
+std::string batch_segments_json(const transcribe_session * ctx, int i) {
+    if (transcribe_batch_returned_timestamp_kind(ctx, i) == TRANSCRIBE_TIMESTAMPS_NONE) {
+        return {};
+    }
+    const int n_seg = transcribe_batch_n_segments(ctx, i);
+    if (n_seg <= 0) return {};
+    std::string out = ",\"segments\":[";
+    for (int s = 0; s < n_seg; ++s) {
+        if (s > 0) out += ",";
+        struct transcribe_segment seg; transcribe_segment_init(&seg);
+        (void)transcribe_batch_get_segment(ctx, i, s, &seg);
+        char head[96];
+        std::snprintf(head, sizeof(head),
+                      "{\"t0_ms\":%lld,\"t1_ms\":%lld,\"text\":\"",
+                      static_cast<long long>(seg.t0_ms),
+                      static_cast<long long>(seg.t1_ms));
+        out += head;
+        out += json_escape(seg.text != nullptr ? seg.text : "");
+        out += "\"}";
+    }
+    out += "]";
+    return out;
+}
+
 struct cli_args {
     std::string wav_path;
     std::string model_path;
     std::string language;
     std::string target_language; // --target-language: target lang for translation
     std::string batch_file; // --batch: one wav path per line
+    int         batch_size = 0; // --batch-size: >1 groups utterances into
+                                // transcribe_run_batch calls (offline only).
+                                // 0/1 keeps the per-file serial loop.
     bool        translate = false;
     bool        quiet     = false;
     bool        batch_jsonl = false; // --batch-jsonl: output JSONL
@@ -104,6 +133,8 @@ struct cli_args {
     // Whisper-family knobs. Ignored for non-Whisper models.
     std::string initial_prompt;                // --initial-prompt TEXT
     bool        whisper_set                  = false;
+    bool        temperature_set              = false; // --temperature F
+    float       temperature                  = 0.0f;  // tier-0 sampling temp
     bool        condition_on_prev_tokens     = false; // --condition-on-prev-tokens
     enum transcribe_whisper_prompt_condition prompt_condition =
         TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;       // --prompt-condition first|all
@@ -159,7 +190,10 @@ void print_usage(const char * argv0) {
         "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: none)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
+        "  --batch-size N        group N utterances into one transcribe_run_batch\n"
+        "                        call (offline only; 0/1 = per-file serial loop)\n"
         "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"
+        "  --temperature F       (whisper) tier-0 sampling temperature (default 0 = greedy)\n"
         "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
         "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
         "  --itn                 (sensevoice/funasr-nano) enable inverse text normalization\n"
@@ -269,11 +303,25 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             out.batch_file = v;
         } else if (a == "--batch-jsonl") {
             out.batch_jsonl = true;
+        } else if (a == "--batch-size") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.batch_size = std::atoi(v);
+            if (out.batch_size < 0) {
+                std::fprintf(stderr, "error: --batch-size must be >= 0\n");
+                return false;
+            }
         } else if (a == "--initial-prompt") {
             const char * v = take_value(a.c_str());
             if (!v) return false;
             out.initial_prompt = v;
             out.whisper_set    = true;
+        } else if (a == "--temperature") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.temperature     = static_cast<float>(std::atof(v));
+            out.temperature_set = true;
+            out.whisper_set     = true;
         } else if (a == "--condition-on-prev-tokens") {
             out.condition_on_prev_tokens = true;
             out.whisper_set              = true;
@@ -481,6 +529,7 @@ int main(int argc, char ** argv) {
                 wx.initial_prompt = args.initial_prompt.c_str();
             }
             wx.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            if (args.temperature_set) wx.temperature = args.temperature;
             wx.prompt_condition         = args.prompt_condition;
             if (transcribe_model_accepts_ext_kind(
                     model,
@@ -508,6 +557,125 @@ int main(int argc, char ** argv) {
 
         int n_ok = 0;
         int n_fail = 0;
+
+        // Offline batched path: group up to batch_size utterances into one
+        // transcribe_run_batch call. Mutually exclusive with the streaming
+        // path (--stream-chunk-ms), which is per-utterance by construction.
+        // Per-file JSONL output is byte-identical in shape to the serial
+        // path so the WER harness (scripts/wer/run.py) consumes either.
+        const bool use_batched =
+            args.batch_size > 1 && args.stream_chunk_ms <= 0;
+        if (use_batched) {
+            const size_t total = wav_paths.size();
+            const size_t group = static_cast<size_t>(args.batch_size);
+            for (size_t base = 0; base < total; base += group) {
+                const size_t end = std::min(total, base + group);
+
+                // Load each wav in the group. A wav that fails to load is
+                // emitted as an error line and excluded from the batch, so
+                // its failure cannot abort its neighbours.
+                std::vector<std::vector<float>> pcms;
+                std::vector<const float *>      pcm_ptrs;
+                std::vector<int>                n_samps;
+                std::vector<size_t>             src_index;   // -> wav_paths
+                for (size_t i = base; i < end; ++i) {
+                    std::vector<float> pcm;
+                    std::string        wav_err;
+                    if (!transcribe_cli::load_wav_mono_16k(wav_paths[i], pcm, wav_err)) {
+                        if (args.batch_jsonl) {
+                            std::printf("{\"file\":\"%s\",\"text\":\"\","
+                                        "\"error\":\"wav: %s\"}\n",
+                                        wav_paths[i].c_str(), wav_err.c_str());
+                        } else {
+                            std::fprintf(stderr, "SKIP %s: %s\n",
+                                         wav_paths[i].c_str(), wav_err.c_str());
+                        }
+                        ++n_fail;
+                        std::fflush(stdout);
+                        continue;
+                    }
+                    pcms.push_back(std::move(pcm));
+                    src_index.push_back(i);
+                }
+                for (auto & p : pcms) {
+                    pcm_ptrs.push_back(p.data());
+                    n_samps.push_back(static_cast<int>(p.size()));
+                }
+                if (pcms.empty()) {
+                    continue;
+                }
+
+                const transcribe_status bst = transcribe_run_batch(
+                    ctx, pcm_ptrs.data(), n_samps.data(),
+                    static_cast<int>(pcm_ptrs.size()), &rp);
+                if (bst != TRANSCRIBE_OK && transcribe_batch_n_results(ctx) == 0) {
+                    // Whole-batch failure (no per-utterance results): emit an
+                    // error line per file in the group and continue.
+                    for (size_t k = 0; k < src_index.size(); ++k) {
+                        if (args.batch_jsonl) {
+                            std::printf("{\"file\":\"%s\",\"text\":\"\","
+                                        "\"error\":\"%s\"}\n",
+                                        wav_paths[src_index[k]].c_str(),
+                                        json_escape(transcribe_status_string(bst)).c_str());
+                        }
+                        ++n_fail;
+                    }
+                    std::fflush(stdout);
+                    continue;
+                }
+
+                for (size_t k = 0; k < src_index.size(); ++k) {
+                    const std::string & wav = wav_paths[src_index[k]];
+                    const transcribe_status ust =
+                        transcribe_batch_status(ctx, static_cast<int>(k));
+                    const char * text = "";
+                    if (ust == TRANSCRIBE_OK) {
+                        const char * t = transcribe_batch_full_text(
+                            ctx, static_cast<int>(k));
+                        if (t && *t) text = t;
+                        ++n_ok;
+                    } else {
+                        ++n_fail;
+                    }
+                    if (args.batch_jsonl) {
+                        const std::string escaped  = json_escape(text);
+                        const std::string segments =
+                            batch_segments_json(ctx, static_cast<int>(k));
+                        std::string err_field;
+                        if (ust != TRANSCRIBE_OK) {
+                            err_field = ",\"error\":\"";
+                            err_field += json_escape(transcribe_status_string(ust));
+                            err_field += "\"";
+                        }
+                        // Per-utterance timings: the batched encoder time is
+                        // amortized across the batch, decode is real per-utt,
+                        // so summing across utterances gives the true encode vs
+                        // decode split for the whole batched run.
+                        struct transcribe_timings tm; transcribe_timings_init(&tm);
+                        (void)transcribe_batch_get_timings(
+                            ctx, static_cast<int>(k), &tm);
+                        std::printf("{\"file\":\"%s\",\"text\":\"%s\"%s,"
+                                    "\"mel_ms\":%.1f,\"encode_ms\":%.1f,"
+                                    "\"decode_ms\":%.1f%s}\n",
+                                    wav.c_str(), escaped.c_str(),
+                                    segments.c_str(),
+                                    (double)tm.mel_ms, (double)tm.encode_ms,
+                                    (double)tm.decode_ms,
+                                    err_field.c_str());
+                    } else {
+                        std::printf("[%zu/%zu] %s",
+                                    src_index[k] + 1, total, wav.c_str());
+                        if (ust != TRANSCRIBE_OK) {
+                            std::printf("  ERROR: %s\n",
+                                        transcribe_status_string(ust));
+                        } else {
+                            std::printf("\n  text: %s\n", text);
+                        }
+                    }
+                    std::fflush(stdout);
+                }
+            }
+        } else {
         for (size_t i = 0; i < wav_paths.size(); ++i) {
             const std::string & wav = wav_paths[i];
 
@@ -631,6 +799,7 @@ int main(int argc, char ** argv) {
             }
             std::fflush(stdout);
         }
+        } // end serial else
 
         if (!args.batch_jsonl) {
             std::fprintf(stderr, "batch: %d ok, %d failed out of %zu\n",
@@ -705,6 +874,7 @@ int main(int argc, char ** argv) {
                 wx.initial_prompt = args.initial_prompt.c_str();
             }
             wx.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            if (args.temperature_set) wx.temperature = args.temperature;
             wx.prompt_condition         = args.prompt_condition;
             if (transcribe_model_accepts_ext_kind(
                     model,

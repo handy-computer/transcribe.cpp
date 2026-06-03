@@ -99,6 +99,7 @@ const transcribe::Arch & run_validate_arch() {
         nullptr,                 // load
         nullptr,                 // init_context
         fake_run,
+        nullptr,                 // run_batch
         nullptr,                 // stream_validate
         nullptr,                 // stream_begin
         nullptr,                 // stream_feed
@@ -173,11 +174,141 @@ void test_run_validate_success_clears_and_runs() {
     CHECK(session.full_text == "fresh result");
 }
 
+// ---------------------------------------------------------------------------
+// Batch abort padding: a batch that aborts partway must still expose exactly
+// n result slots. Utterances completed before the abort keep their real
+// status; missing slots report TRANSCRIBE_ERR_ABORTED ("did not complete
+// because the batch was aborted"). Exercised on the serial fallback path
+// (run_batch == nullptr in run_validate_arch).
+// ---------------------------------------------------------------------------
+
+int g_abort_after = 0;   // number of poll_abort() calls allowed before firing
+int g_abort_polls = 0;
+
+bool fake_abort_cb(void * u) {
+    (void)u;
+    ++g_abort_polls;
+    return g_abort_polls > g_abort_after;
+}
+
+void test_batch_abort_pads_missing_to_n() {
+    transcribe_model model;
+    model.arch = &run_validate_arch();   // run_batch == nullptr -> serial fallback
+
+    transcribe_session session;
+    session.model = &model;
+
+    transcribe_run_params params; transcribe_run_params_init(&params);
+
+    g_run_validate_status = TRANSCRIBE_OK;
+    g_abort_polls = 0;
+    g_abort_after = 1;   // utterance 0 runs; abort fires before utterance 1
+    transcribe_set_abort_callback(&session, fake_abort_cb, nullptr);
+
+    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+    const float * pcm[3]      = { &s0, &s1, &s2 };
+    const int     n_samples[3] = { 1, 1, 1 };
+
+    const transcribe_status st =
+        transcribe_run_batch(&session, pcm, n_samples, 3, &params);
+
+    // Whole-batch status is ABORTED, but every input still owns a slot.
+    CHECK(st == TRANSCRIBE_ERR_ABORTED);
+    CHECK(transcribe_batch_n_results(&session) == 3);
+    CHECK(transcribe_batch_status(&session, 0) == TRANSCRIBE_OK);
+    CHECK(transcribe_batch_status(&session, 1) == TRANSCRIBE_ERR_ABORTED);
+    CHECK(transcribe_batch_status(&session, 2) == TRANSCRIBE_ERR_ABORTED);
+
+    // Utterance 0 completed and aliases the legacy single-result accessors.
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 0), "fresh result") == 0);
+    CHECK(std::strcmp(transcribe_full_text(&session), "fresh result") == 0);
+
+    // Synthesized slots carry no transcript.
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 2), "") == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Fast-path counterpart: a family run_batch hook that completes one utterance
+// and then returns TRANSCRIBE_ERR_ABORTED. The dispatcher must pad missing
+// slots to n, just as it does for the serial fallback — covering the run_batch
+// != nullptr branch in transcribe_run_batch.
+// ---------------------------------------------------------------------------
+
+transcribe_status fake_run_batch_abort(
+    transcribe_session *          session,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params)
+{
+    (void)pcm;
+    (void)n_samples;
+    (void)n;
+    (void)params;
+    // Complete utterance 0, then abort before producing the rest. The hook
+    // retains only what it finished; the dispatcher pads missing slots.
+    transcribe_session::ResultSet rs;
+    rs.full_text  = "batch result 0";
+    rs.has_result = true;
+    rs.status     = TRANSCRIBE_OK;
+    session->batch_results.push_back(std::move(rs));
+    return TRANSCRIBE_ERR_ABORTED;
+}
+
+const transcribe::Arch & run_batch_abort_arch() {
+    static const transcribe::Arch arch = {
+        "fake-run-batch",
+        nullptr,                 // load
+        nullptr,                 // init_context
+        fake_run,                // run (required; dispatcher gates on it)
+        fake_run_batch_abort,    // run_batch (fast path)
+        nullptr,                 // stream_validate
+        nullptr,                 // stream_begin
+        nullptr,                 // stream_feed
+        nullptr,                 // stream_finalize
+        nullptr,                 // stream_reset
+        nullptr,                 // accepts_run_kind
+        nullptr,                 // run_validate
+    };
+    return arch;
+}
+
+void test_batch_fastpath_abort_pads_missing_to_n() {
+    transcribe_model model;
+    model.arch = &run_batch_abort_arch();
+
+    transcribe_session session;
+    session.model = &model;
+
+    transcribe_run_params params; transcribe_run_params_init(&params);
+
+    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+    const float * pcm[3]       = { &s0, &s1, &s2 };
+    const int     n_samples[3] = { 1, 1, 1 };
+
+    const transcribe_status st =
+        transcribe_run_batch(&session, pcm, n_samples, 3, &params);
+
+    // Same invariant as the serial fallback, via the fast-path branch.
+    CHECK(st == TRANSCRIBE_ERR_ABORTED);
+    CHECK(transcribe_batch_n_results(&session) == 3);
+    CHECK(transcribe_batch_status(&session, 0) == TRANSCRIBE_OK);
+    CHECK(transcribe_batch_status(&session, 1) == TRANSCRIBE_ERR_ABORTED);
+    CHECK(transcribe_batch_status(&session, 2) == TRANSCRIBE_ERR_ABORTED);
+
+    // Hook-completed utterance 0 aliases the legacy single-result accessors.
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 0), "batch result 0") == 0);
+    CHECK(std::strcmp(transcribe_full_text(&session), "batch result 0") == 0);
+    CHECK(std::strcmp(transcribe_batch_full_text(&session, 2), "") == 0);
+}
+
 } // namespace
 
 int main() {
     test_no_run_hook_clears_and_not_implemented();
     test_run_validate_failure_preserves_snapshot();
     test_run_validate_success_clears_and_runs();
+    test_batch_abort_pads_missing_to_n();
+    test_batch_fastpath_abort_pads_missing_to_n();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

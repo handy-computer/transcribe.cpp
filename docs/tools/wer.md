@@ -22,6 +22,45 @@ Each stage is a separate script because the expensive one (`run.py`) is
 slow, and the cheap ones (`score.py`, `compare.py`) get re-run often
 while iterating on normalization and aggregation.
 
+## Methodology (pinned recipe)
+
+WER is only comparable across runs, backends, and against external
+numbers when the decode recipe is identical. The published transcribe.cpp
+tables use this recipe, which matches the field standard for **short-form**
+LibriSpeech WER:
+
+| Knob | Value | Why |
+| --- | --- | --- |
+| Timestamps | **`none`** (`<\|notimestamps\|>`) | OpenAI's own LibriSpeech eval and the HF Open ASR Leaderboard report short-form WER with timestamps off; on the leaderboard timestamps are only used in the long-form track. |
+| Language | **forced** (`en` for LibriSpeech) | LibriSpeech manifests carry `"language":"en"`, so `run.py` forces it instead of letting multilingual models auto-detect. Matches `DecodingOptions(language="en")`. |
+| Decoding | **greedy** | No beam search / no sampling at temperature 0 (transcribe.cpp default). |
+| Temperature fallback | ladder `0.0, 0.2, …, 1.0` | Library default (`temperature=0`, `temperature_inc=0.2`); `seed=0` keeps any T>0 tier deterministic. |
+| Fallback thresholds | compression `2.4`, logprob `-1.0`, no-speech `0.6` | Library defaults (`transcribe_whisper_run_ext_init`). |
+| Condition on prev | **off** | Library default; long-form conditioning is not part of short-form WER. |
+| Normalization | `EnglishTextNormalizer` (en) / `BasicTextNormalizer` (other) | Applied to both ref and hyp at score time (`score.py`). |
+| Dataset | full LibriSpeech `test-clean` (2620 utts) | — |
+
+The recipe is **stamped into the hyp JSONL `batch_header`** (`recipe` field)
+by `run.py`, so every artifact is self-describing and a methodology drift
+shows up in the file rather than silently shifting the number.
+
+**What does and doesn't move WER (measured on whisper-medium F16):**
+
+- **Timestamps move it ~0.2pp.** `segment` → 2.63%, `none` → 2.81%. This is
+  the single biggest knob. Earlier published whisper tables were measured
+  with `segment` enabled (non-standard); they have been re-baselined to
+  `none` to match OpenAI/Open ASR Leaderboard. `segment` is *better* here
+  because timestamp constraints suppress short-clip hallucination, but it is
+  not how the field reports WER.
+- **Backend is WER-neutral.** CUDA `none` = 2.81% vs Metal `none` = 2.82%.
+- **Batching is WER-neutral.** batch-1 vs batch-8 differ by ≤0.08% across the
+  whole whisper family — under the ~0.1pp Metal run-to-run noise floor.
+
+> If you intentionally want timestamped WER (a product-usage question, not a
+> benchmark one), pass `--timestamps segment`; the output filename and the
+> stamped `recipe` will record it so it never gets confused with the
+> standard number.
+
 ## `ingest.py` — prepare a corpus
 
 ```bash

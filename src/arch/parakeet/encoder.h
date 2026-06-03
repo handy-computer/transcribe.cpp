@@ -133,8 +133,25 @@ struct EncoderBuild {
 
     // Buffered-streaming conv valid-frame mask, ne=[T_enc, 1, 1, 1] f32.
     // Null unless the buffered path has pre_encode overhang frames that
-    // NeMo would expose via pad_mask to every Conformer conv module.
+    // NeMo would expose via pad_mask to every Conformer conv module. Also
+    // reused for variable-length batching, where it is sized
+    // ne=[T_enc, 1, n_batch, 1] (per-utterance valid-frame mask).
     ggml_tensor * conv_pad_mask_in = nullptr;
+
+    // Variable-length batch attention key-padding mask, ne=[T_enc, 1, 1,
+    // n_batch] f32 (0 on real keys, -INF on padded keys). Null unless
+    // build_encoder_graph was called with batch_var_len and n_batch > 1.
+    // The driver fills it host-side after the compute buffer is allocated.
+    ggml_tensor * attn_pad_mask_in = nullptr;
+
+    // Variable-length batch pre-encode valid-frame masks (NeMo masked
+    // subsampling), one per ReLU stage, ne=[1, H_stage, 1, n_batch] f32
+    // (1 on valid time frames, 0 on padded). Null unless variable-length
+    // batching on a non-causal pre-encode. The driver fills them from the
+    // per-utterance valid length downsampled to each stage.
+    ggml_tensor * pre_encode_mask_s1_in = nullptr;  // after relu0
+    ggml_tensor * pre_encode_mask_s2_in = nullptr;  // after relu3
+    ggml_tensor * pre_encode_mask_s3_in = nullptr;  // after relu6
 
     // Encoder forward output, ne=[d_model, T_enc, 1, 1] f32. Equal
     // to dumps.final_out; provided as a separate field so callers
@@ -187,13 +204,27 @@ struct BufferedStreamMaskOverride {
     int valid_frames;
 };
 
+// n_batch: number of utterances packed along the encoder batch axis (B at
+// the activation's ne[2]). 1 is the single-shot path and is byte-identical
+// to the pre-batch graph. > 1 (offline transcribe_run_batch) requires every
+// packed utterance to share n_mel_frames (same-length batch); the mel_in
+// handle becomes ne=[n_mel_frames, n_mels, 1, n_batch] and `out` becomes
+// ne=[d_model, T_enc, n_batch]. Variable-length batching pads to a common
+// n_mel_frames and masks the overhang — that masking is the caller's job.
 EncoderBuild build_encoder_graph(ggml_context *          compute_ctx,
                                  const ParakeetWeights & weights,
                                  const ParakeetHParams & hp,
                                  int                     n_mel_frames,
                                  ggml_type               kv_type = GGML_TYPE_COUNT,
                                  const char *            backend_name = "",
-                                 const BufferedStreamMaskOverride * buf_mask = nullptr);
+                                 const BufferedStreamMaskOverride * buf_mask = nullptr,
+                                 int                     n_batch = 1,
+                                 // When true and n_batch > 1, allocate the
+                                 // variable-length batch masks (attn_pad_mask_in
+                                 // + conv_pad_mask_in sized for the batch) and
+                                 // wire them into every conformer block. The
+                                 // driver fills them from per-utterance lengths.
+                                 bool                    batch_var_len = false);
 
 // Per-layer streaming cache I/O for the streaming encoder graph.
 // The inputs are persistent backend tensors (allocated outside the

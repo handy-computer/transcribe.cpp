@@ -21,6 +21,19 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
     return t;
 }
 
+// Weight matmul forcing F32 accumulation for F16 weights, so CUDA's cuBLAS
+// path does not accumulate the adaptor's multi-token GEMMs in F16 (which
+// overflows F16's ~65504 range -> NaNs). Gated on F16 so BF16/quantized/F32
+// weights and CPU/Metal are bit-identical to before. See the matching helper
+// in sanm.cpp / qwen3_lm.cpp for the full rationale.
+ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
+    ggml_tensor * y = ggml_mul_mat(ctx, w, x);
+    if (w->type == GGML_TYPE_F16) {
+        ggml_mul_mat_set_prec(y, GGML_PREC_F32);
+    }
+    return y;
+}
+
 ggml_tensor * layer_norm(ggml_context * ctx,
                          ggml_tensor *  x,
                          ggml_tensor *  gamma,
@@ -44,11 +57,11 @@ ggml_tensor * adaptor_attention(ggml_context *      ctx,
     const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
     // q, k, v: separate linears with biases (plain MultiHeadedAttention).
-    ggml_tensor * q = ggml_mul_mat(ctx, b.attn_q_w, x);
+    ggml_tensor * q = mul_mat_f32acc(ctx, b.attn_q_w, x);
     q = ggml_add(ctx, q, b.attn_q_b);
-    ggml_tensor * k = ggml_mul_mat(ctx, b.attn_k_w, x);
+    ggml_tensor * k = mul_mat_f32acc(ctx, b.attn_k_w, x);
     k = ggml_add(ctx, k, b.attn_k_b);
-    ggml_tensor * v = ggml_mul_mat(ctx, b.attn_v_w, x);
+    ggml_tensor * v = mul_mat_f32acc(ctx, b.attn_v_w, x);
     v = ggml_add(ctx, v, b.attn_v_b);
 
     auto split_heads = [&](ggml_tensor * t) {
@@ -72,7 +85,7 @@ ggml_tensor * adaptor_attention(ggml_context *      ctx,
     o = ggml_cont(ctx, o);
     o = ggml_reshape_2d(ctx, o, llm_dim, T);
 
-    o = ggml_mul_mat(ctx, b.attn_out_w, o);
+    o = mul_mat_f32acc(ctx, b.attn_out_w, o);
     o = ggml_add(ctx, o, b.attn_out_b);
     return o;
 }
@@ -81,10 +94,10 @@ ggml_tensor * adaptor_ffn(ggml_context *      ctx,
                           ggml_tensor *       x,
                           const AdaptorBlock & b)
 {
-    ggml_tensor * h = ggml_mul_mat(ctx, b.ffn_fc1_w, x);
+    ggml_tensor * h = mul_mat_f32acc(ctx, b.ffn_fc1_w, x);
     h = ggml_add(ctx, h, b.ffn_fc1_b);
     h = ggml_relu(ctx, h);
-    h = ggml_mul_mat(ctx, b.ffn_fc2_w, h);
+    h = mul_mat_f32acc(ctx, b.ffn_fc2_w, h);
     h = ggml_add(ctx, h, b.ffn_fc2_b);
     return h;
 }
@@ -148,7 +161,7 @@ AdaptorBuild build_adaptor_graph(ggml_context *             ctx,
     ggml_set_input(ab.enc_in);
 
     // linear1 (512 → 2048) + bias.
-    ggml_tensor * x = ggml_mul_mat(ctx, w.adaptor.linear1_w, ab.enc_in);
+    ggml_tensor * x = mul_mat_f32acc(ctx, w.adaptor.linear1_w, ab.enc_in);
     x = ggml_add(ctx, x, w.adaptor.linear1_b);
     mark_dump(ab.dumps.linear1_out, x, "adaptor.linear1.out");
 
@@ -156,7 +169,7 @@ AdaptorBuild build_adaptor_graph(ggml_context *             ctx,
     x = ggml_relu(ctx, x);
 
     // linear2 (2048 → 1024) + bias.
-    x = ggml_mul_mat(ctx, w.adaptor.linear2_w, x);
+    x = mul_mat_f32acc(ctx, w.adaptor.linear2_w, x);
     x = ggml_add(ctx, x, w.adaptor.linear2_b);
     mark_dump(ab.dumps.linear2_out, x, "adaptor.linear2.out");
 

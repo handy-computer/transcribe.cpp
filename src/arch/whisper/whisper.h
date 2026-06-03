@@ -74,6 +74,14 @@ struct WhisperKvCache {
     // Maximum self-attention sequence length.
     int n_ctx = 0;
 
+    // Batch dimension. 1 for the single-shot path (layout byte-identical
+    // to the pre-batch cache); >1 for the offline batched decode, where
+    // each role tensor carries a per-utterance slab. Layout (batched):
+    //   self_k/self_v  : [d_model * n_ctx * n_batch * n_layer]
+    //   cross_k/cross_v: [d_model * T_enc * n_batch * n_layer]
+    // with slab(layer,b) at offset (b + n_batch*layer)*<rows>*d_model.
+    int n_batch = 1;
+
     // Current number of filled positions in the self-attention cache.
     int n = 0;
 
@@ -108,6 +116,7 @@ struct WhisperKvCache {
         self_v = nullptr;
         cross_k = nullptr;
         cross_v = nullptr;
+        n_batch = 1;
         n = 0;
         head = 0;
         T_enc = 0;
@@ -182,6 +191,20 @@ bool kv_cache_init(WhisperKvCache & cache,
                    int              d_model,
                    int              n_layer,
                    ggml_type        kv_type);
+
+// Allocate batched cache tensors for the offline batched decode. Same as
+// kv_cache_init but each role tensor carries an n_batch dimension; the
+// cross cache uses T_enc (== T_enc_max, no 256-pad — the batched cross
+// graph + a per-utterance cross-pad mask handle the FA shape). n_batch==1
+// is byte-identical to kv_cache_init.
+bool kv_cache_init_batched(WhisperKvCache & cache,
+                           ggml_backend_t   backend,
+                           int              n_ctx,
+                           int              T_enc,
+                           int              d_model,
+                           int              n_layer,
+                           int              n_batch,
+                           ggml_type        kv_type);
 
 // ---------------------------------------------------------------------------
 // Per-stage timing counters for performance diagnosis.
