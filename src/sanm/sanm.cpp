@@ -12,6 +12,28 @@
 
 namespace transcribe::sanm {
 
+// SAN-M scales activations by sqrt(d_model) before the encoder stack, so its
+// internal activations run large. With F16 weights, CUDA's cuBLAS path
+// accumulates matmuls in F16 (CUBLAS_COMPUTE_16F) and those large dot-product
+// partial sums overflow F16's ~65504 range -> NaNs / garbage. Metal and CPU
+// accumulate in F32 regardless, which is why F16 only breaks on CUDA. Forcing
+// GGML_PREC_F32 makes cuBLAS accumulate in F32 (matching the CPU reference).
+//
+// Gated on F16 weights so it cannot perturb any already-validated numerics:
+// CPU/Metal ignore the prec hint (always F32-accumulate), and BF16/quantized
+// weights are left on their default path (BF16 already COMPUTE_32F; quantized
+// goes through MMQ). Only CUDA-F16 changes.
+static ggml_tensor * mul_mat_f32acc(ggml_context * ctx,
+                                    ggml_tensor *  w,
+                                    ggml_tensor *  x)
+{
+    ggml_tensor * y = ggml_mul_mat(ctx, w, x);
+    if (w->type == GGML_TYPE_F16) {
+        ggml_mul_mat_set_prec(y, GGML_PREC_F32);
+    }
+    return y;
+}
+
 ggml_tensor * sv_layer_norm(ggml_context * ctx,
                             ggml_tensor *  x,
                             ggml_tensor *  gamma,
@@ -99,7 +121,7 @@ ggml_tensor * sanm_attention(ggml_context *          ctx,
 
     // Fused QKV projection. W_qkv ne=[d_in, 3*d_model] (PyTorch
     // [3*d_model, d_in] stored ggml-style as [d_in, 3*d_model]).
-    ggml_tensor * qkv = ggml_mul_mat(ctx, b.attn_qkv_w, x);    // [3*d_model, T, B]
+    ggml_tensor * qkv = mul_mat_f32acc(ctx, b.attn_qkv_w, x);  // [3*d_model, T, B]
     qkv = ggml_add(ctx, qkv, b.attn_qkv_b);
 
     // Split QKV along the channel axis (ne[0]). Each view is contiguous
@@ -176,7 +198,7 @@ ggml_tensor * sanm_attention(ggml_context *          ctx,
     }
 
     // Output projection.
-    o = ggml_mul_mat(ctx, b.attn_out_w, o);
+    o = mul_mat_f32acc(ctx, b.attn_out_w, o);
     o = ggml_add(ctx, o, b.attn_out_b);
 
     // SAN-M attention output: SDPA + FSMN.
@@ -187,10 +209,10 @@ ggml_tensor * sanm_ffn(ggml_context *        ctx,
                        ggml_tensor *         x,
                        const SanmBlockView & b)
 {
-    ggml_tensor * h = ggml_mul_mat(ctx, b.ffn_fc1_w, x);
+    ggml_tensor * h = mul_mat_f32acc(ctx, b.ffn_fc1_w, x);
     h = ggml_add(ctx, h, b.ffn_fc1_b);
     h = ggml_relu(ctx, h);
-    h = ggml_mul_mat(ctx, b.ffn_fc2_w, h);
+    h = mul_mat_f32acc(ctx, b.ffn_fc2_w, h);
     h = ggml_add(ctx, h, b.ffn_fc2_b);
     return h;
 }

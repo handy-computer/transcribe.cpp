@@ -28,6 +28,23 @@ ggml_tensor * rms_norm(ggml_context * ctx, ggml_tensor * x,
     return ggml_mul(ctx, ggml_rms_norm(ctx, x, eps), weight);
 }
 
+// Weight matmul forcing F32 accumulation for F16 weights. On CUDA, F16 weights
+// take the cuBLAS path that accumulates in F16 (CUBLAS_COMPUTE_16F); a deep LLM
+// residual stream has large-magnitude outlier channels that overflow F16's
+// ~65504 range -> NaNs (multi-token prefill / batched GEMMs only; single-token
+// decode uses an F32-accumulating mat-vec). GGML_PREC_F32 makes cuBLAS run the
+// GEMM in F32, matching the CPU reference. Gated on F16 so BF16/quantized/F32
+// weights are untouched (BF16 is already COMPUTE_32F; quantized uses MMQ) and
+// CPU/Metal — which always F32-accumulate — are unaffected.
+ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x)
+{
+    ggml_tensor * y = ggml_mul_mat(ctx, w, x);
+    if (w->type == GGML_TYPE_F16) {
+        ggml_mul_mat_set_prec(y, GGML_PREC_F32);
+    }
+    return y;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -199,9 +216,9 @@ ggml_tensor * block_prefill(
 
     // Q/K/V projections (bias-free on Qwen3). Packing into one mul_mat
     // consistently regresses on Metal; left separate.
-    ggml_tensor * Q = ggml_mul_mat(ctx, view.attn_q_w, x_norm);
-    ggml_tensor * K = ggml_mul_mat(ctx, view.attn_k_w, x_norm);
-    ggml_tensor * V = ggml_mul_mat(ctx, view.attn_v_w, x_norm);
+    ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);
+    ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);
+    ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);
 
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads,    T_seq, 1);
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T_seq, 1);
@@ -308,7 +325,7 @@ ggml_tensor * block_prefill(
         o = ggml_reshape_2d(ctx, o, q_dim, T_seq);
     }
 
-    o = ggml_mul_mat(ctx, view.attn_o_w, o);
+    o = mul_mat_f32acc(ctx, view.attn_o_w, o);
     x = ggml_add(ctx, x, o);
 
     // Optional last-position slice before FFN (caller uses on the LAST
@@ -324,9 +341,9 @@ ggml_tensor * block_prefill(
 
     // ---- MLP sub-layer (SwiGLU on packed gate_up) ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
-    ggml_tensor * gate_up = ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm);
+    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
     ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
+    ff = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;
@@ -367,9 +384,9 @@ ggml_tensor * block_step(
     // ---- Attention sub-layer ----
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
-    ggml_tensor * Q = ggml_mul_mat(ctx, view.attn_q_w, x_norm);
-    ggml_tensor * K = ggml_mul_mat(ctx, view.attn_k_w, x_norm);
-    ggml_tensor * V = ggml_mul_mat(ctx, view.attn_v_w, x_norm);
+    ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);
+    ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);
+    ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);
 
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads,    1, 1);
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, 1, 1);
@@ -467,14 +484,14 @@ ggml_tensor * block_step(
         o = ggml_reshape_2d(ctx, o, q_dim, 1);
     }
 
-    o = ggml_mul_mat(ctx, view.attn_o_w, o);
+    o = mul_mat_f32acc(ctx, view.attn_o_w, o);
     x = ggml_add(ctx, x, o);
 
     // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
-    ggml_tensor * gate_up = ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm);
+    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
     ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
+    ff = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;
@@ -516,9 +533,9 @@ ggml_tensor * block_step_batched(
     // ---- Attention sub-layer ----
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
-    ggml_tensor * Q = ggml_mul_mat(ctx, view.attn_q_w, x_norm);  // [q_dim, B]
-    ggml_tensor * K = ggml_mul_mat(ctx, view.attn_k_w, x_norm);  // [kv_dim, B]
-    ggml_tensor * V = ggml_mul_mat(ctx, view.attn_v_w, x_norm);  // [kv_dim, B]
+    ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);  // [q_dim, B]
+    ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);  // [kv_dim, B]
+    ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);  // [kv_dim, B]
 
     // Batch on ne[2] (the per-token/position axis) so RoPE applies each
     // utterance's own position. T == 1 per utterance, so ne[2] == B.
@@ -598,14 +615,14 @@ ggml_tensor * block_step_batched(
         return nullptr;
     }
 
-    o = ggml_mul_mat(ctx, view.attn_o_w, o);  // [hidden, B]
+    o = mul_mat_f32acc(ctx, view.attn_o_w, o);  // [hidden, B]
     x = ggml_add(ctx, x, o);
 
     // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
-    ggml_tensor * gate_up = ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm);
+    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
     ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
+    ff = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;
@@ -648,9 +665,9 @@ ggml_tensor * block_prefill_batched(
     // ---- Attention sub-layer ----
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
-    ggml_tensor * Q = ggml_mul_mat(ctx, view.attn_q_w, x_norm);  // [q_dim, T, B]
-    ggml_tensor * K = ggml_mul_mat(ctx, view.attn_k_w, x_norm);  // [kv_dim, T, B]
-    ggml_tensor * V = ggml_mul_mat(ctx, view.attn_v_w, x_norm);  // [kv_dim, T, B]
+    ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);  // [q_dim, T, B]
+    ggml_tensor * K = mul_mat_f32acc(ctx, view.attn_k_w, x_norm);  // [kv_dim, T, B]
+    ggml_tensor * V = mul_mat_f32acc(ctx, view.attn_v_w, x_norm);  // [kv_dim, T, B]
 
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads,    T, B);
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T, B);
@@ -718,14 +735,14 @@ ggml_tensor * block_prefill_batched(
         return nullptr;
     }
 
-    o = ggml_mul_mat(ctx, view.attn_o_w, o);  // [hidden, T, B]
+    o = mul_mat_f32acc(ctx, view.attn_o_w, o);  // [hidden, T, B]
     x = ggml_add(ctx, x, o);
 
     // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
-    ggml_tensor * gate_up = ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm);
+    ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
     ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
-    ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
+    ff = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
 
     x = ggml_add(ctx, x, ff);
     return x;
