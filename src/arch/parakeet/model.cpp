@@ -1476,22 +1476,9 @@ static transcribe_status run_batch_encode(
         if (nf[b] != T_max) { var_len = true; break; }
     }
 
-    // Pack mels into [T_max, n_mels, 1, n], zero-padding each along time.
-    // Source is mel-major [n_mels, nf[b]] (src[m*nf + t]); destination slab
-    // for utterance b is [T_max, n_mels] at offset b*n_mels*T_max
-    // (dst[m*T_max + t]).
-    const size_t per = static_cast<size_t>(n_mels) * static_cast<size_t>(T_max);
-    pc->mel_buf.assign(per * static_cast<size_t>(n), 0.0f);
-    for (int b = 0; b < n; ++b) {
-        const int nb = nf[b];
-        const float * src = mels[b].data();
-        float * dst = pc->mel_buf.data() + static_cast<size_t>(b) * per;
-        for (int m = 0; m < n_mels; ++m) {
-            std::copy(src + static_cast<size_t>(m) * nb,
-                      src + static_cast<size_t>(m) * nb + nb,
-                      dst + static_cast<size_t>(m) * T_max);
-        }
-    }
+    // Pack mels into [T_max, n_mels, 1, n], zero-padding each along time
+    // (channel-major source [n_mels, nf[b]] -> per-utterance [T_max, n_mels]).
+    transcribe::pack_pad_channel_major(pc->mel_buf, mels, nf, n_mels, T_max);
 
     if (pc->compute_ctx != nullptr) {
         ggml_free(pc->compute_ctx);
@@ -1549,33 +1536,10 @@ static transcribe_status run_batch_encode(
             t = pre_encode_t_out(t);
             real_tenc[b] = std::min(t, T_enc);
         }
-        // Attention key-padding mask [T_enc, 1, 1, n]: 0 on real keys,
-        // -INF on padded keys. Row-major host buffer index b*T_enc + k.
-        if (eb.attn_pad_mask_in != nullptr) {
-            std::vector<float> am(static_cast<size_t>(T_enc) * n);
-            for (int b = 0; b < n; ++b) {
-                for (int k = 0; k < T_enc; ++k) {
-                    am[static_cast<size_t>(b) * T_enc + k] =
-                        (k < real_tenc[b]) ? 0.0f
-                                           : -std::numeric_limits<float>::infinity();
-                }
-            }
-            ggml_backend_tensor_set(eb.attn_pad_mask_in, am.data(),
-                                    0, am.size() * sizeof(float));
-        }
-        // Conv valid-frame mask [T_enc, 1, n, 1]: 1 on real frames, 0 on
-        // padded. Host buffer index b*T_enc + t.
-        if (eb.conv_pad_mask_in != nullptr) {
-            std::vector<float> cm(static_cast<size_t>(T_enc) * n);
-            for (int b = 0; b < n; ++b) {
-                for (int t = 0; t < T_enc; ++t) {
-                    cm[static_cast<size_t>(b) * T_enc + t] =
-                        (t < real_tenc[b]) ? 1.0f : 0.0f;
-                }
-            }
-            ggml_backend_tensor_set(eb.conv_pad_mask_in, cm.data(),
-                                    0, cm.size() * sizeof(float));
-        }
+        // Attention key-padding mask [T_enc, 1, 1, n] (0 real / -INF padded)
+        // and conv valid-frame mask [T_enc, 1, n, 1] (1 real / 0 padded).
+        transcribe::fill_keypad_mask(eb.attn_pad_mask_in, real_tenc, T_enc, n);
+        transcribe::fill_valid_frame_mask(eb.conv_pad_mask_in, real_tenc, T_enc, n);
 
         // Pre-encode valid-frame masks (masked subsampling). One per ReLU
         // stage; the valid time length at stage k is the per-utterance mel
@@ -1716,24 +1680,16 @@ static transcribe_status run_batch_encode(
     ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
                             pc->enc_host.size() * sizeof(float));
 
-    // Per-utterance timing attribution: the encoder is ONE shared dispatch,
-    // so amortize its total compute (and the total mel cost) across the batch
-    // — the sum over utterances then equals the real batch encode / mel time.
-    // Decode is genuinely per-utterance (decode_and_populate sets t_decode_us).
-    const int64_t enc_per_utt = pc->t_encode_us / std::max(1, n);
-    const int64_t mel_per_utt = total_mel_us / std::max(1, n);
-    for (int b = 0; b < n; ++b) {
-        if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        pc->clear_result();
-        const float * enc_b = pc->enc_host.data() + static_cast<size_t>(b) * utt_elems;
-        const transcribe_status st = decode_and_populate(
-            pc, pm, params, enc_b, real_tenc[b], d_enc, /*utt_index=*/b);
-        auto rs = pc->capture_result(st);   // rs.t_decode_us == this utt's decode
-        rs.t_mel_us    = mel_per_utt;
-        rs.t_encode_us = enc_per_utt;
-        pc->batch_results.push_back(std::move(rs));
-    }
-    return TRANSCRIBE_OK;
+    // Host-slice the shared encoder output and decode each utterance. The
+    // encoder is ONE shared dispatch, so decode_batch_slices amortizes its
+    // total compute + the total mel cost across the batch (the per-utt sum then
+    // equals the real batch time); decode is genuinely per-utterance.
+    return transcribe::decode_batch_slices(
+        pc, n, pc->enc_host.data(), utt_elems, pc->t_encode_us, total_mel_us,
+        [&](int b, const float * enc_b) {
+            return decode_and_populate(pc, pm, params, enc_b, real_tenc[b],
+                                       d_enc, /*utt_index=*/b);
+        });
 }
 
 transcribe_status run_batch(

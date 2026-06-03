@@ -1572,12 +1572,12 @@ transcribe_status run_batch(
         std::fill(base, base + std::min(real, T_enc_max), f16_zero);
     }
 
-    int kv_window = 64;
-    while (kv_window > max_n_kv) kv_window /= 2;
-    if (kv_window < 1) kv_window = max_n_kv;
+    int init_window = 64;
+    while (init_window > max_n_kv) init_window /= 2;
+    if (init_window < 1) init_window = max_n_kv;
 
     StepBuildBatched sb {};
-    auto rebuild_step = [&](int win) -> bool {
+    auto rebuild = [&](int win, transcribe::EncDecStepIO & io) -> bool {
         if (!new_compute_ctx(16 * 1024 * 1024)) return false;
         sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp,
                                       cc->kv_cache, win, T_enc_max, n, cc->decoder_use_flash);
@@ -1586,77 +1586,21 @@ transcribe_status run_batch(
         if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return false;
         ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0,
                                 cmask.size() * sizeof(ggml_fp16_t));
+        io.token_ids = sb.token_ids_in;
+        io.pos_ids   = sb.pos_ids_in;
+        io.kv_idx    = sb.kv_idx_in;
+        io.self_mask = sb.self_mask_in;
+        io.argmax    = sb.argmax_out;
+        io.graph     = sb.graph;
         return true;
     };
-    if (!rebuild_step(kv_window)) return TRANSCRIBE_ERR_GGUF;
 
-    std::vector<ggml_fp16_t> smask(static_cast<size_t>(kv_window) * n, f16_ninf);
-    std::vector<int32_t> tok_buf(n, 0), pos_buf(n, 0), argmax_buf(n, 0);
-    std::vector<int64_t> kvidx_buf(n, 0);
-    std::vector<char> finished(n, 0);
     std::vector<std::vector<int32_t>> generated(n);
-    std::vector<int32_t> next_tok(n, 0);
-    for (int b = 0; b < n; ++b) if (!valid[b]) finished[b] = 1;
-
-    auto run_step = [&](int posv) -> transcribe_status {
-        for (int b = 0; b < n; ++b) {
-            pos_buf[b] = posv; kvidx_buf[b] = posv;
-            smask[static_cast<size_t>(b) * kv_window + posv] = f16_zero;
-        }
-        ggml_backend_tensor_set(sb.token_ids_in, tok_buf.data(), 0, n * sizeof(int32_t));
-        ggml_backend_tensor_set(sb.pos_ids_in,  pos_buf.data(), 0, n * sizeof(int32_t));
-        ggml_backend_tensor_set(sb.kv_idx_in,   kvidx_buf.data(), 0, n * sizeof(int64_t));
-        ggml_backend_tensor_set(sb.self_mask_in, smask.data(), 0,
-                                smask.size() * sizeof(ggml_fp16_t));
-        if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS)
-            return TRANSCRIBE_ERR_GGUF;
-        ggml_backend_tensor_get(sb.argmax_out, argmax_buf.data(), 0, n * sizeof(int32_t));
-        return TRANSCRIBE_OK;
-    };
-
-    auto ensure_window = [&](int posv) -> bool {
-        if (posv + 1 <= kv_window) return true;
-        int win = kv_window;
-        while (win < posv + 1 && win < max_n_kv) win *= 2;
-        if (win > max_n_kv) win = max_n_kv;
-        if (win == kv_window) return true;
-        std::vector<ggml_fp16_t> wider(static_cast<size_t>(win) * n, f16_ninf);
-        for (int b = 0; b < n; ++b)
-            std::fill(wider.data() + static_cast<size_t>(b) * win,
-                      wider.data() + static_cast<size_t>(b) * win + posv, f16_zero);
-        smask.swap(wider);
-        kv_window = win;
-        return rebuild_step(kv_window);
-    };
-
-    int pos = 0;
-    for (; pos < prompt_len; ++pos) {
-        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        if (!ensure_window(pos)) return TRANSCRIBE_ERR_GGUF;
-        for (int b = 0; b < n; ++b) tok_buf[b] = prompt_ids[pos];
-        if (run_step(pos) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
-    }
-    for (int b = 0; b < n; ++b) {
-        if (finished[b]) continue;
-        next_tok[b] = argmax_buf[b];
-        if (next_tok[b] == eos_id) finished[b] = 1;
-        else generated[b].push_back(next_tok[b]);
-    }
-
-    for (int produced = 1; produced < max_new; ++produced, ++pos) {
-        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        bool all_done = true;
-        for (int b = 0; b < n; ++b) if (!finished[b]) { all_done = false; break; }
-        if (all_done || pos + 1 > max_n_kv) break;
-        if (!ensure_window(pos)) return TRANSCRIBE_ERR_GGUF;
-        for (int b = 0; b < n; ++b) tok_buf[b] = finished[b] ? eos_id : next_tok[b];
-        if (run_step(pos) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
-        for (int b = 0; b < n; ++b) {
-            if (finished[b]) continue;
-            next_tok[b] = argmax_buf[b];
-            if (next_tok[b] == eos_id) finished[b] = 1;
-            else generated[b].push_back(next_tok[b]);
-        }
+    if (const transcribe_status st = transcribe::run_batched_encdec_step_loop(
+            cc, cc->sched, rebuild, prompt_ids, prompt_len, init_window,
+            max_new, max_n_kv, eos_id, n, valid, generated);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
     const int64_t dec_us = ggml_time_us() - t_dec0;
 
@@ -1691,9 +1635,9 @@ transcribe_status run_batch(
 
     if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
         std::fprintf(stderr,
-            "canary run_batch: n=%d T_enc_max=%d kv_window=%d (cap %d) prompt=%d\n"
+            "canary run_batch: n=%d T_enc_max=%d kv_cap=%d prompt=%d\n"
             "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
-            n, T_enc_max, kv_window, max_n_kv, prompt_len,
+            n, T_enc_max, max_n_kv, prompt_len,
             mel_us / 1000.0, enc_us / 1000.0, n, dec_us / 1000.0);
     }
     return TRANSCRIBE_OK;

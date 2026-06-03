@@ -1719,12 +1719,8 @@ transcribe_status run_batch(
     }
     const int64_t prefill_pass_us = ggml_time_us() - t_prefpass0;
 
-    // ---- Pass 2: batched step loop ----
+    // ---- Pass 2: batched step loop (shared qwen3_lm driver) ----
     const int32_t eos_id = cm->hparams.eos_token_id;
-    std::vector<char> finished(n, 1);
-    for (int b = 0; b < n; ++b) {
-        if (valid[b]) finished[b] = (next_tok[b] == eos_id);
-    }
 
     if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK)
         return st;
@@ -1736,74 +1732,27 @@ transcribe_status run_batch(
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph))
         return TRANSCRIBE_ERR_GGUF;
 
-    // Host-side step inputs.
-    std::vector<int32_t> ids_buf(n, 0);
-    std::vector<int32_t> pos_buf(n, 0);
-    std::vector<int64_t> kvidx_buf(n, 0);
-    const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f);
-    const ggml_fp16_t mn = ggml_fp32_to_fp16(-INFINITY);
-    std::vector<ggml_fp16_t> mask_buf(
-        static_cast<size_t>(max_n_kv) * n, mn);  // [max_n_kv, 1, 1, n]
-    std::vector<int32_t> out_buf(n, 0);
+    transcribe::qwen3_lm::StepBatchedIO io {};
+    io.input_ids = sb.input_ids_in;
+    io.positions = sb.position_in;
+    io.kv_idx    = sb.kv_idx_in;
+    io.mask      = sb.mask_in;
+    io.argmax    = sb.out;
+    io.graph     = sb.graph;
 
-    // Initialise each row's mask: attendable [0, n_past[b]] (prompt + the
-    // first generated token which step 0 writes at row n_past[b]).
-    for (int b = 0; b < n; ++b) {
-        if (!valid[b]) continue;
-        const size_t base = static_cast<size_t>(b) * max_n_kv;
-        for (int c = 0; c <= n_past[b] && c < max_n_kv; ++c) mask_buf[base + c] = mz;
+    transcribe::qwen3_lm::StepBatchedState step_state;
+    step_state.valid    = valid;
+    step_state.next_tok = next_tok;
+    step_state.n_past   = n_past;
+
+    transcribe::qwen3_lm::StepLoopStats step_stats;
+    if (const transcribe_status st = transcribe::qwen3_lm::run_batched_step_loop(
+            cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
+            generated, &step_stats); st != TRANSCRIBE_OK) {
+        return st;
     }
-
-    const int64_t t_step0 = ggml_time_us();
-    int n_steps = 0;
-    bool all_done = false;
-    while (!all_done) {
-        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        for (int b = 0; b < n; ++b) {
-            // Finished/invalid rows keep stepping with frozen, valid inputs;
-            // their independent KV slab means the overwrite is a no-op for
-            // live rows and their output is ignored.
-            ids_buf[b]   = next_tok[b];
-            pos_buf[b]   = n_past[b];
-            kvidx_buf[b] = n_past[b];
-        }
-        ggml_backend_tensor_set(sb.input_ids_in, ids_buf.data(),
-                                0, ids_buf.size() * sizeof(int32_t));
-        ggml_backend_tensor_set(sb.position_in, pos_buf.data(),
-                                0, pos_buf.size() * sizeof(int32_t));
-        ggml_backend_tensor_set(sb.kv_idx_in, kvidx_buf.data(),
-                                0, kvidx_buf.size() * sizeof(int64_t));
-        ggml_backend_tensor_set(sb.mask_in, mask_buf.data(),
-                                0, mask_buf.size() * sizeof(ggml_fp16_t));
-
-        if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) !=
-            GGML_STATUS_SUCCESS) {
-            return TRANSCRIBE_ERR_GGUF;
-        }
-        ggml_backend_tensor_get(sb.out, out_buf.data(), 0,
-                                out_buf.size() * sizeof(int32_t));
-        ++n_steps;
-
-        all_done = true;
-        for (int b = 0; b < n; ++b) {
-            if (finished[b] || !valid[b]) continue;
-            const int32_t tok = out_buf[b];
-            next_tok[b] = tok;
-            generated[b].push_back(tok);
-            n_past[b] += 1;
-            // Open the new KV position for the NEXT step's attention.
-            const size_t base = static_cast<size_t>(b) * max_n_kv;
-            if (n_past[b] < max_n_kv) mask_buf[base + n_past[b]] = mz;
-            if (tok == eos_id ||
-                static_cast<int>(generated[b].size()) >= max_new ||
-                n_past[b] + 1 > max_n_kv) {
-                finished[b] = 1;
-            } else {
-                all_done = false;
-            }
-        }
-    }
-    const int64_t step_us = ggml_time_us() - t_step0;
+    const int64_t step_us = step_stats.step_us;
+    const int     n_steps = step_stats.n_steps;
 
     // ---- Capture per-utterance results ----
     const int valid_count = std::max(1, static_cast<int>(

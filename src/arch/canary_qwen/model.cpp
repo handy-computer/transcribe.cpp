@@ -1525,10 +1525,8 @@ transcribe_status run_batch(
         }
     }
 
-    // ---- Pass 3: batched step loop ----
+    // ---- Pass 3: batched step loop (shared qwen3_lm driver) ----
     const int32_t eos_id = cm->hparams.eos_token_id;
-    std::vector<char> finished(n, 1);
-    for (int b = 0; b < n; ++b) if (valid[b]) finished[b] = (next_tok[b] == eos_id);
 
     if (reset_ctx(cc, 16) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
     StepBuildBatched sb = build_step_graph_batched(
@@ -1538,45 +1536,26 @@ transcribe_status run_batch(
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
 
-    std::vector<int32_t> ids_buf(n, 0), pos_buf(n, 0), out_buf(n, 0);
-    std::vector<int64_t> kvidx_buf(n, 0);
-    const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f);
-    const ggml_fp16_t mn = ggml_fp32_to_fp16(-INFINITY);
-    std::vector<ggml_fp16_t> mask_buf(static_cast<size_t>(max_n_kv) * n, mn);
-    for (int b = 0; b < n; ++b) {
-        if (!valid[b]) continue;
-        const size_t base = static_cast<size_t>(b) * max_n_kv;
-        for (int c = 0; c <= n_past[b] && c < max_n_kv; ++c) mask_buf[base + c] = mz;
-    }
+    transcribe::qwen3_lm::StepBatchedIO io {};
+    io.input_ids = sb.input_ids_in;
+    io.positions = sb.position_in;
+    io.kv_idx    = sb.kv_idx_in;
+    io.mask      = sb.mask_in;
+    io.argmax    = sb.out;
+    io.graph     = sb.graph;
 
-    const int64_t t_step0 = ggml_time_us();
-    bool all_done = false;
-    while (!all_done) {
-        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        for (int b = 0; b < n; ++b) {
-            ids_buf[b] = next_tok[b]; pos_buf[b] = n_past[b]; kvidx_buf[b] = n_past[b];
-        }
-        ggml_backend_tensor_set(sb.input_ids_in, ids_buf.data(), 0, ids_buf.size() * sizeof(int32_t));
-        ggml_backend_tensor_set(sb.position_in, pos_buf.data(), 0, pos_buf.size() * sizeof(int32_t));
-        ggml_backend_tensor_set(sb.kv_idx_in, kvidx_buf.data(), 0, kvidx_buf.size() * sizeof(int64_t));
-        ggml_backend_tensor_set(sb.mask_in, mask_buf.data(), 0, mask_buf.size() * sizeof(ggml_fp16_t));
-        if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS)
-            return TRANSCRIBE_ERR_GGUF;
-        ggml_backend_tensor_get(sb.out, out_buf.data(), 0, out_buf.size() * sizeof(int32_t));
-        all_done = true;
-        for (int b = 0; b < n; ++b) {
-            if (finished[b] || !valid[b]) continue;
-            const int32_t tok = out_buf[b];
-            next_tok[b] = tok; generated[b].push_back(tok); n_past[b] += 1;
-            const size_t base = static_cast<size_t>(b) * max_n_kv;
-            if (n_past[b] < max_n_kv) mask_buf[base + n_past[b]] = mz;
-            if (tok == eos_id ||
-                static_cast<int>(generated[b].size()) >= max_new ||
-                n_past[b] + 1 > max_n_kv) finished[b] = 1;
-            else all_done = false;
-        }
+    transcribe::qwen3_lm::StepBatchedState step_state;
+    step_state.valid    = valid;
+    step_state.next_tok = next_tok;
+    step_state.n_past   = n_past;
+
+    transcribe::qwen3_lm::StepLoopStats step_stats;
+    if (const transcribe_status st = transcribe::qwen3_lm::run_batched_step_loop(
+            cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
+            generated, &step_stats); st != TRANSCRIBE_OK) {
+        return st;
     }
-    const int64_t step_us = ggml_time_us() - t_step0;
+    const int64_t step_us = step_stats.step_us;
 
     // ---- Capture results ----
     const int valid_count = std::max(1, static_cast<int>(

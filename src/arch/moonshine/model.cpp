@@ -12,6 +12,7 @@
 #include "weights.h"
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -965,76 +966,46 @@ transcribe_status run_batch(
         cc->kv_cache.cross_populated = true;
     }
 
-    // ----- Batched step graph -----
-    if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
-    StepBuildBatched sb = build_step_graph_batched(
-        cc->compute_ctx, cm->weights, hp, cc->kv_cache,
-        max_n_kv, T_enc_max, n, /*use_flash=*/true);
-    if (sb.graph == nullptr || sb.argmax_out == nullptr) return TRANSCRIBE_ERR_GGUF;
-    ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
-
+    // ----- Batched step graph + shared greedy step loop -----
+    // moonshine is the degenerate enc-dec case: a single decoder_start prompt
+    // token and a fixed read window (self-KV spans the whole sequence, so
+    // init_window == max_n_kv and the shared driver never grows it).
     const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
     const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-INFINITY);
-    {
-        std::vector<ggml_fp16_t> cmask(static_cast<size_t>(T_enc_max) * n, f16_ninf);
-        for (int b = 0; b < n; ++b) {
-            const int real = valid[b] ? T_enc[b] : 1;
-            ggml_fp16_t * base = cmask.data() + static_cast<size_t>(b) * T_enc_max;
-            std::fill(base, base + std::min(real, T_enc_max), f16_zero);
-        }
+    std::vector<ggml_fp16_t> cmask(static_cast<size_t>(T_enc_max) * n, f16_ninf);
+    for (int b = 0; b < n; ++b) {
+        const int real = valid[b] ? T_enc[b] : 1;
+        ggml_fp16_t * base = cmask.data() + static_cast<size_t>(b) * T_enc_max;
+        std::fill(base, base + std::min(real, T_enc_max), f16_zero);
+    }
+
+    StepBuildBatched sb {};
+    auto rebuild = [&](int win, transcribe::EncDecStepIO & io) -> bool {
+        if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) return false;
+        sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp,
+                                      cc->kv_cache, win, T_enc_max, n, /*use_flash=*/true);
+        if (sb.graph == nullptr || sb.argmax_out == nullptr) return false;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return false;
         ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0,
                                 cmask.size() * sizeof(ggml_fp16_t));
-    }
-
-    std::vector<ggml_fp16_t> smask(static_cast<size_t>(max_n_kv) * n, f16_ninf);
-    std::vector<int32_t> tok_buf(n, 0), pos_buf(n, 0), argmax_buf(n, 0);
-    std::vector<int64_t> kvidx_buf(n, 0);
-    std::vector<char> finished(n, 0);
-    std::vector<std::vector<int32_t>> generated(n);
-    std::vector<int32_t> next_tok(n, 0);
-    for (int b = 0; b < n; ++b) if (!valid[b]) finished[b] = 1;
-
-    auto run_step = [&](int posv) -> transcribe_status {
-        for (int b = 0; b < n; ++b) {
-            pos_buf[b] = posv; kvidx_buf[b] = posv;
-            smask[static_cast<size_t>(b) * max_n_kv + posv] = f16_zero;
-        }
-        ggml_backend_tensor_set(sb.token_ids_in, tok_buf.data(), 0, n * sizeof(int32_t));
-        ggml_backend_tensor_set(sb.pos_ids_in,  pos_buf.data(), 0, n * sizeof(int32_t));
-        ggml_backend_tensor_set(sb.kv_idx_in,   kvidx_buf.data(), 0, n * sizeof(int64_t));
-        ggml_backend_tensor_set(sb.self_mask_in, smask.data(), 0,
-                                smask.size() * sizeof(ggml_fp16_t));
-        if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS)
-            return TRANSCRIBE_ERR_GGUF;
-        ggml_backend_tensor_get(sb.argmax_out, argmax_buf.data(), 0, n * sizeof(int32_t));
-        return TRANSCRIBE_OK;
+        io.token_ids = sb.token_ids_in;
+        io.pos_ids   = sb.pos_ids_in;
+        io.kv_idx    = sb.kv_idx_in;
+        io.self_mask = sb.self_mask_in;
+        io.argmax    = sb.argmax_out;
+        io.graph     = sb.graph;
+        return true;
     };
 
-    // Prompt feed: a single decoder_start token (pos 0).
-    for (int b = 0; b < n; ++b) tok_buf[b] = decoder_start;
-    if (run_step(0) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
-    for (int b = 0; b < n; ++b) {
-        if (finished[b]) continue;
-        next_tok[b] = argmax_buf[b];
-        if (next_tok[b] == eos) finished[b] = 1;
-        else generated[b].push_back(next_tok[b]);
-    }
-
-    // Generation.
-    for (int pos = 1; pos < max_pos; ++pos) {
-        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        bool all_done = true;
-        for (int b = 0; b < n; ++b) if (!finished[b]) { all_done = false; break; }
-        if (all_done || pos + 1 > max_n_kv) break;
-        for (int b = 0; b < n; ++b) tok_buf[b] = finished[b] ? eos : next_tok[b];
-        if (run_step(pos) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
-        for (int b = 0; b < n; ++b) {
-            if (finished[b]) continue;
-            next_tok[b] = argmax_buf[b];
-            if (next_tok[b] == eos) finished[b] = 1;
-            else generated[b].push_back(next_tok[b]);
-        }
+    const std::vector<int32_t> prompt_ids = { static_cast<int32_t>(decoder_start) };
+    std::vector<std::vector<int32_t>> generated(n);
+    if (const transcribe_status st = transcribe::run_batched_encdec_step_loop(
+            cc, cc->sched, rebuild, prompt_ids, /*prompt_len=*/1,
+            /*init_window=*/max_n_kv, /*max_new=*/max_pos, max_n_kv,
+            static_cast<int32_t>(eos), n, valid, generated);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
     const int64_t dec_us = ggml_time_us() - t_dec0;
 

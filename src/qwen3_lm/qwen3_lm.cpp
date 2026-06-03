@@ -7,6 +7,7 @@
 // preserved bit-for-bit.
 
 #include "qwen3_lm.h"
+#include "transcribe-session.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -858,6 +859,100 @@ bool pack_gate_up(ggml_backend_t                  backend,
         ggml_backend_tensor_set(gate_up,  buf.data(), gate_bytes, up_bytes);
     }
     return true;
+}
+
+transcribe_status run_batched_step_loop(
+    transcribe_session *                session,
+    ggml_backend_sched_t                sched,
+    const StepBatchedIO &               io,
+    int                                 n_batch,
+    int                                 max_n_kv,
+    int32_t                             eos_id,
+    int                                 max_new,
+    const StepBatchedState &            state,
+    std::vector<std::vector<int32_t>> & generated,
+    StepLoopStats *                     stats)
+{
+    const int n = n_batch;
+
+    // Per-row working state.
+    std::vector<int32_t> next_tok = state.next_tok;
+    std::vector<int>     n_past   = state.n_past;
+    const std::vector<char> & valid = state.valid;
+    std::vector<char>    finished(n, 1);
+    for (int b = 0; b < n; ++b) {
+        if (valid[b]) finished[b] = (next_tok[b] == eos_id);
+    }
+
+    // Host-side step inputs.
+    std::vector<int32_t> ids_buf(n, 0), pos_buf(n, 0), out_buf(n, 0);
+    std::vector<int64_t> kvidx_buf(n, 0);
+    const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t mn = ggml_fp32_to_fp16(-INFINITY);
+    std::vector<ggml_fp16_t> mask_buf(static_cast<size_t>(max_n_kv) * n, mn);
+    // Initialise each row's mask: attendable [0, n_past[b]] (prompt + the first
+    // generated token, which step 0 writes at row n_past[b]).
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) continue;
+        const size_t base = static_cast<size_t>(b) * max_n_kv;
+        for (int c = 0; c <= n_past[b] && c < max_n_kv; ++c) mask_buf[base + c] = mz;
+    }
+
+    const int64_t t_step0 = ggml_time_us();
+    int  n_steps  = 0;
+    bool all_done = false;
+    while (!all_done) {
+        if (session->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        for (int b = 0; b < n; ++b) {
+            // Finished/invalid rows keep stepping with frozen, valid inputs;
+            // their independent KV slab means the overwrite is a no-op for live
+            // rows and their output is ignored.
+            ids_buf[b]   = next_tok[b];
+            pos_buf[b]   = n_past[b];
+            kvidx_buf[b] = n_past[b];
+        }
+        ggml_backend_tensor_set(io.input_ids, ids_buf.data(),
+                                0, ids_buf.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(io.positions, pos_buf.data(),
+                                0, pos_buf.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(io.kv_idx, kvidx_buf.data(),
+                                0, kvidx_buf.size() * sizeof(int64_t));
+        ggml_backend_tensor_set(io.mask, mask_buf.data(),
+                                0, mask_buf.size() * sizeof(ggml_fp16_t));
+
+        if (ggml_backend_sched_graph_compute(sched, io.graph) !=
+            GGML_STATUS_SUCCESS) {
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_tensor_get(io.argmax, out_buf.data(), 0,
+                                out_buf.size() * sizeof(int32_t));
+        ++n_steps;
+
+        all_done = true;
+        for (int b = 0; b < n; ++b) {
+            if (finished[b] || !valid[b]) continue;
+            const int32_t tok = out_buf[b];
+            next_tok[b] = tok;
+            generated[b].push_back(tok);
+            n_past[b] += 1;
+            // Open the new KV position for the NEXT step's attention.
+            const size_t base = static_cast<size_t>(b) * max_n_kv;
+            if (n_past[b] < max_n_kv) mask_buf[base + n_past[b]] = mz;
+            if (tok == eos_id ||
+                static_cast<int>(generated[b].size()) >= max_new ||
+                n_past[b] + 1 > max_n_kv) {
+                finished[b] = 1;
+            } else {
+                all_done = false;
+            }
+        }
+    }
+
+    if (stats != nullptr) {
+        stats->n_steps = n_steps;
+        stats->step_us = ggml_time_us() - t_step0;
+    }
+    return TRANSCRIBE_OK;
 }
 
 } // namespace transcribe::qwen3_lm

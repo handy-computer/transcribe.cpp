@@ -46,11 +46,15 @@
 
 #pragma once
 
+#include "transcribe.h"
+
 #include "ggml.h"
 #include "ggml-backend.h"
 
 #include <cstdint>
 #include <vector>
+
+struct transcribe_session;
 
 namespace transcribe::qwen3_lm {
 
@@ -327,5 +331,61 @@ bool pack_gate_up(ggml_backend_t                  backend,
                   const std::vector<GateUpEntry> & entries,
                   PackedGateUpHandles &           out_handles,
                   const char *                    error_tag = "qwen3_lm");
+
+// ---------------------------------------------------------------------------
+// Batched greedy step loop (offline transcribe_run_batch decode)
+// ---------------------------------------------------------------------------
+
+// The B utterances' batched step graph, as built by a family's
+// build_step_graph_batched(). The field NAMES differ across families' build
+// structs, so the caller fills this projection at the call site.
+struct StepBatchedIO {
+    ggml_tensor * input_ids = nullptr;  // [B] i32   — token fed each step
+    ggml_tensor * positions = nullptr;  // [B] i32   — RoPE position per row
+    ggml_tensor * kv_idx    = nullptr;  // [1, B] i64 — KV write row per utterance
+    ggml_tensor * mask      = nullptr;  // [max_n_kv, 1, 1, B] f16 — per-row window
+    ggml_tensor * argmax    = nullptr;  // [B] i32   — graph output (next token)
+    ggml_cgraph * graph     = nullptr;
+};
+
+// Per-row state on entry to the step loop, i.e. just after serial prefill.
+//   valid[b]    : the utterance produced a usable prefill
+//   next_tok[b] : the prefill's first generated token (fed into step 0)
+//   n_past[b]   : == T_prompt[b] (the prompt KV length already written)
+// The caller must also have seeded generated[b] with next_tok[b].
+struct StepBatchedState {
+    std::vector<char>    valid;
+    std::vector<int32_t> next_tok;
+    std::vector<int>     n_past;
+};
+
+struct StepLoopStats {
+    int     n_steps = 0;
+    int64_t step_us = 0;
+};
+
+// Run the lockstep batched greedy decode. Each row steps until it emits
+// `eos_id`, accumulates `max_new` generated tokens, or fills the KV window;
+// each emitted token is appended to generated[b]. Finished / invalid rows keep
+// stepping into their own KV slab (independent memory, so a no-op for live
+// rows). Polls session->poll_abort() once per step. The step graph must already
+// be built and allocated on `sched`. Returns TRANSCRIBE_ERR_ABORTED on abort,
+// TRANSCRIBE_ERR_GGUF on a compute failure, else TRANSCRIBE_OK.
+//
+// Extracted verbatim from the four qwen3_lm-family run_batch() drivers
+// (qwen3_asr / funasr_nano / canary_qwen / granite), which were byte-identical
+// here apart from granite hand-coding the f16 mask literals (0x0000 / 0xFC00 ==
+// ggml_fp32_to_fp16(0) / ggml_fp32_to_fp16(-inf), so this is bit-identical).
+transcribe_status run_batched_step_loop(
+    transcribe_session *                session,
+    ggml_backend_sched_t                sched,
+    const StepBatchedIO &               io,
+    int                                 n_batch,
+    int                                 max_n_kv,
+    int32_t                             eos_id,
+    int                                 max_new,
+    const StepBatchedState &            state,
+    std::vector<std::vector<int32_t>> & generated,
+    StepLoopStats *                     stats = nullptr);
 
 } // namespace transcribe::qwen3_lm

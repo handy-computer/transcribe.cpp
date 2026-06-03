@@ -536,21 +536,9 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
         if (nf[b] != T_max) { var_len = true; break; }
     }
 
-    // Pack mels into [T_max, n_mels, n], zero-padding each along time. Source
-    // is mel-major [n_mels, nf[b]] (src[m*nf + t]); destination slab for
-    // utterance b is [T_max, n_mels] at offset b*n_mels*T_max (dst[m*T_max + t]).
-    const size_t per = static_cast<size_t>(n_mels) * static_cast<size_t>(T_max);
-    gc->mel_buf.assign(per * static_cast<size_t>(n), 0.0f);
-    for (int b = 0; b < n; ++b) {
-        const int nb = nf[b];
-        const float * src = mels[b].data();
-        float * dst = gc->mel_buf.data() + static_cast<size_t>(b) * per;
-        for (int m = 0; m < n_mels; ++m) {
-            std::copy(src + static_cast<size_t>(m) * nb,
-                      src + static_cast<size_t>(m) * nb + nb,
-                      dst + static_cast<size_t>(m) * T_max);
-        }
-    }
+    // Pack mels into [T_max, n_mels, n], zero-padding each along time
+    // (channel-major source [n_mels, nf[b]] -> per-utterance [T_max, n_mels]).
+    transcribe::pack_pad_channel_major(gc->mel_buf, mels, nf, n_mels, T_max);
 
     if (gc->compute_ctx != nullptr) {
         ggml_free(gc->compute_ctx);
@@ -603,31 +591,10 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
             t = batch_pre_encode_t_out(t);
             real_tenc[b] = std::min(t, T_enc);
         }
-        // Attention key-padding mask [T_enc, 1, 1, n]: 0 real / -INF padded.
-        if (eb.attn_pad_mask_in != nullptr) {
-            std::vector<float> am(static_cast<size_t>(T_enc) * n);
-            for (int b = 0; b < n; ++b) {
-                for (int k = 0; k < T_enc; ++k) {
-                    am[static_cast<size_t>(b) * T_enc + k] =
-                        (k < real_tenc[b]) ? 0.0f
-                            : -std::numeric_limits<float>::infinity();
-                }
-            }
-            ggml_backend_tensor_set(eb.attn_pad_mask_in, am.data(),
-                                    0, am.size() * sizeof(float));
-        }
-        // Conv valid-frame mask [T_enc, 1, n, 1]: 1 real / 0 padded.
-        if (eb.conv_pad_mask_in != nullptr) {
-            std::vector<float> cm(static_cast<size_t>(T_enc) * n);
-            for (int b = 0; b < n; ++b) {
-                for (int t = 0; t < T_enc; ++t) {
-                    cm[static_cast<size_t>(b) * T_enc + t] =
-                        (t < real_tenc[b]) ? 1.0f : 0.0f;
-                }
-            }
-            ggml_backend_tensor_set(eb.conv_pad_mask_in, cm.data(),
-                                    0, cm.size() * sizeof(float));
-        }
+        // Attention key-padding mask [T_enc, 1, 1, n] (0 real / -INF padded)
+        // and conv valid-frame mask [T_enc, 1, n, 1] (1 real / 0 padded).
+        transcribe::fill_keypad_mask(eb.attn_pad_mask_in, real_tenc, T_enc, n);
+        transcribe::fill_valid_frame_mask(eb.conv_pad_mask_in, real_tenc, T_enc, n);
         // Pre-encode masked-subsampling masks [T_stage, 1, n]: one per
         // conv-relu stage, valid time = mel length downsampled k times.
         auto fill_pe_mask = [&](ggml_tensor * mask, int n_down) {
@@ -714,22 +681,14 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
     ggml_backend_tensor_get(enc_t, gc->enc_host.data(), 0,
                             gc->enc_host.size() * sizeof(float));
 
-    // Amortize the shared encoder + mel cost across the batch so the per-utt
-    // sum reflects the real batch wall time; decode is genuinely per-utt.
-    const int64_t enc_per_utt = gc->t_encode_us / std::max(1, n);
-    const int64_t mel_per_utt = total_mel_us / std::max(1, n);
-    for (int b = 0; b < n; ++b) {
-        if (gc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        gc->clear_result();
-        const float * enc_b = gc->enc_host.data() + static_cast<size_t>(b) * utt_elems;
-        const transcribe_status st = decode_and_populate(
-            gc, gm, enc_b, real_tenc[b], d_enc, /*utt_index=*/b);
-        auto rs = gc->capture_result(st);
-        rs.t_mel_us    = mel_per_utt;
-        rs.t_encode_us = enc_per_utt;
-        gc->batch_results.push_back(std::move(rs));
-    }
-    return TRANSCRIBE_OK;
+    // Host-slice the shared encoder output and decode each utterance, with the
+    // single shared encode + total mel cost amortized across the batch.
+    return transcribe::decode_batch_slices(
+        gc, n, gc->enc_host.data(), utt_elems, gc->t_encode_us, total_mel_us,
+        [&](int b, const float * enc_b) {
+            return decode_and_populate(gc, gm, enc_b, real_tenc[b], d_enc,
+                                       /*utt_index=*/b);
+        });
 }
 
 transcribe_status run_batch(transcribe_session *          session,

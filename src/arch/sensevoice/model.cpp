@@ -693,29 +693,13 @@ static transcribe_status run_batch_encode(
     for (int b = 0; b < n; ++b) real_T_full[b] = T_lfr[b] + 4;
 
     if (var_len) {
-        if (eb.attn_pad_mask_in != nullptr) {
-            std::vector<float> am(static_cast<size_t>(T_full_max) * n);
-            for (int b = 0; b < n; ++b) {
-                for (int k = 0; k < T_full_max; ++k) {
-                    am[static_cast<size_t>(b) * T_full_max + k] =
-                        (k < real_T_full[b])
-                            ? 0.0f : -std::numeric_limits<float>::infinity();
-                }
-            }
-            ggml_backend_tensor_set(eb.attn_pad_mask_in, am.data(),
-                                    0, am.size() * sizeof(float));
-        }
-        if (eb.conv_pad_mask_in != nullptr) {
-            std::vector<float> cmask(static_cast<size_t>(T_full_max) * n);
-            for (int b = 0; b < n; ++b) {
-                for (int t = 0; t < T_full_max; ++t) {
-                    cmask[static_cast<size_t>(b) * T_full_max + t] =
-                        (t < real_T_full[b]) ? 1.0f : 0.0f;
-                }
-            }
-            ggml_backend_tensor_set(eb.conv_pad_mask_in, cmask.data(),
-                                    0, cmask.size() * sizeof(float));
-        }
+        // Attention key-padding mask [T_full_max, 1, 1, n] (0 real / -INF padded)
+        // and FSMN conv valid-frame mask [1, T_full_max, n] (1 real / 0 padded);
+        // both share the host ordering index b*T_full_max + t.
+        transcribe::fill_keypad_mask(eb.attn_pad_mask_in, real_T_full,
+                                     T_full_max, n);
+        transcribe::fill_valid_frame_mask(eb.conv_pad_mask_in, real_T_full,
+                                          T_full_max, n);
     }
 
     apply_thread_policy(cc);
@@ -741,37 +725,25 @@ static transcribe_status run_batch_encode(
     ggml_backend_tensor_get(eb.out, cc->logits_buf.data(),
                             0, cc->logits_buf.size() * sizeof(float));
 
-    // Amortize the single shared encode + total mel across the batch so the
-    // per-utterance timings sum to the real batch cost.
-    const int64_t enc_per_utt = cc->t_encode_us / std::max(1, n);
-    const int64_t mel_per_utt = total_mel_us   / std::max(1, n);
-
-    for (int b = 0; b < n; ++b) {
-        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        cc->clear_result();
-        const float * lp = cc->logits_buf.data() +
-                           static_cast<size_t>(b) * utt_elems;
-
-        // Per-utterance CTC log-probs dump for the batch tensor-parity gate.
-        // Same vocab-innermost element order as the single-shot ctc.log_probs
-        // dump, so the harness can diff slice-for-slice.
-        if (transcribe::debug::enabled()) {
-            const long long shape[2] = { real_T_full[b], vocab };
-            std::string nm = "ctc.log_probs.b" + std::to_string(b);
-            transcribe::debug::dump_host_f32(
-                nm.c_str(), lp,
-                static_cast<long long>(real_T_full[b]) * vocab,
-                shape, 2, "ctc.log_probs");
-        }
-
-        const transcribe_status st = decode_and_populate(
-            cc, cm, params, lp, real_T_full[b], vocab, lang, n_samples[b]);
-        auto rs = cc->capture_result(st);
-        rs.t_mel_us    = mel_per_utt;
-        rs.t_encode_us = enc_per_utt;
-        cc->batch_results.push_back(std::move(rs));
-    }
-    return TRANSCRIBE_OK;
+    // Host-slice the shared CTC log-probs and decode each utterance, with the
+    // single shared encode + total mel cost amortized across the batch.
+    return transcribe::decode_batch_slices(
+        cc, n, cc->logits_buf.data(), utt_elems, cc->t_encode_us, total_mel_us,
+        [&](int b, const float * lp) {
+            // Per-utterance CTC log-probs dump for the batch tensor-parity
+            // gate. Same vocab-innermost element order as the single-shot
+            // ctc.log_probs dump, so the harness can diff slice-for-slice.
+            if (transcribe::debug::enabled()) {
+                const long long shape[2] = { real_T_full[b], vocab };
+                std::string nm = "ctc.log_probs.b" + std::to_string(b);
+                transcribe::debug::dump_host_f32(
+                    nm.c_str(), lp,
+                    static_cast<long long>(real_T_full[b]) * vocab,
+                    shape, 2, "ctc.log_probs");
+            }
+            return decode_and_populate(cc, cm, params, lp, real_T_full[b],
+                                       vocab, lang, n_samples[b]);
+        });
 }
 
 transcribe_status run_batch(
