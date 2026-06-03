@@ -739,6 +739,8 @@ def sweep(
     gpu: str = "L4",
     n_utts: int = -1,
     clean: bool = False,
+    batch_sizes: str = "1",
+    sort_by_length: bool = True,
 ) -> None:
     """Fan WER across one or more models on one GPU class.
 
@@ -774,6 +776,8 @@ def sweep(
     needs_listing = sorted({repo for _, repo, fns in resolved if fns is None})
     listings = dict(list_ggufs.remote(needs_listing)) if needs_listing else {}
 
+    sizes = [int(x) for x in batch_sizes.split(",") if x.strip()] or [1]
+
     cells: list[dict] = []
     skipped: list[tuple[str, str]] = []
     for spec, repo, fns in resolved:
@@ -788,7 +792,8 @@ def sweep(
                 skipped.append((spec, f"no quants matched filter {quant_filter}"))
                 continue
         for f in fns:
-            cells.append({"repo": repo, "file": f, "dataset": dataset})
+            for bs in sizes:
+                cells.append({"repo": repo, "file": f, "dataset": dataset, "bs": bs})
 
     if skipped:
         print(">>> skipped (no cells generated):")
@@ -814,15 +819,19 @@ def sweep(
     print(f">>> launching {len(cells)} {gpu} containers in parallel...")
     n = None if n_utts < 0 else n_utts
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
-                             build_dir=build_dir))
+                             c["bs"], sort_by_length, build_dir))
             for c in cells]
 
     rows, failures = [], []
     for c, fut in futs:
-        slug = c["file"].replace(".gguf", "")
+        bs = c["bs"]
+        slug = c["file"].replace(".gguf", "") + (f" b{bs}" if bs != 1 else "")
         try:
             res = fut.get()
-            p = _write_hyp(res["hyp_jsonl"], c["file"], c["dataset"])
+            # b1 stays untagged (matches the published-run filenames); b>1 is
+            # tagged .b{bs} so batched hyps score independently for comparison.
+            p = _write_hyp(res["hyp_jsonl"], c["file"], c["dataset"],
+                           batch_size=(bs if bs != 1 else None))
             s = res["summary"]
             rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
                          s["wall_s"], s["rtf_wall"], str(p)))
