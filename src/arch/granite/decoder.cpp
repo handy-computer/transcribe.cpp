@@ -340,6 +340,186 @@ ggml_tensor * block_step(
     return x;
 }
 
+// Granite batched block (prefill). x: [hidden, T, B], batch on ne[2].
+// Requires flash. Mirrors qwen3_lm::block_prefill_batched with Granite math.
+ggml_tensor * block_prefill_batched(
+    ggml_context *                  ctx,
+    ggml_cgraph *                   gf,
+    ggml_tensor *                   x,
+    const GraniteDecBlock &         view,
+    const GraniteBlockParams &      params,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             layer_idx,
+    int                             T_seq,
+    int                             n_batch,
+    ggml_tensor *                   mask,
+    ggml_tensor *                   positions,
+    ggml_tensor *                   kv_idx,
+    bool                            use_flash)
+{
+    const int64_t n_heads    = params.n_heads;
+    const int64_t n_kv_heads = params.n_kv_heads;
+    const int64_t head_dim   = params.head_dim;
+    const int64_t q_dim      = n_heads    * head_dim;
+    const int64_t kv_dim     = n_kv_heads * head_dim;
+    const int64_t n_ctx      = kv_cache.n_ctx;
+    const int64_t T          = T_seq;
+    const int64_t B          = n_batch;
+    const float   rms_eps    = params.rms_eps;
+    const float   rope_theta = params.rope_theta;
+    const float   scale_attn = params.attn_scale;
+    const size_t  k_elem = ggml_element_size(kv_cache.self_k);
+    const size_t  v_elem = ggml_element_size(kv_cache.self_v);
+
+    if (!use_flash) {
+        std::fprintf(stderr, "granite block_prefill_batched: requires flash\n");
+        return nullptr;
+    }
+
+    ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
+    ggml_tensor * Q = ggml_mul_mat(ctx, view.attn_q_w, x_norm);
+    ggml_tensor * K = ggml_mul_mat(ctx, view.attn_k_w, x_norm);
+    ggml_tensor * V = ggml_mul_mat(ctx, view.attn_v_w, x_norm);
+    Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads,    T, B);
+    K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T, B);
+    V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, T, B);
+    // No per-head Q/K RMSNorm on Granite.
+    Q = ggml_rope_ext(ctx, Q, positions, nullptr, static_cast<int>(head_dim),
+                      GGML_ROPE_TYPE_NEOX, params.max_position,
+                      rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+    K = ggml_rope_ext(ctx, K, positions, nullptr, static_cast<int>(head_dim),
+                      GGML_ROPE_TYPE_NEOX, params.max_position,
+                      rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+    {
+        const size_t off_k = k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+        const size_t off_v = v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+        ggml_tensor * k_layer = ggml_view_3d(ctx, kv_cache.self_k, kv_dim, n_ctx, B,
+            k_elem * kv_dim, k_elem * kv_dim * n_ctx, off_k);
+        ggml_tensor * v_layer = ggml_view_3d(ctx, kv_cache.self_v, kv_dim, n_ctx, B,
+            v_elem * kv_dim, v_elem * kv_dim * n_ctx, off_v);
+        ggml_tensor * K_rows = ggml_reshape_3d(ctx, K, kv_dim, T, B);
+        ggml_tensor * V_rows = ggml_reshape_3d(ctx, V, kv_dim, T, B);
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx, k_layer, K_rows, kv_idx));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx, v_layer, V_rows, kv_idx));
+    }
+    const size_t off_k = k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+    const size_t off_v = v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+    ggml_tensor * K_att = ggml_view_4d(ctx, kv_cache.self_k, head_dim, T, n_kv_heads, B,
+        k_elem * kv_dim, k_elem * head_dim, k_elem * kv_dim * n_ctx, off_k);
+    ggml_tensor * V_att = ggml_view_4d(ctx, kv_cache.self_v, head_dim, T, n_kv_heads, B,
+        v_elem * kv_dim, v_elem * head_dim, v_elem * kv_dim * n_ctx, off_v);
+    ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 1, 3));
+    ggml_tensor * o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, mask,
+                                          scale_attn, 0.0f, 0.0f);
+    o = ggml_reshape_3d(ctx, o, q_dim, T, B);
+    o = ggml_mul_mat(ctx, view.attn_o_w, o);
+    o = ggml_scale(ctx, o, params.residual_mul);
+    x = ggml_add(ctx, x, o);
+
+    ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
+    ggml_tensor * ff;
+    if (view.ffn_gate_up_w != nullptr) {
+        ff = ggml_swiglu(ctx, ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm));
+    } else {
+        ggml_tensor * gate = ggml_mul_mat(ctx, view.ffn_gate_w, ff_norm);
+        ggml_tensor * up   = ggml_mul_mat(ctx, view.ffn_up_w,   ff_norm);
+        ff = ggml_mul(ctx, ggml_silu(ctx, gate), up);
+    }
+    ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
+    ff = ggml_scale(ctx, ff, params.residual_mul);
+    x = ggml_add(ctx, x, ff);
+    return x;
+}
+
+// Granite batched block (step). x: [hidden, B], batch on ne[2] for RoPE,
+// permute to ne[3] for flash. Mirrors qwen3_lm::block_step_batched.
+ggml_tensor * block_step_batched(
+    ggml_context *                  ctx,
+    ggml_cgraph *                   gf,
+    ggml_tensor *                   x,
+    const GraniteDecBlock &         view,
+    const GraniteBlockParams &      params,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             layer_idx,
+    int                             max_n_kv,
+    int                             n_batch,
+    ggml_tensor *                   mask,
+    ggml_tensor *                   position,
+    ggml_tensor *                   kv_idx,
+    bool                            use_flash)
+{
+    const int64_t n_heads    = params.n_heads;
+    const int64_t n_kv_heads = params.n_kv_heads;
+    const int64_t head_dim   = params.head_dim;
+    const int64_t q_dim      = n_heads    * head_dim;
+    const int64_t kv_dim     = n_kv_heads * head_dim;
+    const int64_t n_ctx      = kv_cache.n_ctx;
+    const int64_t B          = n_batch;
+    const float   rms_eps    = params.rms_eps;
+    const float   rope_theta = params.rope_theta;
+    const float   scale_attn = params.attn_scale;
+    const size_t  k_elem = ggml_element_size(kv_cache.self_k);
+    const size_t  v_elem = ggml_element_size(kv_cache.self_v);
+
+    if (!use_flash) {
+        std::fprintf(stderr, "granite block_step_batched: requires flash\n");
+        return nullptr;
+    }
+
+    ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
+    ggml_tensor * Q = ggml_mul_mat(ctx, view.attn_q_w, x_norm);  // [q_dim, B]
+    ggml_tensor * K = ggml_mul_mat(ctx, view.attn_k_w, x_norm);
+    ggml_tensor * V = ggml_mul_mat(ctx, view.attn_v_w, x_norm);
+    Q = ggml_reshape_3d(ctx, Q, head_dim, n_heads,    B);
+    K = ggml_reshape_3d(ctx, K, head_dim, n_kv_heads, B);
+    V = ggml_reshape_3d(ctx, V, head_dim, n_kv_heads, B);
+    Q = ggml_rope_ext(ctx, Q, position, nullptr, static_cast<int>(head_dim),
+                      GGML_ROPE_TYPE_NEOX, params.max_position,
+                      rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+    K = ggml_rope_ext(ctx, K, position, nullptr, static_cast<int>(head_dim),
+                      GGML_ROPE_TYPE_NEOX, params.max_position,
+                      rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+    {
+        const size_t off_k = k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+        const size_t off_v = v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+        ggml_tensor * k_layer = ggml_view_3d(ctx, kv_cache.self_k, kv_dim, n_ctx, B,
+            k_elem * kv_dim, k_elem * kv_dim * n_ctx, off_k);
+        ggml_tensor * v_layer = ggml_view_3d(ctx, kv_cache.self_v, kv_dim, n_ctx, B,
+            v_elem * kv_dim, v_elem * kv_dim * n_ctx, off_v);
+        ggml_tensor * K_row = ggml_reshape_3d(ctx, K, kv_dim, 1, B);
+        ggml_tensor * V_row = ggml_reshape_3d(ctx, V, kv_dim, 1, B);
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx, k_layer, K_row, kv_idx));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx, v_layer, V_row, kv_idx));
+    }
+    const size_t off_k = k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+    const size_t off_v = v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+    ggml_tensor * K_att = ggml_view_4d(ctx, kv_cache.self_k, head_dim, max_n_kv, n_kv_heads, B,
+        k_elem * kv_dim, k_elem * head_dim, k_elem * kv_dim * n_ctx, off_k);
+    ggml_tensor * V_att = ggml_view_4d(ctx, kv_cache.self_v, head_dim, max_n_kv, n_kv_heads, B,
+        v_elem * kv_dim, v_elem * head_dim, v_elem * kv_dim * n_ctx, off_v);
+    ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 3, 1));
+    ggml_tensor * o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, mask,
+                                          scale_attn, 0.0f, 0.0f);
+    o = ggml_reshape_2d(ctx, o, q_dim, B);
+    o = ggml_mul_mat(ctx, view.attn_o_w, o);
+    o = ggml_scale(ctx, o, params.residual_mul);
+    x = ggml_add(ctx, x, o);
+
+    ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
+    ggml_tensor * ff;
+    if (view.ffn_gate_up_w != nullptr) {
+        ff = ggml_swiglu(ctx, ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm));
+    } else {
+        ggml_tensor * gate = ggml_mul_mat(ctx, view.ffn_gate_w, ff_norm);
+        ggml_tensor * up   = ggml_mul_mat(ctx, view.ffn_up_w,   ff_norm);
+        ff = ggml_mul(ctx, ggml_silu(ctx, gate), up);
+    }
+    ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
+    ff = ggml_scale(ctx, ff, params.residual_mul);
+    x = ggml_add(ctx, x, ff);
+    return x;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -639,6 +819,156 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     ggml_build_forward_expand(gf, sb.out);
     ggml_build_forward_expand(gf, logits);
 
+    return sb;
+}
+
+// ---------------------------------------------------------------------------
+// Batched prefill / step (offline transcribe_run_batch)
+// ---------------------------------------------------------------------------
+
+PrefillBuildBatched build_prefill_graph_batched(
+    ggml_context *                  ctx,
+    const GraniteWeights &          weights,
+    const GraniteHParams &          hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             T_prompt_max,
+    int                             n_audio_max,
+    int                             n_batch,
+    bool                            use_flash)
+{
+    PrefillBuildBatched pb {};
+    pb.T_prompt_max = T_prompt_max;
+    pb.n_audio_max  = n_audio_max;
+    pb.n_batch      = n_batch;
+
+    if (ctx == nullptr || T_prompt_max <= 0 || n_audio_max <= 0 ||
+        n_batch <= 0 || !use_flash ||
+        kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
+        T_prompt_max > kv_cache.n_ctx) {
+        std::fprintf(stderr, "granite prefill(batched): invalid arg\n");
+        return pb;
+    }
+
+    const int64_t hidden  = hp.dec_hidden;
+    const int64_t vocab   = hp.dec_vocab_size;
+    const int     n_layer = hp.dec_n_layers;
+    const float   rms_eps = hp.dec_rms_norm_eps;
+    const float   emb_mul = hp.dec_embedding_multiplier;
+    const float   inv_log = (hp.dec_logits_scaling > 0.0f)
+                            ? (1.0f / hp.dec_logits_scaling) : 1.0f;
+    const int     B       = n_batch;
+    const auto params = to_params(hp);
+
+    pb.input_ids_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, T_prompt_max, B);
+    ggml_set_input(pb.input_ids_in);
+    pb.audio_feats_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hidden, n_audio_max, B);
+    ggml_set_input(pb.audio_feats_in);
+    pb.audio_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, n_audio_max, B);
+    ggml_set_input(pb.audio_idx_in);
+    pb.positions_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_prompt_max);
+    ggml_set_input(pb.positions_in);
+    pb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, T_prompt_max, T_prompt_max);
+    ggml_set_input(pb.mask_in);
+    pb.kv_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, T_prompt_max, B);
+    ggml_set_input(pb.kv_idx_in);
+    pb.last_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, B);
+    ggml_set_input(pb.last_idx_in);
+
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
+    if (gf == nullptr) return pb;
+    pb.graph = gf;
+
+    ggml_tensor * ids_flat =
+        ggml_reshape_1d(ctx, pb.input_ids_in, static_cast<int64_t>(T_prompt_max) * B);
+    ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, ids_flat);
+    x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);
+    x = ggml_set_rows(ctx, x, pb.audio_feats_in, pb.audio_idx_in);
+    x = ggml_scale(ctx, x, emb_mul);   // embedding_multiplier (after injection)
+
+    for (int il = 0; il < n_layer; ++il) {
+        x = block_prefill_batched(ctx, gf, x, weights.dec_blocks[il], params,
+                                  kv_cache, il, T_prompt_max, B,
+                                  pb.mask_in, pb.positions_in, pb.kv_idx_in, use_flash);
+        if (x == nullptr) { pb.graph = nullptr; return pb; }
+    }
+
+    ggml_tensor * x_last = ggml_get_rows(ctx, x, pb.last_idx_in);
+    x_last = ggml_reshape_2d(ctx, x_last, hidden, B);
+    x_last = rms_norm(ctx, x_last, weights.dec_final.norm_w, rms_eps);
+    ggml_tensor * head_w = (weights.dec_final.output_w != nullptr)
+                            ? weights.dec_final.output_w : weights.dec_embed.token_w;
+    ggml_tensor * logits = ggml_mul_mat(ctx, head_w, x_last);
+    logits = ggml_reshape_2d(ctx, logits, vocab, B);
+    logits = ggml_scale(ctx, logits, inv_log);
+    pb.logits = logits;
+    pb.out = ggml_argmax(ctx, logits);
+    ggml_set_output(pb.out);
+    ggml_build_forward_expand(gf, pb.out);
+    ggml_build_forward_expand(gf, logits);
+    return pb;
+}
+
+StepBuildBatched build_step_graph_batched(
+    ggml_context *                  ctx,
+    const GraniteWeights &          weights,
+    const GraniteHParams &          hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             max_n_kv,
+    int                             n_batch,
+    bool                            use_flash)
+{
+    StepBuildBatched sb {};
+    sb.max_n_kv = max_n_kv;
+    sb.n_batch  = n_batch;
+    if (ctx == nullptr || max_n_kv <= 0 || n_batch <= 0 || !use_flash ||
+        kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
+        max_n_kv > kv_cache.n_ctx) {
+        std::fprintf(stderr, "granite step(batched): invalid arg\n");
+        return sb;
+    }
+
+    const int64_t vocab   = hp.dec_vocab_size;
+    const int     n_layer = hp.dec_n_layers;
+    const float   rms_eps = hp.dec_rms_norm_eps;
+    const float   emb_mul = hp.dec_embedding_multiplier;
+    const float   inv_log = (hp.dec_logits_scaling > 0.0f)
+                            ? (1.0f / hp.dec_logits_scaling) : 1.0f;
+    const int     B       = n_batch;
+    const auto params = to_params(hp);
+
+    sb.input_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, B);
+    ggml_set_input(sb.input_ids_in);
+    sb.position_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, B);
+    ggml_set_input(sb.position_in);
+    sb.kv_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, 1, B);
+    ggml_set_input(sb.kv_idx_in);
+    sb.mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, max_n_kv, 1, 1, B);
+    ggml_set_input(sb.mask_in);
+
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
+    if (gf == nullptr) return sb;
+    sb.graph = gf;
+
+    ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, sb.input_ids_in);
+    x = ggml_scale(ctx, x, emb_mul);
+    for (int il = 0; il < n_layer; ++il) {
+        x = block_step_batched(ctx, gf, x, weights.dec_blocks[il], params,
+                               kv_cache, il, max_n_kv, B,
+                               sb.mask_in, sb.position_in, sb.kv_idx_in, use_flash);
+        if (x == nullptr) { sb.graph = nullptr; return sb; }
+    }
+
+    x = rms_norm(ctx, x, weights.dec_final.norm_w, rms_eps);
+    ggml_tensor * head_w = (weights.dec_final.output_w != nullptr)
+                            ? weights.dec_final.output_w : weights.dec_embed.token_w;
+    ggml_tensor * logits = ggml_mul_mat(ctx, head_w, x);
+    logits = ggml_reshape_2d(ctx, logits, vocab, B);
+    logits = ggml_scale(ctx, logits, inv_log);
+    sb.logits = logits;
+    sb.out = ggml_argmax(ctx, logits);
+    ggml_set_output(sb.out);
+    ggml_build_forward_expand(gf, sb.out);
+    ggml_build_forward_expand(gf, logits);
     return sb;
 }
 

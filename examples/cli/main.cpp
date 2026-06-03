@@ -133,6 +133,8 @@ struct cli_args {
     // Whisper-family knobs. Ignored for non-Whisper models.
     std::string initial_prompt;                // --initial-prompt TEXT
     bool        whisper_set                  = false;
+    bool        temperature_set              = false; // --temperature F
+    float       temperature                  = 0.0f;  // tier-0 sampling temp
     bool        condition_on_prev_tokens     = false; // --condition-on-prev-tokens
     enum transcribe_whisper_prompt_condition prompt_condition =
         TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT;       // --prompt-condition first|all
@@ -191,6 +193,7 @@ void print_usage(const char * argv0) {
         "  --batch-size N        group N utterances into one transcribe_run_batch\n"
         "                        call (offline only; 0/1 = per-file serial loop)\n"
         "  --initial-prompt TEXT (whisper) initial prompt text for context biasing\n"
+        "  --temperature F       (whisper) tier-0 sampling temperature (default 0 = greedy)\n"
         "  --condition-on-prev-tokens (whisper) carry prev-chunk tokens across chunks\n"
         "  --prompt-condition T  (whisper) prompt placement: first|all (default: first)\n"
         "  --itn                 (sensevoice/funasr-nano) enable inverse text normalization\n"
@@ -313,6 +316,12 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) return false;
             out.initial_prompt = v;
             out.whisper_set    = true;
+        } else if (a == "--temperature") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.temperature     = static_cast<float>(std::atof(v));
+            out.temperature_set = true;
+            out.whisper_set     = true;
         } else if (a == "--condition-on-prev-tokens") {
             out.condition_on_prev_tokens = true;
             out.whisper_set              = true;
@@ -520,6 +529,7 @@ int main(int argc, char ** argv) {
                 wx.initial_prompt = args.initial_prompt.c_str();
             }
             wx.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            if (args.temperature_set) wx.temperature = args.temperature;
             wx.prompt_condition         = args.prompt_condition;
             if (transcribe_model_accepts_ext_kind(
                     model,
@@ -864,6 +874,7 @@ int main(int argc, char ** argv) {
                 wx.initial_prompt = args.initial_prompt.c_str();
             }
             wx.condition_on_prev_tokens = args.condition_on_prev_tokens;
+            if (args.temperature_set) wx.temperature = args.temperature;
             wx.prompt_condition         = args.prompt_condition;
             if (transcribe_model_accepts_ext_kind(
                     model,

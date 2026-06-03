@@ -61,6 +61,7 @@ struct MoonshineStreamingKvCache {
     int n     = 0;
     int head  = 0;
     int T_enc = 0;
+    int n_batch = 1;   // utterance batch width (>1 for the offline batched decoder)
 
     bool cross_populated = false;
 
@@ -80,6 +81,7 @@ struct MoonshineStreamingKvCache {
         n = 0;
         head = 0;
         T_enc = 0;
+        n_batch = 1;
         cross_populated = false;
     }
 };
@@ -91,6 +93,17 @@ bool kv_cache_init(MoonshineStreamingKvCache & cache,
                    int                         d_model,
                    int                         n_layer,
                    ggml_type                   kv_type);
+
+// Batched variant: self [d_model·n_ctx·n_batch·n_layer], cross
+// [d_model·T_enc·n_batch·n_layer]. n_batch == 1 is layout-identical.
+bool kv_cache_init_batched(MoonshineStreamingKvCache & cache,
+                           ggml_backend_t              backend,
+                           int                         n_ctx,
+                           int                         T_enc,
+                           int                         d_model,
+                           int                         n_layer,
+                           int                         n_batch,
+                           ggml_type                   kv_type);
 
 // ---------------------------------------------------------------------------
 // Model / context

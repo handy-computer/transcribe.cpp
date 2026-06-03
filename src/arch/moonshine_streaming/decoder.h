@@ -124,4 +124,39 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       compute
                                     bool                                 skip_log_softmax = false,
                                     bool                                 use_flash        = true);
 
+// ---------------------------------------------------------------------------
+// Offline batched decode (B utterances). Mirrors src/arch/moonshine, with
+// the streaming-specific untied lm_head. The adapter is applied per
+// utterance (serial) before the batched cross-KV, so the cross input here
+// is the already-adapted [dec_d_model, T_enc_max, B] hidden state.
+// ---------------------------------------------------------------------------
+
+DecoderBuild build_cross_kv_graph_batched(ggml_context *                    ctx,
+                                          const MoonshineStreamingWeights & w,
+                                          const MoonshineStreamingHParams & hp,
+                                          MoonshineStreamingKvCache &       kv_cache,
+                                          int                               T_enc_max,
+                                          int                               n_batch);
+
+struct StepBuildBatched {
+    ggml_tensor * token_ids_in  = nullptr;  // i32 [B]
+    ggml_tensor * pos_ids_in    = nullptr;  // i32 [B]
+    ggml_tensor * kv_idx_in     = nullptr;  // i64 [1, B]
+    ggml_tensor * self_mask_in  = nullptr;  // f16 [max_n_kv, 1, 1, B]
+    ggml_tensor * cross_mask_in = nullptr;  // f16 [T_enc_max, 1, 1, B]
+    ggml_tensor * argmax_out    = nullptr;  // i32 [B]
+    int           max_n_kv      = 0;
+    int           n_batch       = 0;
+    ggml_cgraph * graph         = nullptr;
+};
+
+StepBuildBatched build_step_graph_batched(ggml_context *                    ctx,
+                                          const MoonshineStreamingWeights & w,
+                                          const MoonshineStreamingHParams & hp,
+                                          MoonshineStreamingKvCache &       kv_cache,
+                                          int                               max_n_kv,
+                                          int                               T_enc_max,
+                                          int                               n_batch,
+                                          bool                              use_flash = true);
+
 } // namespace transcribe::moonshine_streaming

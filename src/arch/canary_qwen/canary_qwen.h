@@ -108,6 +108,12 @@ struct CanaryQwenSession final : public transcribe_session {
     ggml_backend_sched_t sched       = nullptr;
 
     transcribe::qwen3_lm::KvCache kv_cache;
+
+    // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
+    transcribe::qwen3_lm::KvCache kv_cache_batch;
+    int                           kv_batch_cap   = 0;
+    int                           kv_batch_n_ctx = 0;
+
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Reusable host scratch.

@@ -138,4 +138,45 @@ StepBuild build_step_graph(ggml_context *         compute_ctx,
                            int                    T_enc,
                            bool                   use_flash = true);
 
+// ---------------------------------------------------------------------------
+// Offline batched decode (B utterances at once).
+// ---------------------------------------------------------------------------
+
+// Batched cross-attention K/V. encoder_out_in is [hidden, T_enc_max, B]
+// (each utterance right-padded to T_enc_max); per-layer K/V are written
+// into the batched cross cache slab (layer, b). Padded encoder frames
+// produce bias-only K/V that the cross-pad mask discards at attention time.
+DecoderBuild build_cross_kv_graph_batched(ggml_context *         compute_ctx,
+                                          const CohereWeights &  weights,
+                                          const CohereHParams &  hp,
+                                          CohereKvCache &        kv_cache,
+                                          int                    T_enc_max,
+                                          int                    n_batch);
+
+// Static-topology batched single-step graph for B utterances. Reused for
+// BOTH the (short, uniform) prompt feed and autoregressive generation:
+// each invocation consumes one token per utterance, writes self-KV at
+// kv_idx[b], and reads self-KV [0,max_n_kv) (self_mask gates valid slots)
+// + cross-KV [0,T_enc_max) (cross_mask gates each utterance's real frames).
+struct StepBuildBatched {
+    ggml_tensor * token_ids_in = nullptr;  // i32 [B]
+    ggml_tensor * pos_ids_in   = nullptr;  // i32 [B]
+    ggml_tensor * kv_idx_in    = nullptr;  // i64 [1, B]
+    ggml_tensor * self_mask_in = nullptr;  // f16 [max_n_kv, 1, 1, B]
+    ggml_tensor * cross_mask_in = nullptr; // f16 [T_enc_max, 1, 1, B]
+    ggml_tensor * argmax_out   = nullptr;  // i32 [B]
+    int           max_n_kv     = 0;
+    int           n_batch      = 0;
+    ggml_cgraph * graph        = nullptr;
+};
+
+StepBuildBatched build_step_graph_batched(ggml_context *        compute_ctx,
+                                          const CohereWeights & weights,
+                                          const CohereHParams & hp,
+                                          CohereKvCache &       kv_cache,
+                                          int                   max_n_kv,
+                                          int                   T_enc_max,
+                                          int                   n_batch,
+                                          bool                  use_flash = true);
+
 } // namespace transcribe::cohere

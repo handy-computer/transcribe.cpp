@@ -107,4 +107,56 @@ StepBuild build_step_graph(ggml_context *                  ctx,
                            int                             max_n_kv,
                            bool                            use_flash);
 
+// ---------- Batched prefill / step (offline transcribe_run_batch) ----------
+// Same recipe as the qwen3_lm families but with Granite block math (no Q/K
+// norm, attention_multiplier scale, residual_multiplier, embedding_multiplier,
+// logits_scaling). Batch rides ne[2]; requires use_flash.
+
+struct PrefillBuildBatched {
+    ggml_tensor * input_ids_in   = nullptr;  // [T_prompt_max, B] i32
+    ggml_tensor * audio_feats_in = nullptr;  // [hidden, n_audio_max, B] f32
+    ggml_tensor * audio_idx_in   = nullptr;  // [n_audio_max, B] i64
+    ggml_tensor * positions_in   = nullptr;  // [T_prompt_max] i32
+    ggml_tensor * mask_in        = nullptr;  // [T_prompt_max, T_prompt_max] f16
+    ggml_tensor * kv_idx_in      = nullptr;  // [T_prompt_max, B] i64
+    ggml_tensor * last_idx_in    = nullptr;  // [1, B] i32
+    ggml_tensor * logits         = nullptr;  // [vocab, B]
+    ggml_tensor * out            = nullptr;  // [B] i32 argmax
+    ggml_cgraph * graph          = nullptr;
+    int T_prompt_max   = 0;
+    int n_audio_max    = 0;
+    int n_batch        = 0;
+};
+
+PrefillBuildBatched build_prefill_graph_batched(
+    ggml_context *                  ctx,
+    const GraniteWeights &          weights,
+    const GraniteHParams &          hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             T_prompt_max,
+    int                             n_audio_max,
+    int                             n_batch,
+    bool                            use_flash);
+
+struct StepBuildBatched {
+    ggml_tensor * input_ids_in = nullptr;  // [B] i32
+    ggml_tensor * position_in  = nullptr;  // [B] i32
+    ggml_tensor * kv_idx_in    = nullptr;  // [1, B] i64
+    ggml_tensor * mask_in      = nullptr;  // [max_n_kv, 1, 1, B] f16
+    ggml_tensor * logits       = nullptr;  // [vocab, B]
+    ggml_tensor * out          = nullptr;  // [B] i32 argmax
+    ggml_cgraph * graph        = nullptr;
+    int max_n_kv = 0;
+    int n_batch  = 0;
+};
+
+StepBuildBatched build_step_graph_batched(
+    ggml_context *                  ctx,
+    const GraniteWeights &          weights,
+    const GraniteHParams &          hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             max_n_kv,
+    int                             n_batch,
+    bool                            use_flash);
+
 } // namespace transcribe::granite

@@ -104,9 +104,12 @@ struct KvCache {
     ggml_context *        ctx    = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
 
-    int n_ctx = 0;
-    int n     = 0;     // current fill (high-water mark)
-    int head  = 0;     // next write position
+    int n_ctx    = 0;
+    int n        = 0;     // current fill (high-water mark)
+    int head     = 0;     // next write position
+    int n_batch  = 1;     // utterances packed along the batch axis (offline
+                          // batched decode). 1 == single-shot layout, in which
+                          // case the flat tensor is byte-identical to kv_init.
 
     void free();
 };
@@ -121,6 +124,19 @@ bool kv_init(KvCache &      cache,
              int            n_layer,
              ggml_type      kv_type);
 
+// Batched variant: allocates [n_kv_heads · head_dim · n_ctx · n_batch · n_layer]
+// flat per K and V, laid out (slowest → fastest) layer, batch, position, head,
+// dim. With n_batch == 1 the size and layout are identical to kv_init, so the
+// single-shot block_step views read byte-identical memory. Sets cache.n_batch.
+bool kv_init_batched(KvCache &      cache,
+                     ggml_backend_t backend,
+                     int            n_ctx,
+                     int            n_kv_heads,
+                     int            head_dim,
+                     int            n_layer,
+                     int            n_batch,
+                     ggml_type      kv_type);
+
 // ---------------------------------------------------------------------------
 // Block forward (prefill: T_seq > 1)
 // ---------------------------------------------------------------------------
@@ -134,6 +150,15 @@ struct BlockOpts {
     // this on the LAST block when only the final position's logits are
     // consumed (matches llama.cpp's inp_out_ids optimization).
     bool slice_last_before_ffn = false;
+
+    // Offline batched decode: write/read this utterance's KV in slab
+    // `kv_batch_slot` of a batched cache holding `kv_n_batch` slabs. The
+    // per-(layer,slot) byte offset becomes
+    //   (kv_batch_slot + kv_n_batch * layer_idx) * n_ctx * kv_dim.
+    // Defaults (0, 1) reproduce the single-shot offset layer_idx*n_ctx*kv_dim
+    // exactly, so single-shot callers are unaffected.
+    int  kv_batch_slot = 0;
+    int  kv_n_batch    = 1;
 };
 
 // Run one Qwen3 block on `x` (ne = [hidden, T_seq]). Writes K/V for
@@ -183,6 +208,76 @@ ggml_tensor * block_step(
     ggml_tensor *       mask,       // [max_n_kv, 1] f16
     ggml_tensor *       position,   // [1] i32
     ggml_tensor *       kv_idx,     // [1] i64
+    bool                use_flash);
+
+// ---------------------------------------------------------------------------
+// Block forward (batched step: B utterances, one new token each)
+// ---------------------------------------------------------------------------
+
+// Run one Qwen3 block on B new tokens (x = [hidden, B]), one per utterance
+// stepping in lockstep against a batched KV cache (kv_init_batched, n_batch=B).
+//
+// Layout choice: the batch axis sits on ne[2] (the "position/token" axis)
+// through projection + RoPE so each utterance gets its OWN RoPE position from
+// `position` [B]; Q is then permuted to [head_dim, 1, n_heads, B] for
+// flash_attn_ext, which batches on ne[3]. K/V are written with a single
+// batched ggml_set_rows (dest [kv_dim, n_ctx, B], src [kv_dim, 1, B], idx
+// [1, B]) so utterance b writes row kv_idx[b] of its own slab.
+//
+// Inputs:
+//   x         [hidden, B]
+//   max_n_kv  static KV window (full window read under per-row mask)
+//   n_batch   B
+//   mask      [max_n_kv, 1, 1, B] f16 — per-utterance causal+pad mask
+//   position  [B] i32 — RoPE position per utterance (= that row's n_past)
+//   kv_idx    [1, B] i64 — KV write row per utterance (= that row's n_past)
+//
+// Requires use_flash (the manual GQA path is single-shot only). Returns
+// [hidden, B]. With B == 1 this is numerically the batched-of-one analog of
+// block_step; the parity gate compares batched row b vs single-shot b.
+ggml_tensor * block_step_batched(
+    ggml_context *      ctx,
+    ggml_cgraph *       gf,
+    ggml_tensor *       x,          // [hidden, B]
+    const BlockView &   view,
+    const BlockParams & params,
+    KvCache &           kv_cache,
+    int                 layer_idx,
+    int                 max_n_kv,
+    int                 n_batch,
+    ggml_tensor *       mask,       // [max_n_kv, 1, 1, B] f16
+    ggml_tensor *       position,   // [B] i32
+    ggml_tensor *       kv_idx,     // [1, B] i64
+    bool                use_flash);
+
+// ---------------------------------------------------------------------------
+// Block forward (batched prefill: B utterances, T tokens each)
+// ---------------------------------------------------------------------------
+
+// Run one Qwen3 block over B prompts of T tokens each (x = [hidden, T, B]),
+// writing each utterance's K/V to positions [0, T) of its own slab in a
+// batched KV cache (kv_init_batched, n_batch=B). Batch rides ne[2]; RoPE
+// positions [T] are shared (every prompt starts at position 0); the causal
+// mask [T, T] is shared (a real token p < T_prompt[b] only attends [0, p],
+// all real). One batched ggml_set_rows writes B*T KV rows (idx[t,b]=t).
+//
+// Pad tokens (t >= T_prompt[b]) compute harmlessly: their KV lands in pad
+// slab positions that the step loop overwrites before attending, and the
+// caller gathers only each utterance's real last-position output. Requires
+// use_flash (the manual GQA path has no batch axis). Returns [hidden, T, B].
+ggml_tensor * block_prefill_batched(
+    ggml_context *      ctx,
+    ggml_cgraph *       gf,
+    ggml_tensor *       x,          // [hidden, T, B]
+    const BlockView &   view,
+    const BlockParams & params,
+    KvCache &           kv_cache,
+    int                 layer_idx,
+    int                 T_seq,
+    int                 n_batch,
+    ggml_tensor *       mask,       // [T_seq, T_seq] f16 causal (shared)
+    ggml_tensor *       positions,  // [T_seq] i32 (shared)
+    ggml_tensor *       kv_idx,     // [T_seq, B] i64 (idx[t,b] = t)
     bool                use_flash);
 
 // ---------------------------------------------------------------------------

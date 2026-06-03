@@ -133,6 +133,11 @@ struct GraniteSession final : public transcribe_session {
     // the actual prompt+gen budget.
     transcribe::qwen3_lm::KvCache kv;
 
+    // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
+    transcribe::qwen3_lm::KvCache kv_batch;
+    int                           kv_batch_cap   = 0;
+    int                           kv_batch_n_ctx = 0;
+
     GraniteSession() = default;
     ~GraniteSession() override;
 };

@@ -31,6 +31,7 @@
 #include "weights.h"
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -62,6 +63,7 @@ static_assert(std::is_base_of_v<transcribe_session, GraniteSession>);
 
 GraniteSession::~GraniteSession() {
     kv.free();
+    kv_batch.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -443,6 +445,110 @@ static const char * granite_target_language_name(const char * code_or_name) {
     return nullptr;
 }
 
+// Build the prompt prefix/suffix token-id lists from the shared run params and
+// model variant (the audio tokens splice in between). Single source of truth
+// for run() and run_batch().
+static transcribe_status build_granite_affixes(
+    GraniteModel *                cm,
+    const transcribe_run_params * params,
+    std::vector<int32_t> &        prefix_ids,
+    std::vector<int32_t> &        suffix_ids)
+{
+    std::string instruction;
+    if (cm->hparams.variant == "granite-speech-4.1-2b") {
+        instruction = "transcribe the speech with proper punctuation and capitalization.";
+    } else if (cm->hparams.variant == "granite-speech-4.1-2b-plus") {
+        instruction = " can you transcribe the speech into a written format?";
+    } else {
+        instruction = "can you transcribe the speech into a written format?";
+    }
+    if (params != nullptr) {
+        if (params->task == TRANSCRIBE_TASK_TRANSLATE) {
+            if (params->target_language == nullptr ||
+                params->target_language[0] == '\0') {
+                std::fprintf(stderr,
+                             "granite: translate task requires --target-language\n");
+                return TRANSCRIBE_ERR_INVALID_ARG;
+            }
+            const char * lang_name =
+                granite_target_language_name(params->target_language);
+            if (lang_name == nullptr) {
+                std::fprintf(stderr,
+                             "granite: target_language '%s' is not advertised\n",
+                             params->target_language);
+                return TRANSCRIBE_ERR_INVALID_ARG;
+            }
+            instruction = std::string("can you translate the speech into ")
+                        + lang_name + "?";
+        } else if (params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD ||
+                   params->timestamps == TRANSCRIBE_TIMESTAMPS_AUTO) {
+            instruction = "transcribe the speech with timestamps in [SS:MS] format";
+        }
+    }
+
+    const bool use_granite4_chat =
+        cm->chat_template.find("<|start_of_role|>") != std::string::npos
+        && cm->chat_tokens.start_of_role >= 0
+        && cm->chat_tokens.end_of_role >= 0;
+    if (use_granite4_chat) {
+        const char * system_content =
+            (cm->hparams.variant == "granite-speech-4.1-2b-plus")
+                ? "Knowledge Cutoff Date: April 2024.\n"
+                  "Today's Date: December 19, 2024.\n"
+                  "You are Granite, developed by IBM. You are a helpful AI assistant"
+                : "You are a helpful assistant. Please ensure responses "
+                  "are professional, accurate, and safe.";
+        std::vector<int32_t> text_a, text_b;
+        if (const transcribe_status st = cm->tok.encode("system", text_a);
+            st != TRANSCRIBE_OK) return st;
+        if (const transcribe_status st = cm->tok.encode(system_content, text_b);
+            st != TRANSCRIBE_OK) return st;
+        prefix_ids.push_back(cm->chat_tokens.start_of_role);
+        prefix_ids.insert(prefix_ids.end(), text_a.begin(), text_a.end());
+        prefix_ids.push_back(cm->chat_tokens.end_of_role);
+        prefix_ids.insert(prefix_ids.end(), text_b.begin(), text_b.end());
+        prefix_ids.push_back(cm->chat_tokens.end_of_text);
+
+        std::vector<int32_t> nl_ids, user_ids;
+        if (const transcribe_status st = cm->tok.encode("\n", nl_ids);
+            st != TRANSCRIBE_OK) return st;
+        if (const transcribe_status st = cm->tok.encode("user", user_ids);
+            st != TRANSCRIBE_OK) return st;
+        prefix_ids.insert(prefix_ids.end(), nl_ids.begin(), nl_ids.end());
+        prefix_ids.push_back(cm->chat_tokens.start_of_role);
+        prefix_ids.insert(prefix_ids.end(), user_ids.begin(), user_ids.end());
+        prefix_ids.push_back(cm->chat_tokens.end_of_role);
+
+        if (const transcribe_status st = cm->tok.encode(instruction, suffix_ids);
+            st != TRANSCRIBE_OK) return st;
+        suffix_ids.push_back(cm->chat_tokens.end_of_text);
+        std::vector<int32_t> nl_ids2;
+        if (const transcribe_status st = cm->tok.encode("\n", nl_ids2);
+            st != TRANSCRIBE_OK) return st;
+        suffix_ids.insert(suffix_ids.end(), nl_ids2.begin(), nl_ids2.end());
+        suffix_ids.push_back(cm->chat_tokens.start_of_role);
+        std::vector<int32_t> asst_ids;
+        if (const transcribe_status st = cm->tok.encode("assistant", asst_ids);
+            st != TRANSCRIBE_OK) return st;
+        suffix_ids.insert(suffix_ids.end(), asst_ids.begin(), asst_ids.end());
+        suffix_ids.push_back(cm->chat_tokens.end_of_role);
+    } else {
+        const std::string prefix_text = "USER: ";
+        const std::string suffix_text = instruction + "\n ASSISTANT:";
+        if (const transcribe_status st = cm->tok.encode(prefix_text, prefix_ids);
+            st != TRANSCRIBE_OK) {
+            std::fprintf(stderr, "granite: tokenize(prefix) failed\n");
+            return st;
+        }
+        if (const transcribe_status st = cm->tok.encode(suffix_text, suffix_ids);
+            st != TRANSCRIBE_OK) {
+            std::fprintf(stderr, "granite: tokenize(suffix) failed\n");
+            return st;
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
 transcribe_status run(
     transcribe_session *      ctx_base,
     const float *             pcm,
@@ -738,141 +844,12 @@ transcribe_status run(
     //                                       fall back to plain transcript, which Stage-4 Capability
     //                                       Validation records as SKIP rather than PASS)
     //   translate task                   : "can you translate the speech into <Language>?"
-    std::string instruction;
-    if (cm->hparams.variant == "granite-speech-4.1-2b") {
-        instruction = "transcribe the speech with proper punctuation and capitalization.";
-    } else if (cm->hparams.variant == "granite-speech-4.1-2b-plus") {
-        instruction = " can you transcribe the speech into a written format?";
-    } else {
-        // granite-4.0-1b-speech and any future variant default to the
-        // 1b prompt unless we add a per-variant override above.
-        instruction = "can you transcribe the speech into a written format?";
-    }
-    bool want_timestamps = false;
-    if (params != nullptr) {
-        if (params->task == TRANSCRIBE_TASK_TRANSLATE) {
-            if (params->target_language == nullptr ||
-                params->target_language[0] == '\0')
-            {
-                std::fprintf(stderr,
-                             "granite run: translate task requires --target-language\n");
-                return TRANSCRIBE_ERR_INVALID_ARG;
-            }
-            const char * lang_name =
-                granite_target_language_name(params->target_language);
-            if (lang_name == nullptr) {
-                std::fprintf(stderr,
-                             "granite run: target_language '%s' is not advertised "
-                             "by granite-speech (supported: de fr es pt ja en)\n",
-                             params->target_language);
-                return TRANSCRIBE_ERR_INVALID_ARG;
-            }
-            instruction = std::string("can you translate the speech into ")
-                        + lang_name + "?";
-        } else if (params->timestamps == TRANSCRIBE_TIMESTAMPS_WORD ||
-                   params->timestamps == TRANSCRIBE_TIMESTAMPS_AUTO)
-        {
-            instruction = "transcribe the speech with timestamps in [SS:MS] format";
-            want_timestamps = true;
-        }
-    }
-    (void)want_timestamps;  // reserved for future per-word segment emission
-
     std::vector<int32_t> prefix_ids;
     std::vector<int32_t> suffix_ids;
-    // The granite-4 system-role template is identified by the chat
-    // template KV containing "<|start_of_role|>". 1b / 2b vocabs DO
-    // carry the start_of_role / end_of_role added tokens (their ids are
-    // resolvable via tok.find), but their chat template is the bare
-    // USER:/ASSISTANT: Jinja, so token presence alone is not a usable
-    // selector.
-    const bool use_granite4_chat =
-        cm->chat_template.find("<|start_of_role|>") != std::string::npos
-        && cm->chat_tokens.start_of_role >= 0
-        && cm->chat_tokens.end_of_role >= 0;
-    if (use_granite4_chat) {
-        // prefix:
-        //   <|start_of_role|> system <|end_of_role|>
-        //   {system_content}
-        //   <|end_of_text|> \n <|start_of_role|> user <|end_of_role|>
-        //   <|audio|>...
-        // We assemble token ids manually so the special pieces are
-        // exact, not BPE'd.
-        //
-        // Per-variant system content (the granite-speech-4.1-2b-plus
-        // model card publishes the Granite-style system prompt below;
-        // future granite4-chat variants would slot in here):
-        const char * system_content =
-            (cm->hparams.variant == "granite-speech-4.1-2b-plus")
-                ? "Knowledge Cutoff Date: April 2024.\n"
-                  "Today's Date: December 19, 2024.\n"
-                  "You are Granite, developed by IBM. You are a helpful AI assistant"
-                : "You are a helpful assistant. Please ensure responses "
-                  "are professional, accurate, and safe.";
-        std::vector<int32_t> text_a, text_b;
-        if (const transcribe_status st = cm->tok.encode("system", text_a);
-            st != TRANSCRIBE_OK) return st;
-        if (const transcribe_status st = cm->tok.encode(system_content, text_b);
-            st != TRANSCRIBE_OK) return st;
-        prefix_ids.push_back(cm->chat_tokens.start_of_role);
-        prefix_ids.insert(prefix_ids.end(), text_a.begin(), text_a.end());
-        prefix_ids.push_back(cm->chat_tokens.end_of_role);
-        prefix_ids.insert(prefix_ids.end(), text_b.begin(), text_b.end());
-        prefix_ids.push_back(cm->chat_tokens.end_of_text);
-
-        std::vector<int32_t> nl_ids, user_ids;
-        if (const transcribe_status st = cm->tok.encode("\n", nl_ids);
-            st != TRANSCRIBE_OK) return st;
-        if (const transcribe_status st = cm->tok.encode("user", user_ids);
-            st != TRANSCRIBE_OK) return st;
-        prefix_ids.insert(prefix_ids.end(), nl_ids.begin(), nl_ids.end());
-        prefix_ids.push_back(cm->chat_tokens.start_of_role);
-        prefix_ids.insert(prefix_ids.end(), user_ids.begin(), user_ids.end());
-        prefix_ids.push_back(cm->chat_tokens.end_of_role);
-        // (audio tokens emit between prefix and suffix.)
-
-        // suffix:  {instruction} <|end_of_text|> \n
-        //          <|start_of_role|> assistant <|end_of_role|>
-        // The trailing assistant-role marker is equivalent to HF's
-        // `add_generation_prompt=True`. We deliberately diverge from the
-        // Stage-2 dumper (which used False to match a literal
-        // apply_chat_template call) because the model otherwise emits
-        // immediate <|end_of_text|> on short / ambiguous clips (27/512
-        // empties on test-clean with False, 0 with True). The Stage-4
-        // tensor dumps were captured WITHOUT this marker — see
-        // tests/tolerances/granite.json _comment for the regime note —
-        // but production transcription uses it because it is the
-        // user-visible chat protocol the model was trained on.
-        if (const transcribe_status st = cm->tok.encode(instruction, suffix_ids);
-            st != TRANSCRIBE_OK) return st;
-        suffix_ids.push_back(cm->chat_tokens.end_of_text);
-        std::vector<int32_t> nl_ids2;
-        if (const transcribe_status st = cm->tok.encode("\n", nl_ids2);
-            st != TRANSCRIBE_OK) return st;
-        suffix_ids.insert(suffix_ids.end(), nl_ids2.begin(), nl_ids2.end());
-        suffix_ids.push_back(cm->chat_tokens.start_of_role);
-        std::vector<int32_t> asst_ids;
-        if (const transcribe_status st = cm->tok.encode("assistant", asst_ids);
-            st != TRANSCRIBE_OK) return st;
-        suffix_ids.insert(suffix_ids.end(), asst_ids.begin(), asst_ids.end());
-        suffix_ids.push_back(cm->chat_tokens.end_of_role);
-    } else {
-        // bare USER:/ASSISTANT: template (1b / 2b).
-        const std::string prefix_text = "USER: ";
-        const std::string suffix_text =
-            instruction + "\n ASSISTANT:";
-        if (const transcribe_status st = cm->tok.encode(prefix_text, prefix_ids);
-            st != TRANSCRIBE_OK)
-        {
-            std::fprintf(stderr, "granite run: tokenize(prefix) failed\n");
-            return st;
-        }
-        if (const transcribe_status st = cm->tok.encode(suffix_text, suffix_ids);
-            st != TRANSCRIBE_OK)
-        {
-            std::fprintf(stderr, "granite run: tokenize(suffix) failed\n");
-            return st;
-        }
+    if (const transcribe_status st =
+            build_granite_affixes(cm, params, prefix_ids, suffix_ids);
+        st != TRANSCRIBE_OK) {
+        return st;
     }
 
     const int n_audio_tokens = cc->n_audio_tokens;
@@ -1136,14 +1113,439 @@ transcribe_status run(
     return TRANSCRIBE_OK;
 }
 
+// ===========================================================================
+// Offline batched decode (transcribe_run_batch)
+// ===========================================================================
+// Serial mel + Conformer encoder + Q-Former projector per utterance produce
+// each one's audio embedding [hidden, n_audio_tokens]; then prefill + step are
+// batched via granite's batched block builders. Same recipe as the qwen3_lm
+// families, with Granite-specific block math.
+
+transcribe_status reset_ctx_g(GraniteSession * cc, int mb) {
+    if (cc->compute_ctx != nullptr) {
+        ggml_free(cc->compute_ctx);
+        cc->compute_ctx = nullptr;
+    }
+    ggml_init_params ip {};
+    ip.mem_size   = static_cast<size_t>(mb) * 1024 * 1024;
+    ip.mem_buffer = nullptr;
+    ip.no_alloc   = true;
+    cc->compute_ctx = ggml_init(ip);
+    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_GGUF;
+}
+
+void apply_threads_g(GraniteSession * cc) {
+    int n_threads = cc->n_threads;
+    if (n_threads <= 0)
+        n_threads = std::min(8, std::max(1, static_cast<int>(
+            std::thread::hardware_concurrency())));
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(cc->sched); ++i) {
+        ggml_backend_t be  = ggml_backend_sched_get_backend(cc->sched, i);
+        ggml_backend_dev_t dev = ggml_backend_get_device(be);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+        if (reg == nullptr) continue;
+        auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+        if (fn != nullptr) fn(be, n_threads);
+    }
+}
+
+// encoder + projector for one utterance from a PRECOMPUTED mel buffer (the
+// mel+2-frame-stack is computed in parallel by the caller) → [hidden, n_audio].
+//
+// NOTE: the encoder is run PER-UTTERANCE (serial) deliberately. The 2B
+// conformer is compute-bound — the time axis (T_enc) already amortizes the
+// weight reads and the matmuls saturate the GPU — so a batched single-graph
+// encoder is a measured wash on BOTH Metal and L40S (wall time identical
+// batched vs serial; encoder compute flat across batch sizes), and for
+// mixed-length batches it is strictly worse (it pads every utterance to the
+// longest). See docs/batching-autoregressive-plan.md. Only the latency-bound
+// decode (M=1) and the host-side mel benefit from batching/threading.
+transcribe_status encode_one(
+    GraniteSession * cc, GraniteModel * cm,
+    const std::vector<float> & mel_buf, int t_enc,
+    std::vector<float> & audio_out, int & n_audio_out,
+    int64_t & enc_us) {
+    const auto & hp = cm->hparams;
+    if (t_enc <= 0) return TRANSCRIBE_ERR_GGUF;
+
+    if (reset_ctx_g(cc, 32) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp,
+                                          t_enc, cc->encoder_use_flash);
+    if (eb.graph == nullptr || eb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+    if (cc->sched == nullptr) {
+        cc->sched = ggml_backend_sched_new(
+            cm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(cm->plan.scheduler_list.size()),
+            32768, false, true);
+        if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+
+    ggml_backend_tensor_set(eb.mel_in, mel_buf.data(), 0,
+                            mel_buf.size() * sizeof(float));
+    std::vector<int32_t> dists = precompute_attention_dists(
+        hp.enc_context_size, hp.enc_max_pos_emb);
+    ggml_backend_tensor_set(eb.attention_dists, dists.data(), 0,
+                            dists.size() * sizeof(int32_t));
+    {
+        const int ctx_size = hp.enc_context_size;
+        const size_t plane = static_cast<size_t>(ctx_size) * ctx_size;
+        std::vector<float> mask(plane * eb.n_blocks_local, 0.0f);
+        const int rem = eb.last_block_rem;
+        if (rem > 0 && rem < ctx_size) {
+            std::vector<float> last = precompute_last_block_mask(ctx_size, rem);
+            std::memcpy(mask.data() + plane * (eb.n_blocks_local - 1),
+                        last.data(), plane * sizeof(float));
+        }
+        ggml_backend_tensor_set(eb.last_block_mask, mask.data(), 0,
+                                mask.size() * sizeof(float));
+    }
+    if (eb.zero_pad != nullptr) {
+        const size_t n_elems = static_cast<size_t>(eb.zero_pad->ne[0]) *
+                               eb.zero_pad->ne[1];
+        std::vector<float> zeros(n_elems, 0.0f);
+        ggml_backend_tensor_set(eb.zero_pad, zeros.data(), 0,
+                                zeros.size() * sizeof(float));
+    }
+    apply_threads_g(cc);
+
+    const int64_t t_enc0 = ggml_time_us();
+    if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS)
+        return TRANSCRIBE_ERR_GGUF;
+    enc_us += ggml_time_us() - t_enc0;
+
+    const int64_t enc_hidden = eb.out->ne[0];
+    const int64_t enc_T      = eb.out->ne[1];
+    std::vector<float> enc_host(static_cast<size_t>(enc_hidden) * enc_T);
+    ggml_backend_tensor_get(eb.out, enc_host.data(), 0,
+                            enc_host.size() * sizeof(float));
+
+    ggml_context * proj_ctx = nullptr;
+    { ggml_init_params ip {}; ip.mem_size = 16 * 1024 * 1024; ip.no_alloc = true;
+      proj_ctx = ggml_init(ip); if (proj_ctx == nullptr) return TRANSCRIBE_ERR_GGUF; }
+    ProjectorBuild pb = build_projector_graph(proj_ctx, cm->weights, hp,
+                                              static_cast<int>(enc_T));
+    if (pb.graph == nullptr || pb.out == nullptr) { ggml_free(proj_ctx); return TRANSCRIBE_ERR_GGUF; }
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) { ggml_free(proj_ctx); return TRANSCRIBE_ERR_GGUF; }
+    ggml_backend_tensor_set(pb.enc_in, enc_host.data(), 0, enc_host.size() * sizeof(float));
+    if (pb.enc_pad != nullptr) {
+        const size_t n = static_cast<size_t>(pb.enc_pad->ne[0]) * pb.enc_pad->ne[1];
+        std::vector<float> pad(n, 0.0f);
+        ggml_backend_tensor_set(pb.enc_pad, pad.data(), 0, n * sizeof(float));
+    }
+    const int64_t t_enc1 = ggml_time_us();
+    if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
+        ggml_free(proj_ctx); return TRANSCRIBE_ERR_GGUF;
+    }
+    enc_us += ggml_time_us() - t_enc1;
+    n_audio_out = pb.n_audio_tokens;
+    audio_out.resize(static_cast<size_t>(pb.out->ne[0]) * pb.out->ne[1]);
+    ggml_backend_tensor_get(pb.out, audio_out.data(), 0, audio_out.size() * sizeof(float));
+    ggml_free(proj_ctx);
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status run(transcribe_session *, const float *, int,
+                      const transcribe_run_params *);
+
+transcribe_status run_batch_serial(GraniteSession * cc,
+                                   const float * const * pcm,
+                                   const int * n_samples, int n,
+                                   const transcribe_run_params * params) {
+    for (int i = 0; i < n; ++i) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        const transcribe_status st =
+            (pcm[i] == nullptr || n_samples[i] <= 0)
+                ? TRANSCRIBE_ERR_INVALID_ARG
+                : run(cc, pcm[i], n_samples[i], params);
+        if (st == TRANSCRIBE_OK) cc->batch_results.push_back(cc->capture_result(st));
+        else {
+            transcribe_session::ResultSet rs; rs.status = st;
+            cc->batch_results.push_back(std::move(rs));
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
 } // namespace
+
+transcribe_status run_batch(
+    transcribe_session *          session,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params) {
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0)
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    auto * cc = static_cast<GraniteSession *>(session);
+    auto * cm = static_cast<GraniteModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty() || !cm->mel.has_value())
+        return TRANSCRIBE_ERR_INVALID_ARG;
+
+    if (!cc->decoder_use_flash || transcribe::debug::enabled() || n == 1)
+        return run_batch_serial(cc, pcm, n_samples, n, params);
+
+    transcribe::debug::init();
+    const auto & hp = cm->hparams;
+
+    // Shared prompt affixes (one run_params across the batch).
+    std::vector<int32_t> prefix_ids, suffix_ids;
+    if (build_granite_affixes(cm, params, prefix_ids, suffix_ids) != TRANSCRIBE_OK)
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    const int prefix_len = static_cast<int>(prefix_ids.size());
+
+    // ---- Pass 1: per-utterance mel + encoder + projector (serial) ----
+    std::vector<char> valid(n, 0);
+    std::vector<std::vector<float>> audio_hosts(n);
+    std::vector<int> n_audio(n, 0);
+    std::vector<std::vector<int32_t>> prompt_ids(n);
+    std::vector<int> T_prompt(n, 0);
+    int64_t mel_us = 0, enc_us = 0;
+
+    // ---- Pass 0: parallel mel + 2-frame stack (host-side, thread-safe) ----
+    std::vector<std::vector<float>> mel_bufs(n);
+    std::vector<int> mel_t_enc(n, 0);
+    int n_mel_threads = cc->n_threads;
+    if (n_mel_threads <= 0)
+        n_mel_threads = std::min(8, std::max(1, static_cast<int>(
+            std::thread::hardware_concurrency())));
+    const int64_t t_mel0 = ggml_time_us();
+    transcribe::parallel_for_all(n, n_mel_threads, [&](int b) {
+        if (pcm[b] == nullptr || n_samples[b] <= 0) return true;
+        int t = 0;
+        if (compute_mel_encoder_input(*cm->mel, pcm[b], n_samples[b],
+                                      /*n_threads=*/1, mel_bufs[b], t) == TRANSCRIBE_OK)
+            mel_t_enc[b] = t;
+        return true;
+    });
+    mel_us += ggml_time_us() - t_mel0;
+
+    // ---- Pass 1: per-utterance encoder + projector (serial) ----
+    // The conformer encoder is compute-bound (see encode_one's note): a
+    // batched single-graph encoder is a wash on Metal AND L40S (wall
+    // identical) and regresses on mixed-length batches, so it is NOT
+    // batched. Only the mel (Pass 0) is parallelized; the decode (prefill +
+    // step loop) is batched below.
+    for (int b = 0; b < n; ++b) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        if (mel_t_enc[b] <= 0) continue;
+        if (encode_one(cc, cm, mel_bufs[b], mel_t_enc[b],
+                       audio_hosts[b], n_audio[b], enc_us) != TRANSCRIBE_OK)
+            continue;
+        if (n_audio[b] <= 0) continue;
+        prompt_ids[b] = prefix_ids;
+        for (int i = 0; i < n_audio[b]; ++i) prompt_ids[b].push_back(0);  // placeholder
+        prompt_ids[b].insert(prompt_ids[b].end(), suffix_ids.begin(), suffix_ids.end());
+        T_prompt[b] = static_cast<int>(prompt_ids[b].size());
+        valid[b] = 1;
+    }
+
+    int max_T_prompt = 0, n_audio_max = 0;
+    for (int b = 0; b < n; ++b) if (valid[b]) {
+        max_T_prompt = std::max(max_T_prompt, T_prompt[b]);
+        n_audio_max  = std::max(n_audio_max, n_audio[b]);
+    }
+    if (max_T_prompt == 0) {
+        for (int b = 0; b < n; ++b) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+        }
+        return TRANSCRIBE_OK;
+    }
+    n_audio_max = std::max(1, n_audio_max);
+    const int max_new = 256;
+    int max_n_kv = 1024;
+    while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
+
+    // ---- Allocate batched KV cache ----
+    ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
+                      ? GGML_TYPE_F32 : GGML_TYPE_F16;
+    if (cc->kv_batch.self_k == nullptr ||
+        cc->kv_batch_cap != n || cc->kv_batch_n_ctx != max_n_kv) {
+        cc->kv_batch.free();
+        if (!transcribe::qwen3_lm::kv_init_batched(
+                cc->kv_batch, cm->plan.primary, max_n_kv,
+                hp.dec_n_kv_heads, hp.dec_head_dim, hp.dec_n_layers, n, kv_type)) {
+            std::fprintf(stderr, "granite run_batch: kv_init_batched failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        cc->kv_batch_cap = n; cc->kv_batch_n_ctx = max_n_kv;
+    } else if (cc->kv_batch.buffer != nullptr) {
+        ggml_backend_buffer_clear(cc->kv_batch.buffer, 0);
+    }
+
+    // ---- Pass 2: batched prefill ----
+    std::vector<int32_t> next_tok(n, 0);
+    std::vector<int> n_past(n, 0);
+    std::vector<std::vector<int32_t>> generated(n);
+    const int64_t t_pref0 = ggml_time_us();
+    {
+        if (reset_ctx_g(cc, 64) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+        PrefillBuildBatched pb = build_prefill_graph_batched(
+            cc->compute_ctx, cm->weights, hp, cc->kv_batch,
+            max_T_prompt, n_audio_max, n, cc->decoder_use_flash);
+        if (pb.graph == nullptr || pb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) return TRANSCRIBE_ERR_GGUF;
+
+        const int hidden = hp.dec_hidden;
+        std::vector<int32_t> ids(static_cast<size_t>(max_T_prompt) * n, 0);
+        std::vector<float> aud(static_cast<size_t>(hidden) * n_audio_max * n, 0.0f);
+        std::vector<int64_t> aidx(static_cast<size_t>(n_audio_max) * n, 0);
+        std::vector<int64_t> kidx(static_cast<size_t>(max_T_prompt) * n);
+        std::vector<int32_t> lidx(n, 0);
+        for (int b = 0; b < n; ++b) {
+            const int na = valid[b] ? n_audio[b] : 0;
+            const int tp = valid[b] ? T_prompt[b] : 0;
+            if (valid[b]) {
+                std::memcpy(ids.data() + static_cast<size_t>(b) * max_T_prompt,
+                            prompt_ids[b].data(), static_cast<size_t>(tp) * sizeof(int32_t));
+                std::memcpy(aud.data() + static_cast<size_t>(b) * n_audio_max * hidden,
+                            audio_hosts[b].data(),
+                            static_cast<size_t>(na) * hidden * sizeof(float));
+            }
+            for (int j = 0; j < n_audio_max; ++j)
+                aidx[static_cast<size_t>(b) * n_audio_max + j] =
+                    (j < na) ? (prefix_len + j) : (tp + j - na);
+            for (int t = 0; t < max_T_prompt; ++t)
+                kidx[static_cast<size_t>(b) * max_T_prompt + t] = t;
+            lidx[b] = valid[b] ? (tp - 1) : 0;
+        }
+        ggml_backend_tensor_set(pb.input_ids_in, ids.data(), 0, ids.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.audio_feats_in, aud.data(), 0, aud.size() * sizeof(float));
+        ggml_backend_tensor_set(pb.audio_idx_in, aidx.data(), 0, aidx.size() * sizeof(int64_t));
+        {
+            std::vector<int32_t> pos(max_T_prompt);
+            for (int t = 0; t < max_T_prompt; ++t) pos[t] = t;
+            ggml_backend_tensor_set(pb.positions_in, pos.data(), 0, pos.size() * sizeof(int32_t));
+        }
+        {
+            const uint16_t f16_zero = 0x0000, f16_ninf = 0xFC00;
+            std::vector<uint16_t> mask(static_cast<size_t>(max_T_prompt) * max_T_prompt, f16_zero);
+            for (int q = 0; q < max_T_prompt; ++q)
+                for (int k = q + 1; k < max_T_prompt; ++k)
+                    mask[static_cast<size_t>(q) * max_T_prompt + k] = f16_ninf;
+            ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(uint16_t));
+        }
+        ggml_backend_tensor_set(pb.kv_idx_in, kidx.data(), 0, kidx.size() * sizeof(int64_t));
+        ggml_backend_tensor_set(pb.last_idx_in, lidx.data(), 0, lidx.size() * sizeof(int32_t));
+        apply_threads_g(cc);
+        if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        std::vector<int32_t> amax(n, 0);
+        ggml_backend_tensor_get(pb.out, amax.data(), 0, amax.size() * sizeof(int32_t));
+        for (int b = 0; b < n; ++b) {
+            if (!valid[b]) continue;
+            n_past[b] = T_prompt[b]; next_tok[b] = amax[b];
+            generated[b].push_back(amax[b]);
+        }
+    }
+
+    const int64_t prefill_us = ggml_time_us() - t_pref0;
+
+    // ---- Pass 3: batched step loop ----
+    const int32_t eos_id = cm->hparams.eos_token_id;
+    std::vector<char> finished(n, 1);
+    for (int b = 0; b < n; ++b) if (valid[b]) finished[b] = (next_tok[b] == eos_id);
+
+    if (reset_ctx_g(cc, 32) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+    StepBuildBatched sb = build_step_graph_batched(
+        cc->compute_ctx, cm->weights, hp, cc->kv_batch, max_n_kv, n,
+        cc->decoder_use_flash);
+    if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
+
+    std::vector<int32_t> ids_buf(n, 0), pos_buf(n, 0), out_buf(n, 0);
+    std::vector<int64_t> kvidx_buf(n, 0);
+    const uint16_t f16_zero = 0x0000, f16_ninf = 0xFC00;
+    std::vector<uint16_t> mask_buf(static_cast<size_t>(max_n_kv) * n, f16_ninf);
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) continue;
+        const size_t base = static_cast<size_t>(b) * max_n_kv;
+        for (int c = 0; c <= n_past[b] && c < max_n_kv; ++c) mask_buf[base + c] = f16_zero;
+    }
+
+    const int64_t t_step0 = ggml_time_us();
+    bool all_done = false;
+    while (!all_done) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        for (int b = 0; b < n; ++b) {
+            ids_buf[b] = next_tok[b]; pos_buf[b] = n_past[b]; kvidx_buf[b] = n_past[b];
+        }
+        ggml_backend_tensor_set(sb.input_ids_in, ids_buf.data(), 0, ids_buf.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(sb.position_in, pos_buf.data(), 0, pos_buf.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(sb.kv_idx_in, kvidx_buf.data(), 0, kvidx_buf.size() * sizeof(int64_t));
+        ggml_backend_tensor_set(sb.mask_in, mask_buf.data(), 0, mask_buf.size() * sizeof(uint16_t));
+        if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_tensor_get(sb.out, out_buf.data(), 0, out_buf.size() * sizeof(int32_t));
+        all_done = true;
+        for (int b = 0; b < n; ++b) {
+            if (finished[b] || !valid[b]) continue;
+            const int32_t tok = out_buf[b];
+            next_tok[b] = tok; generated[b].push_back(tok); n_past[b] += 1;
+            const size_t base = static_cast<size_t>(b) * max_n_kv;
+            if (n_past[b] < max_n_kv) mask_buf[base + n_past[b]] = f16_zero;
+            if (tok == eos_id ||
+                static_cast<int>(generated[b].size()) >= max_new ||
+                n_past[b] + 1 > max_n_kv) finished[b] = 1;
+            else all_done = false;
+        }
+    }
+    const int64_t step_us = ggml_time_us() - t_step0;
+
+    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+        int total_steps = 0;
+        for (int b = 0; b < n; ++b)
+            total_steps = std::max<int>(total_steps, static_cast<int>(generated[b].size()));
+        std::fprintf(stderr,
+            "granite run_batch: n=%d max_n_kv=%d steps=%d max_T_prompt=%d n_audio_max=%d\n"
+            "  mel=%.1fms enc+proj=%.1fms (serial x%d)  prefill=%.1fms (batched)  step_loop=%.1fms (%.2fms/step, batched)\n",
+            n, max_n_kv, total_steps, max_T_prompt, n_audio_max,
+            mel_us / 1000.0, enc_us / 1000.0, n,
+            prefill_us / 1000.0, step_us / 1000.0,
+            total_steps > 0 ? step_us / 1000.0 / total_steps : 0.0);
+    }
+
+    // ---- Capture results ----
+    const int valid_count = std::max(1, static_cast<int>(
+        std::count(valid.begin(), valid.end(), char(1))));
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+            continue;
+        }
+        std::vector<int32_t> gen = generated[b];
+        if (!gen.empty() && gen.back() == eos_id) gen.pop_back();
+        std::string transcript = cm->tok.decode(gen.data(), static_cast<int>(gen.size()));
+        transcribe_session::ResultSet rs;
+        rs.full_text = transcript;
+        rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        rs.has_result = true; rs.status = TRANSCRIBE_OK;
+        transcribe_session::SegmentEntry seg {};
+        seg.text = transcript; seg.t0_ms = 0;
+        seg.t1_ms = static_cast<int64_t>(n_samples[b]) * 1000
+                  / static_cast<int64_t>(hp.fe_sample_rate);
+        rs.segments.push_back(std::move(seg));
+        rs.t_mel_us = mel_us / valid_count;
+        rs.t_encode_us = enc_us / valid_count;
+        rs.t_decode_us = step_us / valid_count;
+        cc->batch_results.push_back(std::move(rs));
+    }
+    return TRANSCRIBE_OK;
+}
 
 extern const Arch arch = {
     /* .name             = */ "granite_speech",
     /* .load             = */ load,
     /* .init_context     = */ init_context,
     /* .run              = */ run,
-    /* .run_batch        = */ nullptr,
+    /* .run_batch        = */ run_batch,
     /* .stream_validate  = */ nullptr,
     /* .stream_begin     = */ nullptr,
     /* .stream_feed      = */ nullptr,

@@ -92,9 +92,74 @@ bool kv_init(KvCache &      cache,
     }
     ggml_backend_buffer_clear(cache.buffer, 0);
 
-    cache.n_ctx = n_ctx;
-    cache.n     = 0;
-    cache.head  = 0;
+    cache.n_ctx   = n_ctx;
+    cache.n       = 0;
+    cache.head    = 0;
+    cache.n_batch = 1;
+    return true;
+}
+
+bool kv_init_batched(KvCache &      cache,
+                     ggml_backend_t backend,
+                     int            n_ctx,
+                     int            n_kv_heads,
+                     int            head_dim,
+                     int            n_layer,
+                     int            n_batch,
+                     ggml_type      kv_type)
+{
+    if (n_batch <= 1) {
+        if (!kv_init(cache, backend, n_ctx, n_kv_heads, head_dim, n_layer,
+                     kv_type)) {
+            return false;
+        }
+        cache.n_batch = 1;
+        return true;
+    }
+    if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
+        std::fprintf(stderr,
+                     "qwen3_lm kv_init_batched: unsupported kv_type=%d\n",
+                     static_cast<int>(kv_type));
+        return false;
+    }
+
+    const size_t ctx_size = 2 * ggml_tensor_overhead() + 256;
+    ggml_init_params params {};
+    params.mem_size   = ctx_size;
+    params.mem_buffer = nullptr;
+    params.no_alloc   = true;
+
+    cache.ctx = ggml_init(params);
+    if (cache.ctx == nullptr) {
+        std::fprintf(stderr, "qwen3_lm kv_init_batched: ggml_init failed\n");
+        return false;
+    }
+
+    // Layout (slowest → fastest): layer, batch, position, head, dim. A
+    // per-(layer,slot) slab is [kv_dim, n_ctx] contiguous, so prefill's 1D
+    // cpy and the step's batched set_rows both address it with a simple
+    // (slot + n_batch*layer)*n_ctx*kv_dim offset.
+    const int64_t elems = static_cast<int64_t>(n_kv_heads) * head_dim *
+                          n_ctx * n_batch * n_layer;
+    cache.self_k = ggml_new_tensor_1d(cache.ctx, kv_type, elems);
+    cache.self_v = ggml_new_tensor_1d(cache.ctx, kv_type, elems);
+    ggml_set_name(cache.self_k, "kv_self_k_batched");
+    ggml_set_name(cache.self_v, "kv_self_v_batched");
+
+    cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
+    if (cache.buffer == nullptr) {
+        std::fprintf(stderr,
+                     "qwen3_lm kv_init_batched: buffer alloc failed\n");
+        ggml_free(cache.ctx);
+        cache.ctx = nullptr;
+        return false;
+    }
+    ggml_backend_buffer_clear(cache.buffer, 0);
+
+    cache.n_ctx   = n_ctx;
+    cache.n       = 0;
+    cache.head    = 0;
+    cache.n_batch = n_batch;
     return true;
 }
 
@@ -165,14 +230,20 @@ ggml_tensor * block_prefill(
     // (fastest→slowest) is D, Hkv, T. Cache stores position-major
     // within each layer (per position, all D·Hkv values contiguous).
     // Same layout — a 1D cpy handles it.
+    // Slab (layer, batch-slot) base offset, in elements. Defaults
+    // (kv_batch_slot=0, kv_n_batch=1) collapse to layer_idx*n_ctx*kv_dim —
+    // byte-identical to the single-shot layout.
+    const size_t slab =
+        static_cast<size_t>(opts.kv_batch_slot) +
+        static_cast<size_t>(opts.kv_n_batch) * static_cast<size_t>(layer_idx);
+    const size_t slab_off = slab * n_ctx * kv_dim;
     {
-        const size_t layer_off = static_cast<size_t>(layer_idx) * n_ctx * kv_dim;
-        const size_t n_elem    = static_cast<size_t>(T_seq) * kv_dim;
+        const size_t n_elem = static_cast<size_t>(T_seq) * kv_dim;
 
         ggml_tensor * k_dst = ggml_view_1d(
-            ctx, kv_cache.self_k, n_elem, k_elem * layer_off);
+            ctx, kv_cache.self_k, n_elem, k_elem * slab_off);
         ggml_tensor * v_dst = ggml_view_1d(
-            ctx, kv_cache.self_v, n_elem, v_elem * layer_off);
+            ctx, kv_cache.self_v, n_elem, v_elem * slab_off);
 
         ggml_build_forward_expand(gf, ggml_cpy(ctx, K, k_dst));
         ggml_build_forward_expand(gf, ggml_cpy(ctx, V, v_dst));
@@ -181,20 +252,18 @@ ggml_tensor * block_prefill(
     // Read K, V back from the cache for attention as strided
     // [D, T_seq, Hkv] views (no permute + cont needed). mul_mat and
     // flash_attn_ext both accept strided inputs.
-    const size_t layer_off_bytes =
-        k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim;
     ggml_tensor * K_att = ggml_view_3d(
         ctx, kv_cache.self_k,
         head_dim, T_seq, n_kv_heads,
         /*nb1=*/k_elem * kv_dim,
         /*nb2=*/k_elem * head_dim,
-        layer_off_bytes);
+        k_elem * slab_off);
     ggml_tensor * V_att = ggml_view_3d(
         ctx, kv_cache.self_v,
         head_dim, T_seq, n_kv_heads,
         v_elem * kv_dim,
         v_elem * head_dim,
-        v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim);
+        v_elem * slab_off);
 
     // Permute Q for attention: [D, H, T_seq, 1] → [D, T_seq, H, 1].
     ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 1, 3));
@@ -399,6 +468,257 @@ ggml_tensor * block_step(
     }
 
     o = ggml_mul_mat(ctx, view.attn_o_w, o);
+    x = ggml_add(ctx, x, o);
+
+    // ---- MLP sub-layer ----
+    ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
+    ggml_tensor * gate_up = ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm);
+    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
+    ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
+
+    x = ggml_add(ctx, x, ff);
+    return x;
+}
+
+// ---------------------------------------------------------------------------
+// Block forward — batched step (B utterances)
+// ---------------------------------------------------------------------------
+
+ggml_tensor * block_step_batched(
+    ggml_context *      ctx,
+    ggml_cgraph *       gf,
+    ggml_tensor *       x,          // [hidden, B]
+    const BlockView &   view,
+    const BlockParams & params,
+    KvCache &           kv_cache,
+    int                 layer_idx,
+    int                 max_n_kv,
+    int                 n_batch,
+    ggml_tensor *       mask,       // [max_n_kv, 1, 1, B] f16
+    ggml_tensor *       position,   // [B] i32
+    ggml_tensor *       kv_idx,     // [1, B] i64
+    bool                use_flash)
+{
+    const int64_t n_heads    = params.n_heads;
+    const int64_t n_kv_heads = params.n_kv_heads;
+    const int64_t head_dim   = params.head_dim;
+    const int64_t q_dim      = n_heads    * head_dim;
+    const int64_t kv_dim     = n_kv_heads * head_dim;
+    const int64_t n_ctx      = kv_cache.n_ctx;
+    const int64_t B          = n_batch;
+    const float   rms_eps    = params.rms_eps;
+    const float   rope_theta = params.rope_theta;
+    const float   scale_attn = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+    const size_t k_elem = ggml_element_size(kv_cache.self_k);
+    const size_t v_elem = ggml_element_size(kv_cache.self_v);
+
+    // ---- Attention sub-layer ----
+    ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
+
+    ggml_tensor * Q = ggml_mul_mat(ctx, view.attn_q_w, x_norm);  // [q_dim, B]
+    ggml_tensor * K = ggml_mul_mat(ctx, view.attn_k_w, x_norm);  // [kv_dim, B]
+    ggml_tensor * V = ggml_mul_mat(ctx, view.attn_v_w, x_norm);  // [kv_dim, B]
+
+    // Batch on ne[2] (the per-token/position axis) so RoPE applies each
+    // utterance's own position. T == 1 per utterance, so ne[2] == B.
+    Q = ggml_reshape_3d(ctx, Q, head_dim, n_heads,    B);
+    K = ggml_reshape_3d(ctx, K, head_dim, n_kv_heads, B);
+    V = ggml_reshape_3d(ctx, V, head_dim, n_kv_heads, B);
+
+    Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
+    K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+
+    // position [B] indexes ne[2]: row b is rotated by position[b].
+    Q = ggml_rope_ext(ctx, Q, position, nullptr,
+                      static_cast<int>(head_dim),
+                      GGML_ROPE_TYPE_NEOX, params.max_position,
+                      rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+    K = ggml_rope_ext(ctx, K, position, nullptr,
+                      static_cast<int>(head_dim),
+                      GGML_ROPE_TYPE_NEOX, params.max_position,
+                      rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+
+    // ---- Batched KV write ----
+    // Per layer the cache slab is [kv_dim, n_ctx, B]; one ggml_set_rows
+    // writes B rows (one per utterance) at B independent indices kv_idx[b].
+    {
+        const size_t layer_off_k =
+            k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+        const size_t layer_off_v =
+            v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+
+        ggml_tensor * k_layer = ggml_view_3d(
+            ctx, kv_cache.self_k, kv_dim, n_ctx, B,
+            k_elem * kv_dim, k_elem * kv_dim * n_ctx, layer_off_k);
+        ggml_tensor * v_layer = ggml_view_3d(
+            ctx, kv_cache.self_v, kv_dim, n_ctx, B,
+            v_elem * kv_dim, v_elem * kv_dim * n_ctx, layer_off_v);
+
+        ggml_tensor * K_row = ggml_reshape_3d(ctx, K, kv_dim, 1, B);
+        ggml_tensor * V_row = ggml_reshape_3d(ctx, V, kv_dim, 1, B);
+
+        ggml_build_forward_expand(
+            gf, ggml_set_rows(ctx, k_layer, K_row, kv_idx));
+        ggml_build_forward_expand(
+            gf, ggml_set_rows(ctx, v_layer, V_row, kv_idx));
+    }
+
+    // ---- Attention read: [head_dim, max_n_kv, n_kv_heads, B] per layer ----
+    const size_t layer_off_bytes_k =
+        k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+    const size_t layer_off_bytes_v =
+        v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+    ggml_tensor * K_att = ggml_view_4d(
+        ctx, kv_cache.self_k, head_dim, max_n_kv, n_kv_heads, B,
+        /*nb1=*/k_elem * kv_dim,
+        /*nb2=*/k_elem * head_dim,
+        /*nb3=*/k_elem * kv_dim * n_ctx,
+        layer_off_bytes_k);
+    ggml_tensor * V_att = ggml_view_4d(
+        ctx, kv_cache.self_v, head_dim, max_n_kv, n_kv_heads, B,
+        v_elem * kv_dim, v_elem * head_dim, v_elem * kv_dim * n_ctx,
+        layer_off_bytes_v);
+
+    // Q for flash: [head_dim, n_heads, B, 1] → [head_dim, 1, n_heads, B].
+    ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 3, 1));
+
+    ggml_tensor * o;
+    if (use_flash) {
+        o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, mask,
+                                scale_attn, /*max_bias=*/0.0f,
+                                /*logit_softcap=*/0.0f);
+        // o = [head_dim, n_heads, 1, B] → [q_dim, B].
+        o = ggml_reshape_2d(ctx, o, q_dim, B);
+    } else {
+        // The manual GQA path is single-shot only; batched decode requires
+        // flash. Callers gate on use_flash and fall back to serial run().
+        std::fprintf(stderr,
+                     "qwen3_lm block_step_batched: non-flash path unsupported\n");
+        return nullptr;
+    }
+
+    o = ggml_mul_mat(ctx, view.attn_o_w, o);  // [hidden, B]
+    x = ggml_add(ctx, x, o);
+
+    // ---- MLP sub-layer ----
+    ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
+    ggml_tensor * gate_up = ggml_mul_mat(ctx, view.ffn_gate_up_w, ff_norm);
+    ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
+    ff = ggml_mul_mat(ctx, view.ffn_down_w, ff);
+
+    x = ggml_add(ctx, x, ff);
+    return x;
+}
+
+// ---------------------------------------------------------------------------
+// Block forward — batched prefill (B utterances, T tokens each)
+// ---------------------------------------------------------------------------
+
+ggml_tensor * block_prefill_batched(
+    ggml_context *      ctx,
+    ggml_cgraph *       gf,
+    ggml_tensor *       x,          // [hidden, T, B]
+    const BlockView &   view,
+    const BlockParams & params,
+    KvCache &           kv_cache,
+    int                 layer_idx,
+    int                 T_seq,
+    int                 n_batch,
+    ggml_tensor *       mask,       // [T_seq, T_seq] f16 causal
+    ggml_tensor *       positions,  // [T_seq] i32
+    ggml_tensor *       kv_idx,     // [T_seq, B] i64
+    bool                use_flash)
+{
+    const int64_t n_heads    = params.n_heads;
+    const int64_t n_kv_heads = params.n_kv_heads;
+    const int64_t head_dim   = params.head_dim;
+    const int64_t q_dim      = n_heads    * head_dim;
+    const int64_t kv_dim     = n_kv_heads * head_dim;
+    const int64_t n_ctx      = kv_cache.n_ctx;
+    const int64_t T          = T_seq;
+    const int64_t B          = n_batch;
+    const float   rms_eps    = params.rms_eps;
+    const float   rope_theta = params.rope_theta;
+    const float   scale_attn = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+    const size_t k_elem = ggml_element_size(kv_cache.self_k);
+    const size_t v_elem = ggml_element_size(kv_cache.self_v);
+
+    // ---- Attention sub-layer ----
+    ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
+
+    ggml_tensor * Q = ggml_mul_mat(ctx, view.attn_q_w, x_norm);  // [q_dim, T, B]
+    ggml_tensor * K = ggml_mul_mat(ctx, view.attn_k_w, x_norm);  // [kv_dim, T, B]
+    ggml_tensor * V = ggml_mul_mat(ctx, view.attn_v_w, x_norm);  // [kv_dim, T, B]
+
+    Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads,    T, B);
+    K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T, B);
+    V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, T, B);
+
+    Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
+    K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+
+    // RoPE position indexes ne[2] (the time axis); shared across heads/batch.
+    Q = ggml_rope_ext(ctx, Q, positions, nullptr, static_cast<int>(head_dim),
+                      GGML_ROPE_TYPE_NEOX, params.max_position,
+                      rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+    K = ggml_rope_ext(ctx, K, positions, nullptr, static_cast<int>(head_dim),
+                      GGML_ROPE_TYPE_NEOX, params.max_position,
+                      rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
+
+    // ---- Batched KV write: each utterance's T rows -> [0, T) of its slab ----
+    {
+        const size_t layer_off_k =
+            k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+        const size_t layer_off_v =
+            v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+        ggml_tensor * k_layer = ggml_view_3d(
+            ctx, kv_cache.self_k, kv_dim, n_ctx, B,
+            k_elem * kv_dim, k_elem * kv_dim * n_ctx, layer_off_k);
+        ggml_tensor * v_layer = ggml_view_3d(
+            ctx, kv_cache.self_v, kv_dim, n_ctx, B,
+            v_elem * kv_dim, v_elem * kv_dim * n_ctx, layer_off_v);
+
+        // K/V are [head_dim, n_kv_heads, T, B]; collapse heads -> [kv_dim, T, B].
+        ggml_tensor * K_rows = ggml_reshape_3d(ctx, K, kv_dim, T, B);
+        ggml_tensor * V_rows = ggml_reshape_3d(ctx, V, kv_dim, T, B);
+
+        ggml_build_forward_expand(
+            gf, ggml_set_rows(ctx, k_layer, K_rows, kv_idx));
+        ggml_build_forward_expand(
+            gf, ggml_set_rows(ctx, v_layer, V_rows, kv_idx));
+    }
+
+    // ---- Attention read: [head_dim, T, n_kv_heads, B] (positions [0, T)) ----
+    const size_t layer_off_bytes_k =
+        k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+    const size_t layer_off_bytes_v =
+        v_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
+    ggml_tensor * K_att = ggml_view_4d(
+        ctx, kv_cache.self_k, head_dim, T, n_kv_heads, B,
+        k_elem * kv_dim, k_elem * head_dim, k_elem * kv_dim * n_ctx,
+        layer_off_bytes_k);
+    ggml_tensor * V_att = ggml_view_4d(
+        ctx, kv_cache.self_v, head_dim, T, n_kv_heads, B,
+        v_elem * kv_dim, v_elem * head_dim, v_elem * kv_dim * n_ctx,
+        layer_off_bytes_v);
+
+    // Q -> [head_dim, T, n_heads, B].
+    ggml_tensor * Q_att = ggml_cont(ctx, ggml_permute(ctx, Q, 0, 2, 1, 3));
+
+    ggml_tensor * o;
+    if (use_flash) {
+        o = ggml_flash_attn_ext(ctx, Q_att, K_att, V_att, mask,
+                                scale_attn, 0.0f, 0.0f);
+        o = ggml_reshape_3d(ctx, o, q_dim, T, B);
+    } else {
+        std::fprintf(stderr,
+                     "qwen3_lm block_prefill_batched: non-flash unsupported\n");
+        return nullptr;
+    }
+
+    o = ggml_mul_mat(ctx, view.attn_o_w, o);  // [hidden, T, B]
     x = ggml_add(ctx, x, o);
 
     // ---- MLP sub-layer ----

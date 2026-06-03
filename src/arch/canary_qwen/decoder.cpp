@@ -355,4 +355,145 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     return sb;
 }
 
+// ---------------------------------------------------------------------------
+// Batched prefill / step (offline transcribe_run_batch)
+// ---------------------------------------------------------------------------
+
+PrefillBuildBatched build_prefill_graph_batched(
+    ggml_context *                  ctx,
+    const CanaryQwenWeights &       weights,
+    const CanaryQwenHParams &       hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             T_prompt_max,
+    int                             T_audio_max,
+    int                             n_batch,
+    bool                            use_flash)
+{
+    PrefillBuildBatched pb {};
+    pb.T_prompt_max = T_prompt_max;
+    pb.T_audio_max  = T_audio_max;
+    pb.n_batch      = n_batch;
+
+    if (ctx == nullptr || T_prompt_max <= 0 || T_audio_max <= 0 ||
+        n_batch <= 0 || !use_flash ||
+        kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
+        T_prompt_max > kv_cache.n_ctx) {
+        std::fprintf(stderr, "canary_qwen prefill(batched): invalid arg\n");
+        return pb;
+    }
+
+    const int64_t hidden  = hp.dec_hidden;
+    const int64_t vocab   = hp.dec_vocab_size;
+    const int     n_layer = hp.dec_n_layers;
+    const float   rms_eps = hp.dec_rms_norm_eps;
+    const int     B       = n_batch;
+    const auto block_params = to_block_params(hp);
+
+    pb.input_ids_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, T_prompt_max, B);
+    ggml_set_input(pb.input_ids_in);
+    pb.audio_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hidden, T_audio_max, B);
+    ggml_set_input(pb.audio_in);
+    pb.audio_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, T_audio_max, B);
+    ggml_set_input(pb.audio_idx_in);
+    pb.positions_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_prompt_max);
+    ggml_set_input(pb.positions_in);
+    pb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, T_prompt_max, T_prompt_max);
+    ggml_set_input(pb.mask_in);
+    pb.kv_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, T_prompt_max, B);
+    ggml_set_input(pb.kv_idx_in);
+    pb.last_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, B);
+    ggml_set_input(pb.last_idx_in);
+
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
+    if (gf == nullptr) return pb;
+    pb.graph = gf;
+
+    ggml_tensor * ids_flat =
+        ggml_reshape_1d(ctx, pb.input_ids_in,
+                        static_cast<int64_t>(T_prompt_max) * B);
+    ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, ids_flat);
+    x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);
+    x = ggml_set_rows(ctx, x, pb.audio_in, pb.audio_idx_in);
+
+    for (int il = 0; il < n_layer; ++il) {
+        x = qwen3_lm::block_prefill_batched(
+            ctx, gf, x, to_block_view(weights.dec_blocks[il]),
+            block_params, kv_cache, il, T_prompt_max, B,
+            pb.mask_in, pb.positions_in, pb.kv_idx_in, use_flash);
+        if (x == nullptr) { pb.graph = nullptr; return pb; }
+    }
+
+    ggml_tensor * x_last = ggml_get_rows(ctx, x, pb.last_idx_in);
+    x_last = ggml_reshape_2d(ctx, x_last, hidden, B);
+    x_last = ggml_mul(ctx, ggml_rms_norm(ctx, x_last, rms_eps),
+                      weights.dec_final.norm_w);
+    ggml_tensor * logits = ggml_mul_mat(ctx, weights.dec_embed.token_w, x_last);
+    logits = ggml_reshape_2d(ctx, logits, vocab, B);
+    pb.logits = logits;
+    pb.out = ggml_argmax(ctx, logits);
+    ggml_set_output(pb.out);
+    ggml_build_forward_expand(gf, pb.out);
+    ggml_build_forward_expand(gf, logits);
+    return pb;
+}
+
+StepBuildBatched build_step_graph_batched(
+    ggml_context *                  ctx,
+    const CanaryQwenWeights &       weights,
+    const CanaryQwenHParams &       hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             max_n_kv,
+    int                             n_batch,
+    bool                            use_flash)
+{
+    StepBuildBatched sb {};
+    sb.max_n_kv = max_n_kv;
+    sb.n_batch  = n_batch;
+    if (ctx == nullptr || max_n_kv <= 0 || n_batch <= 0 || !use_flash ||
+        kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
+        max_n_kv > kv_cache.n_ctx) {
+        std::fprintf(stderr, "canary_qwen step(batched): invalid arg\n");
+        return sb;
+    }
+
+    const int64_t vocab   = hp.dec_vocab_size;
+    const int     n_layer = hp.dec_n_layers;
+    const float   rms_eps = hp.dec_rms_norm_eps;
+    const int     B       = n_batch;
+    const auto block_params = to_block_params(hp);
+
+    sb.input_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, B);
+    ggml_set_input(sb.input_ids_in);
+    sb.position_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, B);
+    ggml_set_input(sb.position_in);
+    sb.kv_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, 1, B);
+    ggml_set_input(sb.kv_idx_in);
+    sb.mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, max_n_kv, 1, 1, B);
+    ggml_set_input(sb.mask_in);
+
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
+    if (gf == nullptr) return sb;
+    sb.graph = gf;
+
+    ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w,
+                                    sb.input_ids_in);  // [hidden, B]
+    for (int il = 0; il < n_layer; ++il) {
+        x = qwen3_lm::block_step_batched(
+            ctx, gf, x, to_block_view(weights.dec_blocks[il]),
+            block_params, kv_cache, il, max_n_kv, B,
+            sb.mask_in, sb.position_in, sb.kv_idx_in, use_flash);
+        if (x == nullptr) { sb.graph = nullptr; return sb; }
+    }
+
+    x = ggml_mul(ctx, ggml_rms_norm(ctx, x, rms_eps), weights.dec_final.norm_w);
+    ggml_tensor * logits = ggml_mul_mat(ctx, weights.dec_embed.token_w, x);
+    logits = ggml_reshape_2d(ctx, logits, vocab, B);
+    sb.logits = logits;
+    sb.out = ggml_argmax(ctx, logits);
+    ggml_set_output(sb.out);
+    ggml_build_forward_expand(gf, sb.out);
+    ggml_build_forward_expand(gf, logits);
+    return sb;
+}
+
 } // namespace transcribe::canary_qwen

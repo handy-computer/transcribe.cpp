@@ -119,6 +119,12 @@ struct QwenAsrSession final : public transcribe_session {
 
     transcribe::qwen3_lm::KvCache kv_cache;
 
+    // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
+    // Allocated/resized lazily by run_batch; freed in the destructor.
+    transcribe::qwen3_lm::KvCache kv_cache_batch;
+    int                           kv_batch_cap   = 0;  // allocated n_batch
+    int                           kv_batch_n_ctx = 0;  // allocated n_ctx
+
     std::vector<float> mel_buf;
     std::vector<float> enc_host;  // audio encoder output, pre-injection
 
