@@ -351,9 +351,25 @@ def main() -> int:
             # Persist it as the first record in the output JSONL, augmented
             # with the run-level language so score.py can auto-route the
             # metric/normalizer without the caller repeating --language.
+            #
+            # Also stamp the decode recipe so every hyp artifact is
+            # self-describing: WER is only comparable across runs when the
+            # recipe matches, and the canonical methodology lives in
+            # docs/tools/wer.md. The library-default knobs not exposed as CLI
+            # flags (temperature ladder 0.0..1.0 step 0.2, compression/logprob/
+            # no-speech thresholds, condition_on_prev=off) are documented there
+            # and recorded here as "decode": "greedy+default-fallback".
             if result.get("type") == "batch_header":
                 if args.language:
                     result["language"] = args.language
+                result["recipe"] = {
+                    "timestamps": args.timestamps,
+                    "language": args.language or "auto-detect",
+                    "batch_size": bs,
+                    "backend": args.backend or "default",
+                    "kv_type": args.kv_type or "default",
+                    "decode": "greedy+default-fallback",
+                }
                 fout.write(json.dumps(result) + "\n")
                 fout.flush()
                 continue

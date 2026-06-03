@@ -430,7 +430,8 @@ def list_ggufs(repos: list[str]) -> list[tuple[str, list[str]]]:
 def _hyp_cache_paths(model_file: str, dataset_spec: str,
                      n_utts: int | None,
                      batch_size: int = 1,
-                     sort_by_length: bool = True) -> tuple[str, str]:
+                     sort_by_length: bool = True,
+                     timestamps: str = "none") -> tuple[str, str]:
     """Deterministic Volume paths for the (model, dataset, subset, batch,
     sort) tuple.
 
@@ -446,8 +447,11 @@ def _hyp_cache_paths(model_file: str, dataset_spec: str,
     subset_tag = "full" if n_utts is None else f"n{n_utts}"
     bs_tag = "" if batch_size <= 1 else f".b{batch_size}"
     sort_tag = "" if sort_by_length else ".nosort"
+    # Default "none" carries no tag so it stays compatible with already-cached
+    # entries; any other timestamp mode gets its own cache slot.
+    ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
     base = (f"/data/wer/hyps/{HYP_FP}/{slug}."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 
@@ -486,6 +490,7 @@ def _run_wer_impl(
     build_dir: str,
     batch_size: int = 1,
     sort_by_length: bool = True,
+    timestamps: str = "none",
 ) -> dict:
     """Run scripts/wer/run.py on `n_utts` (or full manifest) and return the
     hyp JSONL contents + a summary dict back to the dispatcher.
@@ -499,7 +504,7 @@ def _run_wer_impl(
     # Cache lookup first; skips _prepare_work + model download + run.py entirely
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
     cache_hyp, cache_sum = _hyp_cache_paths(
-        model_file, dataset_spec, n_utts, batch_size, sort_by_length)
+        model_file, dataset_spec, n_utts, batch_size, sort_by_length, timestamps)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         print(f"[wer] cache hit: {cache_hyp}")
@@ -560,6 +565,8 @@ def _run_wer_impl(
         cmd += ["--batch-size", str(batch_size)]
         if sort_by_length:
             cmd += ["--sort-by-length"]
+    if timestamps and timestamps != "none":
+        cmd += ["--timestamps", timestamps]
     print(f"[wer] $ {' '.join(cmd)}")
     t0 = time.time()
     rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
@@ -651,6 +658,7 @@ def _register_runner(gpu_id: str):
         batch_size: int = 1,
         sort_by_length: bool = True,
         build_dir: str | None = None,
+        timestamps: str = "none",
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
         # SRC_FP can drift between the laptop and the container, so recomputing
@@ -660,6 +668,7 @@ def _register_runner(gpu_id: str):
             model_repo, model_file, dataset_spec, n_utts,
             build_dir or default_build_dir,
             batch_size=batch_size, sort_by_length=sort_by_length,
+            timestamps=timestamps,
         )
 
     runner.__name__ = name
@@ -716,13 +725,15 @@ def _resolve_model(spec: str) -> tuple[str, list[str] | None]:
 
 
 def _write_hyp(hyp_jsonl: str, model_file: str, dataset_spec: str,
-               batch_size: int | None = None) -> pathlib.Path:
+               batch_size: int | None = None,
+               timestamps: str = "none") -> pathlib.Path:
     out_dir = pathlib.Path(REPO) / "reports" / "wer"
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = model_file.replace(".gguf", "")
     ds = dataset_id(dataset_spec)
     bs_tag = "" if batch_size is None else f".b{batch_size}"
-    out_path = out_dir / f"{slug}.{ds}{bs_tag}.jsonl"
+    ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
+    out_path = out_dir / f"{slug}.{ds}{bs_tag}{ts_tag}.jsonl"
     out_path.write_text(hyp_jsonl)
     return out_path
 
@@ -741,6 +752,7 @@ def sweep(
     clean: bool = False,
     batch_sizes: str = "1",
     sort_by_length: bool = True,
+    timestamps: str = "none",
 ) -> None:
     """Fan WER across one or more models on one GPU class.
 
@@ -819,7 +831,7 @@ def sweep(
     print(f">>> launching {len(cells)} {gpu} containers in parallel...")
     n = None if n_utts < 0 else n_utts
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
-                             c["bs"], sort_by_length, build_dir))
+                             c["bs"], sort_by_length, build_dir, timestamps))
             for c in cells]
 
     rows, failures = [], []
@@ -831,7 +843,8 @@ def sweep(
             # b1 stays untagged (matches the published-run filenames); b>1 is
             # tagged .b{bs} so batched hyps score independently for comparison.
             p = _write_hyp(res["hyp_jsonl"], c["file"], c["dataset"],
-                           batch_size=(bs if bs != 1 else None))
+                           batch_size=(bs if bs != 1 else None),
+                           timestamps=timestamps)
             s = res["summary"]
             rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
                          s["wall_s"], s["rtf_wall"], str(p)))
