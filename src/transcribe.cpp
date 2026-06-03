@@ -1680,9 +1680,9 @@ extern "C" transcribe_status transcribe_run(
     int                              n_samples,
     const struct transcribe_run_params * params)
 {
-    // Single-shot is the n == 1 case of batching. A well-formed single run
-    // resets the batch-result view so the transcribe_batch_* accessors fall
-    // back to reading the scratch slot as utterance 0.
+    // A well-formed single run has the same result view as a one-item batch:
+    // reset batch_results so the transcribe_batch_* accessors fall back to
+    // reading the scratch slot as utterance 0.
     //
     // Guard the deref with the SAME pre-deref conditions run_one_inner uses
     // (non-null session + non-null pcm + positive n_samples). A malformed
@@ -1720,6 +1720,22 @@ transcribe_session::ResultSet snapshot_scratch_result(
     rs.has_result        = s->has_result;
     rs.status            = status;
     return rs;
+}
+
+// Pad batch_results out to `n` entries with explicit aborted failures.
+// Called only on an aborted batch: retained results keep their real ResultSet;
+// synthesized slots carry TRANSCRIBE_ERR_ABORTED, meaning "did not complete
+// because the batch was aborted" (NOT that the utterance itself reached an
+// abort checkpoint). This is what gives the result-set view one slot per input
+// utterance — transcribe_batch_n_results() == n — after an ABORTED return,
+// keeping the index->input mapping uniform across families and across the fast
+// path vs the serial fallback.
+void pad_batch_results_aborted(transcribe_session * s, int n) {
+    while (s->batch_results.size() < static_cast<size_t>(n)) {
+        transcribe_session::ResultSet rs;
+        rs.status = TRANSCRIBE_ERR_ABORTED;
+        s->batch_results.push_back(std::move(rs));
+    }
 }
 
 // Restore the scratch slot from a ResultSet so the legacy single-result
@@ -1825,6 +1841,11 @@ extern "C" transcribe_status transcribe_run_batch(
     if (session->model->arch->run_batch != nullptr) {
         const transcribe_status st =
             session->model->arch->run_batch(session, pcm, n_samples, n, params);
+        // On abort the hook may retain only completed results; synthesize any
+        // missing slots so the result-set view always exposes n entries.
+        if (st == TRANSCRIBE_ERR_ABORTED) {
+            pad_batch_results_aborted(session, n);
+        }
         // Keep the legacy single accessors coherent with utterance 0.
         if (!session->batch_results.empty()) {
             restore_scratch_from_result(session, session->batch_results.front());
@@ -1862,6 +1883,13 @@ extern "C" transcribe_status transcribe_run_batch(
                 break;
             }
         }
+    }
+
+    // On abort the loop can break early, leaving fewer than n entries;
+    // synthesize any missing slots so the result-set view always exposes n
+    // entries (same invariant the fast path holds).
+    if (batch_status == TRANSCRIBE_ERR_ABORTED) {
+        pad_batch_results_aborted(session, n);
     }
 
     // Restore the scratch slot to mirror utterance 0 for the legacy
@@ -2225,10 +2253,10 @@ extern "C" transcribe_status transcribe_get_token(
 // ---------------------------------------------------------------------------
 //
 // These index session->batch_results when a batch run populated it, and
-// otherwise synthesize utterance 0 from the scratch slot so a single
-// transcribe_run is the n == 1 case. The copy-out row accessors share the
-// same staging shape as the single-result accessors above; only the source
-// vector differs (batch ResultSet rows vs the scratch slot).
+// otherwise synthesize utterance 0 from the scratch slot after transcribe_run.
+// The copy-out row accessors share the same staging shape as the single-result
+// accessors above; only the source vector differs (batch ResultSet rows vs the
+// scratch slot).
 
 namespace {
 

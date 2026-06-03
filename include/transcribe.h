@@ -1003,7 +1003,14 @@ TRANSCRIBE_API transcribe_status transcribe_run(
  * every model accepts this call; only the speedup is family-dependent.
  *
  * This is the offline counterpart to transcribe_run; it is NOT a streaming
- * primitive. transcribe_run is exactly the n == 1 case.
+ * primitive. For a well-formed single utterance it is equivalent to
+ * transcribe_run with n == 1, but the two are NOT exactly equivalent for
+ * malformed input: transcribe_run(NULL pcm / n_samples <= 0) fails top-level
+ * with TRANSCRIBE_ERR_INVALID_ARG and leaves the previous result untouched,
+ * whereas a malformed single utterance inside a batch (with valid top-level
+ * args) is a per-utterance failure — the call returns TRANSCRIBE_OK,
+ * transcribe_batch_status(session, 0) carries the INVALID_ARG, and the
+ * previous result has already been replaced by the (failed) batch.
  *
  *   session:    a session in a non-ACTIVE-stream state. As with
  *               transcribe_run, a session is single-threaded: do not call
@@ -1044,9 +1051,19 @@ TRANSCRIBE_API transcribe_status transcribe_run(
  *       (TRANSCRIBE_ERR_UNSUPPORTED_TASK / _TIMESTAMPS / _LANGUAGE), which
  *       apply to the whole batch and are reported before any utterance
  *       runs (the previous result snapshot is preserved on these).
- *   TRANSCRIBE_ERR_ABORTED         the abort callback fired; utterances
- *                                  completed before the abort are retained
- *                                  and readable via the batch accessors.
+ *   TRANSCRIBE_ERR_ABORTED         the abort callback fired. Completed
+ *                                  utterances are retained with their real
+ *                                  status; any utterance that does NOT
+ *                                  complete reports TRANSCRIBE_ERR_ABORTED,
+ *                                  whether it was aborted mid-decode or was
+ *                                  never retained as a completed result by the
+ *                                  batch path. Dispatcher-synthesized slots
+ *                                  specifically mean "did not complete because
+ *                                  the batch was aborted" — not that the
+ *                                  utterance itself reached an abort
+ *                                  checkpoint. As on a successful return,
+ *                                  transcribe_batch_n_results is n (one slot
+ *                                  per input utterance).
  */
 TRANSCRIBE_API transcribe_status transcribe_run_batch(
     struct transcribe_session *          session,
@@ -1843,14 +1860,27 @@ TRANSCRIBE_API transcribe_status transcribe_get_token(
  *     zero-initialized struct (text == NULL) for the copy-out accessors,
  *     which still return TRANSCRIBE_OK (struct-size faults and a NULL
  *     `out` return their usual non-OK codes).
+ *   - Two accessors are deliberate exceptions to the sentinel rule and
+ *     instead return TRANSCRIBE_ERR_INVALID_ARG for an out-of-range (or
+ *     negative) utterance index `i`: transcribe_batch_status (TRANSCRIBE_OK
+ *     is reserved for a real per-utterance success, so it cannot also
+ *     sentinel a missing utterance) and transcribe_batch_get_timings
+ *     (timings are utterance-scoped, not a row accessor like
+ *     transcribe_batch_get_segment / _word / _token, so a missing utterance
+ *     is an error rather than an empty row). The per-function docs below are
+ *     authoritative where they differ from this summary.
  */
 
 /*
  * Number of per-utterance results available. 0 before any run, or if
- * session is NULL. 1 after a successful transcribe_run. n after
- * transcribe_run_batch with n utterances (including utterances that
- * failed individually — those report a non-OK transcribe_batch_status and
- * empty rows).
+ * session is NULL. 1 after a successful transcribe_run. n after a
+ * transcribe_run_batch with n utterances that returns OK or
+ * TRANSCRIBE_ERR_ABORTED — one slot per input utterance, including
+ * utterances that failed individually (non-OK transcribe_batch_status,
+ * empty rows) and, after an abort, utterances not retained as completed
+ * results (present as TRANSCRIBE_ERR_ABORTED slots). After a whole-batch
+ * fault other than abort (OOM, backend error) the count is unspecified;
+ * the non-OK top-level return is the signal in that case.
  */
 TRANSCRIBE_API int transcribe_batch_n_results(
     const struct transcribe_session * session);
