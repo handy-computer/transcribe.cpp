@@ -7,6 +7,7 @@
 // decode keeps the tensor-validation prompt available.
 
 #include "transcribe.h"
+#include "transcribe/whisper.h"
 
 #include "wav.h"
 
@@ -78,7 +79,7 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;
     struct transcribe_model * model = nullptr;
     transcribe_status st = transcribe_model_load_file(model_path.c_str(), &mp, &model);
@@ -88,7 +89,10 @@ int main() {
     }
 
     CHECK(std::strcmp(transcribe_model_arch_string(model), "whisper") == 0);
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK_EQ_INT(caps->native_sample_rate, 16000);
@@ -98,20 +102,21 @@ int main() {
         CHECK(caps->n_languages > 0);
         CHECK(caps->languages != nullptr);
 
-        // Stage 2 + 3 capability surface. Cancellation + temperature
+        // Stage 2 + 3 feature surface. Cancellation + temperature
         // fallback + long-form shipped in Stage 2; initial_prompt
         // (initial_prompt / prompt_tokens / condition_on_prev_tokens)
-        // shipped in Stage 3.
-        CHECK(caps->supports_cancellation);
-        CHECK(caps->supports_temperature_fallback);
-        CHECK(caps->supports_long_form);
-        CHECK(caps->supports_initial_prompt);
+        // shipped in Stage 3. These advisories live behind the
+        // transcribe_model_supports() probe, not the caps struct.
+        CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_CANCELLATION));
+        CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK));
+        CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_LONG_FORM));
+        CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_INITIAL_PROMPT));
     }
 
-    transcribe_context_params cp = transcribe_context_default_params();
+    transcribe_session_params cp; transcribe_session_params_init(&cp);
     cp.kv_type = TRANSCRIBE_KV_TYPE_F32;
-    struct transcribe_context * ctx = nullptr;
-    st = transcribe_context_init(model, &cp, &ctx);
+    struct transcribe_session * ctx = nullptr;
+    st = transcribe_session_init(model, &cp, &ctx);
     if (st != TRANSCRIBE_OK || ctx == nullptr) {
         std::fprintf(stderr, "FAIL context init: %s\n", transcribe_status_string(st));
         transcribe_model_free(model);
@@ -119,19 +124,23 @@ int main() {
     }
 
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
         CHECK_EQ_INT(transcribe_returned_timestamp_kind(ctx),
                      TRANSCRIBE_TIMESTAMPS_NONE);
         CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
-        CHECK_EQ_INT(transcribe_segment_t0_ms(ctx, 0), 0);
-        CHECK_EQ_INT(transcribe_segment_t1_ms(ctx, 0), 0);
+        {
+            transcribe_segment seg; transcribe_segment_init(&seg);
+            CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
+            CHECK_EQ_INT(seg.t0_ms, 0);
+            CHECK_EQ_INT(seg.t1_ms, 0);
+        }
     }
 
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         rp.language = "en";
         rp.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
@@ -141,12 +150,14 @@ int main() {
                      TRANSCRIBE_TIMESTAMPS_SEGMENT);
         CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
         if (transcribe_n_segments(ctx) == 1) {
-            CHECK(transcribe_segment_t1_ms(ctx, 0) > transcribe_segment_t0_ms(ctx, 0));
+            transcribe_segment seg; transcribe_segment_init(&seg);
+            CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
+            CHECK(seg.t1_ms > seg.t0_ms);
         }
     }
 
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         rp.language = "en";
         rp.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
@@ -157,7 +168,7 @@ int main() {
     }
 
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         rp.task = TRANSCRIBE_TASK_TRANSLATE;
         rp.language = "en";
         rp.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
@@ -169,7 +180,7 @@ int main() {
     }
 
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         rp.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK(st == TRANSCRIBE_ERR_UNSUPPORTED_TIMESTAMPS);
@@ -201,7 +212,7 @@ int main() {
         AbortState state{0, 5};
         transcribe_set_abort_callback(ctx, abort_cb, &state);
 
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_ERR_ABORTED);
         CHECK(transcribe_was_aborted(ctx));
@@ -216,7 +227,7 @@ int main() {
         AbortState state{0, 0};
         transcribe_set_abort_callback(ctx, abort_cb, &state);
 
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_ERR_ABORTED);
         CHECK(transcribe_was_aborted(ctx));
@@ -227,7 +238,7 @@ int main() {
     // and clears was_aborted.
     transcribe_set_abort_callback(ctx, nullptr, nullptr);
     {
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
         CHECK(!transcribe_was_aborted(ctx));
@@ -239,8 +250,8 @@ int main() {
     // avg_logprob are real numbers from the decoder, not zero.
     {
         CHECK_EQ_INT(transcribe_get_whisper_chunk_count(ctx), 1);
-        transcribe_whisper_chunk_trace tr =
-            transcribe_get_whisper_chunk_trace(ctx, 0);
+        transcribe_whisper_chunk_trace tr; transcribe_whisper_chunk_trace_init(&tr);
+        CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, 0, &tr), TRANSCRIBE_OK);
         CHECK(tr.t0_ms == 0);
         CHECK(tr.t1_ms > tr.t0_ms);
         CHECK(tr.temperature_used == 0.0f);
@@ -253,8 +264,8 @@ int main() {
         CHECK(tr.avg_logprob < 0.0f); /* log probabilities are negative */
         CHECK(!tr.no_speech_triggered);
         /* Out-of-range index returns a zeroed trace. */
-        transcribe_whisper_chunk_trace oor =
-            transcribe_get_whisper_chunk_trace(ctx, 99);
+        transcribe_whisper_chunk_trace oor; transcribe_whisper_chunk_trace_init(&oor);
+        CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, 99, &oor), TRANSCRIBE_OK);
         CHECK(oor.t0_ms == 0 && oor.t1_ms == 0 &&
               oor.temperature_used == 0.0f && oor.n_fallbacks == 0);
     }
@@ -270,7 +281,7 @@ int main() {
         for (int i = 0; i < repeats; ++i) {
             long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
         }
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         rp.language = "en";
         rp.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         st = transcribe_run(ctx, long_pcm.data(),
@@ -289,8 +300,8 @@ int main() {
         /* Every chunk trace's temperature is on the fallback tuple. */
         const int n_chunks = transcribe_get_whisper_chunk_count(ctx);
         for (int i = 0; i < n_chunks; ++i) {
-            transcribe_whisper_chunk_trace tr =
-                transcribe_get_whisper_chunk_trace(ctx, i);
+            transcribe_whisper_chunk_trace tr; transcribe_whisper_chunk_trace_init(&tr);
+            CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, i, &tr), TRANSCRIBE_OK);
             CHECK(tr.temperature_used >= 0.0f);
             CHECK(tr.temperature_used <= 1.0f + 1e-3f);
             CHECK(tr.n_fallbacks >= 0);
@@ -328,16 +339,16 @@ int main() {
     // avg_logprob. The gate requires both conditions per HF
     // _need_fallback; disabling either one disables the skip.
     {
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.no_speech_thold = TRANSCRIBE_WHISPER_THOLD_DISABLED;
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
         const int n = transcribe_get_whisper_chunk_count(ctx);
         for (int i = 0; i < n; ++i) {
-            transcribe_whisper_chunk_trace tr =
-                transcribe_get_whisper_chunk_trace(ctx, i);
+            transcribe_whisper_chunk_trace tr; transcribe_whisper_chunk_trace_init(&tr);
+            CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, i, &tr), TRANSCRIBE_OK);
             /* no_speech skip gate MUST NOT fire when no_speech_thold
              * is disabled; no_speech_prob itself still populates
              * because the capture is independent of the skip check. */
@@ -345,16 +356,16 @@ int main() {
         }
     }
     {
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.logprob_thold = TRANSCRIBE_WHISPER_LOGPROB_DISABLED;
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
         const int n = transcribe_get_whisper_chunk_count(ctx);
         for (int i = 0; i < n; ++i) {
-            transcribe_whisper_chunk_trace tr =
-                transcribe_get_whisper_chunk_trace(ctx, i);
+            transcribe_whisper_chunk_trace tr; transcribe_whisper_chunk_trace_init(&tr);
+            CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, i, &tr), TRANSCRIBE_OK);
             CHECK(!tr.no_speech_triggered);
         }
     }
@@ -372,22 +383,22 @@ int main() {
     // escalate through every hotter tier before discarding, producing
     // n_fallbacks >= 1 here.
     {
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.no_speech_thold = -1.0f;
         wp.logprob_thold   =  0.0f;
         /* Disable compression threshold so compression-ratio failures
          * don't accidentally trigger fallback before the no-speech
          * check gets a chance. */
         wp.compression_ratio_thold = TRANSCRIBE_WHISPER_THOLD_DISABLED;
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
         const int n = transcribe_get_whisper_chunk_count(ctx);
         CHECK(n >= 1);
         if (n >= 1) {
-            transcribe_whisper_chunk_trace tr =
-                transcribe_get_whisper_chunk_trace(ctx, 0);
+            transcribe_whisper_chunk_trace tr; transcribe_whisper_chunk_trace_init(&tr);
+            CHECK_EQ_INT(transcribe_get_whisper_chunk_trace(ctx, 0, &tr), TRANSCRIBE_OK);
             CHECK(tr.no_speech_triggered);
             CHECK_EQ_INT(tr.n_fallbacks, 0);
             /* Chunk output was discarded → full_text is empty. */
@@ -410,7 +421,7 @@ int main() {
             long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
         }
 
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.temperature = 0.4f;           /* forces the sampler active */
         wp.temperature_inc = 0.0f;       /* single-tier, no fallback  */
         wp.compression_ratio_thold =
@@ -419,9 +430,9 @@ int main() {
         wp.no_speech_thold = TRANSCRIBE_WHISPER_THOLD_DISABLED;
         wp.seed = 42;
 
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         rp.language = "en";
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
 
         st = transcribe_run(ctx, long_pcm.data(),
                             static_cast<int>(long_pcm.size()), &rp);
@@ -445,11 +456,11 @@ int main() {
     // into a non-OK status). No abort callback is set; the rejection
     // happens inside transcribe_run, not the callback.
     {
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.prompt_condition         = TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS;
         wp.condition_on_prev_tokens = false;
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
@@ -462,10 +473,10 @@ int main() {
     // directly against the vocab. "<|en|>" is a real id (50259 for
     // multilingual whisper) and must be rejected before any compute.
     {
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.initial_prompt = "Inaugural <|en|> address";
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
@@ -476,11 +487,11 @@ int main() {
     {
         /* multilingual whisper-tiny: <|startofprev|> = 50361 */
         int32_t bad[] = { 50361, 100, 200 };
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.prompt_tokens   = bad;
         wp.n_prompt_tokens = 3;
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_ERR_INVALID_ARG);
     }
@@ -490,10 +501,10 @@ int main() {
     // pathological audio); we assert that the run completes and
     // "country" still appears.
     {
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.initial_prompt = "Inaugural address";
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
         CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
@@ -508,11 +519,11 @@ int main() {
                                           tok_buf, 32);
         CHECK(n > 0);
         if (n > 0) {
-            transcribe_params rp = transcribe_default_params();
-            transcribe_whisper_params wp = transcribe_whisper_default_params();
+            transcribe_run_params rp; transcribe_run_params_init(&rp);
+            transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
             wp.prompt_tokens   = tok_buf;
             wp.n_prompt_tokens = static_cast<size_t>(n);
-            rp.whisper = &wp;
+            rp.family = &wp.ext;
             st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
             CHECK_EQ_INT(st, TRANSCRIBE_OK);
             CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
@@ -556,7 +567,7 @@ int main() {
                 return n;
             };
 
-            transcribe_params rp = transcribe_default_params();
+            transcribe_run_params rp; transcribe_run_params_init(&rp);
             rp.language = "en";
             rp.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
             st = transcribe_run(ctx, product_pcm.data(),
@@ -565,13 +576,12 @@ int main() {
             const int unprompted_hits =
                 product_hits(transcribe_full_text(ctx));
 
-            transcribe_whisper_params wp =
-                transcribe_whisper_default_params();
+            transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
             wp.initial_prompt =
                 "QuirkQuid Quill Inc, P3-Quattro, O3-Omni, "
                 "B3-BondX, E3-Equity, W3-WrapZ, O2-Outlier, "
                 "U3-UniFund, M3-Mover";
-            rp.whisper = &wp;
+            rp.family = &wp.ext;
             st = transcribe_run(ctx, product_pcm.data(),
                                 static_cast<int>(product_pcm.size()), &rp);
             CHECK_EQ_INT(st, TRANSCRIBE_OK);
@@ -587,10 +597,10 @@ int main() {
     // prompt was used", but the run must succeed with output that
     // still contains "country" (matches the no-prompt default).
     {
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.initial_prompt = "   \t\n  ";
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
         CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
@@ -606,11 +616,11 @@ int main() {
         for (int i = 0; i < repeats; ++i) {
             long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
         }
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.condition_on_prev_tokens = true;
         rp.language = "en";
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, long_pcm.data(),
                             static_cast<int>(long_pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
@@ -635,13 +645,13 @@ int main() {
         for (int i = 0; i < repeats; ++i) {
             long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
         }
-        transcribe_params rp = transcribe_default_params();
-        transcribe_whisper_params wp = transcribe_whisper_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
         wp.initial_prompt           = "Inaugural address";
         wp.prompt_condition         = TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS;
         wp.condition_on_prev_tokens = true;
         rp.language = "en";
-        rp.whisper = &wp;
+        rp.family = &wp.ext;
         st = transcribe_run(ctx, long_pcm.data(),
                             static_cast<int>(long_pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_OK);
@@ -659,7 +669,7 @@ int main() {
     {
         AbortState state{0, 5};
         transcribe_set_abort_callback(ctx, abort_cb, &state);
-        transcribe_params rp = transcribe_default_params();
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
         rp.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
         st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         CHECK_EQ_INT(st, TRANSCRIBE_ERR_ABORTED);
@@ -671,7 +681,7 @@ int main() {
         transcribe_set_abort_callback(ctx, nullptr, nullptr);
     }
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
     transcribe_model_free(model);
 
     if (g_failures > 0) {

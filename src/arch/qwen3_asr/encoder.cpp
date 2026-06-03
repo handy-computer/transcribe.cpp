@@ -149,6 +149,9 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T        = x->ne[1];
+    // Offline batch: utterances ride ne[2]. B == 1 is the single-shot path
+    // and every reshape below collapses to the pre-batch topology exactly.
+    const int64_t B        = x->ne[2];
 
     // ----- Self-attention sub-layer -----
     ggml_tensor * x_norm = layer_norm(ctx, x, w.norm_attn_w, w.norm_attn_b);
@@ -157,12 +160,13 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
     ggml_tensor * k = linear(ctx, x_norm, w.attn_k_w, w.attn_k_b);
     ggml_tensor * v = linear(ctx, x_norm, w.attn_v_w, w.attn_v_b);
 
-    // Split heads: [d_model, T] -> [head_dim, n_heads, T, 1]
-    q = ggml_reshape_4d(ctx, q, head_dim, n_heads, T, 1);
-    k = ggml_reshape_4d(ctx, k, head_dim, n_heads, T, 1);
-    v = ggml_reshape_4d(ctx, v, head_dim, n_heads, T, 1);
+    // Split heads: [d_model, T, B] -> [head_dim, n_heads, T, B].
+    q = ggml_reshape_4d(ctx, q, head_dim, n_heads, T, B);
+    k = ggml_reshape_4d(ctx, k, head_dim, n_heads, T, B);
+    v = ggml_reshape_4d(ctx, v, head_dim, n_heads, T, B);
 
-    // Permute to [head_dim, T, n_heads, 1] for attention.
+    // Permute to [head_dim, T, n_heads, B] for attention (heads ne[2],
+    // batch ne[3] — matches flash_attn_ext / batched soft_max_ext).
     q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
     k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
     v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));
@@ -172,7 +176,8 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
         o = ggml_flash_attn_ext(ctx, q, k, v, mask,
                                 scale, /*max_bias=*/0.0f,
                                 /*logit_softcap=*/0.0f);
-        o = ggml_reshape_2d(ctx, o, d_model, T);
+        o = (B == 1) ? ggml_reshape_2d(ctx, o, d_model, T)
+                     : ggml_reshape_3d(ctx, o, d_model, T, B);
     } else {
         ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
         ggml_tensor * kq_soft =
@@ -180,7 +185,8 @@ ggml_tensor * build_enc_block(ggml_context *         ctx,
         ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
         o = ggml_mul_mat(ctx, v_t, kq_soft);
         o = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));
-        o = ggml_reshape_2d(ctx, o, d_model, T);
+        o = (B == 1) ? ggml_reshape_2d(ctx, o, d_model, T)
+                     : ggml_reshape_3d(ctx, o, d_model, T, B);
     }
 
     o = linear(ctx, o, w.attn_out_w, w.attn_out_b);
@@ -415,6 +421,121 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     if (eb.dumps.ln_post_out)    ggml_build_forward_expand(eb.graph, eb.dumps.ln_post_out);
     if (eb.dumps.proj_out)       ggml_build_forward_expand(eb.graph, eb.dumps.proj_out);
 
+    return eb;
+}
+
+EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
+                                                const QwenAsrWeights & weights,
+                                                const QwenAsrHParams & hp,
+                                                int                    n_chunks_max,
+                                                int                    n_batch,
+                                                bool                   use_flash)
+{
+    EncoderBuildBatched eb {};
+    if (ctx == nullptr || n_chunks_max <= 0 || n_batch <= 0) {
+        std::fprintf(stderr,
+                     "qwen3_asr encoder(batched): invalid arg "
+                     "(n_chunks_max=%d, n_batch=%d)\n", n_chunks_max, n_batch);
+        return eb;
+    }
+
+    const int64_t d_model       = hp.enc_d_model;
+    const int64_t n_heads       = hp.enc_n_heads;
+    const int64_t ds_h          = hp.enc_downsample_hidden;
+    const int64_t n_mels        = hp.enc_num_mel_bins;
+    const int64_t mel_per_chunk = hp.enc_n_window * 2;
+    const int64_t T_per_chunk   = aftercnn_len(static_cast<int32_t>(mel_per_chunk));
+    const int64_t B             = n_batch;
+    const int64_t N             = B * n_chunks_max;          // packed conv batch
+    const int64_t T_pad_max     = n_chunks_max * T_per_chunk;
+
+    eb.n_batch      = n_batch;
+    eb.n_chunks_max = n_chunks_max;
+    eb.T_per_chunk  = static_cast<int>(T_per_chunk);
+    eb.T_pad_max    = static_cast<int>(T_pad_max);
+
+    // ----- Graph inputs -----
+    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                   mel_per_chunk, n_mels, 1, N);
+    named(eb.mel_in, "enc.mel_in");
+    ggml_set_input(eb.mel_in);
+
+    eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_per_chunk);
+    named(eb.pos_emb_in, "enc.pos_emb.in");
+    ggml_set_input(eb.pos_emb_in);
+
+    // Key-pad mask: per-utterance [T_pad_max, T_pad_max, 1, B]. Built host-side.
+    eb.mask_in = ggml_new_tensor_4d(ctx,
+                                    use_flash ? GGML_TYPE_F16 : GGML_TYPE_F32,
+                                    T_pad_max, T_pad_max, 1, B);
+    named(eb.mask_in, "enc.attn_mask.in");
+    ggml_set_input(eb.mask_in);
+
+    // ----- Subsample: 3x Conv2d + GELU (per-chunk over N = B*n_chunks_max) -----
+    ggml_tensor * x = eb.mel_in;
+    x = ggml_conv_2d(ctx, weights.enc_subsample.conv0_w, x, 2, 2, 1, 1, 1, 1);
+    x = add_conv_bias(ctx, x, weights.enc_subsample.conv0_b);
+    x = ggml_gelu_erf(ctx, x);
+    x = ggml_conv_2d(ctx, weights.enc_subsample.conv1_w, x, 2, 2, 1, 1, 1, 1);
+    x = add_conv_bias(ctx, x, weights.enc_subsample.conv1_b);
+    x = ggml_gelu_erf(ctx, x);
+    x = ggml_conv_2d(ctx, weights.enc_subsample.conv2_w, x, 2, 2, 1, 1, 1, 1);
+    x = add_conv_bias(ctx, x, weights.enc_subsample.conv2_b);
+    x = ggml_gelu_erf(ctx, x);
+    // ne = [W=T_per_chunk, H=n_mels_ds, C=ds_h, N].
+
+    const int64_t W_ds = x->ne[0];
+    const int64_t H_ds = x->ne[1];
+    if (W_ds != T_per_chunk) {
+        std::fprintf(stderr,
+                     "qwen3_asr encoder(batched): post-conv W=%lld != "
+                     "per_chunk_aftercnn=%lld\n",
+                     static_cast<long long>(W_ds),
+                     static_cast<long long>(T_per_chunk));
+        return eb;
+    }
+
+    // [W=T_ds, H=F_ds, C=ds_h, N] -> [F_ds, ds_h, T_ds, N] (see single-shot).
+    x = ggml_permute(ctx, x, 2, 0, 1, 3);
+    x = ggml_cont(ctx, x);
+    x = ggml_reshape_3d(ctx, x, H_ds * ds_h, T_per_chunk, N);
+    x = ggml_mul_mat(ctx, weights.enc_subsample.conv_out, x);  // [d_model, T_per_chunk, N]
+
+    // Add sinusoidal PE (broadcast across the N = B*n_chunks_max axis).
+    x = ggml_add(ctx, x, eb.pos_emb_in);
+
+    // Reorganise N=(b*n_chunks_max + c) -> [d_model, T_per_chunk, n_chunks_max, B],
+    // then flatten (T_per_chunk, n_chunks_max) chunk-major into the sequence:
+    // row r = chunk*T_per_chunk + pos. Result [d_model, T_pad_max, B].
+    x = ggml_cont(ctx, x);
+    x = ggml_reshape_4d(ctx, x, d_model, T_per_chunk, n_chunks_max, B);
+    x = ggml_reshape_3d(ctx, x, d_model, T_pad_max, B);
+
+    // ----- 18 encoder blocks (batch on ne[2], per-utterance key-pad mask) -----
+    const int n_layers = static_cast<int>(weights.enc_blocks.size());
+    for (int i = 0; i < n_layers; ++i) {
+        x = build_enc_block(ctx, x, eb.mask_in, weights.enc_blocks[i],
+                            static_cast<int>(d_model),
+                            static_cast<int>(n_heads), use_flash);
+    }
+
+    // ----- Post head: LN -> proj1 -> GELU -> proj2 -----
+    x = layer_norm(ctx, x, weights.enc_head.ln_post_w, weights.enc_head.ln_post_b);
+    x = linear(ctx, x, weights.enc_head.proj1_w, weights.enc_head.proj1_b);
+    x = ggml_gelu_erf(ctx, x);
+    x = linear(ctx, x, weights.enc_head.proj2_w, weights.enc_head.proj2_b);
+    named(x, "enc.proj.out");
+
+    eb.out = x;
+    ggml_set_output(eb.out);
+
+    eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
+    if (eb.graph == nullptr) {
+        std::fprintf(stderr,
+                     "qwen3_asr encoder(batched): ggml_new_graph_custom failed\n");
+        return eb;
+    }
+    ggml_build_forward_expand(eb.graph, eb.out);
     return eb;
 }
 

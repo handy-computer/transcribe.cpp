@@ -67,14 +67,33 @@ Bucket classify_tensor(const std::string & name) {
     if (ends_with(name, ".bias")) {
         return Bucket::Norm;
     }
-    // BatchNorm: bn.{weight, bias, running_mean, running_var}.
-    if (contains(name, ".bn.")) {
+    // BatchNorm: bn.{weight, bias, running_mean, running_var}. The
+    // ".bn." form matches NeMo-style tensor names; the "conv_bn." form
+    // matches granite/granite_nar where the conv module uses an
+    // underscore separator. Also catch running stats (running_mean /
+    // running_var) which need to stay F32 for the at-load BN-fusion math.
+    if (contains(name, ".bn.") ||
+        contains(name, "conv_bn.") ||
+        ends_with(name, ".running_mean") ||
+        ends_with(name, ".running_var"))
+    {
         return Bucket::Norm;
     }
     // LayerNorm scale (norm_ff1.weight, norm_attn.weight, norm_conv.weight,
     // norm_out.weight, norm_self.weight, norm_cross.weight, norm_ff.weight,
     // etc). The .bias case was already caught above.
     if (contains(name, "norm_") && ends_with(name, ".weight")) {
+        return Bucket::Norm;
+    }
+    // Mirror-image: name ends in "_norm.weight" (e.g. granite_nar's
+    // prj.out_norm.weight). Distinct from the "norm_" prefix rule above.
+    if (ends_with(name, "_norm.weight")) {
+        return Bucket::Norm;
+    }
+    // Lists of layer-norms indexed by integer: granite_nar's per-encoder-
+    // layer projector LNs live at `prj.layer_norms.<N>.weight`. The "s"
+    // breaks the "_norm." substring rule above.
+    if (contains(name, "_norms.") && ends_with(name, ".weight")) {
         return Bucket::Norm;
     }
     // Cohere: dec.embed.norm.weight and dec.final_norm.weight — layer
@@ -112,6 +131,15 @@ Bucket classify_tensor(const std::string & name) {
     }
     // Cohere: sinusoidal positional encoding table, precision-sensitive.
     if (ends_with(name, ".pos_enc")) {
+        return Bucket::Norm;
+    }
+    // granite_nar projector learned parameters: the 3-query embedding
+    // (prj.query, [hidden, 3, 1]) and the 15-frame window positional
+    // bias (prj.window_positions, [hidden, 15, 1]). Both are added
+    // directly into F32 activations inside the projector graph, and the
+    // loader uses an F32/F16/BF16-only find_tensor for both. Keep them
+    // at the same dtype as the .bias tensors.
+    if (name == "prj.query" || name == "prj.window_positions") {
         return Bucket::Norm;
     }
     // Whisper: encoder sinusoidal pos_emb (1500 x d_model) and decoder
@@ -159,9 +187,17 @@ Bucket classify_tensor(const std::string & name) {
     // they can run at F16 on the im2col+matmul path. Matches
     // "enc.blocks.<N>.conv.pointwise1.weight" and ".pointwise2.weight"
     // but intentionally NOT any pre-encode convs (different names like
-    // enc.pre_encode.conv.0.weight).
+    // enc.pre_encode.conv.0.weight). granite_nar uses the underscore
+    // form `conv_pointwise{1,2}` (single-token names without a `.conv.`
+    // separator) — route those to ConvPw as well.
     if ((ends_with(name, ".conv.pointwise1.weight") ||
          ends_with(name, ".conv.pointwise2.weight")) &&
+        contains(name, "enc.blocks."))
+    {
+        return Bucket::ConvPw;
+    }
+    if ((ends_with(name, ".conv_pointwise1.weight") ||
+         ends_with(name, ".conv_pointwise2.weight")) &&
         contains(name, "enc.blocks."))
     {
         return Bucket::ConvPw;
@@ -171,6 +207,11 @@ Bucket classify_tensor(const std::string & name) {
     // ".conv." (with dots on both sides) distinguishes these from
     // norm_conv.weight which we already routed above.
     if (contains(name, ".conv.") && ends_with(name, ".weight")) {
+        return Bucket::Conv;
+    }
+    // granite_nar depthwise conv kernel uses the underscore form
+    // (`conv_depthwise.weight`) without a `.conv.` separator.
+    if (ends_with(name, ".conv_depthwise.weight")) {
         return Bucket::Conv;
     }
     // SenseVoice FSMN: depthwise 1D conv inside the SAN-M attention

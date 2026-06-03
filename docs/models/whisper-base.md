@@ -22,14 +22,14 @@ on 2026-04-26.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-base-F32.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-F32.gguf) | 279 MB | 5.10% |
-| F16    | [whisper-base-F16.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-F16.gguf) | 144 MB | 5.10% |
-| Q8_0   | [whisper-base-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-Q8_0.gguf) | 81 MB | 5.12% |
-| Q6_K   | [whisper-base-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-Q6_K.gguf) | 65 MB | 5.12% |
-| Q5_K_M | [whisper-base-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-Q5_K_M.gguf) | 61 MB | 5.19% |
-| Q4_K_M | [whisper-base-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-Q4_K_M.gguf) | 56 MB | 5.36% |
+| F32    | [whisper-base-F32.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-F32.gguf) | 279 MB | 4.98% |
+| F16    | [whisper-base-F16.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-F16.gguf) | 144 MB | 4.99% |
+| Q8_0   | [whisper-base-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-Q8_0.gguf) | 81 MB | 5.01% |
+| Q6_K   | [whisper-base-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-Q6_K.gguf) | 65 MB | 5.02% |
+| Q5_K_M | [whisper-base-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-Q5_K_M.gguf) | 61 MB | 5.02% |
+| Q4_K_M | [whisper-base-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-base-gguf/resolve/main/whisper-base-Q4_K_M.gguf) | 56 MB | 5.23% |
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with the transcribe.cpp default decode (greedy, suppress_tokens, temperature fallback, segment timestamps enabled). OpenAI's self-reported number on the same split is 5.009%. We don't know upstream's exact eval config, but the most likely cause of any divergence is that OpenAI's `model.generate()` defaults to `<|notimestamps|>` while transcribe.cpp's pipeline runs with timestamps enabled. Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions can shift corpus WER by ~0.1pp between runs, mostly driven by short-clip hallucination outcomes on the noise floor.
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with the pinned short-form recipe: greedy decode, timestamps off (`<|notimestamps|>`), and language forced to `en` — see [WER methodology](../tools/wer.md#methodology-pinned-recipe). Captured on a single CUDA (L40S) run at batch size 1; quantization, backend, and batching are all generally WER-neutral.
 
 ## Quick Start
 

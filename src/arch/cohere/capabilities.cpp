@@ -4,7 +4,9 @@
 
 namespace transcribe::cohere {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     caps.native_sample_rate = 16000;
     caps.supports_translate = false;
 
@@ -17,13 +19,11 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // dispatcher reject any request for finer granularity.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
-    // Cancellation is wired at the per-run level. The other three
-    // features are Whisper-specific in this release; Cohere ASR does
-    // not participate.
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
+    // Cancellation is wired at the per-run level. The other unallied
+    // features (initial prompt, temperature fallback, long-form, PNC,
+    // ITN) are Whisper-specific or family-specific elsewhere; Cohere
+    // ASR does not participate.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
 } // namespace transcribe::cohere

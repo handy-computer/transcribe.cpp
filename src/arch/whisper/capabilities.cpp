@@ -4,7 +4,9 @@
 
 namespace transcribe::whisper {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     caps.native_sample_rate = 16000;
 
     // Multilingual whisper variants support both lang-detect and the
@@ -16,7 +18,9 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // stt.capability.{lang_detect,translate}=false and overwrite.
     caps.supports_language_detect = true;
     caps.supports_translate       = true;
-    caps.supports_streaming       = false;
+    // supports_streaming stays at its zero-init default (false); whisper
+    // has no streaming hooks. Left implicit to match the other
+    // non-streaming families rather than restating the default here.
 
     // Segment timestamps via the timestamp-token stream (<|t=0.00|> …
     // <|t=30.00|>, ids 50364+). Word-level timestamps via DTW over
@@ -26,17 +30,18 @@ void apply_family_invariants(transcribe_capabilities & caps) {
     // WORD-grain timing rather than silently falling back.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_SEGMENT;
 
-    // Stage 2 lights up temperature fallback + long-form decoding +
-    // per-chunk decoding trace. Stage 1 already shipped cancellation
-    // (abort callback between chunks and between decode steps). Stage 3
-    // wires initial_prompt (text or pre-tokenized) and
-    // condition_on_prev_tokens (cross-chunk coherence under
-    // <|startofprev|>) — both surfaces are reachable through
-    // transcribe_whisper_params.
-    caps.supports_initial_prompt       = true;
-    caps.supports_temperature_fallback = true;
-    caps.supports_long_form            = true;
-    caps.supports_cancellation         = true;
+    // Whisper run knobs are reached through transcribe_whisper_run_ext
+    // (via transcribe_run_params::family). Stage 2 lights up temperature
+    // fallback + long-form decoding + per-chunk decoding trace. Stage 1
+    // already shipped cancellation (abort callback between chunks and
+    // between decode steps). Stage 3 wires initial_prompt (text or
+    // pre-tokenized) and condition_on_prev_tokens (cross-chunk
+    // coherence under <|startofprev|>). No PNC/ITN runtime toggle —
+    // whisper emits whatever its training distribution produces.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_INITIAL_PROMPT,       true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK, true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_LONG_FORM,            true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION,         true);
 }
 
 } // namespace transcribe::whisper

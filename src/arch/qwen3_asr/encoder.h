@@ -106,4 +106,40 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  const EncoderTiming &  timing,
                                  bool                   use_flash = false);
 
+// ---------------------------------------------------------------------------
+// Batched encoder (offline transcribe_run_batch)
+// ---------------------------------------------------------------------------
+
+struct EncoderBuildBatched {
+    ggml_tensor * mel_in     = nullptr;  // [mel_per_chunk, n_mels, 1, B*n_chunks_max]
+    ggml_tensor * pos_emb_in = nullptr;  // [d_model, per_chunk_aftercnn]
+    ggml_tensor * mask_in    = nullptr;  // [T_pad_max, T_pad_max, 1, B] key-pad
+    ggml_tensor * out        = nullptr;  // [output_dim, T_pad_max, B]
+    ggml_cgraph * graph      = nullptr;
+
+    int n_batch       = 0;
+    int n_chunks_max  = 0;
+    int T_per_chunk   = 0;
+    int T_pad_max     = 0;  // n_chunks_max * per_chunk_aftercnn
+};
+
+// Build one encoder graph that processes B utterances in parallel on the
+// batch axis ne[2]. All utterances share the same per_chunk_aftercnn (it
+// depends only on enc_n_window), so they pack cleanly: utterance b's chunks
+// occupy N-indices [b*n_chunks_max, b*n_chunks_max + n_chunks[b]) of mel_in,
+// zero-padded to n_chunks_max. The conv subsampler is per-chunk (no cross-
+// utterance leak); the 18 blocks attend per-utterance under a key-pad mask
+// (`mask_in[k,q,0,b] = 0 if k < T_enc[b] else -inf`). The real rows of
+// utterance b are the first T_enc[b] rows of its [T_pad_max] section, so the
+// caller slices out[:, 0:T_enc[b], b]. Real-row outputs are bit-identical to
+// the single-shot encoder (same per-chunk conv, same masked attention).
+//
+// Pass use_flash=false to match the single-shot non-flash default exactly.
+EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
+                                                const QwenAsrWeights & weights,
+                                                const QwenAsrHParams & hp,
+                                                int                    n_chunks_max,
+                                                int                    n_batch,
+                                                bool                   use_flash = false);
+
 } // namespace transcribe::qwen3_asr

@@ -536,15 +536,6 @@ wheels = [
 ]
 
 [[package]]
-name = "diskcache"
-version = "5.6.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550 },
-]
-
-[[package]]
 name = "editdistance"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1574,7 +1565,7 @@ wheels = [
 
 [[package]]
 name = "nemo-toolkit"
-version = "2.7.2"
+version = "2.7.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cuda-bindings", marker = "sys_platform != 'darwin'" },
@@ -1596,9 +1587,9 @@ dependencies = [
     { name = "wget" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cc/5f/55420bbf8ce4336992296ba75ffc934156bf0027eb212794f8ff01a1bb4a/nemo_toolkit-2.7.2.tar.gz", hash = "sha256:7846ac04f52d71c8b4d3e9b3b96395cb753d324870500ba74c9942cacb928685", size = 4262239 }
+sdist = { url = "https://files.pythonhosted.org/packages/e2/30/c385006f44cf6267592c38e16e9d84aa4770a39d55f347d9d8fcc6ee1df5/nemo_toolkit-2.7.3.tar.gz", hash = "sha256:083240dd24b7534eeb6da5b3bc88fa930da625b2a6a8c071c23fb16919783224", size = 4262615 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/0f/133a79adaf0dbdebd4cd053ac7a4badc1b1dfe9aea77b6ab1f10baee6247/nemo_toolkit-2.7.2-py3-none-any.whl", hash = "sha256:5ebb12cb5277cd68a09836ddacde8278fdc5fdba972b3d11b2a18c8f4dcec373", size = 6025524 },
+    { url = "https://files.pythonhosted.org/packages/40/8b/44dc1ec481301b9d0c1b262552d629a175d31f546ec5c6491ec697c4a9b5/nemo_toolkit-2.7.3-py3-none-any.whl", hash = "sha256:8cbeb10263d71262c47cd4797c4cdb2603d2d2f4b7f03c77c8062e268fb80ecb", size = 6025905 },
 ]
 
 [package.optional-dependencies]
@@ -1606,7 +1597,6 @@ asr = [
     { name = "braceexpand" },
     { name = "cloudpickle" },
     { name = "datasets" },
-    { name = "diskcache" },
     { name = "editdistance" },
     { name = "einops" },
     { name = "fiddle" },
@@ -3095,7 +3085,7 @@ dependencies = [
 requires-dist = [
     { name = "gguf", specifier = ">=0.10.0" },
     { name = "huggingface-hub", specifier = ">=0.20" },
-    { name = "nemo-toolkit", extras = ["asr"], specifier = ">=2.0" },
+    { name = "nemo-toolkit", extras = ["asr"], specifier = "==2.7.3" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "sentencepiece", specifier = ">=0.2" },
     { name = "soundfile", specifier = ">=0.12" },

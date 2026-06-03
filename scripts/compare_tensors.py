@@ -214,6 +214,16 @@ def tolerance_for(
     )
 
 
+def is_shape_optional(name: str, overrides: dict[str, dict[str, float]]) -> bool:
+    """A tolerance entry may set `"shape_optional": true` to declare that
+    a SHAPE mismatch is an expected behavior of the family — used for
+    NAR-style architectures whose output length is a non-deterministic
+    function of borderline CTC argmax decisions. The tolerance entry's
+    `_comment` must explain why."""
+    o = overrides.get(name, {})
+    return bool(o.get("shape_optional", False))
+
+
 def fmt_shape(s: tuple[int, ...] | None) -> str:
     if s is None:
         return "—"
@@ -280,6 +290,13 @@ def main() -> int:
             # are expected; treat as ok.
             ok = True
             flag = "ok"
+        elif r.status == "SHAPE" and is_shape_optional(r.name, overrides):
+            # The tolerance entry explicitly accepts a SHAPE mismatch —
+            # used for NAR families whose output length depends on
+            # borderline CTC argmax decisions. The _comment in the
+            # entry must name the mechanism.
+            ok = True
+            flag = "SHAPE-ok"
         else:
             ok = (r.status == "ok"
                   and r.max_abs  <= max_tol

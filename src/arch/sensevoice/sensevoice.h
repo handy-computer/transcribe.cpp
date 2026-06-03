@@ -2,14 +2,14 @@
 // context types.
 //
 // INTERNAL to src/arch/sensevoice/. Defines the concrete classes that
-// derive from transcribe_model / transcribe_context.
+// derive from transcribe_model / transcribe_session.
 
 #pragma once
 
 #include "weights.h"
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-kaldi-fbank.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -26,7 +26,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::sensevoice {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 struct SenseVoiceModel final : public transcribe_model {
     transcribe::Tokenizer tok;
@@ -48,7 +48,7 @@ struct SenseVoiceModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct SenseVoiceContext final : public transcribe_context {
+struct SenseVoiceSession final : public transcribe_session {
     // Per-call compute state. Reset at the top of every run() call.
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
@@ -61,8 +61,8 @@ struct SenseVoiceContext final : public transcribe_context {
     std::vector<float>   logits_buf;     // [T, vocab] for greedy CTC
     std::vector<int32_t> token_ids;      // post-collapse / post-blank-strip
 
-    SenseVoiceContext() = default;
-    ~SenseVoiceContext() override;
+    SenseVoiceSession() = default;
+    ~SenseVoiceSession() override;
 };
 
 } // namespace transcribe::sensevoice

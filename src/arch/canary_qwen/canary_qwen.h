@@ -21,7 +21,7 @@
 
 #include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -40,7 +40,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::canary_qwen {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // Resolved chat-template special-token ids (filled at load time from the
 // GGUF tokenizer). The HF chat template emits these by name; we look up
@@ -103,11 +103,17 @@ struct CanaryQwenModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct CanaryQwenContext final : public transcribe_context {
+struct CanaryQwenSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
     transcribe::qwen3_lm::KvCache kv_cache;
+
+    // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
+    transcribe::qwen3_lm::KvCache kv_cache_batch;
+    int                           kv_batch_cap   = 0;
+    int                           kv_batch_n_ctx = 0;
+
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Reusable host scratch.
@@ -122,8 +128,8 @@ struct CanaryQwenContext final : public transcribe_context {
     bool encoder_use_flash = false;
     bool decoder_use_flash = false;
 
-    CanaryQwenContext() = default;
-    ~CanaryQwenContext() override;
+    CanaryQwenSession() = default;
+    ~CanaryQwenSession() override;
 };
 
 } // namespace transcribe::canary_qwen

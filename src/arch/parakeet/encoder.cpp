@@ -263,13 +263,18 @@ std::vector<int> parse_sub_block_env(int n_layers)
 
 } // namespace
 
-EncoderBuild build_encoder_graph(ggml_context *          ctx,
-                                 const ParakeetWeights & w,
-                                 const ParakeetHParams & hp,
-                                 int                     n_mel_frames,
-                                 ggml_type               kv_type,
-                                 const char *            backend_name)
+EncoderBuild build_encoder_graph(ggml_context *                      ctx,
+                                 const ParakeetWeights &             w,
+                                 const ParakeetHParams &             hp,
+                                 int                                 n_mel_frames,
+                                 ggml_type                           kv_type,
+                                 const char *                        backend_name,
+                                 const BufferedStreamMaskOverride *  buf_mask,
+                                 int                                 n_batch,
+                                 bool                                batch_var_len)
 {
+    if (n_batch < 1) n_batch = 1;
+    const bool var_len_masks = batch_var_len && n_batch > 1;
     // Per-family dispatch policy. Parakeet keeps the historical split
     // where the in-block depthwise uses the direct path on every
     // backend but the pre_encode depthwise uses the f32-friendly
@@ -279,12 +284,18 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
     policy.direct_dw_in_pre_encode = false;
-    // Cache-aware streaming variants set conv_context_{left,right} to
-    // explicit causal values; that flag also drives NeMo's
-    // ConvSubsampling to use CausalConv2D (left=k-1, right=stride-1
-    // pad on both spatial axes), so we mirror it here.
-    policy.causal_pre_encode = (hp.enc_conv_context_left  >= 0 &&
-                                hp.enc_conv_context_right >= 0);
+    // Cache-aware streaming variants (NeMo `causal_downsampling=true`)
+    // use CausalConv2D for the pre-encode subsample stack (left=k-1,
+    // right=stride-1 pad on both spatial axes). We infer this from the
+    // attention style: ChunkedLimited (cache-aware) implies causal
+    // subsample; Regular (offline) and ChunkedLimitedWithRc (buffered
+    // streaming) both use the standard non-causal symmetric pad. The
+    // pre-encode kernel (k=3) and the conformer conv-module kernel
+    // (k=9) are independent — hp.enc_conv_context_{left,right} are
+    // for the latter and don't say anything about the former.
+    policy.causal_pre_encode =
+        (hp.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimited);
 
     EncoderBuild eb {};
 
@@ -317,11 +328,14 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         return eb;
     }
 
-    // Mel input handle. ne=[T_mel, n_mels, 1, 1] matches the C++
-    // MelFrontend's row-major [n_mels, n_frames] storage byte for
-    // byte (see the layout cheat sheet at the top of the file).
-    eb.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
-                                   n_mel_frames, hp.fe_num_mels);
+    // Mel input handle. ne=[T_mel, n_mels, 1, n_batch] matches the C++
+    // MelFrontend's row-major [n_mels, n_frames] storage byte for byte
+    // (see the layout cheat sheet at the top of the file); utterance b is
+    // the contiguous [n_mel_frames * n_mels] slab at offset
+    // b * n_mel_frames * n_mels. For n_batch == 1 this is identical to the
+    // prior 2-D [T_mel, n_mels] tensor.
+    eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                   n_mel_frames, hp.fe_num_mels, 1, n_batch);
     if (eb.mel_in == nullptr) {
         std::fprintf(stderr,
                      "parakeet encoder: failed to allocate mel_in tensor\n");
@@ -329,12 +343,31 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     }
     ggml_set_name(eb.mel_in, "mel.in");
     ggml_set_input(eb.mel_in);
+    // Debug-only: pin the mel_in buffer so the scheduler doesn't reuse
+    // its slot for a later activation before dump_tensor() reads it
+    // back. Without this, streaming dumps of enc.mel.in show garbage
+    // because n_mel_frames is small and the slot is the first to be
+    // freed. No-op in normal builds.
+    transcribe::debug::mark_tensor_for_dump(eb.mel_in);
 
-    // Build the pre_encode subgraph.
+    // Build the pre_encode subgraph. For variable-length offline batching we
+    // enable masked subsampling (zero each conv intermediate's padded time
+    // region so an utterance's boundary frame matches a standalone run). Only
+    // the non-causal pre-encode is masked here — the causal/streaming stem
+    // has a different per-stage length formula and its boundary frame does
+    // not flip decoded tokens in practice.
+    conf::PreEncodeValidMasks pe_masks;
+    const bool mask_pre_encode = var_len_masks && !policy.causal_pre_encode;
     ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode),
                                              eb.mel_in, policy,
                                              /*name_prefix=*/"enc.pre_encode",
-                                             /*error_tag=*/"parakeet");
+                                             /*error_tag=*/"parakeet",
+                                             mask_pre_encode ? &pe_masks : nullptr);
+    if (mask_pre_encode) {
+        eb.pre_encode_mask_s1_in = pe_masks.mask_s1;
+        eb.pre_encode_mask_s2_in = pe_masks.mask_s2;
+        eb.pre_encode_mask_s3_in = pe_masks.mask_s3;
+    }
     if (x == nullptr) {
         // build_pre_encode already logged the diagnostic.
         return eb;
@@ -398,9 +431,17 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         // LocalAttRelPositionalEncoding. ChunkedLimited style keeps pos_emb
         // at the full 2T-1 and uses a separate attention-position mask
         // (built below).
+        // ChunkedLimited (2-tuple cache-aware) always engages the mask.
+        // ChunkedLimitedWithRc (3-tuple buffered streaming) only engages
+        // when the caller passes a non-null buf_mask override — offline
+        // load of a unified-en GGUF runs the encoder with full attention
+        // even though the style declares chunked_limited_with_rc.
         const bool is_chunked =
             (hp.enc_att_context_style ==
-                 ParakeetHParams::AttContextStyle::ChunkedLimited);
+                 ParakeetHParams::AttContextStyle::ChunkedLimited) ||
+            (hp.enc_att_context_style ==
+                 ParakeetHParams::AttContextStyle::ChunkedLimitedWithRc
+             && buf_mask != nullptr);
         const bool is_local_pe =
             (!is_chunked) &&
             (hp.enc_att_context_left >= 0 && hp.enc_att_context_right >= 0);
@@ -425,12 +466,54 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
             eb.chunked_mask_in = chunked_mask_in;
         }
 
+        ggml_tensor * conv_pad_mask_in = nullptr;
+        if (buf_mask != nullptr &&
+            buf_mask->valid_frames >= 0 &&
+            buf_mask->valid_frames < T_enc)
+        {
+            conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                                  T_enc, 1, 1, 1);
+            ggml_set_name(conv_pad_mask_in, "conv.pad_mask.in");
+            ggml_set_input(conv_pad_mask_in);
+            eb.conv_pad_mask_in = conv_pad_mask_in;
+        }
+
+        // Variable-length batch masks. When batching utterances of differing
+        // length we pad every mel to a common T_max; these two masks keep
+        // each utterance's padded tail from corrupting its real frames:
+        //   - attn_pad_mask_in [T_enc, 1, 1, n_batch]: additive (-INF on
+        //     padded keys) so real queries never attend to padded keys.
+        //   - conv_pad_mask_in [T_enc, 1, n_batch, 1]: 0/1 valid-frame mask
+        //     that zeroes padded frames after pw1+GLU and before the
+        //     depthwise conv (same role as the buffered-streaming mask, but
+        //     per utterance). Reuses the conv_pad_mask_in field since the
+        //     buffered path is mutually exclusive with offline batching.
+        ggml_tensor * attn_pad_mask_in = nullptr;
+        if (var_len_masks) {
+            attn_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                                  T_enc, 1, 1, n_batch);
+            ggml_set_name(attn_pad_mask_in, "attn.pad_mask.in");
+            ggml_set_input(attn_pad_mask_in);
+            eb.attn_pad_mask_in = attn_pad_mask_in;
+
+            conv_pad_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                                  T_enc, 1, n_batch, 1);
+            ggml_set_name(conv_pad_mask_in, "conv.pad_mask.batch.in");
+            ggml_set_input(conv_pad_mask_in);
+            eb.conv_pad_mask_in = conv_pad_mask_in;
+        }
+
         conf::BlockParams bparams {};
         bparams.d_model           = hp.enc_d_model;
         bparams.n_head            = hp.enc_n_heads;
         bparams.conv_kernel       = hp.enc_conv_kernel;
         bparams.kv_type           = kv_type;
-        bparams.use_flash         = true;
+        // Flash attention by default. Flash batches correctly (the batched
+        // encoder output is bit-identical to single-shot flash), so the batch
+        // axis does not change the path. TRANSCRIBE_NO_FLASH=1 forces the
+        // manual F32 mul_mat + soft_max path — used by the bit-exact CPU
+        // tensor gate (flash casts the rel-pos mask to F16, manual stays F32).
+        bparams.use_flash         = (std::getenv("TRANSCRIBE_NO_FLASH") == nullptr);
         bparams.policy            = policy;
         bparams.att_context_left  = hp.enc_att_context_left;
         bparams.att_context_right = hp.enc_att_context_right;
@@ -438,8 +521,10 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
             ? conf::BlockParams::AttContextStyle::ChunkedLimited
             : conf::BlockParams::AttContextStyle::Regular;
         bparams.attn_chunked_mask = chunked_mask_in;
+        bparams.attn_pad_mask      = attn_pad_mask_in;
         bparams.conv_context_left  = hp.enc_conv_context_left;
         bparams.conv_context_right = hp.enc_conv_context_right;
+        bparams.conv_pad_mask      = conv_pad_mask_in;
         bparams.conv_norm_type = (hp.enc_conv_norm_type
                                   == ParakeetHParams::ConvNormType::LayerNorm)
             ? conf::BlockParams::ConvNormType::LayerNorm
@@ -556,6 +641,218 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     }
     ggml_build_forward_expand(eb.graph, eb.out);
 
+    return eb;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming encoder graph (cache-aware, per-chunk feed)
+// ---------------------------------------------------------------------------
+//
+// Mirrors build_encoder_graph but:
+//   - Operates on a mel chunk (n_mel_chunk_frames), not the whole audio.
+//   - Slices off `drop_extra_pre_encoded` post-subsample frames.
+//   - Threads per-layer cache_last_channel + cache_last_time tensors
+//     through BlockParams, and emits per-layer cache outputs into
+//     fresh compute_ctx tensors that the driver reads back.
+//   - Sizes pos_emb and chunked_mask for T_virtual = T_cache + T_q_new
+//     (the per-block attention runs on the cache+new union).
+//
+// Shapes:
+//   eb.mel_in           [n_mel_chunk_frames, n_mels, 1, 1]
+//   eb.pos_emb_in       [d_model, 2*T_virtual - 1, 1, 1]
+//   eb.chunked_mask_in  [T_virtual, T_virtual, 1, 1]
+//   eb.out              [d_model, T_q_new, 1, 1]
+//   cache_io.channel_out[i]   [d_model, T_cache, 1, 1]   (fresh)
+//   cache_io.time_out[i]      [k_minus_1, d_model, 1, 1] (fresh)
+//
+// All cache input tensors (cache_io.channel_in / time_in) must come
+// from the persistent ParakeetStreamingCaches buffer and have the
+// shapes above. The graph DOES treat them as inputs (the scheduler
+// walks back from cpy ops and eb.out to find them).
+EncoderBuild build_encoder_graph_streaming(
+    ggml_context *          ctx,
+    const ParakeetWeights & w,
+    const ParakeetHParams & hp,
+    int                     n_mel_chunk_frames,
+    int                     drop_extra_pre_encoded,
+    StreamingEncoderCacheIO & cache_io,
+    ggml_type               kv_type,
+    const char *            backend_name)
+{
+    conf::ConvPolicy policy {};
+    policy.direct_pw               = conf::detect_direct_pw(backend_name);
+    policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
+    policy.direct_dw_in_pre_encode = false;
+    // See the offline analog in build_encoder_graph: causal pre-encode
+    // is the cache-aware streaming convention only.
+    policy.causal_pre_encode =
+        (hp.enc_att_context_style ==
+             ParakeetHParams::AttContextStyle::ChunkedLimited);
+
+    EncoderBuild eb {};
+
+    if (ctx == nullptr || n_mel_chunk_frames <= 0) {
+        std::fprintf(stderr,
+                     "parakeet streaming encoder: invalid arg "
+                     "(ctx=%p, n_mel_chunk_frames=%d)\n",
+                     static_cast<void *>(ctx), n_mel_chunk_frames);
+        return eb;
+    }
+
+    if (hp.enc_subsampling_factor != 8) {
+        std::fprintf(stderr,
+                     "parakeet streaming encoder: unsupported "
+                     "subsampling_factor=%d (only 8 implemented)\n",
+                     hp.enc_subsampling_factor);
+        return eb;
+    }
+    if (hp.enc_att_context_style !=
+            ParakeetHParams::AttContextStyle::ChunkedLimited)
+    {
+        std::fprintf(stderr,
+                     "parakeet streaming encoder: requires "
+                     "att_context_style=ChunkedLimited\n");
+        return eb;
+    }
+
+    const int n_layers = static_cast<int>(w.blocks.size());
+    if (static_cast<int>(cache_io.channel_in.size()) != n_layers ||
+        static_cast<int>(cache_io.time_in.size())    != n_layers)
+    {
+        std::fprintf(stderr,
+                     "parakeet streaming encoder: cache_io.in vectors "
+                     "must be sized to n_layers=%d (got channel=%zu, "
+                     "time=%zu)\n",
+                     n_layers, cache_io.channel_in.size(),
+                     cache_io.time_in.size());
+        return eb;
+    }
+
+    // ----- Mel chunk input -----
+    eb.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                                   n_mel_chunk_frames, hp.fe_num_mels);
+    ggml_set_name(eb.mel_in, "stream.mel.in");
+    ggml_set_input(eb.mel_in);
+
+    // ----- Pre-encode + (optional) xscaling -----
+    ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode),
+                                             eb.mel_in, policy,
+                                             /*name_prefix=*/"stream.enc.pre_encode",
+                                             /*error_tag=*/"parakeet stream");
+    if (x == nullptr) return eb;
+
+    if (hp.enc_xscaling) {
+        const float scale = std::sqrt(static_cast<float>(hp.enc_d_model));
+        x = ggml_scale(ctx, x, scale);
+    }
+
+    // x ne = [d_model, T_pre_enc]. Slice off the first
+    // drop_extra_pre_encoded frames (NeMo's mechanism to handle the
+    // 8x-subsample overlap after the mel-history prepend).
+    if (drop_extra_pre_encoded > 0) {
+        const int64_t T_pre = x->ne[1];
+        if (drop_extra_pre_encoded >= T_pre) {
+            std::fprintf(stderr,
+                         "parakeet streaming encoder: drop_extra=%d >= "
+                         "T_pre_enc=%lld\n",
+                         drop_extra_pre_encoded, (long long)T_pre);
+            return eb;
+        }
+        x = ggml_view_2d(ctx, x,
+                         x->ne[0], T_pre - drop_extra_pre_encoded,
+                         x->nb[1],
+                         drop_extra_pre_encoded * x->nb[1]);
+        x = ggml_cont(ctx, x);
+    }
+
+    const int64_t T_q_new  = x->ne[1];
+    const int64_t T_cache  = cache_io.channel_in[0]->ne[1];
+    const int64_t T_virt   = T_cache + T_q_new;
+
+    // ----- Pos_emb sized for T_virtual -----
+    const int64_t pos_len = 2 * T_virt - 1;
+    eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                                       hp.enc_d_model, pos_len);
+    ggml_set_name(eb.pos_emb_in, "stream.pos_emb.in");
+    ggml_set_input(eb.pos_emb_in);
+
+    // Chunked mask: [T_virtual, T_virtual]. Built host-side.
+    eb.chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
+                                            T_virt, T_virt, 1, 1);
+    ggml_set_name(eb.chunked_mask_in, "stream.attn.chunked_mask.in");
+    ggml_set_input(eb.chunked_mask_in);
+
+    // ----- Create the graph BEFORE allocating cache_out tensors, so
+    // the helpers can ggml_build_forward_expand their cpy nodes onto
+    // it. -----
+    eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
+    if (eb.graph == nullptr) return eb;
+
+    // ----- BlockParams (per-block, but only streaming_*_in/_out and
+    // streaming_T_q_new change per layer) -----
+    conf::BlockParams bparams {};
+    bparams.d_model           = hp.enc_d_model;
+    bparams.n_head            = hp.enc_n_heads;
+    bparams.conv_kernel       = hp.enc_conv_kernel;
+    bparams.kv_type           = kv_type;
+    bparams.use_flash         = true;
+    bparams.policy            = policy;
+    // No att_context_left/right here: ChunkedLimited derives the attention
+    // band entirely from attn_chunked_mask (built host-side in
+    // emit_streaming_chunk). build_conformer_block only reads
+    // att_context_left/right on the Regular (is_local) path, which this
+    // builder never takes — leaving them at the BlockParams defaults keeps
+    // the live source of truth (the mask) singular.
+    bparams.att_context_style = conf::BlockParams::AttContextStyle::ChunkedLimited;
+    bparams.attn_chunked_mask = eb.chunked_mask_in;
+    bparams.conv_context_left  = hp.enc_conv_context_left;
+    bparams.conv_context_right = hp.enc_conv_context_right;
+    bparams.conv_norm_type = (hp.enc_conv_norm_type
+                              == ParakeetHParams::ConvNormType::LayerNorm)
+        ? conf::BlockParams::ConvNormType::LayerNorm
+        : conf::BlockParams::ConvNormType::BatchNorm;
+    bparams.streaming_graph    = eb.graph;
+    bparams.streaming_T_q_new  = static_cast<int>(T_q_new);
+
+    cache_io.channel_out.assign(n_layers, nullptr);
+    cache_io.time_out.assign(n_layers, nullptr);
+    const int k_minus_1 = static_cast<int>(cache_io.time_in[0]->ne[0]);
+
+    for (int i = 0; i < n_layers; ++i) {
+        // Per-layer cache I/O. The "in" tensors are from the
+        // persistent cache buffer (passed in by the driver). The
+        // "out" tensors are fresh in compute_ctx; the helpers fill
+        // them via ggml_cpy and the driver reads them after compute.
+        ggml_tensor * cache_ch_out = ggml_new_tensor_2d(
+            ctx, GGML_TYPE_F32, hp.enc_d_model, T_cache);
+        ggml_tensor * cache_tm_out = ggml_new_tensor_2d(
+            ctx, GGML_TYPE_F32, k_minus_1, hp.enc_d_model);
+        if (cache_ch_out == nullptr || cache_tm_out == nullptr) return eb;
+        char nm[64];
+        std::snprintf(nm, sizeof(nm), "stream.cache_ch_out.%d", i);
+        ggml_set_name(cache_ch_out, nm);
+        std::snprintf(nm, sizeof(nm), "stream.cache_tm_out.%d", i);
+        ggml_set_name(cache_tm_out, nm);
+        ggml_set_output(cache_ch_out);
+        ggml_set_output(cache_tm_out);
+
+        bparams.streaming_channel_in  = cache_io.channel_in[i];
+        bparams.streaming_channel_out = cache_ch_out;
+        bparams.streaming_time_in     = cache_io.time_in[i];
+        bparams.streaming_time_out    = cache_tm_out;
+
+        x = conf::build_conformer_block(ctx, x, eb.pos_emb_in,
+                                        to_view(w.blocks[i]),
+                                        bparams,
+                                        /*obs=*/nullptr);
+
+        cache_io.channel_out[i] = cache_ch_out;
+        cache_io.time_out[i]    = cache_tm_out;
+    }
+
+    eb.out = x;
+    ggml_set_output(eb.out);
+    ggml_build_forward_expand(eb.graph, eb.out);
     return eb;
 }
 

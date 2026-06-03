@@ -75,6 +75,44 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       compute_c
                                   MoonshineStreamingKvCache &          kv_cache,
                                   int                                  T_enc);
 
+// Build a graph that computes cross-attn K/V projections for every
+// decoder layer over an [dec_d_model, n_frames] adapter slice, leaving
+// the per-layer K and V tensors readable to host. Does NOT touch the
+// persistent KV cache — the caller accumulates K/V into host buffers
+// across feeds and pushes them into the cache once at finalize via
+// build_cross_kv_commit_graph. This keeps the per-feed work bounded
+// and decouples the cache allocation (which requires the final T_enc)
+// from per-feed computation.
+struct CrossKVProjectionBuild {
+    ggml_tensor *               encoder_out_in = nullptr; // [dec_d_model, n_frames] f32
+    std::vector<ggml_tensor *>  per_layer_k;              // [dec_d_model, n_frames] f32 each
+    std::vector<ggml_tensor *>  per_layer_v;
+    ggml_cgraph *               graph          = nullptr;
+};
+
+CrossKVProjectionBuild build_cross_kv_projection_graph(
+    ggml_context *                       compute_ctx,
+    const MoonshineStreamingWeights &    weights,
+    const MoonshineStreamingHParams &    hp,
+    int                                  n_frames);
+
+// Build a graph that uploads per-layer K and V host buffers (one
+// pair per decoder layer, each [dec_d_model, T_enc] f32) into the
+// kv_cache.cross_k / cross_v slots via ggml_cpy. Routing the upload
+// through ggml_cpy lets the backend handle any F32→F16 conversion
+// that the cache's storage dtype requires.
+struct CrossKVCommitBuild {
+    std::vector<ggml_tensor *>  per_layer_k_in;  // [dec_d_model, T_enc] f32 input each
+    std::vector<ggml_tensor *>  per_layer_v_in;
+    ggml_cgraph *               graph = nullptr;
+};
+
+CrossKVCommitBuild build_cross_kv_commit_graph(
+    ggml_context *                       compute_ctx,
+    const MoonshineStreamingHParams &    hp,
+    MoonshineStreamingKvCache &          kv_cache,
+    int                                  T_enc);
+
 // Build a KV-cached decoder graph for the prompt or step pass.
 DecoderBuild build_decoder_graph_kv(ggml_context *                       compute_ctx,
                                     const MoonshineStreamingWeights &    weights,
@@ -85,5 +123,40 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       compute
                                     int                                  T_enc,
                                     bool                                 skip_log_softmax = false,
                                     bool                                 use_flash        = true);
+
+// ---------------------------------------------------------------------------
+// Offline batched decode (B utterances). Mirrors src/arch/moonshine, with
+// the streaming-specific untied lm_head. The adapter is applied per
+// utterance (serial) before the batched cross-KV, so the cross input here
+// is the already-adapted [dec_d_model, T_enc_max, B] hidden state.
+// ---------------------------------------------------------------------------
+
+DecoderBuild build_cross_kv_graph_batched(ggml_context *                    ctx,
+                                          const MoonshineStreamingWeights & w,
+                                          const MoonshineStreamingHParams & hp,
+                                          MoonshineStreamingKvCache &       kv_cache,
+                                          int                               T_enc_max,
+                                          int                               n_batch);
+
+struct StepBuildBatched {
+    ggml_tensor * token_ids_in  = nullptr;  // i32 [B]
+    ggml_tensor * pos_ids_in    = nullptr;  // i32 [B]
+    ggml_tensor * kv_idx_in     = nullptr;  // i64 [1, B]
+    ggml_tensor * self_mask_in  = nullptr;  // f16 [max_n_kv, 1, 1, B]
+    ggml_tensor * cross_mask_in = nullptr;  // f16 [T_enc_max, 1, 1, B]
+    ggml_tensor * argmax_out    = nullptr;  // i32 [B]
+    int           max_n_kv      = 0;
+    int           n_batch       = 0;
+    ggml_cgraph * graph         = nullptr;
+};
+
+StepBuildBatched build_step_graph_batched(ggml_context *                    ctx,
+                                          const MoonshineStreamingWeights & w,
+                                          const MoonshineStreamingHParams & hp,
+                                          MoonshineStreamingKvCache &       kv_cache,
+                                          int                               max_n_kv,
+                                          int                               T_enc_max,
+                                          int                               n_batch,
+                                          bool                              use_flash = true);
 
 } // namespace transcribe::moonshine_streaming

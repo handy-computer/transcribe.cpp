@@ -336,8 +336,14 @@ def _nemo_preprocessor_to_pre(model_config: dict) -> dict | None:
 def _config_dtype(config: dict | None) -> str | None:
     if not config:
         return None
-    for path in (("text_config", "dtype"), ("text_config", "torch_dtype"),
-                 ("dtype",), ("torch_dtype",)):
+    # Top-level dtype/torch_dtype is HF's canonical declaration for the
+    # composite model. text_config.* is checked only as a fallback for
+    # configs that omit a top-level dtype. Putting sub-config first causes
+    # false FAILs on models whose base-LLM checkpoint left a vestigial
+    # text_config.dtype="float32" while the actual weights are BF16 (e.g.
+    # ibm-granite/granite-speech-4.0-1b-speech).
+    for path in (("dtype",), ("torch_dtype",),
+                 ("text_config", "dtype"), ("text_config", "torch_dtype")):
         node: Any = config
         for k in path:
             node = node.get(k) if isinstance(node, dict) else None

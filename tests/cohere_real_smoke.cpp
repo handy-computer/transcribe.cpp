@@ -139,7 +139,7 @@ int main() {
         return 77;
     }
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     struct transcribe_model * model = nullptr;
 
     const transcribe_status st =
@@ -174,7 +174,10 @@ int main() {
     }
 
     // Family invariants + language catalog.
-    const transcribe_capabilities * caps = transcribe_model_capabilities(model);
+    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK_EQ_INT(caps->native_sample_rate, 16000);

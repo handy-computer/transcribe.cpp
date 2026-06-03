@@ -154,6 +154,15 @@ def main() -> int:
                    help="transcribe-cli binary")
     p.add_argument("--out", type=Path, default=None,
                    help="Output report file (default: auto-derived)")
+    p.add_argument("--batch-size", type=int, default=0,
+                   help="Group N utterances per transcribe_run_batch call "
+                        "(offline batched encoder). 0/1 = per-file serial. "
+                        "Pair with --sort-by-length for efficiency.")
+    p.add_argument("--sort-by-length", action="store_true",
+                   help="Sort the manifest by audio duration before batching "
+                        "so each batch groups similar-length clips (the "
+                        "batched encoder pads to the group max). Output is "
+                        "keyed by file, so id mapping is preserved.")
     p.add_argument("--backend",
                    choices=("auto", "cpu", "cpu_accel", "metal", "vulkan"),
                    default=None,
@@ -166,6 +175,27 @@ def main() -> int:
                    choices=("auto", "none", "segment", "word", "token"),
                    default="none",
                    help="Timestamp granularity passthrough (default: none)")
+    p.add_argument("--stream-chunk-ms", type=int, default=0,
+                   help="When > 0, drive each utterance through the "
+                        "streaming API in N-ms chunks. Requires a model "
+                        "that advertises supports_streaming.")
+    p.add_argument("--stream-att-right", type=int, default=None,
+                   help="Parakeet streaming: pick a right-context "
+                        "(lookahead) setting from the model's training "
+                        "menu. Ignored unless --stream-chunk-ms > 0.")
+    p.add_argument("--stream-buf-left-ms", type=int, default=None,
+                   help="Parakeet-unified buffered streaming: override "
+                        "the left-context size in ms. Ignored unless "
+                        "--stream-chunk-ms > 0 and the model is "
+                        "buffered-streaming capable.")
+    p.add_argument("--stream-buf-chunk-ms", type=int, default=None,
+                   help="Parakeet-unified buffered streaming: override "
+                        "the chunk size in ms. Ignored unless "
+                        "--stream-chunk-ms > 0.")
+    p.add_argument("--stream-buf-right-ms", type=int, default=None,
+                   help="Parakeet-unified buffered streaming: override "
+                        "the right-context (lookahead) size in ms. "
+                        "Ignored unless --stream-chunk-ms > 0.")
     args = p.parse_args()
 
     # Resolve --dataset first (may run ingest.py). --dataset takes
@@ -227,18 +257,38 @@ def main() -> int:
     for e in manifest:
         audio_to_entry[e["audio"]] = e
 
+    # Optional length-sort for efficient batching. The batched encoder pads
+    # every utterance in a group to the group's longest clip, so grouping
+    # similar-length clips avoids wasted compute. Output is keyed by audio
+    # path (audio_to_entry), so reordering the batch list is safe.
+    batch_order = manifest
+    if args.sort_by_length and args.batch_size and args.batch_size > 1:
+        import wave
+
+        def _dur(e: dict) -> float:
+            try:
+                with wave.open(e["audio"]) as w:
+                    return w.getnframes() / float(w.getframerate())
+            except Exception:
+                return 0.0
+
+        batch_order = sorted(manifest, key=_dur)
+
+    bs = args.batch_size if args.batch_size and args.batch_size > 1 else 1
     print(f"model:    {args.model}")
     print(f"manifest: {args.manifest} ({total} utterances)")
     print(f"language: {args.language or '(default)'}")
     print(f"output:   {out_path}")
-    print(f"mode:     batch (single process, model loads once)")
+    print(f"mode:     batch (single process, model loads once); "
+          f"batch_size={bs}"
+          f"{' length-sorted' if (bs > 1 and args.sort_by_length) else ''}")
 
     # Write the batch file list (one wav path per line).
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".list", delete=False
     ) as tf:
         batch_path = tf.name
-        for e in manifest:
+        for e in batch_order:
             tf.write(e["audio"] + "\n")
 
     # Invoke transcribe-cli in batch mode.
@@ -248,6 +298,8 @@ def main() -> int:
         "--batch", batch_path,
         "--batch-jsonl",
     ]
+    if args.batch_size and args.batch_size > 1:
+        cmd += ["--batch-size", str(args.batch_size)]
     if args.backend:
         cmd += ["--backend", args.backend]
     if args.kv_type:
@@ -255,6 +307,16 @@ def main() -> int:
     if args.language:
         cmd += ["--language", args.language]
     cmd += ["--timestamps", args.timestamps]
+    if args.stream_chunk_ms > 0:
+        cmd += ["--stream-chunk-ms", str(args.stream_chunk_ms)]
+        if args.stream_att_right is not None:
+            cmd += ["--stream-att-right", str(args.stream_att_right)]
+        if args.stream_buf_left_ms is not None:
+            cmd += ["--stream-buf-left-ms", str(args.stream_buf_left_ms)]
+        if args.stream_buf_chunk_ms is not None:
+            cmd += ["--stream-buf-chunk-ms", str(args.stream_buf_chunk_ms)]
+        if args.stream_buf_right_ms is not None:
+            cmd += ["--stream-buf-right-ms", str(args.stream_buf_right_ms)]
     print(f"  $ {' '.join(cmd[:6])} ...")
 
     t_start = time.monotonic()
@@ -272,6 +334,7 @@ def main() -> int:
 
     n_done = 0
     n_errors = 0
+    sum_mel = sum_encode = sum_decode = 0.0
 
     with open(out_path, "w") as fout:
         assert proc.stdout is not None
@@ -288,9 +351,25 @@ def main() -> int:
             # Persist it as the first record in the output JSONL, augmented
             # with the run-level language so score.py can auto-route the
             # metric/normalizer without the caller repeating --language.
+            #
+            # Also stamp the decode recipe so every hyp artifact is
+            # self-describing: WER is only comparable across runs when the
+            # recipe matches, and the canonical methodology lives in
+            # docs/tools/wer.md. The library-default knobs not exposed as CLI
+            # flags (temperature ladder 0.0..1.0 step 0.2, compression/logprob/
+            # no-speech thresholds, condition_on_prev=off) are documented there
+            # and recorded here as "decode": "greedy+default-fallback".
             if result.get("type") == "batch_header":
                 if args.language:
                     result["language"] = args.language
+                result["recipe"] = {
+                    "timestamps": args.timestamps,
+                    "language": args.language or "auto-detect",
+                    "batch_size": bs,
+                    "backend": args.backend or "default",
+                    "kv_type": args.kv_type or "default",
+                    "decode": "greedy+default-fallback",
+                }
                 fout.write(json.dumps(result) + "\n")
                 fout.flush()
                 continue
@@ -314,6 +393,9 @@ def main() -> int:
             )
             if out_entry.get("error"):
                 n_errors += 1
+            sum_mel += out_entry["mel_ms"]
+            sum_encode += out_entry["encode_ms"]
+            sum_decode += out_entry["decode_ms"]
 
             fout.write(json.dumps(out_entry) + "\n")
             fout.flush()
@@ -335,6 +417,16 @@ def main() -> int:
 
     print(f"\ndone. {n_done} utterances in {wall:.1f}s "
           f"({n_done/wall:.1f} utt/s), {n_errors} errors")
+    # Stage breakdown. encode is the (amortized) GPU encoder; decode is the
+    # host-side search. With batching, encode/utt shrinks while decode/utt
+    # stays flat, so this shows where the wall actually goes as B grows.
+    stage_total = sum_mel + sum_encode + sum_decode
+    if stage_total > 0:
+        print(f"stage totals (sum of per-utt): "
+              f"mel {sum_mel/1000:.2f}s  encode {sum_encode/1000:.2f}s  "
+              f"decode {sum_decode/1000:.2f}s  "
+              f"(encode {100*sum_encode/stage_total:.0f}% / "
+              f"decode {100*sum_decode/stage_total:.0f}%)")
     print(f"report: {out_path}")
     return 0 if proc.returncode == 0 else 1
 

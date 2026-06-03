@@ -1,6 +1,6 @@
 # transcribe.cpp
 
-C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, targeting Metal and Vulkan for fast GPU inference everywhere.
+C/C++ speech-to-text inference library. Runs diverse STT model families via [GGUF](https://github.com/ggerganov/gguf) models on the [ggml](https://github.com/ggml-org/ggml) runtime, with Metal, Vulkan, and CUDA backends for fast GPU inference.
 
 **Supported models:**
 
@@ -18,6 +18,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | SenseVoice | `sensevoice-small` | [docs/models/sensevoice-small.md](docs/models/sensevoice-small.md) |
 | FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
 | Nemotron Speech Streaming | `nemotron-speech-streaming-en-0.6b` | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
+| Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b{,-plus,-nar}` | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
@@ -38,7 +39,15 @@ cmake -B build -DTRANSCRIBE_VULKAN=ON
 cmake --build build
 ```
 
-`libopenblas-dev` is optional but recommended — it accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
+For CUDA (Linux + NVIDIA GPU):
+
+```bash
+# requires the CUDA toolkit (nvcc) on PATH
+cmake -B build -DTRANSCRIBE_CUDA=ON
+cmake --build build
+```
+
+`libopenblas-dev` is optional but recommended. It accelerates the host-side decoder ~10-15x. Without it the build falls back to a scalar path automatically.
 
 To build the quantization tool:
 

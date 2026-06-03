@@ -157,11 +157,11 @@ void run_case(transcribe_model *  model,
         return;
     }
 
-    transcribe_context_params cp = transcribe_context_default_params();
-    struct transcribe_context * ctx = nullptr;
+    transcribe_session_params cp; transcribe_session_params_init(&cp);
+    struct transcribe_session * ctx = nullptr;
     {
         const transcribe_status st =
-            transcribe_context_init(model, &cp, &ctx);
+            transcribe_session_init(model, &cp, &ctx);
         if (st != TRANSCRIBE_OK || ctx == nullptr) {
             std::fprintf(stderr,
                          "qwen3_asr_e2e_smoke[%s]: FAIL ctx_init: %s\n",
@@ -171,7 +171,7 @@ void run_case(transcribe_model *  model,
         }
     }
 
-    transcribe_params rp = transcribe_default_params();
+    transcribe_run_params rp; transcribe_run_params_init(&rp);
     {
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(),
@@ -181,7 +181,7 @@ void run_case(transcribe_model *  model,
                          "qwen3_asr_e2e_smoke[%s]: FAIL run: %s\n",
                          case_name, transcribe_status_string(st));
             ++g_failures;
-            transcribe_context_free(ctx);
+            transcribe_session_free(ctx);
             return;
         }
     }
@@ -195,7 +195,7 @@ void run_case(transcribe_model *  model,
         std::fprintf(stderr,
                      "FAIL[%s]: transcript is empty\n", case_name);
         ++g_failures;
-        transcribe_context_free(ctx);
+        transcribe_session_free(ctx);
         return;
     }
 
@@ -213,7 +213,7 @@ void run_case(transcribe_model *  model,
         ++g_failures;
     }
 
-    transcribe_context_free(ctx);
+    transcribe_session_free(ctx);
 }
 
 } // namespace
@@ -245,7 +245,7 @@ int main() {
 
     const auto t_start = std::chrono::steady_clock::now();
 
-    transcribe_model_params mp = transcribe_model_default_params();
+    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;
     struct transcribe_model * model = nullptr;
     {
@@ -287,9 +287,9 @@ int main() {
             return EXIT_FAILURE;
         }
 
-        transcribe_context_params cp = transcribe_context_default_params();
-        struct transcribe_context * ctx = nullptr;
-        if (transcribe_context_init(model, &cp, &ctx) != TRANSCRIBE_OK ||
+        transcribe_session_params cp; transcribe_session_params_init(&cp);
+        struct transcribe_session * ctx = nullptr;
+        if (transcribe_session_init(model, &cp, &ctx) != TRANSCRIBE_OK ||
             ctx == nullptr)
         {
             std::fprintf(stderr,
@@ -302,7 +302,7 @@ int main() {
         // Accept path: force "en" on English audio and expect a
         // transcript within the same edit-distance tolerance as the
         // auto-detect jfk case.
-        transcribe_params rp_lang = transcribe_default_params();
+        transcribe_run_params rp_lang; transcribe_run_params_init(&rp_lang);
         rp_lang.language = "en";
         const transcribe_status st =
             transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()),
@@ -343,7 +343,7 @@ int main() {
             ++g_failures;
         }
 
-        transcribe_context_free(ctx);
+        transcribe_session_free(ctx);
     }
 
     // Case 1: jfk.wav (single-chunk).

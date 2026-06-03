@@ -1,0 +1,24 @@
+[project]
+name = "transcribe-granite-nar-env"
+version = "0.1.0"
+description = "Python env for IBM Granite Speech NLE-NAR (non-autoregressive editor) reference dumps and conversion"
+requires-python = ">=3.11,<3.13"
+# transformers pinned to 5.5.3 per the model card. NLE uses trust_remote_code;
+# the modeling/configuration/feature_extraction code lives in the HF repo
+# itself (configuration_nle.py, modeling_nle.py, feature_extraction_nle.py)
+# and is registered via the config.auto_map. flash-attn is required for
+# the NLE bidirectional LM forward (no causal mask, single pass).
+dependencies = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "librosa>=0.10",
+    "numpy>=1.26",
+    "protobuf>=4.25",
+    "safetensors>=0.4",
+    "sentencepiece>=0.2",
+    "soundfile>=0.12",
+    "transformers==5.5.3",
+    "accelerate>=1.0",
+]

@@ -11,6 +11,7 @@
 #include "sanm/sanm.h"
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-kaldi-fbank.h"
 #include "transcribe-load-common.h"
@@ -38,14 +39,15 @@ namespace transcribe::funasr_nano {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   FunAsrNanoModel>);
-static_assert(std::is_base_of_v<transcribe_context, FunAsrNanoContext>);
+static_assert(std::is_base_of_v<transcribe_session, FunAsrNanoSession>);
 
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-FunAsrNanoContext::~FunAsrNanoContext() {
+FunAsrNanoSession::~FunAsrNanoSession() {
     kv_cache.free();
+    kv_cache_batch.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -216,7 +218,7 @@ transcribe_status build_funasr_nano_prompt(const transcribe::Tokenizer & tok,
     return TRANSCRIBE_OK;
 }
 
-void apply_thread_policy(FunAsrNanoContext * cc) {
+void apply_thread_policy(FunAsrNanoSession * cc) {
     int n_threads = cc->n_threads;
     if (n_threads <= 0) {
         n_threads = std::min(8, std::max(1, static_cast<int>(
@@ -239,7 +241,7 @@ void apply_thread_policy(FunAsrNanoContext * cc) {
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -250,7 +252,7 @@ transcribe_status load(
     m->variant   = loader.variant().empty() ? k_default_variant : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -383,12 +385,12 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) return TRANSCRIBE_ERR_INVALID_ARG;
 
-    auto cc = std::make_unique<FunAsrNanoContext>();
+    auto cc = std::make_unique<FunAsrNanoSession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
@@ -423,16 +425,16 @@ transcribe_status init_context(
 // ---------------------------------------------------------------------------
 
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * cc = static_cast<FunAsrNanoContext *>(ctx);
+    auto * cc = static_cast<FunAsrNanoSession *>(session);
     auto * cm = static_cast<FunAsrNanoModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty() ||
         cm->frontend == nullptr)
@@ -617,10 +619,19 @@ transcribe_status run(
         compute_fake_token_len(T_lfr, hp.adaptor_use_low_frame_rate);
 
     const char * lang = (params != nullptr) ? params->language : nullptr;
-    const bool use_itn =
-        (params != nullptr && params->funasr_nano != nullptr)
-            ? params->funasr_nano->use_itn
-            : false;
+    // Generic transcribe_run_params::itn routes here. DEFAULT maps to the
+    // family's shipping default (use_itn=false; matches the upstream
+    // `itn=False` Python path). OFF / ON override explicitly. The
+    // dispatcher's advisory WARN only fires when supports_itn == false;
+    // funasr_nano advertises supports_itn = true, so no WARN here.
+    bool use_itn = false;
+    if (params != nullptr) {
+        switch (params->itn) {
+            case TRANSCRIBE_ITN_MODE_DEFAULT: use_itn = false; break;
+            case TRANSCRIBE_ITN_MODE_OFF:     use_itn = false; break;
+            case TRANSCRIBE_ITN_MODE_ON:      use_itn = true;  break;
+        }
+    }
 
     std::vector<int32_t> prompt_ids;
     int fbank_beg = 0;
@@ -869,7 +880,7 @@ transcribe_status run(
     cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     cc->has_result = true;
 
-    transcribe_context::SegmentEntry seg {};
+    transcribe_session::SegmentEntry seg {};
     seg.text  = transcript;
     seg.t0_ms = 0;
     seg.t1_ms = static_cast<int64_t>(n_samples) * 1000
@@ -881,11 +892,357 @@ transcribe_status run(
 
 } // namespace
 
+// ===========================================================================
+// Offline batched decode (transcribe_run_batch)
+// ===========================================================================
+// Serial frontend+encoder+adaptor per utterance produce each one's audio
+// embedding (adaptor output, [hidden, T_audio]); then the prefill and the
+// autoregressive step loop are batched via the shared qwen3_lm primitives —
+// the same recipe as arch/qwen3_asr.
+
+namespace {
+
+transcribe_status reset_ctx(FunAsrNanoSession * cc, int mb) {
+    if (cc->compute_ctx != nullptr) {
+        ggml_free(cc->compute_ctx);
+        cc->compute_ctx = nullptr;
+    }
+    ggml_init_params ip {};
+    ip.mem_size   = static_cast<size_t>(mb) * 1024 * 1024;
+    ip.mem_buffer = nullptr;
+    ip.no_alloc   = true;
+    cc->compute_ctx = ggml_init(ip);
+    return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_GGUF;
+}
+
+// encoder + adaptor for one utterance from a PRECOMPUTED frontend buffer
+// (the mel/fbank is computed in parallel by the caller) → audio embedding
+// [hidden, T_audio]. Mirrors run()'s encoder/adaptor section (serial).
+transcribe_status audio_embed_one(
+    FunAsrNanoSession * cc, FunAsrNanoModel * cm,
+    const std::vector<float> & frontend_buf, int T_lfr,
+    std::vector<float> & audio_host, int & T_audio_out,
+    int64_t & enc_us) {
+    const auto & hp = cm->hparams;
+    if (T_lfr <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
+
+    // Encoder.
+    if (const transcribe_status st = reset_ctx(cc, 32); st != TRANSCRIBE_OK) return st;
+    EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp, T_lfr);
+    if (eb.graph == nullptr || eb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+    if (cc->sched == nullptr) {
+        cc->sched = ggml_backend_sched_new(
+            cm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(cm->plan.scheduler_list.size()),
+            16384, false, true);
+        if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+    ggml_backend_tensor_set(eb.frontend_in, frontend_buf.data(),
+                            0, frontend_buf.size() * sizeof(float));
+    transcribe::sanm::build_sinusoidal_pe(cc->pe_buf, hp.enc_d_input, T_lfr);
+    ggml_backend_tensor_set(eb.pe_in, cc->pe_buf.data(),
+                            0, cc->pe_buf.size() * sizeof(float));
+    apply_thread_policy(cc);
+    const int64_t t_enc0 = ggml_time_us();
+    if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS)
+        return TRANSCRIBE_ERR_GGUF;
+    enc_us += ggml_time_us() - t_enc0;
+    cc->enc_host.resize(static_cast<size_t>(hp.enc_d_model) * T_lfr);
+    ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0,
+                            cc->enc_host.size() * sizeof(float));
+
+    // Adaptor.
+    if (const transcribe_status st = reset_ctx(cc, 8); st != TRANSCRIBE_OK) return st;
+    AdaptorBuild ab = build_adaptor_graph(cc->compute_ctx, cm->weights, hp, T_lfr);
+    if (ab.graph == nullptr || ab.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, ab.graph)) return TRANSCRIBE_ERR_GGUF;
+    ggml_backend_tensor_set(ab.enc_in, cc->enc_host.data(),
+                            0, cc->enc_host.size() * sizeof(float));
+    const int64_t t_enc1 = ggml_time_us();
+    if (ggml_backend_sched_graph_compute(cc->sched, ab.graph) != GGML_STATUS_SUCCESS)
+        return TRANSCRIBE_ERR_GGUF;
+    enc_us += ggml_time_us() - t_enc1;
+    cc->adaptor_host.resize(static_cast<size_t>(hp.adaptor_llm_dim) * T_lfr);
+    ggml_backend_tensor_get(ab.out, cc->adaptor_host.data(), 0,
+                            cc->adaptor_host.size() * sizeof(float));
+
+    const int fake_token_len =
+        compute_fake_token_len(T_lfr, hp.adaptor_use_low_frame_rate);
+    T_audio_out = fake_token_len;
+    audio_host.assign(
+        cc->adaptor_host.begin(),
+        cc->adaptor_host.begin() +
+            static_cast<size_t>(fake_token_len) * hp.adaptor_llm_dim);
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status run_batch_serial(FunAsrNanoSession * cc,
+                                   const float * const * pcm,
+                                   const int * n_samples, int n,
+                                   const transcribe_run_params * params) {
+    for (int i = 0; i < n; ++i) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        const transcribe_status st =
+            (pcm[i] == nullptr || n_samples[i] <= 0)
+                ? TRANSCRIBE_ERR_INVALID_ARG
+                : run(cc, pcm[i], n_samples[i], params);
+        if (st == TRANSCRIBE_OK) {
+            cc->batch_results.push_back(cc->capture_result(st));
+        } else {
+            transcribe_session::ResultSet rs;
+            rs.status = st;
+            cc->batch_results.push_back(std::move(rs));
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+} // namespace
+
+transcribe_status run_batch(
+    transcribe_session *          session,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params) {
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0)
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    auto * cc = static_cast<FunAsrNanoSession *>(session);
+    auto * cm = static_cast<FunAsrNanoModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty() || cm->frontend == nullptr)
+        return TRANSCRIBE_ERR_INVALID_ARG;
+
+    if (!cc->decoder_use_flash || transcribe::debug::enabled() || n == 1)
+        return run_batch_serial(cc, pcm, n_samples, n, params);
+
+    transcribe::debug::init();
+    const auto & hp = cm->hparams;
+
+    // ---- Pass 1: per-utterance frontend + encoder + adaptor (serial) ----
+    std::vector<char> valid(n, 0);
+    std::vector<std::vector<float>> audio_hosts(n);
+    std::vector<int> T_audio(n, 0);
+    std::vector<std::vector<int32_t>> prompt_ids(n);
+    std::vector<int> T_prompt(n, 0);
+    int prefix_len = 0;
+    int64_t mel_us = 0, enc_us = 0;
+
+    const char * lang = (params != nullptr) ? params->language : nullptr;
+    bool use_itn = (params != nullptr && params->itn == TRANSCRIBE_ITN_MODE_ON);
+
+    // ---- Pass 0: parallel frontend (kaldi-fbank, host-side, thread-safe) ----
+    std::vector<std::vector<float>> fbufs(n);
+    std::vector<int> T_lfr(n, 0);
+    int n_mel_threads = cc->n_threads;
+    if (n_mel_threads <= 0)
+        n_mel_threads = std::min(8, std::max(1, static_cast<int>(
+            std::thread::hardware_concurrency())));
+    const int64_t t_mel0 = ggml_time_us();
+    transcribe::parallel_for_all(n, n_mel_threads, [&](int b) {
+        if (pcm[b] == nullptr || n_samples[b] <= 0) return true;
+        const int t = cm->frontend->compute(
+            pcm[b], static_cast<size_t>(n_samples[b]), fbufs[b]);
+        if (t > 0) T_lfr[b] = t;
+        return true;
+    });
+    mel_us += ggml_time_us() - t_mel0;
+
+    // ---- Pass 1: per-utterance encoder + adaptor (serial) ----
+    for (int b = 0; b < n; ++b) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        if (T_lfr[b] <= 0) continue;
+        if (audio_embed_one(cc, cm, fbufs[b], T_lfr[b],
+                            audio_hosts[b], T_audio[b], enc_us) != TRANSCRIBE_OK)
+            continue;
+        int fbank_beg = 0;
+        if (build_funasr_nano_prompt(cm->tok, cm->chat_tokens, lang, use_itn,
+                                     T_audio[b], prompt_ids[b], fbank_beg)
+            != TRANSCRIBE_OK)
+            continue;
+        T_prompt[b] = static_cast<int>(prompt_ids[b].size());
+        prefix_len  = fbank_beg;
+        valid[b]    = 1;
+    }
+
+    int max_T_prompt = 0;
+    for (int b = 0; b < n; ++b) if (valid[b]) max_T_prompt = std::max(max_T_prompt, T_prompt[b]);
+    if (max_T_prompt == 0) {
+        for (int b = 0; b < n; ++b) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+        }
+        return TRANSCRIBE_OK;
+    }
+    const int max_new = 256;
+    int max_n_kv = 1024;
+    while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
+
+    // ---- Allocate batched KV cache ----
+    ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
+                      ? GGML_TYPE_F32 : GGML_TYPE_F16;
+    if (cc->kv_cache_batch.self_k == nullptr ||
+        cc->kv_batch_cap != n || cc->kv_batch_n_ctx != max_n_kv) {
+        cc->kv_cache_batch.free();
+        if (!transcribe::qwen3_lm::kv_init_batched(
+                cc->kv_cache_batch, cm->plan.primary, max_n_kv,
+                hp.dec_n_kv_heads, hp.dec_head_dim, hp.dec_n_layers, n, kv_type)) {
+            std::fprintf(stderr, "funasr_nano run_batch: kv_init_batched failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        cc->kv_batch_cap = n; cc->kv_batch_n_ctx = max_n_kv;
+    } else if (cc->kv_cache_batch.buffer != nullptr) {
+        ggml_backend_buffer_clear(cc->kv_cache_batch.buffer, 0);
+    }
+
+    // ---- Pass 2: batched prefill ----
+    std::vector<int32_t> next_tok(n, 0);
+    std::vector<int> n_past(n, 0);
+    std::vector<std::vector<int32_t>> generated(n);
+    {
+        int T_audio_max = 0;
+        for (int b = 0; b < n; ++b) if (valid[b]) T_audio_max = std::max(T_audio_max, T_audio[b]);
+        T_audio_max = std::max(1, T_audio_max);
+        if (reset_ctx(cc, 32) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+        PrefillBuildBatched pb = build_prefill_graph_batched(
+            cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch,
+            max_T_prompt, T_audio_max, n, cc->decoder_use_flash);
+        if (pb.graph == nullptr || pb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) return TRANSCRIBE_ERR_GGUF;
+
+        const int hidden = hp.dec_hidden;
+        std::vector<int32_t> ids(static_cast<size_t>(max_T_prompt) * n, 0);
+        std::vector<float> aud(static_cast<size_t>(hidden) * T_audio_max * n, 0.0f);
+        std::vector<int64_t> aidx(static_cast<size_t>(T_audio_max) * n, 0);
+        std::vector<int64_t> kidx(static_cast<size_t>(max_T_prompt) * n);
+        std::vector<int32_t> lidx(n, 0);
+        for (int b = 0; b < n; ++b) {
+            const int ta = valid[b] ? T_audio[b] : 0;
+            const int tp = valid[b] ? T_prompt[b] : 0;
+            if (valid[b]) {
+                std::memcpy(ids.data() + static_cast<size_t>(b) * max_T_prompt,
+                            prompt_ids[b].data(),
+                            static_cast<size_t>(tp) * sizeof(int32_t));
+                std::memcpy(aud.data() + static_cast<size_t>(b) * T_audio_max * hidden,
+                            audio_hosts[b].data(),
+                            static_cast<size_t>(ta) * hidden * sizeof(float));
+            }
+            for (int j = 0; j < T_audio_max; ++j)
+                aidx[static_cast<size_t>(b) * T_audio_max + j] =
+                    (j < ta) ? (prefix_len + j) : (tp + j - ta);
+            for (int t = 0; t < max_T_prompt; ++t)
+                kidx[static_cast<size_t>(b) * max_T_prompt + t] = t;
+            lidx[b] = valid[b] ? (tp - 1) : 0;
+        }
+        ggml_backend_tensor_set(pb.input_ids_in, ids.data(), 0, ids.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.audio_in, aud.data(), 0, aud.size() * sizeof(float));
+        ggml_backend_tensor_set(pb.audio_idx_in, aidx.data(), 0, aidx.size() * sizeof(int64_t));
+        {
+            std::vector<int32_t> pos(max_T_prompt);
+            for (int t = 0; t < max_T_prompt; ++t) pos[t] = t;
+            ggml_backend_tensor_set(pb.positions_in, pos.data(), 0, pos.size() * sizeof(int32_t));
+        }
+        {
+            const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f);
+            const ggml_fp16_t mn = ggml_fp32_to_fp16(-INFINITY);
+            std::vector<ggml_fp16_t> mask(static_cast<size_t>(max_T_prompt) * max_T_prompt, mn);
+            for (int q = 0; q < max_T_prompt; ++q)
+                std::fill(mask.begin() + static_cast<size_t>(q) * max_T_prompt,
+                          mask.begin() + static_cast<size_t>(q) * max_T_prompt + q + 1, mz);
+            ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
+        }
+        ggml_backend_tensor_set(pb.kv_idx_in, kidx.data(), 0, kidx.size() * sizeof(int64_t));
+        ggml_backend_tensor_set(pb.last_idx_in, lidx.data(), 0, lidx.size() * sizeof(int32_t));
+        apply_thread_policy(cc);
+        if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        std::vector<int32_t> amax(n, 0);
+        ggml_backend_tensor_get(pb.out, amax.data(), 0, amax.size() * sizeof(int32_t));
+        for (int b = 0; b < n; ++b) {
+            if (!valid[b]) continue;
+            n_past[b] = T_prompt[b];
+            next_tok[b] = amax[b];
+            generated[b].push_back(amax[b]);
+        }
+    }
+
+    // ---- Pass 3: batched step loop (shared qwen3_lm driver) ----
+    const int32_t eos_id = cm->hparams.eos_token_id;
+
+    if (reset_ctx(cc, 16) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+    StepBuildBatched sb = build_step_graph_batched(
+        cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch,
+        max_n_kv, n, cc->decoder_use_flash);
+    if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
+
+    transcribe::qwen3_lm::StepBatchedIO io {};
+    io.input_ids = sb.input_ids_in;
+    io.positions = sb.position_in;
+    io.kv_idx    = sb.kv_idx_in;
+    io.mask      = sb.mask_in;
+    io.argmax    = sb.out;
+    io.graph     = sb.graph;
+
+    transcribe::qwen3_lm::StepBatchedState step_state;
+    step_state.valid    = valid;
+    step_state.next_tok = next_tok;
+    step_state.n_past   = n_past;
+
+    transcribe::qwen3_lm::StepLoopStats step_stats;
+    if (const transcribe_status st = transcribe::qwen3_lm::run_batched_step_loop(
+            cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
+            generated, &step_stats); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const int64_t step_us = step_stats.step_us;
+
+    // ---- Capture results ----
+    const int valid_count = std::max(1, static_cast<int>(
+        std::count(valid.begin(), valid.end(), char(1))));
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+            continue;
+        }
+        std::vector<int32_t> gen = generated[b];
+        if (!gen.empty() && gen.back() == eos_id) gen.pop_back();
+        std::string transcript = cm->tok.decode(gen.data(), static_cast<int>(gen.size()));
+        transcribe_session::ResultSet rs;
+        rs.full_text = transcript;
+        rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        rs.has_result = true;
+        rs.status = TRANSCRIBE_OK;
+        transcribe_session::SegmentEntry seg {};
+        seg.text = transcript; seg.t0_ms = 0;
+        seg.t1_ms = static_cast<int64_t>(n_samples[b]) * 1000
+                  / static_cast<int64_t>(hp.fe_sample_rate);
+        rs.segments.push_back(std::move(seg));
+        rs.t_mel_us = mel_us / valid_count;
+        rs.t_encode_us = enc_us / valid_count;
+        rs.t_decode_us = step_us / valid_count;
+        cc->batch_results.push_back(std::move(rs));
+    }
+    return TRANSCRIBE_OK;
+}
+
 extern const Arch arch = {
-    /* .name         = */ "funasr_nano",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name             = */ "funasr_nano",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .run_batch        = */ run_batch,
+    /* .stream_validate  = */ nullptr,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::funasr_nano

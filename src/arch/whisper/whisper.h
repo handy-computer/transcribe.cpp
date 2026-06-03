@@ -1,7 +1,7 @@
 // arch/whisper/whisper.h - Whisper ASR model and context types.
 //
 // This header is INTERNAL to src/arch/whisper/. It defines the concrete
-// classes that derive from transcribe_model / transcribe_context for
+// classes that derive from transcribe_model / transcribe_session for
 // the Whisper ASR family (encoder-decoder transformer with cross-
 // attention decoder).
 //
@@ -14,10 +14,11 @@
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
+#include "transcribe/whisper.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -39,7 +40,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::whisper {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // ---------------------------------------------------------------------------
 // KV cache for the autoregressive decoder.
@@ -72,6 +73,14 @@ struct WhisperKvCache {
 
     // Maximum self-attention sequence length.
     int n_ctx = 0;
+
+    // Batch dimension. 1 for the single-shot path (layout byte-identical
+    // to the pre-batch cache); >1 for the offline batched decode, where
+    // each role tensor carries a per-utterance slab. Layout (batched):
+    //   self_k/self_v  : [d_model * n_ctx * n_batch * n_layer]
+    //   cross_k/cross_v: [d_model * T_enc * n_batch * n_layer]
+    // with slab(layer,b) at offset (b + n_batch*layer)*<rows>*d_model.
+    int n_batch = 1;
 
     // Current number of filled positions in the self-attention cache.
     int n = 0;
@@ -107,6 +116,7 @@ struct WhisperKvCache {
         self_v = nullptr;
         cross_k = nullptr;
         cross_v = nullptr;
+        n_batch = 1;
         n = 0;
         head = 0;
         T_enc = 0;
@@ -181,6 +191,20 @@ bool kv_cache_init(WhisperKvCache & cache,
                    int              d_model,
                    int              n_layer,
                    ggml_type        kv_type);
+
+// Allocate batched cache tensors for the offline batched decode. Same as
+// kv_cache_init but each role tensor carries an n_batch dimension; the
+// cross cache uses T_enc (== T_enc_max, no 256-pad — the batched cross
+// graph + a per-utterance cross-pad mask handle the FA shape). n_batch==1
+// is byte-identical to kv_cache_init.
+bool kv_cache_init_batched(WhisperKvCache & cache,
+                           ggml_backend_t   backend,
+                           int              n_ctx,
+                           int              T_enc,
+                           int              d_model,
+                           int              n_layer,
+                           int              n_batch,
+                           ggml_type        kv_type);
 
 // ---------------------------------------------------------------------------
 // Per-stage timing counters for performance diagnosis.
@@ -303,7 +327,7 @@ struct WhisperModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct WhisperContext final : public transcribe_context {
+struct WhisperSession final : public transcribe_session {
     ggml_context *        compute_ctx      = nullptr;
     // Currently-allocated capacity of compute_ctx (mem_size). Used by
     // ensure_compute_ctx to decide between ggml_reset (cheap reuse)
@@ -359,8 +383,8 @@ struct WhisperContext final : public transcribe_context {
     // touch this buffer.
     std::vector<double> sample_scratch;
 
-    WhisperContext() = default;
-    ~WhisperContext() override;
+    WhisperSession() = default;
+    ~WhisperSession() override;
 };
 
 } // namespace transcribe::whisper

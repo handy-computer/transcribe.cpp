@@ -82,8 +82,16 @@ All Parakeet variants support:
 - **Token-level timestamps** at the encoder frame rate (TDT and RNN-T;
   CTC also exposes frame-level alignment).
 
+**Buffered streaming** is supported on `parakeet-unified-en-0.6b`
+across all six published `(L, C, R)` configurations from the model's
+training menu (lookahead latency from 160ms at `(70, 1, 1)` through
+2.08s at the default `(70, 13, 13)`). See
+[parakeet-unified-en-0.6b.md](parakeet-unified-en-0.6b.md#streaming)
+for the per-config WER and the `--stream-buf-{left,chunk,right}-ms`
+CLI surface. Other Parakeet variants run offline only.
+
 What's not supported (consistent across the family): translation,
-real-time streaming, VAD, speaker diarization. Language coverage is
-English-only except `parakeet-tdt-0.6b-v3` (25 European languages, no
-auto-detect — language hint required). See the family doc for the full
-runtime contract.
+VAD, speaker diarization. Language coverage is English-only except
+`parakeet-tdt-0.6b-v3` (25 European languages, no auto-detect —
+language hint required). See the family doc for the full runtime
+contract.

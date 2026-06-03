@@ -38,6 +38,7 @@ option(TRANSCRIBE_BUILD_EXAMPLES "Build example CLI"        ON)
 option(TRANSCRIBE_BUILD_TOOLS    "Build inspect / quantize" OFF)  # post pass 2
 option(TRANSCRIBE_METAL          "Enable Metal backend"     ${TRANSCRIBE_IS_APPLE_SILICON})
 option(TRANSCRIBE_VULKAN         "Enable Vulkan backend"    OFF)  # post-v1
+option(TRANSCRIBE_CUDA           "Enable CUDA backend"      OFF)  # opt-in; Linux + nvcc
 option(TRANSCRIBE_SANITIZE       "Enable ASan + UBSan"      OFF)
 option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 
@@ -64,6 +65,16 @@ function(transcribe_apply_warnings tgt)
             -Wshadow
             -Wpedantic
             -Wno-unused-parameter
+            # The output-side TRANSCRIBE_*_INIT macros (timings,
+            # stream_update, capabilities, whisper_chunk_trace, ...)
+            # are deliberate zero-fill aggregate initializers:
+            # struct_size is set, every other field falls to
+            # initializer zero by C aggregate-init rules. The
+            # zero-means-absent contract is documented and load-bearing.
+            # -Wmissing-field-initializers would fire on every use of
+            # those macros; the warning's signal-to-noise on this
+            # codebase is too low to justify keeping it on.
+            -Wno-missing-field-initializers
         )
     endif()
 endfunction()
@@ -117,6 +128,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 set(GGML_METAL    ${TRANSCRIBE_METAL}  CACHE BOOL "" FORCE)
 set(GGML_VULKAN   ${TRANSCRIBE_VULKAN} CACHE BOOL "" FORCE)
+set(GGML_CUDA     ${TRANSCRIBE_CUDA}   CACHE BOOL "" FORCE)
 set(GGML_BLAS OFF CACHE BOOL "" FORCE)
 
 # We don't want ggml's tests / examples leaking into our build tree. They

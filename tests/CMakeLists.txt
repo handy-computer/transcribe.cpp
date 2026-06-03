@@ -54,6 +54,12 @@ target_link_libraries(transcribe_api_smoke PRIVATE transcribe)
 
 add_test(NAME transcribe_api_smoke COMMAND transcribe_api_smoke)
 
+add_test(
+    NAME transcribe_extension_umbrella_check
+    COMMAND ${CMAKE_COMMAND}
+        -DTRANSCRIBE_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/check_extension_umbrella.cmake)
+
 # -----------------------------------------------------------------------------
 # Backend classification unit test
 # -----------------------------------------------------------------------------
@@ -100,6 +106,30 @@ add_test(NAME transcribe_backend_init_unit
     COMMAND transcribe_backend_init_unit)
 
 # -----------------------------------------------------------------------------
+# Parakeet chunked_limited_with_rc attention mask unit test
+# -----------------------------------------------------------------------------
+#
+# Validates compute_chunked_limited_with_rc_mask against an inline
+# reproduction of NeMo's ConformerEncoder._create_masks formula for the
+# chunked_limited_with_rc branch. The buffered streaming driver
+# (parakeet-unified-en-0.6b) feeds this mask into rel_pos_mhsa; any
+# divergence from NeMo would break the streaming WER gate.
+
+add_executable(transcribe_parakeet_chunked_limited_with_rc_mask_unit
+    parakeet_chunked_limited_with_rc_mask_unit.cpp)
+
+target_link_libraries(transcribe_parakeet_chunked_limited_with_rc_mask_unit
+    PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_parakeet_chunked_limited_with_rc_mask_unit
+    PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_parakeet_chunked_limited_with_rc_mask_unit)
+
+add_test(NAME transcribe_parakeet_chunked_limited_with_rc_mask_unit
+    COMMAND transcribe_parakeet_chunked_limited_with_rc_mask_unit)
+
+# -----------------------------------------------------------------------------
 # F16 → F32 conv pointwise promotion unit test
 # -----------------------------------------------------------------------------
 #
@@ -141,6 +171,23 @@ add_test(NAME transcribe_run_dispatch_unit
     COMMAND transcribe_run_dispatch_unit)
 
 # -----------------------------------------------------------------------------
+# Dispatcher-level streaming entry-point behavior
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_stream_dispatch_unit
+    stream_dispatch_unit.cpp)
+
+target_link_libraries(transcribe_stream_dispatch_unit PRIVATE transcribe)
+
+target_include_directories(transcribe_stream_dispatch_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_stream_dispatch_unit)
+
+add_test(NAME transcribe_stream_dispatch_unit
+    COMMAND transcribe_stream_dispatch_unit)
+
+# -----------------------------------------------------------------------------
 # Synthetic GGUF fixtures (for the loader smoke test)
 # -----------------------------------------------------------------------------
 
@@ -155,6 +202,9 @@ set(TRANSCRIBE_FIXTURE_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/corrupt_magic.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_v3.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_cache_aware.gguf
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tokenizer_minimal_streaming_buffered.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_cohere_minimal.gguf
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/arch_qwen3_asr_minimal.gguf)
 
@@ -249,6 +299,62 @@ if(TRANSCRIBE_UV)
     add_test(NAME transcribe_tokenizer_smoke COMMAND transcribe_tokenizer_smoke)
     set_tests_properties(transcribe_tokenizer_smoke PROPERTIES
         SKIP_RETURN_CODE 77)
+
+    # -------------------------------------------------------------------------
+    # Streaming capability gate against a real loaded model (Phase 3)
+    # -------------------------------------------------------------------------
+    #
+    # Uses two parakeet fixtures (default capability + KV-override) to
+    # pin (a) supports_streaming reads correctly from both family default
+    # and stt.capability.streaming KV, and (b) transcribe_stream_begin
+    # returns NOT_IMPLEMENTED in both cases — once on the capability
+    # gate, once on the dispatcher's hook-set check. Public-API only
+    # (no internal-header reach).
+    add_executable(transcribe_stream_capability_unit
+        stream_capability_unit.cpp)
+
+    target_link_libraries(transcribe_stream_capability_unit PRIVATE transcribe)
+
+    target_compile_definitions(transcribe_stream_capability_unit PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_stream_capability_unit)
+
+    add_dependencies(transcribe_stream_capability_unit fixtures)
+
+    add_test(NAME transcribe_stream_capability_unit
+        COMMAND transcribe_stream_capability_unit)
+    set_tests_properties(transcribe_stream_capability_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
+
+    # -------------------------------------------------------------------------
+    # Parakeet streaming extension sentinel-reject regression
+    # -------------------------------------------------------------------------
+    #
+    # Pins the per-field "< -1 sentinel returns INVALID_ARG" rule for
+    # both the cache-aware (transcribe_parakeet_stream_ext) and the
+    # chunked-attention buffered (transcribe_parakeet_buffered_stream_ext)
+    # streaming extensions. Uses toy ChunkedLimited and ChunkedLimitedWithRc
+    # fixtures so the parakeet stream_begin hook routes into each
+    # validation path; the rejection fires before any compute, so the
+    # toy fixtures without real weights are sufficient.
+    add_executable(transcribe_parakeet_stream_ext_reject_unit
+        parakeet_stream_ext_reject_unit.cpp)
+
+    target_link_libraries(transcribe_parakeet_stream_ext_reject_unit
+        PRIVATE transcribe)
+
+    target_compile_definitions(transcribe_parakeet_stream_ext_reject_unit PRIVATE
+        "TRANSCRIBE_TEST_FIXTURES_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/fixtures\"")
+
+    transcribe_apply_warnings(transcribe_parakeet_stream_ext_reject_unit)
+
+    add_dependencies(transcribe_parakeet_stream_ext_reject_unit fixtures)
+
+    add_test(NAME transcribe_parakeet_stream_ext_reject_unit
+        COMMAND transcribe_parakeet_stream_ext_reject_unit)
+    set_tests_properties(transcribe_parakeet_stream_ext_reject_unit PROPERTIES
+        SKIP_RETURN_CODE 77)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -339,6 +445,42 @@ endif()
 # TRANSCRIBE_REAL_PARAKEET_GGUF is unset. The reference text is
 # baked into the test source, not a golden file on disk, so the
 # test is hermetic — it does not need a golden generation step.
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_moonshine_streaming_stream_parity
+        moonshine_streaming_stream_parity.cpp)
+
+    target_link_libraries(transcribe_moonshine_streaming_stream_parity
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_moonshine_streaming_stream_parity PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_moonshine_streaming_stream_parity)
+
+    add_test(NAME transcribe_moonshine_streaming_stream_parity
+        COMMAND transcribe_moonshine_streaming_stream_parity)
+    set_tests_properties(transcribe_moonshine_streaming_stream_parity PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_stream_committed_pointer_stability
+        stream_committed_pointer_stability.cpp)
+
+    target_link_libraries(transcribe_stream_committed_pointer_stability
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_stream_committed_pointer_stability PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_stream_committed_pointer_stability)
+
+    add_test(NAME transcribe_stream_committed_pointer_stability
+        COMMAND transcribe_stream_committed_pointer_stability)
+    set_tests_properties(transcribe_stream_committed_pointer_stability PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_executable(transcribe_decoder_smoke

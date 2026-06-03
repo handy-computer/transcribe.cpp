@@ -75,6 +75,10 @@ struct PrefillBuild {
 //
 // The kv_cache is WRITTEN by the graph. Callers should set
 // kv_cache.n = T_prompt and kv_cache.head = T_prompt after compute.
+// kv_batch_slot / kv_n_batch: for offline batched decode, write this
+// utterance's KV into slab `kv_batch_slot` of a batched cache holding
+// `kv_n_batch` slabs (see qwen3_lm::block_prefill / kv_init_batched).
+// Defaults (0, 1) reproduce the single-shot KV layout exactly.
 PrefillBuild build_prefill_graph(ggml_context *                ctx,
                                  const QwenAsrWeights &        weights,
                                  const QwenAsrHParams &        hp,
@@ -84,7 +88,9 @@ PrefillBuild build_prefill_graph(ggml_context *                ctx,
                                  int                           prefix_len,
                                  int                           suffix_len,
                                  bool                          use_flash,
-                                 bool                          slice_last);
+                                 bool                          slice_last,
+                                 int                           kv_batch_slot = 0,
+                                 int                           kv_n_batch    = 1);
 
 // ---------- Step graph (one token) ----------
 
@@ -117,5 +123,72 @@ StepBuild build_step_graph(ggml_context *                  ctx,
                            transcribe::qwen3_lm::KvCache & kv_cache,
                            int                             max_n_kv,
                            bool                            use_flash);
+
+// ---------- Batched prefill graph (B utterances, T tokens each) ----------
+
+struct PrefillBuildBatched {
+    ggml_tensor * input_ids_in = nullptr;  // [T_prompt_max, B] i32 (audio_token placeholders)
+    ggml_tensor * enc_out_in   = nullptr;  // [enc_dim, T_enc_max, B] f32 (packed, padded)
+    ggml_tensor * enc_idx_in   = nullptr;  // [T_enc_max, B] i64 (audio scatter target rows)
+    ggml_tensor * positions_in = nullptr;  // [T_prompt_max] i32 (shared 0..T-1)
+    ggml_tensor * mask_in      = nullptr;  // [T_prompt_max, T_prompt_max] f16 causal (shared)
+    ggml_tensor * kv_idx_in    = nullptr;  // [T_prompt_max, B] i64 (idx[t,b] = t)
+    ggml_tensor * last_idx_in  = nullptr;  // [1, B] i32 (each utterance's last real position)
+    ggml_tensor * logits       = nullptr;  // [vocab, B] last-real-position logits
+    ggml_tensor * out          = nullptr;  // [B] i32 argmax (first generated token)
+    ggml_cgraph * graph        = nullptr;
+
+    int T_prompt_max = 0;
+    int T_enc_max    = 0;
+    int n_batch      = 0;
+};
+
+// Build a batched prefill graph: B prompts of up to T_prompt_max tokens each,
+// writing each utterance's K/V into slab b of a batched cache (kv_init_batched).
+// Audio is injected by ggml_set_rows scatter of enc_out into the audio
+// placeholder positions (per-utterance scatter indices in enc_idx_in). The
+// last-real-position logits per utterance are gathered via last_idx_in, so the
+// readback is [vocab, B] (not [vocab, T_prompt_max, B]). Requires use_flash.
+PrefillBuildBatched build_prefill_graph_batched(
+    ggml_context *                  ctx,
+    const QwenAsrWeights &          weights,
+    const QwenAsrHParams &          hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             T_prompt_max,
+    int                             T_enc_max,
+    int                             n_batch,
+    bool                            use_flash);
+
+// ---------- Batched step graph (B utterances, one token each) ----------
+
+struct StepBuildBatched {
+    ggml_tensor * input_ids_in = nullptr;  // [B] i32
+    ggml_tensor * position_in  = nullptr;  // [B] i32, value = per-row n_past
+    ggml_tensor * kv_idx_in    = nullptr;  // [1, B] i64, per-row KV write row
+    ggml_tensor * mask_in      = nullptr;  // [max_n_kv, 1, 1, B] f16
+    ggml_tensor * logits       = nullptr;  // [vocab, B] f32 (parity/sampling)
+    ggml_tensor * out          = nullptr;  // [B] i32 — per-row argmax token id
+    ggml_cgraph * graph        = nullptr;
+
+    int           max_n_kv     = 0;
+    int           n_batch      = 0;
+};
+
+// Build a static-shape batched step graph reused across every step of an
+// offline batch of `n_batch` utterances against a batched KV cache
+// (qwen3_lm::kv_init_batched). The four input tensors are updated per step:
+//   input_ids_in [B]            — the token to embed for each utterance
+//   position_in  [B]            — RoPE position per utterance (= its n_past)
+//   kv_idx_in    [1, B]         — KV write row per utterance (= its n_past)
+//   mask_in      [max_n_kv,1,1,B] — per-utterance attention mask
+// Requires use_flash (block_step_batched has no manual-GQA path).
+StepBuildBatched build_step_graph_batched(
+    ggml_context *                  ctx,
+    const QwenAsrWeights &          weights,
+    const QwenAsrHParams &          hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             max_n_kv,
+    int                             n_batch,
+    bool                            use_flash);
 
 } // namespace transcribe::qwen3_asr

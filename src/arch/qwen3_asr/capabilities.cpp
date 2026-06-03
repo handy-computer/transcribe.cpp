@@ -4,7 +4,9 @@
 
 namespace transcribe::qwen3_asr {
 
-void apply_family_invariants(transcribe_capabilities & caps) {
+void apply_family_invariants(transcribe_model & model) {
+    transcribe_capabilities & caps = model.caps;
+
     caps.native_sample_rate = 16000;
 
     // Qwen3-ASR emits transcript text inside a Qwen-style chat response.
@@ -31,11 +33,8 @@ void apply_family_invariants(transcribe_capabilities & caps) {
 
     // Cancellation is wired at the per-run level. Whisper-specific
     // long-form / temperature-fallback / initial-prompt features do
-    // not apply here.
-    caps.supports_initial_prompt       = false;
-    caps.supports_temperature_fallback = false;
-    caps.supports_long_form            = false;
-    caps.supports_cancellation         = true;
+    // not apply here. No runtime PNC/ITN toggle.
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
 } // namespace transcribe::qwen3_asr

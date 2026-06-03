@@ -116,4 +116,40 @@ StepBuild build_step_graph(ggml_context *           compute_ctx,
                            int                      T_enc,
                            bool                     use_flash = true);
 
+// ---------------------------------------------------------------------------
+// Offline batched decode (B utterances). Mirrors src/arch/cohere + canary,
+// with moonshine's partial RoPE on self-attn and head-dim padding.
+// ---------------------------------------------------------------------------
+
+// Batched cross-attention K/V from packed encoder outputs [d_model, T_enc_max, B].
+DecoderBuild build_cross_kv_graph_batched(ggml_context *           ctx,
+                                          const MoonshineWeights & w,
+                                          const MoonshineHParams & hp,
+                                          MoonshineKvCache &       kv_cache,
+                                          int                      T_enc_max,
+                                          int                      n_batch);
+
+// Static-topology batched single-step graph for B utterances, reused for the
+// single-token prompt feed and generation. Requires flash.
+struct StepBuildBatched {
+    ggml_tensor * token_ids_in  = nullptr;  // i32 [B]
+    ggml_tensor * pos_ids_in    = nullptr;  // i32 [B]
+    ggml_tensor * kv_idx_in     = nullptr;  // i64 [1, B]
+    ggml_tensor * self_mask_in  = nullptr;  // f16 [max_n_kv, 1, 1, B]
+    ggml_tensor * cross_mask_in = nullptr;  // f16 [T_enc_max, 1, 1, B]
+    ggml_tensor * argmax_out    = nullptr;  // i32 [B]
+    int           max_n_kv      = 0;
+    int           n_batch       = 0;
+    ggml_cgraph * graph         = nullptr;
+};
+
+StepBuildBatched build_step_graph_batched(ggml_context *           ctx,
+                                          const MoonshineWeights & w,
+                                          const MoonshineHParams & hp,
+                                          MoonshineKvCache &       kv_cache,
+                                          int                      max_n_kv,
+                                          int                      T_enc_max,
+                                          int                      n_batch,
+                                          bool                     use_flash = true);
+
 } // namespace transcribe::moonshine

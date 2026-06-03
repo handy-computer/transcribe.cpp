@@ -65,3 +65,6 @@ PORTING.md
 RESUME.md
 PERF.md
 WER_TESTING.md
+
+# IDE / language-server artifacts
+.cache/

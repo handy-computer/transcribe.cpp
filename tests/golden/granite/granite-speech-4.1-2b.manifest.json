@@ -1,0 +1,50 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "granite",
+  "variant": "granite-speech-4.1-2b",
+  "source_model": {
+    "hf_repo": "ibm-granite/granite-speech-4.1-2b",
+    "hf_revision": "8f4bb5f31ae98971bd218169f00065a041d20058"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://github.com/huggingface/transformers",
+    "revision": "v5.8.1",
+    "entrypoint": "scripts/dump_reference_granite_transformers.py",
+    "dump_args": ["--instruction", "transcribe the speech with proper punctuation and capitalization."]
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 80,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 100353,
+    "special_tokens": {
+      "bos": 100257,
+      "eos": 100257,
+      "pad": 100256,
+      "audio": 100352
+    }
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "pt", "ja"],
+    "language_detection": false,
+    "translation": true,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/granite.json",
+  "cases": ["jfk"]
+}

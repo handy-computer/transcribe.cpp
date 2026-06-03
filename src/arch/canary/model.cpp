@@ -17,6 +17,7 @@
 #include "weights.h"
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -47,9 +48,9 @@ namespace transcribe::canary {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   CanaryModel>);
-static_assert(std::is_base_of_v<transcribe_context, CanaryContext>);
+static_assert(std::is_base_of_v<transcribe_session, CanarySession>);
 
-CanaryContext::~CanaryContext() {
+CanarySession::~CanarySession() {
     kv_cache.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
@@ -123,11 +124,59 @@ bool kv_cache_init(CanaryKvCache & cache,
         ggml_nbytes(cache.cross_k) + ggml_nbytes(cache.cross_v);
     std::fprintf(stderr,
                  "canary kv_cache: allocated %.1f MB (%s) "
-                 "(self: %d ctx x %d layers, cross: %d T_enc x %d layers)\n",
+                 "(self: %d session x %d layers, cross: %d T_enc x %d layers)\n",
                  static_cast<double>(total_bytes) / (1024.0 * 1024.0),
                  ggml_type_name(kv_type),
                  n_ctx, n_layer, T_enc, n_layer);
 
+    return true;
+}
+
+bool kv_cache_init_batched(CanaryKvCache & cache,
+                           ggml_backend_t  backend,
+                           int             n_ctx,
+                           int             T_enc,
+                           int             n_state,
+                           int             n_layer,
+                           int             n_batch,
+                           ggml_type       kv_type)
+{
+    if (n_batch <= 1) {
+        if (!kv_cache_init(cache, backend, n_ctx, T_enc, n_state, n_layer, kv_type))
+            return false;
+        cache.n_batch = 1;
+        return true;
+    }
+    if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
+        std::fprintf(stderr, "canary kv_cache(batched): unsupported kv_type\n");
+        return false;
+    }
+    const size_t ctx_size = 4 * ggml_tensor_overhead() + 256;
+    ggml_init_params params {};
+    params.mem_size = ctx_size; params.mem_buffer = nullptr; params.no_alloc = true;
+    cache.ctx = ggml_init(params);
+    if (cache.ctx == nullptr) return false;
+
+    const int64_t self_elements =
+        static_cast<int64_t>(n_state) * n_layer * n_ctx * n_batch;
+    const int64_t cross_elements =
+        static_cast<int64_t>(n_state) * n_layer * T_enc * n_batch;
+    cache.self_k  = ggml_new_tensor_1d(cache.ctx, kv_type, self_elements);
+    cache.self_v  = ggml_new_tensor_1d(cache.ctx, kv_type, self_elements);
+    cache.cross_k = ggml_new_tensor_1d(cache.ctx, kv_type, cross_elements);
+    cache.cross_v = ggml_new_tensor_1d(cache.ctx, kv_type, cross_elements);
+    ggml_set_name(cache.self_k,  "kv_self_k");
+    ggml_set_name(cache.self_v,  "kv_self_v");
+    ggml_set_name(cache.cross_k, "kv_cross_k");
+    ggml_set_name(cache.cross_v, "kv_cross_v");
+
+    cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
+    if (cache.buffer == nullptr) {
+        ggml_free(cache.ctx); cache.ctx = nullptr; return false;
+    }
+    ggml_backend_buffer_clear(cache.buffer, 0);
+    cache.n_ctx = n_ctx; cache.T_enc = T_enc; cache.n = 0; cache.head = 0;
+    cache.n_batch = n_batch; cache.cross_populated = false;
     return true;
 }
 
@@ -237,16 +286,16 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryModel & m) {
 
 constexpr const char k_default_variant[] = "canary";
 
-extern transcribe_status load        (Loader &, const transcribe_model_params *,
+extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
-extern transcribe_status init_context(transcribe_model *, const transcribe_context_params *,
-                                      transcribe_context **);
-extern transcribe_status run         (transcribe_context *, const float *, int,
-                                      const transcribe_params *);
+extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
+                                      transcribe_session **);
+extern transcribe_status run         (transcribe_session *, const float *, int,
+                                      const transcribe_run_params *);
 
 transcribe_status load(
     Loader &                          loader,
-    const transcribe_model_params *   params,
+    const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -262,7 +311,7 @@ transcribe_status load(
     }
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -424,14 +473,14 @@ transcribe_status load(
 
 transcribe_status init_context(
     transcribe_model *                model,
-    const transcribe_context_params * params,
-    transcribe_context **             out_ctx)
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto cc = std::make_unique<CanaryContext>();
+    auto cc = std::make_unique<CanarySession>();
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
@@ -523,7 +572,7 @@ std::vector<int32_t> build_prompt_canary2(const CanaryModel &   cm,
     //
     // For ASR with empty decoder context the realized sequence is 9
     // tokens. itn / timestamp / diarize stay hardwired to their off
-    // tokens — only pnc is user-toggleable (see transcribe_canary_params).
+    // tokens — only pnc is user-toggleable (see transcribe_run_params::pnc).
     std::vector<int32_t> ids;
     ids.reserve(9);
 
@@ -578,16 +627,16 @@ int find_language_id(const CanaryHParams & hp, const char * lang) {
 }
 
 transcribe_status run(
-    transcribe_context *      ctx,
+    transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
-    const transcribe_params * params)
+    const transcribe_run_params * params)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * cc = static_cast<CanaryContext *>(ctx);
+    auto * cc = static_cast<CanarySession *>(session);
     auto * cm = static_cast<CanaryModel *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -793,9 +842,19 @@ transcribe_status run(
         return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
     }
 
+    // Generic transcribe_run_params::pnc routes here. DEFAULT maps to the
+    // model's shipped behavior (pnc=on; matches the upstream model card's
+    // published WER numbers). OFF / ON override explicitly. Non-DEFAULT
+    // requests have already passed the dispatcher's advisory-warn gate
+    // (which only warns when supports_pnc == false; canary advertises
+    // supports_pnc = true so no warn fires here).
     bool pnc = true;
-    if (params != nullptr && params->canary != nullptr) {
-        pnc = params->canary->pnc;
+    if (params != nullptr) {
+        switch (params->pnc) {
+            case TRANSCRIBE_PNC_MODE_DEFAULT: pnc = true;  break;
+            case TRANSCRIBE_PNC_MODE_OFF:     pnc = false; break;
+            case TRANSCRIBE_PNC_MODE_ON:      pnc = true;  break;
+        }
     }
 
     std::vector<int32_t> prompt_ids;
@@ -1029,14 +1088,14 @@ transcribe_status run(
 
             const transcribe::Tokenizer & tok = cm->tok;
 
-            // strip_special_tags (default true): canary's vocab carries
-            // language/task/PNC control tokens at CONTROL type. They
-            // shouldn't appear after the prompt is consumed, but the
-            // strip is defensive — and only applied when the caller
-            // wants clean text. --raw-tokens / strip_special_tags=false
-            // exposes whatever the decoder emitted.
+            // keep_special_tags (default false → strip): canary's vocab
+            // carries language/task/PNC control tokens at CONTROL type.
+            // They shouldn't appear after the prompt is consumed, but the
+            // strip is defensive — and only applied when the caller wants
+            // clean text. --raw-tokens / keep_special_tags=true exposes
+            // whatever the decoder emitted.
             const bool strip =
-                (params == nullptr) ? true : params->strip_special_tags;
+                (params == nullptr) ? true : !params->keep_special_tags;
             std::vector<int> text_ids;
             if (strip) {
                 text_ids.reserve(generated_ids.size());
@@ -1052,7 +1111,7 @@ transcribe_status run(
                                           static_cast<int>(text_ids.size()));
             if (!full.empty() && full.front() == ' ') full.erase(full.begin());
 
-            transcribe_context::SegmentEntry seg;
+            transcribe_session::SegmentEntry seg;
             seg.t0_ms       = 0;
             seg.t1_ms       = 0;
             seg.first_token = 0;
@@ -1241,13 +1300,363 @@ transcribe_status run(
     return TRANSCRIBE_OK;
 }
 
+// ===========================================================================
+// Offline batched decode (transcribe_run_batch). Mirrors src/arch/cohere.
+// Encoder stays serial per utterance (compute-bound); mel parallel; the
+// autoregressive decode (self + cross attention) is batched. See
+// docs/batching-autoregressive-plan.md.
+// ===========================================================================
+
+// Encoder for one utterance from a precomputed mel buffer → host [hidden, T_enc].
+transcribe_status encode_one_to_host(
+    CanarySession * cc, CanaryModel * cm,
+    const std::vector<float> & mel_buf, int mel_n_frames,
+    std::vector<float> & enc_host_out, int & T_enc_out, int64_t & enc_us)
+{
+    if (mel_n_frames <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
+
+    if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+    cc->encoder_out = nullptr;
+    { ggml_init_params ip {}; ip.mem_size = 8 * 1024 * 1024; ip.mem_buffer = nullptr;
+      ip.no_alloc = true; cc->compute_ctx = ggml_init(ip);
+      if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF; }
+
+    ggml_type resolved_kv = GGML_TYPE_COUNT;
+    if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) resolved_kv = GGML_TYPE_F32;
+    if (cc->kv_type == TRANSCRIBE_KV_TYPE_F16) resolved_kv = GGML_TYPE_F16;
+
+    EncoderBuild eb = build_encoder_graph(
+        cc->compute_ctx, cm->weights, cm->hparams, mel_n_frames,
+        resolved_kv, cc->encoder_use_flash, cm->backend.c_str());
+    if (eb.out == nullptr || eb.graph == nullptr) return TRANSCRIBE_ERR_GGUF;
+
+    if (cc->sched == nullptr) {
+        cc->sched = ggml_backend_sched_new(
+            cm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
+        if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+
+    ggml_backend_tensor_set(eb.mel_in, mel_buf.data(), 0, mel_buf.size() * sizeof(float));
+
+    if (eb.pos_emb_in != nullptr) {
+        const int d_model = cm->hparams.enc_d_model;
+        const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
+        const int T_enc   = (pos_len + 1) / 2;
+        std::vector<float> pos_buf(static_cast<size_t>(pos_len) * d_model, 0.0f);
+        const float ln_10000 = std::log(10000.0f);
+        std::vector<float> div_term(static_cast<size_t>(d_model / 2));
+        for (int k = 0; k < d_model / 2; ++k)
+            div_term[k] = std::exp(static_cast<float>(2 * k) *
+                                   (-ln_10000 / static_cast<float>(d_model)));
+        for (int i = 0; i < pos_len; ++i) {
+            const float p = static_cast<float>((T_enc - 1) - i);
+            float * row = pos_buf.data() + static_cast<size_t>(i) * d_model;
+            for (int k = 0; k < d_model / 2; ++k) {
+                row[2 * k]     = std::sin(p * div_term[k]);
+                row[2 * k + 1] = std::cos(p * div_term[k]);
+            }
+        }
+        ggml_backend_tensor_set(eb.pos_emb_in, pos_buf.data(), 0,
+                                pos_buf.size() * sizeof(float));
+    }
+
+    {
+        int n_threads = cc->n_threads;
+        if (n_threads <= 0) n_threads = std::min(8, std::max(1,
+            static_cast<int>(std::thread::hardware_concurrency())));
+        for (int i = 0; i < ggml_backend_sched_get_n_backends(cc->sched); ++i) {
+            ggml_backend_t be = ggml_backend_sched_get_backend(cc->sched, i);
+            ggml_backend_dev_t dev = ggml_backend_get_device(be);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (reg == nullptr) continue;
+            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+            if (fn != nullptr) fn(be, n_threads);
+        }
+    }
+
+    const int64_t t0 = ggml_time_us();
+    if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS)
+        return TRANSCRIBE_ERR_GGUF;
+    enc_us += ggml_time_us() - t0;
+
+    const int d_dec = static_cast<int>(eb.out->ne[0]);
+    const int T_enc = static_cast<int>(eb.out->ne[1]);
+    if (d_dec <= 0 || T_enc <= 0) return TRANSCRIBE_ERR_GGUF;
+    enc_host_out.resize(static_cast<size_t>(d_dec) * T_enc);
+    ggml_backend_tensor_get(eb.out, enc_host_out.data(), 0,
+                            enc_host_out.size() * sizeof(float));
+    T_enc_out = T_enc;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status run_batch_serial(CanarySession * cc,
+                                   const float * const * pcm,
+                                   const int * n_samples, int n,
+                                   const transcribe_run_params * params) {
+    for (int i = 0; i < n; ++i) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        const transcribe_status st =
+            (pcm[i] == nullptr || n_samples[i] <= 0)
+                ? TRANSCRIBE_ERR_INVALID_ARG
+                : run(cc, pcm[i], n_samples[i], params);
+        if (st == TRANSCRIBE_OK) {
+            cc->batch_results.push_back(cc->capture_result(st));
+        } else {
+            transcribe_session::ResultSet rs; rs.status = st;
+            cc->batch_results.push_back(std::move(rs));
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status run_batch(
+    transcribe_session *          session,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params)
+{
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0)
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    auto * cc = static_cast<CanarySession *>(session);
+    auto * cm = static_cast<CanaryModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty() || !cm->mel.has_value())
+        return TRANSCRIBE_ERR_INVALID_ARG;
+
+    const bool primary_is_gpu =
+        cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
+        cm->plan.primary_kind != transcribe::BackendKind::Accel &&
+        cm->plan.primary_kind != transcribe::BackendKind::Unknown;
+    if (n == 1 || !cc->decoder_use_flash || !primary_is_gpu ||
+        transcribe::debug::enabled())
+        return run_batch_serial(cc, pcm, n_samples, n, params);
+
+    transcribe::debug::init();
+    const auto & hp = cm->hparams;
+    const int hidden  = hp.dec_d_model;
+    const int n_layer = hp.dec_n_layers;
+
+    // ----- Shared multitask prompt (identical across the batch) -----
+    const char * lang = (params && params->language) ? params->language : "en";
+    const bool is_translate =
+        (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE);
+    const char * tgt_lang = lang;
+    if (is_translate && params && params->target_language) tgt_lang = params->target_language;
+    const char * task = is_translate ? "translate" : "asr";
+    const int src_id = find_language_id(hp, lang);
+    const int tgt_id = find_language_id(hp, tgt_lang);
+    if (src_id < 0 || tgt_id < 0) return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    bool pnc = true;
+    if (params != nullptr && params->pnc == TRANSCRIBE_PNC_MODE_OFF) pnc = false;
+    std::vector<int32_t> prompt_ids;
+    if (hp.prompt_format == "canary2")
+        prompt_ids = build_prompt_canary2(*cm, hp, src_id, tgt_id, task, pnc);
+    else if (hp.prompt_format == "canary")
+        prompt_ids = build_prompt_canary(hp, src_id, tgt_id, task, pnc);
+    if (prompt_ids.empty()) return TRANSCRIBE_ERR_INVALID_ARG;
+    const int prompt_len = static_cast<int>(prompt_ids.size());
+
+    // ----- Pass 0: parallel mel -----
+    std::vector<char> valid(n, 0);
+    std::vector<std::vector<float>> mel_bufs(n);
+    std::vector<int> mel_nf(n, 0);
+    int n_threads = cc->n_threads;
+    if (n_threads <= 0) n_threads = std::min(8, std::max(1,
+        static_cast<int>(std::thread::hardware_concurrency())));
+    int64_t mel_us = 0, enc_us = 0;
+    const int64_t t_mel0 = ggml_time_us();
+    transcribe::parallel_for_all(n, n_threads, [&](int b) {
+        if (pcm[b] == nullptr || n_samples[b] <= 0) return true;
+        int nm = 0, nf = 0;
+        if (cm->mel->compute(pcm[b], static_cast<size_t>(n_samples[b]),
+                             mel_bufs[b], nm, nf, /*n_threads=*/1) == TRANSCRIBE_OK
+            && nf > 0) { mel_nf[b] = nf; valid[b] = 1; }
+        return true;
+    });
+    mel_us += ggml_time_us() - t_mel0;
+
+    // ----- Pass 1: serial per-utterance encoder -----
+    std::vector<std::vector<float>> enc_hosts(n);
+    std::vector<int> T_enc(n, 0);
+    int T_enc_max = 0;
+    for (int b = 0; b < n; ++b) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        if (!valid[b]) continue;
+        if (encode_one_to_host(cc, cm, mel_bufs[b], mel_nf[b],
+                               enc_hosts[b], T_enc[b], enc_us) != TRANSCRIBE_OK
+            || T_enc[b] <= 0) { valid[b] = 0; continue; }
+        T_enc_max = std::max(T_enc_max, T_enc[b]);
+    }
+    if (T_enc_max <= 0) {
+        for (int b = 0; b < n; ++b) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+        }
+        return TRANSCRIBE_OK;
+    }
+
+    // ----- Batched KV cache -----
+    const int max_new = 512;
+    int max_n_kv = 1024;
+    while (max_n_kv < prompt_len + max_new) max_n_kv *= 2;
+    const int n_ctx_cap = hp.dec_max_position > 0 ? hp.dec_max_position : 1024;
+    if (max_n_kv > n_ctx_cap) max_n_kv = n_ctx_cap;
+
+    ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
+                      ? GGML_TYPE_F32 : GGML_TYPE_F16;
+    if (cc->kv_cache.buffer != nullptr &&
+        (cc->kv_cache.n_batch != n || cc->kv_cache.T_enc != T_enc_max ||
+         cc->kv_cache.n_ctx != max_n_kv))
+        cc->kv_cache.free();
+    if (cc->kv_cache.buffer == nullptr) {
+        if (!kv_cache_init_batched(cc->kv_cache, cm->plan.primary,
+                                   max_n_kv, T_enc_max, hidden, n_layer, n, kv_type)) {
+            std::fprintf(stderr, "canary run_batch: kv_cache_init_batched failed\n");
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+    } else {
+        ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
+        cc->kv_cache.n = 0; cc->kv_cache.head = 0; cc->kv_cache.cross_populated = false;
+    }
+
+    auto new_compute_ctx = [&](size_t mem) -> bool {
+        if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+        cc->encoder_out = nullptr;
+        ggml_init_params ip {}; ip.mem_size = mem; ip.mem_buffer = nullptr; ip.no_alloc = true;
+        cc->compute_ctx = ggml_init(ip);
+        return cc->compute_ctx != nullptr;
+    };
+
+    const int64_t t_dec0 = ggml_time_us();
+
+    // ----- Batched cross-attention K/V -----
+    {
+        if (!new_compute_ctx(8 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+        DecoderBuild cross = build_cross_kv_graph_batched(
+            cc->compute_ctx, cm->weights, hp, cc->kv_cache, T_enc_max, n);
+        if (cross.graph == nullptr) return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) return TRANSCRIBE_ERR_GGUF;
+        std::vector<float> packed(static_cast<size_t>(hidden) * T_enc_max * n, 0.0f);
+        for (int b = 0; b < n; ++b) {
+            if (!valid[b]) continue;
+            std::memcpy(packed.data() + static_cast<size_t>(b) * T_enc_max * hidden,
+                        enc_hosts[b].data(),
+                        static_cast<size_t>(hidden) * T_enc[b] * sizeof(float));
+        }
+        ggml_backend_tensor_set(cross.encoder_out_in, packed.data(), 0,
+                                packed.size() * sizeof(float));
+        if (ggml_backend_sched_graph_compute(cc->sched, cross.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        cc->kv_cache.cross_populated = true;
+    }
+
+    // ----- Batched step graph with a GROWING self-attention window -----
+    // Self-KV holds only the short prompt + transcript (audio is in cross-KV),
+    // so the static n_ctx read is mostly empty for short clips. Start the read
+    // window at 64 and double it as n_past advances (rebuild graph + widen
+    // mask, O(log) rebuilds; KV cache persists). Cache capacity (max_n_kv)
+    // unchanged. See docs/batching-autoregressive-plan.md.
+    const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-INFINITY);
+    const int32_t eos_id = hp.eos_token_id;
+
+    std::vector<ggml_fp16_t> cmask(static_cast<size_t>(T_enc_max) * n, f16_ninf);
+    for (int b = 0; b < n; ++b) {
+        const int real = valid[b] ? T_enc[b] : 1;
+        ggml_fp16_t * base = cmask.data() + static_cast<size_t>(b) * T_enc_max;
+        std::fill(base, base + std::min(real, T_enc_max), f16_zero);
+    }
+
+    int init_window = 64;
+    while (init_window > max_n_kv) init_window /= 2;
+    if (init_window < 1) init_window = max_n_kv;
+
+    StepBuildBatched sb {};
+    auto rebuild = [&](int win, transcribe::EncDecStepIO & io) -> bool {
+        if (!new_compute_ctx(16 * 1024 * 1024)) return false;
+        sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp,
+                                      cc->kv_cache, win, T_enc_max, n, cc->decoder_use_flash);
+        if (sb.graph == nullptr || sb.argmax_out == nullptr) return false;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return false;
+        ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0,
+                                cmask.size() * sizeof(ggml_fp16_t));
+        io.token_ids = sb.token_ids_in;
+        io.pos_ids   = sb.pos_ids_in;
+        io.kv_idx    = sb.kv_idx_in;
+        io.self_mask = sb.self_mask_in;
+        io.argmax    = sb.argmax_out;
+        io.graph     = sb.graph;
+        return true;
+    };
+
+    std::vector<std::vector<int32_t>> generated(n);
+    if (const transcribe_status st = transcribe::run_batched_encdec_step_loop(
+            cc, cc->sched, rebuild, prompt_ids, prompt_len, init_window,
+            max_new, max_n_kv, eos_id, n, valid, generated);
+        st != TRANSCRIBE_OK) {
+        return st;
+    }
+    const int64_t dec_us = ggml_time_us() - t_dec0;
+
+    // ----- Capture (strip control tokens like serial commit_result) -----
+    const bool strip = (params == nullptr) ? true : !params->keep_special_tags;
+    const int valid_count = std::max(1, static_cast<int>(
+        std::count(valid.begin(), valid.end(), char(1))));
+    for (int b = 0; b < n; ++b) {
+        transcribe_session::ResultSet rs;
+        if (!valid[b]) { rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+                         cc->batch_results.push_back(std::move(rs)); continue; }
+        std::vector<int> text_ids;
+        if (strip) {
+            for (int id : generated[b]) if (!cm->tok.is_control(id)) text_ids.push_back(id);
+        } else {
+            text_ids.assign(generated[b].begin(), generated[b].end());
+        }
+        std::string full = cm->tok.decode(text_ids.data(),
+                                          static_cast<int>(text_ids.size()));
+        if (!full.empty() && full.front() == ' ') full.erase(full.begin());
+        transcribe_session::SegmentEntry seg {};
+        seg.t0_ms = 0; seg.t1_ms = 0; seg.text = full;
+        rs.segments.push_back(std::move(seg));
+        rs.full_text = full;
+        rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        rs.has_result = true; rs.status = TRANSCRIBE_OK;
+        rs.t_mel_us = mel_us / valid_count;
+        rs.t_encode_us = enc_us / valid_count;
+        rs.t_decode_us = dec_us / valid_count;
+        cc->batch_results.push_back(std::move(rs));
+    }
+
+    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+        std::fprintf(stderr,
+            "canary run_batch: n=%d T_enc_max=%d kv_cap=%d prompt=%d\n"
+            "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
+            n, T_enc_max, max_n_kv, prompt_len,
+            mel_us / 1000.0, enc_us / 1000.0, n, dec_us / 1000.0);
+    }
+    return TRANSCRIBE_OK;
+}
+
 } // namespace
 
 extern const Arch arch = {
-    /* .name         = */ "canary",
-    /* .load         = */ load,
-    /* .init_context = */ init_context,
-    /* .run          = */ run,
+    /* .name             = */ "canary",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .run_batch        = */ run_batch,
+    /* .stream_validate  = */ nullptr,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
 };
 
 } // namespace transcribe::canary

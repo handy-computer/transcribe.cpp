@@ -78,10 +78,29 @@ struct SanmBlockView {
 };
 
 // Per-call shape for the SAN-M block.
+//
+// The batch axis rides the activation's ne[2]: a single-utterance call
+// passes x ne=[d, T] (ne[2] == 1) and every helper below derives B from
+// x->ne[2], so the B == 1 path is byte-identical to the pre-batch code.
+// Offline batching (transcribe_run_batch) packs B utterances at ne[2] and,
+// when their lengths differ, hands in the two padding masks so a padded
+// tail can never perturb a real frame:
+//   - attn_pad_mask : additive key-padding mask ne=[T_k, 1, 1, B] f32
+//       (0 on real keys, -INF on padded). Added onto the attention score
+//       matrix. Its presence also forces the manual SDPA path (the flash
+//       kernel's masked batched form is not exercised here).
+//   - conv_pad_mask : FSMN valid-frame mask ne=[1, T, B] f32 (1 on real
+//       frames, 0 on padded). Multiplies V before the depthwise conv so a
+//       padded frame contributes 0 to its real neighbours.
+// Same-length batches leave both null and run the bit-exact flash path.
 struct SanmBlockParams {
     int n_heads = 0;
     int d_model = 0;
     int kernel  = 0;       // FSMN depthwise kernel width (sanm_shift=0)
+
+    ggml_tensor * attn_pad_mask = nullptr;
+    ggml_tensor * conv_pad_mask = nullptr;
+    bool          use_flash     = true;
 };
 
 // LayerNorm with kLayerNormEps. `beta` is optional (may be nullptr).
@@ -91,19 +110,23 @@ ggml_tensor * sv_layer_norm(ggml_context * ctx,
                             ggml_tensor *  beta);
 
 // FSMN parallel branch: depthwise conv1d on V (kernel-symmetric padding)
-// + V residual. Input layout `v_pre` ne=[d_model, T]; output same shape.
+// + V residual. Input layout `v_pre` ne=[d_model, T, B]; output same shape
+// (B derived from v_pre->ne[2]). `conv_pad_mask` (nullable, ne=[1, T, B])
+// zeros padded frames before the conv for variable-length batches.
 ggml_tensor * fsmn_branch(ggml_context * ctx,
                           ggml_tensor *  v_pre,
                           ggml_tensor *  fsmn_w,
-                          int            kernel);
+                          int            kernel,
+                          ggml_tensor *  conv_pad_mask = nullptr);
 
 // SAN-M attention sub-block: fused QKV, FSMN parallel branch on V,
-// SDPA over the QKV split. Returns ne=[d_model, T] (post-projection
-// SDPA + post-FSMN add). Input `x` ne=[d_in, T] (d_in == d_model for
-// residual blocks, d_input for the projection block).
+// SDPA over the QKV split. Returns ne=[d_model, T, B] (post-projection
+// SDPA + post-FSMN add). Input `x` ne=[d_in, T, B] (d_in == d_model for
+// residual blocks, d_input for the projection block; B == x->ne[2]).
 //
-// Mask is omitted: batch=1 inference always has every position valid.
-// Re-add when batched inference lands.
+// Variable-length batches supply p.attn_pad_mask / p.conv_pad_mask; a
+// non-null attn_pad_mask forces the manual SDPA path. Same-length batches
+// (and single-shot) run the flash path with no mask.
 ggml_tensor * sanm_attention(ggml_context *          ctx,
                              ggml_tensor *           x,
                              const SanmBlockView &   b,

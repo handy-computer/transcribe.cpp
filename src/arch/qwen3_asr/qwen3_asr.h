@@ -1,7 +1,7 @@
 // arch/qwen3_asr/qwen3_asr.h - Qwen3-ASR model and context types.
 //
 // INTERNAL to src/arch/qwen3_asr/. Defines the concrete classes that
-// derive from transcribe_model / transcribe_context for the Qwen3-ASR
+// derive from transcribe_model / transcribe_session for the Qwen3-ASR
 // family (audio-LLM: audio encoder + Qwen3 causal LM with audio-token
 // injection).
 //
@@ -13,7 +13,7 @@
 
 #include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -38,7 +38,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::qwen3_asr {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // Encode "language {Name}<asr_text>" for the given BCP-47 code. The
 // output is the token-id sequence the Qwen3-ASR chat template seeds
@@ -113,11 +113,17 @@ struct QwenAsrModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct QwenAsrContext final : public transcribe_context {
+struct QwenAsrSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
     transcribe::qwen3_lm::KvCache kv_cache;
+
+    // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
+    // Allocated/resized lazily by run_batch; freed in the destructor.
+    transcribe::qwen3_lm::KvCache kv_cache_batch;
+    int                           kv_batch_cap   = 0;  // allocated n_batch
+    int                           kv_batch_n_ctx = 0;  // allocated n_ctx
 
     std::vector<float> mel_buf;
     std::vector<float> enc_host;  // audio encoder output, pre-injection
@@ -127,8 +133,8 @@ struct QwenAsrContext final : public transcribe_context {
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
-    QwenAsrContext() = default;
-    ~QwenAsrContext() override;
+    QwenAsrSession() = default;
+    ~QwenAsrSession() override;
 };
 
 } // namespace transcribe::qwen3_asr

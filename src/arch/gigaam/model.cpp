@@ -20,6 +20,7 @@
 #include "weights.h"
 
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -30,13 +31,16 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <ios>
+#include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -45,9 +49,9 @@ namespace transcribe::gigaam {
 extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   GigaamModel>);
-static_assert(std::is_base_of_v<transcribe_context, GigaamContext>);
+static_assert(std::is_base_of_v<transcribe_session, GigaamSession>);
 
-GigaamContext::~GigaamContext() {
+GigaamSession::~GigaamSession() {
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -83,7 +87,7 @@ namespace {
 constexpr const char k_default_variant[] = "gigaam-v3-e2e-rnnt";
 
 transcribe_status load(Loader &                         loader,
-                       const transcribe_model_params *  params,
+                       const transcribe_model_load_params *  params,
                        transcribe_model **              out_model)
 {
     const int64_t t_load_start = ggml_time_us();
@@ -95,7 +99,7 @@ transcribe_status load(Loader &                         loader,
     m->variant = loader.variant().empty() ? k_default_variant : loader.variant();
     m->backend.clear();
 
-    apply_family_invariants(m->caps);
+    apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
 
@@ -175,12 +179,12 @@ transcribe_status load(Loader &                         loader,
 }
 
 transcribe_status init_context(transcribe_model *                model,
-                               const transcribe_context_params * params,
-                               transcribe_context **             out_ctx)
+                               const transcribe_session_params * params,
+                               transcribe_session **             out_ctx)
 {
     if (model->arch != &arch) return TRANSCRIBE_ERR_INVALID_ARG;
 
-    auto gc = std::make_unique<GigaamContext>();
+    auto gc = std::make_unique<GigaamSession>();
     gc->model     = model;
     gc->n_threads = params->n_threads;
     gc->kv_type   = params->kv_type;
@@ -236,18 +240,95 @@ transcribe_status load_ref_mel(const std::string & dir,
     return TRANSCRIBE_OK;
 }
 
+// Host-side RNN-T / CTC greedy decode of one utterance's encoder slice,
+// publishing the transcript into the session scratch slot (full_text /
+// tokens / has_result / result_kind / t_decode_us). `encoded` is the
+// pre-final-transpose encoder output for a single utterance, laid out
+// T-major [T_enc * d_enc] (element (t, d) at offset t*d_enc + d) — the
+// same layout the graph's `rnnt.encoded` tensor materializes and that
+// decode_{rnnt,ctc}_greedy expect. `utt_index` tags the per-utterance
+// `dec.enc_out` dump for the batch parity gate: -1 (single-shot) writes
+// `dec.enc_out`, b >= 0 writes `dec.enc_out.b{b}`. Shared by run() and
+// run_batch_encode().
+transcribe_status decode_and_populate(GigaamSession * gc,
+                                      GigaamModel *   gm,
+                                      const float *   encoded,
+                                      int             T_enc,
+                                      int             d_enc,
+                                      int             utt_index)
+{
+    const int64_t t_dec_start = ggml_time_us();
+
+    // Per-utterance encoder-output dump (single-shot == reference; batched ==
+    // batched-equals-single-shot gate). Matches parakeet's `dec.enc_out`.
+    if (transcribe::debug::enabled()) {
+        std::string dump_name = "dec.enc_out";
+        if (utt_index >= 0) dump_name += ".b" + std::to_string(utt_index);
+        const long long enc_shape[2] = {T_enc, d_enc};
+        transcribe::debug::dump_host_f32(
+            dump_name.c_str(), encoded,
+            static_cast<long long>(T_enc) * d_enc,
+            enc_shape, 2, "decoder.enc_out");
+    }
+
+    std::vector<int> tokens;
+    std::vector<int> frames;
+
+    if (gm->hparams.head_kind == HeadKind::RNNT) {
+        if (auto st = decode_rnnt_greedy(gm->host_decoder, gm->hparams,
+                                          encoded, T_enc,
+                                          /*max_symbols=*/10,
+                                          tokens, frames);
+            st != TRANSCRIBE_OK) return st;
+    } else { // CTC
+        if (auto st = decode_ctc_greedy(gm->host_decoder, gm->hparams,
+                                         encoded, T_enc,
+                                         tokens, frames);
+            st != TRANSCRIBE_OK) return st;
+    }
+    gc->t_decode_us = ggml_time_us() - t_dec_start;
+
+    // Detokenize via the family-agnostic Tokenizer.
+    std::string text = gm->tok.decode(tokens.data(),
+                                      static_cast<int>(tokens.size()));
+    // SentencePiece convention: the first token's leading ▁ is stripped on
+    // decode. Our shared SP detokenizer maps every ▁ to a space, so trim a
+    // single leading space here. Mirrors parakeet's post-decode.
+    if (!text.empty() && text.front() == ' ') {
+        text.erase(text.begin());
+    }
+
+    gc->full_text   = text;
+    gc->has_result  = true;
+    gc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
+
+    // Tokens. Subsampling factor 4 + hop 160 + sample_rate 16000 gives
+    // 40 ms per encoder frame. Token spans one frame.
+    gc->tokens.clear();
+    gc->tokens.reserve(tokens.size());
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        transcribe_session::TokenEntry te{};
+        te.id    = tokens[i];
+        te.text  = gm->tok.token(tokens[i]);
+        te.t0_ms = static_cast<int64_t>(frames[i]) * 40;
+        te.t1_ms = te.t0_ms + 40;
+        gc->tokens.push_back(te);
+    }
+    return TRANSCRIBE_OK;
+}
+
 } // namespace
 
-transcribe_status run(transcribe_context *      ctx,
+transcribe_status run(transcribe_session *      session,
                       const float *             pcm,
                       int                       n_samples,
-                      const transcribe_params *)
+                      const transcribe_run_params *)
 {
-    if (ctx == nullptr || pcm == nullptr || n_samples <= 0) {
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto * gc = static_cast<GigaamContext *>(ctx);
+    auto * gc = static_cast<GigaamSession *>(session);
     auto * gm = static_cast<GigaamModel *>(gc->model);
     if (gm == nullptr || gm->plan.scheduler_list.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -359,6 +440,12 @@ transcribe_status run(transcribe_context *      ctx,
     if (eb.dumps.pre_encode_out)
         transcribe::debug::dump_tensor("enc.subsample.out",
                                        eb.dumps.pre_encode_out, "encoder.subsample");
+    if (eb.dumps.block0_after_attn)
+        transcribe::debug::dump_tensor("enc.block.0.after_attn",
+                                       eb.dumps.block0_after_attn, "encoder.block.0");
+    if (eb.dumps.block0_after_conv)
+        transcribe::debug::dump_tensor("enc.block.0.after_conv",
+                                       eb.dumps.block0_after_conv, "encoder.block.0");
     if (eb.dumps.block0_out)
         transcribe::debug::dump_tensor("enc.block.0.out",
                                        eb.dumps.block0_out, "encoder.block.0");
@@ -388,8 +475,6 @@ transcribe_status run(transcribe_context *      ctx,
     // not emit it for CTC variants, so emitting one on the C++ side
     // would surface as a MISSING-right gate failure in compare_tensors).
     {
-        const int64_t t_dec_start = ggml_time_us();
-
         ggml_tensor * enc_t = eb.dumps.rnnt_encoded;
         if (enc_t == nullptr) {
             std::fprintf(stderr, "gigaam: rnnt.encoded missing\n");
@@ -401,73 +486,284 @@ transcribe_status run(transcribe_context *      ctx,
         ggml_backend_tensor_get(enc_t, gc->enc_host.data(), 0,
                                 gc->enc_host.size() * sizeof(float));
 
-        std::vector<int> tokens;
-        std::vector<int> frames;
-
+        // Reference `rnnt.encoded` dump (RNNT variants only; the reference
+        // dumper does not emit it for CTC). validate.py gates on this.
         if (gm->hparams.head_kind == HeadKind::RNNT) {
             const long long enc_shape[2] = {T_enc, D};
             transcribe::debug::dump_host_f32(
-                "rnnt.encoded",
-                gc->enc_host.data(),
+                "rnnt.encoded", gc->enc_host.data(),
                 static_cast<long long>(gc->enc_host.size()),
                 enc_shape, 2, "decoder.rnnt.encoded");
-
-            if (auto st = decode_rnnt_greedy(gm->host_decoder, gm->hparams,
-                                              gc->enc_host.data(),
-                                              T_enc,
-                                              /*max_symbols=*/10,
-                                              tokens, frames);
-                st != TRANSCRIBE_OK) return st;
-        } else { // CTC
-            if (auto st = decode_ctc_greedy(gm->host_decoder, gm->hparams,
-                                             gc->enc_host.data(),
-                                             T_enc,
-                                             tokens, frames);
-                st != TRANSCRIBE_OK) return st;
-        }
-        gc->t_decode_us = ggml_time_us() - t_dec_start;
-
-        // Detokenize via the family-agnostic Tokenizer.
-        std::string text = gm->tok.decode(tokens.data(),
-                                          static_cast<int>(tokens.size()));
-        // SentencePiece convention: the first token's leading ▁ is
-        // stripped on decode (`sp.decode([▁В, ...])` → "В...", not
-        // " В..."). Our shared SP detokenizer maps every ▁ to a space
-        // unconditionally, so we trim a single leading space here.
-        // Mirrors parakeet's post-decode in model.cpp:1093.
-        if (!text.empty() && text.front() == ' ') {
-            text.erase(text.begin());
         }
 
-        // Publish on the base context.
-        gc->full_text   = text;
-        gc->has_result  = true;
-        gc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
+        if (auto st = decode_and_populate(gc, gm, gc->enc_host.data(),
+                                          T_enc, D, /*utt_index=*/-1);
+            st != TRANSCRIBE_OK) return st;
+    }
 
-        // Tokens. Subsampling factor 4 + hop 160 + sample_rate 16000
-        // gives 40 ms per encoder frame. Token spans one frame.
-        gc->tokens.clear();
-        gc->tokens.reserve(tokens.size());
-        for (size_t i = 0; i < tokens.size(); ++i) {
-            transcribe_context::TokenEntry te{};
-            te.id    = tokens[i];
-            te.text  = gm->tok.token(tokens[i]);
-            te.t0_ms = static_cast<int64_t>(frames[i]) * 40;
-            te.t1_ms = te.t0_ms + 40;
-            gc->tokens.push_back(te);
+    return TRANSCRIBE_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Offline batch (transcribe_run_batch)
+// ---------------------------------------------------------------------------
+//
+// Batches B utterances through ONE Conformer encoder dispatch (the batch
+// rides the activation's ne[2] axis — see encoder.cpp), then host-decodes
+// each utterance's RNN-T / CTC slice. The mel front-end and decode are
+// identical to single-shot; only the encoder is fused. GigaAM's RNN-T/CTC
+// decode is host-side and cheap (small vocab, no BPE-head bottleneck), so —
+// unlike granite_nar — encoder batching is the win. Same-length batches run
+// mask-free (bit-identical to single-shot per utterance); variable-length
+// batches pad to T_max and apply per-utterance masks. Mirrors parakeet's
+// run_batch recipe (full-read encoder output + host-slice — NOT per-utt
+// offset reads, which are unreliable across backends).
+
+// One stride-2 conv with symmetric (k-1)/2 padding (matches encoder.cpp).
+static int batch_pre_encode_t_out(int in) { return (in - 1) / 2 + 1; }
+
+transcribe_status run_batch_encode(GigaamSession *                         gc,
+                                   GigaamModel *                           gm,
+                                   const std::vector<std::vector<float>> & mels,
+                                   const std::vector<int> &                nf,
+                                   int                                     n_mels,
+                                   int                                     T_max,
+                                   int64_t                                 total_mel_us)
+{
+    const int n = static_cast<int>(mels.size());
+    bool var_len = false;
+    for (int b = 0; b < n; ++b) {
+        if (nf[b] != T_max) { var_len = true; break; }
+    }
+
+    // Pack mels into [T_max, n_mels, n], zero-padding each along time
+    // (channel-major source [n_mels, nf[b]] -> per-utterance [T_max, n_mels]).
+    transcribe::pack_pad_channel_major(gc->mel_buf, mels, nf, n_mels, T_max);
+
+    if (gc->compute_ctx != nullptr) {
+        ggml_free(gc->compute_ctx);
+        gc->compute_ctx = nullptr;
+    }
+    gc->encoder_out = nullptr;
+    {
+        ggml_init_params ip {};
+        ip.mem_size   = 4 * 1024 * 1024;
+        ip.mem_buffer = nullptr;
+        ip.no_alloc   = true;
+        gc->compute_ctx = ggml_init(ip);
+        if (gc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+
+    EncoderBuild eb = build_encoder_graph(
+        gc->compute_ctx, gm->weights, gm->hparams, T_max,
+        /*kv_type=*/GGML_TYPE_F32, gm->backend.c_str(),
+        /*n_batch=*/n, /*batch_var_len=*/var_len);
+    if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    if (gc->sched == nullptr) {
+        gc->sched = ggml_backend_sched_new(
+            gm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(gm->plan.scheduler_list.size()),
+            /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
+        if (gc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_sched_reset(gc->sched);
+    if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    ggml_backend_tensor_set(eb.mel_in, gc->mel_buf.data(),
+                            0, gc->mel_buf.size() * sizeof(float));
+
+    ggml_tensor * enc_t = eb.dumps.rnnt_encoded;  // [d_enc, T_enc, n]
+    if (enc_t == nullptr) return TRANSCRIBE_ERR_GGUF;
+    const int d_enc = static_cast<int>(enc_t->ne[0]);
+    const int T_enc = static_cast<int>(enc_t->ne[1]);
+    if (d_enc <= 0 || T_enc <= 0) return TRANSCRIBE_ERR_GGUF;
+
+    // Per-utterance valid encoder-frame count (two stride-2 pre-encode convs).
+    std::vector<int> real_tenc(static_cast<size_t>(n), T_enc);
+    if (var_len) {
+        for (int b = 0; b < n; ++b) {
+            int t = batch_pre_encode_t_out(nf[b]);
+            t = batch_pre_encode_t_out(t);
+            real_tenc[b] = std::min(t, T_enc);
+        }
+        // Attention key-padding mask [T_enc, 1, 1, n] (0 real / -INF padded)
+        // and conv valid-frame mask [T_enc, 1, n, 1] (1 real / 0 padded).
+        transcribe::fill_keypad_mask(eb.attn_pad_mask_in, real_tenc, T_enc, n);
+        transcribe::fill_valid_frame_mask(eb.conv_pad_mask_in, real_tenc, T_enc, n);
+        // Pre-encode masked-subsampling masks [T_stage, 1, n]: one per
+        // conv-relu stage, valid time = mel length downsampled k times.
+        auto fill_pe_mask = [&](ggml_tensor * mask, int n_down) {
+            if (mask == nullptr) return;
+            const int H = static_cast<int>(mask->ne[0]);
+            std::vector<float> mb(static_cast<size_t>(H) * n, 0.0f);
+            for (int b = 0; b < n; ++b) {
+                int v = nf[b];
+                for (int d = 0; d < n_down; ++d) v = batch_pre_encode_t_out(v);
+                if (v > H) v = H;
+                for (int t = 0; t < v; ++t) {
+                    mb[static_cast<size_t>(b) * H + t] = 1.0f;
+                }
+            }
+            ggml_backend_tensor_set(mask, mb.data(), 0, mb.size() * sizeof(float));
+        };
+        fill_pe_mask(eb.pre_encode_mask_s1_in, 1);  // after conv0 relu
+        fill_pe_mask(eb.pre_encode_mask_s2_in, 2);  // after conv2 relu
+    }
+
+    // Rotary positions [0, 1, ..., T_enc-1] (batch-independent).
+    if (eb.dumps.pos_emb != nullptr) {
+        std::vector<int32_t> pos(static_cast<size_t>(T_enc));
+        for (int i = 0; i < T_enc; ++i) pos[i] = i;
+        ggml_backend_tensor_set(eb.dumps.pos_emb, pos.data(), 0,
+                                pos.size() * sizeof(int32_t));
+    }
+
+    // Set the per-backend thread count (mirrors single-shot through the
+    // scheduler; the encoder is the dominant cost on CPU).
+    {
+        int n_threads = gc->n_threads;
+        if (n_threads <= 0) {
+            n_threads = std::min(8, std::max(1, static_cast<int>(
+                std::thread::hardware_concurrency())));
+        }
+        for (int i = 0; i < ggml_backend_sched_get_n_backends(gc->sched); ++i) {
+            ggml_backend_t be = ggml_backend_sched_get_backend(gc->sched, i);
+            ggml_backend_dev_t dev = ggml_backend_get_device(be);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (reg == nullptr) continue;
+            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+            if (fn != nullptr) fn(be, n_threads);
         }
     }
 
+    const int64_t t_enc_start = ggml_time_us();
+    if (ggml_backend_sched_graph_compute(gc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
+        std::fprintf(stderr, "gigaam run_batch: graph_compute failed\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    gc->t_encode_us = ggml_time_us() - t_enc_start;
+
+    // Bisect dump (debug only): full [d, T, n] intermediates so a batched-vs-
+    // single divergence can be localized per stage. Gated on the env var.
+    if (transcribe::debug::enabled() &&
+        std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr)
+    {
+        if (eb.dumps.pre_encode_out != nullptr) {
+            transcribe::debug::dump_tensor("enc.subsample.out",
+                                           eb.dumps.pre_encode_out,
+                                           "encoder.subsample");
+        }
+        if (eb.dumps.block0_after_attn != nullptr)
+            transcribe::debug::dump_tensor("enc.block.0.after_attn",
+                                           eb.dumps.block0_after_attn, "encoder.block.0");
+        if (eb.dumps.block0_after_conv != nullptr)
+            transcribe::debug::dump_tensor("enc.block.0.after_conv",
+                                           eb.dumps.block0_after_conv, "encoder.block.0");
+        for (size_t i = 0; i < eb.dumps.all_block_outs.size(); ++i) {
+            ggml_tensor * t = eb.dumps.all_block_outs[i];
+            if (t == nullptr) continue;
+            char nm[64];
+            std::snprintf(nm, sizeof(nm), "enc.block.%zu.out", i);
+            transcribe::debug::dump_tensor(nm, t, "encoder.block.bisect");
+        }
+    }
+
+    // Full-read the encoder output, then host-slice per utterance (non-zero
+    // offset reads are unreliable across backends — see batching-plan.md).
+    const size_t utt_elems = static_cast<size_t>(d_enc) * static_cast<size_t>(T_enc);
+    gc->enc_host.assign(utt_elems * static_cast<size_t>(n), 0.0f);
+    ggml_backend_tensor_get(enc_t, gc->enc_host.data(), 0,
+                            gc->enc_host.size() * sizeof(float));
+
+    // Host-slice the shared encoder output and decode each utterance, with the
+    // single shared encode + total mel cost amortized across the batch.
+    return transcribe::decode_batch_slices(
+        gc, n, gc->enc_host.data(), utt_elems, gc->t_encode_us, total_mel_us,
+        [&](int b, const float * enc_b) {
+            return decode_and_populate(gc, gm, enc_b, real_tenc[b], d_enc,
+                                       /*utt_index=*/b);
+        });
+}
+
+transcribe_status run_batch(transcribe_session *          session,
+                            const float * const *         pcm,
+                            const int *                   n_samples,
+                            int                           n,
+                            const transcribe_run_params * params)
+{
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    auto * gc = static_cast<GigaamSession *>(session);
+    auto * gm = static_cast<GigaamModel *>(gc->model);
+    if (gm == nullptr || gm->plan.scheduler_list.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    transcribe::debug::init();
+
+    // Compute each utterance's mel in parallel (pure host code, no
+    // cross-utterance state). A malformed/failed utterance drops the whole
+    // call to the per-utterance fallback so the batch tensor stays
+    // rectangular and the masks stay well-defined.
+    const int n_mels = gm->hparams.fe_num_mels;
+    std::vector<std::vector<float>> mels(static_cast<size_t>(n));
+    std::vector<int>                nf(static_cast<size_t>(n), 0);
+    const int64_t t_mel_start = ggml_time_us();
+    const bool all_ok = transcribe::parallel_for_all(
+        n, gc->n_threads, [&](int i) -> bool {
+            if (pcm[i] == nullptr || n_samples[i] <= 0) return false;
+            int this_frames = 0;
+            const transcribe_status st = gm->mel.compute(
+                pcm[i], static_cast<size_t>(n_samples[i]),
+                mels[i], this_frames);
+            if (st != TRANSCRIBE_OK || this_frames <= 0) return false;
+            nf[i] = this_frames;
+            return true;
+        });
+    const int64_t total_mel_us = ggml_time_us() - t_mel_start;
+
+    if (all_ok) {
+        int T_max = 0;
+        for (int i = 0; i < n; ++i) T_max = std::max(T_max, nf[i]);
+        return run_batch_encode(gc, gm, mels, nf, n_mels, T_max, total_mel_us);
+    }
+
+    // Per-utterance fallback (also the malformed-input path).
+    for (int i = 0; i < n; ++i) {
+        if (gc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        if (pcm[i] == nullptr || n_samples[i] <= 0) {
+            transcribe_session::ResultSet rs;
+            rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            gc->batch_results.push_back(std::move(rs));
+            continue;
+        }
+        gc->clear_result();
+        const transcribe_status st = run(session, pcm[i], n_samples[i], params);
+        gc->batch_results.push_back(gc->capture_result(st));
+    }
     return TRANSCRIBE_OK;
 }
 
 } // namespace
 
 const Arch arch = {
-    /*.name         =*/ "gigaam",
-    /*.load         =*/ load,
-    /*.init_context =*/ init_context,
-    /*.run          =*/ run,
+    /*.name             =*/ "gigaam",
+    /*.load             =*/ load,
+    /*.init_context     =*/ init_context,
+    /*.run              =*/ run,
+    /*.run_batch        =*/ run_batch,
+    /*.stream_validate  =*/ nullptr,
+    /*.stream_begin     =*/ nullptr,
+    /*.stream_feed      =*/ nullptr,
+    /*.stream_finalize  =*/ nullptr,
+    /*.stream_reset     =*/ nullptr,
+    /*.accepts_ext_kind =*/ nullptr,
 };
 
 } // namespace transcribe::gigaam

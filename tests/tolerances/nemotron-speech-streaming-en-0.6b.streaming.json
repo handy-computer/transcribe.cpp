@@ -1,0 +1,93 @@
+{
+  "_comment": [
+    "Nemotron streaming per-tensor tolerances for validate_streaming.py.",
+    "",
+    "Calibration regime (matches /porting-2-oracle Stage 4 recipe):",
+    "  - reference: NeMo conformer_stream_step on jfk.wav, R=13",
+    "  - observed: C++ stream_feed/finalize, --backend cpu --threads 1,",
+    "    F32 GGUF, recompute mel per feed (production-realistic).",
+    "  - per kind = max-of-max across all chunks (covers steady-state",
+    "    and partial-tail chunks; partial-tail is intrinsically",
+    "    noisier because of mel right-edge reflect-pad).",
+    "  - per-entry: max_abs = max(1.5 \u00d7 observed_max_abs,",
+    "                            max(1e-4 \u00d7 max p99_abs, 1e-6))",
+    "               mean_abs = max(1.5 \u00d7 observed_mean_abs,",
+    "                              max(1e-5 \u00d7 max rms, 1e-6))",
+    "",
+    "Cross-checks (also documented in",
+    "docs/models/nemotron-speech-streaming-en-0.6b.md):",
+    "  - Streaming chunk-0 (clean cache) on CPU 1-thread shows",
+    "    drift TIGHTER than the offline (single-pass) C++ on the",
+    "    same audio at every comparable extraction point.",
+    "  - Metal backend adds ~18 additional tensor failures at",
+    "    Stage 2 provisional thresholds, but transcript output",
+    "    stays byte-equal. This tolerance file pins CPU 1-thread;",
+    "    accepting Metal-specific drift is a future task.",
+    "  - The 'observed' values were measured AFTER:",
+    "      (1) right-edge mel-pad margin in stream_feed gate,",
+    "      (2) NeMo first-chunk semantics (no prepend, drop=0),",
+    "      (3) conv-time cache write fixed to",
+    "          concat(prev_cache, x)[-pad_left:] (works at any chunk size),",
+    "      (4) natural-tail finalize (no silence pad on partial chunk).",
+    "",
+    "Pattern-keyed: stream.chunk.<N>.<kind>[_<layer>] all share the",
+    "same '<kind>' entry. validate_streaming.py expands these at",
+    "harness time."
+  ],
+  "cache_lc_in": {
+    "max_abs": 0.010684087872505188,
+    "mean_abs": 0.00012750767200486735,
+    "_observed_max": 0.007122725248336792,
+    "_observed_mean": 8.500511466991156e-05,
+    "_ref_p99": 0.18303075566887936,
+    "_ref_rms": 0.06407676850391326
+  },
+  "cache_lc_out": {
+    "max_abs": 0.010684087872505188,
+    "mean_abs": 0.00012750767200486735,
+    "_observed_max": 0.007122725248336792,
+    "_observed_mean": 8.500511466991156e-05,
+    "_ref_p99": 0.18303075566887936,
+    "_ref_rms": 0.06598704577986325
+  },
+  "cache_lt_in": {
+    "max_abs": 0.28275203704833984,
+    "mean_abs": 0.004766320344060659,
+    "_observed_max": 0.18850135803222656,
+    "_observed_mean": 0.0031775468960404396,
+    "_ref_p99": 17.95749301910402,
+    "_ref_rms": 3.8097638566126477
+  },
+  "cache_lt_out": {
+    "max_abs": 0.3300905227661133,
+    "mean_abs": 0.004766320344060659,
+    "_observed_max": 0.2200603485107422,
+    "_observed_mean": 0.0031775468960404396,
+    "_ref_p99": 17.95749301910402,
+    "_ref_rms": 3.8097638566126477
+  },
+  "channel_len": {
+    "max_abs": 0.007,
+    "mean_abs": 0.0007000000000000001,
+    "_observed_max": 0.0,
+    "_observed_mean": 0.0,
+    "_ref_p99": 70.0,
+    "_ref_rms": 70.0
+  },
+  "enc_out": {
+    "max_abs": 0.00969522725790739,
+    "mean_abs": 0.00044830251135863364,
+    "_observed_max": 0.006463484838604927,
+    "_observed_mean": 0.00029886834090575576,
+    "_ref_p99": 0.24086437746882436,
+    "_ref_rms": 0.08954016621175678
+  },
+  "mel_in": {
+    "max_abs": 1.2088851928710938,
+    "mean_abs": 0.0005929822364123538,
+    "_observed_max": 0.8059234619140625,
+    "_observed_mean": 0.0003953214909415692,
+    "_ref_p99": 16.63553237915039,
+    "_ref_rms": 11.65364144704821
+  }
+}

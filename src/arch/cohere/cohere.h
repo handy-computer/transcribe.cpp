@@ -1,13 +1,13 @@
 // arch/cohere/cohere.h - Cohere ASR model and context types.
 //
 // This header is INTERNAL to src/arch/cohere/. It defines the concrete
-// classes that derive from transcribe_model / transcribe_context for
+// classes that derive from transcribe_model / transcribe_session for
 // the Cohere ASR family (encoder-decoder conformer + transformer).
 
 #pragma once
 
 #include "transcribe-backend.h"
-#include "transcribe-context.h"
+#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -32,7 +32,7 @@ typedef struct ggml_backend_sched *  ggml_backend_sched_t;
 
 namespace transcribe::cohere {
 
-void apply_family_invariants(transcribe_capabilities & caps);
+void apply_family_invariants(transcribe_model & model);
 
 // ---------------------------------------------------------------------------
 // KV cache for the autoregressive decoder.
@@ -70,8 +70,16 @@ struct CohereKvCache {
     // The position at which the next token(s) will be written.
     int head = 0;
 
-    // Number of encoder frames in cross-attention cache.
+    // Number of encoder frames in cross-attention cache. For a batched
+    // cache this is T_enc_max (the longest utterance; shorter ones are
+    // right-padded and masked out in cross-attention).
     int T_enc = 0;
+
+    // Utterance batch width. 1 for the single-shot path; > 1 for the
+    // offline batched decoder. Self slab (layer, b) lives at flat offset
+    // (b + n_batch*layer) * n_ctx * hidden; cross slab (layer, b) at
+    // (b + n_batch*layer) * T_enc * hidden.
+    int n_batch = 1;
 
     // Whether cross-attention cache has been populated.
     bool cross_populated = false;
@@ -91,6 +99,7 @@ struct CohereKvCache {
         cross_v = nullptr;
         n = 0;
         head = 0;
+        n_batch = 1;
         cross_populated = false;
     }
 };
@@ -108,6 +117,19 @@ bool kv_cache_init(CohereKvCache & cache,
                    int             n_state,
                    int             n_layer,
                    ggml_type       kv_type);
+
+// Batched variant: allocates self/cross caches with an extra utterance
+// batch dimension (n_batch). Self tensors are [n_state·n_ctx·n_batch·n_layer],
+// cross tensors [n_state·T_enc·n_batch·n_layer]. n_batch == 1 is layout-
+// identical to kv_cache_init.
+bool kv_cache_init_batched(CohereKvCache & cache,
+                           ggml_backend_t  backend,
+                           int             n_ctx,
+                           int             T_enc,
+                           int             n_state,
+                           int             n_layer,
+                           int             n_batch,
+                           ggml_type       kv_type);
 
 struct CohereModel final : public transcribe_model {
     Tokenizer       tok;
@@ -143,7 +165,7 @@ struct CohereModel final : public transcribe_model {
     const transcribe::Tokenizer * tokenizer() const override { return &tok; }
 };
 
-struct CohereContext final : public transcribe_context {
+struct CohereSession final : public transcribe_session {
     ggml_context *        compute_ctx    = nullptr;
     ggml_backend_sched_t  sched          = nullptr;
     ggml_tensor *         encoder_out    = nullptr;
@@ -176,8 +198,8 @@ struct CohereContext final : public transcribe_context {
     bool               encoder_use_flash = true;
     bool               decoder_use_flash = true;
 
-    CohereContext() = default;
-    ~CohereContext() override;
+    CohereSession() = default;
+    ~CohereSession() override;
 };
 
 } // namespace transcribe::cohere

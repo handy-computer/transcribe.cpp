@@ -27,9 +27,11 @@ add_library(transcribe
     transcribe-load-common.cpp
     transcribe-weights-util.cpp
     transcribe-bin-loader.cpp
+    transcribe-batch-util.cpp
     conformer/conformer.cpp
     sanm/sanm.cpp
     qwen3_lm/qwen3_lm.cpp
+    granite_conformer/shaw_attn.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp
     arch/parakeet/weights.cpp
@@ -61,6 +63,7 @@ add_library(transcribe
     arch/whisper/encoder.cpp
     arch/whisper/decoder.cpp
     arch/whisper/bin_load.cpp
+    arch/whisper/public.cpp
     arch/moonshine/model.cpp
     arch/moonshine/capabilities.cpp
     arch/moonshine/weights.cpp
@@ -87,6 +90,18 @@ add_library(transcribe
     arch/gigaam/encoder.cpp
     arch/gigaam/decoder.cpp
     arch/gigaam/mel.cpp
+    arch/granite/model.cpp
+    arch/granite/capabilities.cpp
+    arch/granite/weights.cpp
+    arch/granite/encoder.cpp
+    arch/granite/projector.cpp
+    arch/granite/decoder.cpp
+    arch/granite_nar/model.cpp
+    arch/granite_nar/capabilities.cpp
+    arch/granite_nar/weights.cpp
+    arch/granite_nar/encoder.cpp
+    arch/granite_nar/projector.cpp
+    arch/granite_nar/decoder.cpp
 )
 
 target_include_directories(transcribe
