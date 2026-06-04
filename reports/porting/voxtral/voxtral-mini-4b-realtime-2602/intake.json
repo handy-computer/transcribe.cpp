@@ -1,0 +1,202 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "voxtral",
+  "hf_repo": "mistralai/Voxtral-Mini-4B-Realtime-2602",
+  "hf_revision": "2769294da9567371363522aac9bbcfdd19447add",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "reference_code",
+      "path": "refs/huggingface/transformers/src/transformers/models/voxtral_realtime/feature_extraction_voxtral_realtime.py",
+      "status": "found",
+      "detail": "No preprocessor_config.json on the repo; the streaming feature extractor is defined in code (VoxtralRealtimeFeatureExtractor). Streaming log-mel: n_fft=400, hop=160, win=400, 128 mels, periodic Hann, slaney mel 0-8000Hz, FIXED global_log_mel_max=1.5 (causal), (log+4)/4."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "accepted_gap",
+      "detail": "No HF tokenizer_config.json; tokenizes via mistral-common (tekken.json). BOS=1, EOS=2, STREAMING_PAD=32, n_special=1000. transcription_delay_ms (default 480) is configured inside tekken.json."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tekken.json",
+      "status": "found",
+      "detail": "Tekken (tiktoken-style BPE) vocab + streaming control tokens + audio_config (window_size, hop_length, num_mel_bins, num_delay_tokens, n_right_pad_tokens, audio_length_per_tok). Consumed by mistral-common."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found",
+      "detail": "bos_token_id=1, eos_token_id=2, pad_token_id=11"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "refs/huggingface/transformers/src/transformers/models/voxtral_realtime/modeling_voxtral_realtime.py",
+      "status": "found",
+      "detail": "First-class transformers support (>=5.x): VoxtralRealtimeForConditionalGeneration (+ modular_voxtral_realtime.py, feature_extraction/processing, convert_voxtral_realtime_weights_to_hf.py). Distinct architecture from the 2507 'voxtral' models. MLX cross-check at refs/mlx/mlx-audio/mlx_audio/stt/models/voxtral_realtime/ (audio/encoder/decoder/tokenizer)."
+    }
+  },
+  "variants": [
+    {
+      "name": "voxtral-mini-4b-realtime-2602",
+      "memory_gb": 9.0,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "audio-llm"
+    ],
+    "key_fields": {
+      "architectures": ["VoxtralRealtimeForConditionalGeneration"],
+      "model_type": "voxtral_realtime",
+      "hidden_size": 3072,
+      "downsample_factor": 4,
+      "audio_length_per_tok": 8,
+      "default_num_delay_tokens": 6,
+      "projector_hidden_act": "gelu",
+      "dtype": "bfloat16",
+      "audio_config.model_type": "voxtral_realtime_encoder",
+      "audio_config.hidden_size": 1280,
+      "audio_config.num_hidden_layers": 32,
+      "audio_config.num_attention_heads": 32,
+      "audio_config.num_key_value_heads": 32,
+      "audio_config.head_dim": 64,
+      "audio_config.intermediate_size": 5120,
+      "audio_config.num_mel_bins": 128,
+      "audio_config.max_position_embeddings": 1500,
+      "audio_config.sliding_window": 750,
+      "audio_config.rope_theta": 1000000.0,
+      "audio_config.rms_norm_eps": 1e-05,
+      "audio_config.hidden_act": "silu",
+      "audio_config.activation_function": "gelu",
+      "audio_config.vocab_size": 131072,
+      "text_config.model_type": "voxtral_realtime_text",
+      "text_config.hidden_size": 3072,
+      "text_config.intermediate_size": 9216,
+      "text_config.num_hidden_layers": 26,
+      "text_config.num_attention_heads": 32,
+      "text_config.num_key_value_heads": 8,
+      "text_config.head_dim": 128,
+      "text_config.hidden_act": "silu",
+      "text_config.rms_norm_eps": 1e-05,
+      "text_config.rope_theta": 1000000.0,
+      "text_config.sliding_window": 8192,
+      "text_config.tie_word_embeddings": true,
+      "text_config.max_position_embeddings": 131072,
+      "text_config.vocab_size": 131072
+    },
+    "varying_across_variants": [
+      "model_type",
+      "audio_config.model_type",
+      "text_config.model_type"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "config",
+    "evidence": "config.dtype=bfloat16; model card states 'released in BF16'; safetensors header BF16=711 (all tensors, no F32). The realtime encoder uses RoPE (no synthesized sinusoidal embed_positions table), so there is no F32 positional-embedding tensor unlike the 2507 variants.",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "BF16": 711
+      }
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hann_periodic",
+    "normalization": "global",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 131072,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 11,
+      "streaming_pad": 32
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "es", "de", "ru", "zh", "ja", "it", "pt", "nl", "ar", "hi", "ko"],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": ["none"],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "FLEURS (avg WER, 13 langs, 480ms delay)",
+      "language": null,
+      "metric": "wer",
+      "score": 8.72,
+      "score_unit": "percent",
+      "source": "model card (mistralai/Voxtral-Mini-4B-Realtime-2602) + technical report arXiv:2602.11298",
+      "notes": "Recommended 480ms transcription delay. Card also reports 12.60% @160ms, 10.80% @240ms, 7.70% @960ms (avg). Offline Voxtral Mini Transcribe 2.0 reference is 5.90% avg. Publisher does not report LibriSpeech test-clean."
+    },
+    {
+      "dataset": "FLEURS English (480ms delay)",
+      "language": "en",
+      "metric": "wer",
+      "score": 4.90,
+      "score_unit": "percent",
+      "source": "model card (mistralai/Voxtral-Mini-4B-Realtime-2602)",
+      "notes": "English column at the recommended 480ms delay (6.46% @160ms, 5.91% @240ms)."
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "Voxtral Realtime has first-class transformers support (VoxtralRealtimeForConditionalGeneration / model_type 'voxtral_realtime', present in transformers >=5.x; the refs checkout is 5.6.0.dev0). The HF checkpoint we convert is in transformers layout (convert_voxtral_realtime_weights_to_hf.py maps original Mistral weights into the HF tree), so the transformers forward pass is the numerical oracle for Stage 2 dumps. The MLX implementation (refs/mlx/mlx-audio/.../voxtral_realtime) is a clean secondary reference for the streaming scheduling and decode-side token layout. The tokenizer + streaming prompt template are mistral-common (tekken.json); transformers delegates to it, so mistral-common is authoritative for token IDs, STREAMING_PAD layout, and the transcription_delay configuration. NOTE: this is architecturally a DISTINCT model from the 2507 'voxtral' variants (causal RoPE+sliding-window audio encoder, streaming frontend, delay-token conditioning) — it shares only the family key, the projector shape, and the tekken tokenizer.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "STREAMING is the model's reason to exist and is a major scope decision. The reference interleaves encoding and decoding: audio is fed downsample_factor=4 encoder frames per decode step, output length is hard-clamped to ceil(mel_frames/audio_length_per_tok=8) tokens (one text token per 80ms audio slot, 12.5 Hz). Implementing true streaming in ggml requires an offline-encode assumption break plus delay-token scheduling. An offline/whole-clip path MAY be numerically equivalent to streaming (because the frontend max is fixed and convs are causal) but this equivalence MUST be verified numerically before relying on it.",
+    "Causal RoPE + sliding-window (750) audio encoder — NOT the Whisper bidirectional encoder of the 2507 models. 32-layer causal transformer, RoPE theta=1e6 head_dim=64, RMSNorm pre-norm, sliding-window-causal mask of width 750 over encoder frames. ggml needs an encoder-side cos/sin RoPE precompute AND a windowed-causal mask — novel vs every existing (whisper/parakeet) bidirectional one-shot encoder in the codebase.",
+    "RoPE layout (interleaved vs NEOX): the original Mistral checkpoint is INTERLEAVED RoPE; convert_voxtral_realtime_weights_to_hf.py applies permute_for_rope to q/k weights AND biases to produce HF split-halves (NEOX) layout. If you convert from the HF checkpoint, implement NEOX rotate_half; if from original Mistral, implement interleaved. Applies to BOTH the audio encoder (theta 1e6, head_dim 64) and the text decoder (theta 1e6, head_dim 128). Verify rotate_half against the reference before trusting block 0.",
+    "Causal conv stem: conv1 (128->1280, k=3, s=1) and conv2 (1280->1280, k=3, s=2) are LEFT-pad-only causal convs (left_pad=2 and 1) with GELU after each, and a conv padding cache (VoxtralRealtimeConv1dPaddingCache) carries left_pad samples across streaming chunks for bit-exact continuity. The conv2 stride 2 plus projector downsample_factor 4 gives the 8 mel-frames-per-token rate (8/(2*4)=1).",
+    "Delay-token conditioning of the decoder: num_delay_tokens (default 6 = 480ms) drives (a) the prompt pad count [BOS] + [STREAMING_PAD=32]*(n_left_pad=32 + num_delay) and (b) a sinusoidal time_embedding feeding a per-layer ADAPTIVE RMSNorm on the FFN branch (post_attention_layernorm(h) * (1 + ada_rms_norm(t_cond))). The same weights serve delays 80ms..2.4s; delay is a runtime conditioning input, not a fixed constant. This adaptive-RMSNorm-on-FFN is a novel op for the codebase.",
+    "Streaming frontend differs from Whisper/2507: n_fft=400, periodic Hann, drop last STFT frame, slaney mel 0-8000Hz, but FIXED global_log_mel_max=1.5 (NOT the per-utterance log.max() that Whisper/2507 use), then max(log, 1.5-8) and (log+4)/4. The fixed max is what makes per-frame mel causal/streaming-safe. center=True only for the first/offline chunk, False for continuation chunks. Getting the fixed-max vs per-utterance-max wrong silently breaks streaming numerics.",
+    "Projector: reshape (B,T,1280)->(B,T/4,5120) concatenating 4 consecutive encoder frames (downsample_factor=4, with seq%4 truncation), then Linear 5120->3072 (bias=False) -> GELU -> Linear 3072->3072 (bias=False). Audio embeds are then ADDED (inputs_embeds += pooler_output) onto text-token embeds at aligned positions — additive fusion, NOT masked_scatter / concatenation like the 2507 models.",
+    "Selective biases: encoder attention q/v/o have bias, k has NO bias (Whisper-style); encoder FFN is SwiGLU/silu with bias only on the down projection (w2), none on w1/w3. The decoder is fully bias-free. activation_function='gelu' in the encoder config is effectively dead (used only for the conv stem); the encoder MLP is SwiGLU/silu.",
+    "Two independent KV caches + a conv cache for true streaming: a decoder KV cache (sliding 8192) AND an encoder KV cache (StaticCache sized to sliding_window=750) re-run incrementally, plus the conv padding cache. This breaks the typical 'encode once, decode many' ggml structure. Sliding-window masks are needed at TWO widths (encoder 750, decoder 8192).",
+    "Tied lm_head (tie_word_embeddings=true): lm_head = embed_tokens; emit one tensor and reuse (llama.cpp TENSOR_DUPLICATED-style fallback in the loader).",
+    "Tekken tokenizer (mistral-common): no HF fast tokenizer. Decode/encode layout: ids 0..999 special (n_special=1000, BOS=1 EOS=2 STREAMING_PAD=32), ids>=1000 are base64-UTF8 byte tokens (vocab_id = token_id - 1000). The streaming prompt and transcription_delay_ms (default 480, configurable 80..1200 + 2400 inside tekken.json) are emitted by mistral-common encode_transcription(StreamingMode.ONLINE/OFFLINE), not visible in transformers Python.",
+    "Reference env needs a recent transformers (5.x dev; refs checkout is 5.6.0.dev0) plus mistral-common with audio for Stage 2 — newer than the 4.54 the 2507 models need. Do not treat config's transformers_version=5.2.0.dev0 as a hard floor; check PyPI/registry for the current release at Oracle time."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Not computed yet; compute at converter time from tekken.json (mistral-common)."
+    },
+    {
+      "field": "frontend.normalization",
+      "reason": "Declared 'global' to capture the FIXED global_log_mel_max=1.5 streaming normalization (vs the 2507 per-utterance max). No preprocessor_config.json exists on the repo; values are taken from feature_extraction_voxtral_realtime.py. Confirm during Stage 2 against the reference feature extractor output."
+    },
+    {
+      "field": "upstream_benchmarks",
+      "reason": "FLEURS multilingual numbers captured from the card (8.72% avg @480ms). Publisher does not report LibriSpeech test-clean. Acceptance gate uses the measured Oracle reference baseline."
+    }
+  ]
+}

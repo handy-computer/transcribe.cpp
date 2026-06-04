@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "voxtral",
+  "variant": "voxtral-mini-4b-realtime-2602",
+  "source_model": {
+    "hf_repo": "mistralai/Voxtral-Mini-4B-Realtime-2602",
+    "hf_revision": "2769294da9567371363522aac9bbcfdd19447add"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "_skeleton": true
+}
