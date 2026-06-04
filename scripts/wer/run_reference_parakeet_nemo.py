@@ -47,7 +47,11 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=0,
                    help="Process only the first N utterances (0 = all).")
     p.add_argument("--batch-size", type=int, default=1,
-                   help="NeMo transcribe() batch size.")
+                   help="NeMo transcribe() batch size (groups N utterances).")
+    p.add_argument("--device", default="cpu",
+                   help="torch device: 'cpu' or 'cuda' (default cpu). "
+                        "Uniform across reference runners so the Modal "
+                        "reference_sweep can drive any family the same way.")
     p.add_argument("--offline-only", action="store_true",
                    help=(
                        "Force att_context_style='regular'. Required only for "
@@ -107,6 +111,8 @@ def main() -> int:
         else:
             raise last
     model.eval()
+    if args.device != "cpu":
+        model = model.to(args.device)
     load_ms = (time.monotonic() - t0) * 1000
 
     # Parakeet variants without a validation_ds in cfg need this stub
@@ -138,51 +144,69 @@ def main() -> int:
         }) + "\n")
         fout.flush()
 
-        # Iterate one utterance at a time. Parakeet's transcribe() takes
-        # a list of audio paths directly (no per-row manifest required).
-        # Single-utterance calls are deterministic and let us log
-        # per-utterance timings for run.py-compatible reports.
-        for entry in manifest:
-            uid = entry["id"]
-            audio_path = entry["audio"]
-            ref_text = entry.get("ref_text", "")
+        # Batch utterances in groups of --batch-size. NeMo's transcribe()
+        # takes a list of audio paths and batches them natively, returning
+        # results aligned to input order. A batch that raises falls back to
+        # per-utterance so one bad file can't drop the whole group.
+        def _hyp_of(item) -> str:
+            if hasattr(item, "text"):
+                return item.text
+            if isinstance(item, str):
+                return item
+            return str(item)
 
+        def _texts(out, k: int) -> list[str]:
+            # RNNT/CTC return a flat list of k hypotheses; hybrid models can
+            # return a 1-tuple / (rnnt_hyps, ctc_hyps) tuple of lists. Unwrap
+            # to the first decoder's list, then map each to text.
+            if isinstance(out, tuple):
+                out = out[0] if out else []
+            if not isinstance(out, (list, tuple)):
+                out = [out]
+            return [_hyp_of(x) for x in out][:k]
+
+        bs = max(1, args.batch_size)
+        for start in range(0, total, bs):
+            group = manifest[start:start + bs]
+            paths = [e["audio"] for e in group]
+            k = len(group)
             t_start = time.monotonic()
-            err = ""
-            hyp_text = ""
+            errs = [""] * k
+            hyps = [""] * k
             try:
-                out = model.transcribe(audio=[audio_path], batch_size=args.batch_size)
-                if isinstance(out, (list, tuple)) and out:
-                    first = out[0]
-                    if isinstance(first, (list, tuple)):
-                        first = first[0]
-                    if hasattr(first, "text"):
-                        hyp_text = first.text
-                    elif isinstance(first, str):
-                        hyp_text = first
-                    else:
-                        hyp_text = str(first)
-            except Exception as e:
-                err = f"{type(e).__name__}: {e}"
-                n_errors += 1
+                out = model.transcribe(audio=paths, batch_size=k)
+                texts = _texts(out, k)
+                for i in range(k):
+                    hyps[i] = texts[i] if i < len(texts) else ""
+            except Exception:
+                # Per-utterance fallback for this group.
+                for i, e_ in enumerate(group):
+                    try:
+                        t1 = _texts(model.transcribe(audio=[e_["audio"]],
+                                                     batch_size=1), 1)
+                        hyps[i] = t1[0] if t1 else ""
+                    except Exception as e2:
+                        errs[i] = f"{type(e2).__name__}: {e2}"
+                        n_errors += 1
+            per_ms = round((time.monotonic() - t_start) * 1000 / k, 1)
 
-            elapsed_ms = round((time.monotonic() - t_start) * 1000, 1)
-            rec = {
-                "id": uid,
-                "ref_text": ref_text,
-                "hyp_text": hyp_text.strip(),
-                "raw_text": hyp_text,
-                "mel_ms": 0,
-                "encode_ms": 0,
-                "decode_ms": elapsed_ms,
-                "latency_ms": elapsed_ms,
-                "error": err,
-            }
-            fout.write(json.dumps(rec) + "\n")
-            fout.flush()
-            n_done += 1
+            for i, entry in enumerate(group):
+                rec = {
+                    "id": entry["id"],
+                    "ref_text": entry.get("ref_text", ""),
+                    "hyp_text": (hyps[i] or "").strip(),
+                    "raw_text": hyps[i] or "",
+                    "mel_ms": 0,
+                    "encode_ms": 0,
+                    "decode_ms": per_ms,
+                    "latency_ms": per_ms,
+                    "error": errs[i],
+                }
+                fout.write(json.dumps(rec) + "\n")
+                fout.flush()
+                n_done += 1
 
-            if n_done % 50 == 0 or n_done == total:
+            if start // bs % 10 == 0 or n_done == total:
                 wall = time.monotonic() - t_loop
                 rate = n_done / wall if wall > 0 else 0
                 eta = (total - n_done) / rate if rate > 0 else 0

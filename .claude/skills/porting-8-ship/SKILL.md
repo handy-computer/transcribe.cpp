@@ -1,14 +1,13 @@
 ---
 name: porting-8-ship
-description: Produces the user-facing and upload-ready documentation for a completed port. Checklist-driven — the skill asserts every preceding artifact exists in the expected location before drafting the family doc, model card, HF card YAML, and HF README. Use after porting-7-wer has produced the ref-dtype gate pass and the per-quant WER table. Output: docs/porting/families/<family>.md (filled), docs/models/<variant>.md, scripts/hf_cards/<variant>.yaml, and models/<variant>/README.md. Human review before HF upload is an ask-point. The actual upload is human-run.
+description: Produces user-facing and upload-ready documentation for a completed port. Use after porting-7-wer has produced the ref-dtype gate pass and per-quant WER table. Output: filled family doc, model card, HF card YAML, rendered HF README, and private-repo docs upload.
 ---
 
 # porting-8-ship
 
-Stage 8 (final) of the porting pipeline. Checklist-driven local prep:
-verify every preceding artifact exists, then draft the family doc, the
-user-facing model card, the HF card YAML, and the HF README. Shipping
-itself stays in the user's hands.
+Stage 8 (final) verifies prior artifacts, drafts release docs, renders the
+HF README, and pushes docs/README to the private HF repo. Public release
+is out of scope.
 
 ## Preconditions
 
@@ -102,6 +101,16 @@ timestamp granularity) plus any sharp edges the port surfaced. Do not
 invent limitations the port didn't discover; do not omit limitations the
 capabilities flags imply. Present the draft for human review in Step 6.
 
+State the **batch and streaming** posture from the Capability Validation
+rows:
+- Batch: whether the family ships an explicit `run_batch()` fast path
+  (PASS) or runs the serial fallback (`ACCEPTED GAP — serial fallback`),
+  and that batching is WER-neutral (byte-identical to single-stream).
+- Streaming: if `capabilities.streaming` is true the row is PASS — say
+  so and name the chunk/lookahead contract; it is never reported as an
+  accepted gap for a natively-streaming model. If the model does not
+  stream, omit the row.
+
 ### Step 3: User-facing model card (execute)
 
 Author `docs/models/<variant>.md`. The repo ships a Jinja template at
@@ -110,12 +119,13 @@ Author `docs/models/<variant>.md`. The repo ships a Jinja template at
 
 Two acceptable approaches:
 
-1. **Copy from the closest existing model card** and edit the fields by
-   hand. Pull facts directly from artifacts — quants from
-   `models/<variant>/`, WER from `reports/wer/<variant>-*.score.json`,
-   bench from `reports/perf/<machine>/`, dataset / upstream score from
+1. **Copy from the closest existing model card** and edit by hand. Pull
+   facts directly from artifacts — quants from
+   `models/<variant>/`, WER and the measured reference baseline from
+   `reports/wer/<variant>-*.score.json`, bench from
+   `reports/perf/<machine>/`, and the acceptance dataset from
    `intake.upstream_benchmarks[0]`. Ask for `target_hf_repo` since it
-   cannot be inferred. This is usually the right call.
+   cannot be inferred.
 2. **Render from the existing template** if the template already covers
    everything the variant needs and the variant has no rendered card
    yet. Build the context dict in a short ad-hoc `uv run python -c`
@@ -123,9 +133,7 @@ Two acceptable approaches:
    context fields just for one family — handcraft those sections in
    the rendered markdown instead.
 
-Either way, the result is a first draft. Subsequent regenerations must
-respect human edits — do not blindly re-render after the user has
-touched the file.
+Subsequent regenerations must respect human edits.
 
 ### Step 4: HF card YAML spec (execute)
 
@@ -164,8 +172,7 @@ tags:
 uv run scripts/hf_cards/generate.py scripts/hf_cards/<variant>.yaml
 ```
 
-Writes `models/<variant>/README.md` by default. This is what `hf upload`
-will pick up alongside the GGUFs.
+Writes `models/<variant>/README.md` by default.
 
 ### Step 6: Pre-upload review (ask-point)
 
@@ -175,29 +182,26 @@ human review:
 - `docs/models/<variant>.md`
 - `models/<variant>/README.md`
 
-Flag the sections most likely to over-promise so the user examines them
-closely: the model card's `one_liner` and `capabilities_prose`, the
-family doc's Known Limitations. Wait for explicit sign-off before Step 7.
+Flag likely over-promising sections (`one_liner`, `capabilities_prose`,
+Known Limitations) and wait for explicit sign-off before Step 7.
 
 ### Step 7: Sign-off
 
 Report:
 - All four output paths (family doc, model card, HF YAML, HF README).
-- Target HF repo.
+- Target private HF repo.
 - Pre-flight checklist outcome from Step 1.
-- Next command for the user to run (actual upload is not the skill's
-  job):
+- Push the rendered docs/README to the private repo:
   ```bash
-  hf upload <target_repo> models/<variant> .
+  hf upload <target_repo> models/<variant> . --repo-type model
   ```
-- Remind the user to commit the docs/families/models/hf_cards changes
-  manually before the upload.
+- Remind the user to commit the docs/families/models/hf_cards changes.
 - If this port adds a new family (or new variants under an existing
   family), remind the user to update the supported-models table in the
   root `README.md` so the family/variants are listed.
 
-**Do not commit. Do not upload.** The upload is a human action because
-it publishes to a public registry.
+**Do not commit.** Keep the repo private; flipping it public is a future
+action, not part of this stage.
 
 ## Postconditions
 
@@ -207,6 +211,7 @@ it publishes to a public registry.
   bench table.
 - `scripts/hf_cards/<variant>.yaml` committed-ready.
 - `models/<variant>/README.md` rendered.
+- Docs/README pushed to the private HF repo; public flip deferred.
 
 ## Pointers (read, not execute)
 

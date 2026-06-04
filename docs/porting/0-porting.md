@@ -45,8 +45,7 @@ The authoritative stage chain is the eight `porting-N` skills under
 
 Each skill owns its postconditions and is the source of truth for what
 must exist by the time you advance. Read the corresponding SKILL.md
-before starting each stage. `docs/porting/skills-v2-proposal.md` records
-the v2 framing and the rationale for the split.
+before starting each stage.
 
 The high-level intent of each stage:
 
@@ -58,14 +57,15 @@ The high-level intent of each stage:
 3. **Convert** — produce only the reference-dtype GGUF; clear Preflight
    Gate B.
 4. **C++** — implement `src/arch/<family>/`, finalize tolerances, run
-   the family-doc Capability Validation table, gate Stage 4 subset WER
-   vs reference.
-5. **Quants** — generate the shipped quant matrix and CLI smoke each
-   produced GGUF.
+   the family-doc Capability Validation table, gate full ref-dtype WER
+   vs the measured Oracle reference baseline.
+5. **Quants** — generate the shipped quant matrix, CLI smoke each
+   produced GGUF, and take a tentative quant WER read for human review.
 6. **Bench** — performance matrix; every accepted iteration re-runs
    `validate.py all`.
-7. **WER** — full release WER sweep against the upstream acceptance
-   number; ref-dtype hard gate, quants reported but not gated.
+7. **WER** — full release WER sweep; ref-dtype hard gate against the
+   measured Oracle reference baseline, quants human-reviewed and not
+   auto-gated.
 8. **Ship** — checklist-driven local prep of the family doc, model card,
    HF YAML, HF README.
 
@@ -88,11 +88,6 @@ Every family should end with:
 - bench matrix support in `scripts/bench/run.py`
 - manifest support under `tests/golden/<family>/` so `scripts/validate.py`
   can run reference -> C++ -> compare
-
-Recommended local workspace setup is described in
-[`7-workspace-setup.md`](7-workspace-setup.md). Current manifests use
-model ids by default; local model and GGUF paths remain overridable with
-`--model` and `--gguf`.
 
 Numerical validation workflow is described in
 [`4-numerical-validation.md`](4-numerical-validation.md). Common

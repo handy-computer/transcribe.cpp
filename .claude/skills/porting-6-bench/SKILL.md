@@ -5,12 +5,9 @@ description: Runs the publication performance benchmark for a ported model varia
 
 # porting-6-bench
 
-Stage 6 of the porting pipeline. Drives `scripts/bench/run.py` over the
-**publication scope** — the cells that actually ship in
-`docs/models/<variant>.md` — validates the emitted reports against the
-standardized bench schema, and scripts the accept/revert cycle when the
-human is manually optimizing. Every accepted change re-runs `validate.py`
-so we never trade numerical correctness for speed silently.
+Stage 6 of the porting pipeline. Runs publication-scope benchmarks,
+validates report schema, and gates accepted performance changes with
+`validate.py all`.
 
 Anything beyond the publication scope (more presets, more samples,
 longer iter counts) is good-to-know exploration, not a sign-off
@@ -26,34 +23,15 @@ requirement.
 
 ## Build directory
 
-Default build directory is `build/`. Bench tooling discovers binaries in
-`build/bin/` first and falls back to `build-vulkan/bin/` only for legacy
-local setups that retain a separate Vulkan build. New ports should not
-introduce additional build directories.
+Default build directory is `build/`. New ports should not introduce
+additional build directories.
 
 ## Standardized bench schema
 
-Every per-cell run emitted into a driver report
-(`reports/perf/<machine>/<name>_<variant>_<backend>.json`) splits into
-required and optional fields. Sign-off blocks on required; optional
-fields are surfaced if absent but do not gate.
-
-**Required:**
-
-1. **Machine identity** — `machine.{slug,cpu_model,os,hostname}`.
-2. **Build SHA** — `git_sha` at the aggregate top level.
-3. **Cell identifiers** — `model_path`, `backend`, (derived) `quant`,
-   `sample` per run.
-4. **Per-stage timings** — `mel_ms`, `encode_ms`, `decode_ms`, `total_ms`,
-   `wall_ms` per iteration in `runs[].per_iter[]`.
-5. **`rtf_wall_mean`** per run — wall-clock-based real-time factor, the
-   user-visible number.
-6. **`transcript_sha256`** per run — SHA256 of the decoded text.
-   Structural regression check.
-
-All required fields are emitted today by `scripts/bench/run.py` +
-`build/bin/transcribe-bench`. Any future regression that drops a required
-field blocks Stage 6.
+Every per-cell report under
+`reports/perf/<machine>/<name>_<variant>_<backend>.json` is checked by the
+`required_*` sets in Step 5. Missing required fields block Stage 6;
+optional gaps are surfaced but do not gate.
 
 ## Workflow
 
@@ -63,6 +41,7 @@ Bench progress:
 - [ ] Step 2: Rebuild transcribe-bench
 - [ ] Step 3: Confirm bench scope (publication default, optional widening)
 - [ ] Step 4: Capture publication baseline
+- [ ] Step 4b: Batch throughput sweep (good-to-know, non-gating)
 - [ ] Step 5: Validate schema completeness
 - [ ] Step 6: Iteration loop (human-driven, with validate gate per accept)
 - [ ] Step 7: Sign-off review
@@ -83,13 +62,8 @@ the variant declared. Missing files → return to Stage 5.
 cmake --build build --target transcribe-bench
 ```
 
-`transcribe-bench` is a separate cmake target. Stages 4 and 5 build
-`transcribe-cli` and `transcribe-quantize` respectively, but neither
-touches the bench binary, so it stays at whatever revision was last
-built (potentially pre-Stage-4 — i.e. before the C++ work that just
-landed for this variant). Skipping this step shows up as "binary
-failed (exit 1)" with a stale-loader error (e.g. unsupported KV value)
-on every cell. Always rebuild before capturing baseline.
+`transcribe-bench` is a separate cmake target; always rebuild before
+capturing baseline.
 
 ### Step 3: Bench scope (ask-point)
 
@@ -104,11 +78,8 @@ matrix that ends up rendered in `docs/models/<variant>.md`:
 - Iters: `3`, Warmup: `1`
 - `--name <variant>-publication`
 
-Confirm publication scope with the user. The user may opt to narrow
-during tight iteration (e.g. `--backends metal --quants q4_k_m`) or
-widen for a one-off "good-to-know" sweep (more presets, more samples,
-larger iter counts). A widened sweep is exploratory and does not gate
-sign-off; sign-off is decided on the publication-scope cells.
+Confirm publication scope with the user. Narrowed or widened sweeps are
+allowed for iteration, but sign-off is decided on publication scope.
 
 ### Step 4: Baseline capture (execute)
 
@@ -132,6 +103,23 @@ Writes one report per (variant, backend) pair to `reports/perf/<machine>/`.
 Record the file paths. The final on-doc bench at sign-off should re-run
 this command with `--name <variant>-publication` (matching the
 reproduction command rendered in `docs/models/<variant>.md`).
+
+### Step 4b: Batch throughput sweep (execute, good-to-know)
+
+Optional batch throughput sweep. Correctness is already gated in Stage 4;
+this step measures batch-size scaling:
+
+```bash
+cmake --build build --target transcribe-batch-bench
+build/bin/transcribe-batch-bench \
+  -m models/<variant>/<variant>-F16.gguf \
+  samples/jfk.wav \
+  --batch-sizes 1,2,4,8,16,32 --iters 3
+```
+
+Emits per-batch `{batch_size, per_utt_ms, wall_ms}` to
+`reports/perf/<machine>/<name>_<variant>_batch_<backend>.json`. This is
+exploratory and does not gate sign-off. Batch runs stay strictly serial.
 
 ### Step 5: Schema validation (execute)
 
@@ -164,19 +152,15 @@ Any missing **required** field is a bench-harness regression — halt Stage
 
 ### Step 6: Iteration loop (human-driven)
 
-For each optimization hypothesis the user has:
+For each optimization hypothesis:
 
-1. User states the hypothesis ("fuse norms in the attention path") and
-   the expected directional effect ("encode_ms drops, decode_ms
-   unchanged, transcript hash unchanged").
+1. User states the hypothesis and expected timing/hash effect.
 2. User makes the code change.
 3. Skill rebuilds:
    ```bash
    cmake --build build --target transcribe-cli transcribe-bench
    ```
-4. Skill re-runs the bench at the **same scope used for the baseline**.
-   For tight iteration the user may have narrowed (e.g. one backend,
-   one quant); otherwise this is publication scope:
+4. Skill re-runs the bench at the same scope used for the baseline:
    ```bash
    uv run scripts/bench/run.py \
      --models <variant> \
@@ -192,21 +176,17 @@ For each optimization hypothesis the user has:
      --baseline reports/perf/<machine>/baseline-*_<variant>_<backend>.json \
      --candidate reports/perf/<machine>/<hypothesis-slug>-*_<variant>_<backend>.json
    ```
-6. Skill reports: the timing delta, AND whether `transcript_sha256` /
-   `token_ids_sha256` changed between baseline and candidate. **A
-   numerical hash change without the user claiming a numerical change is
-   a revert signal.**
+6. Skill reports timing deltas and whether `transcript_sha256` /
+   `token_ids_sha256` changed. An unexpected hash change is a revert
+   signal.
 7. **Accepted-change validation gate (execute on every accept).** Before
    the user commits, the skill re-runs:
    ```bash
    uv run scripts/validate.py all --family <family> --variant <variant>
    ```
-   If validate.py fails, the perf change has broken ref-dtype numerics
-   and must be reverted or fixed — never committed in a "broken numerics
-   for speed" state. If validate.py passes, the user commits and the
+   If validate.py fails, revert or fix the perf change. If it passes, the
    candidate becomes the new baseline.
-8. User reverts (throws the change away) if the timing or hash signals
-   are wrong.
+8. User reverts if the timing or hash signals are wrong.
 
 Repeat until the user is satisfied.
 
@@ -237,6 +217,10 @@ committed at the user's discretion.
 - Wider sweeps (more presets, more samples, larger iter counts) are
   optional. They are good-to-know context and may inform follow-up work
   but do not gate Stage 6 sign-off.
+- Optionally, a batch throughput sweep at
+  `reports/perf/<machine>/<name>_<variant>_batch_<backend>.json` via
+  `transcribe-batch-bench`. Good-to-know; informs the batched-vs-serial
+  fast-path decision but does not gate sign-off.
 
 ## Pointers (read, not execute)
 
@@ -245,4 +229,8 @@ committed at the user's discretion.
 - `scripts/bench/compare.py` — baseline-vs-candidate delta table
 - `tools/transcribe-bench/main.cpp` — bench binary source if the schema
   needs extension
+- `examples/bench/batch_bench.cpp` — `transcribe-batch-bench` source
+  (offline batch throughput sweep)
+- `scripts/batch_parity.py` — Stage 4 batch correctness gate (referenced
+  here only to confirm correctness was already proven)
 - Existing reports under `reports/perf/<machine>/` — shape references
