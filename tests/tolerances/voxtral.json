@@ -1,0 +1,80 @@
+{
+  "_comment": [
+    "Voxtral provisional tolerances (Stage 2 Oracle). NOT finalized.",
+    "Magnitude-aware: max_abs = max(1e-4 * p99_abs, 1e-6);",
+    "                 mean_abs = max(1e-5 * rms, 1e-6).",
+    "Derived from the reference (transformers VoxtralForConditionalGeneration,",
+    "bf16, eager) jfk decode dump. Per-tensor _provisional:true is removed by",
+    "Stage 4 once finalized against observed C++ drift. Do NOT ship while any",
+    "_provisional entry remains.",
+    "Note: late encoder/decoder blocks carry massive-activation outliers",
+    "(enc.block.31 max ~1.2e3 with p99_abs far smaller; dec blocks similar),",
+    "so worst-element max_abs budgets there are large by design while mean_abs",
+    "stays tight."
+  ],
+  "dec.audio_injected": {
+    "max_abs": 6.5234375e-05,
+    "mean_abs": 1.9545927052315195e-06,
+    "_provisional": true
+  },
+  "dec.block.0.out": {
+    "max_abs": 6.71875e-05,
+    "mean_abs": 2.3580610434956195e-06,
+    "_provisional": true
+  },
+  "dec.block.15.out": {
+    "max_abs": 8.0078125e-05,
+    "mean_abs": 6.309503992027642e-06,
+    "_provisional": true
+  },
+  "dec.block.29.out": {
+    "max_abs": 0.0003484375,
+    "mean_abs": 1.1813425140742669e-05,
+    "_provisional": true
+  },
+  "dec.logits_raw": {
+    "max_abs": 0.0008687500000000001,
+    "mean_abs": 3.879413757500416e-05,
+    "_provisional": true
+  },
+  "dec.out_before_head": {
+    "max_abs": 0.001025,
+    "mean_abs": 4.035837071828043e-05,
+    "_provisional": true
+  },
+  "dec.token_emb": {
+    "max_abs": 4.19921875e-06,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.00013125000000000002,
+    "mean_abs": 5.05978181745356e-06,
+    "_provisional": true
+  },
+  "enc.block.16.out": {
+    "max_abs": 0.00010156250000000001,
+    "mean_abs": 5.251072273443931e-06,
+    "_provisional": true
+  },
+  "enc.block.31.out": {
+    "max_abs": 0.00019296875,
+    "mean_abs": 5.7750225625821406e-05,
+    "_provisional": true
+  },
+  "enc.mel.in": {
+    "max_abs": 9.724989634752274e-05,
+    "mean_abs": 4.87961698084374e-06,
+    "_provisional": true
+  },
+  "enc.out": {
+    "max_abs": 0.00017187500000000002,
+    "mean_abs": 7.605144668034899e-06,
+    "_provisional": true
+  },
+  "proj.out": {
+    "max_abs": 6.562500000000001e-05,
+    "mean_abs": 1.975269575451404e-06,
+    "_provisional": true
+  }
+}
