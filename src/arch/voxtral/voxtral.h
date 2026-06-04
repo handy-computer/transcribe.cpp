@@ -85,6 +85,13 @@ struct VoxtralSession final : public transcribe_session {
 
     transcribe::qwen3_lm::KvCache kv_cache;
 
+    // Offline batched decode (transcribe_run_batch): a batched KV cache with
+    // one slab per utterance, reused across calls and re-allocated only when
+    // the batch size or context window grows.
+    transcribe::qwen3_lm::KvCache kv_cache_batch;
+    int kv_batch_cap   = 0;  // slabs allocated (== n_batch of last alloc)
+    int kv_batch_n_ctx = 0;  // n_ctx of last alloc
+
     std::vector<float> mel_buf;
     std::vector<float> enc_host;  // projector output (audio embeds), all chunks
 

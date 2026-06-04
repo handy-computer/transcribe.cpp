@@ -89,4 +89,66 @@ StepBuild build_step_graph(ggml_context *                  ctx,
                            int                             max_n_kv,
                            bool                            use_flash);
 
+// ---------------------------------------------------------------------------
+// Batched prefill / step (offline transcribe_run_batch fast path)
+//
+// B utterances decoded in lockstep against a batched KV cache
+// (qwen3_lm::kv_init_batched, n_batch=B). Ragged prompts are right-padded
+// to T_prompt_max; the shared causal mask works because pads land after
+// each utterance's real tokens, and per-row last_idx selects each real
+// final position. Audio embeddings are scattered into the token-embedding
+// sequence via ggml_set_rows at the audio_token_id positions. Both require
+// use_flash (the qwen3_lm batched blocks have no manual GQA path). Mirrors
+// arch/canary_qwen, with Voxtral's UNTIED lm_head (dec.output.weight).
+// ---------------------------------------------------------------------------
+
+struct PrefillBuildBatched {
+    ggml_tensor * input_ids_in = nullptr;  // [T_prompt_max, B] i32 (right-padded)
+    ggml_tensor * audio_in     = nullptr;  // [dec_hidden, T_audio_max, B] f32
+    ggml_tensor * audio_idx_in = nullptr;  // [T_audio_max, B] i64 (scatter rows)
+    ggml_tensor * positions_in = nullptr;  // [T_prompt_max] i32 (shared)
+    ggml_tensor * mask_in      = nullptr;  // [T_prompt_max, T_prompt_max] f16 causal
+    ggml_tensor * kv_idx_in    = nullptr;  // [T_prompt_max, B] i64 (idx[t,b]=t)
+    ggml_tensor * last_idx_in  = nullptr;  // [1, B] i32 (real last position per utt)
+    ggml_tensor * out          = nullptr;  // [B] i32 argmax of last-position logits
+    ggml_tensor * logits       = nullptr;  // [vocab, B] f32
+    ggml_cgraph * graph        = nullptr;
+
+    int T_prompt_max = 0;
+    int T_audio_max  = 0;
+    int n_batch      = 0;
+};
+
+PrefillBuildBatched build_prefill_graph_batched(
+    ggml_context *                  ctx,
+    const VoxtralWeights &          weights,
+    const VoxtralHParams &          hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             T_prompt_max,
+    int                             T_audio_max,
+    int                             n_batch,
+    bool                            use_flash);
+
+struct StepBuildBatched {
+    ggml_tensor * input_ids_in = nullptr;  // [B] i32
+    ggml_tensor * position_in  = nullptr;  // [B] i32 (RoPE position per utt)
+    ggml_tensor * kv_idx_in    = nullptr;  // [1, B] i64 (KV write row per utt)
+    ggml_tensor * mask_in      = nullptr;  // [max_n_kv, 1, 1, B] f16 per-row window
+    ggml_tensor * out          = nullptr;  // [B] i32 argmax token id
+    ggml_tensor * logits       = nullptr;  // [vocab, B] f32
+    ggml_cgraph * graph        = nullptr;
+
+    int max_n_kv = 0;
+    int n_batch  = 0;
+};
+
+StepBuildBatched build_step_graph_batched(
+    ggml_context *                  ctx,
+    const VoxtralWeights &          weights,
+    const VoxtralHParams &          hp,
+    transcribe::qwen3_lm::KvCache & kv_cache,
+    int                             max_n_kv,
+    int                             n_batch,
+    bool                            use_flash);
+
 } // namespace transcribe::voxtral

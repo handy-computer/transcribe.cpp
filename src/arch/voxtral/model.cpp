@@ -19,6 +19,7 @@
 
 #include "qwen3_lm/qwen3_lm.h"
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -52,6 +53,7 @@ static_assert(std::is_base_of_v<transcribe_session, VoxtralSession>);
 
 VoxtralSession::~VoxtralSession() {
     kv_cache.free();
+    kv_cache_batch.free();
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -352,7 +354,11 @@ transcribe_status init_context(
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
-    cc->encoder_use_flash = false;
+    // Encoder is the Whisper-large-v3 encoder (head_dim 64, full
+    // bidirectional attention, null mask) — flash-supported on every
+    // backend we ship, matching the whisper arch which runs encoder
+    // flash unconditionally. Decoder (Llama head_dim 128) also flash.
+    cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
@@ -768,6 +774,408 @@ transcribe_status run(
     return TRANSCRIBE_OK;
 }
 
+// ---------------------------------------------------------------------------
+// Offline batched decode (transcribe_run_batch)
+// ---------------------------------------------------------------------------
+//
+// Batched encoder (all equal-length 30 s chunks stacked on ne[2]) + batched
+// prefill + the shared qwen3_lm batched step loop. Ragged prompts are
+// right-padded to T_prompt_max; the decoder recipe mirrors arch/canary_qwen.
+// Falls back to a serial per-utterance loop for n==1, dump mode, or no-flash.
+
+transcribe_status run_batch_serial(VoxtralSession *              cc,
+                                   const float * const *         pcm,
+                                   const int *                   n_samples,
+                                   int                           n,
+                                   const transcribe_run_params * params) {
+    for (int i = 0; i < n; ++i) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        const transcribe_status st =
+            (pcm[i] == nullptr || n_samples[i] <= 0)
+                ? TRANSCRIBE_ERR_INVALID_ARG
+                : run(cc, pcm[i], n_samples[i], params);
+        if (st == TRANSCRIBE_OK) cc->batch_results.push_back(cc->capture_result(st));
+        else {
+            transcribe_session::ResultSet rs; rs.status = st;
+            cc->batch_results.push_back(std::move(rs));
+        }
+    }
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status run_batch(
+    transcribe_session *          session,
+    const float * const *         pcm,
+    const int *                   n_samples,
+    int                           n,
+    const transcribe_run_params * params)
+{
+    if (session == nullptr || pcm == nullptr || n_samples == nullptr || n <= 0)
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    auto * cc = static_cast<VoxtralSession *>(session);
+    auto * cm = static_cast<VoxtralModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty() || !cm->mel.has_value())
+        return TRANSCRIBE_ERR_INVALID_ARG;
+
+    // The batched encoder + qwen3_lm batched blocks are flash-only; dump mode
+    // and n==1 take the established single-shot path for byte-parity.
+    if (!cc->decoder_use_flash || !cc->encoder_use_flash ||
+        transcribe::debug::enabled() || n == 1)
+        return run_batch_serial(cc, pcm, n_samples, n, params);
+
+    transcribe::debug::init();
+    const auto & hp = cm->hparams;
+
+    // ----- Prompt mode (uniform across the batch) -----
+    const bool translate = (params != nullptr &&
+                            params->task == TRANSCRIBE_TASK_TRANSLATE);
+    std::string instruction;
+    if (translate) {
+        const char * tgt = (params != nullptr) ? params->target_language : nullptr;
+        instruction = std::string("Translate this to ") + lang_name_for(tgt) + ".";
+    }
+    const char * lang = (params != nullptr) ? params->language : nullptr;
+
+    // ----- Chunk geometry -----
+    int samples_per_chunk = hp.fe_n_samples;
+    if (samples_per_chunk <= 0) {
+        samples_per_chunk = (hp.fe_chunk_length > 0 ? hp.fe_chunk_length : 30) *
+                            hp.fe_sample_rate;
+    }
+    const int frames_per_chunk = (hp.fe_nb_max_frames > 0)
+        ? hp.fe_nb_max_frames
+        : samples_per_chunk / hp.fe_hop_length;
+    const int audio_per_chunk = hp.audio_tokens_per_chunk();
+    const int n_mels          = hp.enc_num_mel_bins;
+    const int dec_h           = hp.dec_hidden;
+
+    // ----- Pass 0: per-utterance chunking + parallel mel -----
+    std::vector<char> valid(n, 0);
+    std::vector<int>  n_chunks(n, 0);
+    std::vector<std::vector<float>> mel_bufs(n);
+    std::vector<int>  mel_nf(n, 0);
+
+    int n_mel_threads = cc->n_threads;
+    if (n_mel_threads <= 0)
+        n_mel_threads = std::min(8, std::max(1,
+            static_cast<int>(std::thread::hardware_concurrency())));
+
+    const int64_t t_mel0 = ggml_time_us();
+    transcribe::parallel_for_all(n, n_mel_threads, [&](int b) {
+        if (pcm[b] == nullptr || n_samples[b] <= 0) return true;
+        const int nc = std::max(1,
+            (n_samples[b] + samples_per_chunk - 1) / samples_per_chunk);
+        const size_t padded = static_cast<size_t>(nc) * samples_per_chunk;
+        std::vector<float> pcm_padded(padded, 0.0f);
+        std::memcpy(pcm_padded.data(), pcm[b],
+                    static_cast<size_t>(n_samples[b]) * sizeof(float));
+        int nm = 0, nf = 0;
+        if (cm->mel->compute(pcm_padded.data(), padded, mel_bufs[b], nm, nf,
+                             /*n_threads=*/1) == TRANSCRIBE_OK &&
+            nm == n_mels && nf >= nc * frames_per_chunk) {
+            n_chunks[b] = nc;
+            mel_nf[b]   = nf;
+        }
+        return true;
+    });
+    int64_t mel_us = ggml_time_us() - t_mel0;
+
+    // Map global chunk index -> (utterance, local chunk).
+    std::vector<int> chunk_owner, chunk_local;
+    for (int b = 0; b < n; ++b) {
+        if (n_chunks[b] <= 0) continue;
+        valid[b] = 1;
+        for (int lc = 0; lc < n_chunks[b]; ++lc) {
+            chunk_owner.push_back(b);
+            chunk_local.push_back(lc);
+        }
+    }
+    const int total_chunks = static_cast<int>(chunk_owner.size());
+    if (total_chunks == 0) {
+        for (int b = 0; b < n; ++b) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+        }
+        return TRANSCRIBE_OK;
+    }
+
+    // Lazy scheduler (shared with the single-shot path).
+    if (cc->sched == nullptr) {
+        cc->sched = ggml_backend_sched_new(
+            cm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
+        if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // ----- Pass 1: batched encoder over all chunks -----
+    std::vector<std::vector<float>> enc_hosts(n);
+    for (int b = 0; b < n; ++b)
+        if (valid[b])
+            enc_hosts[b].assign(static_cast<size_t>(dec_h) * n_chunks[b] * audio_per_chunk, 0.0f);
+
+    int64_t enc_us = 0;
+    {
+        // Frame-major mel slab [n_mels, frames_per_chunk, total_chunks]:
+        // slab[(gc*FPC + t)*n_mels + m] = mel_bufs[b][m*mel_nf[b] + lc*FPC + t].
+        std::vector<float> slab(
+            static_cast<size_t>(n_mels) * frames_per_chunk * total_chunks, 0.0f);
+        for (int gc = 0; gc < total_chunks; ++gc) {
+            const int b  = chunk_owner[gc];
+            const int lc = chunk_local[gc];
+            const float * src = mel_bufs[b].data();
+            const int nf = mel_nf[b];
+            for (int t = 0; t < frames_per_chunk; ++t) {
+                const size_t dst_base =
+                    (static_cast<size_t>(gc) * frames_per_chunk + t) * n_mels;
+                const int gframe = lc * frames_per_chunk + t;
+                for (int m = 0; m < n_mels; ++m)
+                    slab[dst_base + m] = src[static_cast<size_t>(m) * nf + gframe];
+            }
+        }
+
+        if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+        ggml_init_params ip {};
+        ip.mem_size = 64 * 1024 * 1024;
+        ip.no_alloc = true;
+        cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+
+        EncoderBuild eb = build_encoder_graph_batched(
+            cc->compute_ctx, cm->weights, hp, frames_per_chunk, total_chunks,
+            cc->encoder_use_flash);
+        if (eb.graph == nullptr || eb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_tensor_set(eb.mel_in, slab.data(), 0, slab.size() * sizeof(float));
+        set_sched_threads(cc->sched, cc->n_threads);
+
+        const int64_t t_enc0 = ggml_time_us();
+        if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        enc_us = ggml_time_us() - t_enc0;
+
+        // proj.out [dec_h, audio_per_chunk, total_chunks] -> per-utterance host.
+        std::vector<float> proj_host(
+            static_cast<size_t>(dec_h) * audio_per_chunk * total_chunks);
+        ggml_backend_tensor_get(eb.out, proj_host.data(), 0,
+                                proj_host.size() * sizeof(float));
+        const size_t chunk_elems = static_cast<size_t>(dec_h) * audio_per_chunk;
+        for (int gc = 0; gc < total_chunks; ++gc) {
+            const int b  = chunk_owner[gc];
+            const int lc = chunk_local[gc];
+            std::memcpy(enc_hosts[b].data() + static_cast<size_t>(lc) * chunk_elems,
+                        proj_host.data() + static_cast<size_t>(gc) * chunk_elems,
+                        chunk_elems * sizeof(float));
+        }
+    }
+
+    // ----- Prompts (ragged: n_audio differs per utterance) -----
+    std::vector<std::vector<int32_t>> prompt_ids(n);
+    std::vector<int> T_prompt(n, 0), T_audio(n, 0);
+    int prefix_len = 0, suffix_len = 0;
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) continue;
+        const int n_audio = n_chunks[b] * audio_per_chunk;
+        int pfx = 0, sfx = 0;
+        const transcribe_status st = translate
+            ? build_instruct_prompt(*cm, instruction, n_audio, prompt_ids[b], pfx, sfx)
+            : build_transcription_prompt(*cm, lang, n_audio, prompt_ids[b], pfx, sfx);
+        if (st != TRANSCRIBE_OK) { valid[b] = 0; continue; }
+        prefix_len = pfx; suffix_len = sfx;  // uniform across the batch
+        T_prompt[b] = static_cast<int>(prompt_ids[b].size());
+        T_audio[b]  = n_audio;
+    }
+
+    int max_T_prompt = 0, T_audio_max = 0;
+    for (int b = 0; b < n; ++b) if (valid[b]) {
+        max_T_prompt = std::max(max_T_prompt, T_prompt[b]);
+        T_audio_max  = std::max(T_audio_max, T_audio[b]);
+    }
+    if (max_T_prompt == 0) {
+        for (int b = 0; b < n; ++b) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+        }
+        return TRANSCRIBE_OK;
+    }
+    T_audio_max = std::max(1, T_audio_max);
+
+    const int max_new = 448;
+    int max_n_kv = 1024;
+    while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
+    if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
+
+    // ----- Batched KV cache (reused; re-alloc only on growth) -----
+    ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
+                      ? GGML_TYPE_F32 : GGML_TYPE_F16;
+    if (cc->kv_cache_batch.self_k == nullptr ||
+        cc->kv_batch_cap != n || cc->kv_batch_n_ctx != max_n_kv) {
+        cc->kv_cache_batch.free();
+        if (!transcribe::qwen3_lm::kv_init_batched(
+                cc->kv_cache_batch, cm->plan.primary, max_n_kv,
+                hp.dec_n_kv_heads, hp.dec_head_dim, hp.dec_n_layers, n, kv_type)) {
+            std::fprintf(stderr, "voxtral run_batch: kv_init_batched failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        cc->kv_batch_cap = n; cc->kv_batch_n_ctx = max_n_kv;
+    } else if (cc->kv_cache_batch.buffer != nullptr) {
+        ggml_backend_buffer_clear(cc->kv_cache_batch.buffer, 0);
+    }
+
+    // ----- Pass 2: batched prefill -----
+    std::vector<int32_t> next_tok(n, 0);
+    std::vector<int> n_past(n, 0);
+    std::vector<std::vector<int32_t>> generated(n);
+    int64_t dec_us = 0;
+    {
+        if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+        ggml_init_params ip {};
+        ip.mem_size = 64 * 1024 * 1024;
+        ip.no_alloc = true;
+        cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+
+        PrefillBuildBatched pb = build_prefill_graph_batched(
+            cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch,
+            max_T_prompt, T_audio_max, n, cc->decoder_use_flash);
+        if (pb.graph == nullptr || pb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) return TRANSCRIBE_ERR_GGUF;
+
+        std::vector<int32_t> ids(static_cast<size_t>(max_T_prompt) * n, 0);
+        std::vector<float>   aud(static_cast<size_t>(dec_h) * T_audio_max * n, 0.0f);
+        std::vector<int64_t> aidx(static_cast<size_t>(T_audio_max) * n, 0);
+        std::vector<int64_t> kidx(static_cast<size_t>(max_T_prompt) * n, 0);
+        std::vector<int32_t> lidx(n, 0);
+        for (int b = 0; b < n; ++b) {
+            const int ta = valid[b] ? T_audio[b] : 0;
+            const int tp = valid[b] ? T_prompt[b] : 0;
+            if (valid[b]) {
+                std::memcpy(ids.data() + static_cast<size_t>(b) * max_T_prompt,
+                            prompt_ids[b].data(),
+                            static_cast<size_t>(tp) * sizeof(int32_t));
+                std::memcpy(aud.data() + static_cast<size_t>(b) * T_audio_max * dec_h,
+                            enc_hosts[b].data(),
+                            static_cast<size_t>(ta) * dec_h * sizeof(float));
+            }
+            for (int j = 0; j < T_audio_max; ++j)
+                aidx[static_cast<size_t>(b) * T_audio_max + j] =
+                    (j < ta) ? (prefix_len + j) : (tp + j - ta);
+            for (int t = 0; t < max_T_prompt; ++t)
+                kidx[static_cast<size_t>(b) * max_T_prompt + t] = t;
+            lidx[b] = valid[b] ? (tp - 1) : 0;
+        }
+        ggml_backend_tensor_set(pb.input_ids_in, ids.data(), 0, ids.size() * sizeof(int32_t));
+        ggml_backend_tensor_set(pb.audio_in, aud.data(), 0, aud.size() * sizeof(float));
+        ggml_backend_tensor_set(pb.audio_idx_in, aidx.data(), 0, aidx.size() * sizeof(int64_t));
+        {
+            std::vector<int32_t> pos(max_T_prompt);
+            for (int t = 0; t < max_T_prompt; ++t) pos[t] = t;
+            ggml_backend_tensor_set(pb.positions_in, pos.data(), 0, pos.size() * sizeof(int32_t));
+        }
+        {
+            const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f);
+            const ggml_fp16_t mn = ggml_fp32_to_fp16(-INFINITY);
+            std::vector<ggml_fp16_t> mask(static_cast<size_t>(max_T_prompt) * max_T_prompt, mn);
+            for (int q = 0; q < max_T_prompt; ++q)
+                std::fill(mask.begin() + static_cast<size_t>(q) * max_T_prompt,
+                          mask.begin() + static_cast<size_t>(q) * max_T_prompt + q + 1, mz);
+            ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
+        }
+        ggml_backend_tensor_set(pb.kv_idx_in, kidx.data(), 0, kidx.size() * sizeof(int64_t));
+        ggml_backend_tensor_set(pb.last_idx_in, lidx.data(), 0, lidx.size() * sizeof(int32_t));
+        set_sched_threads(cc->sched, cc->n_threads);
+
+        const int64_t t_dec0 = ggml_time_us();
+        if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS)
+            return TRANSCRIBE_ERR_GGUF;
+        dec_us += ggml_time_us() - t_dec0;
+
+        std::vector<int32_t> amax(n, 0);
+        ggml_backend_tensor_get(pb.out, amax.data(), 0, amax.size() * sizeof(int32_t));
+        for (int b = 0; b < n; ++b) {
+            if (!valid[b]) continue;
+            n_past[b] = T_prompt[b]; next_tok[b] = amax[b];
+            generated[b].push_back(amax[b]);
+        }
+    }
+
+    // ----- Pass 3: batched greedy step loop (shared qwen3_lm driver) -----
+    const int32_t eos_id = hp.eos_token_id;
+    {
+        if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+        ggml_init_params ip {};
+        ip.mem_size = 32 * 1024 * 1024;
+        ip.no_alloc = true;
+        cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+
+        StepBuildBatched sb = build_step_graph_batched(
+            cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch,
+            max_n_kv, n, cc->decoder_use_flash);
+        if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
+        set_sched_threads(cc->sched, cc->n_threads);
+
+        transcribe::qwen3_lm::StepBatchedIO io {};
+        io.input_ids = sb.input_ids_in;
+        io.positions = sb.position_in;
+        io.kv_idx    = sb.kv_idx_in;
+        io.mask      = sb.mask_in;
+        io.argmax    = sb.out;
+        io.graph     = sb.graph;
+
+        transcribe::qwen3_lm::StepBatchedState step_state;
+        step_state.valid    = valid;
+        step_state.next_tok = next_tok;
+        step_state.n_past   = n_past;
+
+        transcribe::qwen3_lm::StepLoopStats step_stats;
+        if (const transcribe_status st = transcribe::qwen3_lm::run_batched_step_loop(
+                cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
+                generated, &step_stats); st != TRANSCRIBE_OK)
+            return st;
+        dec_us += step_stats.step_us;
+    }
+
+    // ----- Capture per-utterance results -----
+    const int valid_count = std::max(1,
+        static_cast<int>(std::count(valid.begin(), valid.end(), char(1))));
+    for (int b = 0; b < n; ++b) {
+        if (!valid[b]) {
+            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            cc->batch_results.push_back(std::move(rs));
+            continue;
+        }
+        std::vector<int32_t> gen = generated[b];
+        if (!gen.empty() && gen.back() == eos_id) gen.pop_back();
+        std::string text = cm->tok.decode(gen.data(), static_cast<int>(gen.size()));
+        size_t s = 0, e = text.size();
+        while (s < e && std::isspace(static_cast<unsigned char>(text[s]))) ++s;
+        while (e > s && std::isspace(static_cast<unsigned char>(text[e - 1]))) --e;
+        text = text.substr(s, e - s);
+
+        transcribe_session::ResultSet rs;
+        rs.full_text   = text;
+        rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+        rs.has_result  = true;
+        rs.status      = TRANSCRIBE_OK;
+        transcribe_session::SegmentEntry seg {};
+        seg.text  = text;
+        seg.t0_ms = 0;
+        seg.t1_ms = static_cast<int64_t>(n_samples[b]) * 1000
+                  / static_cast<int64_t>(hp.fe_sample_rate);
+        rs.segments.push_back(std::move(seg));
+        rs.t_mel_us    = mel_us / valid_count;
+        rs.t_encode_us = enc_us / valid_count;
+        rs.t_decode_us = dec_us / valid_count;
+        cc->batch_results.push_back(std::move(rs));
+    }
+    return TRANSCRIBE_OK;
+}
+
 } // namespace
 
 extern const Arch arch = {
@@ -775,7 +1183,7 @@ extern const Arch arch = {
     /* .load             = */ load,
     /* .init_context     = */ init_context,
     /* .run              = */ run,
-    /* .run_batch        = */ nullptr,  // serial fallback (Stage 4 first port)
+    /* .run_batch        = */ run_batch,
     /* .stream_validate  = */ nullptr,
     /* .stream_begin     = */ nullptr,
     /* .stream_feed      = */ nullptr,
