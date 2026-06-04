@@ -106,6 +106,16 @@ variants are TODO until their respective Stage 4 run.
 Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 `ACCEPTED GAP — <reason>`.
 
+> **Policy note (streaming).** A variant whose intake declares
+> `capabilities.streaming: true` may not carry an `ACCEPTED GAP` / `SKIP`
+> streaming row — the runtime exposes `--stream-chunk-ms`, so streaming
+> resolves to `PASS` or is an explicit user-signed BLOCKER. Both
+> streaming variants satisfy this: `unified-en-0.6b` (buffered RNN-T) and
+> `nemotron-speech-streaming-en-0.6b` (cache-aware RNN-T) stream through
+> the runtime today. The nemotron streaming rows were previously logged
+> as `ACCEPTED GAP — streaming deferred`; that was stale — streaming was
+> verified working on 2026-06-04 and the rows are now `PASS`.
+
 | Variant | Capability | Mode | Command | Expected | Status |
 |---|---|---|---|---|---|
 | tdt-0.6b-v2 | Transcribe | explicit en | `build/bin/transcribe-cli -m models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
@@ -120,8 +130,8 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 | unified-en-0.6b | Streaming (buffered RNN-T, chunked_limited_with_rc) | streaming | `TRANSCRIBE_DUMP_DIR=/tmp/cpp build/bin/transcribe-cli -m models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-F32.gguf --stream-chunk-ms 500 --backend cpu --threads 1 samples/jfk.wav` | byte-equal transcript vs NeMo `speech_to_text_streaming_infer_rnnt.py`; default `(L=70, C=13, R=13)` from the training menu | PASS |
 | nemotron-speech-streaming-en-0.6b | Transcribe (offline / cache-aware att_context_size=[70,13], 1.12s chunk) | explicit en | `build/bin/transcribe-cli -m models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript with PnC | PASS |
 | nemotron-speech-streaming-en-0.6b | Punctuation/casing | output | same as above | output contains capital letters and `,.?!` | PASS |
-| nemotron-speech-streaming-en-0.6b | Streaming (cache reuse across chunks) | streaming | n/a | n/a | `ACCEPTED GAP — v1 port ships batch / one-shot only; streaming session API deferred to follow-up port pass` |
-| nemotron-speech-streaming-en-0.6b | Other latency settings ([70,0]/[70,1]/[70,6] = 80/160/560ms chunks) | runtime-selectable att_context_size | n/a | n/a | `ACCEPTED GAP — v1 ships 1.12s chunk only; other settings deferred until streaming lands` |
+| nemotron-speech-streaming-en-0.6b | Streaming (cache reuse across chunks) | streaming | `build/bin/transcribe-cli -m models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b-F32.gguf --language en --backend cpu --threads 1 --stream-chunk-ms 1120 --stream-att-right 13 samples/jfk.wav` | byte-equal transcript vs one-shot at the default `att_context_size=[70,13]` (1.12s chunk) | PASS |
+| nemotron-speech-streaming-en-0.6b | Other latency settings ([70,0]/[70,1]/[70,6]/[70,13]) | runtime-selectable att_context_size | `… --stream-chunk-ms 1120 --stream-att-right {0,1,6,13} …` (R selects the right-context from the training menu) | all four R settings stream a valid transcript; R=6/13 byte-equal to one-shot, R=0/1 differ only in trailing punctuation (lower lookahead) | PASS |
 | ctc-1.1b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
 | ctc-0.6b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
 | all variants | Word timestamps | only if exposed | `transcribe-cli --timestamps word -m <gguf> <wav>` (any variant) | per-word `t0_ms`/`t1_ms` in JSON output | PASS — derived host-side from emit-frame indices (TDT/RNNT) or per-frame argmax (CTC); same code path as the existing v2/v3 word-timestamp gate, no per-variant differences |

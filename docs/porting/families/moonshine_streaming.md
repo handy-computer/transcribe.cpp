@@ -282,11 +282,20 @@ each command. Allowed statuses:
 - `ACCEPTED GAP — <reason>` — capability is exposed but intentionally
   not exercised here; reason names what would unblock the row.
 
+All three variants (`tiny`, `small`, `medium`) share one implementation
+and frontend, so the `Transcribe` rows below — shown with `tiny` as the
+representative — hold identically for `small` and `medium` (substitute
+the model path). Streaming is the per-variant-audited capability and gets
+an explicit row each; all three were verified streaming-final == one-shot
+on 2026-06-04.
+
 | Capability | Mode | Command / test | Expected observable | Status |
 |------------|------|----------------|---------------------|--------|
 | Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | PASS |
 | Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf samples/jfk.wav` | non-empty plausible transcript (English-only model — auto path is the same as explicit `en`) | PASS |
-| Streaming | chunked feed with live partial transcripts (Phase 4b-full) | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --stream-chunk-ms 500 samples/jfk.wav` | per-feed lines show a growing `partial="..."` tentative transcript as audio arrives ("And so" → "And so my fellow" → ...), with `result_changed=true` and `revision` bumping whenever the text advances. `buffered_ms` settles at the published 240 ms right-context. `finalize:` commits the final transcript, which matches one-shot. `transcribe_moonshine_streaming_stream_parity` asserts: (a) final text matches one-shot across chunk sizes 1..1000 ms, (b) revision monotonic, (c) `n_committed_tokens` monotonic, (d) `result_changed=true` implies text changed, (e) `n_committed_tokens == n_tokens` after finalize. | PASS (Phase 4b-full) |
+| Streaming (tiny) | chunked feed with live partial transcripts (Phase 4b-full) | `build/bin/transcribe-cli -m models/moonshine-streaming-tiny/moonshine-streaming-tiny-F32.gguf --stream-chunk-ms 500 samples/jfk.wav` | per-feed lines show a growing `partial="..."` tentative transcript as audio arrives ("And so" → "And so my fellow" → ...), with `result_changed=true` and `revision` bumping whenever the text advances. `buffered_ms` settles at the published 240 ms right-context. `finalize:` commits the final transcript, which matches one-shot. `transcribe_moonshine_streaming_stream_parity` asserts: (a) final text matches one-shot across chunk sizes 1..1000 ms, (b) revision monotonic, (c) `n_committed_tokens` monotonic, (d) `result_changed=true` implies text changed, (e) `n_committed_tokens == n_tokens` after finalize. | PASS (Phase 4b-full) |
+| Streaming (small) | chunked feed (Phase 4b-full) | `build/bin/transcribe-cli -m models/moonshine-streaming-small/moonshine-streaming-small-F32.gguf --backend cpu --threads 1 --stream-chunk-ms 500 samples/jfk.wav` | final streamed transcript byte-equal to one-shot; same partial/revision/commit invariants as the `tiny` row | PASS (Phase 4b-full) |
+| Streaming (medium) | chunked feed (Phase 4b-full) | `build/bin/transcribe-cli -m models/moonshine-streaming-medium/moonshine-streaming-medium-F32.gguf --backend cpu --threads 1 --stream-chunk-ms 500 samples/jfk.wav` | final streamed transcript byte-equal to one-shot; same partial/revision/commit invariants as the `tiny` row | PASS (Phase 4b-full) |
 
 ## Streaming validation strategy
 

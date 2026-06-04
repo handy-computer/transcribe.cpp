@@ -137,7 +137,7 @@ transcribe_status run_batched_encdec_step_loop(
 {
     const int         n        = n_batch;
     const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
-    const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-INFINITY);
+    const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-std::numeric_limits<float>::infinity());
 
     int          kv_window = init_window;
     EncDecStepIO io {};

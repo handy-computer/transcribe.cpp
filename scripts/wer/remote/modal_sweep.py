@@ -196,7 +196,40 @@ image = (
             "reports/**",
             "scripts/envs/**", "**/__pycache__/**", "**/.venv/**",
             "**/.uv/**", "**/.git/**", ".git/**",
-            "tests/golden/**",
+            ".claude/**", "docs/**", "tests/golden/**",
+            "**/*.gguf", "**/*.safetensors", "**/*.onnx", "**/*.onnx.data",
+            "**/*.nemo", ".DS_Store",
+        ],
+    )
+)
+
+# Reference image: runs the upstream reference framework (NeMo / Transformers /
+# author repo) per family, NOT transcribe-cli. Nothing compiles -> CUDA
+# *runtime* base, not devel. Unlike `image` it KEEPS
+# scripts/envs/<family>/{pyproject.toml,uv.lock} (needed for `uv sync`) while
+# still dropping the heavy vendored local .venv (885 MB - 1.4 GB per family).
+ref_image = (
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.1-runtime-ubuntu22.04",
+        add_python="3.11",
+    )
+    .apt_install("git", "ca-certificates", "ffmpeg", "libsndfile1", "curl",
+                 "build-essential")
+    .pip_install("huggingface_hub")
+    .run_commands(
+        "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        "ln -sf /root/.local/bin/uv /usr/local/bin/uv",
+    )
+    .add_local_dir(
+        REPO, "/src",
+        ignore=[
+            "build/**", "build-*/**", "models/**", "tmp/**",
+            "samples/wer/raw/**", "samples/wer/librispeech-*/**",
+            "samples/wer/fleurs-*/**", "samples/wer/*.manifest.jsonl",
+            "reports/**",
+            "scripts/envs/**/.venv/**", "**/__pycache__/**", "**/.uv/**",
+            "**/.git/**", ".git/**",
+            ".claude/**", "docs/**", "tests/golden/**",
             "**/*.gguf", "**/*.safetensors", "**/*.onnx", "**/*.onnx.data",
             "**/*.nemo", ".DS_Store",
         ],
@@ -683,6 +716,291 @@ def _register_runner(gpu_id: str):
 _GPU_FNS = {gpu: _register_runner(gpu) for gpu in GPU_TO_ARCH}
 
 
+# ===========================================================================
+# Reference sweep: run the upstream reference framework (NeMo / Transformers /
+# author repo) per variant on a GPU, producing the `<variant>-REF.<dataset>`
+# baseline that porting-2-oracle Step 7 consumes. Mirrors the sweep above, but
+# the "build" is a per-family `uv sync` (ENV_FP) instead of a C++ compile
+# (SRC_FP), and the model download is delegated to the runner's own
+# `from_pretrained`.
+# ===========================================================================
+
+def _env_fingerprint(root: pathlib.Path, family: str, runner_rel: str) -> str:
+    """Hash of what determines a family's reference venv + runner behavior:
+    its pyproject.toml + uv.lock + the runner script. Computed identically on
+    the laptop and in the container (ref_image keeps these files under /src)."""
+    h = hashlib.sha256()
+    for rel in (f"scripts/envs/{family}/pyproject.toml",
+                f"scripts/envs/{family}/uv.lock",
+                runner_rel):
+        p = root / rel
+        h.update(rel.encode()); h.update(b"\0")
+        if p.is_file():
+            h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()[:12]
+
+
+def _ref_hyp_cache_paths(variant: str, dataset_spec: str, n_utts: int | None,
+                         batch_size: int, env_fp: str) -> tuple[str, str]:
+    subset_tag = "full" if n_utts is None else f"n{n_utts}"
+    bs_tag = "" if batch_size <= 1 else f".b{batch_size}"
+    base = (f"/data/wer/ref-hyps/{env_fp}/{variant}-REF."
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}")
+    return f"{base}.jsonl", f"{base}.summary.json"
+
+
+def _ensure_local_venv(family: str) -> str:
+    """`uv sync` the family env onto LOCAL container disk and return the venv
+    path. The venv/cache CANNOT live on a Modal Volume: uv takes advisory file
+    locks the Volume FUSE filesystem rejects ('Could not acquire lock:
+    Operation not permitted') — the same class of issue build() works around
+    for ccache. Synced once per container; both batch sizes reuse it. The cost
+    is one `uv sync` per (variant, container); a cross-run wheel cache is a
+    follow-up optimization (e.g. a tarball'd venv keyed by ENV_FP)."""
+    venv = f"/tmp/venv-{family}"
+    if os.path.exists(os.path.join(venv, "bin", "python")):
+        return venv
+    env = {
+        **os.environ,
+        "UV_PROJECT_ENVIRONMENT": venv,    # LOCAL disk, not a Volume
+        "UV_CACHE_DIR": "/tmp/uv-cache",   # LOCAL disk
+        "UV_LINK_MODE": "copy",
+    }
+    print(f"[ref] uv sync --frozen --project scripts/envs/{family} -> {venv}")
+    subprocess.check_call(
+        ["uv", "sync", "--frozen", "--project", f"scripts/envs/{family}"],
+        cwd="/work", env=env,
+    )
+    assert os.path.exists(os.path.join(venv, "bin", "python"))
+    return venv
+
+
+def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
+                       subset_path, subset_count, venv, dataset_spec, n_utts,
+                       env_fp, batch_size, device) -> dict:
+    """One reference run at a single batch size. Hyp-cached on /data (plain
+    file writes, no flock, so the Volume is fine here — only uv needs local
+    disk)."""
+    cache_hyp, cache_sum = _ref_hyp_cache_paths(
+        variant, dataset_spec, n_utts, batch_size, env_fp)
+    if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
+       and os.path.getsize(cache_hyp) > 0:
+        print(f"[ref] cache hit: {cache_hyp}")
+        with open(cache_sum) as f:
+            summary = json.load(f)
+        return {"hyp_jsonl": open(cache_hyp).read(), "summary": summary,
+                "cached": True}
+
+    out_path = f"/tmp/ref-hyps.b{batch_size}.jsonl"
+    if os.path.exists(out_path):
+        os.unlink(out_path)
+    env = {
+        **os.environ,
+        "PYTHONUNBUFFERED": "1",
+        "UV_PROJECT_ENVIRONMENT": venv,
+        "UV_CACHE_DIR": "/tmp/uv-cache",
+        "HF_HOME": "/root/.cache/huggingface",
+    }
+    # Uniform reference CLI contract: --manifest --model --out --device --batch-size
+    cmd = [
+        "uv", "run", "--project", f"scripts/envs/{family}", "--no-sync",
+        runner_rel,
+        "--manifest", subset_path,
+        "--model", upstream_repo,
+        "--out", out_path,
+        "--device", device,
+        "--batch-size", str(batch_size),
+    ]
+    print(f"[ref] bs={batch_size} $ {' '.join(cmd)}")
+    t0 = time.time()
+    rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
+    wall_s = time.time() - t0
+    hf_vol.commit()
+    if rc != 0:
+        raise RuntimeError(
+            f"reference runner (bs={batch_size}) exited {rc}; "
+            f"stderr tail:\n{stderr_tail.rstrip()}")
+
+    hyp_jsonl = open(out_path).read()
+    import wave
+    audio_s = 0.0
+    with open(subset_path) as f:
+        for line in f:
+            ent = json.loads(line)
+            try:
+                with wave.open(ent["audio"], "rb") as w:
+                    audio_s += w.getnframes() / w.getframerate()
+            except Exception:
+                pass
+    gpu = subprocess.check_output(
+        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+        text=True,
+    ).strip()
+    summary = {
+        "variant": variant, "family": family, "framework": framework,
+        "model": upstream_repo, "dataset": dataset_spec,
+        "n_utts": subset_count, "audio_s": audio_s, "wall_s": wall_s,
+        "rtf_wall": audio_s / wall_s if wall_s > 0 else 0.0,
+        "utt_per_s": subset_count / wall_s if wall_s > 0 else 0.0,
+        "batch_size": batch_size, "device": device, "gpu": gpu,
+    }
+    print(f"[ref] done bs={batch_size}: {summary}")
+    os.makedirs(os.path.dirname(cache_hyp), exist_ok=True)
+    shutil.copyfile(out_path, cache_hyp)
+    with open(cache_sum, "w") as f:
+        json.dump(summary, f)
+    data_vol.commit()
+    return {"hyp_jsonl": hyp_jsonl, "summary": summary, "cached": False}
+
+
+def _run_reference_impl(
+    family: str,
+    variant: str,
+    framework: str,
+    upstream_repo: str,
+    runner_rel: str,
+    dataset_spec: str,
+    n_utts: int | None,
+    env_fp: str,
+    batch_sizes: list,
+    device: str = "cuda",
+) -> dict:
+    """One container per variant: `uv sync` the env once (local disk), then run
+    the reference runner at each requested batch size. Returns
+    {str(batch_size): {hyp_jsonl, summary, cached}}."""
+    manifest = _prepare_work(dataset_spec)
+    assert os.path.exists(manifest), (
+        f"manifest missing at {manifest}; call prefetch_dataset first")
+    venv = _ensure_local_venv(family)
+
+    if n_utts is None:
+        subset_path = manifest
+    else:
+        subset_path = "/tmp/subset.manifest.jsonl"
+        with open(manifest) as fin, open(subset_path, "w") as fout:
+            for i, line in enumerate(fin):
+                if i >= n_utts:
+                    break
+                fout.write(line)
+    subset_count = sum(1 for _ in open(subset_path))
+    print(f"[ref] {family}/{variant} fw={framework} batches={batch_sizes}: "
+          f"{subset_count} utts")
+
+    results = {}
+    for bs in batch_sizes:
+        results[str(bs)] = _run_one_reference(
+            family, variant, framework, upstream_repo, runner_rel,
+            subset_path, subset_count, venv, dataset_spec, n_utts, env_fp,
+            bs, device)
+    return results
+
+
+_REF_RUN_KWARGS = dict(
+    image=ref_image, timeout=10800,
+    volumes={
+        "/root/.cache/huggingface": hf_vol,
+        "/data": data_vol,
+    },
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+)
+
+
+def _register_reference_runner(gpu_id: str):
+    """Per-GPU wrapper for _run_reference_impl, same trick as _register_runner
+    (Modal 1.4.x needs a distinct module-level function per GPU class)."""
+    name = f"run_ref_{gpu_id.lower().replace('-', '_')}"
+
+    def runner(
+        family: str,
+        variant: str,
+        framework: str,
+        upstream_repo: str,
+        runner_rel: str,
+        env_fp: str,
+        dataset_spec: str = "librispeech:test-clean",
+        n_utts: int | None = None,
+        batch_sizes: list | None = None,
+        device: str = "cuda",
+    ) -> dict:
+        return _run_reference_impl(
+            family, variant, framework, upstream_repo, runner_rel,
+            dataset_spec, n_utts, env_fp, batch_sizes or [1], device=device)
+
+    runner.__name__ = name
+    runner.__qualname__ = name
+    decorated = app.function(gpu=gpu_id, **_REF_RUN_KWARGS)(runner)
+    globals()[name] = decorated
+    return decorated
+
+
+_REF_GPU_FNS = {gpu: _register_reference_runner(gpu) for gpu in GPU_TO_ARCH}
+
+
+def _resolve_reference(spec: str, runner_override: str = "") -> dict:
+    """Map a variant spec to everything the reference cell needs.
+
+    spec is '<family>:<variant>' (unambiguous, preferred) or '<variant>'
+    (resolved by scanning reports/porting/*/<variant>/intake.json). Reads the
+    intake for the upstream repo + framework, picks the runner by globbing
+    scripts/wer/run_reference_<family>_*.py (shortest name wins; pass --runner
+    to override when a family has several, e.g. parakeet's streaming variants).
+    """
+    root = pathlib.Path(REPO)
+    if ":" in spec:
+        family, variant = spec.split(":", 1)
+        intake = root / "reports" / "porting" / family / variant / "intake.json"
+    else:
+        variant = spec
+        hits = list(root.glob(f"reports/porting/*/{variant}/intake.json"))
+        if len(hits) != 1:
+            raise SystemExit(
+                f"{spec!r}: found {len(hits)} matching intakes; "
+                f"disambiguate with '<family>:{variant}'")
+        intake = hits[0]
+        family = intake.parents[1].name
+    if not intake.exists():
+        raise SystemExit(f"no intake.json at {intake}")
+    d = json.loads(intake.read_text())
+    upstream_repo = d.get("hf_repo")
+    framework = d.get("reference_framework") or "unknown"
+    if not upstream_repo:
+        raise SystemExit(f"{intake}: missing hf_repo")
+
+    if runner_override:
+        runner_rel = runner_override
+        if not (root / runner_rel).is_file():
+            raise SystemExit(f"--runner {runner_rel} not found under {REPO}")
+    else:
+        cands = sorted(root.glob(f"scripts/wer/run_reference_{family}_*.py"),
+                       key=lambda p: len(p.name))
+        if not cands:
+            raise SystemExit(
+                f"no scripts/wer/run_reference_{family}_*.py; "
+                f"pass --runner <path> (a new family needs one — copy the "
+                f"closest same-framework runner)")
+        runner_rel = str(cands[0].relative_to(root))
+
+    env_dir = root / "scripts" / "envs" / family
+    if not (env_dir / "pyproject.toml").is_file():
+        raise SystemExit(f"no reference env at {env_dir}/pyproject.toml")
+
+    return {
+        "family": family, "variant": variant, "framework": framework,
+        "upstream_repo": upstream_repo, "runner_rel": runner_rel,
+        "env_fp": _env_fingerprint(root, family, runner_rel),
+    }
+
+
+def _write_ref_hyp(hyp_jsonl: str, variant: str, dataset_spec: str,
+                   batch_size: int | None = None) -> pathlib.Path:
+    out_dir = pathlib.Path(REPO) / "reports" / "wer"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bs_tag = "" if not batch_size or batch_size <= 1 else f".b{batch_size}"
+    out_path = out_dir / f"{variant}-REF.{dataset_id(dataset_spec)}{bs_tag}.jsonl"
+    out_path.write_text(hyp_jsonl)
+    return out_path
+
 
 # ---------------------------------------------------------------------------
 # Model resolution: a spec is either an hf_card slug or a bare HF repo.
@@ -1026,4 +1344,108 @@ def run(
         n_utts=n_utts,
         clean=clean,
     )
+
+
+@app.local_entrypoint()
+def reference_sweep(
+    variants: str,
+    dataset: str = "librispeech:test-clean",
+    gpu: str = "L4",
+    n_utts: int = -1,
+    batch_sizes: str = "1",
+    clean: bool = False,
+    runner: str = "",
+) -> None:
+    """Fan the REFERENCE framework (NeMo / Transformers / author repo) across
+    one or more variants on a GPU, producing `<variant>-REF.<dataset>.jsonl`
+    baselines (porting-2-oracle Step 7). Scoring stays local (score.py).
+
+    --variants     Comma-separated variant specs. Prefer '<family>:<variant>'
+                   (e.g. 'parakeet:parakeet-tdt-0.6b-v2'); a bare '<variant>'
+                   is resolved by scanning reports/porting/*/<variant>/.
+    --dataset      'librispeech:test-clean' (default) / 'librispeech:<split>' /
+                   'fleurs:<bcp47>'.
+    --gpu          Modal CUDA SKU (default L4). T4,L4,A10G,L40S,A100,H100,H200.
+    --n-utts       Cap each manifest to N utts. Default -1 = full.
+    --batch-sizes  Comma list of reference --batch-size values, e.g. '1,4'.
+    --clean        Rebuild the family venv (wipe /uvcache/<env_fp>).
+    --runner       Explicit runner path override (needed when a family has
+                   several run_reference_<family>_*.py, e.g. parakeet).
+
+    Examples:
+      # Smoke one Transformers + one NeMo variant at bs 1 and 4 (4 cells):
+      modal run scripts/wer/remote/modal_sweep.py::reference_sweep \\
+          --variants granite:granite-4.0-1b-speech,parakeet:parakeet-tdt-0.6b-v2 \\
+          --n-utts 64 --batch-sizes 1,4 --gpu L4
+    """
+    specs = [s.strip() for s in variants.split(",") if s.strip()]
+    if not specs:
+        raise SystemExit("--variants is required (comma-separated)")
+    sizes = [int(x) for x in batch_sizes.split(",") if x.strip()] or [1]
+
+    resolved = [_resolve_reference(s, runner) for s in specs]
+
+    print("================ reference_sweep config ================")
+    print(f"  variants = {[r['variant'] for r in resolved]}")
+    print(f"  dataset  = {dataset}")
+    print(f"  gpu      = {gpu}")
+    print(f"  n_utts   = {'full manifest' if n_utts < 0 else n_utts}")
+    print(f"  batches  = {sizes}")
+    for r in resolved:
+        print(f"  - {r['family']}:{r['variant']}  fw={r['framework']}  "
+              f"repo={r['upstream_repo']}  runner={r['runner_rel']}  "
+              f"env_fp={r['env_fp']}")
+    print("========================================================")
+
+    runner_fn = _REF_GPU_FNS.get(gpu)
+    if runner_fn is None:
+        raise SystemExit(
+            f"--gpu {gpu!r} not registered; choose one of: {sorted(_REF_GPU_FNS)}")
+
+    print(f">>> prefetch dataset ({dataset})")
+    prefetch_dataset.remote(dataset)
+
+    # One container per variant: it `uv sync`s the env once (on local disk) and
+    # runs all requested batch sizes. Distinct variants fan out in parallel.
+    n = None if n_utts < 0 else n_utts
+    print(f">>> launching {len(resolved)} {gpu} reference cells "
+          f"(batch sizes {sizes} each)...")
+    futs = [(r, runner_fn.spawn(
+                r["family"], r["variant"], r["framework"], r["upstream_repo"],
+                r["runner_rel"], r["env_fp"], dataset, n, sizes, "cuda"))
+            for r in resolved]
+
+    rows, failures = [], []
+    for r, fut in futs:
+        try:
+            per_bs = fut.get()  # {str(bs): {hyp_jsonl, summary, cached}}
+        except Exception as e:
+            failures.append((r["variant"], repr(e)))
+            print(f"  [FAIL] {r['variant']}: {e} (check Modal dashboard)")
+            continue
+        for bs in sizes:
+            res = per_bs.get(str(bs))
+            slug = r["variant"] + (f" b{bs}" if bs != 1 else "")
+            if res is None:
+                failures.append((slug, "no result for this batch size"))
+                continue
+            p = _write_ref_hyp(res["hyp_jsonl"], r["variant"], dataset,
+                               batch_size=(bs if bs != 1 else None))
+            s = res["summary"]
+            rows.append((slug, s["n_utts"], s["audio_s"], s["wall_s"],
+                         s["rtf_wall"], str(p)))
+            tag = "CACHED" if res.get("cached") else "OK"
+            print(f"  [{tag}] {slug}: {s['wall_s']:.1f}s, "
+                  f"RTF {s['rtf_wall']:.1f}x -> {p}")
+
+    print("\n========== reference_sweep summary ==========")
+    print(f"{'variant':<44} {'n':>5} {'audio':>9} {'wall':>8} {'rtf':>6}")
+    for slug, n_, audio, wall, rtf, _ in rows:
+        print(f"{slug:<44} {n_:>5} {audio:>9.1f} {wall:>8.1f} {rtf:>6.1f}")
+    if failures:
+        print("\nfailures:")
+        for slug, err in failures:
+            print(f"  {slug}: {err}")
+    print(f"\nscore locally:  for f in reports/wer/*-REF.{dataset_id(dataset)}*.jsonl; "
+          f"do uv run scripts/wer/score.py \"$f\"; done")
 

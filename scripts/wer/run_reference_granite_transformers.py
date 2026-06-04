@@ -79,6 +79,12 @@ def main() -> int:
                    choices=["bf16", "f16", "f32"])
     p.add_argument("--limit", type=int, default=0,
                    help="Process only the first N utterances (0 = all).")
+    p.add_argument("--batch-size", type=int, default=1,
+                   help="Group N utterances per batched generate() call. "
+                        ">1 left-pads the batch; on any batch error it falls "
+                        "back to per-utterance so a bad sample can't drop the "
+                        "group. Uniform across reference runners so the Modal "
+                        "reference_sweep drives every family the same way.")
     args = p.parse_args()
 
     if not args.manifest.exists():
@@ -210,72 +216,112 @@ def main() -> int:
         }) + "\n")
         fout.flush()
 
-        for entry in manifest:
-            uid = entry["id"]
-            audio_path = entry["audio"]
-            ref_text = entry.get("ref_text", "")
+        # Per-utterance inference (also the bs>1 fallback). Returns hyp text;
+        # raises on error so the caller records it per utterance.
+        def infer_one(audio_path: str) -> str:
+            pcm, sr = sf.read(audio_path, dtype="float32")
+            if pcm.ndim > 1:
+                pcm = pcm[:, 0]
+            if sr != 16000:
+                raise RuntimeError(f"granite-speech expects 16kHz; got {sr}Hz")
+            inputs = processor(
+                text=prompt, audio=[torch.from_numpy(pcm)],
+                sampling_rate=sr, return_tensors="pt", device=args.device,
+            )
+            inputs = {k: (v.to(args.device) if hasattr(v, "to") else v)
+                      for k, v in inputs.items()}
+            prompt_len = int(inputs["input_ids"].shape[1])
+            with torch.inference_mode():
+                gen = model.generate(**inputs, max_new_tokens=args.max_new_tokens,
+                                     do_sample=False, num_beams=1)
+            seq = gen.sequences[0] if hasattr(gen, "sequences") else gen[0]
+            ids = seq.detach().cpu().tolist()
+            if len(ids) > prompt_len:
+                ids = ids[prompt_len:]
+            eos_id = processor.tokenizer.eos_token_id
+            if eos_id is not None and eos_id in ids:
+                ids = ids[:ids.index(eos_id)]
+            return processor.tokenizer.decode(ids, skip_special_tokens=True).strip()
 
-            t_start = time.monotonic()
-            err = ""
-            hyp_text = ""
-            try:
-                pcm, sr = sf.read(audio_path, dtype="float32")
+        # Batched generate over a group. Left padding makes every row's prompt
+        # the same length, so one slice drops the prompt for all rows.
+        def infer_batch(entries: list) -> list:
+            pcms = []
+            for e_ in entries:
+                pcm, sr = sf.read(e_["audio"], dtype="float32")
                 if pcm.ndim > 1:
                     pcm = pcm[:, 0]
                 if sr != 16000:
-                    raise RuntimeError(
-                        f"granite-speech expects 16kHz; got {sr}Hz"
-                    )
-                inputs = processor(
-                    text=prompt, audio=[torch.from_numpy(pcm)],
-                    sampling_rate=sr, return_tensors="pt",
-                    device=args.device,
-                )
-                inputs = {
-                    k: (v.to(args.device) if hasattr(v, "to") else v)
-                    for k, v in inputs.items()
+                    raise RuntimeError(f"granite-speech expects 16kHz; got {sr}Hz")
+                pcms.append(torch.from_numpy(pcm))
+            inputs = processor(
+                text=[prompt] * len(entries), audio=pcms,
+                sampling_rate=16000, return_tensors="pt", padding=True,
+                device=args.device,
+            )
+            inputs = {k: (v.to(args.device) if hasattr(v, "to") else v)
+                      for k, v in inputs.items()}
+            prompt_len = int(inputs["input_ids"].shape[1])
+            with torch.inference_mode():
+                gen = model.generate(**inputs, max_new_tokens=args.max_new_tokens,
+                                     do_sample=False, num_beams=1)
+            seqs = gen.sequences if hasattr(gen, "sequences") else gen
+            eos_id = processor.tokenizer.eos_token_id
+            out = []
+            for row in seqs:
+                ids = row.detach().cpu().tolist()[prompt_len:]
+                if eos_id is not None and eos_id in ids:
+                    ids = ids[:ids.index(eos_id)]
+                out.append(processor.tokenizer.decode(
+                    ids, skip_special_tokens=True).strip())
+            return out
+
+        bs = max(1, args.batch_size)
+        if bs > 1:
+            # Left padding is required for correct batched-generate slicing.
+            processor.tokenizer.padding_side = "left"
+
+        for start in range(0, total, bs):
+            group = manifest[start:start + bs]
+            k = len(group)
+            t_start = time.monotonic()
+            hyps = [""] * k
+            errs = [""] * k
+            if bs == 1:
+                try:
+                    hyps[0] = infer_one(group[0]["audio"])
+                except Exception as e:
+                    errs[0] = f"{type(e).__name__}: {e}"
+                    n_errors += 1
+            else:
+                try:
+                    hyps = infer_batch(group)
+                except Exception:
+                    # Fall back to per-utterance for this group.
+                    for i, e_ in enumerate(group):
+                        try:
+                            hyps[i] = infer_one(e_["audio"])
+                        except Exception as e2:
+                            errs[i] = f"{type(e2).__name__}: {e2}"
+                            n_errors += 1
+            per_ms = round((time.monotonic() - t_start) * 1000 / k, 1)
+
+            for i, entry in enumerate(group):
+                rec = {
+                    "id": entry["id"],
+                    "ref_text": entry.get("ref_text", ""),
+                    "hyp_text": (hyps[i] or "").strip(),
+                    "mel_ms": 0,
+                    "encode_ms": 0,
+                    "decode_ms": per_ms,
+                    "latency_ms": per_ms,
+                    "error": errs[i],
                 }
-                prompt_len = int(inputs["input_ids"].shape[1])
+                fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                fout.flush()
+                n_done += 1
 
-                with torch.inference_mode():
-                    gen = model.generate(
-                        **inputs,
-                        max_new_tokens=args.max_new_tokens,
-                        do_sample=False,
-                        num_beams=1,
-                    )
-                if hasattr(gen, "sequences"):
-                    token_ids = gen.sequences[0].detach().cpu().tolist()
-                else:
-                    token_ids = gen[0].detach().cpu().tolist()
-                if len(token_ids) > prompt_len:
-                    token_ids = token_ids[prompt_len:]
-                eos_id = processor.tokenizer.eos_token_id
-                if eos_id is not None and eos_id in token_ids:
-                    token_ids = token_ids[:token_ids.index(eos_id)]
-                hyp_text = processor.tokenizer.decode(
-                    token_ids, skip_special_tokens=True
-                ).strip()
-            except Exception as e:
-                err = f"{type(e).__name__}: {e}"
-                n_errors += 1
-
-            elapsed_ms = round((time.monotonic() - t_start) * 1000, 1)
-            rec = {
-                "id": uid,
-                "ref_text": ref_text,
-                "hyp_text": hyp_text.strip(),
-                "mel_ms": 0,
-                "encode_ms": 0,
-                "decode_ms": elapsed_ms,
-                "latency_ms": elapsed_ms,
-                "error": err,
-            }
-            fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            fout.flush()
-            n_done += 1
-
-            if n_done % 25 == 0 or n_done == total:
+            if start // bs % 10 == 0 or n_done == total:
                 wall = time.monotonic() - t_loop
                 rate = n_done / wall if wall > 0 else 0
                 eta = (total - n_done) / rate if rate > 0 else 0

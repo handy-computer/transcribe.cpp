@@ -92,7 +92,7 @@
     "language_detection": null,
     "translation": null,
     "timestamps": [],
-    "streaming": null,
+    "streaming": false,
     "voice_activity_detection": null,
     "speaker_diarization": null
   },
