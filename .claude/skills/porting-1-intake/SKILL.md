@@ -1,11 +1,13 @@
 ---
 name: porting-1-intake
-description: Produces the machine-readable intake packet (reports/porting/<family>/<variant>/intake.json) that locks down identity and human-judgment decisions at the start of a new model-family port. Use this as the FIRST step when porting a new speech model to transcribe.cpp, before any converter or C++ work. Input is a Hugging Face repo URL or org/name plus a family key and variant name; output is a schema-valid intake.json plus a draft family doc, with Preflight Gate A green.
+description: First stage for a new speech-model port. Produces reports/porting/<family>/<variant>/intake.json, drafts the family capability table, seeds the golden manifest skeleton, and clears Preflight Gate A.
 ---
 
 # porting-1-intake
 
-First stage of the porting pipeline. Runs the mechanical intake bootstrapper, walks the user through the human-judgment ask-points, schema-validates the result, and runs Preflight Gate A. On green, the port is ready for `porting-2-oracle`.
+First stage of the porting pipeline. Creates the intake packet, fills the
+human-judgment fields, drafts the family doc's capability table, and
+clears Preflight Gate A.
 
 ## Preconditions
 
@@ -43,21 +45,44 @@ This writes a draft with mechanical fields populated (hf_revision, config, dtype
 
 **If the family is already ported** (there is a prior `reports/porting/<family>/<other-variant>/intake.json`): read the prior intake and carry its `reference_framework`, `reference_rationale`, `architecture_pattern`, and `known_risks` forward as defaults.
 
-### Step 2: Potential Ask-points
+### Step 2: Human-judgment fields
 
-Try and research and fill out the following questions/ask-points on your own. Fill the corresponding fields in the intake JSON. See `docs/porting/1a-intake.md` for field semantics.
+Fill these fields from research. Ask only when the answer cannot be found
+or a decision needs user sign-off. See `docs/porting/1a-intake.md` for
+field semantics.
 
 1. **Reference framework choice.**: The reference implementation should always be the source of truth. If there is not one, this is a red flag and must immediately be told to the human.
 
 2. **Architecture pattern.** One of `encoder-transducer`, `encoder-decoder`, `audio-llm`, `encoder-ctc`. The script's `config.architecture_candidates` is a heuristic starting point. If it doesn't fit, propose a new pattern and have the user accept it based on your research of the architecture.
 
-3. **Acceptance dataset.** Default: LibriSpeech test-clean (upstream-reported WER must be captured in `upstream_benchmarks`). For models not supporting English LibriSpeech is NOT a valid target. This must be flagged and become a hard stop for the time being.
+3. **Acceptance dataset.** Default: LibriSpeech test-clean. Capture any
+   publisher-reported score in `upstream_benchmarks` when available for
+   context, but downstream gates use the measured Oracle reference
+   baseline, not the publisher score. For models not supporting English
+   LibriSpeech is NOT a valid target. This must be flagged and become a
+   hard stop for the time being.
 
-4. **Known risks.** Anything the agent cannot infer from HF metadata: novel positional encoding, custom attention masks, multimodal fusion quirks, streaming, long-sequence degradation, per-layer dtype differences, upstream doing one precision but our quantize path assuming another. Free-form list; one risk per entry. Only flag these if they are CRITICAL blockers for the next stages. If not, DO NOT ask the human.
+4. **Known risks.** List critical risks that affect later stages
+   (frontend/tokenizer ambiguity, custom attention masks, streaming,
+   long-sequence behavior, dtype quirks, etc.). One risk per entry. Do
+   not ask the user about routine or low-impact observations.
 
-5. **Capability validation table.** The family doc holds a `## Capability Validation` table — one row per advertised capability (transcribe with explicit language, transcribe with auto/no-hint, translate if exposed, segment/word timestamps if exposed, etc.). At intake time, draft a row for every advertised capability with `Status: TODO`. Stage 4 fills in the actual command and the resulting status (PASS / SKIP — not exposed by runtime / ACCEPTED GAP — `<reason>`). Capabilities that the C++ runtime cannot observe today get a row anyway and resolve to SKIP at Stage 4 — that keeps the gap visible without inventing a check. The table replaces older intake-resident behavior cases.
+5. **Capability validation table.** Draft one row per advertised
+   capability in `docs/porting/families/<family>.md`, fill `Target`, and
+   leave `Status: TODO` for Stage 4. `Target` is one of:
+   - `MUST PASS` — in scope; Stage 4 is obligated to make the row resolve to `PASS`.
+   - `OUT OF SCOPE — <reason>` — explicitly deferred for this port; Stage 4 may resolve it to SKIP or ACCEPTED GAP. The reason names what would bring it back in scope.
 
-If `scripts/intake.py` reported non-empty `intake_gaps`, surface them here too. Gaps affecting dtype, frontend, tokenizer IDs, architecture pattern, or reference framework must be resolved or explicitly accepted by the user.
+   Forced `MUST PASS`: explicit-language transcription, auto/no-hint
+   transcription, offline batch, and streaming when
+   `capabilities.streaming: true`. All other targets require user
+   sign-off. Stage 4 fills `Status` and may not downgrade a `MUST PASS`
+   row without the user re-signing. Capabilities the runtime cannot
+   observe still get `OUT OF SCOPE` rows so the gap stays visible.
+
+If `scripts/intake.py` reported `intake_gaps`, resolve or explicitly
+accept any gap affecting dtype, frontend, tokenizer IDs, architecture
+pattern, or reference framework.
 
 ### Step 3: Schema validation (execute)
 
@@ -117,8 +142,14 @@ Report to the user:
 - Preflight Gate A result.
 - Any unresolved `intake_gaps`.
 - Whether the acceptance dataset is LibriSpeech or an alternate (name it).
-- The advertised capabilities and the row count of the family doc's
-  Capability Validation table — Stage 4 will exercise each row.
+- **The Capability Validation table, row by row, with your proposed
+  `Target` for each.** Ask the user to confirm or amend every `Target`
+  that is not a forced `MUST PASS` (the transcribe rows, streaming, and
+  batch are forced). This per-row in/out-of-scope confirmation is the
+  contract Stage 4 implements against — a `MUST PASS` row Stage 4 cannot
+  satisfy is a blocker, an `OUT OF SCOPE` row may resolve to SKIP /
+  ACCEPTED GAP. Do not treat this as a row-count summary; the user must
+  sign off the scope of each capability here.
 
 **Do not commit.** The user authors the commit manually after reviewing.
 
@@ -126,8 +157,11 @@ Report to the user:
 
 - `reports/porting/<family>/<variant>/intake.json` exists and validates against `docs/porting/families/_intake-schema.json`.
 - All four human-judgment fields (`reference_framework`, `reference_rationale`, `architecture_pattern`, `known_risks`) are filled.
-- Upstream acceptance target is captured in `upstream_benchmarks` — LibriSpeech test-clean by default, or an explicit alternate for non-English models.
-- `docs/porting/families/<family>.md` exists as a draft and includes a `## Capability Validation` table with one row per advertised capability; rows for capabilities the runtime cannot observe stay in the table and resolve to SKIP at Stage 4. Stage 1 just makes the table exist with `Status: TODO`.
+- Acceptance dataset is captured in `upstream_benchmarks` — LibriSpeech
+  test-clean by default, or an explicit alternate for non-English models.
+  Any publisher-reported score is context only; downstream gates use the
+  measured Oracle reference baseline.
+- `docs/porting/families/<family>.md` exists as a draft and includes a `## Capability Validation` table with one row per advertised capability; every row has its `Target` filled (`MUST PASS` or `OUT OF SCOPE — <reason>`, user-signed for non-forced rows) and `Status: TODO`. Rows for capabilities the runtime cannot observe are marked `OUT OF SCOPE` so they may resolve to SKIP at Stage 4.
 - `tests/golden/<family>/<variant>.manifest.json` exists as a skeleton (identity fields only, `_skeleton: true`).
 - Preflight Gate A is green.
 

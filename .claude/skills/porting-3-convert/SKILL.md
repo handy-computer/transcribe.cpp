@@ -5,7 +5,9 @@ description: Converts a model family's upstream checkpoint into a reference-dtyp
 
 # porting-3-convert
 
-Third stage of the porting pipeline. Runs the family's converter to emit the reference-dtype GGUF, records a converter manifest, and clears Preflight Gate B. Deferring the full quant matrix (F16 / Q8_0 / Q6_K / Q5_K_M / Q4_K_M) to Stage 5 (`porting-5-quants`) means we never re-quantize over the course of a C++ bringup.
+Third stage of the porting pipeline. Runs the family's converter to emit
+the reference-dtype GGUF, records provenance, and clears Preflight Gate B.
+The full quant matrix belongs to Stage 5.
 
 ## Preconditions
 
@@ -33,7 +35,11 @@ Check for `scripts/convert-<family>.py`.
 
 **If present**: reuse. For sibling variants (e.g. `-v3` when `-v2` is ported) the converter usually handles the new variant via `--repo-id` alone; confirm by reading the converter's source for any hard-coded variant checks.
 
-**If absent**: mirror the closest existing converter's shape — `convert-cohere.py` (Transformers HF dir), `convert-parakeet.py` (NeMo `.nemo`), or `convert-qwen3_asr.py` (author-repo with `--revision`, `--variant`). All converters accept positional HF repo or local path, `--repo-id` for the output name, preserve source dtypes exactly (CLAUDE.md policy #2), and emit the `general.*` and `stt.*` KV that the C++ loader's per-family `read_*_hparams` reads (see `src/arch/<closest>/weights.cpp`). Surface only unresolved decisions to the user (tensor-name mappings the closest converter does not handle, novel sharding, etc.); a routine stub does not need confirmation before running.
+**If absent**: mirror the closest existing converter
+(`convert-cohere.py`, `convert-parakeet.py`, or `convert-qwen3_asr.py`).
+Preserve source dtypes, emit the loader KV used by
+`src/arch/<family>/weights.cpp`, and surface only unresolved tensor-name
+or sharding decisions to the user.
 
 ### Step 2: Identify reference dtype (read intake)
 

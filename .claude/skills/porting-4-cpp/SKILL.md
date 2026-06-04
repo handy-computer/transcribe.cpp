@@ -1,15 +1,15 @@
 ---
 name: porting-4-cpp
-description: Brings up the C++ implementation for a new model family at the reference dtype, finalizes per-tensor tolerances from observed drift, runs the family-doc Capability Validation table commands, and ends with a 512-utterance subset WER sanity vs the reference framework. Use after porting-3-convert has produced the reference-dtype GGUF. Input: intake.json, manifest, dump_coverage.json, provisional tolerances, reference-dtype GGUF, family forward-map.md, family doc Capability Validation table. Output: src/arch/<family>/* source, family-level reports/porting/<family>/forward-map.md, finalized tests/tolerances/<family>.json (no _provisional flags, _comment block explaining drift sources), validate.py all green at ref dtype, Capability Validation table updated with PASS/SKIP/ACCEPTED-GAP per row, and Stage 4 subset WER no more than reference WER + 0.01 on the same 512-row subset. Quant generation is Stage 5, not here.
+description: Brings up the C++ implementation for a new model family at the reference dtype. Produces src/arch/<family>/*, finalized tolerances, resolved capability checks, batch parity, and full ref-dtype WER against the Oracle reference baseline. Use after porting-3-convert. Quant generation is Stage 5, not here.
 ---
 
 # porting-4-cpp
 
 Stage 4 of the porting pipeline. Implements `src/arch/<family>/*`, authors
 `tests/tolerances/<family>.json` from the first honest C++ drift, runs
-the family-doc Capability Validation table, and ends with a deterministic
-subset WER sanity. Quant generation moved to Stage 5; this stage stays
-ref-dtype only.
+the family-doc Capability Validation table, and ends with a full
+ref-dtype WER gate (batch 1 + batch 8). Quant generation moved to Stage 5;
+this stage stays ref-dtype only.
 
 First principle: the reference implementation is the source of truth. Open
 it before writing C++. Re-open it when debugging drift.
@@ -19,7 +19,11 @@ it before writing C++. Re-open it when debugging drift.
 - `reports/porting/<family>/<variant>/intake.json` schema-valid, Preflight
   Gate A green.
 - `docs/porting/families/<family>.md` has a `## Capability Validation`
-  table drafted at intake time (one row per advertised capability).
+  table drafted at intake time (one row per advertised capability), with
+  every row's `Target` filled and user-signed (`MUST PASS` /
+  `OUT OF SCOPE — <reason>`) and `Status: TODO`. If any `Target` is still
+  blank, send the port back to `porting-1-intake` for the scope sign-off
+  before implementing.
 - `build/validate/<family>/<variant>/dump_coverage.json` exists.
 - `models/<variant>/<variant>-<REFDTYPE>.gguf` exists, Preflight Gate B
   green.
@@ -39,8 +43,9 @@ CPP progress:
 - [ ] Step 6: validate.py all green at ref dtype
 - [ ] Step 7: Verify frontend parity for production inference
 - [ ] Step 8: Run the family-doc Capability Validation table
-- [ ] Step 9: Stage 4 subset WER sanity
-- [ ] Step 10: Sign-off review
+- [ ] Step 9: Batch parity (offline run_batch vs serial)
+- [ ] Step 10: Full ref-dtype WER gate (batch 1 + batch 8)
+- [ ] Step 11: Sign-off review
 ```
 
 ### Step 0: Family-level forward-map.md (execute)
@@ -52,10 +57,9 @@ same forward structure. Variant-specific differences go into the
 "Variant Notes" section only when they affect graph shape, control flow,
 capabilities, or validation coverage.
 
-For a new family, write the map before C++ work, but it can have `TODO`
-or `UNKNOWN` rows during bring-up — open questions are how the map earns
-its keep. For a new variant in an existing family, read the existing map
-and update it only if the variant changes the architecture.
+For a new family, write the map before C++ work; `TODO` / `UNKNOWN` rows
+are allowed during bring-up. For a new variant in an existing family,
+update it only when architecture or validation coverage changes.
 
 ```bash
 [ -f reports/porting/<family>/forward-map.md ] || \
@@ -63,10 +67,8 @@ and update it only if the variant changes the architecture.
      reports/porting/<family>/forward-map.md
 ```
 
-The map is short. Repeated layers map the block pattern once and list
-the first/middle/last gate tensors — not one row per layer. The
-"no unresolved rows" gate applies only at Stage 4 sign-off (Step 10),
-not while you are working through the implementation.
+Keep the map short. Repeated layers map the block pattern once. The
+"no unresolved rows" gate applies only at Stage 4 sign-off.
 
 ### Step 1: Sibling-variant shortcut (execute)
 
@@ -120,28 +122,16 @@ cmake --build build --target transcribe-cli
 Surface to the user any ggml-pattern decisions they should make explicitly
 rather than silently (see "Human Decisions" in the parent CLAUDE.md).
 
-**Family-specific requirements.** Some families ship implementation work
-beyond the arch pattern itself — e.g. whisper must support loading
-whisper.cpp-compatible `.bin` files on the loader side. These extras do
-NOT flow through intake → convert → validate (our GGUF remains the
-canonical numerical reference), but they are real C++ work for this stage.
-Capture each one in `docs/porting/families/<family>.md` under a
-"Family-specific implementation notes" section, and confirm with the user
-at the start of Stage 4 that all such items are listed.
+**Family-specific requirements.** Capture any implementation work that
+does not flow through convert/validate in
+`docs/porting/families/<family>.md`, and confirm the list with the user
+at Stage 4 start.
 
 **Mid-generation tensor coverage (autoregressive decoders).** Families
-whose decoder maintains a KV cache (`encoder-decoder`, `audio-llm`) MUST
-include at least one dump point that exercises the `n_past > 0` step-graph
-code path. The prompt pass (`n_past=0, n_tokens=seq_len`) does not cover
-cache write/read offsets, causal-mask indexing for a single new token, or
-position-id handling past the prompt — a bug in any of those can pass
-every prompt-pass tolerance and still corrupt the model mid-transcription.
-Convention: a tensor named `dec.logits_raw.gen<N>` (or equivalent for the
-family's logit shape), captured after N ≥ 8 completed step-loop iterations
-on BOTH sides, with both sides running matching greedy rules. If
-`dump_coverage.json` doesn't list a mid-generation tensor, add it here in
-both the reference dumper and the C++ runner, and file the missing
-coverage back to `porting-2-oracle` for the next family.
+with KV-cache decoders (`encoder-decoder`, `audio-llm`) MUST dump at least
+one `n_past > 0` step tensor on both sides, conventionally
+`dec.logits_raw.gen<N>` after N ≥ 8 greedy steps. If coverage is missing,
+add it to the reference dumper and C++ runner.
 
 ### Step 3: First validate.py run (execute)
 
@@ -214,21 +204,12 @@ Remove every `_provisional: true` flag during finalization. Any remaining
 `_provisional` at sign-off is a blocking error. File shape mirrors
 `tests/tolerances/parakeet.json`.
 
-**The `_comment` block is the numerical-conception part.** Write it BY
-INSPECTING THE DRIFT PROFILE. It must name: (a) the correctness regime
-(dtype + KV dtype + mel source + backend), (b) reference framework + mode,
-(c) C++ compute dtype, (d) dominant drift source (STFT precision,
-attention op-order, LSTM init, F16 KV round-trip), (e) which entries
-were tightened/kept/widened vs Stage 2 provisional and why for each
-widening.
+The `_comment` block must name the correctness regime, reference mode,
+C++ compute dtype, dominant drift source, and any entries widened vs
+Stage 2 provisional.
 
-**Suspicious localized drift.** If a tensor's drift is concentrated on
-one position or feature dimension (rather than spread across all
-elements like fp32 reduction-order noise typically is), that is a
-structural-bug signal — a missed causal-mask row, a wrong position-id
-offset, a shape permutation. Inspect it before accepting; do not absorb
-it into a wider tolerance. Spread drift can be widened with a named
-mechanism in `_comment`.
+Inspect localized drift before accepting it; do not absorb likely mask,
+position, or shape bugs into wider tolerances.
 
 ### Step 5: Human review of tolerances
 
@@ -238,8 +219,8 @@ either:
 - Pushes back — return to Step 2 to debug, NOT to Step 4 to loosen
   tolerances.
 
-**Silent acceptance is how bugs hide.** Loose tolerances without a named
-mechanism must be debugged before they are accepted.
+Loose tolerances without a named mechanism must be debugged before
+acceptance.
 
 ### Step 6: Ref-dtype validation green (execute)
 
@@ -275,83 +256,101 @@ with injected tensors.
 Open `docs/porting/families/<family>.md` and find the
 `## Capability Validation` table. Each row names an advertised
 capability, the mode (explicit-language, auto/no-hint, etc.), the actual
-CLI/API command that exercises it, the expected observable, and a
-status. At intake time the status is `TODO`; this step fills it in.
+CLI/API command that exercises it, the expected observable, a `Target`
+(the user-signed scope decision from Stage 1), and a `Status`. At intake
+time the `Status` is `TODO`; this step fills it in. Do not edit the
+`Target` column here.
 
 For each row:
 
 1. Run the listed command against the ref-dtype GGUF.
-2. Compare the runtime output against the expected observable. The
-   observables are deliberately loose ("non-empty plausible transcript,"
-   "timestamp output present") because the runtime can only observe what
-   the public CLI/API exposes — do not invent assertions the runtime
-   cannot actually surface.
-3. Update the row's `Status` cell to one of:
+2. Compare the runtime output against the expected observable.
+3. Update the row's `Status` cell, honoring its `Target`:
    - `PASS` — command ran and the observable matched.
    - `SKIP — not exposed by runtime` — the capability is advertised but
      the C++ CLI/API does not expose a way to observe it. The row stays
      in the table; users reading the family doc see the gap honestly.
+     **Only legal when `Target` is `OUT OF SCOPE`.**
    - `ACCEPTED GAP — <reason>` — the capability is exposed but
      intentionally not exercised in this port (e.g. requires audio
      samples we don't ship). The reason must name what unblocks the
-     row later.
+     row later. **Only legal when `Target` is `OUT OF SCOPE`** (plus the
+     batch serial-fallback exception in Step 9).
 
-Every advertised capability must end up with PASS, SKIP, or ACCEPTED
-GAP — not TODO. If a row that should be PASS instead fails the runtime
-check, that is a real regression: fix the C++ before signing off Stage
-4, do not downgrade the row.
+A `Target: MUST PASS` row must resolve to `PASS` unless the user re-signs
+it as `OUT OF SCOPE`. `SKIP` / `ACCEPTED GAP` are legal only on
+`OUT OF SCOPE` rows, plus the batch serial-fallback exception in Step 9.
+No row may remain `TODO`. If `capabilities.streaming: true`, the
+streaming row is forced `MUST PASS`; a blocked streaming implementation
+requires explicit user sign-off as a blocker.
 
-This step replaces the older intake-resident behavior cases. The signal
-"we implemented tensor parity but forgot user-visible behavior" is
-caught by the table being incomplete or full of SKIP rows that the user
-expected to be PASS. Do not introduce a `tests/contract/<family>/`
-framework unless a family genuinely needs a bespoke harness.
+### Step 9: Batch parity (execute)
 
-### Step 9: Stage 4 subset WER sanity (execute)
+Offline batching is a throughput feature. In the Stage 4 CPU regime,
+batched output must match the single-utterance path.
 
-Run a small subset of the acceptance manifest on the C++ ref-dtype GGUF
-and the reference framework, then compare WERs.
+Text parity (byte-identical hypotheses, serial vs batched), and freeze
+the golden baseline that later changes gate against:
 
 ```bash
-# Take the first 512 manifest rows in order. Same source manifest →
-# same subset every time; re-runs are no-ops once the file exists.
-uv run scripts/wer/subset.py \
-  --manifest samples/wer/<dataset>.manifest.jsonl \
-  --n 512 \
-  --out samples/wer/<dataset>.512.manifest.jsonl
-
-uv run scripts/wer/run.py \
+uv run scripts/batch_parity.py \
   --model models/<variant>/<variant>-<REFDTYPE>.gguf \
-  --manifest samples/wer/<dataset>.512.manifest.jsonl \
-  --out reports/wer/<variant>-<REFDTYPE>.<dataset>-512.jsonl
-uv run scripts/wer/score.py reports/wer/<variant>-<REFDTYPE>.<dataset>-512.jsonl
+  --samples-dir samples/wer/<dataset> \
+  --batch-sizes 2,4,8 --backend cpu \
+  --golden-out tests/golden/batch/<variant>.cpu.json
 ```
 
-Run the reference framework on the same subset file (per-family driver)
-and record the resulting WER alongside the C++ score.
+Tensor parity on the per-utterance encoder output (bit-exact on CPU; the
+GPU flash-attention path is expected to drift ~1e-3 and is not the Stage
+4 regime):
 
-Simple rule:
+```bash
+uv run scripts/batch_tensor_parity.py \
+  --model models/<variant>/<variant>-<REFDTYPE>.gguf \
+  --samples-dir samples/wer/<dataset> --batch-size 4 --backend cpu
+```
 
-- Reference WER on the 512-row subset: `3.59`
-- Max allowed C++ WER on the same 512-row subset: `3.60`
-- `3.60` passes
-- `3.61` is too high and must be investigated
+Add/update the `Batch (offline)` Capability Validation row:
+- `PASS` — text byte-identical and CPU tensor parity bit-exact at the
+  tested batch sizes (the family implements an explicit `run_batch()`
+  fast path).
+- `ACCEPTED GAP — serial fallback` — the family has no batched fast path
+  and runs the serial per-utterance loop. Name why the fast path was
+  skipped.
 
-Both runners must score against the exact same `.512.manifest.jsonl`
-path. Reporting the path + utterance count in sign-off is enough — no
-SHA enforcement.
+A text or tensor parity mismatch is a batching bug, never an accepted gap.
 
-If the dataset has fewer than 512 utterances, the subset is the full
-manifest. If the reference runner is not yet wired up for this dataset,
-record an accepted gap in the family doc and rely on tensor validation
-+ the Capability Validation table for Stage 4 acceptance. Do **not**
-compare the 512-utterance subset against a public full-dataset upstream
-number — the subsets are not the same.
+### Step 10: Full ref-dtype WER gate (execute)
 
-Also surface the worst per-utterance transcript differences for human
-review.
+Score the **full** acceptance manifest on the C++ ref-dtype GGUF at batch
+1 and batch 8, and gate against the Stage-2 Oracle reference WER
+(`reports/wer/<variant>-REF.<dataset>.{jsonl,score.json}`) — our own
+reference run, not a published number. Run it on Modal if credentials are
+available; otherwise run locally:
 
-### Step 10: Sign-off
+```bash
+# local
+for B in 1 8; do
+  uv run scripts/wer/run.py --model models/<variant>/<variant>-<REFDTYPE>.gguf \
+    --manifest "$MANIFEST" --batch-size $B \
+    --out reports/wer/<variant>-<REFDTYPE>.<dataset>.b$B.jsonl
+  uv run scripts/wer/score.py reports/wer/<variant>-<REFDTYPE>.<dataset>.b$B.jsonl
+done
+# or Modal: modal run scripts/wer/remote/modal_sweep.py::sweep \
+#   --models <repo-or-card> --quants <REFDTYPE>
+```
+
+Gate (batch 1): C++ ref-dtype WER ≤ Oracle reference WER + 0.01. Higher is
+a blocker — diff the worst per-utterance hyps against the Oracle JSONL and
+investigate; do not widen.
+
+Batch 1 vs batch 8 is human-reviewed. A WER delta beyond dataset noise
+(~0.01) is a batching bug, not a sign-off.
+
+If the Oracle reference baseline is missing, that is a `porting-2-oracle`
+gap — send it back rather than gating against a published number.
+
+### Step 11: Sign-off
 
 Report:
 - Family forward-map path.
@@ -359,36 +358,47 @@ Report:
 - `validate.py all` exit code at ref dtype.
 - Frontend parity command + exit code (or explicit reason no separate
   frontend exists).
-- Capability Validation table outcome: per-row PASS / SKIP /
-  ACCEPTED-GAP, with the family-doc path so the user can read it.
-- Subset WER: reference WER, C++ WER, max allowed C++ WER, and pass/blocked.
+- Capability Validation table outcome: per-row `Target` → `Status`
+  (PASS / SKIP / ACCEPTED-GAP), with the family-doc path so the user can
+  read it. Confirm every `MUST PASS` row resolved to `PASS`; flag any
+  that did not as a blocker (or an explicit user-signed scope change to
+  `OUT OF SCOPE`). If the model streams natively, the streaming row is
+  PASS or an explicit user-signed BLOCKER — never a silent gap.
+- Batch parity: text + tensor parity result, the golden fixture path
+  (`tests/golden/batch/<variant>.cpu.json`), and the `Batch (offline)`
+  row status (PASS or ACCEPTED GAP — serial fallback).
+- Full ref-dtype WER: Oracle reference WER, C++ batch-1 WER, max allowed,
+  pass/blocked; plus the batch-8 WER and the user's sign-off that batching
+  is WER-neutral.
 
 **Do not commit.** Quant generation and CLI smokes are Stage 5
 (`porting-5-quants`).
 
 ## Postconditions
 
-- `reports/porting/<family>/forward-map.md` exists with no unresolved
-  `TODO` / `UNKNOWN` / `accepted_gap` rows.
-- `src/arch/<family>/` follows the in-tree shape: `weights.{h,cpp}`,
-  `encoder.{h,cpp}`, `decoder.{h,cpp}` as `.h`/`.cpp` pairs, plus
-  `model.cpp` and `capabilities.cpp` backed by a single family-level
-  header `<family>.h`.
-- `tests/tolerances/<family>.json` has a `_comment` block naming the
-  correctness regime, no `_provisional` flags remain, pure-lookup/pure-add
-  tensors are pinned at exact `0.0`, and was reviewed by the user.
+- `reports/porting/<family>/forward-map.md` has no unresolved `TODO` /
+  `UNKNOWN` / `accepted_gap` rows.
+- `src/arch/<family>/` follows the in-tree family shape and is wired into
+  the arch dispatch.
+- `tests/tolerances/<family>.json` is finalized: `_comment` names the
+  correctness regime, no `_provisional` flags remain, pure-read/pure-add
+  tensors are exact `0.0`, and the user reviewed it.
 - `validate.py all --family <family> --variant <variant>` exits 0 at
   reference dtype in the declared regime.
-- For autoregressive-decoder families: at least one
-  `dec.logits_raw.gen<N>` (N ≥ 8) is dumped and gated.
+- Autoregressive-decoder families dump and gate at least one
+  `dec.logits_raw.gen<N>` with `N >= 8`.
 - Production frontend output is validated against the reference frontend
   when the family has an inference-time frontend.
-- The family-doc Capability Validation table has every row updated to
-  PASS, SKIP — not exposed by runtime, or ACCEPTED GAP — `<reason>`.
-  No row remains TODO.
-- Stage 4 subset WER uses the same 512-row subset file for C++ and the
-  reference framework. C++ WER is no more than reference WER + 0.01.
-  Sign-off names the subset path and utterance count.
+- Capability Validation has no `TODO`; every `MUST PASS` row is `PASS`
+  unless the user explicitly re-signed scope.
+- If `capabilities.streaming` is true, the streaming row is `PASS` or an
+  explicit user-signed `BLOCKER`.
+- Batch parity is gated: text + CPU tensor checks pass at 2/4/8, the
+  golden fixture exists, and the family doc records `Batch (offline)` as
+  `PASS` or `ACCEPTED GAP — serial fallback`.
+- Full ref-dtype WER ran on the complete acceptance manifest at batch 1
+  and batch 8; batch 1 passes the Oracle reference WER + 0.01 gate, and
+  batch 8 is user-reviewed as WER-neutral.
 - No quantized GGUFs are produced here (Stage 5 owns that).
 
 ## Pointers (read, not execute)

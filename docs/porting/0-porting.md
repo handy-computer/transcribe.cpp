@@ -57,14 +57,15 @@ The high-level intent of each stage:
 3. **Convert** — produce only the reference-dtype GGUF; clear Preflight
    Gate B.
 4. **C++** — implement `src/arch/<family>/`, finalize tolerances, run
-   the family-doc Capability Validation table, gate Stage 4 subset WER
-   vs reference.
-5. **Quants** — generate the shipped quant matrix and CLI smoke each
-   produced GGUF.
+   the family-doc Capability Validation table, gate full ref-dtype WER
+   vs the measured Oracle reference baseline.
+5. **Quants** — generate the shipped quant matrix, CLI smoke each
+   produced GGUF, and take a tentative quant WER read for human review.
 6. **Bench** — performance matrix; every accepted iteration re-runs
    `validate.py all`.
-7. **WER** — full release WER sweep against the upstream acceptance
-   number; ref-dtype hard gate, quants reported but not gated.
+7. **WER** — full release WER sweep; ref-dtype hard gate against the
+   measured Oracle reference baseline, quants human-reviewed and not
+   auto-gated.
 8. **Ship** — checklist-driven local prep of the family doc, model card,
    HF YAML, HF README.
 

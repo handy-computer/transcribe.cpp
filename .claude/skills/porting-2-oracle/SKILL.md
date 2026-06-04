@@ -1,13 +1,13 @@
 ---
 name: porting-2-oracle
-description: Builds the oracle packet — the reference answer key Stage 4 implements against. Runs the reference framework against the family's manifest cases once, captures tensor sidecars (with rms / p99_abs), reference transcripts (transcript.json), and a provisional tests/tolerances/<family>.json derived from per-tensor magnitude statistics (1e-4 × p99_abs for max, 1e-5 × rms for mean). Use after porting-1-intake clears Gate A and before porting-3-convert. Output: build/validate/<family>/<variant>/<case>/<stage>/ref/, dump_coverage.json, transcript.json per decode case, and a provisional tolerances file Stage 4 will finalize.
+description: Builds the oracle packet Stage 4 implements against: tensor dumps, reference transcripts, measured reference WER, and provisional tolerances. Use after porting-1-intake clears Gate A and before porting-3-convert. Output: tests/golden/<family>/<variant>.manifest.json, build/validate/<family>/<variant>/, reports/wer/<variant>-REF.<dataset>.{jsonl,score.json}, and tests/tolerances/<family>.json.
 ---
 
 # porting-2-oracle
 
-Second stage of the porting pipeline. Produces the oracle packet — the
-collection of artifacts Stage 4 implements C++ against. The oracle is
-the tensor dumps + transcripts + magnitude-aware provisional tolerances.
+Second stage of the porting pipeline. Produces the oracle packet Stage 4
+implements against: tensor dumps, reference transcripts, measured
+reference WER, and provisional tolerances.
 
 ## Preconditions
 
@@ -32,6 +32,8 @@ tests/golden/<family>/<variant>.manifest.json
 build/validate/<family>/<variant>/<case>/<stage>/ref/                  # tensor dumps + sidecars
 build/validate/<family>/<variant>/dump_coverage.json                   # tensor catalog
 build/validate/<family>/<variant>/<case>/<stage>/ref/transcript.json   # reference transcript per decode case
+reports/wer/<variant>-REF.<dataset>.jsonl                              # per-utterance reference hyps (one-for-one debug oracle)
+reports/wer/<variant>-REF.<dataset>.score.json                         # reference-measured WER baseline (the gate, not the published number)
 tests/tolerances/<family>.json                                         # provisional, Stage 4 finalizes
 ```
 
@@ -50,7 +52,8 @@ Oracle progress:
 - [ ] Step 4: Verify reference transcripts
 - [ ] Step 5: Generate dump_coverage.json
 - [ ] Step 6: Write provisional tolerances from per-tensor magnitude
-- [ ] Step 7: Sign-off review
+- [ ] Step 7: Reference WER baseline ran on the acceptance dataset
+- [ ] Step 8: Sign-off review
 ```
 
 ### Step 1: Per-family env and dumper
@@ -61,20 +64,12 @@ Check for `scripts/envs/<family>/pyproject.toml` and
 **If the family is already ported** (either script exists): use as-is.
 
 **If the family is new**:
-- Create `scripts/envs/<family>/pyproject.toml` listing the reference
-  framework's package pins. Mirror the shape of `scripts/envs/parakeet/`
-  (NeMo), `scripts/envs/cohere/` (Transformers), or `scripts/envs/qwen3_asr/`
-  (author-repo style).
-- Create `scripts/dump_reference_<family>_<framework>.py` using the
-  argparse subcommand shape of the closest existing dumper. All dumpers
-  MUST emit tensors via `scripts/lib/ref_dump.py::write_tensor` and
-  transcripts via `write_transcript` so the on-disk contract is identical
-  across families. The shared sidecar records `rms` and `p99_abs`
-  alongside `min`/`max`/`mean` — Step 6 reads these to size tolerances.
-- Surface to the user any unresolved technical decisions the closest
-  existing dumper does not answer (novel reference framework wiring,
-  unusual hook points, multi-stage decode quirks). Routine stubs do not
-  need confirmation — just run them.
+- Create `scripts/envs/<family>/pyproject.toml` from the closest existing
+  reference env.
+- Create `scripts/dump_reference_<family>_<framework>.py` from the closest
+  dumper. It MUST emit tensors via `ref_dump.write_tensor` and transcripts
+  via `write_transcript`; sidecars must include `rms` and `p99_abs`.
+- Surface only unresolved technical decisions to the user.
 
 ### Step 2: Complete the golden manifest (execute)
 
@@ -169,18 +164,6 @@ When the same tensor name appears in multiple `(case, stage_dir)`
 sidecars, take the **max** p99_abs and rms across them so the budget
 covers the worst-magnitude instance.
 
-Why these multipliers: observed fp32-vs-fp32 drift between two correct
-implementations (different BLAS, different reduction order, FMA vs
-mul+add) is typically ~1e-5 relative per tensor — well below
-Wilkinson worst-case (~1e-4 for stacked matmuls of width K across
-L layers). The 1e-4 / 1e-5 prior is 10× looser than typical observed
-drift: loose enough to admit benign cross-library variation, tight
-enough that a real port issue (wrong layer norm epsilon, missing
-residual, scale factor off, unintended dtype upcast) trips the
-budget on first Stage 4 run. The 1e-6 floor catches near-zero
-tensors (zero-init biases, all-zero pad regions) where the relative
-budget would otherwise vanish.
-
 Per-tensor entry: `{max_abs, mean_abs, _provisional: true}`. Top-of-file
 `_comment` (array of strings) states:
 - These tolerances are magnitude-aware: `1e-4 × p99_abs` for max,
@@ -189,11 +172,61 @@ Per-tensor entry: `{max_abs, mean_abs, _provisional: true}`. Top-of-file
 - Entries with `_provisional: true` make finalization-not-yet-run obvious.
 - Do NOT ship a model while `_provisional` entries remain.
 
-A correctly-ported tensor should land near or below this budget on
-first run; tensors well above it are real signals to investigate, not
-artifacts of a placeholder floor.
+Tensors well above this budget in Stage 4 are signals to investigate.
 
-### Step 7: Sign-off
+### Step 7: Reference WER baseline (execute)
+
+The Oracle WER run is the downstream accuracy baseline. Do not gate
+against publisher scores: Stage 4 and Stage 7 compare C++ against this
+measured reference run on our manifest and normalization. If intake
+captured a publisher score, compare and report the delta for context only.
+
+Keep every per-utterance reference hypothesis. Later WER drift should diff
+C++ vs captured reference `hyp_text` by `id` instead of re-running the
+reference.
+
+The acceptance dataset is `intake.upstream_benchmarks[0].dataset`
+(default LibriSpeech test-clean). Build the WER manifest once if it does
+not exist, then run the per-family reference runner over the **full**
+acceptance manifest and score it:
+
+```bash
+DATASET=$(uv run python -c "import json; \
+  print(json.load(open('reports/porting/<family>/<variant>/intake.json'))['upstream_benchmarks'][0]['dataset'].replace(' ','-').lower())")
+
+# Build the manifest if this dataset has not been ingested yet.
+[ -f samples/wer/${DATASET}.manifest.jsonl ] || \
+  uv run scripts/wer/ingest.py librispeech   # or: fleurs --lang <bcp47>
+
+uv run --project scripts/envs/<family> \
+  scripts/wer/run_reference_<family>_<framework>.py \
+  --manifest samples/wer/${DATASET}.manifest.jsonl \
+  --model <hf_repo> \
+  --out reports/wer/<variant>-REF.${DATASET}.jsonl
+
+uv run scripts/wer/score.py reports/wer/<variant>-REF.${DATASET}.jsonl
+# writes reports/wer/<variant>-REF.${DATASET}.score.json
+```
+
+This is a **one-time** reference run. Stage 4 and Stage 7 gate C++ WER
+against this same file; the reference is not re-run downstream.
+
+**GPU option (Modal).** To run the reference on cloud GPUs instead of
+locally, use the remote sweep — it installs the family venv on a GPU
+container and runs the same runner, returning the JSONL to score locally:
+
+```bash
+modal run scripts/wer/remote/modal_sweep.py::reference_sweep \
+  --variants <family>:<variant> --gpu L4
+```
+
+It writes the same `reports/wer/<variant>-REF.<dataset>.jsonl`. See
+`scripts/wer/remote/REFERENCE_SWEEP_SPEC.md`. A new family needs a
+`scripts/wer/run_reference_<family>_*.py` with the uniform
+`--manifest/--model/--out/--device/--batch-size` contract (copy the
+closest same-framework one).
+
+### Step 8: Sign-off
 
 Report:
 - Number of manifest cases dumped.
@@ -205,28 +238,25 @@ Report:
   embedding-scale tensor 1e-4).
 - Per-case transcript paths so the user can sanity-check the reference
   output before C++ work.
+- Reference WER baseline: measured reference WER on the acceptance
+  dataset, the published score if present, the delta between them, the
+  dataset + utterance count, and the
+  `reports/wer/<variant>-REF.<dataset>.{jsonl,score.json}` paths.
 - Confirmation that the user reviewed the provisional tolerances.
 
 **Do not commit.**
 
 ## Postconditions
 
-- `.f32` + `.json` sidecar pairs exist under
-  `build/validate/<family>/<variant>/<case>/<stage>/ref/` for every
-  tensor the dumper emits.
-- Sidecars include `rms` and `p99_abs` (provided by the shared
-  `ref_dump.write_tensor`).
-- `build/validate/<family>/<variant>/dump_coverage.json` catalogs every
-  ref tensor (and only tensors — `transcript.json` and other behavioral
-  files are excluded).
-- `build/validate/<family>/<variant>/<case>/<stage>/ref/transcript.json`
-  exists wherever the reference dumper exposes a transcript.
-- `tests/golden/<family>/<variant>.manifest.json` lists the audio cases
-  the dumper actually ran and names the reference entrypoint.
-- `tests/tolerances/<family>.json` exists, populated from per-tensor
-  magnitude (`max(1e-4 × p99_abs, 1e-6)` for max, `max(1e-5 × rms, 1e-6)`
-  for mean), every tensor carries `_provisional: true`, top-of-file
-  `_comment` states the derivation source.
+- Every path listed in "Oracle packet contents" exists and uses the same
+  `<family>/<variant>/<case>/<stage>` conventions.
+- Tensor sidecars include `rms` and `p99_abs`; `dump_coverage.json`
+  catalogs tensors only.
+- `tests/tolerances/<family>.json` is provisional, derived from
+  per-tensor magnitude, every tensor carries `_provisional: true`, and the
+  user reviewed it.
+- The measured reference WER baseline exists for the acceptance dataset,
+  and any measured-vs-published gap was reported to the user.
 
 ## Pointers (read, not execute)
 
@@ -238,3 +268,9 @@ Report:
   - `scripts/dump_reference_cohere_transformers.py`
   - `scripts/dump_reference_qwen3_asr_author.py`
   - `scripts/dump_reference_whisper_transformers.py`
+- Reference WER (Step 7):
+  - `scripts/wer/run_reference_<family>_<framework>.py` — per-family
+    reference WER runners (copy the closest same-framework one for a new
+    family); local, GPU-accelerated if torch sees one
+  - `scripts/wer/ingest.py` — builds the acceptance manifest (librispeech / fleurs)
+  - `scripts/wer/score.py` — shared scorer; writes `<report>.score.json`

@@ -1,41 +1,28 @@
 ---
 name: porting-7-wer
-description: Full release WER sweep for a ported variant. Scores the full acceptance manifest declared in intake.upstream_benchmarks across the reference dtype and every shipped quant. Simple rule: if upstream WER is 3.59, the ref-dtype C++ WER must be 3.60 or lower. Anything higher blocks release until explained with extra testing. Quant WERs are documentation only, not gated. Use after porting-6-bench. Output: reports/wer/<variant>-<preset>.<dataset>.score.json per shipped preset, reports/wer/<variant>.<dataset>.summary.md, and a ship-gate decision.
+description: Full release WER sweep for a ported variant. Scores the full acceptance manifest across the reference dtype and every shipped quant. Ref-dtype C++ is hard-gated against the measured Oracle reference baseline; quant WERs are human-reviewed, not auto-gated. Use after porting-6-bench. Output: reports/wer/<variant>-<preset>.<dataset>.score.json per shipped preset, reports/wer/<variant>.<dataset>.summary.md, and a ship-gate decision.
 ---
 
 # porting-7-wer
 
-Stage 7 of the porting pipeline. The acceptance target is whatever the
-intake captured in `upstream_benchmarks[0]` — LibriSpeech test-clean for
-English models, FLEURS / Common Voice / custom dataset for others, as
-the publisher reports. Produces WER scores with bootstrap CIs for every
-shipped preset and applies one simple rule:
+Stage 7 of the porting pipeline. Scores the full acceptance manifest for
+the ref dtype and every shipped quant. Step 3 checks the hard gate against
+the measured Oracle reference baseline from Stage 2.
 
-**C++ WER must be no more than upstream WER + 0.01 WER points.**
+Quant WER is **reviewed and signed off** by the user, not auto-gated.
 
-Example: if upstream WER is `3.59`, the highest allowed C++ WER is
-`3.60`. `3.60` passes. `3.61` does not pass.
-
-If C++ is higher than the allowed number, the skill does not loosen
-tolerances or waive the test. It stops release sign-off until extra
-testing explains the gap.
-
-Quant WER is **reported, not gated**. The user decides per-quant whether
-to ship based on the summary table. There is no automatic quant WER
-threshold.
-
-This is distinct from the Stage 4 subset WER sanity: Stage 4 compared
-C++ against the reference framework on the first-512 manifest subset;
-Stage 7 scores the full acceptance manifest against the publisher's
-reported number for the user-facing model card.
+Stage 4 already gated ref dtype, and Stage 5 took a tentative quant read.
+Stage 7 re-confirms after bench and records human review for every quant.
 
 ## Preconditions
 
 - `models/<variant>/<variant>-<PRESET>.gguf` exists for every shipped
   preset.
 - `reports/porting/<family>/<variant>/intake.json` has
-  `upstream_benchmarks[0]` with a non-null `score` for the declared
-  acceptance dataset.
+  `upstream_benchmarks[0]` with a declared acceptance dataset and metric.
+- `reports/wer/<variant>-REF.<dataset>.score.json` exists from
+  `porting-2-oracle` Step 7. This measured reference score is the
+  ref-dtype gate target.
 - `build/bin/transcribe-cli` is built.
 - Acceptance manifest is available (see Step 1).
 
@@ -53,9 +40,10 @@ WER progress:
 
 ### Step 1: Acceptance manifest (execute or ask-point)
 
-Read the acceptance target from `upstream_benchmarks[0].{dataset, metric, score, score_unit}`. Slugify: lowercase, spaces → hyphens. `"LibriSpeech test-clean"` → `librispeech-test-clean`. Resolve to `$MANIFEST`; every later step uses `$MANIFEST`, never a reconstructed path. Confirm `metric` is `wer` or `cer`; anything else is out of scope.
+Read the acceptance dataset and metric from `upstream_benchmarks[0].{dataset, metric}`. Slugify: lowercase, spaces → hyphens. `"LibriSpeech test-clean"` → `librispeech-test-clean`. Resolve to `$MANIFEST`; every later step uses `$MANIFEST`, never a reconstructed path. Confirm `metric` is `wer` or `cer`; anything else is out of scope. Do not use any publisher-reported score for pass/fail; the measured Oracle reference score is the gate target.
 
-`scripts/wer/ingest.py` is a subcommand dispatcher. Today: `librispeech` (auto-downloads from OpenSLR) and `fleurs` (per-language test split from `google/fleurs`). Adding a source means adding a subparser + adapter inside the same file, not a new script. If the intake's dataset isn't covered, extend `ingest.py` before running this step.
+If the intake's dataset is not covered by `scripts/wer/ingest.py`, extend
+that script before running this step.
 
 **LibriSpeech.** Output is `samples/wer/librispeech-<split>.manifest.jsonl`; accept the legacy unprefixed `test-clean.manifest.jsonl` as a fallback:
 
@@ -78,7 +66,7 @@ uv run scripts/wer/ingest.py fleurs --lang "$LANG"
 MANIFEST=samples/wer/fleurs-${LANG}.manifest.jsonl
 ```
 
-CER auto-routes for zh / yue / ja / ko / th via the manifest's `language` field. The score JSON populates `error_rate_pct` as the canonical metric; WER reports keep `wer_pct` aliases for backward compat.
+CER auto-routes for zh / yue / ja / ko / th via the manifest's `language` field. The score JSON's `error_rate_pct` is the canonical report metric.
 
 ### Step 2: Score the reference-dtype model (execute)
 
@@ -99,17 +87,16 @@ uv run scripts/wer/run.py \
 uv run scripts/wer/score.py reports/wer/<variant>-${REFDTYPE}.${DATASET}.jsonl
 ```
 
-`score.py` writes
-`reports/wer/<variant>-<REFDTYPE>.<DATASET>.score.json` with `wer`,
-`wer_pct`, `wer_ci_lo`, `wer_ci_hi`, `n`, and per-utterance detail.
+`score.py` writes the `.score.json` consumed by the gate and summary.
 
 ### Step 3: Ref-dtype WER limit (execute)
 
-Use WER as the percent number humans read in reports.
+Use the score JSON's canonical `error_rate` ratio, and print it as the
+percent number humans read in reports.
 
 Simple rule:
 
-- Upstream WER: `3.59`
+- Measured Oracle reference WER: `3.59`
 - Max allowed C++ WER: `3.60`
 - `3.60` passes
 - `3.61` is too high and must be investigated
@@ -119,21 +106,17 @@ Simple rule:
 import json, sys
 from decimal import Decimal, ROUND_HALF_UP
 
-def wer_number(x):
+def rate_number(x):
     return Decimal(str(x * 100.0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 family = "<family>"; variant = "<variant>"; refdtype = "<REFDTYPE>"; dataset = "<DATASET>"
-intake = json.load(open(f"reports/porting/{family}/{variant}/intake.json"))
-target = intake["upstream_benchmarks"][0]["score"]
-# Upstream scores may be ratio (0.0169) or percent (1.69); normalize.
-unit = intake["upstream_benchmarks"][0].get("score_unit", "ratio")
-target_ratio = target / 100.0 if unit == "percent" else target
-observed = json.load(open(f"reports/wer/{variant}-{refdtype}.{dataset}.score.json"))["wer"]
-upstream_wer = wer_number(target_ratio)
-cpp_wer = wer_number(observed)
-max_allowed_wer = upstream_wer + Decimal("0.01")
+reference = json.load(open(f"reports/wer/{variant}-REF.{dataset}.score.json"))["error_rate"]
+observed = json.load(open(f"reports/wer/{variant}-{refdtype}.{dataset}.score.json"))["error_rate"]
+reference_wer = rate_number(reference)
+cpp_wer = rate_number(observed)
+max_allowed_wer = reference_wer + Decimal("0.01")
 over_by = cpp_wer - max_allowed_wer
-print(f"upstream={upstream_wer} cpp={cpp_wer} max_allowed={max_allowed_wer} over_by={over_by:+}")
+print(f"reference={reference_wer} cpp={cpp_wer} max_allowed={max_allowed_wer} over_by={over_by:+}")
 ok = cpp_wer <= max_allowed_wer
 sys.exit(0 if ok else 1)
 ```
@@ -141,29 +124,27 @@ sys.exit(0 if ok else 1)
 Round WER to two decimals before comparing. The number printed in the
 report is the number used for the pass/fail decision.
 
-**If C++ WER is higher than `upstream WER + 0.01`**, stop release
-sign-off. Do NOT loosen anything. Do NOT accept it without a written
-reason backed by extra testing.
+If the gate exits nonzero, stop release sign-off. Do not loosen the limit
+or accept the result without a written reason backed by extra testing. Use
+the captured Oracle JSONL at `reports/wer/<variant>-REF.<dataset>.jsonl`
+for one-for-one per-utterance diffing.
 
-The job is simple: prove whether the C++ implementation is wrong.
+Required investigation when blocked:
 
-Required investigation:
-
-1. Run the same audio list through C++ and the reference framework.
+1. Diff C++ against the captured reference per-utterance (`hyp_text` by
+   `id`) from the Oracle JSONL; only re-run the reference framework if
+   that baseline is missing or stale.
 2. Compare WER and the worst transcript differences.
-3. If C++ and the reference do not match, dump tensors around the likely
+3. If C++ and reference differ, dump tensors around the likely
    bad layer/component and compare them.
-4. Add missing tensors to `dump_coverage.json` if the current tensor
-   checks missed the problem.
-5. If C++ matches the reference but both are worse than upstream,
-   document the dataset version, text normalization, decoding settings,
-   and why the upstream number is not directly comparable.
+4. Add missing tensors to `dump_coverage.json` if coverage missed the
+   problem.
+5. If C++ matches reference, document the evidence in the WER summary
+   or family doc before proceeding.
 
 Proceed only when the higher WER is explained, reviewed, and written in
 the WER summary or family doc. Higher WER without evidence is a release
 blocker.
-
-**If C++ WER is at or below `upstream WER + 0.01`**, proceed.
 
 ### Step 4: Score each shipped quant (execute)
 
@@ -181,28 +162,30 @@ for PRESET in F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
 done
 ```
 
-Quant WER is reported, not gated. Still flag any quant that is more than
-`0.01` worse than the ref-dtype model. Simple rule: if ref-dtype WER is
-`3.59`, then quant WER `3.60` is okay and quant WER `3.61` must be
-called out for review. The user decides per-quant whether to ship.
+Quant WER is reviewed and signed off by the user, not auto-gated.
+
+Batch mode should be WER-neutral. If a `--batch-size > 1` sweep differs
+from serial beyond dataset noise (~0.01), stop and report the numbers.
 
 ### Step 5: Summary table (execute)
 
 Write a markdown table at `reports/wer/<variant>.<dataset>.summary.md`
-with columns `| Preset | WER | Max allowed WER | 95% CI | n | Over allowed |` and one row
-per scored preset. Stage 8 (`porting-8-ship`) consumes this into the
-model card.
+with columns `| Preset | Error rate | Reference error rate | 95% CI | n | Review |`
+and one row per scored preset. The ref-dtype row records the automatic
+gate result (`PASS` or `BLOCKED`). Quant rows record human disposition
+(`ACCEPTED`, `REJECTED`, or `PENDING REVIEW`) plus any short note the
+user gives. Stage 8 (`porting-8-ship`) consumes this into the model card.
 
 ### Step 6: Sign-off
 
 Report:
 - Manifest path and utterance count.
-- Ref-dtype status: upstream WER, C++ WER, max allowed WER, pass/blocked,
-  and any required justification.
+- Ref-dtype status: measured Oracle reference WER, C++ WER, max allowed
+  WER, pass/blocked, and any required justification.
 - Path to every produced `.score.json`.
 - Path to the summary markdown.
-- Any quant that is more than `0.01` worse than the ref-dtype WER. Example:
-  if ref-dtype WER is `3.59`, then quant WER `3.61` must be flagged.
+- Human disposition for every shipped quant. Quant WER has no automatic
+  numeric gate; unresolved quant review means Stage 7 sign-off is pending.
 
 **Do not commit.** WER outputs under `reports/wer/` are local generated
 artifacts, ignored by `.gitignore`. The summary tables and per-quant
@@ -213,18 +196,19 @@ WER cells are what ships in-repo via Stage 8.
 - `reports/wer/<variant>-<PRESET>.<dataset>.score.json` for every
   shipped preset.
 - `reports/wer/<variant>.<dataset>.summary.md` table.
-- Ref-dtype status is known and reported as plain WER numbers.
+- Ref-dtype status is known and reported as plain WER numbers against
+  the measured Oracle reference baseline.
 - Sign-off names the manifest path and utterance count so consumers can
   verify which dataset was scored.
-- Quant WER is documented but not gated; user decides per-quant.
+- Quant WER is reviewed and signed off by the user, not auto-gated.
 
 ## Pointers (read, not execute)
 
 - `docs/porting/families/<family>.md` — acceptance dataset details
 - `scripts/wer/ingest.py` — LibriSpeech-style manifest builder (shape
   reference for alternate datasets)
-- `scripts/wer/run.py` — transcribe-cli driver for batch transcription
+- `scripts/wer/run.py` — transcribe-cli driver; runs `--batch` mode and
+  accepts `--batch-size` (WER-neutral; correctness gated in Stage 4)
 - `scripts/wer/score.py` — jiwer + bootstrap CI
-- `scripts/wer/subset.py` — Stage 4 subset generator (different scope:
-  Stage 7 uses the full manifest, not the 512-row subset)
+- `scripts/wer/remote/modal_sweep.py` — GPU sweep (also used by Stages 4/5)
 - Existing summaries under `reports/wer/` — format reference
