@@ -195,3 +195,39 @@ the 2507 audio-LLM path is proven) — its rows are inactive this effort.
   requires the runtime/CLI to expose a translation request path (a
   Stage 4 implementation requirement, since translation is a
   mistral-common chat/transcription-request mode, not a bare ASR flag).
+
+### Converter tensor-name / dtype decisions (Stage 3, `scripts/convert-voxtral.py`)
+
+GGUF architecture string is `voxtral`. HF → GGUF tensor mapping and the
+non-obvious dtype/tokenizer choices the C++ loader (Stage 4) must match:
+
+- **Conv stem → `enc.conv.0/1.{weight,bias}`** (named with `.conv.` so
+  `gguf_common.reference_dtype_for` routes the kernels to **F16** — the
+  loader has no BF16 conv kernel; biases stay F32). Source Conv1d weights
+  are passed through in PyTorch `[out, in, k]` order.
+- **Sinusoidal positional embedding** `audio_tower.embed_positions.weight`
+  → `enc.pos_emb.weight`, kept **F32** (it is already F32 in the
+  checkpoint — *not* synthesized here, unlike the HF convert script).
+- **Final encoder LayerNorm** `audio_tower.layer_norm` → `enc.ln_post.*`
+  (F32). Encoder blocks: `enc.blocks.N.{norm_attn,attn.{q,k,v,out},
+  norm_ffn,ffn.{fc1,fc2}}` — **`attn.k` has no bias** (Whisper); q/v/out do.
+- **Projector** (no biases): `multi_modal_projector.linear_1/2.weight` →
+  `proj.linear_1/2.weight`. The 4× frame-grouping reshape is **not** a
+  tensor — it's `stt.voxtral.projector.downsample_factor=4` /
+  `input_dim=5120`; Stage 4 reshapes encoder output before `proj.linear_1`.
+- **Text decoder** (Llama, no attention biases): `dec.blocks.N.{norm_attn,
+  norm_ffn,attn.{q,k,v,o},ffn.{gate,up,down}}`, `dec.token_embd.weight`,
+  `dec.output_norm.weight`. **lm_head is UNTIED** → emitted as a separate
+  `dec.output.weight` (do not tie to `dec.token_embd`). NEOX RoPE
+  theta 1e8 is applied in C++; q/k weights are stored as-is (already
+  permuted to HF split-halves layout in the checkpoint).
+- **Tokenizer (tekken → llama.cpp gpt2 BPE):** `tokenizer.ggml.model=
+  "gpt2"`, `tokenizer.ggml.pre="tekken"`, 131072 tokens (ids 0–999
+  CONTROL, 1000+ NORMAL byte-level), **269443 reconstructed merges**
+  (tekken is rank-based/tiktoken with no explicit merges, so they are
+  synthesized from the mergeable ranks exactly as llama.cpp's
+  `MistralVocab` does), bos=1/eos=2/unk=0/pad=11, add_bos=true.
+  Stage 4's C++ needs gpt2 byte-level BPE + the tekken pretokenizer regex.
+- **Frontend buffers baked in:** `frontend.mel_filterbank` (slaney) and
+  `frontend.window` (periodic Hann) as F32 tensors, plus the full
+  `stt.frontend.*` KV block (per-utterance Whisper log-mel).
