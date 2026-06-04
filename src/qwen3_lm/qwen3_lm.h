@@ -67,7 +67,9 @@ namespace transcribe::qwen3_lm {
 // `arch/funasr_nano/DecBlock` so the call-site builder is a struct
 // initializer.
 //
-// All slots are required for block_prefill / block_step.
+// All slots are required for block_prefill / block_step EXCEPT
+// attn_q_norm / attn_k_norm, which are optional (null = skip, for
+// Llama-style decoders without per-head Q/K norm).
 struct BlockView {
     ggml_tensor * norm_attn_w   = nullptr;  // input_layernorm (RMSNorm, no bias)
     ggml_tensor * norm_ffn_w    = nullptr;  // post_attention_layernorm
@@ -75,8 +77,11 @@ struct BlockView {
     ggml_tensor * attn_k_w      = nullptr;  // [hidden, n_kv_heads * head_dim]
     ggml_tensor * attn_v_w      = nullptr;  // [hidden, n_kv_heads * head_dim]
     ggml_tensor * attn_o_w      = nullptr;  // [n_heads * head_dim, hidden]
-    ggml_tensor * attn_q_norm   = nullptr;  // [head_dim] per-head Q-norm
-    ggml_tensor * attn_k_norm   = nullptr;  // [head_dim] per-head K-norm
+    // Per-head Q/K RMSNorm (Qwen3). OPTIONAL: leave null for Llama-style
+    // decoders (e.g. Voxtral's Ministral backbone) that ship no q/k norm;
+    // the block helpers skip the norm when the slot is null.
+    ggml_tensor * attn_q_norm   = nullptr;  // [head_dim] per-head Q-norm, or null
+    ggml_tensor * attn_k_norm   = nullptr;  // [head_dim] per-head K-norm, or null
     // Packed gate+up: [hidden, 2·intermediate]. Filled by pack_gate_up
     // at load time (see below). The graph runs ONE mul_mat against this
     // tensor + ggml_swiglu instead of two mul_mats + manual silu·mul.

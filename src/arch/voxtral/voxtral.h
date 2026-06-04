@@ -1,0 +1,100 @@
+// arch/voxtral/voxtral.h - Voxtral (2507) model and context types.
+//
+// INTERNAL to src/arch/voxtral/. Declares the concrete classes that
+// derive from transcribe_model / transcribe_session for the Voxtral
+// audio-LLM family (Whisper-large-v3 encoder + 4x frame-group projector
+// + Llama/Ministral causal LM with audio-token injection).
+//
+// First port targets non-streaming ASR transcription plus a chat
+// instruction path (translation / free-text prompting): translation and
+// audio understanding both go through the mistral-common instruct
+// template, which is structurally distinct from the transcription-
+// request template. Both share the same encoder/projector/decoder.
+
+#pragma once
+
+#include "qwen3_lm/qwen3_lm.h"
+#include "transcribe-backend.h"
+#include "transcribe-session.h"
+#include "transcribe-mel.h"
+#include "transcribe-model.h"
+#include "transcribe-tokenizer.h"
+#include "weights.h"
+
+#include "ggml.h"
+#include "ggml-backend.h"
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+struct ggml_context;
+struct ggml_tensor;
+struct ggml_backend;
+struct ggml_backend_buffer;
+struct ggml_backend_sched;
+typedef struct ggml_backend *        ggml_backend_t;
+typedef struct ggml_backend_buffer * ggml_backend_buffer_t;
+typedef struct ggml_backend_sched *  ggml_backend_sched_t;
+
+namespace transcribe::voxtral {
+
+void apply_family_invariants(transcribe_model & model);
+
+// mistral-common transcription/instruct control tokens, resolved through
+// the loaded tokenizer at load time so a vocab reorder fails loudly here
+// rather than silently corrupting the prompt.
+//
+// Transcription template:
+//   [BOS] [INST] [BEGIN_AUDIO] [AUDIO]*N [/INST] (lang:<l>)? [TRANSCRIBE]
+// Instruct template (translate / prompt):
+//   [BOS] [INST] [BEGIN_AUDIO] [AUDIO]*N BPE(instruction) [/INST]
+struct PromptSpecials {
+    int32_t bos         = -1;
+    int32_t inst        = -1;  // [INST]
+    int32_t begin_audio = -1;  // [BEGIN_AUDIO]
+    int32_t end_inst    = -1;  // [/INST]
+    int32_t transcribe  = -1;  // [TRANSCRIBE]
+    int32_t eos         = -1;
+};
+
+struct VoxtralModel final : public transcribe_model {
+    Tokenizer      tok;
+    VoxtralHParams hparams;
+    VoxtralWeights weights;
+    ggml_context * ctx_meta = nullptr;
+
+    transcribe::BackendPlan       plan;
+    ggml_backend_buffer_t         backend_buffer = nullptr;
+    transcribe::qwen3_lm::PackedGateUpHandles packed_gate_up;
+
+    std::optional<transcribe::MelFrontend> mel;
+
+    PromptSpecials specials;
+
+    VoxtralModel() = default;
+    ~VoxtralModel() override;
+
+    const transcribe::Tokenizer * tokenizer() const override { return &tok; }
+};
+
+struct VoxtralSession final : public transcribe_session {
+    ggml_context *       compute_ctx = nullptr;
+    ggml_backend_sched_t sched       = nullptr;
+
+    transcribe::qwen3_lm::KvCache kv_cache;
+
+    std::vector<float> mel_buf;
+    std::vector<float> enc_host;  // projector output (audio embeds), all chunks
+
+    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
+
+    bool encoder_use_flash = false;
+    bool decoder_use_flash = true;
+
+    VoxtralSession() = default;
+    ~VoxtralSession() override;
+};
+
+} // namespace transcribe::voxtral

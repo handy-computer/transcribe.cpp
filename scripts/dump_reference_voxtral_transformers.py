@@ -357,6 +357,20 @@ def cmd_decode(args: argparse.Namespace) -> int:
         )
         print(f"  dec.logits_raw: shape={logits0.shape} min={logits0.min():.4e} max={logits0.max():.4e} mean={logits0.mean():.6e}")
 
+    # Mid-generation step logits (validate.py autoregressive coverage): the
+    # logits for the 9th generated token, i.e. after 8 greedy steps. Gated in
+    # C++ at the matching step (cur_past == T_prompt + 7).
+    if gen_out.scores and len(gen_out.scores) > 8:
+        logits8 = to_np(gen_out.scores[8])  # [vocab]
+        write_tensor(
+            "dec.logits_raw.gen8",
+            logits8,
+            stage="decoder",
+            source={**source, "hook": "generate.scores[8]"},
+            out_dir=out_dir,
+        )
+        print(f"  dec.logits_raw.gen8: shape={logits8.shape} min={logits8.min():.4e} max={logits8.max():.4e} mean={logits8.mean():.6e}")
+
     def flush(name: str, t, stage: str) -> None:
         if t is None:
             print(f"  WARN: {name}: no value captured")

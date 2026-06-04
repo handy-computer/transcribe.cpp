@@ -226,8 +226,15 @@ ggml_tensor * block_prefill(
     V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, T_seq, 1);
 
     // Per-head Q/K RMSNorm on head_dim (Qwen3 innovation).
-    Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
-    K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders
+    // (e.g. Voxtral's Ministral backbone) ship no q_norm/k_norm tensors,
+    // so the call site leaves these view slots null and we skip the norm.
+    if (view.attn_q_norm != nullptr) {
+        Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
+    }
+    if (view.attn_k_norm != nullptr) {
+        K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+    }
 
     // RoPE (NeoX rotate_half) on Q and K. MRoPE collapses to NeoX for
     // text-only ASR (every position has the same (T,H,W) coordinate).
@@ -393,8 +400,15 @@ ggml_tensor * block_step(
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, 1, 1);
     V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, 1, 1);
 
-    Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
-    K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders
+    // (e.g. Voxtral's Ministral backbone) ship no q_norm/k_norm tensors,
+    // so the call site leaves these view slots null and we skip the norm.
+    if (view.attn_q_norm != nullptr) {
+        Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
+    }
+    if (view.attn_k_norm != nullptr) {
+        K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+    }
 
     Q = ggml_rope_ext(ctx, Q, position, nullptr,
                       static_cast<int>(head_dim),
@@ -544,8 +558,15 @@ ggml_tensor * block_step_batched(
     K = ggml_reshape_3d(ctx, K, head_dim, n_kv_heads, B);
     V = ggml_reshape_3d(ctx, V, head_dim, n_kv_heads, B);
 
-    Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
-    K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders
+    // (e.g. Voxtral's Ministral backbone) ship no q_norm/k_norm tensors,
+    // so the call site leaves these view slots null and we skip the norm.
+    if (view.attn_q_norm != nullptr) {
+        Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
+    }
+    if (view.attn_k_norm != nullptr) {
+        K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+    }
 
     // position [B] indexes ne[2]: row b is rotated by position[b].
     Q = ggml_rope_ext(ctx, Q, position, nullptr,
@@ -674,8 +695,15 @@ ggml_tensor * block_prefill_batched(
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T, B);
     V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, T, B);
 
-    Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
-    K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders
+    // (e.g. Voxtral's Ministral backbone) ship no q_norm/k_norm tensors,
+    // so the call site leaves these view slots null and we skip the norm.
+    if (view.attn_q_norm != nullptr) {
+        Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
+    }
+    if (view.attn_k_norm != nullptr) {
+        K = ggml_mul(ctx, ggml_rms_norm(ctx, K, rms_eps), view.attn_k_norm);
+    }
 
     // RoPE position indexes ne[2] (the time axis); shared across heads/batch.
     Q = ggml_rope_ext(ctx, Q, positions, nullptr, static_cast<int>(head_dim),

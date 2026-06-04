@@ -1,0 +1,92 @@
+// arch/voxtral/decoder.h - Voxtral LM graph builders (prefill + step).
+//
+// The LM is a Llama / Ministral causal decoder:
+//   - pre-LN RMSNorm (eps 1e-5)
+//   - GQA (32 Q heads, 8 KV heads, head_dim 128), NO per-head Q/K norm
+//   - NEOX RoPE (rotate_half) at theta 1e8
+//   - SwiGLU MLP: down(silu(gate(x)) * up(x)) via packed gate+up
+//   - UNTIED lm_head (dec.output.weight, separate from token_embd)
+//
+// The per-block math is the shared qwen3_lm module; this file owns graph
+// allocation, prompt + audio injection (3-way concat of
+// prefix | proj.out | suffix), tensor naming / dump parity, the untied
+// head, and the driver-facing build structs.
+//
+// Audio injection: the prompt has `audio_token_id` placeholders at a
+// single contiguous run [prefix_len, prefix_len + T_enc); the projector
+// output (T_enc audio embeddings in dec_hidden space) is spliced there.
+
+#pragma once
+
+#include "voxtral.h"
+#include "qwen3_lm/qwen3_lm.h"
+#include "weights.h"
+
+#include "ggml.h"
+
+struct ggml_context;
+struct ggml_cgraph;
+struct ggml_tensor;
+
+namespace transcribe::voxtral {
+
+struct DecoderDumps {
+    ggml_tensor * token_emb       = nullptr;  // embed_tokens, pre-injection
+    ggml_tensor * audio_injected  = nullptr;  // after audio splice
+    ggml_tensor * block_0_out     = nullptr;
+    ggml_tensor * block_mid_out   = nullptr;
+    ggml_tensor * block_last_out  = nullptr;
+    ggml_tensor * out_before_head = nullptr;  // final RMSNorm output
+    ggml_tensor * logits_raw      = nullptr;  // [vocab] last position
+};
+
+struct PrefillBuild {
+    ggml_tensor * input_ids_in = nullptr;  // [T_prompt] i32
+    ggml_tensor * enc_out_in   = nullptr;  // [dec_hidden, T_enc] f32 (proj.out)
+    ggml_tensor * positions_in = nullptr;  // [T_prompt] i32 for RoPE
+    ggml_tensor * mask_in      = nullptr;  // [T_prompt, T_prompt] f16 causal
+    ggml_tensor * out          = nullptr;  // [vocab] last-position logits
+    DecoderDumps  dumps {};
+    ggml_cgraph * graph        = nullptr;
+
+    int T_prompt   = 0;
+    int T_enc      = 0;
+    int prefix_len = 0;
+    int suffix_len = 0;
+};
+
+// Prefill graph: token-embed the prompt, splice proj.out over the audio
+// placeholder run, run the LM blocks (writing KV [0,T_prompt)), final
+// RMSNorm + UNTIED head, output last-position logits.
+PrefillBuild build_prefill_graph(ggml_context *                  ctx,
+                                 const VoxtralWeights &          weights,
+                                 const VoxtralHParams &          hp,
+                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 int                             T_prompt,
+                                 int                             T_enc,
+                                 int                             prefix_len,
+                                 int                             suffix_len,
+                                 bool                            use_flash,
+                                 bool                            slice_last);
+
+struct StepBuild {
+    ggml_tensor * input_id_in = nullptr;  // [1] i32
+    ggml_tensor * position_in = nullptr;  // [1] i32 (= n_past)
+    ggml_tensor * kv_idx_in   = nullptr;  // [1] i64 (KV write position)
+    ggml_tensor * mask_in     = nullptr;  // [max_n_kv, 1] f16
+    ggml_tensor * out         = nullptr;  // [1] i32 argmax token id
+    ggml_tensor * logits      = nullptr;  // [vocab] f32 step logits (for gen<N> dump)
+    ggml_cgraph * graph       = nullptr;
+
+    int max_n_kv = 0;
+};
+
+// Static-shape single-token step graph, reused across every step.
+StepBuild build_step_graph(ggml_context *                  ctx,
+                           const VoxtralWeights &          weights,
+                           const VoxtralHParams &          hp,
+                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           int                             max_n_kv,
+                           bool                            use_flash);
+
+} // namespace transcribe::voxtral

@@ -1,0 +1,787 @@
+// arch/voxtral/model.cpp - Voxtral (2507) family handler.
+//
+// audio-llm: Whisper-large-v3 encoder + 4x frame-group projector + a
+// Llama/Ministral causal LM with audio-token injection. Two prompt
+// modes share the same encoder/projector/decoder:
+//
+//   transcription : [BOS][INST][BEGIN_AUDIO][AUDIO]*N[/INST](lang:<l>)?[TRANSCRIBE]
+//   instruct      : [BOS][INST][BEGIN_AUDIO][AUDIO]*N BPE(instruction)[/INST]
+//
+// The instruct mode covers translation (task TRANSLATE synthesizes
+// "Translate this to {Language}.") and free-text prompting; both are
+// mistral-common instruct requests, not transcription requests.
+
+#include "voxtral.h"
+
+#include "decoder.h"
+#include "encoder.h"
+#include "weights.h"
+
+#include "qwen3_lm/qwen3_lm.h"
+#include "transcribe-arch.h"
+#include "transcribe-debug.h"
+#include "transcribe-flash-policy.h"
+#include "transcribe-load-common.h"
+#include "transcribe-loader.h"
+#include "transcribe-mel.h"
+#include "transcribe-meta.h"
+
+#include "ggml.h"
+#include "ggml-backend.h"
+#include "gguf.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <memory>
+#include <string>
+#include <thread>
+#include <type_traits>
+#include <vector>
+
+namespace transcribe::voxtral {
+
+extern const Arch arch;
+
+static_assert(std::is_base_of_v<transcribe_model,   VoxtralModel>);
+static_assert(std::is_base_of_v<transcribe_session, VoxtralSession>);
+
+VoxtralSession::~VoxtralSession() {
+    kv_cache.free();
+    if (sched != nullptr) {
+        ggml_backend_sched_free(sched);
+        sched = nullptr;
+    }
+    if (compute_ctx != nullptr) {
+        ggml_free(compute_ctx);
+        compute_ctx = nullptr;
+    }
+}
+
+VoxtralModel::~VoxtralModel() {
+    if (ctx_meta != nullptr) {
+        ggml_free(ctx_meta);
+        ctx_meta = nullptr;
+    }
+    if (backend_buffer != nullptr) {
+        ggml_backend_buffer_free(backend_buffer);
+        backend_buffer = nullptr;
+    }
+    packed_gate_up.free();
+    for (auto it = plan.scheduler_list.rbegin();
+         it != plan.scheduler_list.rend(); ++it)
+    {
+        ggml_backend_free(*it);
+    }
+    plan.scheduler_list.clear();
+    plan.primary      = nullptr;
+    plan.primary_kind = transcribe::BackendKind::Unknown;
+}
+
+namespace {
+
+constexpr const char k_default_variant[] = "voxtral-mini-3b-2507";
+
+// BCP-47 -> English language name for the synthesized translate
+// instruction ("Translate this to {Name}."). Covers Voxtral's advertised
+// languages; falls back to the raw code if unknown.
+struct LangName { const char * bcp47; const char * name; };
+constexpr LangName k_lang_names[] = {
+    {"en", "English"}, {"fr", "French"},  {"de", "German"},
+    {"es", "Spanish"}, {"it", "Italian"}, {"pt", "Portuguese"},
+    {"nl", "Dutch"},   {"hi", "Hindi"},
+};
+
+const char * lang_name_for(const char * bcp47) {
+    if (bcp47 == nullptr || bcp47[0] == '\0') return "English";
+    for (const auto & e : k_lang_names) {
+        if (std::strcmp(e.bcp47, bcp47) == 0) return e.name;
+    }
+    return bcp47;
+}
+
+// Resolve the transcription/instruct control tokens against the loaded
+// tokenizer. Hard-fails if any piece is missing so a vocab reorder
+// surfaces at load, not mid-decode.
+transcribe_status resolve_specials(const transcribe::Tokenizer & tok,
+                                   const VoxtralHParams &        hp,
+                                   PromptSpecials &              out)
+{
+    struct PieceSlot { const char * piece; int32_t * slot; };
+    const PieceSlot pieces[] = {
+        { "[INST]",         &out.inst        },
+        { "[BEGIN_AUDIO]",  &out.begin_audio },
+        { "[/INST]",        &out.end_inst    },
+        { "[TRANSCRIBE]",   &out.transcribe  },
+    };
+    for (const auto & p : pieces) {
+        const int id = tok.find(p.piece);
+        if (id < 0) {
+            std::fprintf(stderr,
+                         "voxtral: control token \"%s\" not in tokenizer\n",
+                         p.piece);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        *p.slot = id;
+    }
+    out.bos = tok.bos_id();
+    out.eos = tok.eos_id();
+    if (out.bos < 0 || out.eos < 0) {
+        std::fprintf(stderr, "voxtral: tokenizer missing bos/eos id\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    (void)hp;
+    return TRANSCRIBE_OK;
+}
+
+// Build the transcription prompt. language may be null/empty (auto).
+transcribe_status build_transcription_prompt(const VoxtralModel & m,
+                                             const char *         language,
+                                             int                  n_audio,
+                                             std::vector<int32_t> & out_ids,
+                                             int &                prefix_len,
+                                             int &                suffix_len)
+{
+    const PromptSpecials & s = m.specials;
+    out_ids.clear();
+    out_ids.push_back(s.bos);
+    out_ids.push_back(s.inst);
+    out_ids.push_back(s.begin_audio);
+    prefix_len = static_cast<int>(out_ids.size());  // 3
+    for (int i = 0; i < n_audio; ++i) out_ids.push_back(m.hparams.audio_token_id);
+    out_ids.push_back(s.end_inst);
+    if (language != nullptr && language[0] != '\0') {
+        std::vector<int32_t> lang_ids;
+        const std::string lang_str = std::string("lang:") + language;
+        if (const transcribe_status st = m.tok.encode(lang_str, lang_ids);
+            st != TRANSCRIBE_OK)
+        {
+            std::fprintf(stderr, "voxtral: failed to encode \"%s\"\n", lang_str.c_str());
+            return st;
+        }
+        out_ids.insert(out_ids.end(), lang_ids.begin(), lang_ids.end());
+    }
+    out_ids.push_back(s.transcribe);
+    suffix_len = static_cast<int>(out_ids.size()) - prefix_len - n_audio;
+    return TRANSCRIBE_OK;
+}
+
+// Build the instruct prompt: audio + BPE(instruction) + [/INST].
+transcribe_status build_instruct_prompt(const VoxtralModel & m,
+                                        const std::string &  instruction,
+                                        int                  n_audio,
+                                        std::vector<int32_t> & out_ids,
+                                        int &                prefix_len,
+                                        int &                suffix_len)
+{
+    const PromptSpecials & s = m.specials;
+    out_ids.clear();
+    out_ids.push_back(s.bos);
+    out_ids.push_back(s.inst);
+    out_ids.push_back(s.begin_audio);
+    prefix_len = static_cast<int>(out_ids.size());  // 3
+    for (int i = 0; i < n_audio; ++i) out_ids.push_back(m.hparams.audio_token_id);
+    std::vector<int32_t> instr_ids;
+    if (const transcribe_status st = m.tok.encode(instruction, instr_ids);
+        st != TRANSCRIBE_OK)
+    {
+        std::fprintf(stderr, "voxtral: failed to encode instruction text\n");
+        return st;
+    }
+    out_ids.insert(out_ids.end(), instr_ids.begin(), instr_ids.end());
+    out_ids.push_back(s.end_inst);
+    suffix_len = static_cast<int>(out_ids.size()) - prefix_len - n_audio;
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status load(
+    Loader &                              loader,
+    const transcribe_model_load_params *  params,
+    transcribe_model **                   out_model)
+{
+    const int64_t t_load_start = ggml_time_us();
+
+    auto m = std::make_unique<VoxtralModel>();
+    m->arch      = &arch;
+    m->t_load_us = 0;
+    m->variant   = loader.variant().empty() ? k_default_variant : loader.variant();
+    m->backend.clear();
+
+    apply_family_invariants(*m);
+    m->caps.n_languages = 0;
+    m->caps.languages   = nullptr;
+
+    if (const transcribe_status st = read_capability_kv(loader.gguf(), m->caps);
+        st != TRANSCRIBE_OK) return st;
+    if (const transcribe_status st = read_languages_kv(loader.gguf(), *m);
+        st != TRANSCRIBE_OK) return st;
+
+    if (const transcribe_status st = m->tok.load(loader.gguf());
+        st != TRANSCRIBE_OK) return st;
+
+    if (const transcribe_status st = read_voxtral_hparams(loader.gguf(), m->hparams);
+        st != TRANSCRIBE_OK) return st;
+
+    m->hparams.vocab_size   = m->tok.n_tokens();
+    m->hparams.bos_token_id = m->tok.bos_id();
+    m->hparams.eos_token_id = m->tok.eos_id();
+
+    if (m->hparams.vocab_size != m->hparams.dec_vocab_size) {
+        std::fprintf(stderr,
+                     "voxtral: tokenizer vocab (%d) != decoder vocab_size (%d)\n",
+                     m->hparams.vocab_size, m->hparams.dec_vocab_size);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (m->hparams.eos_token_id < 0) {
+        std::fprintf(stderr, "voxtral: GGUF tokenizer has no eos_token_id\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    if (const transcribe_status st = resolve_specials(m->tok, m->hparams, m->specials);
+        st != TRANSCRIBE_OK) return st;
+
+    // Mel frontend (Whisper 128-bin log-mel at 16 kHz, per-utterance norm).
+    {
+        transcribe::MelConfig cfg {};
+        cfg.sample_rate  = m->hparams.fe_sample_rate;
+        cfg.num_mels     = m->hparams.fe_num_mels;
+        cfg.n_fft        = m->hparams.fe_n_fft;
+        cfg.win_length   = m->hparams.fe_win_length;
+        cfg.hop_length   = m->hparams.fe_hop_length;
+        cfg.pre_emphasis = m->hparams.fe_pre_emphasis;
+        cfg.f_min        = m->hparams.fe_f_min;
+        cfg.f_max        = m->hparams.fe_f_max;
+        cfg.pad_mode     = m->hparams.fe_pad_mode;
+        cfg.window_type  = m->hparams.fe_window;     // "hann_periodic"
+        cfg.normalize    = m->hparams.fe_normalize;  // "per_utterance"
+
+        using R = transcribe::load_common::ReadF32Result;
+        const size_t fb_elems =
+            static_cast<size_t>(cfg.num_mels) * static_cast<size_t>(cfg.n_fft / 2 + 1);
+        const auto fb_rc = transcribe::load_common::read_f32_tensor_checked(
+            loader.gguf(), loader.path(), "frontend.mel_filterbank", fb_elems,
+            "voxtral", cfg.filterbank);
+        if (fb_rc != R::Ok && fb_rc != R::Absent) return TRANSCRIBE_ERR_GGUF;
+        const size_t win_elems = static_cast<size_t>(cfg.win_length);
+        const auto win_rc = transcribe::load_common::read_f32_tensor_checked(
+            loader.gguf(), loader.path(), "frontend.window", win_elems,
+            "voxtral", cfg.window);
+        if (win_rc != R::Ok && win_rc != R::Absent) return TRANSCRIBE_ERR_GGUF;
+
+        m->mel.emplace(cfg);
+    }
+
+    // Tensor catalog (no_alloc) + backend alloc + data stream.
+    gguf_init_params init_params {};
+    init_params.no_alloc = true;
+    init_params.ctx      = &m->ctx_meta;
+    gguf_context * gguf_data = gguf_init_from_file(loader.path().c_str(), init_params);
+    if (gguf_data == nullptr) return TRANSCRIBE_ERR_GGUF;
+
+    if (const transcribe_status st = build_voxtral_weights(m->ctx_meta, m->hparams, m->weights);
+        st != TRANSCRIBE_OK)
+    {
+        gguf_free(gguf_data);
+        return st;
+    }
+
+    const transcribe_backend_request backend_req =
+        (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
+    if (const transcribe_status st = transcribe::load_common::init_backends(
+            backend_req, "voxtral", m->plan);
+        st != TRANSCRIBE_OK)
+    {
+        gguf_free(gguf_data);
+        return st;
+    }
+    m->backend = ggml_backend_name(m->plan.primary);
+
+    ggml_backend_buffer_t weights_buffer =
+        ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
+    if (weights_buffer == nullptr) {
+        gguf_free(gguf_data);
+        std::fprintf(stderr, "voxtral: ggml_backend_alloc_ctx_tensors failed\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    m->backend_buffer = weights_buffer;
+    ggml_backend_buffer_set_usage(weights_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    if (const transcribe_status st = transcribe::load_common::stream_tensor_data(
+            loader.path(), gguf_data, m->ctx_meta, "voxtral");
+        st != TRANSCRIBE_OK)
+    {
+        gguf_free(gguf_data);
+        return st;
+    }
+    gguf_free(gguf_data);
+
+    // Pack gate+up for one-mul_mat SwiGLU.
+    {
+        std::vector<transcribe::qwen3_lm::GateUpEntry> entries;
+        entries.reserve(m->weights.dec_blocks.size());
+        for (auto & b : m->weights.dec_blocks) {
+            entries.push_back({b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w});
+        }
+        if (!transcribe::qwen3_lm::pack_gate_up(
+                m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
+                entries, m->packed_gate_up, "voxtral"))
+        {
+            m->packed_gate_up.free();
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    m->t_load_us = ggml_time_us() - t_load_start;
+    *out_model = m.release();
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status init_context(
+    transcribe_model *                model,
+    const transcribe_session_params * params,
+    transcribe_session **             out_ctx)
+{
+    if (model->arch != &arch) return TRANSCRIBE_ERR_INVALID_ARG;
+
+    auto cc = std::make_unique<VoxtralSession>();
+    cc->model     = model;
+    cc->n_threads = params->n_threads;
+    cc->kv_type   = params->kv_type;
+
+    cc->encoder_use_flash = false;
+    cc->decoder_use_flash = true;
+    transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
+
+    auto * cm = static_cast<VoxtralModel *>(model);
+    {
+        ggml_type kv_type = GGML_TYPE_F16;
+        if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
+        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary,
+                                           /*n_ctx=*/4096,
+                                           cm->hparams.dec_n_kv_heads,
+                                           cm->hparams.dec_head_dim,
+                                           cm->hparams.dec_n_layers,
+                                           kv_type))
+        {
+            std::fprintf(stderr, "voxtral init_context: kv_init failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    *out_ctx = cc.release();
+    return TRANSCRIBE_OK;
+}
+
+// Apply n_threads to every backend on the scheduler.
+void set_sched_threads(ggml_backend_sched_t sched, int n_threads) {
+    if (n_threads <= 0) {
+        n_threads = std::min(8, std::max(1,
+            static_cast<int>(std::thread::hardware_concurrency())));
+    }
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+        ggml_backend_t be  = ggml_backend_sched_get_backend(sched, i);
+        ggml_backend_dev_t dev = ggml_backend_get_device(be);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+        if (reg == nullptr) continue;
+        auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+        if (fn != nullptr) fn(be, n_threads);
+    }
+}
+
+transcribe_status run(
+    transcribe_session *          session,
+    const float *                 pcm,
+    int                           n_samples,
+    const transcribe_run_params * params)
+{
+    if (session == nullptr || pcm == nullptr || n_samples <= 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    auto * cc = static_cast<VoxtralSession *>(session);
+    auto * cm = static_cast<VoxtralModel *>(cc->model);
+    if (cm == nullptr || cm->plan.scheduler_list.empty()) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+
+    transcribe::debug::init();
+
+    // ----- Prompt mode -----
+    const bool translate = (params != nullptr &&
+                            params->task == TRANSCRIBE_TASK_TRANSLATE);
+    std::string instruction;
+    if (translate) {
+        const char * tgt = (params != nullptr) ? params->target_language : nullptr;
+        instruction = std::string("Translate this to ") + lang_name_for(tgt) + ".";
+    }
+
+    if (!cm->mel.has_value()) {
+        std::fprintf(stderr, "voxtral run: model has no MelFrontend\n");
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // ----- Chunking: pad PCM to a multiple of 30 s and mel once -----
+    int samples_per_chunk = cm->hparams.fe_n_samples;
+    if (samples_per_chunk <= 0) {
+        samples_per_chunk = (cm->hparams.fe_chunk_length > 0
+                                 ? cm->hparams.fe_chunk_length : 30) *
+                            cm->hparams.fe_sample_rate;
+    }
+    const int frames_per_chunk = (cm->hparams.fe_nb_max_frames > 0)
+        ? cm->hparams.fe_nb_max_frames
+        : samples_per_chunk / cm->hparams.fe_hop_length;
+    const int audio_per_chunk = cm->hparams.audio_tokens_per_chunk();
+
+    const int n_chunks = std::max(1, (n_samples + samples_per_chunk - 1) / samples_per_chunk);
+    const size_t padded = static_cast<size_t>(n_chunks) * samples_per_chunk;
+
+    std::vector<float> pcm_padded(padded, 0.0f);
+    std::memcpy(pcm_padded.data(), pcm, static_cast<size_t>(n_samples) * sizeof(float));
+
+    const int64_t t_mel_start = ggml_time_us();
+    int mel_n_mels = 0, mel_n_frames = 0;
+    if (const transcribe_status mst = cm->mel->compute(
+            pcm_padded.data(), padded, cc->mel_buf, mel_n_mels, mel_n_frames,
+            cc->n_threads);
+        mst != TRANSCRIBE_OK)
+    {
+        std::fprintf(stderr, "voxtral run: MelFrontend::compute failed (%s)\n",
+                     transcribe_status_string(mst));
+        return mst;
+    }
+    cc->t_mel_us = ggml_time_us() - t_mel_start;
+
+    if (mel_n_mels != cm->hparams.enc_num_mel_bins) {
+        std::fprintf(stderr, "voxtral run: mel bins %d != %d\n",
+                     mel_n_mels, cm->hparams.enc_num_mel_bins);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (mel_n_frames < n_chunks * frames_per_chunk) {
+        std::fprintf(stderr, "voxtral run: mel frames %d < %d*%d\n",
+                     mel_n_frames, n_chunks, frames_per_chunk);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // enc.mel.in dump: mel-major [n_mels, n_frames], matching the reference.
+    if (transcribe::debug::enabled()) {
+        const long long shape[2] = { mel_n_mels, mel_n_frames };
+        transcribe::debug::dump_host_f32(
+            "enc.mel.in", cc->mel_buf.data(),
+            static_cast<long long>(cc->mel_buf.size()), shape, 2, "frontend.mel.norm");
+    }
+
+    // ----- Encoder + projector, per 30 s chunk -----
+    const int dec_h = cm->hparams.dec_hidden;
+    const int n_audio_total = n_chunks * audio_per_chunk;
+    cc->enc_host.assign(static_cast<size_t>(dec_h) * n_audio_total, 0.0f);
+
+    if (cc->sched == nullptr) {
+        cc->sched = ggml_backend_sched_new(
+            cm->plan.scheduler_list.data(), nullptr,
+            static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
+        if (cc->sched == nullptr) {
+            std::fprintf(stderr, "voxtral run: ggml_backend_sched_new failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
+    const int64_t t_enc_start = ggml_time_us();
+    std::vector<float> chunk_mel(static_cast<size_t>(mel_n_mels) * frames_per_chunk);
+    for (int c = 0; c < n_chunks; ++c) {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+
+        if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+        ggml_init_params ip {};
+        ip.mem_size = 32 * 1024 * 1024;
+        ip.no_alloc = true;
+        cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) {
+            std::fprintf(stderr, "voxtral run: ggml_init (encoder) failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, cm->hparams,
+                                              frames_per_chunk, cc->encoder_use_flash);
+        if (eb.graph == nullptr || eb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+
+        ggml_backend_sched_reset(cc->sched);
+        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+            std::fprintf(stderr, "voxtral run: sched_alloc_graph (encoder) failed\n");
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        // Frame-major mel for this chunk: chunk_mel[t*n_mels + m] =
+        // mel_buf[m*n_frames + (c*frames_per_chunk + t)].
+        for (int t = 0; t < frames_per_chunk; ++t) {
+            const int tg = c * frames_per_chunk + t;
+            for (int mm = 0; mm < mel_n_mels; ++mm) {
+                chunk_mel[static_cast<size_t>(t) * mel_n_mels + mm] =
+                    cc->mel_buf[static_cast<size_t>(mm) * mel_n_frames + tg];
+            }
+        }
+        ggml_backend_tensor_set(eb.mel_in, chunk_mel.data(), 0,
+                                chunk_mel.size() * sizeof(float));
+        set_sched_threads(cc->sched, cc->n_threads);
+
+        if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph);
+            gs != GGML_STATUS_SUCCESS)
+        {
+            std::fprintf(stderr, "voxtral run: encoder compute failed (%d)\n",
+                         static_cast<int>(gs));
+            return TRANSCRIBE_ERR_GGUF;
+        }
+
+        // Dump enc.* for the first chunk (matches the single-chunk reference).
+        if (c == 0 && transcribe::debug::enabled()) {
+            for (size_t i = 0; i < eb.dumps.block_outs.size(); ++i) {
+                char nm[64];
+                std::snprintf(nm, sizeof(nm), "enc.block.%zu.out", i);
+                transcribe::debug::dump_tensor(nm, eb.dumps.block_outs[i], "enc.block");
+            }
+            if (eb.dumps.enc_out)  transcribe::debug::dump_tensor("enc.out",  eb.dumps.enc_out,  "enc");
+            if (eb.dumps.proj_out) transcribe::debug::dump_tensor("proj.out", eb.dumps.proj_out, "proj");
+        }
+
+        // Read proj.out [dec_h, audio_per_chunk] into the chunk's slot.
+        ggml_backend_tensor_get(
+            eb.out,
+            cc->enc_host.data() + static_cast<size_t>(c) * audio_per_chunk * dec_h,
+            0, static_cast<size_t>(audio_per_chunk) * dec_h * sizeof(float));
+    }
+    cc->t_encode_us = ggml_time_us() - t_enc_start;
+
+    // ----- Prompt construction -----
+    std::vector<int32_t> prompt_ids;
+    int prefix_len = 0, suffix_len = 0;
+    if (translate) {
+        if (const transcribe_status st = build_instruct_prompt(
+                *cm, instruction, n_audio_total, prompt_ids, prefix_len, suffix_len);
+            st != TRANSCRIBE_OK) return st;
+    } else {
+        const char * lang = (params != nullptr) ? params->language : nullptr;
+        if (const transcribe_status st = build_transcription_prompt(
+                *cm, lang, n_audio_total, prompt_ids, prefix_len, suffix_len);
+            st != TRANSCRIBE_OK) return st;
+    }
+    const int T_prompt = static_cast<int>(prompt_ids.size());
+    if (T_prompt > cc->kv_cache.n_ctx) {
+        std::fprintf(stderr, "voxtral run: prompt len %d exceeds n_ctx %d\n",
+                     T_prompt, cc->kv_cache.n_ctx);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // ----- KV reset -----
+    const int64_t t_dec_start = ggml_time_us();
+    if (cc->kv_cache.buffer != nullptr) ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
+    cc->kv_cache.n = 0;
+    cc->kv_cache.head = 0;
+
+    // ----- Prefill -----
+    const bool dumps_on   = transcribe::debug::enabled();
+    const bool slice_last = !dumps_on;
+    if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+    {
+        ggml_init_params ip {};
+        ip.mem_size = 64 * 1024 * 1024;
+        ip.no_alloc = true;
+        cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    PrefillBuild pb = build_prefill_graph(
+        cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
+        T_prompt, n_audio_total, prefix_len, suffix_len,
+        cc->decoder_use_flash, slice_last);
+    if (pb.graph == nullptr || pb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        std::fprintf(stderr, "voxtral run: sched_alloc_graph (prefill) failed\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+
+    ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(),
+                            0, prompt_ids.size() * sizeof(int32_t));
+    ggml_backend_tensor_set(pb.enc_out_in, cc->enc_host.data(),
+                            0, cc->enc_host.size() * sizeof(float));
+    {
+        std::vector<int32_t> positions(T_prompt);
+        for (int i = 0; i < T_prompt; ++i) positions[i] = i;
+        ggml_backend_tensor_set(pb.positions_in, positions.data(),
+                                0, positions.size() * sizeof(int32_t));
+    }
+    {
+        const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f);
+        const ggml_fp16_t mn = ggml_fp32_to_fp16(-INFINITY);
+        std::vector<ggml_fp16_t> mask(static_cast<size_t>(T_prompt) * T_prompt, mn);
+        for (int r = 0; r < T_prompt; ++r)
+            for (int col = 0; col <= r; ++col)
+                mask[static_cast<size_t>(r) * T_prompt + col] = mz;
+        ggml_backend_tensor_set(pb.mask_in, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
+    }
+    set_sched_threads(cc->sched, cc->n_threads);
+
+    if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph);
+        gs != GGML_STATUS_SUCCESS)
+    {
+        std::fprintf(stderr, "voxtral run: prefill compute failed (%d)\n",
+                     static_cast<int>(gs));
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    cc->kv_cache.n    = T_prompt;
+    cc->kv_cache.head = T_prompt;
+
+    if (dumps_on) {
+        auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
+            if (t != nullptr) transcribe::debug::dump_tensor(name, t, stage);
+        };
+        try_dump("dec.token_emb",       pb.dumps.token_emb,       "dec.token_emb");
+        try_dump("dec.audio_injected",  pb.dumps.audio_injected,  "dec.audio_injected");
+        try_dump("dec.block.0.out",     pb.dumps.block_0_out,     "dec.block.0");
+        {
+            char nm[64];
+            std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers / 2);
+            try_dump(nm, pb.dumps.block_mid_out, "dec.block.mid");
+        }
+        {
+            char nm[64];
+            std::snprintf(nm, sizeof(nm), "dec.block.%d.out", cm->hparams.dec_n_layers - 1);
+            try_dump(nm, pb.dumps.block_last_out, "dec.block.last");
+        }
+        try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
+        try_dump("dec.logits_raw",      pb.dumps.logits_raw,      "dec.logits_raw");
+    }
+
+    // ----- First token (argmax of prefill logits) -----
+    const int vocab = cm->hparams.dec_vocab_size;
+    std::vector<float> logits(vocab);
+    ggml_backend_tensor_get(pb.out, logits.data(), 0, logits.size() * sizeof(float));
+    auto argmax = [&](const std::vector<float> & v) -> int32_t {
+        int32_t best = 0; float best_v = v[0];
+        for (int32_t i = 1; i < static_cast<int32_t>(v.size()); ++i)
+            if (v[i] > best_v) { best_v = v[i]; best = i; }
+        return best;
+    };
+    std::vector<int32_t> generated_ids;
+    int32_t next_tok = argmax(logits);
+    generated_ids.push_back(next_tok);
+
+    // ----- Step loop -----
+    const int32_t eos_id = cm->hparams.eos_token_id;
+    const int32_t max_new = 448;
+    int cur_past = T_prompt;
+
+    int max_n_kv = 1024;
+    while (max_n_kv < T_prompt + max_new) max_n_kv *= 2;
+    if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
+
+    if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
+    {
+        ggml_init_params ip {};
+        ip.mem_size = 16 * 1024 * 1024;
+        ip.no_alloc = true;
+        cc->compute_ctx = ggml_init(ip);
+        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+    }
+    StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights, cm->hparams,
+                                    cc->kv_cache, max_n_kv, cc->decoder_use_flash);
+    if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+    ggml_backend_sched_reset(cc->sched);
+    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        std::fprintf(stderr, "voxtral run: sched_alloc_graph (step) failed\n");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    set_sched_threads(cc->sched, cc->n_threads);
+
+    const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t mn = ggml_fp32_to_fp16(-INFINITY);
+    std::vector<ggml_fp16_t> step_mask(max_n_kv, mn);
+    while (next_tok != eos_id &&
+           static_cast<int32_t>(generated_ids.size()) < max_new &&
+           cur_past + 1 <= max_n_kv)
+    {
+        if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+        ggml_backend_tensor_set(sb.input_id_in, &next_tok, 0, sizeof(int32_t));
+        const int32_t pos_val = cur_past;
+        ggml_backend_tensor_set(sb.position_in, &pos_val, 0, sizeof(int32_t));
+        const int64_t kv_idx_val = cur_past;
+        ggml_backend_tensor_set(sb.kv_idx_in, &kv_idx_val, 0, sizeof(int64_t));
+        if (cur_past == T_prompt) {
+            std::fill(step_mask.begin(), step_mask.begin() + cur_past + 1, mz);
+        } else {
+            step_mask[cur_past] = mz;
+        }
+        ggml_backend_tensor_set(sb.mask_in, step_mask.data(), 0,
+                                static_cast<size_t>(max_n_kv) * sizeof(ggml_fp16_t));
+
+        if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, sb.graph);
+            gs != GGML_STATUS_SUCCESS)
+        {
+            std::fprintf(stderr, "voxtral run: step compute failed (%d)\n",
+                         static_cast<int>(gs));
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        // Mid-generation logits dump (validate.py coverage): the step at
+        // cur_past == T_prompt + 7 produces the reference's scores[8], i.e.
+        // the logits for the 9th generated token after 8 greedy steps.
+        if (dumps_on && sb.logits != nullptr && cur_past == T_prompt + 7) {
+            transcribe::debug::dump_tensor("dec.logits_raw.gen8", sb.logits, "dec.step");
+        }
+
+        int32_t argmax_tok = 0;
+        ggml_backend_tensor_get(sb.out, &argmax_tok, 0, sizeof(int32_t));
+        next_tok = argmax_tok;
+        generated_ids.push_back(next_tok);
+        cur_past += 1;
+        cc->kv_cache.n    = cur_past + 1;
+        cc->kv_cache.head = cur_past + 1;
+    }
+    cc->t_decode_us = ggml_time_us() - t_dec_start;
+
+    if (!generated_ids.empty() && generated_ids.back() == eos_id) {
+        generated_ids.pop_back();
+    }
+
+    std::string text = cm->tok.decode(
+        generated_ids.data(), static_cast<int>(generated_ids.size()));
+    // Trim leading/trailing whitespace (the assistant turn often starts
+    // with a byte-level space token).
+    size_t b = 0, e = text.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(text[b]))) ++b;
+    while (e > b && std::isspace(static_cast<unsigned char>(text[e - 1]))) --e;
+    text = text.substr(b, e - b);
+
+    cc->full_text = text;
+    cc->result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+    cc->has_result  = true;
+    transcribe_session::SegmentEntry seg {};
+    seg.text  = text;
+    seg.t0_ms = 0;
+    seg.t1_ms = static_cast<int64_t>(n_samples) * 1000
+              / static_cast<int64_t>(cm->hparams.fe_sample_rate);
+    cc->segments.push_back(std::move(seg));
+
+    return TRANSCRIBE_OK;
+}
+
+} // namespace
+
+extern const Arch arch = {
+    /* .name             = */ "voxtral",
+    /* .load             = */ load,
+    /* .init_context     = */ init_context,
+    /* .run              = */ run,
+    /* .run_batch        = */ nullptr,  // serial fallback (Stage 4 first port)
+    /* .stream_validate  = */ nullptr,
+    /* .stream_begin     = */ nullptr,
+    /* .stream_feed      = */ nullptr,
+    /* .stream_finalize  = */ nullptr,
+    /* .stream_reset     = */ nullptr,
+    /* .accepts_ext_kind = */ nullptr,
+};
+
+} // namespace transcribe::voxtral

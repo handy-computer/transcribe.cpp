@@ -52,6 +52,11 @@ add_library(transcribe
     arch/qwen3_asr/weights.cpp
     arch/qwen3_asr/encoder.cpp
     arch/qwen3_asr/decoder.cpp
+    arch/voxtral/model.cpp
+    arch/voxtral/capabilities.cpp
+    arch/voxtral/weights.cpp
+    arch/voxtral/encoder.cpp
+    arch/voxtral/decoder.cpp
     arch/canary_qwen/model.cpp
     arch/canary_qwen/capabilities.cpp
     arch/canary_qwen/weights.cpp
