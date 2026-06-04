@@ -297,8 +297,14 @@ def cmd_decode(args: argparse.Namespace) -> int:
     with torch.inference_mode():
         token_ids = model.generate(**inputs)
 
-    transcriptions = processor.batch_decode(token_ids)
-    text_pred = transcriptions[0] if transcriptions else ""
+    # skip_special_tokens=True matches scripts/wer/run_reference_medasr_transformers.py
+    # so the validate.py transcript and the WER reference transcript agree on
+    # one decode convention (the README path uses the non-skipping variant but
+    # leaves `</s>` in the transcript, which inflates dataset WER by ~0.2pp
+    # on test-clean and breaks Stage 4 transcript_compare against any C++ that
+    # also strips specials — see medasr.json tolerances _comment).
+    transcriptions = processor.batch_decode(token_ids, skip_special_tokens=True)
+    text_pred = (transcriptions[0] if transcriptions else "").strip()
     print(f"  transcript : {text_pred!r}")
 
     # Dump captured tensors
