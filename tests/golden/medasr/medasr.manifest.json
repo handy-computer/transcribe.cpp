@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "medasr",
+  "variant": "medasr",
+  "source_model": {
+    "hf_repo": "google/medasr",
+    "hf_revision": "ae1e4845b4b07479735d93e1e591e566435b7104"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "weights_header",
+  "_skeleton": true
+}
