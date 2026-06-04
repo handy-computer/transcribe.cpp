@@ -34,6 +34,7 @@
 #include "gguf.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -424,6 +425,54 @@ transcribe_status run(transcribe_session *      session,
     }
     try_dump("enc.out_norm.out", eb.dumps.out_norm_out,        "encoder.out_norm");
     try_dump("enc.ctc_logits",   eb.dumps.ctc_logits_for_dump, "encoder.ctc_logits");
+
+    // Diagnostic: per-block stats gated by TRANSCRIBE_MEDASR_DEBUG_STATS.
+    // Prints min / max / mean / has_nan / has_inf for each marker tensor
+    // to stderr (Modal captures and surfaces stderr in the run logs).
+    // Used to localize where CUDA Q* output diverges from F32 / F16.
+    if (const char * dbg = std::getenv("TRANSCRIBE_MEDASR_DEBUG_STATS");
+        dbg != nullptr && dbg[0] != '\0')
+    {
+        std::vector<float> tmp;
+        auto report = [&](const char * name, ggml_tensor * t) {
+            if (t == nullptr) return;
+            const size_t n = static_cast<size_t>(ggml_nelements(t));
+            tmp.assign(n, 0.0f);
+            ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(float));
+            float mn = +1e30f, mx = -1e30f;
+            double sum = 0.0;
+            int n_nan = 0, n_inf = 0;
+            for (size_t i = 0; i < n; ++i) {
+                const float v = tmp[i];
+                if (std::isnan(v)) { ++n_nan; continue; }
+                if (std::isinf(v)) { ++n_inf; continue; }
+                sum += v;
+                if (v < mn) mn = v;
+                if (v > mx) mx = v;
+            }
+            const double mean = n > 0 ? sum / static_cast<double>(n) : 0.0;
+            std::fprintf(stderr,
+                         "STATS %-26s n=%zu  min=%+.4e  max=%+.4e  mean=%+.4e  nan=%d  inf=%d\n",
+                         name, n, mn, mx, mean, n_nan, n_inf);
+        };
+        report("mel.in",                eb.mel_in);
+        report("sub.after_dense0",      eb.dumps.sub_after_dense0);
+        report("sub.after_conv0",       eb.dumps.sub_after_conv0);
+        report("sub.after_conv1",       eb.dumps.sub_after_conv1);
+        report("enc.subsampling.out",   eb.dumps.subsampling_out);
+        report("enc.block.0.post_ff1",  eb.dumps.block0_post_ff1);
+        report("enc.block.0.post_attn", eb.dumps.block0_post_attn);
+        report("enc.block.0.post_conv", eb.dumps.block0_post_conv);
+        report("enc.block.0.post_ff2",  eb.dumps.block0_post_ff2);
+        for (int i = 0; i < n_layers; ++i) {
+            if (eb.dumps.all_block_outs[i] == nullptr) continue;
+            char nm[32];
+            std::snprintf(nm, sizeof(nm), "enc.block.%d.out", i);
+            report(nm, eb.dumps.all_block_outs[i]);
+        }
+        report("enc.out_norm.out", eb.dumps.out_norm_out);
+        report("enc.ctc_logits",   eb.dumps.ctc_logits_for_dump);
+    }
 
     // Per-utterance encoder-output dump (single-shot baseline for the
     // batched-equals-single-shot gate). Matches the parakeet / gigaam name.

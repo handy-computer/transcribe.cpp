@@ -285,11 +285,100 @@ def ingest_fleurs(repo: Path, args: argparse.Namespace) -> int:
     return 0
 
 
+# -------- eka-medical-asr-evaluation-dataset (English + Hindi) -----------
+#
+# https://huggingface.co/datasets/ekacare/eka-medical-asr-evaluation-dataset
+# Domain-relevant for medasr (medical dictation / doctor-patient
+# conversations); MIT license; ungated. ~3,620 EN + 320 HI utterances,
+# test split only. Schema: `audio` (HF audio column) + `text` (string).
+
+EKA_MEDICAL_ASR_LANGS: dict[str, str] = {
+    "en": "en",
+    "hi": "hi",
+}
+
+
+def ingest_eka_medical_asr(repo: Path, args: argparse.Namespace) -> int:
+    lang = args.lang.lower()
+    config = EKA_MEDICAL_ASR_LANGS.get(lang)
+    if not config:
+        codes = ", ".join(sorted(EKA_MEDICAL_ASR_LANGS))
+        print(f"error: no eka-medical-asr config for '{lang}'.\n"
+              f"available codes: {codes}",
+              file=sys.stderr)
+        return 2
+
+    out_dir = repo / f"samples/wer/eka-medical-asr-{lang}"
+    manifest = repo / f"samples/wer/eka-medical-asr-{lang}.manifest.jsonl"
+
+    if manifest.exists() and not args.force:
+        n_existing = sum(1 for _ in open(manifest))
+        print(f"OK already exists: {manifest} ({n_existing} utterances). "
+              f"Pass --force to regenerate.")
+        return 0
+
+    print(f"loading ekacare/eka-medical-asr-evaluation-dataset[{config}] "
+          f"split={args.split}")
+    from datasets import load_dataset
+
+    ds = load_dataset("ekacare/eka-medical-asr-evaluation-dataset",
+                      config, split=args.split)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # The eka dataset's `file_name` column is NOT unique — 39 stems
+    # recur across multiple rows (one stem appears 28 times), each row
+    # being a distinct recording with its own `text`. We pre-scan for
+    # collisions and disambiguate duplicates with the row index so each
+    # row maps to its own wav and ref_text pair.
+    from collections import Counter
+    file_names = [row.get("file_name") or "" for row in ds]
+    stem_counts = Counter(Path(fn).stem if fn else "" for fn in file_names)
+
+    entries: list[dict] = []
+    n_converted = 0
+    n_skipped = 0
+    for i, row in enumerate(ds):
+        file_name = file_names[i]
+        raw_stem = Path(file_name).stem if file_name else ""
+        if raw_stem and stem_counts[raw_stem] == 1:
+            audio_stem = raw_stem
+        elif raw_stem:
+            audio_stem = f"{raw_stem}-row{i:05d}"
+        else:
+            audio_stem = f"row{i:05d}"
+        utt_id = f"eka-medical-asr-{lang}-{audio_stem}"
+        wav_path = out_dir / f"{utt_id}.wav"
+        if not wav_path.exists():
+            audio = row["audio"]
+            data = np.asarray(audio["array"], dtype=np.float32)
+            sr = int(audio["sampling_rate"])
+            write_wav_16k_mono(data, sr, wav_path)
+            n_converted += 1
+        else:
+            n_skipped += 1
+        entries.append({
+            "id": utt_id,
+            "audio": str(wav_path),
+            "ref_text": row["text"],
+            "language": lang,
+        })
+
+    entries.sort(key=lambda e: e["id"])
+    write_manifest(entries, manifest)
+
+    print(f"manifest: {manifest}")
+    print(f"  {len(entries)} utterances ({args.split} split, "
+          f"ekacare/eka-medical-asr-evaluation-dataset[{config}])")
+    print(f"  {n_converted} converted, {n_skipped} skipped (already existed)")
+    return 0
+
+
 # -------- Dispatch --------------------------------------------------------
 
 SOURCES = {
     "librispeech": ingest_librispeech,
     "fleurs": ingest_fleurs,
+    "eka-medical-asr": ingest_eka_medical_asr,
 }
 
 
@@ -301,7 +390,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = p.add_subparsers(dest="source", required=True,
-                           metavar="{librispeech,fleurs}")
+                           metavar="{librispeech,fleurs,eka-medical-asr}")
 
     p_ls = sub.add_parser("librispeech",
                           help="LibriSpeech split (English-only).")
@@ -318,6 +407,17 @@ def main() -> int:
                       choices=("test", "validation", "train"),
                       help="FLEURS split (default: test)")
     p_fl.add_argument("--force", action="store_true",
+                      help="Regenerate even if manifest already exists.")
+
+    p_ek = sub.add_parser("eka-medical-asr",
+                          help="ekacare/eka-medical-asr-evaluation-dataset "
+                               "(English + Hindi medical conversations).")
+    p_ek.add_argument("--lang", required=True,
+                      help="'en' or 'hi'")
+    p_ek.add_argument("--split", default="test",
+                      help="dataset split (default: test — the only split "
+                           "ekacare publishes)")
+    p_ek.add_argument("--force", action="store_true",
                       help="Regenerate even if manifest already exists.")
 
     args = p.parse_args()

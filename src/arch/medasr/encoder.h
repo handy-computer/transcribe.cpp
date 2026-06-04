@@ -14,6 +14,11 @@ struct EncoderDumps {
     // Subsampling output (= reference enc.subsampling.out).
     ggml_tensor * subsampling_out = nullptr;
 
+    // Subsampling sub-step probes (used by the CUDA-quant diagnostic).
+    ggml_tensor * sub_after_dense0 = nullptr;
+    ggml_tensor * sub_after_conv0  = nullptr;
+    ggml_tensor * sub_after_conv1  = nullptr;
+
     // Block 0 sub-steps (= reference enc.block.0.post_{ff1,attn,conv,ff2}).
     ggml_tensor * block0_post_ff1  = nullptr;
     ggml_tensor * block0_post_attn = nullptr;

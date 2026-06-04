@@ -55,6 +55,28 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
+// Weight-matmul forcing F32 accumulation for F16 weights. On CUDA,
+// `ggml_mul_mat` with an F16 weight takes the cuBLAS COMPUTE_16F path
+// whose accumulator saturates at ~6.5e4 — and medasr's scaled-residual
+// stream pushes intermediate activations to ~2e6 between blocks (the
+// macaron [1.5, 0.5] and conv [2.0, 1.0] amplification). F16 accum
+// overflows to NaN, the CTC argmax collapses to blank/specials, and
+// every transcript comes back empty. GGML_PREC_F32 forces cuBLAS to run
+// the GEMM in F32 instead, matching CPU/Metal which always F32-accumulate.
+// No-op on CPU/Metal; slight perf cost on CUDA. Skip on non-F16 weights
+// (BF16 already COMPUTE_32F; quantized routes through MMQ). Mirrors the
+// `mul_mat_f32acc` helper at src/qwen3_lm/qwen3_lm.cpp:40.
+ggml_tensor * mul_mat_f32acc(ggml_context * ctx,
+                             ggml_tensor *  w,
+                             ggml_tensor *  x)
+{
+    ggml_tensor * y = ggml_mul_mat(ctx, w, x);
+    if (w->type == GGML_TYPE_F16) {
+        ggml_mul_mat_set_prec(y, GGML_PREC_F32);
+    }
+    return y;
+}
+
 // LayerNorm with affine scale only (no bias). LASR uses
 // `nn.LayerNorm(hidden_size, layer_norm_eps, bias=False)` on every
 // encoder LN; eps is loaded from the GGUF (1e-6 for medasr) and is
@@ -78,9 +100,9 @@ ggml_tensor * lasr_feed_forward(ggml_context * ctx,
                                 ggml_tensor *  up_w,
                                 ggml_tensor *  down_w)
 {
-    x = ggml_mul_mat(ctx, up_w, x);
+    x = mul_mat_f32acc(ctx, up_w, x);
     x = ggml_silu(ctx, x);
-    x = ggml_mul_mat(ctx, down_w, x);
+    x = mul_mat_f32acc(ctx, down_w, x);
     return x;
 }
 
@@ -128,7 +150,8 @@ ggml_tensor * build_subsampling(ggml_context *            ctx,
                                 const MedAsrSubsampling & ss,
                                 ggml_tensor *             mel_in,
                                 const MedAsrHParams &     hp,
-                                const conf::ConvPolicy &  /*policy*/)
+                                const conf::ConvPolicy &  /*policy*/,
+                                EncoderDumps *            dumps = nullptr)
 {
     const int sub_k = hp.enc_sub_kernel;
 
@@ -139,11 +162,15 @@ ggml_tensor * build_subsampling(ggml_context *            ctx,
 
     // dense_0: Linear(n_mels -> d_model). mul_mat broadcasts over the
     // batch axis (ne[2]).
-    x = ggml_mul_mat(ctx, ss.dense0_w, x);
+    x = mul_mat_f32acc(ctx, ss.dense0_w, x);
     if (ss.dense0_b != nullptr) {
         x = ggml_add(ctx, x, ss.dense0_b);
     }
     x = ggml_relu(ctx, x);
+    if (dumps != nullptr) {
+        dumps->sub_after_dense0 = x;
+        transcribe::debug::mark_tensor_for_dump(x);
+    }
     // x ne=[d_model, T_mel, B].
 
     // Transpose to [T_mel, d_model, B] for conv_1d_f32 (which expects
@@ -158,6 +185,10 @@ ggml_tensor * build_subsampling(ggml_context *            ctx,
         x = ggml_add(ctx, x, bias_r);
     }
     x = ggml_relu(ctx, x);
+    if (dumps != nullptr) {
+        dumps->sub_after_conv0 = x;
+        transcribe::debug::mark_tensor_for_dump(x);
+    }
     // x ne=[T1, d_model, B].
 
     // conv_1: Conv1d(d_model -> sub_channels, k=5, s=2, p=0). Output T_enc.
@@ -168,6 +199,10 @@ ggml_tensor * build_subsampling(ggml_context *            ctx,
         x = ggml_add(ctx, x, bias_r);
     }
     x = ggml_relu(ctx, x);
+    if (dumps != nullptr) {
+        dumps->sub_after_conv1 = x;
+        transcribe::debug::mark_tensor_for_dump(x);
+    }
     // x ne=[T_enc, sub_channels, B].
 
     // Transpose to [sub_channels, T_enc, B] so dense_1's mul_mat sees
@@ -175,7 +210,22 @@ ggml_tensor * build_subsampling(ggml_context *            ctx,
     x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
 
     // dense_1: Linear(sub_channels -> d_model). NO RELU after this dense.
-    x = ggml_mul_mat(ctx, ss.dense1_w, x);
+    //
+    // Q4_K MMQ on CUDA overflows to +Inf for this specific tensor when
+    // the activation magnitudes reach the ~3e4 range produced by the
+    // ReLU-conv-ReLU-conv-ReLU stack above (see the per-stage stats in
+    // the family-doc CUDA-quant debug section). The input dim here is
+    // exactly 256 — one Q4_K super-block — and that shape + large
+    // activations trip a CUDA-specific Q4_K MMQ bug. Workaround: cast
+    // the dense_1 weight to F32 at graph build time on quants. The
+    // tensor is small (256*512 = 128 KiB at F32) and runs once per
+    // call, so the cost is negligible. F16/F32 GGUFs hit the cast
+    // branch as a no-op (the type check skips them).
+    ggml_tensor * dense1_w = ss.dense1_w;
+    if (dense1_w->type != GGML_TYPE_F32 && dense1_w->type != GGML_TYPE_F16) {
+        dense1_w = ggml_cast(ctx, dense1_w, GGML_TYPE_F32);
+    }
+    x = mul_mat_f32acc(ctx, dense1_w, x);
     if (ss.dense1_b != nullptr) {
         x = ggml_add(ctx, x, ss.dense1_b);
     }
@@ -267,9 +317,9 @@ ggml_tensor * build_rope_attn(ggml_context *      ctx,
     const bool flash = use_flash && (attn_pad_mask == nullptr);
 
     // Q/K/V projections (no bias). Outputs [d_model, T, B].
-    ggml_tensor * q = ggml_mul_mat(ctx, b.attn_q_w, x);
-    ggml_tensor * k = ggml_mul_mat(ctx, b.attn_k_w, x);
-    ggml_tensor * v = ggml_mul_mat(ctx, b.attn_v_w, x);
+    ggml_tensor * q = mul_mat_f32acc(ctx, b.attn_q_w, x);
+    ggml_tensor * k = mul_mat_f32acc(ctx, b.attn_k_w, x);
+    ggml_tensor * v = mul_mat_f32acc(ctx, b.attn_v_w, x);
 
     // Reshape Q/K to [head_dim, n_head, T, B] for RoPE rotation. ggml_rope_ext
     // rotates ne[0] (= head_dim) using position lookups on ne[2] (= T).
@@ -325,7 +375,7 @@ ggml_tensor * build_rope_attn(ggml_context *      ctx,
     o = ggml_reshape_3d(ctx, o, d_model, T, Bb);
 
     // Output projection (no bias).
-    o = ggml_mul_mat(ctx, b.attn_o_w, o);
+    o = mul_mat_f32acc(ctx, b.attn_o_w, o);
     return o;
 }
 
@@ -448,8 +498,9 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     policy.direct_dw_in_pre_encode = false;
     policy.causal_pre_encode       = false;
 
-    // Build subsampling.
-    ggml_tensor * x = build_subsampling(ctx, w.subsampling, eb.mel_in, hp, policy);
+    // Build subsampling (passes dumps for stage-by-stage diagnostic).
+    ggml_tensor * x = build_subsampling(ctx, w.subsampling, eb.mel_in, hp,
+                                        policy, &eb.dumps);
     if (x == nullptr) return eb;
     ggml_set_name(x, "enc.subsampling.out");
     eb.dumps.subsampling_out = x;
@@ -554,7 +605,7 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     {
         ggml_tensor * proj_w = ggml_reshape_2d(ctx, w.ctc_head.proj_w,
                                                d_model, hp.ctc_vocab_size);
-        x = ggml_mul_mat(ctx, proj_w, x);
+        x = mul_mat_f32acc(ctx, proj_w, x);
         if (w.ctc_head.proj_b != nullptr) {
             x = ggml_add(ctx, x, w.ctc_head.proj_b);
         }
