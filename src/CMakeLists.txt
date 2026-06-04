@@ -106,7 +106,6 @@ add_library(transcribe
     arch/medasr/capabilities.cpp
     arch/medasr/weights.cpp
     arch/medasr/encoder.cpp
-    arch/medasr/mel.cpp
 )
 
 target_include_directories(transcribe

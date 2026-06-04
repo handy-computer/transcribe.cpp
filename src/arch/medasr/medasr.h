@@ -5,15 +5,16 @@
 
 #pragma once
 
-#include "mel.h"
 #include "weights.h"
 
 #include "transcribe-backend.h"
+#include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 struct ggml_context;
@@ -38,7 +39,7 @@ struct MedAsrModel final : public transcribe_model {
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
 
-    MedAsrMelFrontend mel;
+    std::optional<transcribe::MelFrontend> mel;
 
     MedAsrModel() = default;
     ~MedAsrModel() override;

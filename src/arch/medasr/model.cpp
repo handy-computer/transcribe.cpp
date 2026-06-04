@@ -172,8 +172,55 @@ transcribe_status load(Loader &                              loader,
 
     gguf_free(gguf_data);
 
-    // LASR mel frontend (window + filterbank baked into the GGUF).
-    m->mel.init(m->hparams, m->weights);
+    // LASR mel frontend (window + filterbank baked into the GGUF). The
+    // shared MelFrontend handles n_fft=512 with Accelerate vDSP / cblas
+    // primitives; medasr opts in via pad_mode="none" (center=False) and
+    // log_clamp_min=1e-5 (natural log with floor-clamp, vs NeMo's
+    // log(x+eps)). The GGUF filterbank is laid out [n_freq, n_mels]
+    // row-major (ggml ne=[n_mels, n_freq]); MelConfig wants [n_mels,
+    // n_freq] row-major, so we transpose once at load.
+    {
+        const MedAsrHParams & hp = m->hparams;
+        const int n_freq = hp.fe_n_fft / 2 + 1;
+        transcribe::MelConfig cfg {};
+        cfg.sample_rate   = hp.fe_sample_rate;
+        cfg.num_mels      = hp.fe_num_mels;
+        cfg.n_fft         = hp.fe_n_fft;
+        cfg.win_length    = hp.fe_win_length;
+        cfg.hop_length    = hp.fe_hop_length;
+        cfg.pre_emphasis  = 0.0f;
+        cfg.f_min         = hp.fe_mel_lower_hz;
+        cfg.f_max         = hp.fe_mel_upper_hz;
+        cfg.pad_mode      = "none";
+        cfg.window_type   = "hann_symmetric";
+        cfg.normalize     = "none";
+        cfg.log_clamp_min = hp.fe_log_clamp_min;
+
+        if (m->weights.frontend_window != nullptr) {
+            cfg.window.assign(hp.fe_win_length, 0.0f);
+            ggml_backend_tensor_get(m->weights.frontend_window,
+                                    cfg.window.data(), 0,
+                                    cfg.window.size() * sizeof(float));
+        }
+        if (m->weights.frontend_mel_filterbank != nullptr) {
+            std::vector<float> raw(
+                static_cast<size_t>(hp.fe_num_mels) * n_freq);
+            ggml_backend_tensor_get(m->weights.frontend_mel_filterbank,
+                                    raw.data(), 0,
+                                    raw.size() * sizeof(float));
+            // raw is [n_freq, n_mels] row-major (mel fast). Transpose
+            // into [n_mels, n_freq] row-major (freq fast) for MelConfig.
+            cfg.filterbank.assign(
+                static_cast<size_t>(hp.fe_num_mels) * n_freq, 0.0f);
+            for (int k = 0; k < n_freq; ++k) {
+                for (int mi = 0; mi < hp.fe_num_mels; ++mi) {
+                    cfg.filterbank[static_cast<size_t>(mi) * n_freq + k] =
+                        raw[static_cast<size_t>(k) * hp.fe_num_mels + mi];
+                }
+            }
+        }
+        m->mel.emplace(cfg);
+    }
 
     m->t_load_us = ggml_time_us() - t_load_start;
     *out_model = m.release();
@@ -313,9 +360,25 @@ transcribe_status run(transcribe_session *      session,
                                    mel_n_frames, gc->mel_buf);
             st != TRANSCRIBE_OK) return st;
     } else {
-        if (auto st = gm->mel.compute(pcm, static_cast<size_t>(n_samples),
-                                       gc->mel_buf, mel_n_frames);
+        int out_n_mels = 0;
+        std::vector<float> m_major;
+        if (auto st = gm->mel->compute(pcm, static_cast<size_t>(n_samples),
+                                       m_major, out_n_mels, mel_n_frames,
+                                       gc->n_threads);
             st != TRANSCRIBE_OK) return st;
+        // Shared MelFrontend writes [n_mels, T_mel] row-major (m * T + t);
+        // medasr's encoder mel_in tensor (ne=[n_mels, T_mel, 1, B]) expects
+        // T-major bytes (each frame is n_mels contiguous floats). One-shot
+        // transpose into mel_buf.
+        gc->mel_buf.assign(
+            static_cast<size_t>(out_n_mels) * mel_n_frames, 0.0f);
+        for (int mi = 0; mi < out_n_mels; ++mi) {
+            const float * src = m_major.data() +
+                                static_cast<size_t>(mi) * mel_n_frames;
+            for (int t = 0; t < mel_n_frames; ++t) {
+                gc->mel_buf[static_cast<size_t>(t) * out_n_mels + mi] = src[t];
+            }
+        }
     }
     gc->t_mel_us = ggml_time_us() - t_mel_start;
     if (mel_n_frames <= 0) return TRANSCRIBE_ERR_GGUF;
@@ -832,10 +895,24 @@ transcribe_status run_batch(transcribe_session *          session,
         n, gc->n_threads, [&](int i) -> bool {
             if (pcm[i] == nullptr || n_samples[i] <= 0) return false;
             int this_frames = 0;
-            const transcribe_status st = gm->mel.compute(
+            int out_n_mels = 0;
+            std::vector<float> m_major;
+            const transcribe_status st = gm->mel->compute(
                 pcm[i], static_cast<size_t>(n_samples[i]),
-                mels[i], this_frames);
+                m_major, out_n_mels, this_frames, 1);
             if (st != TRANSCRIBE_OK || this_frames <= 0) return false;
+            // Transpose [n_mels, T_mel] -> T-major to match the
+            // encoder's mel_in tensor layout. See run() for the
+            // detailed comment.
+            mels[i].assign(
+                static_cast<size_t>(out_n_mels) * this_frames, 0.0f);
+            for (int mi = 0; mi < out_n_mels; ++mi) {
+                const float * src = m_major.data() +
+                                    static_cast<size_t>(mi) * this_frames;
+                for (int t = 0; t < this_frames; ++t) {
+                    mels[i][static_cast<size_t>(t) * out_n_mels + mi] = src[t];
+                }
+            }
             nf[i] = this_frames;
             return true;
         });
