@@ -19,6 +19,7 @@ C/C++ speech-to-text inference library. Runs diverse STT model families via [GGU
 | FunASR Nano | `fun-asr-nano-2512`, `fun-asr-mlt-nano-2512` | [docs/models/fun-asr-nano.md](docs/models/fun-asr-nano.md) |
 | Nemotron Speech Streaming | `nemotron-speech-streaming-en-0.6b` | [docs/models/nemotron-speech-streaming-en-0.6b.md](docs/models/nemotron-speech-streaming-en-0.6b.md) |
 | Granite Speech 4 / 4.1 | `granite-4.0-1b-speech`, `granite-speech-4.1-2b{,-plus,-nar}` | [docs/models/granite-speech.md](docs/models/granite-speech.md) |
+| MedASR | `medasr` (Conformer + CTC, English medical-dictation, gated) | [docs/models/medasr.md](docs/models/medasr.md) |
 
 Per-variant model cards live under [`docs/models/`](docs/models/).
 
