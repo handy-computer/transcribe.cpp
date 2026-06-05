@@ -49,14 +49,16 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav
 
 Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2 decimal places).
 
-### Apple M4
+### Apple M4 Max
 
 | Backend | Sample        |          Q8_0 |        Q4_K_M |
 | ------- | ------------- | ------------: | ------------: |
-| Metal   | jfk (11.0 s)  |  74 ms (148×) |  71 ms (155×) |
-| Metal   | dots (35.3 s) | 168 ms (211×) | 168 ms (210×) |
+| Metal   | jfk (11.0 s)  |  38 ms (290×) |  44 ms (248×) |
+| Metal   | dots (35.3 s) |  84 ms (419×) |  90 ms (394×) |
+| CPU     | jfk (11.0 s)  |  161 ms (68×) |  180 ms (61×) |
+| CPU     | dots (35.3 s) |  558 ms (63×) |  623 ms (57×) |
 
-macOS 26.1, transcribe.cpp `782abfd`. Metal device: `Apple M4`. Mel pipeline uses the shared `MelFrontend` (Accelerate vDSP fp64 FFT + cblas_sgemm); encoder is the conformer + RoPE + BatchNorm-conv graph in `src/arch/medasr/encoder.cpp`.
+macOS 26.5, transcribe.cpp `8139a4b`. Metal device: `Apple M4 Max`. Mel pipeline uses the shared `MelFrontend` (Accelerate vDSP fp64 FFT + cblas_sgemm); encoder is the conformer + RoPE + BatchNorm-conv graph in `src/arch/medasr/encoder.cpp`.
 
 ### AMD Ryzen 7 4750U Pro
 
