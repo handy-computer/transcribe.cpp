@@ -340,15 +340,20 @@ done
 #   --models <repo-or-card> --quants <REFDTYPE>
 ```
 
-Gate (batch 1): C++ ref-dtype WER ≤ Oracle reference WER + 0.01. Higher is
-a blocker — diff the worst per-utterance hyps against the Oracle JSONL and
-investigate; do not widen.
+Gate (batch 1): `C++ ref-dtype WER ≤ Oracle reference WER + 0.01pp`
+(percentage points, NOT fraction). The Oracle WER is reported in percent
+form (e.g. `error_rate_pct: 17.88`).
+
+Scores deviating more than this in either direction is a is a blocker.
+You will want to diff utterances versus the reference. 
+Oracle JSONL with `scripts/wer/compare.py` and investigate.
 
 Batch 1 vs batch 8 is human-reviewed. A WER delta beyond dataset noise
-(~0.01) is a batching bug, not a sign-off.
+(~0.01pp) is a potetnail batching bug and needs to be flagged and 
+explcitly signed off by a human.
 
 If the Oracle reference baseline is missing, that is a `porting-2-oracle`
-gap — send it back rather than gating against a published number.
+gap. Send it back rather than gating against a published number.
 
 ### Step 11: Sign-off
 
@@ -397,8 +402,9 @@ Report:
   golden fixture exists, and the family doc records `Batch (offline)` as
   `PASS` or `ACCEPTED GAP — serial fallback`.
 - Full ref-dtype WER ran on the complete acceptance manifest at batch 1
-  and batch 8; batch 1 passes the Oracle reference WER + 0.01 gate, and
-  batch 8 is user-reviewed as WER-neutral.
+  and batch 8; batch 1 passes the `Oracle reference WER + 0.01pp`
+  (percentage points, NOT fraction) gate, and batch 8 is user-reviewed as
+  WER-neutral.
 - No quantized GGUFs are produced here (Stage 5 owns that).
 
 ## Pointers (read, not execute)

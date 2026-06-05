@@ -83,13 +83,16 @@ hf upload <org>/<variant>-gguf models/<variant> . --repo-type model
 
 ### Step 5: Tentative WER sweep (execute)
 
-Preliminary per-quant WER for human review. Stage 7 is authoritative.
-Use Modal if credentials are available; otherwise run locally:
+Per-quant WER for human review on the **full acceptance manifest**, not
+a subset. "Tentative" here means "not the published number" (Stage 7
+re-runs and confirms), NOT "small N". Use Modal if credentials are
+available; otherwise run locally. Do not pass `--n-utts` unless you have
+a specific debugging reason and call it out in the sign-off.
 
 ```bash
-# Modal: sweeps the private repo from Step 4 on GPU
+# Modal: sweeps the private repo from Step 4 on GPU (full dataset)
 modal run scripts/wer/remote/modal_sweep.py::sweep \
-  --models <org>/<variant>-gguf --quants "" --n-utts 512
+  --models <org>/<variant>-gguf --quants ""
 # local
 for q in F16 Q8_0 Q6_K Q5_K_M Q4_K_M; do
   uv run scripts/wer/run.py --model models/<variant>/<variant>-$q.gguf \
