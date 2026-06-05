@@ -145,11 +145,21 @@ def main() -> int:
             entries.append(rec)
 
     # Inherit language from the report header when --language is unset.
-    if language is None and header_language:
+    # "auto" is a model detection MODE, not a scoring language: routing the
+    # normalizer on it silently picks BasicTextNormalizer for English data
+    # (numbers/$/Mr. left unexpanded => inflated WER). Ignore "auto" for
+    # routing and warn so the mis-stamp can't pass unnoticed; the default
+    # (English) normalizer then applies. For non-English data pass --language.
+    if language is None and header_language and header_language != "auto":
         language = header_language
         metric = resolve_metric(language, args.metric)
         normalizer = resolve_normalizer(language)
         print(f"language: inferred {language!r} from report header")
+    elif language is None and header_language == "auto":
+        print("warning: report header language is 'auto' (a model auto-detect "
+              "mode, not a scoring language); defaulting to the English "
+              "normalizer. Pass --language <bcp47> for non-English data.",
+              file=sys.stderr)
 
     if not entries:
         print("error: report is empty", file=sys.stderr)

@@ -349,6 +349,7 @@ ggml_tensor * block_prefill(
 
     // ---- MLP sub-layer (SwiGLU on packed gate_up) ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
+    if (view.ffn_scale != nullptr) ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
     ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
     ff = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
@@ -504,6 +505,7 @@ ggml_tensor * block_step(
 
     // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
+    if (view.ffn_scale != nullptr) ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
     ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
     ff = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
@@ -642,6 +644,7 @@ ggml_tensor * block_step_batched(
 
     // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
+    if (view.ffn_scale != nullptr) ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
     ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
     ff = mul_mat_f32acc(ctx, view.ffn_down_w, ff);
@@ -769,6 +772,7 @@ ggml_tensor * block_prefill_batched(
 
     // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
+    if (view.ffn_scale != nullptr) ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
     ggml_tensor * ff      = ggml_swiglu(ctx, gate_up);
     ff = mul_mat_f32acc(ctx, view.ffn_down_w, ff);

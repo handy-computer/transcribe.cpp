@@ -21,6 +21,7 @@
 
 #include "transcribe.h"
 #include "transcribe/parakeet.h"
+#include "transcribe/voxtral_realtime.h"
 #include "transcribe/whisper.h"
 #include "wav.h"
 
@@ -171,6 +172,11 @@ struct cli_args {
     int         stream_buf_left_ms           = -1;
     int         stream_buf_chunk_ms          = -1;
     int         stream_buf_right_ms          = -1;
+    // Voxtral Realtime streaming: transcription delay in 12.5 Hz audio
+    // tokens (80 ms each). -1 = model default (6 = 480 ms). Set by
+    // --stream-voxtral-delay N. Ignored when stream_chunk_ms == 0 or when
+    // the model is not voxtral_realtime.
+    int         stream_voxtral_delay         = -1;
 };
 
 void print_usage(const char * argv0) {
@@ -214,6 +220,10 @@ void print_usage(const char * argv0) {
         "  --stream-buf-right-ms N (parakeet-unified buffered streaming)\n"
         "                        right-context (lookahead) size in ms;\n"
         "                        -1 = model default\n"
+        "  --stream-voxtral-delay N (voxtral_realtime streaming) transcription\n"
+        "                        delay in 12.5 Hz tokens (80 ms each); valid\n"
+        "                        N = 1..15 (80..1200 ms) or 30 (2400 ms);\n"
+        "                        -1 = model default (6 = 480 ms)\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
 }
@@ -378,6 +388,10 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             const char * v = take_value(a.c_str());
             if (!v) return false;
             out.stream_buf_right_ms = std::atoi(v);
+        } else if (a == "--stream-voxtral-delay") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.stream_voxtral_delay = std::atoi(v);
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -706,6 +720,8 @@ int main(int argc, char ** argv) {
                 transcribe_parakeet_stream_ext_init(&pkt_sp);
                 struct transcribe_parakeet_buffered_stream_ext pkt_buf_sp;
                 transcribe_parakeet_buffered_stream_ext_init(&pkt_buf_sp);
+                struct transcribe_voxtral_realtime_stream_ext vx_sp;
+                transcribe_voxtral_realtime_stream_ext_init(&vx_sp);
                 const bool want_cache_aware = (args.stream_att_right >= 0);
                 const bool want_buffered =
                     args.stream_buf_left_ms  >= 0 ||
@@ -727,6 +743,14 @@ int main(int argc, char ** argv) {
                     pkt_buf_sp.chunk_ms = args.stream_buf_chunk_ms;
                     pkt_buf_sp.right_ms = args.stream_buf_right_ms;
                     sp.family = &pkt_buf_sp.ext;
+                } else if (args.stream_voxtral_delay != -1 &&
+                    transcribe_model_accepts_ext_kind(
+                        model,
+                        TRANSCRIBE_EXT_SLOT_STREAM,
+                        TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM))
+                {
+                    vx_sp.num_delay_tokens = args.stream_voxtral_delay;
+                    sp.family = &vx_sp.ext;
                 }
                 run_st = transcribe_stream_begin(ctx, &rp, &sp);
                 if (run_st == TRANSCRIBE_OK) {
@@ -921,6 +945,8 @@ int main(int argc, char ** argv) {
             transcribe_parakeet_stream_ext_init(&pkt_sp);
             struct transcribe_parakeet_buffered_stream_ext pkt_buf_sp;
             transcribe_parakeet_buffered_stream_ext_init(&pkt_buf_sp);
+            struct transcribe_voxtral_realtime_stream_ext vx_sp;
+            transcribe_voxtral_realtime_stream_ext_init(&vx_sp);
             const bool want_cache_aware = (args.stream_att_right >= 0);
             const bool want_buffered =
                 args.stream_buf_left_ms  >= 0 ||
@@ -948,6 +974,16 @@ int main(int argc, char ** argv) {
                             args.stream_buf_left_ms,
                             args.stream_buf_chunk_ms,
                             args.stream_buf_right_ms);
+            } else if (args.stream_voxtral_delay != -1 &&
+                transcribe_model_accepts_ext_kind(
+                    model,
+                    TRANSCRIBE_EXT_SLOT_STREAM,
+                    TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM))
+            {
+                vx_sp.num_delay_tokens = args.stream_voxtral_delay;
+                sp.family = &vx_sp.ext;
+                std::printf("stream: voxtral num_delay_tokens=%d\n",
+                            args.stream_voxtral_delay);
             }
             run_st = transcribe_stream_begin(ctx, &rp, &sp);
             if (run_st != TRANSCRIBE_OK) {

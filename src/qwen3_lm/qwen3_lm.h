@@ -87,6 +87,12 @@ struct BlockView {
     // tensor + ggml_swiglu instead of two mul_mats + manual silu·mul.
     ggml_tensor * ffn_gate_up_w = nullptr;  // [hidden, 2·intermediate]
     ggml_tensor * ffn_down_w    = nullptr;  // [intermediate, hidden]
+    // OPTIONAL per-layer FFN-branch scale applied right after norm_ffn and
+    // before the gate_up mul_mat: ff_norm *= ffn_scale (broadcast [hidden,1]
+    // over the token axis). Null for every standard caller; used by
+    // voxtral_realtime's delay-conditioned adaptive-norm (a per-layer constant
+    // `1 + ada(t_cond)` precomputed once per run). See arch/voxtral_realtime.
+    ggml_tensor * ffn_scale     = nullptr;  // [hidden] or [hidden,1], or null
 };
 
 // Per-call scalar block params.

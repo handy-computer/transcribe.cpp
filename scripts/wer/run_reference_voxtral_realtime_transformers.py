@@ -111,7 +111,7 @@ def main() -> int:
     dtype = {"bf16": torch.bfloat16, "f16": torch.float16, "f32": torch.float32}[args.dtype]
     model = VoxtralRealtimeForConditionalGeneration.from_pretrained(
         args.model, revision=revision, local_files_only=local_only,
-        dtype=dtype, attn_implementation="eager",
+        dtype=dtype, attn_implementation="sdpa",
     ).eval().to(args.device)
     load_ms = (time.monotonic() - t0) * 1000
 
@@ -207,11 +207,27 @@ def main() -> int:
     n_done = n_errors = 0
     t_loop = time.monotonic()
 
+    # Header language drives score.py's normalizer choice. The model is
+    # auto-detect (it ignores --language for inference), but SCORING must be
+    # routed by the DATA language, not the model's detection mode: derive it
+    # from the manifest (authoritative), falling back to an explicit --language,
+    # then "auto". This mirrors run.py and every other reference runner so the
+    # EnglishTextNormalizer is selected for English data instead of the
+    # BasicTextNormalizer (which leaves numbers/$/Mr. unexpanded and inflates
+    # WER on LibriSpeech-style references).
+    manifest_langs = {e.get("language") for e in manifest if e.get("language")}
+    if len(manifest_langs) == 1:
+        header_language = next(iter(manifest_langs))
+    elif args.language and args.language != "auto":
+        header_language = args.language
+    else:
+        header_language = "auto"
+
     with open(args.out, "w") as fout:
         fout.write(json.dumps({
             "type": "batch_header", "load_ms": round(load_ms, 1),
             "framework": "transformers", "model": args.model,
-            "language": "auto", "dtype": args.dtype, "mode": args.mode,
+            "language": header_language, "dtype": args.dtype, "mode": args.mode,
         }) + "\n")
         fout.flush()
 
