@@ -128,8 +128,13 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 
 struct PrefillBuildBatched {
     ggml_tensor * input_ids_in = nullptr;  // [T_prompt_max, B] i32 (audio_token placeholders)
-    ggml_tensor * enc_out_in   = nullptr;  // [enc_dim, T_enc_max, B] f32 (packed, padded)
-    ggml_tensor * enc_idx_in   = nullptr;  // [T_enc_max, B] i64 (audio scatter target rows)
+    // Audio injection via elementwise blend (no set_rows): audio_dense holds the
+    // enc_out embeds scattered (host-side) into their prompt positions, zero
+    // elsewhere; keep_mask is 0 at audio positions and 1 elsewhere. The block
+    // input is x*keep_mask + audio_dense. Elementwise ops cross the CPU/CUDA
+    // split (forced by k-quant token_embd get_rows) cleanly, unlike a set_rows.
+    ggml_tensor * audio_dense_in = nullptr;  // [dec_hidden, T_prompt_max*B] f32
+    ggml_tensor * keep_mask_in   = nullptr;  // [1, T_prompt_max*B] f32 (0=audio,1=keep)
     ggml_tensor * positions_in = nullptr;  // [T_prompt_max] i32 (shared 0..T-1)
     ggml_tensor * mask_in      = nullptr;  // [T_prompt_max, T_prompt_max] f16 causal (shared)
     ggml_tensor * kv_idx_in    = nullptr;  // [T_prompt_max, B] i64 (idx[t,b] = t)

@@ -1472,8 +1472,11 @@ transcribe_status run_batch(
 
         const int hidden = hp.dec_hidden;
         std::vector<int32_t> ids(static_cast<size_t>(max_T_prompt) * n, 0);
-        std::vector<float> aud(static_cast<size_t>(hidden) * T_enc_max * n, 0.0f);
-        std::vector<int64_t> aidx(static_cast<size_t>(T_enc_max) * n, 0);
+        // Audio injection by elementwise blend: audio_dense holds each
+        // utterance's audio embeds scattered into their prompt positions (zero
+        // elsewhere), keep is 0 there and 1 elsewhere. x = x*keep + audio_dense.
+        std::vector<float> audio_dense(static_cast<size_t>(hidden) * max_T_prompt * n, 0.0f);
+        std::vector<float> keep(static_cast<size_t>(max_T_prompt) * n, 1.0f);
         std::vector<int64_t> kidx(static_cast<size_t>(max_T_prompt) * n);
         std::vector<int32_t> lidx(n, 0);
         for (int b = 0; b < n; ++b) {
@@ -1483,20 +1486,24 @@ transcribe_status run_batch(
                 std::memcpy(ids.data() + static_cast<size_t>(b) * max_T_prompt,
                             prompt_ids[b].data(),
                             static_cast<size_t>(tp) * sizeof(int32_t));
-                std::memcpy(aud.data() + static_cast<size_t>(b) * T_enc_max * hidden,
-                            enc_hosts[b].data(),
-                            static_cast<size_t>(ta) * hidden * sizeof(float));
+                // enc_hosts[b] is [hidden, ta] column-major; audio token j lands
+                // at prompt position prefix_len+j, flat column b*max_T_prompt+pos.
+                for (int j = 0; j < ta; ++j) {
+                    const size_t dst_col =
+                        static_cast<size_t>(b) * max_T_prompt + (prefix_len + j);
+                    std::memcpy(audio_dense.data() + dst_col * hidden,
+                                enc_hosts[b].data() + static_cast<size_t>(j) * hidden,
+                                static_cast<size_t>(hidden) * sizeof(float));
+                    keep[dst_col] = 0.0f;
+                }
             }
-            for (int j = 0; j < T_enc_max; ++j)
-                aidx[static_cast<size_t>(b) * T_enc_max + j] =
-                    (j < ta) ? (prefix_len + j) : (tp + j - ta);
             for (int t = 0; t < max_T_prompt; ++t)
                 kidx[static_cast<size_t>(b) * max_T_prompt + t] = t;
             lidx[b] = valid[b] ? (tp - 1) : 0;
         }
         ggml_backend_tensor_set(pb.input_ids_in, ids.data(), 0, ids.size() * sizeof(int32_t));
-        ggml_backend_tensor_set(pb.audio_in, aud.data(), 0, aud.size() * sizeof(float));
-        ggml_backend_tensor_set(pb.audio_idx_in, aidx.data(), 0, aidx.size() * sizeof(int64_t));
+        ggml_backend_tensor_set(pb.audio_dense_in, audio_dense.data(), 0, audio_dense.size() * sizeof(float));
+        ggml_backend_tensor_set(pb.keep_mask_in, keep.data(), 0, keep.size() * sizeof(float));
         {
             std::vector<int32_t> pos(max_T_prompt);
             for (int t = 0; t < max_T_prompt; ++t) pos[t] = t;

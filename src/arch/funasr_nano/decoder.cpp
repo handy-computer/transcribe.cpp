@@ -381,10 +381,16 @@ PrefillBuildBatched build_prefill_graph_batched(
 
     pb.input_ids_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, T_prompt_max, B);
     ggml_set_input(pb.input_ids_in);
-    pb.audio_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hidden, T_audio_max, B);
-    ggml_set_input(pb.audio_in);
-    pb.audio_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, T_audio_max, B);
-    ggml_set_input(pb.audio_idx_in);
+    // Audio injection is an elementwise blend over the flat token axis (no
+    // set_rows): a k-quant token_embd get_rows is unsupported on CUDA and runs
+    // on CPU; a set_rows consuming that CPU tensor straddles the CPU/CUDA split
+    // and faults. x*keep_mask + audio_dense crosses the split cleanly.
+    pb.audio_dense_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden,
+                                           static_cast<int64_t>(T_prompt_max) * B);
+    ggml_set_input(pb.audio_dense_in);
+    pb.keep_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1,
+                                         static_cast<int64_t>(T_prompt_max) * B);
+    ggml_set_input(pb.keep_mask_in);
     pb.positions_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_prompt_max);
     ggml_set_input(pb.positions_in);
     pb.mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, T_prompt_max, T_prompt_max);
@@ -401,9 +407,12 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_tensor * ids_flat =
         ggml_reshape_1d(ctx, pb.input_ids_in,
                         static_cast<int64_t>(T_prompt_max) * B);
+    // x is 2D [hidden, T_prompt_max*B] (contiguous). Blend the audio embeds in
+    // elementwise: x = x*keep_mask + audio_dense. keep_mask broadcasts over
+    // hidden (ne[0]). Then reshape to 3D for the batched block stack.
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, ids_flat);
+    x = ggml_add(ctx, ggml_mul(ctx, x, pb.keep_mask_in), pb.audio_dense_in);
     x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);
-    x = ggml_set_rows(ctx, x, pb.audio_in, pb.audio_idx_in);
 
     for (int il = 0; il < n_layer; ++il) {
         x = qwen3_lm::block_prefill_batched(

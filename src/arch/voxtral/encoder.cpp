@@ -249,10 +249,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     ggml_tensor * x = ggml_cont(ctx, ggml_transpose(ctx, eb.mel_in));  // [T, n_mels]
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv0_w, x, /*s=*/1, /*p=*/1, /*d=*/1);
     x = add_conv1d_bias(ctx, x, w.enc_stem.conv0_b);
-    x = ggml_gelu_erf(ctx, x);
-    x = ggml_cont(ctx, ggml_transpose(ctx, x));  // [d_model, T]
-
-    x = ggml_cont(ctx, ggml_transpose(ctx, x));  // back to [T, d_model] for conv2
+    x = ggml_gelu_erf(ctx, x);  // [T, d_model] — already the layout conv2 wants
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv1_w, x, /*s=*/2, /*p=*/1, /*d=*/1);
     x = add_conv1d_bias(ctx, x, w.enc_stem.conv1_b);
     x = ggml_gelu_erf(ctx, x);
