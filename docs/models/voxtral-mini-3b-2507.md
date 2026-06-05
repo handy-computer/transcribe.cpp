@@ -93,6 +93,18 @@ decimal places).
 | CPU     | jfk (11.0s)  |   6.06 s (1.8×)  |   6.76 s (1.6×)  |
 | CPU     | dots (35.3s) |  16.60 s (2.1×)  |  15.31 s (2.3×)  |
 
+### AMD Ryzen 7 PRO 4750U
+
+| Backend | Sample       |             Q8_0 |           Q4_K_M |
+| ------- | ------------ | ---------------: | ---------------: |
+| Vulkan  | jfk (11.0s)  |   9.57 s (1.2×)  |   9.37 s (1.2×)  |
+| Vulkan  | dots (35.3s) |  26.49 s (1.3×)  |  23.82 s (1.5×)  |
+| CPU     | jfk (11.0s)  |  26.15 s (0.4×)  |  19.39 s (0.6×)  |
+| CPU     | dots (35.3s) |  63.96 s (0.6×)  |  45.92 s (0.8×)  |
+
+Fedora Linux 43, transcribe.cpp `91af262`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash
