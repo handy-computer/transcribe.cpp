@@ -52,7 +52,16 @@ struct MelConfig {
     float pre_emphasis   = 0.97f;     // 0.0 disables
     float f_min          = 0.0f;
     float f_max          = 8000.0f;
-    std::string pad_mode = "reflect"; // "reflect" or "constant"
+
+    // STFT input padding mode:
+    //   "reflect"  — symmetric reflect-pad by n_fft/2 on both sides
+    //                (NeMo default). Frame count: floor(n / hop) + 1.
+    //   "constant" — zero-pad by n_fft/2 on both sides.
+    //   "none"     — PyTorch center=False: no input padding, window is
+    //                left-aligned in the n_fft buffer instead of centered,
+    //                frame count = (n_samples - win_length) / hop + 1.
+    //                Used by LASR / MedASR.
+    std::string pad_mode = "reflect";
 
     // STFT window shape:
     //   "hann_symmetric" — torch.hann_window(N, periodic=False):
@@ -81,6 +90,11 @@ struct MelConfig {
     // computing from scratch. Set by the loader when the GGUF contains
     // frontend.mel_filterbank.
     std::vector<float> filterbank;
+
+    // When > 0 AND normalize="none", emit log(max(power, log_clamp_min))
+    // instead of NeMo's log(power + kLogEps). LASR / MedASR use this with
+    // log_clamp_min = 1e-5; NeMo's frontends leave it at 0.0.
+    float log_clamp_min = 0.0f;
 
     // Optional checkpoint-provided window [win_length]. When non-empty,
     // used instead of computing a periodic Hann window.

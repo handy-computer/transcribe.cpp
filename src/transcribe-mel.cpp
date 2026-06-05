@@ -331,9 +331,13 @@ MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
     // Use checkpoint-provided window if available, else compute.
     if (!cfg.window.empty()) {
         // Convert f32 checkpoint window to f64 and zero-pad to n_fft.
+        // pad_mode="none" left-aligns the window inside the n_fft buffer
+        // (PyTorch center=False semantics: window applies to pcm[start..
+        // start+win_length), remaining slots zero); the centered/symmetric
+        // modes pad equally on both sides (NeMo/whisper default).
         window_.resize(cfg.n_fft, 0.0);
         const int total_pad = cfg.n_fft - cfg.win_length;
-        const int left_pad  = total_pad / 2;
+        const int left_pad  = (cfg.pad_mode == "none") ? 0 : (total_pad / 2);
         for (int i = 0; i < cfg.win_length && i < static_cast<int>(cfg.window.size()); ++i) {
             window_[left_pad + i] = static_cast<double>(cfg.window[i]);
         }
@@ -373,6 +377,13 @@ MelFrontend::MelFrontend(const MelConfig & cfg) : cfg_(cfg) {
 }
 
 int MelFrontend::n_frames_for(size_t n_samples) const {
+    if (cfg_.pad_mode == "none") {
+        // PyTorch center=False: n_frames = (n - win)/hop + 1.
+        if (static_cast<int>(n_samples) < cfg_.win_length) return 0;
+        return static_cast<int>(
+            (n_samples - static_cast<size_t>(cfg_.win_length)) /
+            static_cast<size_t>(cfg_.hop_length)) + 1;
+    }
     // Matches NeMo features_lens = (waveforms_lens / hop_length) + 1.
     // The +1 accounts for the centered first frame.
     return static_cast<int>(n_samples / static_cast<size_t>(cfg_.hop_length)) + 1;
@@ -393,16 +404,26 @@ transcribe_status MelFrontend::compute(
     const int hop    = cfg_.hop_length;
     const int n_mels = cfg_.num_mels;
     const int n_freq = n_freq_;
+    const int win    = cfg_.win_length;
     const int pad    = n_fft / 2;
+    const bool no_pad = (cfg_.pad_mode == "none");
 
-    const int n_frames =
-        static_cast<int>(n_samples / static_cast<size_t>(hop)) + 1;
+    const int n_frames = no_pad
+        ? (static_cast<int>(n_samples) < win
+               ? 0
+               : static_cast<int>(
+                     (n_samples - static_cast<size_t>(win)) /
+                     static_cast<size_t>(hop)) + 1)
+        : static_cast<int>(n_samples / static_cast<size_t>(hop)) + 1;
 
     // Per-feature normalize divides by (n_frames - 1) and the
     // reflect pad needs at least pad+1 input samples to reflect
-    // without going off the end. Both constraints fold into:
-    const bool use_reflect = (cfg_.pad_mode != "constant");
-    if (n_frames < 2 || (use_reflect && n_samples < static_cast<size_t>(pad + 1))) {
+    // without going off the end. pad_mode="none" requires at least one
+    // full window in the input.
+    const bool use_reflect = (!no_pad && cfg_.pad_mode != "constant");
+    if (n_frames < (no_pad ? 1 : 2) ||
+        (use_reflect && n_samples < static_cast<size_t>(pad + 1)) ||
+        (no_pad && static_cast<int>(n_samples) < win)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -476,28 +497,38 @@ transcribe_status MelFrontend::compute(
             }
         }
 
-        padded.resize(n_samples + 2 * static_cast<size_t>(pad));
-        if (use_reflect) {
-            for (int i = 0; i < pad; ++i) {
-                padded[i] = emph[static_cast<size_t>(pad - i)];
-            }
-            std::memcpy(
-                padded.data() + pad,
-                emph.data(),
-                n_samples * sizeof(double));
-            for (int i = 0; i < pad; ++i) {
-                padded[static_cast<size_t>(pad) + n_samples + i] =
-                    emph[n_samples - 2 - static_cast<size_t>(i)];
-            }
+        if (no_pad) {
+            // PyTorch center=False: no input padding. Sized so that the
+            // last frame (start=(n_frames-1)*hop) can read n_fft samples
+            // without overflowing. The trailing (n_fft - win_length) slots
+            // beyond the data are read but always multiplied by zero in
+            // the left-aligned window, so their value is irrelevant.
+            padded.resize(n_samples + static_cast<size_t>(n_fft - win), 0.0);
+            std::memcpy(padded.data(), emph.data(), n_samples * sizeof(double));
         } else {
-            std::memset(padded.data(), 0,
-                        static_cast<size_t>(pad) * sizeof(double));
-            std::memcpy(
-                padded.data() + pad,
-                emph.data(),
-                n_samples * sizeof(double));
-            std::memset(padded.data() + pad + n_samples, 0,
-                        static_cast<size_t>(pad) * sizeof(double));
+            padded.resize(n_samples + 2 * static_cast<size_t>(pad));
+            if (use_reflect) {
+                for (int i = 0; i < pad; ++i) {
+                    padded[i] = emph[static_cast<size_t>(pad - i)];
+                }
+                std::memcpy(
+                    padded.data() + pad,
+                    emph.data(),
+                    n_samples * sizeof(double));
+                for (int i = 0; i < pad; ++i) {
+                    padded[static_cast<size_t>(pad) + n_samples + i] =
+                        emph[n_samples - 2 - static_cast<size_t>(i)];
+                }
+            } else {
+                std::memset(padded.data(), 0,
+                            static_cast<size_t>(pad) * sizeof(double));
+                std::memcpy(
+                    padded.data() + pad,
+                    emph.data(),
+                    n_samples * sizeof(double));
+                std::memset(padded.data() + pad + n_samples, 0,
+                            static_cast<size_t>(pad) * sizeof(double));
+            }
         }
     }
 
@@ -700,6 +731,17 @@ transcribe_status MelFrontend::compute(
                     if (v < 1.0e-10) v = 1.0e-10;
                     log_mel[i] = static_cast<float>(std::log10(v));
                 }
+            } else if (cfg_.log_clamp_min > 0.0f) {
+                // LASR/MedASR: natural log with explicit floor-clamp
+                // (vs NeMo's log(x + kLogEps)). Differs only in the small-
+                // power regime; the clamp keeps the result bounded at
+                // log(clamp_min) instead of plunging to -log(kLogEps).
+                const float clamp = cfg_.log_clamp_min;
+                for (size_t i = 0; i < total; ++i) {
+                    float v = log_mel[i];
+                    if (v < clamp) v = clamp;
+                    log_mel[i] = std::log(v);
+                }
             } else {
                 for (size_t i = 0; i < total; ++i) {
                     log_mel[i] = std::log(log_mel[i] + kLogEps);
@@ -728,6 +770,10 @@ transcribe_status MelFrontend::compute(
                 if (whisper_mode) {
                     if (sum < 1.0e-10) sum = 1.0e-10;
                     result = static_cast<float>(std::log10(sum));
+                } else if (cfg_.log_clamp_min > 0.0f) {
+                    const double clamp = static_cast<double>(cfg_.log_clamp_min);
+                    if (sum < clamp) sum = clamp;
+                    result = static_cast<float>(std::log(sum));
                 } else {
                     result = static_cast<float>(std::log(sum + static_cast<double>(kLogEps)));
                 }
@@ -762,13 +808,21 @@ transcribe_status MelFrontend::compute(
         out_mel = std::move(log_mel);
         out_n_mels   = n_mels;
         out_n_frames = n_frames;
-        const int valid = static_cast<int>(
-            n_samples / static_cast<size_t>(cfg_.hop_length));
-        for (int m = 0; m < n_mels; ++m) {
-            float * row =
-                out_mel.data() + static_cast<size_t>(m) * n_frames;
-            for (int t = valid; t < n_frames; ++t) {
-                row[t] = 0.0f;
+        // pad_mode="none" emits exactly (n - win)/hop + 1 frames with no
+        // padding artifact, so the trailing-mask step is unnecessary
+        // (and would zero a legitimate final frame). For NeMo-style
+        // reflect/constant padding, the last centered frame is a padding
+        // artifact that needs to be zeroed to match NeMo's normalize_batch
+        // behavior — see the comment block in the doc-history above.
+        if (!no_pad) {
+            const int valid = static_cast<int>(
+                n_samples / static_cast<size_t>(cfg_.hop_length));
+            for (int m = 0; m < n_mels; ++m) {
+                float * row =
+                    out_mel.data() + static_cast<size_t>(m) * n_frames;
+                for (int t = valid; t < n_frames; ++t) {
+                    row[t] = 0.0f;
+                }
             }
         }
         return TRANSCRIBE_OK;

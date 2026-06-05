@@ -1,0 +1,62 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "medasr",
+  "variant": "medasr",
+  "source_model": {
+    "hf_repo": "google/medasr",
+    "hf_revision": "ae1e4845b4b07479735d93e1e591e566435b7104"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://huggingface.co/google/medasr",
+    "revision": "ae1e4845b4b07479735d93e1e591e566435b7104",
+    "entrypoint": "scripts/dump_reference_medasr_transformers.py",
+    "comment": "First-party HF Transformers integration. lasr_ctc / lasr_encoder / LasrFeatureExtractor / LasrTokenizer ship inside transformers itself at v5.0.0.dev0 (commit 65dc261512cbdb1ee72b88ae5b222f2605aad8e5; v5.0.0 is unreleased). The dumper mirrors the model card README path: AutoProcessor + AutoModelForCTC + model.generate + processor.batch_decode. attn_implementation=eager on CPU (LASR does NOT support flash-attn; _supports_flash_attn=False). No trust_remote_code — classes are registered in upstream transformers."
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "weights_header",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_symmetric",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": false,
+    "padding_mode": "zero",
+    "mel_filterbank_norm": "htk",
+    "log_compression": "log(clamp(power, min=1e-5))",
+    "lower_edge_hertz": 125.0,
+    "upper_edge_hertz": 7500.0,
+    "stft_internal_dtype": "float64",
+    "comment": "LasrFeatureExtractor at the pinned commit (transformers/models/lasr/feature_extraction_lasr.py). Manual unfold + torch.fft.rfft(n=n_fft) — NOT torch.stft. window = torch.hann_window(periodic=False) = symmetric Hann. NO preemphasis, NO dither, NO per-feature CMVN. Mel weight matrix is built via linear_to_mel_weight_matrix in NumPy float64: mel_scale='kaldi' formula, HTK-style DC-bin exclusion (zeros first bin), unnormalized triangular filters between 125 Hz and 7500 Hz with 128 bands. Log compression is natural log with clamp(min=1e-5). Output frame stride matches n_fft pad behavior: each window of 400 samples is rfft'd at 512 -> first frame ends at sample 399 -> output frame n at sample (399 + n*160)."
+  },
+  "tokenizer_summary": {
+    "type": "sentencepiece",
+    "vocab_size": 512,
+    "special_tokens": {
+      "blank": 0,
+      "bos": 1,
+      "eos": 2,
+      "unk": 3
+    },
+    "has_language_tokens": false,
+    "comment": "Two-layer tokenizer: SentencePiece (spiece.model, ~241 KB) is the underlying piece model; LasrTokenizer (backend=tokenizers) wraps it with HF fast-tokenizer specials. Model output vocab = 512 entries (CTC head output dim). Ids 512-612 in tokenizer.json (<pad>, 100 T5-style <extra_id_N>) are OUTSIDE the model's CTC output dim and cannot be emitted. CTC blank id = 0 (`<epsilon>`), NOT vocab_size - 1. batch_decode does not skip the </s> id 2 by default — it leaks into the transcript text. The Stage 4 runtime should either pass skip_special_tokens=True or strip </s> post hoc."
+  },
+  "capabilities": {
+    "languages": ["en"],
+    "language_detection": false,
+    "translation": false,
+    "timestamps": [],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false,
+    "comment": "Monolingual English ASR over a 105M Conformer-CTC. Model card publishes WER on internal medical-dictation datasets (RAD-DICT/GENERAL-DICT/FM-DICT) and on MIMIC Eye Gaze; no LibriSpeech number is reported. Stage 7 gates against the measured Oracle reference baseline on LibriSpeech test-clean — see reports/wer/medasr-REF.test-clean.{jsonl,score.json}."
+  },
+  "tolerance_file": "tests/tolerances/medasr.json",
+  "transcript_compare": "normalized",
+  "cases": ["jfk"]
+}
