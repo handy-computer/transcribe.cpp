@@ -29,6 +29,9 @@ it before writing C++. Re-open it when debugging drift.
   green.
 - `tests/golden/<family>/<variant>.manifest.json` populated.
 - `build/bin/transcribe-cli` is buildable.
+- `hf` authenticated for the target org (Step 10 pushes the ref-dtype
+  GGUF to a private repo so Step 11's WER gate can run on Modal). Local-
+  only WER runs do not need this.
 
 ## Workflow
 
@@ -44,8 +47,9 @@ CPP progress:
 - [ ] Step 7: Verify frontend parity for production inference
 - [ ] Step 8: Run the family-doc Capability Validation table
 - [ ] Step 9: Batch parity (offline run_batch vs serial)
-- [ ] Step 10: Full ref-dtype WER gate (batch 1 + batch 8)
-- [ ] Step 11: Sign-off review
+- [ ] Step 10: Publish ref-dtype to private HF repo (enables remote WER)
+- [ ] Step 11: Full ref-dtype WER gate (batch 1 + batch 8)
+- [ ] Step 12: Sign-off review
 ```
 
 ### Step 0: Family-level forward-map.md (execute)
@@ -320,7 +324,18 @@ Add/update the `Batch (offline)` Capability Validation row:
 
 A text or tensor parity mismatch is a batching bug, never an accepted gap.
 
-### Step 10: Full ref-dtype WER gate (execute)
+### Step 10: Publish ref-dtype to private HF repo (execute)
+
+Push the ref-dtype GGUF to the private HF repo so the Step 11 WER gate
+can run on Modal (and so Stage 5 can extend the same repo with the full
+quant matrix). Local-only WER runs do not need this, but Modal does.
+
+```bash
+hf repo create <org>/<variant>-gguf --repo-type model --private  # if absent
+hf upload <org>/<variant>-gguf models/<variant>/<variant>-<REFDTYPE>.gguf --repo-type model
+```
+
+### Step 11: Full ref-dtype WER gate (execute)
 
 Score the **full** acceptance manifest on the C++ ref-dtype GGUF at batch
 1 and batch 8, and gate against the Stage-2 Oracle reference WER
@@ -355,7 +370,7 @@ explcitly signed off by a human.
 If the Oracle reference baseline is missing, that is a `porting-2-oracle`
 gap. Send it back rather than gating against a published number.
 
-### Step 11: Sign-off
+### Step 12: Sign-off
 
 Report:
 - Family forward-map path.
@@ -372,6 +387,7 @@ Report:
 - Batch parity: text + tensor parity result, the golden fixture path
   (`tests/golden/batch/<variant>.cpu.json`), and the `Batch (offline)`
   row status (PASS or ACCEPTED GAP — serial fallback).
+- Private HF repo URL where the ref-dtype GGUF was pushed (Step 10).
 - Full ref-dtype WER: Oracle reference WER, C++ batch-1 WER, max allowed,
   pass/blocked; plus the batch-8 WER and the user's sign-off that batching
   is WER-neutral.
