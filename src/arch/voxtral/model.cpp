@@ -88,6 +88,36 @@ namespace {
 
 constexpr const char k_default_variant[] = "voxtral-mini-3b-2507";
 
+// Floor on the decoder text budget for short clips (also Whisper's per-chunk
+// cap). Long audio scales the budget up with the audio length — see run().
+constexpr int k_decode_budget_min = 448;
+
+// Decode budget (max new text tokens) for an utterance with `n_audio` audio
+// embedding tokens. Real speech yields fewer text tokens than audio frames, so
+// the audio token count is a safe upper bound; clamp to the context remaining
+// under the decoder's trained max so prompt+decode always fits. Greedy decode
+// stops at EOS well before this, so a generous ceiling costs nothing but the
+// KV allocation it implies.
+int pick_decode_budget(int n_audio, int t_prompt, int model_max) {
+    int budget = std::max(k_decode_budget_min, n_audio);
+    const int room = model_max - t_prompt;
+    if (budget > room) budget = room;
+    return budget;
+}
+
+// Pick a KV-cache context length that fits `needed` (prompt + decode budget)
+// tokens. Rounds up to a power of two (so the step graph's `max_n_kv`, computed
+// the same way, never exceeds the allocation) and clamps to the decoder's
+// trained max_position_embeddings — the real ceiling, since RoPE is only valid
+// there. The model's own context (131072 for Voxtral-Mini-3B) is far larger
+// than the conservative initial allocation, so long audio grows it on demand.
+int pick_kv_ctx(int needed, int model_max) {
+    int want = 1024;
+    while (want < needed) want *= 2;
+    if (want > model_max) want = model_max;
+    return want;
+}
+
 // BCP-47 -> English language name for the synthesized translate
 // instruction ("Translate this to {Name}."). Covers Voxtral's advertised
 // languages; falls back to the raw code if unknown.
@@ -366,6 +396,9 @@ transcribe_status init_context(
     {
         ggml_type kv_type = GGML_TYPE_F16;
         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
+        // Initial allocation only: run()/run_batch() grow the KV cache per
+        // utterance up to the decoder's trained context (131072 for Mini-3B).
+        // 4096 covers short clips (~5 min) without a realloc on the hot path.
         if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary,
                                            /*n_ctx=*/4096,
                                            cm->hparams.dec_n_kv_heads,
@@ -575,10 +608,33 @@ transcribe_status run(
             st != TRANSCRIBE_OK) return st;
     }
     const int T_prompt = static_cast<int>(prompt_ids.size());
-    if (T_prompt > cc->kv_cache.n_ctx) {
-        std::fprintf(stderr, "voxtral run: prompt len %d exceeds n_ctx %d\n",
-                     T_prompt, cc->kv_cache.n_ctx);
+
+    // Auto-size the KV cache to this utterance. The initial allocation from
+    // init_context is a conservative starting point; long audio produces a
+    // longer audio prompt than that, so grow the cache to fit (capped at the
+    // decoder's trained context). Only the audio prompt can realistically push
+    // past the model max, so that stays a hard error.
+    const int model_max = cm->hparams.dec_max_position_embeddings;
+    if (T_prompt + 1 > model_max) {
+        std::fprintf(stderr,
+                     "voxtral run: prompt len %d exceeds model max context %d\n",
+                     T_prompt, model_max);
         return TRANSCRIBE_ERR_GGUF;
+    }
+    const int max_new = pick_decode_budget(n_audio_total, T_prompt, model_max);
+    const int want_ctx = pick_kv_ctx(T_prompt + max_new, model_max);
+    if (cc->kv_cache.n_ctx < want_ctx) {
+        const ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
+                                ? GGML_TYPE_F32 : GGML_TYPE_F16;
+        cc->kv_cache.free();
+        if (!transcribe::qwen3_lm::kv_init(
+                cc->kv_cache, cm->plan.primary, want_ctx,
+                cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
+                cm->hparams.dec_n_layers, kv_type)) {
+            std::fprintf(stderr, "voxtral run: kv_init (grow to %d) failed\n",
+                         want_ctx);
+            return TRANSCRIBE_ERR_GGUF;
+        }
     }
 
     // ----- KV reset -----
@@ -678,7 +734,6 @@ transcribe_status run(
 
     // ----- Step loop -----
     const int32_t eos_id = cm->hparams.eos_token_id;
-    const int32_t max_new = 448;
     int cur_past = T_prompt;
 
     int max_n_kv = 1024;
@@ -982,8 +1037,16 @@ transcribe_status run_batch(
             ? build_instruct_prompt(*cm, instruction, n_audio, prompt_ids[b], pfx, sfx)
             : build_transcription_prompt(*cm, lang, n_audio, prompt_ids[b], pfx, sfx);
         if (st != TRANSCRIBE_OK) { valid[b] = 0; continue; }
+        const int t_prompt = static_cast<int>(prompt_ids[b].size());
+        if (t_prompt + 1 > cm->hparams.dec_max_position_embeddings) {
+            std::fprintf(stderr,
+                         "voxtral run_batch: utterance %d prompt len %d exceeds "
+                         "model max context %d\n",
+                         b, t_prompt, cm->hparams.dec_max_position_embeddings);
+            valid[b] = 0; continue;
+        }
         prefix_len = pfx; suffix_len = sfx;  // uniform across the batch
-        T_prompt[b] = static_cast<int>(prompt_ids[b].size());
+        T_prompt[b] = t_prompt;
         T_audio[b]  = n_audio;
     }
 
@@ -1001,10 +1064,15 @@ transcribe_status run_batch(
     }
     T_audio_max = std::max(1, T_audio_max);
 
-    const int max_new = 448;
+    // Size the batched KV cache to the longest prompt in the batch plus the
+    // decode budget, clamped to the decoder's trained context (not the
+    // single-shot cache's initial allocation). kv_init_batched below grows the
+    // cache to this on demand.
+    const int model_max = cm->hparams.dec_max_position_embeddings;
+    const int max_new = pick_decode_budget(T_audio_max, max_T_prompt, model_max);
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
-    if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
+    if (max_n_kv > model_max) max_n_kv = model_max;
 
     // ----- Batched KV cache (reused; re-alloc only on growth) -----
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
