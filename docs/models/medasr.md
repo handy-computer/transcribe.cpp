@@ -58,12 +58,23 @@ Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with speed
 
 macOS 26.1, transcribe.cpp `782abfd`. Metal device: `Apple M4`. Mel pipeline uses the shared `MelFrontend` (Accelerate vDSP fp64 FFT + cblas_sgemm); encoder is the conformer + RoPE + BatchNorm-conv graph in `src/arch/medasr/encoder.cpp`.
 
+### AMD Ryzen 7 4750U Pro
+
+| Backend | Sample        |          Q8_0 |        Q4_K_M |
+| ------- | ------------- | ------------: | ------------: |
+| Vulkan  | jfk (11.0 s)  |  163 ms (68×) |  174 ms (63×) |
+| Vulkan  | dots (35.3 s) |  481 ms (74×) |  495 ms (71×) |
+| CPU     | jfk (11.0 s)  |  543 ms (20×) |  488 ms (23×) |
+| CPU     | dots (35.3 s) | 1.84 s (19×)  | 1.63 s (22×)  |
+
+Fedora 43, transcribe.cpp `79d139a`. Vulkan device: `AMD Radeon Graphics (RADV RENOIR)`.
+
 Benchmark reproduction:
 
 ```bash
 uv run scripts/bench/run.py \
   --models medasr --quants q8_0,q4_k_m --samples jfk,dots \
-  --backends metal --iters 3 --warmup 1 --name medasr-publication
+  --backends metal,cpu,vulkan --iters 3 --warmup 1 --name medasr-publication
 ```
 
 ## Numerical Validation
