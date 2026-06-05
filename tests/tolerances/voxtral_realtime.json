@@ -1,0 +1,99 @@
+{
+  "_comment": [
+    "Voxtral Realtime (2602) PROVISIONAL tolerances. Magnitude-aware:",
+    "  max_abs  = max(1e-4 * p99_abs, 1e-6)   (0.01% of typical large value)",
+    "  mean_abs = max(1e-5 * rms,     1e-6)   (0.001% of RMS energy)",
+    "Worst-magnitude instance taken across (case, stage_dir) per tensor name.",
+    "These are PROVISIONAL: Stage 4 (porting-4-cpp) finalizes them against the",
+    "observed C++ drift. Every entry carries _provisional: true; do NOT ship a",
+    "model while any _provisional entries remain. Tensors far above this budget",
+    "in Stage 4 are signals to investigate, not auto-pass.",
+    "Oracle: transformers VoxtralRealtimeForConditionalGeneration 5.10.2,",
+    "dtype=bfloat16, attn=eager, jfk offline whole-clip decode, num_delay_tokens=6."
+  ],
+  "dec.audio_injected": {
+    "max_abs": 1.77734375e-05,
+    "mean_abs": 1.7511114957567976e-06,
+    "_provisional": true
+  },
+  "dec.block.0.out": {
+    "max_abs": 3.5156250000000004e-05,
+    "mean_abs": 3.1283300737703387e-06,
+    "_provisional": true
+  },
+  "dec.block.13.out": {
+    "max_abs": 0.00011796875,
+    "mean_abs": 1.4352079964872195e-05,
+    "_provisional": true
+  },
+  "dec.block.25.out": {
+    "max_abs": 0.003225,
+    "mean_abs": 0.0001010316740038091,
+    "_provisional": true
+  },
+  "dec.logits_raw": {
+    "max_abs": 0.003725,
+    "mean_abs": 0.0003420934699706871,
+    "_provisional": true
+  },
+  "dec.logits_raw.gen8": {
+    "max_abs": 0.0033,
+    "mean_abs": 0.0002979596430062415,
+    "_provisional": true
+  },
+  "dec.out_before_head": {
+    "max_abs": 0.0009875,
+    "mean_abs": 2.2181128960211247e-05,
+    "_provisional": true
+  },
+  "dec.token_emb": {
+    "max_abs": 3.857421875e-06,
+    "mean_abs": 1e-06,
+    "_provisional": true
+  },
+  "enc.block.0.out": {
+    "max_abs": 8.4375e-05,
+    "mean_abs": 2.731437032546978e-06,
+    "_provisional": true
+  },
+  "enc.block.16.out": {
+    "max_abs": 0.0002234375,
+    "mean_abs": 8.62139495157276e-06,
+    "_provisional": true
+  },
+  "enc.block.31.out": {
+    "max_abs": 0.000875,
+    "mean_abs": 6.618418719693337e-05,
+    "_provisional": true
+  },
+  "enc.embedder.out": {
+    "max_abs": 4.1796875000000005e-05,
+    "mean_abs": 1.5682604745028903e-06,
+    "_provisional": true
+  },
+  "enc.mel.in": {
+    "max_abs": 0.00011015625000000001,
+    "mean_abs": 5.188322603707164e-06,
+    "_provisional": true
+  },
+  "enc.out": {
+    "max_abs": 0.00014453125000000002,
+    "mean_abs": 7.16655766032117e-06,
+    "_provisional": true
+  },
+  "proj.out": {
+    "max_abs": 1.796875e-05,
+    "mean_abs": 1.7540045137797504e-06,
+    "_provisional": true
+  },
+  "stream.logits_raw": {
+    "max_abs": 0.003725,
+    "mean_abs": 0.0003420934699706871,
+    "_provisional": true
+  },
+  "stream.logits_raw.gen8": {
+    "max_abs": 0.0033,
+    "mean_abs": 0.00029799754946787646,
+    "_provisional": true
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "voxtral_realtime",
+  "variant": "voxtral-mini-4b-realtime-2602",
+  "source_model": {
+    "hf_repo": "mistralai/Voxtral-Mini-4B-Realtime-2602",
+    "hf_revision": "2769294da9567371363522aac9bbcfdd19447add"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://github.com/huggingface/transformers",
+    "revision": "v5.10.2",
+    "entrypoint": "scripts/dump_reference_voxtral_realtime_transformers.py",
+    "dump_args": [],
+    "notes": "Offline whole-clip oracle is the per-tensor contract (decode subcommand). A separate streaming-replay pass (stream subcommand) dumps the streaming transcript + per-step logits so Stage 4 can verify offline<->streaming numerical equivalence (intake risk #1). num_delay_tokens defaults to the processor value (config default 6 = 480ms, the publisher-recommended setting). The processor is auto-detect only (TranscriptionRequest language=None); --language is accepted but ignored."
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 400,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "global",
+    "preemphasis": null,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 131072,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 11,
+      "streaming_pad": 32
+    }
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "es", "de", "ru", "zh", "ja", "it", "pt", "nl", "ar", "hi", "ko"],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": ["none"],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/voxtral_realtime.json",
+  "cases": ["jfk"]
+}
