@@ -1,6 +1,6 @@
 # MedASR
 
-Status: research
+Status: shipped (private HF repo only; public flip deferred)
 
 ## Identity
 
@@ -33,32 +33,36 @@ There is no NeMo / ESPnet / FunASR / author-side standalone repo for this checkp
 | --- | --- |
 | Intake | `reports/porting/medasr/medasr/intake.json` |
 | Preflight Gate A | `reports/porting/medasr/medasr/preflight-gate-A.json` |
-| Forward map | `reports/porting/medasr/forward-map.md` (TODO at Stage 3) |
-| Tolerances | `tests/tolerances/medasr.json` (TODO at Stage 2) |
-| Converter report | `reports/convert/medasr-F32.json` (TODO at Stage 3) |
-| Reference dump root | `build/validate/medasr/medasr/` (TODO at Stage 2) |
-| Bench reports | `reports/perf/<machine>/medasr-medasr-*.json` (TODO at Stage 6) |
-| WER scores | `reports/wer/medasr-{REF,F32,F16,Q8_0,Q6_K,Q5_K_M,Q4_K_M}.test-clean.score.json` (TODO at Stage 7) |
-| WER summary | `reports/wer/medasr.test-clean.summary.md` (TODO at Stage 7) |
+| Forward map | `reports/porting/medasr/forward-map.md` |
+| Tolerances | `tests/tolerances/medasr.json` |
+| Converter report | `reports/convert/medasr-F32.json` |
+| Reference dump root | `build/validate/medasr/medasr/` |
+| Bench reports | `reports/perf/apple-m4/medasr-publication_medasr_metal.json` |
+| WER scores | `reports/wer/medasr-{F32,F16,Q8_0,Q6_K,Q5_K_M,Q4_K_M}.librispeech-test-clean.score.json` + `reports/wer/medasr-REF.test-clean.score.json` (REF uses legacy unprefixed slug) |
+| WER summary | `reports/wer/medasr.test-clean.summary.md` |
 
 ## Commands
 
 Reference run:
 
 ```bash
-TODO  # Stage 2: scripts/dump_reference_medasr_hf.py decode --model google/medasr --audio samples/jfk.wav --out build/validate/medasr/medasr/jfk/decode/ref
+uv run --project scripts/envs/medasr scripts/dump_reference_medasr_transformers.py decode \
+  --model google/medasr --audio samples/jfk.wav \
+  --out build/validate/medasr/medasr/jfk/decode/ref
 ```
 
 Reference dumps:
 
 ```bash
-TODO  # Stage 2: scripts/dump_reference_medasr_hf.py dump --model google/medasr --audio samples/jfk.wav --out build/validate/medasr/medasr/jfk/
+uv run --project scripts/envs/medasr scripts/dump_reference_medasr_transformers.py dump \
+  --model google/medasr --audio samples/jfk.wav \
+  --out build/validate/medasr/medasr/jfk/
 ```
 
 Conversion:
 
 ```bash
-TODO  # Stage 3: uv run --project scripts/envs/medasr scripts/convert-medasr.py google/medasr
+uv run --project scripts/envs/medasr scripts/convert-medasr.py google/medasr
 ```
 
 Validation:
@@ -67,10 +71,23 @@ Validation:
 uv run scripts/validate.py all --family medasr --variant medasr
 ```
 
-Benchmarks:
+Benchmarks (Metal, M4):
 
 ```bash
-TODO  # Stage 6: uv run scripts/bench/run.py --models medasr --quants q8_0,q4_k_m --samples jfk --backends metal,cpu --iters 3 --warmup 1 --name medasr-publication
+uv run scripts/bench/run.py \
+  --models medasr --quants q8_0,q4_k_m --samples jfk,dots \
+  --backends metal --iters 3 --warmup 1 --name medasr-publication
+```
+
+WER (Modal L4 sweep across all shipped presets):
+
+```bash
+modal run scripts/wer/remote/modal_sweep.py::sweep \
+  --models handy-computer/medasr-gguf \
+  --dataset librispeech:test-clean --gpu L4
+for f in reports/wer/medasr-*.librispeech-test-clean.jsonl; do
+  uv run scripts/wer/score.py "$f"
+done
 ```
 
 ## Architecture summary
@@ -147,4 +164,7 @@ columns that are filled at different stages:
 
 - This is the first `transformers @ dev` reference in the repo. The reference env (`scripts/envs/medasr/pyproject.toml`) must install transformers from the specific commit in the README, not from a PyPI release. Expect ABI churn vs transformers 4.x.
 - `samples/jfk.wav` is the standard English smoke test. The HF repo also ships `test_audio.wav` (a medical-dictation clip) — pull this into `samples/medasr/` for a per-family secondary smoke test that exercises the in-domain audio profile.
+- **Mel frontend uses the shared `transcribe::MelFrontend`** via two new MelConfig knobs added in Stage 6: `pad_mode="none"` (PyTorch `center=False`; window is left-aligned and frame count is `(n-win)/hop+1`) and `log_clamp_min=1e-5` (natural log with floor-clamp, matching LASR's `log(max(power, 1e-5))` vs NeMo's `log(power+kLogEps)`). The medasr-specific `arch/medasr/mel.{cpp,h}` were deleted in Stage 6; the shared MelFrontend's vDSP+cblas path took mel from 40ms→1ms on jfk and 120ms→3ms on dots on M4 Metal.
+- **CUDA F16/Q4_K_M precision workarounds** in `arch/medasr/encoder.cpp`: every matmul uses `mul_mat_f32acc()` (no-op for F32/F16 weights; forces `GGML_PREC_F32` on F16 to dodge CUDA cuBLAS COMPUTE_16F's 65504 saturation, since the macaron+conv residual stack reaches activation magnitudes ~3e4-2e6). The subsampling `dense_1` matmul also pre-casts its weight to F32 at graph-build time on quantized GGUFs because the 256-input-dim Q4_K MMQ kernel on CUDA L4 overflows for activations in this range. Cost on Metal is a single 128 KiB cast per call (negligible); cost on CPU is zero (the cast is a no-op).
+- **Stage 6 publication bench on M4 (Q8_0)**: jfk 74ms wall (RTF 148x), dots 167ms wall (RTF 211x). mel is now ~1-3ms; encode dominates at ~70ms (jfk) / ~160ms (dots). Per-param efficiency is 0.72 ms/Mparam, on par with whisper-base (0.65) and ahead of canary-180m-flash (0.41 with flash-attn). Q4 vs Q8 differ by <5% in wall (compute-bound, not bandwidth-bound).
 - Stage 7's WER target is LibriSpeech test-clean, but the model is optimized for medical dictation. Eye Gaze (MIMIC chest X-ray) would be the more representative complementary check if licensing allows; flag if absolute LibriSpeech WER comes in noticeably worse than general ASR without that being a port defect.
