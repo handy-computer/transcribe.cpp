@@ -226,6 +226,30 @@ ggml_tensor * block_step(
     bool                use_flash);
 
 // ---------------------------------------------------------------------------
+// Block forward (multi-position step: T_seq new tokens in one pass)
+// ---------------------------------------------------------------------------
+
+// Same as block_step but processes T_seq positions in a single forward.
+// Writes T_seq rows at the indices in `kv_idx` (i64 [T_seq]) and reads the
+// full [0, max_n_kv) KV window. `mask` is [max_n_kv, T_seq] f16 — column
+// `c` masks the c-th query position (typically causal: 0 for cached
+// positions <= cur_pos+c, -inf beyond). Used by spec-decode verify pass.
+ggml_tensor * block_step_n(
+    ggml_context *      ctx,
+    ggml_cgraph *       gf,
+    ggml_tensor *       x,          // [hidden, T_seq]
+    const BlockView &   view,
+    const BlockParams & params,
+    KvCache &           kv_cache,
+    int                 layer_idx,
+    int                 T_seq,
+    int                 max_n_kv,
+    ggml_tensor *       mask,       // [max_n_kv, T_seq] f16
+    ggml_tensor *       positions,  // [T_seq] i32
+    ggml_tensor *       kv_idx,     // [T_seq] i64
+    bool                use_flash);
+
+// ---------------------------------------------------------------------------
 // Block forward (batched step: B utterances, one new token each)
 // ---------------------------------------------------------------------------
 

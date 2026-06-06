@@ -177,6 +177,12 @@ struct cli_args {
     // --stream-voxtral-delay N. Ignored when stream_chunk_ms == 0 or when
     // the model is not voxtral_realtime.
     int         stream_voxtral_delay         = -1;
+    // Speculative-decode draft length passed through to
+    // transcribe_run_params::spec_k_drafts on the offline path. -1 = family
+    // default (each family picks its tuned K). 0 = explicitly off. >0 =
+    // explicit K. Silently ignored by families without
+    // supports_spec_decode. Set by --spec-k-drafts N.
+    int         spec_k_drafts                = -1;
 };
 
 void print_usage(const char * argv0) {
@@ -224,6 +230,11 @@ void print_usage(const char * argv0) {
         "                        delay in 12.5 Hz tokens (80 ms each); valid\n"
         "                        N = 1..15 (80..1200 ms) or 30 (2400 ms);\n"
         "                        -1 = model default (6 = 480 ms)\n"
+        "  --spec-k-drafts N     speculative-decode draft length on offline\n"
+        "                        autoregressive families that advertise\n"
+        "                        supports_spec_decode. -1 = family default,\n"
+        "                        0 = off, > 0 = explicit K. Silently ignored\n"
+        "                        by families without spec support.\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
 }
@@ -392,6 +403,15 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             const char * v = take_value(a.c_str());
             if (!v) return false;
             out.stream_voxtral_delay = std::atoi(v);
+        } else if (a == "--spec-k-drafts") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.spec_k_drafts = std::atoi(v);
+            if (out.spec_k_drafts < -1) {
+                std::fprintf(stderr,
+                             "error: --spec-k-drafts must be -1 (family default), 0 (off), or > 0\n");
+                return false;
+            }
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
             return false;
@@ -522,7 +542,8 @@ int main(int argc, char ** argv) {
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
         if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
-        rp.timestamps = args.timestamps;
+        rp.timestamps   = args.timestamps;
+        rp.spec_k_drafts = args.spec_k_drafts;
 
         if (args.itn_set) {
             rp.itn = args.use_itn ? TRANSCRIBE_ITN_MODE_ON
@@ -881,7 +902,8 @@ int main(int argc, char ** argv) {
         if (args.translate)         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         if (!args.language.empty()) rp.language = args.language.c_str();
         if (!args.target_language.empty()) rp.target_language = args.target_language.c_str();
-        rp.timestamps = args.timestamps;
+        rp.timestamps   = args.timestamps;
+        rp.spec_k_drafts = args.spec_k_drafts;
 
         if (args.itn_set) {
             rp.itn = args.use_itn ? TRANSCRIBE_ITN_MODE_ON

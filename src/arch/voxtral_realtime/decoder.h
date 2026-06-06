@@ -79,6 +79,39 @@ StepBuild build_step_graph(ggml_context *                  ctx,
                            bool                            use_flash);
 
 // ---------------------------------------------------------------------------
+// Multi-position verify (spec-decode prototype)
+// ---------------------------------------------------------------------------
+//
+// Runs the decoder on T_verify positions in one pass. Used by an n-gram
+// speculative-decode driver: feed [next_tok, draft[0..K-1]] (T_verify = K+1),
+// get back T_verify predicted tokens, accept the longest prefix where draft[i]
+// matches the predicted token at column i, rewind by emitting up to that
+// point. KV writes are committed at positions kv_idx[T_verify]; if some
+// draft tokens are rejected, the wrongly-written KV rows are simply
+// overwritten on the next pass (positions are addressed by slot).
+struct VerifyBuild {
+    ggml_tensor * input_ids_in = nullptr;  // [T_verify] i32
+    ggml_tensor * audio_in     = nullptr;  // [dec_hidden, T_verify] f32
+    ggml_tensor * positions_in = nullptr;  // [T_verify] i32
+    ggml_tensor * kv_idx_in    = nullptr;  // [T_verify] i64
+    ggml_tensor * mask_in      = nullptr;  // [max_n_kv, T_verify] f16
+    ggml_tensor * out          = nullptr;  // [T_verify] i32 argmax
+    ggml_tensor * logits       = nullptr;  // [vocab, T_verify] f32
+    ggml_cgraph * graph        = nullptr;
+    int T_verify = 0;
+    int max_n_kv = 0;
+};
+
+VerifyBuild build_verify_graph(ggml_context *                  ctx,
+                               const Weights &                 weights,
+                               const HParams &                 hp,
+                               transcribe::qwen3_lm::KvCache & kv_cache,
+                               ggml_tensor *                   ada_scale_all,
+                               int                             T_verify,
+                               int                             max_n_kv,
+                               bool                            use_flash);
+
+// ---------------------------------------------------------------------------
 // Batched prefill / step (offline transcribe_run_batch)
 // ---------------------------------------------------------------------------
 //

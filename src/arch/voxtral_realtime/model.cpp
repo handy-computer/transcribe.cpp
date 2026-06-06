@@ -42,6 +42,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace transcribe::voxtral_realtime {
@@ -390,6 +391,7 @@ transcribe_status compute_ada_scales(Session * cc, Model * cm, int num_delay) {
 transcribe_status forward_buffer(Session * cc, Model * cm,
                                  const float * pcm, int n_samples,
                                  int num_delay, bool dumps_on,
+                                 int k_drafts,
                                  std::string & out_text) {
     if (!cm->mel.has_value()) {
         std::fprintf(stderr, "voxtral_realtime run: model has no MelFrontend\n");
@@ -599,54 +601,209 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
         generated_ids.push_back(argmax(logits));
     }
 
-    // Steps: position cur_pos in [T_prompt, n_audio).
+    // Steps: 1-gram-lookup speculative decode (when k_drafts > 0) or plain
+    // autoregression (k_drafts == 0).
+    //
+    // Spec path: each iter feeds [next_tok, draft[0..K-1]] at positions
+    // [cur_pos..cur_pos+K] through a multi-position verify graph. predicted[0]
+    // is always the model's true next-token decision; predicted[c] (c>0) is
+    // only valid if draft[0..c-1] all matched the model's argmax at columns
+    // 0..c-1. n_accept = longest matched prefix; we commit predicted[0..n_accept].
+    // Rejected drafts' KV writes get overwritten on the next iter (subsequent
+    // verify pass at cur_pos + n_accept + 1 writes through those slots).
+    //
+    // For both paths the attention read window is shrunk from kv_cache.n_ctx
+    // (allocation stride) to n_audio (the actual clip horizon). The dropped
+    // slots [n_audio, n_ctx) were always -inf-masked, so the shrink is bit-
+    // identical and saves ~11× KV bandwidth on short clips where n_ctx floors
+    // at 2048. Streaming path keeps the full window because positions wrap.
     {
-        // Read only the valid window [0, n_audio) in step attention (Stage 6 #4).
-        // n_ctx stays the allocation/stride; the dropped slots [n_audio, n_ctx) were
-        // always -inf-masked, so this is bit-identical and just cuts KV read
-        // bandwidth (~11x on short clips, where n_ctx floors at 2048).
         const int max_n_kv = n_audio;
+
         if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
-        ggml_init_params ip {}; ip.mem_size = 32 * 1024 * 1024; ip.no_alloc = true;
+        ggml_init_params ip {}; ip.mem_size = 128 * 1024 * 1024; ip.no_alloc = true;
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
 
-        StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights, cm->hparams,
-            cc->kv_cache, cc->ada_scale_all, max_n_kv, cc->decoder_use_flash);
-        if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
-        ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
-        apply_threads(cc->sched, cc->n_threads);
-
         const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f), mn = ggml_fp32_to_fp16(-INFINITY);
-        std::vector<ggml_fp16_t> step_mask(max_n_kv, mn);
+
         int32_t next_tok = generated_ids.back();
         int cur_pos = T_prompt;
-        while (next_tok != eos_id && cur_pos < n_audio) {
-            if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-            ggml_backend_tensor_set(sb.input_id_in, &next_tok, 0, sizeof(int32_t));
-            ggml_backend_tensor_set(sb.audio_in,
-                cc->enc_host.data() + static_cast<size_t>(cur_pos) * dec_h, 0,
-                static_cast<size_t>(dec_h) * sizeof(float));
-            const int32_t pos_val = cur_pos;
-            ggml_backend_tensor_set(sb.position_in, &pos_val, 0, sizeof(int32_t));
-            const int64_t kv_idx = cur_pos;
-            ggml_backend_tensor_set(sb.kv_idx_in, &kv_idx, 0, sizeof(int64_t));
-            if (cur_pos == T_prompt) std::fill(step_mask.begin(), step_mask.begin() + cur_pos + 1, mz);
-            else step_mask[cur_pos] = mz;
-            ggml_backend_tensor_set(sb.mask_in, step_mask.data(), 0,
-                                    static_cast<size_t>(max_n_kv) * sizeof(ggml_fp16_t));
-            if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
-                std::fprintf(stderr, "voxtral_realtime run: step compute failed\n");
-                return TRANSCRIBE_ERR_GGUF;
+
+        if (k_drafts == 0) {
+            // ---- Plain autoregression (zero spec overhead) ----
+            StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights, cm->hparams,
+                cc->kv_cache, cc->ada_scale_all, max_n_kv, cc->decoder_use_flash);
+            if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+            ggml_backend_sched_reset(cc->sched);
+            if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
+            apply_threads(cc->sched, cc->n_threads);
+
+            std::vector<ggml_fp16_t> step_mask(max_n_kv, mn);
+            while (next_tok != eos_id && cur_pos < n_audio) {
+                if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+                ggml_backend_tensor_set(sb.input_id_in, &next_tok, 0, sizeof(int32_t));
+                ggml_backend_tensor_set(sb.audio_in,
+                    cc->enc_host.data() + static_cast<size_t>(cur_pos) * dec_h, 0,
+                    static_cast<size_t>(dec_h) * sizeof(float));
+                const int32_t pos_val = cur_pos;
+                ggml_backend_tensor_set(sb.position_in, &pos_val, 0, sizeof(int32_t));
+                const int64_t kv_idx = cur_pos;
+                ggml_backend_tensor_set(sb.kv_idx_in, &kv_idx, 0, sizeof(int64_t));
+                if (cur_pos == T_prompt) std::fill(step_mask.begin(), step_mask.begin() + cur_pos + 1, mz);
+                else step_mask[cur_pos] = mz;
+                ggml_backend_tensor_set(sb.mask_in, step_mask.data(), 0,
+                                        static_cast<size_t>(max_n_kv) * sizeof(ggml_fp16_t));
+                if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
+                    std::fprintf(stderr, "voxtral_realtime run: step compute failed\n");
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+                int32_t tok = 0;
+                ggml_backend_tensor_get(sb.out, &tok, 0, sizeof(int32_t));
+                next_tok = tok;
+                cur_pos += 1;
+                cc->kv_cache.n = cur_pos + 1; cc->kv_cache.head = cur_pos + 1;
+                if (next_tok == eos_id) break;
+                generated_ids.push_back(next_tok);
             }
-            int32_t tok = 0;
-            ggml_backend_tensor_get(sb.out, &tok, 0, sizeof(int32_t));
-            next_tok = tok;
-            cur_pos += 1;
-            cc->kv_cache.n = cur_pos + 1; cc->kv_cache.head = cur_pos + 1;
-            if (next_tok == eos_id) break;
-            generated_ids.push_back(next_tok);
+        } else {
+            // ---- 1-gram-lookup speculative decode ----
+            const int K_DRAFTS = k_drafts;
+            const int T_verify = K_DRAFTS + 1;
+
+            // Pad enc_host with K_DRAFTS extra zero frames so verify can safely
+            // read audio for columns past n_audio in the tail iterations. The
+            // garbage predictions at those columns are never committed.
+            cc->enc_host.resize(static_cast<size_t>(dec_h) * (n_audio + K_DRAFTS), 0.0f);
+
+            VerifyBuild vb = build_verify_graph(cc->compute_ctx, cm->weights, cm->hparams,
+                cc->kv_cache, cc->ada_scale_all, T_verify, max_n_kv, cc->decoder_use_flash);
+            if (vb.graph == nullptr || vb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
+            ggml_backend_sched_reset(cc->sched);
+            if (!ggml_backend_sched_alloc_graph(cc->sched, vb.graph)) return TRANSCRIBE_ERR_GGUF;
+            apply_threads(cc->sched, cc->n_threads);
+
+            // all_ids[p] = committed token at position p. last_pos_by_tok[t]
+            // = latest position p with all_ids[p] == t (the 1-gram suffix
+            // map). Initial state: prompt + first generated token from prefill.
+            std::vector<int32_t> all_ids;
+            all_ids.reserve(static_cast<size_t>(n_audio));
+            all_ids.insert(all_ids.end(), prompt_ids.begin(), prompt_ids.end());
+            all_ids.push_back(generated_ids.back());
+
+            std::unordered_map<int32_t, int> last_pos_by_tok;
+            last_pos_by_tok.reserve(static_cast<size_t>(n_audio));
+            for (int p = 0; p < T_prompt; ++p) last_pos_by_tok[prompt_ids[p]] = p;
+
+            std::vector<int32_t>      in_ids(T_verify, 0);
+            std::vector<int32_t>      positions(T_verify, 0);
+            std::vector<int64_t>      kv_idxs(T_verify, 0);
+            std::vector<float>        audio_buf(static_cast<size_t>(dec_h) * T_verify);
+            std::vector<ggml_fp16_t>  verify_mask(static_cast<size_t>(max_n_kv) * T_verify, mn);
+            std::vector<int32_t>      predicted(T_verify, 0);
+            std::vector<int32_t>      draft(K_DRAFTS, 0);
+
+            while (next_tok != eos_id && cur_pos < n_audio) {
+                if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
+
+                // Build draft via 1-gram suffix lookup. Fallback when no
+                // match: K copies of STREAMING_PAD (id 32), the dominant
+                // token in the stream — gives free acceptance during silence.
+                int draft_origin = -1;
+                auto it = last_pos_by_tok.find(next_tok);
+                if (it != last_pos_by_tok.end()) draft_origin = it->second;
+                for (int k = 0; k < K_DRAFTS; ++k) {
+                    const int src = (draft_origin >= 0) ? (draft_origin + 1 + k) : -1;
+                    draft[k] = (src >= 0 && src < static_cast<int>(all_ids.size()))
+                        ? all_ids[src] : 32 /* STREAMING_PAD */;
+                }
+
+                in_ids[0] = next_tok;
+                positions[0] = cur_pos;
+                kv_idxs[0] = cur_pos;
+                for (int c = 1; c < T_verify; ++c) {
+                    in_ids[c] = draft[c - 1];
+                    positions[c] = cur_pos + c;
+                    kv_idxs[c] = cur_pos + c;
+                }
+                std::memcpy(audio_buf.data(),
+                            cc->enc_host.data() + static_cast<size_t>(cur_pos) * dec_h,
+                            static_cast<size_t>(dec_h) * T_verify * sizeof(float));
+
+                // Per-column causal mask. Cheap to rebuild each iter
+                // (max_n_kv × T_verify × 2 B, kilobytes-scale).
+                std::fill(verify_mask.begin(), verify_mask.end(), mn);
+                for (int c = 0; c < T_verify; ++c) {
+                    const int last_valid = std::min(cur_pos + c, max_n_kv - 1);
+                    for (int slot = 0; slot <= last_valid; ++slot) {
+                        verify_mask[static_cast<size_t>(c) * max_n_kv + slot] = mz;
+                    }
+                }
+
+                ggml_backend_tensor_set(vb.input_ids_in, in_ids.data(), 0,
+                                        static_cast<size_t>(T_verify) * sizeof(int32_t));
+                ggml_backend_tensor_set(vb.audio_in, audio_buf.data(), 0,
+                                        static_cast<size_t>(dec_h) * T_verify * sizeof(float));
+                ggml_backend_tensor_set(vb.positions_in, positions.data(), 0,
+                                        static_cast<size_t>(T_verify) * sizeof(int32_t));
+                ggml_backend_tensor_set(vb.kv_idx_in, kv_idxs.data(), 0,
+                                        static_cast<size_t>(T_verify) * sizeof(int64_t));
+                ggml_backend_tensor_set(vb.mask_in, verify_mask.data(), 0,
+                                        verify_mask.size() * sizeof(ggml_fp16_t));
+
+                if (ggml_backend_sched_graph_compute(cc->sched, vb.graph) != GGML_STATUS_SUCCESS) {
+                    std::fprintf(stderr, "voxtral_realtime run: verify compute failed\n");
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+
+                ggml_backend_tensor_get(vb.out, predicted.data(), 0,
+                                        static_cast<size_t>(T_verify) * sizeof(int32_t));
+
+                // Accept the longest matched prefix; cap so we never commit
+                // a position past n_audio (matches the original step loop's
+                // horizon).
+                int n_accept = 0;
+                while (n_accept < K_DRAFTS
+                       && predicted[n_accept] == draft[n_accept]
+                       && (cur_pos + 1 + (n_accept + 1)) <= n_audio) {
+                    n_accept++;
+                }
+
+                const int prev_size = static_cast<int>(all_ids.size());
+                bool hit_eos = false;
+                for (int i = 0; i <= n_accept; ++i) {
+                    const int32_t tok = predicted[i];
+                    const int pos = cur_pos + 1 + i;
+                    if (pos > n_audio) break;
+                    if (tok == eos_id) { hit_eos = true; break; }
+                    all_ids.push_back(tok);
+                    generated_ids.push_back(tok);
+                    last_pos_by_tok[tok] = pos;
+                }
+
+                // Pin next_tok at cur_pos (it was committed by a prior iter
+                // / by prefill but isn't yet a "previous occurrence" key).
+                last_pos_by_tok[next_tok] = cur_pos;
+
+                // Forward-progress safety: if no token committed (e.g. eos
+                // at predicted[0]) the outer loop condition would otherwise
+                // spin on the same cur_pos.
+                if (static_cast<int>(all_ids.size()) == prev_size) {
+                    if (!hit_eos) {
+                        std::fprintf(stderr,
+                            "voxtral_realtime spec: no commit at cur_pos=%d "
+                            "(n_audio=%d, predicted[0]=%d) — breaking\n",
+                            cur_pos, n_audio, predicted[0]);
+                    }
+                    break;
+                }
+
+                cur_pos = static_cast<int>(all_ids.size()) - 1;
+                next_tok = all_ids.back();
+                cc->kv_cache.n = cur_pos + 1; cc->kv_cache.head = cur_pos + 1;
+
+                if (hit_eos) { next_tok = eos_id; break; }
+            }
         }
     }
     cc->t_decode_us = ggml_time_us() - t_dec_start;
@@ -747,14 +904,27 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
     auto * cm = static_cast<Model *>(cc->model);
     if (cm == nullptr || cm->plan.scheduler_list.empty()) return TRANSCRIBE_ERR_INVALID_ARG;
     if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-    (void) params;
 
     transcribe::debug::init();
     const bool dumps_on = transcribe::debug::enabled();
 
+    // params->spec_k_drafts: -1 = family default (=2), 0 = disabled,
+    // 1..VOXTRAL_REALTIME_SPEC_K_MAX = explicit. Clamp into range so a
+    // misconfigured caller doesn't ask for an unbounded verify graph.
+    constexpr int VOXTRAL_REALTIME_SPEC_K_MAX = 8;
+    int k_drafts = 2;  // family default
+    if (params != nullptr && params->struct_size >=
+        offsetof(transcribe_run_params, spec_k_drafts) + sizeof(params->spec_k_drafts)) {
+        const int requested = params->spec_k_drafts;
+        if (requested == 0)      k_drafts = 0;
+        else if (requested > 0)  k_drafts = std::min(requested, VOXTRAL_REALTIME_SPEC_K_MAX);
+        // requested == -1 keeps the family default; requested < -1 falls
+        // through to the family default (matches the silent-ignore semantics).
+    }
+
     std::string text;
     if (auto st = forward_buffer(cc, cm, pcm, n_samples,
-                                 cm->hparams.default_num_delay_tokens, dumps_on, text);
+                                 cm->hparams.default_num_delay_tokens, dumps_on, k_drafts, text);
         st != TRANSCRIBE_OK) return st;
 
     cc->full_text   = text;
