@@ -264,11 +264,17 @@ transcribe_status init_context(transcribe_model * model,
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
-    cc->encoder_use_flash = false;  // CPU source-of-truth path; flash opt-in
+    auto * cm = static_cast<Model *>(model);
+
+    // Encoder + decoder flash attention ON by default on every backend (Stage 6
+    // #3 — measured ~14-37% faster encode on Metal, ~17-47% on CPU, byte-identical
+    // transcript). Flash is now the numerical source-of-truth for the encoder;
+    // tests/tolerances/voxtral_realtime.json is gated against it. Override with
+    // TRANSCRIBE_NO_FLASH=1.
+    cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
-    auto * cm = static_cast<Model *>(model);
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
     if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary, /*n_ctx=*/2048,
                                        cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
@@ -357,6 +363,19 @@ transcribe_status compute_ada_scales(Session * cc, Model * cm, int num_delay) {
     ggml_backend_tensor_get(acc, ada.data(), 0, ada.size() * sizeof(float));
     ggml_free(ctx);
     for (auto & v : ada) v += 1.0f;  // s_l = 1 + ada
+    // Stage 6 #2: fold the per-layer FFN-norm weight into the ada scale and store
+    // (s_l ⊙ norm_ffn_w) here. The decode block passes this as the FFN-norm weight
+    // (ffn_scale = null), so the fused rms_norm(·weight) kernel applies the ada
+    // scale with NO separate per-layer ggml_mul. Exact: s⊙(w⊙x̂) == (s⊙w)⊙x̂.
+    {
+        std::vector<float> wbuf(static_cast<size_t>(hidden));
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_backend_tensor_get(cm->weights.dec_blocks[il].norm_ffn_w, wbuf.data(),
+                                    0, wbuf.size() * sizeof(float));
+            float * s = ada.data() + static_cast<size_t>(il) * hidden;
+            for (int i = 0; i < hidden; ++i) s[i] *= wbuf[i];
+        }
+    }
     ggml_backend_tensor_set(cc->ada_scale_all, ada.data(), 0, ada.size() * sizeof(float));
 
     cc->ada_num_delay = num_delay;
