@@ -35,12 +35,12 @@ Licensed Apache-2.0. Ported from upstream commit
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| BF16   | [Voxtral-Small-24B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-GGUF/resolve/main/Voxtral-Small-24B-2507-BF16.gguf)     | 48.54 GB | 1.56% |
-| F16    | [Voxtral-Small-24B-2507-F16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-GGUF/resolve/main/Voxtral-Small-24B-2507-F16.gguf)       | 48.55 GB | 1.57% |
-| Q8_0   | [Voxtral-Small-24B-2507-Q8_0.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-GGUF/resolve/main/Voxtral-Small-24B-2507-Q8_0.gguf)     | 25.81 GB | 1.56% |
-| Q6_K   | [Voxtral-Small-24B-2507-Q6_K.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-GGUF/resolve/main/Voxtral-Small-24B-2507-Q6_K.gguf)     | 19.94 GB | 1.58% |
-| Q5_K_M | [Voxtral-Small-24B-2507-Q5_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-GGUF/resolve/main/Voxtral-Small-24B-2507-Q5_K_M.gguf) | 17.14 GB | 1.60% |
-| Q4_K_M | [Voxtral-Small-24B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-GGUF/resolve/main/Voxtral-Small-24B-2507-Q4_K_M.gguf) | 14.30 GB | 2.11% |
+| BF16   | [Voxtral-Small-24B-2507-BF16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-BF16.gguf)     | 48.54 GB | 1.56% |
+| F16    | [Voxtral-Small-24B-2507-F16.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-F16.gguf)       | 48.55 GB | 1.57% |
+| Q8_0   | [Voxtral-Small-24B-2507-Q8_0.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q8_0.gguf)     | 25.81 GB | 1.56% |
+| Q6_K   | [Voxtral-Small-24B-2507-Q6_K.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q6_K.gguf)     | 19.94 GB | 1.58% |
+| Q5_K_M | [Voxtral-Small-24B-2507-Q5_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q5_K_M.gguf) | 17.14 GB | 1.60% |
+| Q4_K_M | [Voxtral-Small-24B-2507-Q4_K_M.gguf](https://huggingface.co/handy-computer/Voxtral-Small-24B-2507-gguf/resolve/main/Voxtral-Small-24B-2507-Q4_K_M.gguf) | 14.30 GB | 2.11% |
 
 WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
 with the Whisper-style English text normalizer, batch size 8 on an NVIDIA
