@@ -601,7 +601,11 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
 
     // Steps: position cur_pos in [T_prompt, n_audio).
     {
-        const int max_n_kv = cc->kv_cache.n_ctx;
+        // Read only the valid window [0, n_audio) in step attention (Stage 6 #4).
+        // n_ctx stays the allocation/stride; the dropped slots [n_audio, n_ctx) were
+        // always -inf-masked, so this is bit-identical and just cuts KV read
+        // bandwidth (~11x on short clips, where n_ctx floors at 2048).
+        const int max_n_kv = n_audio;
         if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
         ggml_init_params ip {}; ip.mem_size = 32 * 1024 * 1024; ip.no_alloc = true;
         cc->compute_ctx = ggml_init(ip);
@@ -1699,6 +1703,10 @@ transcribe_status run_batch(transcribe_session * session, const float * const * 
     const int model_max = cm->hparams.dec_max_position;
     int max_n_kv = 1024; while (max_n_kv < max_audio + 1) max_n_kv *= 2;
     if (model_max > 0 && max_n_kv > model_max) max_n_kv = model_max;
+    // Step attention reads only the valid window (Stage 6 #4): the batch's actual
+    // max audio length, not the power-of-2 allocation. min() preserves the full
+    // window if the alloc was capped. Bit-identical (extra slots are masked).
+    const int read_n_kv = std::min(max_audio, max_n_kv);
     const ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
     if (cc->kv_cache_batch.self_k == nullptr || cc->kv_batch_cap != n ||
         cc->kv_batch_n_ctx < max_n_kv) {
@@ -1786,13 +1794,13 @@ transcribe_status run_batch(transcribe_session * session, const float * const * 
         if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
 
         StepBuildBatched sb = build_step_graph_batched(cc->compute_ctx, cm->weights,
-            cm->hparams, cc->kv_cache_batch, cc->ada_scale_all, max_n_kv, n, cc->decoder_use_flash);
+            cm->hparams, cc->kv_cache_batch, cc->ada_scale_all, read_n_kv, n, cc->decoder_use_flash);
         if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
         apply_threads(cc->sched, cc->n_threads);
 
-        const transcribe_status st = run_batch_step_loop(cc, sb, n, max_n_kv, eos_id, dec_h,
+        const transcribe_status st = run_batch_step_loop(cc, sb, n, read_n_kv, eos_id, dec_h,
             enc_hosts, n_audio_b, valid, next_tok, n_past, generated);
         if (st != TRANSCRIBE_OK) return st;
     }
