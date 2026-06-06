@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "parakeet",
+  "variant": "nemotron-3.5-asr-streaming-0.6b",
+  "source_model": {
+    "hf_repo": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+    "hf_revision": "24b151a851dd15909e1fc611b11bb2da52b9fc81"
+  },
+  "expected_dtype": "float32",
+  "dtype_source": "manual",
+  "_skeleton": true
+}
