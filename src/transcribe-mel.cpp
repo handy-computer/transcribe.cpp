@@ -561,7 +561,8 @@ transcribe_status MelFrontend::compute(
     std::vector<float> log_mel(
         static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames));
 
-    const bool whisper_mode = (cfg_.normalize == "per_utterance");
+    const bool whisper_mode =
+        (cfg_.normalize == "per_utterance" || cfg_.normalize == "global");
 
     int stft_threads = n_threads;
     if (stft_threads <= 0) {
@@ -861,6 +862,31 @@ transcribe_status MelFrontend::compute(
             }
         }
 
+        out_n_mels   = n_mels;
+        out_n_frames = n_out;
+        return TRANSCRIBE_OK;
+    }
+
+    // ---- 5b. Voxtral Realtime streaming log-mel (fixed global max) ----
+    // Identical to per_utterance but the clamp floor uses a FIXED maximum
+    // (global_log_mel_max), not the per-utterance max — what makes per-frame
+    // normalization causal/streaming-safe. Drops the trailing center-pad frame.
+    if (cfg_.normalize == "global") {
+        const int n_out = n_frames - 1;
+        if (n_out <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
+        const double floor_val =
+            static_cast<double>(cfg_.global_log_mel_max) - 8.0;
+
+        out_mel.resize(static_cast<size_t>(n_mels) * static_cast<size_t>(n_out));
+        for (int m = 0; m < n_mels; ++m) {
+            const float * src = log_mel.data() + static_cast<size_t>(m) * n_frames;
+            float * dst = out_mel.data() + static_cast<size_t>(m) * n_out;
+            for (int t = 0; t < n_out; ++t) {
+                double v = static_cast<double>(src[t]);
+                if (v < floor_val) v = floor_val;
+                dst[t] = static_cast<float>((v + 4.0) / 4.0);
+            }
+        }
         out_n_mels   = n_mels;
         out_n_frames = n_out;
         return TRANSCRIBE_OK;

@@ -37,6 +37,11 @@ struct bench_args {
     int                        n_threads = 0;
     bool                       quiet     = false;
     transcribe_backend_request backend   = TRANSCRIBE_BACKEND_AUTO;
+    // Passed through to transcribe_run_params::spec_k_drafts. -1 = family
+    // default, 0 = spec decode off, > 0 = explicit draft length. Silently
+    // ignored by families without supports_spec_decode. Set by
+    // --spec-k-drafts N.
+    int                        spec_k_drafts = -1;
 };
 
 void print_usage(const char * argv0) {
@@ -55,6 +60,9 @@ void print_usage(const char * argv0) {
         "                     cpu is strict CPU (no GPU, no BLAS/AMX).\n"
         "                     cpu_accel is CPU + host-memory accelerators\n"
         "                       (BLAS/AMX) when the build includes them.\n"
+        "  --spec-k-drafts N  speculative-decode draft length on the offline\n"
+        "                     path: -1 = family default, 0 = off, > 0 = K.\n"
+        "                     Ignored by families without spec support.\n"
         "  -h, --help         show this help\n",
         argv0);
 }
@@ -95,6 +103,7 @@ bool parse_args(int argc, char ** argv, bench_args & out) {
         else if (a == "--iters")    { auto v = need_val(i, "--iters");    if (!v) return false; out.iters     = std::atoi(v); if (out.iters  < 1) out.iters  = 1; }
         else if (a == "--warmup")   { auto v = need_val(i, "--warmup");   if (!v) return false; out.warmup    = std::atoi(v); if (out.warmup < 0) out.warmup = 0; }
         else if (a == "--threads")  { auto v = need_val(i, "--threads");  if (!v) return false; out.n_threads = std::atoi(v); if (out.n_threads < 0) out.n_threads = 0; }
+        else if (a == "--spec-k-drafts") { auto v = need_val(i, "--spec-k-drafts"); if (!v) return false; out.spec_k_drafts = std::atoi(v); if (out.spec_k_drafts < -1) { std::fprintf(stderr, "error: --spec-k-drafts must be -1 (family default), 0 (off), or > 0\n"); return false; } }
         else if (a == "--quiet")    { out.quiet = true; }
         else if (a == "--backend")  {
             auto v = need_val(i, "--backend"); if (!v) return false;
@@ -227,6 +236,7 @@ int main(int argc, char ** argv) {
     }
 
     struct transcribe_run_params rp; transcribe_run_params_init(&rp);
+    rp.spec_k_drafts = args.spec_k_drafts;
 
     // Warmup (untimed).
     for (int w = 0; w < args.warmup; ++w) {
@@ -325,6 +335,7 @@ int main(int argc, char ** argv) {
     append_fmt(out, "  \"sample_duration_s\": %.3f,\n", sample_duration_s);
     append_fmt(out, "  \"iters\": %d,\n",  args.iters);
     append_fmt(out, "  \"warmup\": %d,\n", args.warmup);
+    append_fmt(out, "  \"spec_k_drafts\": %d,\n", args.spec_k_drafts);
     append_fmt(out, "  \"backend\": \"%s\",\n", json_escape(backend.c_str()).c_str());
     append_fmt(out, "  \"load_ms\": %.3f,\n", load_ms);
     out += "  \"per_iter\": [\n";

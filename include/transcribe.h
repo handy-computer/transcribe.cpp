@@ -648,6 +648,29 @@ struct transcribe_run_params {
     const char *                  target_language;
     bool                          keep_special_tags;
     const struct transcribe_ext * family;
+
+    /*
+     * spec_k_drafts: n-gram-lookup speculative-decode draft length for the
+     *   offline autoregressive decode step. Family-portable strategy knob;
+     *   the family decides how K maps to its internal verify graph.
+     *
+     *   Convention:
+     *     -1: family default (each family picks its tuned K).
+     *      0: spec decoding explicitly disabled — standard 1-token-per-step
+     *         autoregression. Use this for byte-equal reproduction of
+     *         pre-spec behavior or when measuring baseline performance.
+     *     >0: draft K tokens per verify pass. Practical range is 1..8;
+     *         optimal K is hardware-dependent (compute-bound hardware
+     *         prefers small K, bandwidth-bound prefers larger K — see
+     *         docs/models/<family>.md for per-family guidance).
+     *
+     *   Families gate this via transcribe_capabilities::supports_spec_decode.
+     *   Setting spec_k_drafts != -1 on a family with
+     *   supports_spec_decode == false is silently ignored (the run proceeds
+     *   as ordinary autoregression). Probe the capability bit if you want
+     *   to know whether the field will take effect.
+     */
+    int32_t                       spec_k_drafts;
 };
 
 TRANSCRIBE_API void transcribe_run_params_init(
@@ -730,6 +753,18 @@ struct transcribe_capabilities {
     bool                      supports_language_detect;
     bool                      supports_translate;
     bool                      supports_streaming;
+
+    /*
+     * supports_spec_decode: gates transcribe_run_params::spec_k_drafts.
+     *   True means the family's offline (transcribe_run / transcribe_run_batch)
+     *   path implements n-gram-lookup speculative decoding. A non-zero
+     *   spec_k_drafts on a model with supports_spec_decode == false is
+     *   silently ignored — the run proceeds as ordinary autoregression. This
+     *   is a soft gate (no error) because spec is purely a performance
+     *   strategy; callers can probe this bit if they want to know whether
+     *   passing K will actually do anything.
+     */
+    bool                      supports_spec_decode;
 
     /*
      * Streaming timing hints intentionally do NOT live here. Streaming

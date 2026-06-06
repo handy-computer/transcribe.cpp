@@ -265,6 +265,7 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
     if (p == nullptr) { return; }
     std::memset(p, 0, sizeof(*p));
     p->struct_size = sizeof(*p);
+    p->spec_k_drafts = -1;  // family default
 }
 
 extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * p) {

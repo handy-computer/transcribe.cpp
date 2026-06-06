@@ -83,7 +83,17 @@ struct MelConfig {
     //                     normalize; used by streaming-trained variants
     //                     whose feature normalisation is baked into
     //                     training rather than applied at inference).
+    //   "global"        — Voxtral Realtime streaming log-mel: like
+    //                      "per_utterance" but the log clamp floor uses a
+    //                      FIXED max (global_log_mel_max) instead of the
+    //                      per-utterance maximum, so each frame is
+    //                      causal/streaming-safe. Still drops the trailing
+    //                      center-pad STFT frame.
     std::string normalize = "per_feature";
+
+    // Fixed log-mel maximum for normalize == "global" (Voxtral Realtime
+    // global_log_mel_max). Unused by other normalize modes.
+    float global_log_mel_max = 1.5f;
 
     // Optional checkpoint-provided mel filterbank [num_mels * (n_fft/2+1)]
     // row-major, Slaney-normalised. When non-empty, used instead of

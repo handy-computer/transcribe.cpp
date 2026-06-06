@@ -103,9 +103,11 @@ capabilities flags imply. Present the draft for human review in Step 6.
 
 State the **batch and streaming** posture from the Capability Validation
 rows:
-- Batch: whether the family ships an explicit `run_batch()` fast path
-  (PASS) or runs the serial fallback (`ACCEPTED GAP — serial fallback`),
-  and that batching is WER-neutral (byte-identical to single-stream).
+- Batch: confirm the family ships an explicit `run_batch()` parallel fast
+  path (PASS — batching `MUST PASS`, not optional) and that it is
+  WER-neutral (byte-identical to single-stream). Serial fallback is
+  reportable only as `ACCEPTED GAP — serial (benchmarked no faster)`, or as an
+  explicit user-signed `BLOCKER`; it is never a silent default.
 - Streaming: if `capabilities.streaming` is true the row is PASS — say
   so and name the chunk/lookahead contract; it is never reported as an
   accepted gap for a natively-streaming model. If the model does not

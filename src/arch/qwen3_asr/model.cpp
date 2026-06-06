@@ -1450,33 +1450,31 @@ transcribe_status prefill_all_batched(
         ggml_backend_tensor_set(pb.input_ids_in, ids.data(), 0,
                                 ids.size() * sizeof(int32_t));
     }
-    // enc_out [d_enc, T_enc_max, n] (pad 0).
+    // Audio injection by elementwise blend: audio_dense [d_enc, T_prompt_max, n]
+    // holds each utterance's enc_out embeds scattered into their prompt
+    // positions (zero elsewhere), keep [T_prompt_max, n] is 0 there and 1
+    // elsewhere. x = x*keep + audio_dense. (d_enc == dec_hidden, enforced.)
     {
-        std::vector<float> enc(static_cast<size_t>(d_enc) * T_enc_max * n, 0.0f);
-        for (int b = 0; b < n; ++b) {
-            if (!valid[b]) continue;
-            std::memcpy(enc.data() +
-                        static_cast<size_t>(b) * T_enc_max * d_enc,
-                        enc_hosts[b].data(),
-                        static_cast<size_t>(T_enc[b]) * d_enc * sizeof(float));
-        }
-        ggml_backend_tensor_set(pb.enc_out_in, enc.data(), 0,
-                                enc.size() * sizeof(float));
-    }
-    // enc_idx [T_enc_max, n] i64: audio rows -> prefix_len+j; pad rows ->
-    // distinct positions [T_prompt[b], T_prompt_max) (overwritten by steps).
-    {
-        std::vector<int64_t> eidx(static_cast<size_t>(T_enc_max) * n, 0);
+        std::vector<float> audio_dense(
+            static_cast<size_t>(d_enc) * T_prompt_max * n, 0.0f);
+        std::vector<float> keep(static_cast<size_t>(T_prompt_max) * n, 1.0f);
         for (int b = 0; b < n; ++b) {
             const int te = valid[b] ? T_enc[b] : 0;
-            const int tp = valid[b] ? T_prompt[b] : 0;
-            for (int j = 0; j < T_enc_max; ++j) {
-                eidx[static_cast<size_t>(b) * T_enc_max + j] =
-                    (j < te) ? (prefix_len + j) : (tp + j - te);
+            // enc_hosts[b] is [d_enc, te] column-major; audio token j lands at
+            // prompt position prefix_len+j, flat column b*T_prompt_max+pos.
+            for (int j = 0; j < te; ++j) {
+                const size_t dst_col =
+                    static_cast<size_t>(b) * T_prompt_max + (prefix_len + j);
+                std::memcpy(audio_dense.data() + dst_col * d_enc,
+                            enc_hosts[b].data() + static_cast<size_t>(j) * d_enc,
+                            static_cast<size_t>(d_enc) * sizeof(float));
+                keep[dst_col] = 0.0f;
             }
         }
-        ggml_backend_tensor_set(pb.enc_idx_in, eidx.data(), 0,
-                                eidx.size() * sizeof(int64_t));
+        ggml_backend_tensor_set(pb.audio_dense_in, audio_dense.data(), 0,
+                                audio_dense.size() * sizeof(float));
+        ggml_backend_tensor_set(pb.keep_mask_in, keep.data(), 0,
+                                keep.size() * sizeof(float));
     }
     // positions [T_prompt_max] 0..T-1 (shared).
     {

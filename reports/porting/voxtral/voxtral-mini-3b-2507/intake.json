@@ -1,0 +1,189 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "voxtral",
+  "hf_repo": "mistralai/Voxtral-Mini-3B-2507",
+  "hf_revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "found",
+      "detail": "WhisperFeatureExtractor: feature_size=128, n_fft=400, hop_length=160, chunk_length=30, sampling_rate=16000, dither=0.0"
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "accepted_gap",
+      "detail": "No HF tokenizer_config.json; Voxtral ships tekken.json and tokenizes via mistral-common (MistralCommonBackend). Special-token IDs taken from generation_config.json + mistral-common."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tekken.json",
+      "status": "found",
+      "detail": "Tekken (tiktoken-style BPE) vocab + control tokens; consumed by mistral-common, not a HF fast-tokenizer JSON."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "found",
+      "detail": "bos_token_id=1, eos_token_id=2, pad_token_id=11"
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; no tensor payloads downloaded"
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "refs/huggingface/transformers/src/transformers/models/voxtral/modeling_voxtral.py",
+      "status": "found",
+      "detail": "First-class transformers support: VoxtralForConditionalGeneration (+ modular_voxtral.py, processing_voxtral.py, convert_voxtral_weights_to_hf.py). MLX cross-check at refs/mlx/mlx-audio/mlx_audio/stt/models/voxtral/."
+    }
+  },
+  "variants": [
+    {
+      "name": "voxtral-mini-3b-2507",
+      "memory_gb": 9.5,
+      "files": []
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "audio-llm"
+    ],
+    "key_fields": {
+      "architectures": ["VoxtralForConditionalGeneration"],
+      "model_type": "voxtral",
+      "vocab_size": 131072,
+      "hidden_size": 3072,
+      "audio_token_id": 24,
+      "projector_hidden_act": "gelu",
+      "torch_dtype": "bfloat16",
+      "audio_config.model_type": "voxtral_encoder",
+      "audio_config.hidden_size": 1280,
+      "audio_config.num_hidden_layers": 32,
+      "audio_config.num_attention_heads": 20,
+      "audio_config.head_dim": 64,
+      "audio_config.intermediate_size": 5120,
+      "audio_config.num_mel_bins": 128,
+      "audio_config.max_source_positions": 1500,
+      "audio_config.activation_function": "gelu",
+      "audio_config.scale_embedding": false,
+      "audio_config.vocab_size": 51866,
+      "text_config.model_type": "llama",
+      "text_config.hidden_size": 3072,
+      "text_config.intermediate_size": 8192,
+      "text_config.num_hidden_layers": 30,
+      "text_config.num_attention_heads": 32,
+      "text_config.num_key_value_heads": 8,
+      "text_config.head_dim": 128,
+      "text_config.hidden_act": "silu",
+      "text_config.rms_norm_eps": 1e-05,
+      "text_config.rope_theta": 100000000.0,
+      "text_config.rope_scaling": null,
+      "text_config.sliding_window": null,
+      "text_config.attention_bias": false,
+      "text_config.mlp_bias": false,
+      "text_config.max_position_embeddings": 131072,
+      "text_config.vocab_size": 131072
+    },
+    "varying_across_variants": [
+      "hidden_size",
+      "text_config.hidden_size",
+      "text_config.intermediate_size",
+      "text_config.num_hidden_layers"
+    ]
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "config",
+    "evidence": "config.torch_dtype=bfloat16; safetensors header BF16=761, F32=1. The single F32 tensor is audio_tower.embed_positions.weight (the sinusoidal positional embedding, synthesized by the converter and force-kept in fp32 via _keep_in_fp32_modules_strict).",
+    "details": {
+      "config_declared": "bfloat16",
+      "header_distribution": {
+        "F32": 1,
+        "BF16": 761
+      }
+    },
+    "expected_f32_tensors": [
+      "audio_tower.embed_positions.weight"
+    ]
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 400,
+    "window": "hann_periodic",
+    "normalization": "per_utterance",
+    "preemphasis": null,
+    "dither": 0.0,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 131072,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 11,
+      "audio": 24
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "it", "pt", "nl", "hi"],
+    "language_detection": true,
+    "translation": true,
+    "timestamps": ["none"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "FLEURS + Mozilla Common Voice + Multilingual LibriSpeech (avg WER, 8 langs)",
+      "language": null,
+      "metric": "wer",
+      "score": null,
+      "score_unit": "percent",
+      "source": "model card (mistralai/Voxtral-Mini-3B-2507) + paper arXiv:2507.13264",
+      "notes": "Model card reports the multilingual average WER only as a bar-chart image; numeric per-language tables are in the Voxtral paper. Publisher does not report LibriSpeech test-clean. Captured for context; downstream gate uses the measured Oracle reference baseline."
+    }
+  ],
+  "reference_framework": "transformers",
+  "reference_rationale": "Voxtral has first-class transformers support (VoxtralForConditionalGeneration / model_type 'voxtral', transformers >=4.54). The HF checkpoint we convert is already in transformers layout (convert_voxtral_weights_to_hf.py maps the original Mistral weights into the HF module tree), so the transformers forward pass is the natural numerical oracle for Stage 2 dumps. The MLX implementation (refs/mlx/mlx-audio/.../voxtral) is a secondary cross-check. The TOKENIZER and prompt/transcription template are NOT in transformers: Voxtral tokenizes through mistral-common (tekken.json, MistralCommonBackend) and transformers delegates to it; mistral-common is therefore the authoritative reference for token IDs, the audio-placeholder run, and the chat/transcription control tokens. vLLM is the publisher-recommended runtime but is a serving host, not the canonical implementation.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "Token-injection fusion (not cross-attention): the Whisper encoder + projector produce audio embeddings that are masked_scatter'd into the LM input-embedding sequence at audio_token_id=24 placeholder positions. The number of placeholders must EXACTLY equal the number of audio embeddings (375 per 30s chunk) or masked_scatter mismatches. No cross-attention anywhere.",
+    "Projector frame-grouping reshape (4x time downsample): encoder output (B,1500,1280) is C-order reshaped to (B,375,5120) — token i = concat(encoder frames 4i,4i+1,4i+2,4i+3) — BEFORE the 2-layer projector (Linear 5120->3072, GELU, Linear 3072->3072, both bias=False). Net audio-token rate is encoder_frames/4 = 375 tokens / 30s. Getting the grouping order or the 5120 input dim wrong silently corrupts the fusion.",
+    "Whisper-large-v3 encoder mel must be bit-exact: periodic Hann (torch.hann_window default), STFT center=True with reflect pad, drop the last STFT frame, power spectrum, slaney mel filterbank (norm=slaney, mel_scale=slaney, 0-8000 Hz, 201 freq bins -> 128 mels), per-utterance log10 normalization (clamp 1e-10, max(log, log.max()-8), then (log+4)/4).",
+    "Sinusoidal positional embedding is NOT in the checkpoint: audio_tower.embed_positions.weight (1500x1280) is synthesized by the converter via sinusoids(1500,1280) and kept in F32 (the single F32 tensor in the header). The GGUF converter must SYNTHESIZE it, not copy it.",
+    "Encoder attention has selective biases: q/v/out_proj have bias but k_proj has NO bias (Whisper convention). q is pre-scaled by head_dim**-0.5 then attention is called with scaling=1.0 to preserve FP order. Loader must not assume a k_proj bias exists.",
+    "Text decoder RoPE is NEOX/split-halves (theta=1e8): the HF checkpoint's q/k weights are pre-permuted by permute_for_rope into HF-Llama split-halves layout. Implement NEOX rotate_half and do NOT double-permute. rope_theta=1e8 is large; verify cos/sin precompute precision.",
+    "Untied lm_head: language_model.lm_head.weight is a separate tensor from embed_tokens.weight (converter maps original output.weight independently). Do not tie.",
+    "Tekken tokenizer + instruct/transcription template (mistral-common): transcription is a chat/TranscriptionRequest, not a bare encoder->decoder pass. The BEGIN_AUDIO / transcribe / optional language control tokens and the audio-placeholder run are emitted by mistral-common (encode_transcription / apply_chat_template), not by transformers. The C++ port must reproduce mistral-common's exact token layout, not just count placeholders. System prompts are not supported.",
+    "Long-form chunking: audio >30s is padded to a multiple of 480000 samples and split into N 30s chunks (3000 mel frames each), stacked on the batch dim, each yielding 375 tokens concatenated in order. Off-by-one in chunk count breaks placeholder/embedding alignment. Card claims up to 30 min (transcription) / 40 min (understanding) within a 32k-token context.",
+    "GQA text decoder (32 q-heads / 8 kv-heads, head_dim 128) with SwiGLU MLP and RMSNorm; standard Llama/Ministral but verify GQA head replication in the ggml graph.",
+    "bf16 storage; reference dtype is bfloat16 (no up/downcast at conversion per project policy). Encoder, projector and decoder run bf16 in HF except embed_positions (fp32)."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "Not computed yet; compute at converter time from tekken.json (mistral-common). vocab_size 131072 is the config/tekken vocab; tokenizer_config.json is absent because Voxtral uses mistral-common."
+    },
+    {
+      "field": "upstream_benchmarks",
+      "reason": "Model card reports multilingual avg WER only as an image; numeric per-language tables live in arXiv:2507.13264. Publisher does not report LibriSpeech test-clean. Acceptance gate uses the measured Oracle reference baseline (LibriSpeech test-clean), not the publisher score."
+    }
+  ]
+}

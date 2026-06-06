@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "voxtral",
+  "variant": "voxtral-small-24b-2507",
+  "source_model": {
+    "hf_repo": "mistralai/Voxtral-Small-24B-2507",
+    "hf_revision": "da5b42409f279fdd92febee0511a6c32828569c1"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "_skeleton": true
+}

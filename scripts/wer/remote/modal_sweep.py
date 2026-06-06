@@ -540,7 +540,8 @@ def _hyp_cache_paths(model_file: str, dataset_spec: str,
                      n_utts: int | None,
                      batch_size: int = 1,
                      sort_by_length: bool = True,
-                     timestamps: str = "none") -> tuple[str, str]:
+                     timestamps: str = "none",
+                     stream_chunk_ms: int = 0) -> tuple[str, str]:
     """Deterministic Volume paths for the (model, dataset, subset, batch,
     sort) tuple.
 
@@ -559,8 +560,11 @@ def _hyp_cache_paths(model_file: str, dataset_spec: str,
     # Default "none" carries no tag so it stays compatible with already-cached
     # entries; any other timestamp mode gets its own cache slot.
     ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
+    # Streaming (--stream-chunk-ms) produces different hyps than the offline
+    # path, so it gets its own cache slot. 0 = offline (no tag, compatible).
+    stream_tag = "" if stream_chunk_ms <= 0 else f".stream{stream_chunk_ms}ms"
     base = (f"/data/wer/hyps/{HYP_FP}/{slug}."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{stream_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 
@@ -600,6 +604,7 @@ def _run_wer_impl(
     batch_size: int = 1,
     sort_by_length: bool = True,
     timestamps: str = "none",
+    stream_chunk_ms: int = 0,
 ) -> dict:
     """Run scripts/wer/run.py on `n_utts` (or full manifest) and return the
     hyp JSONL contents + a summary dict back to the dispatcher.
@@ -607,13 +612,18 @@ def _run_wer_impl(
     Volume-cached by (SRC_FP, model_file, dataset, subset). On a cache hit the
     container returns immediately without downloading the model or running
     the CLI; this is what makes interrupted sweeps resumable.
+
+    stream_chunk_ms > 0 drives each utterance through the streaming API in
+    N-ms chunks (run.py --stream-chunk-ms); the model's default transcription
+    delay applies (voxtral_realtime: 6 tokens = 480 ms).
     """
     from huggingface_hub import hf_hub_download
 
     # Cache lookup first; skips _prepare_work + model download + run.py entirely
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
     cache_hyp, cache_sum = _hyp_cache_paths(
-        model_file, dataset_spec, n_utts, batch_size, sort_by_length, timestamps)
+        model_file, dataset_spec, n_utts, batch_size, sort_by_length, timestamps,
+        stream_chunk_ms)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         print(f"[wer] cache hit: {cache_hyp}")
@@ -676,6 +686,8 @@ def _run_wer_impl(
             cmd += ["--sort-by-length"]
     if timestamps and timestamps != "none":
         cmd += ["--timestamps", timestamps]
+    if stream_chunk_ms and stream_chunk_ms > 0:
+        cmd += ["--stream-chunk-ms", str(stream_chunk_ms)]
     print(f"[wer] $ {' '.join(cmd)}")
     t0 = time.time()
     rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
@@ -722,6 +734,7 @@ def _run_wer_impl(
         "rtf_wall": audio_s / wall_s if wall_s > 0 else 0.0,
         "utt_per_s": subset_count / wall_s if wall_s > 0 else 0.0,
         "batch_size": batch_size,
+        "stream_chunk_ms": stream_chunk_ms,
         "mel_s": mel_ms / 1000.0,
         "encode_s": enc_ms / 1000.0,
         "decode_s": dec_ms / 1000.0,
@@ -739,7 +752,7 @@ def _run_wer_impl(
 
 
 _RUN_WER_KWARGS = dict(
-    image=image, timeout=7200,
+    image=image, timeout=43200,
     volumes={
         "/build": build_vol,
         "/root/.cache/huggingface": hf_vol,
@@ -768,6 +781,7 @@ def _register_runner(gpu_id: str):
         sort_by_length: bool = True,
         build_dir: str | None = None,
         timestamps: str = "none",
+        stream_chunk_ms: int = 0,
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
         # SRC_FP can drift between the laptop and the container, so recomputing
@@ -777,7 +791,7 @@ def _register_runner(gpu_id: str):
             model_repo, model_file, dataset_spec, n_utts,
             build_dir or default_build_dir,
             batch_size=batch_size, sort_by_length=sort_by_length,
-            timestamps=timestamps,
+            timestamps=timestamps, stream_chunk_ms=stream_chunk_ms,
         )
 
     runner.__name__ = name
@@ -818,11 +832,15 @@ def _env_fingerprint(root: pathlib.Path, family: str, runner_rel: str) -> str:
 
 
 def _ref_hyp_cache_paths(variant: str, dataset_spec: str, n_utts: int | None,
-                         batch_size: int, env_fp: str) -> tuple[str, str]:
+                         batch_size: int, env_fp: str,
+                         mode: str = "offline") -> tuple[str, str]:
     subset_tag = "full" if n_utts is None else f"n{n_utts}"
     bs_tag = "" if batch_size <= 1 else f".b{batch_size}"
+    # "offline" carries no tag (compatible with already-cached entries); any
+    # other mode (e.g. "streaming") gets its own cache slot.
+    mode_tag = "" if mode == "offline" else f".{mode}"
     base = (f"/data/wer/ref-hyps/{env_fp}/{variant}-REF."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{mode_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 
@@ -854,12 +872,12 @@ def _ensure_local_venv(family: str) -> str:
 
 def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
                        subset_path, subset_count, venv, dataset_spec, n_utts,
-                       env_fp, batch_size, device) -> dict:
+                       env_fp, batch_size, device, mode="offline") -> dict:
     """One reference run at a single batch size. Hyp-cached on /data (plain
     file writes, no flock, so the Volume is fine here — only uv needs local
     disk)."""
     cache_hyp, cache_sum = _ref_hyp_cache_paths(
-        variant, dataset_spec, n_utts, batch_size, env_fp)
+        variant, dataset_spec, n_utts, batch_size, env_fp, mode)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         print(f"[ref] cache hit: {cache_hyp}")
@@ -888,7 +906,12 @@ def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
         "--device", device,
         "--batch-size", str(batch_size),
     ]
-    print(f"[ref] bs={batch_size} $ {' '.join(cmd)}")
+    # The uniform reference contract is --manifest/--model/--out/--device/
+    # --batch-size; only pass --mode for non-default modes so runners that
+    # predate the flag (every family but voxtral_realtime) are unaffected.
+    if mode and mode != "offline":
+        cmd += ["--mode", mode]
+    print(f"[ref] bs={batch_size} mode={mode} $ {' '.join(cmd)}")
     t0 = time.time()
     rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
     wall_s = time.time() - t0
@@ -919,7 +942,7 @@ def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
         "n_utts": subset_count, "audio_s": audio_s, "wall_s": wall_s,
         "rtf_wall": audio_s / wall_s if wall_s > 0 else 0.0,
         "utt_per_s": subset_count / wall_s if wall_s > 0 else 0.0,
-        "batch_size": batch_size, "device": device, "gpu": gpu,
+        "batch_size": batch_size, "mode": mode, "device": device, "gpu": gpu,
     }
     print(f"[ref] done bs={batch_size}: {summary}")
     os.makedirs(os.path.dirname(cache_hyp), exist_ok=True)
@@ -941,6 +964,7 @@ def _run_reference_impl(
     env_fp: str,
     batch_sizes: list,
     device: str = "cuda",
+    mode: str = "offline",
 ) -> dict:
     """One container per variant: `uv sync` the env once (local disk), then run
     the reference runner at each requested batch size. Returns
@@ -968,12 +992,12 @@ def _run_reference_impl(
         results[str(bs)] = _run_one_reference(
             family, variant, framework, upstream_repo, runner_rel,
             subset_path, subset_count, venv, dataset_spec, n_utts, env_fp,
-            bs, device)
+            bs, device, mode)
     return results
 
 
 _REF_RUN_KWARGS = dict(
-    image=ref_image, timeout=10800,
+    image=ref_image, timeout=43200,
     volumes={
         "/root/.cache/huggingface": hf_vol,
         "/data": data_vol,
@@ -998,10 +1022,12 @@ def _register_reference_runner(gpu_id: str):
         n_utts: int | None = None,
         batch_sizes: list | None = None,
         device: str = "cuda",
+        mode: str = "offline",
     ) -> dict:
         return _run_reference_impl(
             family, variant, framework, upstream_repo, runner_rel,
-            dataset_spec, n_utts, env_fp, batch_sizes or [1], device=device)
+            dataset_spec, n_utts, env_fp, batch_sizes or [1], device=device,
+            mode=mode)
 
     runner.__name__ = name
     runner.__qualname__ = name
@@ -1069,11 +1095,13 @@ def _resolve_reference(spec: str, runner_override: str = "") -> dict:
 
 
 def _write_ref_hyp(hyp_jsonl: str, variant: str, dataset_spec: str,
-                   batch_size: int | None = None) -> pathlib.Path:
+                   batch_size: int | None = None,
+                   mode: str = "offline") -> pathlib.Path:
     out_dir = pathlib.Path(REPO) / "reports" / "wer"
     out_dir.mkdir(parents=True, exist_ok=True)
     bs_tag = "" if not batch_size or batch_size <= 1 else f".b{batch_size}"
-    out_path = out_dir / f"{variant}-REF.{dataset_id(dataset_spec)}{bs_tag}.jsonl"
+    mode_tag = "" if mode == "offline" else f".{mode}"
+    out_path = out_dir / f"{variant}-REF.{dataset_id(dataset_spec)}{bs_tag}{mode_tag}.jsonl"
     out_path.write_text(hyp_jsonl)
     return out_path
 
@@ -1120,14 +1148,16 @@ def _resolve_model(spec: str) -> tuple[str, list[str] | None]:
 
 def _write_hyp(hyp_jsonl: str, model_file: str, dataset_spec: str,
                batch_size: int | None = None,
-               timestamps: str = "none") -> pathlib.Path:
+               timestamps: str = "none",
+               stream_chunk_ms: int = 0) -> pathlib.Path:
     out_dir = pathlib.Path(REPO) / "reports" / "wer"
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = model_file.replace(".gguf", "")
     ds = dataset_id(dataset_spec)
     bs_tag = "" if batch_size is None else f".b{batch_size}"
     ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
-    out_path = out_dir / f"{slug}.{ds}{bs_tag}{ts_tag}.jsonl"
+    stream_tag = "" if stream_chunk_ms <= 0 else f".stream{stream_chunk_ms}ms"
+    out_path = out_dir / f"{slug}.{ds}{bs_tag}{ts_tag}{stream_tag}.jsonl"
     out_path.write_text(hyp_jsonl)
     return out_path
 
@@ -1147,6 +1177,7 @@ def sweep(
     batch_sizes: str = "1",
     sort_by_length: bool = True,
     timestamps: str = "none",
+    stream_chunk_ms: int = 0,
 ) -> None:
     """Fan WER across one or more models on one GPU class.
 
@@ -1225,7 +1256,8 @@ def sweep(
     print(f">>> launching {len(cells)} {gpu} containers in parallel...")
     n = None if n_utts < 0 else n_utts
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
-                             c["bs"], sort_by_length, build_dir, timestamps))
+                             c["bs"], sort_by_length, build_dir, timestamps,
+                             stream_chunk_ms))
             for c in cells]
 
     rows, failures = [], []
@@ -1238,7 +1270,8 @@ def sweep(
             # tagged .b{bs} so batched hyps score independently for comparison.
             p = _write_hyp(res["hyp_jsonl"], c["file"], c["dataset"],
                            batch_size=(bs if bs != 1 else None),
-                           timestamps=timestamps)
+                           timestamps=timestamps,
+                           stream_chunk_ms=stream_chunk_ms)
             s = res["summary"]
             rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
                          s["wall_s"], s["rtf_wall"], str(p)))
@@ -1431,6 +1464,8 @@ def reference_sweep(
     batch_sizes: str = "1",
     clean: bool = False,
     runner: str = "",
+    mode: str = "offline",
+    model_override: str = "",
 ) -> None:
     """Fan the REFERENCE framework (NeMo / Transformers / author repo) across
     one or more variants on a GPU, producing `<variant>-REF.<dataset>.jsonl`
@@ -1460,6 +1495,11 @@ def reference_sweep(
     sizes = [int(x) for x in batch_sizes.split(",") if x.strip()] or [1]
 
     resolved = [_resolve_reference(s, runner) for s in specs]
+    # Optional: redirect from the intake's upstream repo (e.g. a gated
+    # mistralai/... repo) to a private mirror the Modal HF token can reach.
+    if model_override:
+        for r in resolved:
+            r["upstream_repo"] = model_override
 
     print("================ reference_sweep config ================")
     print(f"  variants = {[r['variant'] for r in resolved]}")
@@ -1467,6 +1507,9 @@ def reference_sweep(
     print(f"  gpu      = {gpu}")
     print(f"  n_utts   = {'full manifest' if n_utts < 0 else n_utts}")
     print(f"  batches  = {sizes}")
+    print(f"  mode     = {mode}")
+    if model_override:
+        print(f"  model_override = {model_override}")
     for r in resolved:
         print(f"  - {r['family']}:{r['variant']}  fw={r['framework']}  "
               f"repo={r['upstream_repo']}  runner={r['runner_rel']}  "
@@ -1488,7 +1531,7 @@ def reference_sweep(
           f"(batch sizes {sizes} each)...")
     futs = [(r, runner_fn.spawn(
                 r["family"], r["variant"], r["framework"], r["upstream_repo"],
-                r["runner_rel"], r["env_fp"], dataset, n, sizes, "cuda"))
+                r["runner_rel"], r["env_fp"], dataset, n, sizes, "cuda", mode))
             for r in resolved]
 
     rows, failures = [], []
@@ -1506,7 +1549,8 @@ def reference_sweep(
                 failures.append((slug, "no result for this batch size"))
                 continue
             p = _write_ref_hyp(res["hyp_jsonl"], r["variant"], dataset,
-                               batch_size=(bs if bs != 1 else None))
+                               batch_size=(bs if bs != 1 else None),
+                               mode=mode)
             s = res["summary"]
             rows.append((slug, s["n_utts"], s["audio_s"], s["wall_s"],
                          s["rtf_wall"], str(p)))

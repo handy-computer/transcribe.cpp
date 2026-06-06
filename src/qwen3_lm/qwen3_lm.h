@@ -67,7 +67,9 @@ namespace transcribe::qwen3_lm {
 // `arch/funasr_nano/DecBlock` so the call-site builder is a struct
 // initializer.
 //
-// All slots are required for block_prefill / block_step.
+// All slots are required for block_prefill / block_step EXCEPT
+// attn_q_norm / attn_k_norm, which are optional (null = skip, for
+// Llama-style decoders without per-head Q/K norm).
 struct BlockView {
     ggml_tensor * norm_attn_w   = nullptr;  // input_layernorm (RMSNorm, no bias)
     ggml_tensor * norm_ffn_w    = nullptr;  // post_attention_layernorm
@@ -75,13 +77,22 @@ struct BlockView {
     ggml_tensor * attn_k_w      = nullptr;  // [hidden, n_kv_heads * head_dim]
     ggml_tensor * attn_v_w      = nullptr;  // [hidden, n_kv_heads * head_dim]
     ggml_tensor * attn_o_w      = nullptr;  // [n_heads * head_dim, hidden]
-    ggml_tensor * attn_q_norm   = nullptr;  // [head_dim] per-head Q-norm
-    ggml_tensor * attn_k_norm   = nullptr;  // [head_dim] per-head K-norm
+    // Per-head Q/K RMSNorm (Qwen3). OPTIONAL: leave null for Llama-style
+    // decoders (e.g. Voxtral's Ministral backbone) that ship no q/k norm;
+    // the block helpers skip the norm when the slot is null.
+    ggml_tensor * attn_q_norm   = nullptr;  // [head_dim] per-head Q-norm, or null
+    ggml_tensor * attn_k_norm   = nullptr;  // [head_dim] per-head K-norm, or null
     // Packed gate+up: [hidden, 2·intermediate]. Filled by pack_gate_up
     // at load time (see below). The graph runs ONE mul_mat against this
     // tensor + ggml_swiglu instead of two mul_mats + manual silu·mul.
     ggml_tensor * ffn_gate_up_w = nullptr;  // [hidden, 2·intermediate]
     ggml_tensor * ffn_down_w    = nullptr;  // [intermediate, hidden]
+    // OPTIONAL per-layer FFN-branch scale applied right after norm_ffn and
+    // before the gate_up mul_mat: ff_norm *= ffn_scale (broadcast [hidden,1]
+    // over the token axis). Null for every standard caller; used by
+    // voxtral_realtime's delay-conditioned adaptive-norm (a per-layer constant
+    // `1 + ada(t_cond)` precomputed once per run). See arch/voxtral_realtime.
+    ggml_tensor * ffn_scale     = nullptr;  // [hidden] or [hidden,1], or null
 };
 
 // Per-call scalar block params.
@@ -212,6 +223,30 @@ ggml_tensor * block_step(
     ggml_tensor *       mask,       // [max_n_kv, 1] f16
     ggml_tensor *       position,   // [1] i32
     ggml_tensor *       kv_idx,     // [1] i64
+    bool                use_flash);
+
+// ---------------------------------------------------------------------------
+// Block forward (multi-position step: T_seq new tokens in one pass)
+// ---------------------------------------------------------------------------
+
+// Same as block_step but processes T_seq positions in a single forward.
+// Writes T_seq rows at the indices in `kv_idx` (i64 [T_seq]) and reads the
+// full [0, max_n_kv) KV window. `mask` is [max_n_kv, T_seq] f16 — column
+// `c` masks the c-th query position (typically causal: 0 for cached
+// positions <= cur_pos+c, -inf beyond). Used by spec-decode verify pass.
+ggml_tensor * block_step_n(
+    ggml_context *      ctx,
+    ggml_cgraph *       gf,
+    ggml_tensor *       x,          // [hidden, T_seq]
+    const BlockView &   view,
+    const BlockParams & params,
+    KvCache &           kv_cache,
+    int                 layer_idx,
+    int                 T_seq,
+    int                 max_n_kv,
+    ggml_tensor *       mask,       // [max_n_kv, T_seq] f16
+    ggml_tensor *       positions,  // [T_seq] i32
+    ggml_tensor *       kv_idx,     // [T_seq] i64
     bool                use_flash);
 
 // ---------------------------------------------------------------------------
