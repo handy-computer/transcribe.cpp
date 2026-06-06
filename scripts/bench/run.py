@@ -93,6 +93,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -474,6 +475,58 @@ def resolve_backends(repo: Path, requested: str | None,
     return specs
 
 
+def _read_tctl_c() -> float | None:
+    # AMD CPUs expose Tctl via libsensors; parse `sensors -u` and pick the
+    # `temp1_input` from the k10temp chip block. Blocks are separated by
+    # blank lines; the chip header is the first line of a block.
+    try:
+        proc = subprocess.run(["sensors", "-u"], capture_output=True,
+                              text=True, timeout=3)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    in_k10 = False
+    chip_header_pending = True
+    for raw in proc.stdout.splitlines():
+        if not raw.strip():
+            in_k10 = False
+            chip_header_pending = True
+            continue
+        if chip_header_pending:
+            in_k10 = raw.startswith("k10temp")
+            chip_header_pending = False
+            continue
+        if in_k10 and "temp1_input" in raw:
+            try:
+                return float(raw.split(":", 1)[1].strip())
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
+def cooldown_wait(threshold_c: float, max_wait_s: float, poll_s: float) -> None:
+    if threshold_c <= 0:
+        return
+    start = time.monotonic()
+    while True:
+        t = _read_tctl_c()
+        if t is None:
+            print(f"  cooldown: Tctl unavailable, skipping gate",
+                  file=sys.stderr)
+            return
+        if t < threshold_c:
+            return
+        elapsed = time.monotonic() - start
+        if elapsed >= max_wait_s:
+            print(f"  cooldown: Tctl={t:.1f}°C still >= {threshold_c}°C "
+                  f"after {elapsed:.0f}s, proceeding anyway", file=sys.stderr)
+            return
+        print(f"  cooldown: Tctl={t:.1f}°C >= {threshold_c}°C, "
+              f"waiting {poll_s:.0f}s...", file=sys.stderr)
+        time.sleep(poll_s)
+
+
 def run_bench_binary(bench_bin: Path, cell: Cell, iters: int, warmup: int,
                      backend_arg: str) -> dict | None:
     with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as tmp:
@@ -604,6 +657,15 @@ def parse_args() -> argparse.Namespace:
                    help="output root (default: reports/perf)")
     p.add_argument("--dry-run", action="store_true",
                    help="print selected backends + matrix without running")
+    p.add_argument("--cooldown-tctl-c", type=float, default=0.0,
+                   help="if >0, wait between cells for k10temp Tctl to drop "
+                        "below this value (°C) to avoid thermal bias; "
+                        "publication benches use 55")
+    p.add_argument("--cooldown-max-s", type=float, default=300.0,
+                   help="max seconds to wait for cooldown per cell "
+                        "(default 300)")
+    p.add_argument("--cooldown-poll-s", type=float, default=10.0,
+                   help="seconds between Tctl polls (default 10)")
     return p.parse_args()
 
 
@@ -621,6 +683,8 @@ def _run_one_backend(backend: BackendSpec,
         for cell in group:
             print(f"[{backend.name}][{variant}] {cell.quant} \u00d7 {cell.sample} ...",
                   file=sys.stderr, flush=True)
+            cooldown_wait(args.cooldown_tctl_c, args.cooldown_max_s,
+                          args.cooldown_poll_s)
             result = run_bench_binary(backend.binary, cell, args.iters,
                                       args.warmup, backend.backend_arg)
             if result is None:

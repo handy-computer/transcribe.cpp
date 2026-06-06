@@ -175,12 +175,21 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
                                               kernel->ne[0] * kernel->ne[1],
                                               kernel->ne[2]);  // [IC*K, OC]
 
+    // F32 accumulation when the kernel is F16. The same CUDA cuBLAS
+    // COMPUTE_16F saturation that hits the in-block pointwise convs also
+    // hits this im2col + mul_mat for the subsampling conv stem when the
+    // converter routes those kernels to F16 (medasr / cohere / parakeet).
+    const bool kernel_needs_f32_acc = (kernel->type == GGML_TYPE_F16);
+
     if (N == 1) {
         // Single-shot path (bit-identical to the pre-batch code): flatten
         // OW*N (== OW) and reshape the [OW, OC] result back to [OW, OC, 1].
         ggml_tensor * result = ggml_mul_mat(ctx,
             ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[1]),
             kernel_2d);  // [OW, OC]
+        if (kernel_needs_f32_acc) {
+            ggml_mul_mat_set_prec(result, GGML_PREC_F32);
+        }
         result = ggml_reshape_3d(ctx, result,
                                  im2col->ne[1], kernel->ne[2], 1);
         return result;
@@ -194,6 +203,9 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
     // per-element dot products match the N==1 path exactly (same reduction
     // over IC*K), so each utterance is bit-identical to single-shot.
     ggml_tensor * result = ggml_mul_mat(ctx, kernel_2d, im2col);  // [OC, OW, N]
+    if (kernel_needs_f32_acc) {
+        ggml_mul_mat_set_prec(result, GGML_PREC_F32);
+    }
     result = ggml_cont(ctx, ggml_permute(ctx, result, 1, 0, 2, 3));
     return result;  // [OW, OC, N]
 }
@@ -384,10 +396,20 @@ ggml_tensor * conv_module(ggml_context *      ctx,
     if (policy.direct_pw) {
         // Pointwise conv 1 as direct mul_mat in [d_model, T, B] layout.
         // Kernel ne=[1, d_model, 2*d_model] → reshape to [d_model, 2*d_model].
+        // F32 accumulation when the weight is F16: on CUDA, F16 weights take
+        // the cuBLAS COMPUTE_16F path whose accumulator saturates at ~6.5e4.
+        // Families with large activation magnitudes (e.g. medasr's scaled
+        // residuals push intermediates to ~2e6) overflow to NaN. set_prec
+        // forces F32 accumulation; no-op on CPU/Metal, slight perf cost on
+        // CUDA. Skip for non-F16 weights (BF16 already COMPUTE_32F; quant
+        // dispatches MMQ).
         {
             ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pw1_w,
                                                 d_model, 2 * d_model);
             x = ggml_mul_mat(ctx, pw1, x);  // [2*d_model, T, B]
+            if (b.conv_pw1_w->type == GGML_TYPE_F16) {
+                ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+            }
             if (b.conv_pw1_b != nullptr) {
                 x = ggml_add(ctx, x, b.conv_pw1_b);
             }
@@ -561,10 +583,14 @@ ggml_tensor * conv_module(ggml_context *      ctx,
         // Transpose back: [T, d_model] -> [d_model, T].
         x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
 
-        // Pointwise conv 2 as direct mul_mat in [d_model, T] layout.
+        // Pointwise conv 2 as direct mul_mat in [d_model, T] layout. See
+        // the pw1 comment above for the F16 / CUDA COMPUTE_16F rationale.
         ggml_tensor * pw2 = ggml_reshape_2d(ctx, b.conv_pw2_w,
                                             d_model, d_model);
         x = ggml_mul_mat(ctx, pw2, x);
+        if (b.conv_pw2_w->type == GGML_TYPE_F16) {
+            ggml_mul_mat_set_prec(x, GGML_PREC_F32);
+        }
         if (b.conv_pw2_b != nullptr) {
             x = ggml_add(ctx, x, b.conv_pw2_b);
         }

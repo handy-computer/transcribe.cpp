@@ -1,0 +1,25 @@
+[project]
+name = "transcribe-medasr-env"
+version = "0.1.0"
+description = "Python env for google/medasr (LASR-CTC) reference dumps and conversion"
+requires-python = ">=3.11,<3.13"
+# transformers v5.0.0.dev0 — the `lasr_ctc` / `lasr_encoder` /
+# LASRFeatureExtractor / LasrTokenizer classes are registered only on
+# this specific dev commit. The published v4.x line does not know about
+# them; later v5.0-dev commits may move internals. The model card README
+# pins this exact commit:
+#   https://huggingface.co/google/medasr#installation
+dependencies = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "librosa>=0.10",
+    "numpy>=1.26",
+    "protobuf>=4.25",
+    "safetensors>=0.4",
+    "sentencepiece>=0.2",
+    "soundfile>=0.12",
+    "transformers @ git+https://github.com/huggingface/transformers.git@65dc261512cbdb1ee72b88ae5b222f2605aad8e5",
+    "accelerate>=1.0",
+]

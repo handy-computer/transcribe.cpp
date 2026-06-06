@@ -112,6 +112,10 @@ add_library(transcribe
     arch/granite_nar/encoder.cpp
     arch/granite_nar/projector.cpp
     arch/granite_nar/decoder.cpp
+    arch/medasr/model.cpp
+    arch/medasr/capabilities.cpp
+    arch/medasr/weights.cpp
+    arch/medasr/encoder.cpp
 )
 
 target_include_directories(transcribe

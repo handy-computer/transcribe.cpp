@@ -1,0 +1,68 @@
+# Spec for the HF README of handy-computer/medasr-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: google/medasr
+target_repo: handy-computer/medasr-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/medasr.md
+
+upstream_commit: ae1e484
+pin_date: 2026-06-04
+
+# Validation pin for the most recent upload. Updated on each release;
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: transformers @ 65dc2615 (dev; v5.0.0 unreleased)
+  commit: 782abfd
+  date: 2026-06-04
+
+license: other
+license_display: Health AI Developer Foundations
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - medasr
+  - medical
+  - conformer
+  - ctc
+  - english
+
+summary: |
+  Offline English speech-to-text optimized for medical dictation (radiology, internal medicine, family medicine). 17-layer Conformer encoder with RoPE attention, macaron FFNs, and a 512-token SentencePiece CTC head. Greedy CTC decode; no language model, no beam search.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2,620 utterances) with greedy CTC decoding and no external LM. F32 reference baseline (HuggingFace transformers, Mac MPS): 17.88%; transcribe.cpp F32 matches exactly. Absolute WER is higher than general-purpose ASR (e.g. Whisper-base ~5%) because the model is fine-tuned for medical dictation — on the publisher's internal RAD-DICT / GENERAL-DICT / FM-DICT datasets the model scores 6.6%–9.3%, but those datasets are not publicly reproducible. Q8_0 is the recommended default (smallest preset with no statistically detectable WER degradation); Q4_K_M shows a real +0.26 pp degradation and is shipped for completeness but not recommended — prefer Q5_K_M if you need smaller than Q8_0.
+
+quants:
+  - name: F32
+    filename: medasr-F32.gguf
+    size: 417 MB
+    wer: 17.88%
+  - name: F16
+    filename: medasr-F16.gguf
+    size: 202 MB
+    wer: 17.88%
+  - name: Q8_0
+    filename: medasr-Q8_0.gguf
+    size: 122 MB
+    wer: 17.86%
+  - name: Q6_K
+    filename: medasr-Q6_K.gguf
+    size: 101 MB
+    wer: 17.93%
+  - name: Q5_K_M
+    filename: medasr-Q5_K_M.gguf
+    size: 90 MB
+    wer: 17.91%
+  - name: Q4_K_M
+    filename: medasr-Q4_K_M.gguf
+    size: 79 MB
+    wer: 18.14%

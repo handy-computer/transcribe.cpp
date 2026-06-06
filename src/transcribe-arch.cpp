@@ -33,6 +33,7 @@ namespace funasr_nano        { extern const Arch arch; }
 namespace gigaam             { extern const Arch arch; }
 namespace granite            { extern const Arch arch; }
 namespace granite_nar        { extern const Arch arch; }
+namespace medasr             { extern const Arch arch; }
 
 const Arch * find_arch(const char * name) {
     if (name == nullptr) {
@@ -55,6 +56,7 @@ const Arch * find_arch(const char * name) {
         &gigaam::arch,
         &granite::arch,
         &granite_nar::arch,
+        &medasr::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
 

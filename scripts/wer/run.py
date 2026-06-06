@@ -107,10 +107,14 @@ def resolve_dataset(repo: Path, spec: str) -> tuple[Path, str | None]:
         manifest = repo / f"samples/wer/librispeech-{arg}.manifest.jsonl"
         ingest_args = ["librispeech", "--split", arg]
         default_lang = "en"
+    elif proto == "eka-medical-asr":
+        manifest = repo / f"samples/wer/eka-medical-asr-{arg}.manifest.jsonl"
+        ingest_args = ["eka-medical-asr", "--lang", arg]
+        default_lang = arg
     else:
         raise SystemExit(
             f"error: unknown --dataset protocol {proto!r}; "
-            f"supported: fleurs, librispeech"
+            f"supported: fleurs, librispeech, eka-medical-asr"
         )
 
     if not manifest.exists():

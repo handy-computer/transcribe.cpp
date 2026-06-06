@@ -1,0 +1,106 @@
+{
+  "_comment": [
+    "MedASR per-tensor tolerances for compare_tensors.py.",
+    "",
+    "CORRECTNESS REGIME",
+    "- Reference: google/medasr @ ae1e4845b4b07479735d93e1e591e566435b7104",
+    "  loaded via transformers v5.0.0.dev0 (commit 65dc261512cbdb1ee72b88ae5b222f2605aad8e5,",
+    "  AutoModelForCTC + AutoProcessor, attn_implementation=eager, dtype=float32).",
+    "  Dumper: scripts/dump_reference_medasr_transformers.py.",
+    "- C++: ggml CPU fp32 compute, weights stored as F32 in GGUF, --backend cpu --threads 1.",
+    "- KV cache dtype: n/a (CTC head, no autoregressive decoder).",
+    "- Mel frontend: PRODUCTION C++ MedAsrMelFrontend (LasrFeatureExtractor",
+    "  port: manual unfold + rfft, Hann symmetric, no preemph, no dither,",
+    "  HTK 128-band kaldi mel, log(clamp(power, 1e-5)), center=False).",
+    "  No env-var injection; mel.in measures the C++ vs reference frontend",
+    "  delta directly, folding Step 7 frontend parity into the same regime.",
+    "",
+    "FINALIZED FROM OBSERVED C++ DRIFT (Stage 4)",
+    "Recipe: finalized = max(1.5 * observed, 1e-6). Every entry tightened",
+    "vs the Stage 2 provisional magnitude-budget floor (the C++ drift is",
+    "consistently 30 to 300 times below the 1e-4 * p99_abs ceiling).",
+    "",
+    "DOMINANT DRIFT SOURCES",
+    "- mel.in (max ~5e-4): C++ rfft accumulates in fp32 throughout; the",
+    "  reference LasrFeatureExtractor's mel-filterbank multiplication is",
+    "  computed in fp64 before the log. log(clamp) compresses this back to",
+    "  small absolute drift on log-mel values that sit in roughly [-12, 6].",
+    "- mul_mat accumulation order. ggml's CPU mul_mat path accumulates in",
+    "  a different sum-order than torch's eager Linear (the latter dispatches",
+    "  to MKL/Accelerate). For 512-deep dot products of normally-distributed",
+    "  activations the order difference is ~1e-6 relative per element, which",
+    "  compounds modestly through the 17-layer residual stream.",
+    "- The macaron residual scalars [1.5, 0.5] and the conv residual scalars",
+    "  [2.0, 1.0] amplify the running residual within each block (up to ~2e6",
+    "  raw magnitude on enc.block.0.post_ff2 before the per-block norm_out",
+    "  collapses it). post_* drift budgets scale to that magnitude; block.<i>.out",
+    "  budgets are post-LN so back near 1.",
+    "- enc.subsampling.out absorbs both the mel drift and the post-ReLU",
+    "  conv-1d accumulation order at d_model=512.",
+    "",
+    "NOT REGIMENED HERE",
+    "- Quantized GGUF tolerances (Stage 6/7 reports).",
+    "- F16 KV cache (n/a here).",
+    "- Variable-length batch parity beyond bs=1 (Stage 4 Step 9 gate)."
+  ],
+  "mel.in": {
+    "max_abs": 0.000784,
+    "mean_abs": 2.47e-06,
+    "_seen_in": ["medasr"]
+  },
+  "enc.subsampling.out": {
+    "max_abs": 0.328,
+    "mean_abs": 0.0250,
+    "_seen_in": ["medasr"]
+  },
+  "enc.block.0.post_ff1": {
+    "max_abs": 0.422,
+    "mean_abs": 0.0382,
+    "_seen_in": ["medasr"]
+  },
+  "enc.block.0.post_attn": {
+    "max_abs": 0.388,
+    "mean_abs": 0.0386,
+    "_seen_in": ["medasr"]
+  },
+  "enc.block.0.post_conv": {
+    "max_abs": 0.803,
+    "mean_abs": 0.0788,
+    "_seen_in": ["medasr"]
+  },
+  "enc.block.0.post_ff2": {
+    "max_abs": 1.546,
+    "mean_abs": 0.1274,
+    "_seen_in": ["medasr"]
+  },
+  "enc.block.0.out": {
+    "max_abs": 0.000641,
+    "mean_abs": 1.06e-05,
+    "_seen_in": ["medasr"]
+  },
+  "enc.block.7.out": {
+    "max_abs": 0.000824,
+    "mean_abs": 1.16e-05,
+    "_seen_in": ["medasr"]
+  },
+  "enc.block.8.out": {
+    "max_abs": 0.000732,
+    "mean_abs": 1.17e-05,
+    "_seen_in": ["medasr"]
+  },
+  "enc.block.16.out": {
+    "max_abs": 0.000280,
+    "mean_abs": 4.53e-06,
+    "_seen_in": ["medasr"]
+  },
+  "enc.out_norm.out": {
+    "max_abs": 4.65e-06,
+    "mean_abs": 1e-06,
+    "_seen_in": ["medasr"]
+  },
+  "enc.ctc_logits": {
+    "max_abs": 5.72e-05,
+    "mean_abs": 3.41e-06,
+    "_seen_in": ["medasr"]
+  }
+}
