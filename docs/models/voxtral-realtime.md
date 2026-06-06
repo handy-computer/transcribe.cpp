@@ -64,6 +64,44 @@ CLI flags:
 - `--stream-chunk-ms <N>` — incremental streaming at N-ms chunk granularity.
 - `--stream-voxtral-delay <N>` — transcription delay in audio slots (default
   6 = 480 ms).
+- `--spec-k-drafts <N>` — offline-path 1-gram-lookup speculative decoding
+  draft length. `-1` (default) uses the family default (`2`). `0` disables
+  spec (plain autoregression). `1..8` selects an explicit K. Speculation
+  applies to `transcribe_run` / `transcribe-cli` only — the streaming path
+  is unaffected.
+
+## Speculative decoding
+
+The offline decoder runs 1-gram-lookup speculative decoding by default. Each
+verify pass processes K+1 positions in parallel: position 0 is the model's
+true next-token decision; positions 1..K verify K draft tokens read from the
+1-gram suffix lookup over the already-decoded prefix. Drafts are accepted as
+long as the model's argmax matches the drafted token; the first mismatch ends
+the accepted prefix. Because ~60–70% of audio slots emit `STREAMING_PAD` (id
+32), the 1-gram lookup hits high acceptance during silence and during repeated
+phrases.
+
+The transcript is byte-identical to the K=0 (no-spec) path; only wall-clock
+time changes.
+
+Measured offline-decode wall reduction on an AMD Ryzen 7 PRO 4750U (Vega 7
+iGPU, LPDDR4-3200 shared memory) at the family default `K=2`:
+
+| Backend | Sample | K=0 decode | K=2 decode | Δ      |
+| ------- | ------ | ---------: | ---------: | -----: |
+| Vulkan  | jfk    |    10.3 s  |     8.5 s  | −17 %  |
+| CPU     | jfk    |    11.5 s  |     7.6 s  | −34 %  |
+
+The CPU win is larger because compute is the tightest budget on CPU; the
+verify-N pass amortizes the single-load weight bandwidth over more tokens
+without spilling compute headroom. On hardware with more compute relative to
+bandwidth (discrete GPUs, M-series, etc.) the curve shifts toward larger K;
+plausible sweet spots are K=4..8 there. K=1 is essentially tied with K=2 on
+this iGPU; K≥3 regresses because per-call cost grows faster than tokens per
+call. Tune via `--spec-k-drafts` or `transcribe_run_params::spec_k_drafts`.
+
+Capability gate: `transcribe_capabilities::supports_spec_decode = true`.
+Families that do not advertise this bit silently ignore the field.
 
 ## Validation
 
