@@ -165,6 +165,15 @@ rule. Generalizing invites false-positive bumps on Parakeet's predictor
 embedding and any future family's small auxiliary embeddings. Revisit
 when 3+ families share the same tensor pattern and the same policy.
 
+Small auxiliary tensors a loader reads through an F32-only `GET_F32`
+slot (sinusoidal/positional tables, learned frontend scalars, RoPE-style
+inverse-frequency tables) route into the `Norm` bucket so every preset
+keeps them F32 — quantizing them would fail the loader's type check for
+negligible size savings. Current examples: Whisper `enc.pos_emb.weight` /
+`dec.pos_emb.weight`, Cohere `*.pos_enc`, Moonshine-streaming
+`enc.embedder.comp.log_k`, and Voxtral-Realtime `dec.time_embed.inv_freq`
+(the ada-norm time-embedding inverse-frequency table).
+
 ## Loader allowlist
 
 Every family's loader (`src/arch/<family>/weights.cpp`) declares which

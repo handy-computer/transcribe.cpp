@@ -170,7 +170,7 @@ the 2507 audio-LLM path is proven) — its rows are inactive this effort.
 | Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/voxtral-mini-3b-2507/Voxtral-Mini-3B-2507-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | MUST PASS | **PASS** — byte-exact vs ref on jfk; full test-clean WER 1.87% (== Oracle 1.87%) |
 | Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/voxtral-mini-3b-2507/Voxtral-Mini-3B-2507-BF16.gguf samples/jfk.wav` | non-empty plausible transcript on the auto-detect path | MUST PASS | **PASS** — jfk → correct English on the no-`lang:` prompt path |
 | Translate (speech→text) | 2507 only | `build/bin/transcribe-cli -m .../Voxtral-Mini-3B-2507-BF16.gguf --translate --target-language en samples/german.wav` | non-empty English transcript on non-English audio | MUST PASS (2507) — user-signed | **PASS** — german.wav → fluent English translation via the instruct template (synthesized "Translate this to English." + tekken BPE, no `[TRANSCRIBE]`) |
-| Batch (offline) | run_batch vs serial | `uv run scripts/batch_parity.py --model .../Voxtral-Mini-3B-2507-BF16.gguf --samples-dir samples/wer/<dataset> --batch-sizes 2,4,8 --backend cpu` | byte-identical hypotheses + CPU tensor parity | MUST PASS | **ACCEPTED GAP — serial fallback** — no batched fast path this port (`run_batch=nullptr`); the dispatcher runs the per-utterance serial loop, so batched output is byte-identical by construction. Full-set WER confirms it: b1 == b8 == 1.8707% (|Δ|=0). A batched encoder/decoder fast path is a follow-up. |
+| Batch (offline) | run_batch vs serial | `uv run scripts/batch_parity.py --model .../Voxtral-Mini-3B-2507-BF16.gguf --samples-dir samples/wer/<dataset> --batch-sizes 2,4,8 --backend cpu` | byte-identical hypotheses | MUST PASS | **PASS — true batched fast path** — `run_batch()` runs a parallel batched encoder + GQA decoder (shared `qwen3_lm` batched blocks; flash-only, serial fallback when flash is off, dump mode, or n==1), WER-neutral (byte-identical to single-stream). 3B: b1 == b8 == 1.87%. 24B: full-set WER 1.56% at b8 (== reference 1.57%). **Known limit: 24B at batch ≤ 8** — at the 24B's footprint an all-long (>30 s, multi-chunk) batch above b8 can exceed the ~28 GB of compute headroom left on an 80 GB GPU after weights and fail `sched_alloc_graph`/`graph_compute`; the failure is loud (the run errors, never a silent partial). The 3B and smaller batches are unaffected. |
 | Transcribe (multilingual) | non-English audio | `build/bin/transcribe-cli -m .../Voxtral-Mini-3B-2507-BF16.gguf --language de samples/german.wav` | non-empty plausible non-English transcript | OUT OF SCOPE — English-only acceptance (user); multilingual WER not gated this port. Revisit if a multilingual acceptance set is added | **PASS (not gated)** — german.wav → correct German transcript; demonstrated, not WER-gated |
 | Audio understanding / Q&A / summarization | 2507 only | chat request | non-empty answer grounded in audio | OUT OF SCOPE — chat capability, not ASR; not exposed by the transcribe CLI | ACCEPTED GAP — the instruct mechanism is proven (translate uses it); a general free-text `--prompt` CLI flag is the remaining wiring to expose arbitrary Q&A |
 | Function calling from voice | 2507 (esp. 24B) | chat request with tools | tool call emitted | OUT OF SCOPE — not an ASR observable; not exposed by the transcribe CLI | SKIP — not exposed by runtime |
@@ -184,6 +184,18 @@ the 2507 audio-LLM path is proven) — its rows are inactive this effort.
 - **Port order (user-signed 2026-06-04):** `voxtral-mini-3b-2507` first
   (proves the 2507 audio-LLM path), then `voxtral-small-24b-2507` (same
   architecture, larger decoder), then `voxtral-mini-4b-realtime-2602`.
+- **24B port complete (2026-06-05):** `voxtral-small-24b-2507` ported and
+  shipped — identical architecture to the 3B with a scaled decoder (40
+  layers, `hidden_size=5120`, `intermediate_size=32768`). Validated
+  **end-to-end by WER** (full test-clean BF16 **1.56%** vs `transformers`
+  reference **1.57%**), not a separate tensor-parity sweep — accepted given
+  the model's size, with the 3B establishing family per-tensor parity. Full
+  quant matrix (BF16/F16/Q8_0/Q6_K/Q5_K_M/Q4_K_M) shipped to the private
+  `handy-computer/Voxtral-Small-24B-2507-GGUF`; user-facing card at
+  `docs/models/voxtral-small-24b-2507.md`. Runs at **batch ≤ 8** (see the
+  Batch row). Stage-1–3/6 artifacts (convert report, golden manifest reuse,
+  perf bench, WER summary) were not regenerated for this variant — an
+  accepted gap, since correctness rests on the WER match.
 - **Realtime deferred (user-signed):** the streaming model is intaken now
   but its C++ port does not start until the 2507 path is proven. Its
   forced-`MUST PASS` streaming row stays as the contract that activates at

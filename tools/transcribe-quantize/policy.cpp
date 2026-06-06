@@ -183,6 +183,13 @@ Bucket classify_tensor(const std::string & name) {
     if (name == "enc.embedder.comp.log_k") {
         return Bucket::Norm;
     }
+    // Voxtral Realtime: baked sinusoidal time-embedding inverse-frequency
+    // table (dec.time_embed.inv_freq, [time_embed_dim/2]). Consumed F32 at
+    // session setup to precompute the per-layer ada-norm FFN scales; the
+    // loader's GET_F32 requires F32 and the table is too small to quantize.
+    if (name == "dec.time_embed.inv_freq") {
+        return Bucket::Norm;
+    }
     // Conformer-block 1×1 pointwise convs — split out from Conv so
     // they can run at F16 on the im2col+matmul path. Matches
     // "enc.blocks.<N>.conv.pointwise1.weight" and ".pointwise2.weight"
