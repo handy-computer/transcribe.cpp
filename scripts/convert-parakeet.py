@@ -259,6 +259,41 @@ VARIANT_PROFILES: dict[str, dict] = {
         "languages": ["en"],
         "lang_detect": False,
     },
+    # 0.6B multilingual cache-aware streaming RNN-T. Same FastConformer
+    # encoder as the English predecessor (24L / d_model=1024 / 8h /
+    # kernel=9 / subsampling=8) plus a top-level prompt MLP that
+    # conditions the encoder output on a 128-dim one-hot language
+    # vector (NeMo's EncDecRNNTBPEModelWithPrompt). vocab grows from
+    # 1024 -> 13087 (39 of which are explicit <lang-XX> tag tokens).
+    # cfg ships att_context_size in non-max-context-first order
+    # ([56,3],[56,0],[56,6],[56,13]); the converter sorts choices by
+    # R desc so index 0 stays the v1 target ([56,13]) and the loader
+    # invariant choices[0] == (att_context_left, att_context_right)
+    # holds.
+    "nemotron-3.5-asr-streaming-0.6b": {
+        "variant": "nemotron-3.5-asr-streaming-0.6b",
+        "version": "v1",
+        "size_label": "0.6B",
+        "basename": "parakeet-rnnt",
+        "head_kind": "rnnt",
+        "expected_vocab_size": 13087,
+        # 40 BCP-47 locales from the model card's transcription-ready
+        # tier (19) + broad-coverage tier (13) + adaptation-ready tier
+        # (8). The full prompt_dictionary read from the .nemo carries
+        # extra aliases (en, en-US, enGB ...) — those are emitted in
+        # the prompt KVs, not here.
+        "languages": [
+            "en-US", "en-GB", "es-US", "es-ES", "fr-FR", "fr-CA", "it-IT",
+            "pt-BR", "pt-PT", "nl-NL", "de-DE", "tr-TR", "ru-RU", "ar-AR",
+            "hi-IN", "ja-JP", "ko-KR", "vi-VN", "uk-UA",
+            "pl-PL", "sv-SE", "cs-CZ", "nb-NO", "da-DK", "bg-BG", "fi-FI",
+            "hr-HR", "sk-SK", "zh-CN", "hu-HU", "ro-RO", "et-EE",
+            "el-GR", "lt-LT", "lv-LV", "mt-MT", "sl-SI", "he-IL", "th-TH",
+            "nn-NO",
+        ],
+        "lang_detect": True,
+        "has_prompt": True,
+    },
 }
 
 
@@ -1038,6 +1073,27 @@ CTC_HEAD_TABLE: list[tuple[str, str]] = [
 ]
 
 
+# Prompt MLP for multilingual variants (nemotron-3.5-asr-streaming-0.6b).
+# NeMo's EncDecRNNTBPEModelWithPrompt prepends a 2-layer MLP that
+# conditions the encoder output on a 128-dim one-hot language vector:
+#
+#   x = concat(enc_out[d_model], one_hot(prompt_id)[num_prompts])  # (d_model + num_prompts,)
+#   h = Linear(prompt_kernel.0)(x)                                  # (prompt_hidden,)
+#   h = activation(h)                                               # ReLU, no parameters at .1
+#   y = Linear(prompt_kernel.2)(h)                                  # (d_model,)
+#   enc_out := y                                                    # consumed by RNN-T joint
+#
+# The source nn.Sequential indices (.0 / .2) are preserved verbatim;
+# the activation slot (.1) is parameter-free and implicit, matching
+# PRE_ENCODE_TABLE's convention for the conv-subsampling stack.
+PROMPT_MLP_TABLE: list[tuple[str, str]] = [
+    ("prompt_kernel.0.weight", "prompt.mlp.0.weight"),
+    ("prompt_kernel.0.bias",   "prompt.mlp.0.bias"),
+    ("prompt_kernel.2.weight", "prompt.mlp.2.weight"),
+    ("prompt_kernel.2.bias",   "prompt.mlp.2.bias"),
+]
+
+
 # NeMo state_dict contains buffers and preprocessor tables that the
 # loader computes itself at runtime. Skipping them silently keeps the
 # unused-key check meaningful for genuine misses.
@@ -1055,12 +1111,20 @@ EXPECTED_UNUSED_SUFFIXES = (
 EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED = ("ctc_decoder.",)
 
 
-def is_expected_unused(key: str, head_kind: str, drop_aux_ctc: bool) -> bool:
+def is_expected_unused(key: str, head_kind: str, drop_aux_ctc: bool,
+                       has_prompt: bool) -> bool:
     if key.startswith(EXPECTED_UNUSED_PREFIXES_BASE):
         return True
     if key.endswith(EXPECTED_UNUSED_SUFFIXES):
         return True
     if drop_aux_ctc and key.startswith(EXPECTED_UNUSED_PREFIXES_TDT_CTC_DROPPED):
+        return True
+    # prompt_kernel.* belongs to the multilingual prompt MLP. Variants
+    # with has_prompt=True consume these via PROMPT_MLP_TABLE; variants
+    # without the prompt path (English-only checkpoints) won't carry
+    # them in the state_dict at all, so the prefix check only matters
+    # when an unmodelled variant slips through unchecked.
+    if not has_prompt and key.startswith("prompt_kernel."):
         return True
     return False
 
@@ -1109,7 +1173,9 @@ def convert(model_spec: str, out_path: Path) -> None:
     head_kind = profile["head_kind"]
     prefer_direct = bool(profile.get("prefer_direct_load", False))
     drop_aux_ctc = "tdt_ctc" in slug  # hybrid checkpoints carry an aux CTC head we drop
-    print(f"Variant: {profile['variant']} (head_kind={head_kind})")
+    has_prompt = bool(profile.get("has_prompt", False))
+    print(f"Variant: {profile['variant']} (head_kind={head_kind}"
+          f"{', prompt=on' if has_prompt else ''})")
 
     model = load_nemo_model(model_spec, prefer_direct=prefer_direct)
 
@@ -1156,6 +1222,29 @@ def convert(model_spec: str, out_path: Path) -> None:
                 f"chunk={hp['enc_att_chunk_chunk_choices']!r} "
                 f"right={hp['enc_att_chunk_right_choices']!r}."
             )
+
+    # Normalize the cache-aware multi-lookahead menu so index 0 is the
+    # max-R (max-context, max-accuracy) setting. The loader requires
+    # att_context_size_choices[0] == (att_context_left, att_context_right)
+    # and the runtime treats that scalar pair as the default-when-no-flag.
+    # NeMo cfgs ship the menu in arbitrary training-time order. The
+    # English predecessor cfg ships [[70,13],[70,6],[70,1],[70,0]] (idx 0
+    # already max-R, sort is a no-op); nemotron-3.5-asr-streaming-0.6b
+    # ships [[56,3],[56,0],[56,6],[56,13]] (idx 0 is NOT max-R), and the
+    # intake explicitly names [56,13] as the v1 target. Sorting by R desc
+    # gives a stable, variant-agnostic "idx 0 = primary" convention and
+    # leaves the C++ loader/selector code unchanged.
+    if hp["enc_att_context_style"] == "chunked_limited":
+        choices = hp.get("enc_att_context_size_choices") or []
+        if len(choices) >= 2:
+            sorted_choices = sorted(choices, key=lambda lr: -lr[1])
+            if sorted_choices != choices:
+                print(f"[att-context] reordering att_context_size_choices "
+                      f"{choices} -> {sorted_choices} (max-R first; cfg ships "
+                      f"training-time order, loader expects idx 0 = primary)")
+                hp["enc_att_context_size_choices"] = sorted_choices
+                hp["enc_att_context_left"]  = sorted_choices[0][0]
+                hp["enc_att_context_right"] = sorted_choices[0][1]
 
     raw_vocab_size = hp["pred_vocab"] - 1
     print(f"Detected raw vocab_size = {raw_vocab_size}")
@@ -1334,6 +1423,63 @@ def convert(model_spec: str, out_path: Path) -> None:
             )
             writer.add_uint32("stt.parakeet.tdt.max_symbols", hp["tdt_max_symbols"])
 
+    # Prompt MLP (multilingual variants with NeMo's
+    # EncDecRNNTBPEModelWithPrompt). Reads num_prompts and the
+    # prompt_dictionary out of cfg.model_defaults; tensor names + shapes
+    # validated against PROMPT_MLP_TABLE in the tensor-emit loop below.
+    if has_prompt:
+        md = config.get("model_defaults") or {}
+        num_prompts = int(md["num_prompts"])
+        prompt_dict = md["prompt_dictionary"]
+        # cfg's train_ds carries the prompt_field; model_defaults does not.
+        train_ds = config.get("train_ds") or {}
+        prompt_field = str(train_ds.get("prompt_field", "target_lang"))
+        # Verify the prompt MLP shapes match the (d_model + num_prompts)
+        # -> prompt_hidden -> d_model contract before emitting any KV
+        # so a shape mismatch fails fast with a precise message.
+        w0 = sd["prompt_kernel.0.weight"]
+        w2 = sd["prompt_kernel.2.weight"]
+        prompt_hidden = int(w0.shape[0])
+        in_dim_expected = hp["enc_d_model"] + num_prompts
+        if int(w0.shape[1]) != in_dim_expected:
+            raise ValueError(
+                f"prompt_kernel.0.weight in-dim {int(w0.shape[1])} != "
+                f"d_model({hp['enc_d_model']}) + num_prompts({num_prompts}) "
+                f"= {in_dim_expected}"
+            )
+        if int(w2.shape[0]) != hp["enc_d_model"] or int(w2.shape[1]) != prompt_hidden:
+            raise ValueError(
+                f"prompt_kernel.2.weight shape {tuple(int(s) for s in w2.shape)} "
+                f"!= (d_model={hp['enc_d_model']}, prompt_hidden={prompt_hidden})"
+            )
+        # Materialize prompt_dictionary as two parallel arrays. Locales
+        # are emitted verbatim (including non-canonical aliases like
+        # 'en'/'enGB'/'zh-ZH'/'no'); the C++ side does exact-string
+        # lookup.
+        locales: list[str] = []
+        indices: list[int] = []
+        for k, v in prompt_dict.items():
+            locales.append(str(k))
+            indices.append(int(v))
+        # 'auto' is the language-detection sentinel in the prompt
+        # dictionary; surface it separately so Stage 4 wiring doesn't
+        # have to string-grep the dictionary at runtime.
+        auto_id = int(prompt_dict["auto"])
+
+        writer.add_uint32("stt.parakeet.prompt.num_prompts",     num_prompts)
+        writer.add_uint32("stt.parakeet.prompt.hidden",          prompt_hidden)
+        writer.add_string("stt.parakeet.prompt.field",           prompt_field)
+        # Activation between prompt_kernel.0 and prompt_kernel.2 is a
+        # parameter-free slot (.1) in the source nn.Sequential. The
+        # cfg does not carry the activation name; ReLU is the NeMo
+        # convention for the Prompt class and matches the jointnet
+        # activation. Stage 4 oracle compare flags any mismatch.
+        writer.add_string("stt.parakeet.prompt.activation",      "relu")
+        writer.add_array ("stt.parakeet.prompt.dictionary.locales", locales)
+        writer.add_array ("stt.parakeet.prompt.dictionary.indices",
+                          [int(i) for i in indices])
+        writer.add_uint32("stt.parakeet.prompt.auto_id",         auto_id)
+
     writer.add_string("stt.frontend.type",         hp["fe_type"])
     writer.add_uint32("stt.frontend.num_mels",     hp["fe_num_mels"])
     writer.add_uint32("stt.frontend.sample_rate",  hp["fe_sample_rate"])
@@ -1438,6 +1584,12 @@ def convert(model_spec: str, out_path: Path) -> None:
         for nemo_name, gguf_name in JOINT_TABLE:
             add(nemo_name, gguf_name)
 
+    # Prompt MLP. Shapes were already validated above when the prompt
+    # KVs were emitted; here we just copy the tensors verbatim.
+    if has_prompt:
+        for nemo_name, gguf_name in PROMPT_MLP_TABLE:
+            add(nemo_name, gguf_name)
+
     per_layer_tensors = len(ENCODER_BLOCK_TABLE) + (
         len(ENCODER_BLOCK_BIAS_TABLE) if hp["enc_use_bias"] else 0
     )
@@ -1453,10 +1605,12 @@ def convert(model_spec: str, out_path: Path) -> None:
             + hp["pred_n_layers"] * 3               # pred.lstm.{Wx,Wh,bias}
             + len(JOINT_TABLE)
         )
+    prompt_tensors = len(PROMPT_MLP_TABLE) if has_prompt else 0
     expected = (
         len(PRE_ENCODE_TABLE)
         + hp["enc_n_layers"] * per_layer_tensors
         + head_tensors
+        + prompt_tensors
     )
     if n_added != expected:
         raise RuntimeError(
@@ -1465,7 +1619,8 @@ def convert(model_spec: str, out_path: Path) -> None:
     print(f"Added {n_added} tensors ({bytes_out / (1024 * 1024):.1f} MB)")
 
     unused = sorted(
-        k for k in (sd_keys - consumed) if not is_expected_unused(k, head_kind, drop_aux_ctc)
+        k for k in (sd_keys - consumed)
+        if not is_expected_unused(k, head_kind, drop_aux_ctc, has_prompt)
     )
     if unused:
         print(
