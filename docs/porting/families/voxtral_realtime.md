@@ -1,6 +1,11 @@
 # Voxtral Realtime
 
-Status: porting (Stage 4)
+Status: shipped (Stage 8, 2026-06-06)
+
+Release WER (full LibriSpeech test-clean, 2620 utts, offline b8, L40S): BF16
+**2.08%** vs measured Oracle reference **2.08%** → ref-dtype gate PASS; all
+shipped quants 2.07–2.09%. See
+`reports/wer/voxtral-mini-4b-realtime-2602.librispeech-test-clean.summary.md`.
 
 Mistral's **Voxtral Realtime 2602** — a *streaming* audio-LLM. Architecturally
 distinct from the 2507 `voxtral` family (own `model_type`, own arch dir); it
