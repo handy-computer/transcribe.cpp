@@ -29,19 +29,22 @@ Real-time and offline speech-to-text from a 16 kHz mono WAV.
 
 `handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF`:
 
-| Quantization | Download | Size |
-| --- | --- | ---: |
-| BF16   | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-BF16.gguf)   | 8.87 GB |
-| F16    | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-F16.gguf)    | 8.88 GB |
-| Q8_0   | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf)   | 4.73 GB |
-| Q6_K   | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q6_K.gguf)   | 3.66 GB |
-| Q5_K_M | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q5_K_M.gguf) | 3.28 GB |
-| Q4_K_M | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf) | 2.83 GB |
+| Quantization | Download | Size | WER (LibriSpeech test-clean) |
+| --- | --- | ---: | ---: |
+| BF16   | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-BF16.gguf)   | 8.87 GB | 2.08% |
+| F16    | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-F16.gguf)    | 8.88 GB | 2.09% |
+| Q8_0   | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf)   | 4.73 GB | 2.07% |
+| Q6_K   | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q6_K.gguf)   | 3.66 GB | 2.08% |
+| Q5_K_M | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q5_K_M.gguf) | 3.28 GB | 2.08% |
+| Q4_K_M | [GGUF](https://huggingface.co/handy-computer/Voxtral-Mini-4B-Realtime-2602-GGUF/resolve/main/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf) | 2.83 GB | 2.08% |
 
-BF16 WER on the full LibriSpeech `test-clean` split (2620 utterances, Whisper
-English normalizer): **2.09%**, matching the same-machine HuggingFace
-`transformers` reference (**2.08%**) within rounding. Per-quant WER is a
-follow-up; authoritative per-preset numbers land at the release WER sweep.
+WER measured on the full LibriSpeech `test-clean` split (2620 utterances)
+with the Whisper-style English text normalizer, offline path, batch size 8
+on an NVIDIA L40S. The same-machine HuggingFace `transformers` reference
+(`VoxtralForConditionalGeneration`, BF16, greedy) lands at **2.08%**, and the
+BF16 GGUF matches it (**2.08%**). Every shipped quant stays within bootstrap
+noise of the reference (2.07–2.09%; 95% CI ≈ ±0.18), so the quantization
+ladder is WER-neutral down to Q4_K_M.
 
 ## Quick Start
 
@@ -69,6 +72,36 @@ CLI flags:
   spec (plain autoregression). `1..8` selects an explicit K. Speculation
   applies to `transcribe_run` / `transcribe-cli` only — the streaming path
   is unaffected.
+
+## Performance
+
+Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
+speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
+decimal places). Measured on the offline path at the family-default `K=2`
+speculative decoding.
+
+### Apple M4 Max
+
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Metal   | jfk (11.0s)  | 1.22 s (9.0×)   | 1.14 s (9.7×)   |
+| Metal   | dots (35.3s) | 4.34 s (8.1×)   | 3.91 s (9.0×)   |
+| CPU     | jfk (11.0s)  | 4.43 s (2.5×)   | 4.69 s (2.3×)   |
+| CPU     | dots (35.3s) | 13.65 s (2.6×)  | 13.12 s (2.7×)  |
+
+macOS 15, transcribe.cpp `483c122`. Metal device: Apple M4 Max.
+
+Benchmark reproduction:
+
+```bash
+uv run scripts/bench/run.py \
+  --models Voxtral-Mini-4B-Realtime-2602 \
+  --quants q8_0,q4_k_m \
+  --samples jfk,dots \
+  --backends metal,cpu,vulkan \
+  --iters 3 --warmup 1 \
+  --name voxtral-mini-4b-realtime-2602-publication
+```
 
 ## Speculative decoding
 
