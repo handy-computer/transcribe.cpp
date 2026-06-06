@@ -1,0 +1,113 @@
+{
+  "_comment": [
+    "Nemotron-3.5-ASR-streaming 0.6b per-tensor tolerances for compare_tensors.py.",
+    "",
+    "CORRECTNESS REGIME (Stage 4 contract):",
+    "  - reference-dtype GGUF (F32) at models/nemotron-3.5-asr-streaming-0.6b/*-F32.gguf",
+    "  - C++ build: CPU backend, --threads 1 (default validate.py invocation)",
+    "  - KV cache type: AUTO (resolves to F32 on the F32 weights)",
+    "  - mel frontend: C++ transcribe-mel (no env-var ref injection)",
+    "  - reference: NeMo main @ 6967f48f (EncDecRNNTBPEModelWithPrompt)",
+    "    via scripts/dump_reference_parakeet_nemo.py with --language en-US",
+    "    (target_lang=en-US, prompt_id=0).",
+    "",
+    "PROVISIONAL \u2014 Stage 4 finalises against observed C++ drift.",
+    "  formula:  max_abs  = max(1e-4 * p99_abs, 1e-6)",
+    "            mean_abs = max(1e-5 * rms,     1e-6)",
+    "  Every entry carries _provisional: true; finalisation removes it.",
+    "  Do NOT ship while any _provisional flags remain.",
+    "",
+    "PER-VARIANT SCOPING:",
+    "  Frontend has normalize='NA' (no per-feature normalization), so",
+    "  enc.mel.in is raw log-mel and pre-encode magnitudes are large",
+    "  (cascade pattern shared with predecessor nemotron-speech-streaming-en-0.6b).",
+    "  Sibling parakeet.json tolerances assume per-feature normalisation.",
+    "",
+    "NEW vs. predecessor:",
+    "  enc.prompted / dec.enc_out_prompted are post-prompt-kernel encoder",
+    "  outputs (language-conditioned). Stage 4 must implement the same",
+    "  prompt projection in C++ before comparing."
+  ],
+  "tolerances": {
+    "dec.embed.0": {
+      "max_abs": 1e-06,
+      "mean_abs": 1e-06,
+      "_provisional": true
+    },
+    "dec.enc_out": {
+      "max_abs": 1.465432442724704e-05,
+      "mean_abs": 1e-06,
+      "_provisional": true
+    },
+    "dec.enc_out_prompted": {
+      "max_abs": 5.039005130529398e-05,
+      "mean_abs": 1.282976605198898e-06,
+      "_provisional": true
+    },
+    "dec.joint.0": {
+      "max_abs": 0.00793398557281494,
+      "mean_abs": 0.0004225724844155834,
+      "_provisional": true
+    },
+    "dec.lstm.0.c.0": {
+      "max_abs": 7.453821927309038e-05,
+      "mean_abs": 1.7590211654083737e-06,
+      "_provisional": true
+    },
+    "dec.lstm.0.h.0": {
+      "max_abs": 2.7657646864652635e-05,
+      "mean_abs": 1e-06,
+      "_provisional": true
+    },
+    "dec.lstm.1.c.0": {
+      "max_abs": 5.9392072618007714e-05,
+      "mean_abs": 1.6393091961795505e-06,
+      "_provisional": true
+    },
+    "dec.lstm.1.h.0": {
+      "max_abs": 2.3285605683922784e-05,
+      "mean_abs": 1e-06,
+      "_provisional": true
+    },
+    "enc.block.0.out": {
+      "max_abs": 0.00270507164001464,
+      "mean_abs": 7.907331480576549e-05,
+      "_provisional": true
+    },
+    "enc.block.12.out": {
+      "max_abs": 0.0028537816143035886,
+      "mean_abs": 6.334790672435143e-05,
+      "_provisional": true
+    },
+    "enc.block.23.out": {
+      "max_abs": 1.465432442724704e-05,
+      "mean_abs": 1e-06,
+      "_provisional": true
+    },
+    "enc.final": {
+      "max_abs": 1.465432442724704e-05,
+      "mean_abs": 1e-06,
+      "_provisional": true
+    },
+    "enc.mel.in": {
+      "max_abs": 0.001661121837615967,
+      "mean_abs": 0.00010128634779341219,
+      "_provisional": true
+    },
+    "enc.pos_emb": {
+      "max_abs": 9.999976158142091e-05,
+      "mean_abs": 7.071067828517533e-06,
+      "_provisional": true
+    },
+    "enc.pre_encode.out": {
+      "max_abs": 0.03309354522705063,
+      "mean_abs": 0.0009286948139566373,
+      "_provisional": true
+    },
+    "enc.prompted": {
+      "max_abs": 5.039005130529398e-05,
+      "mean_abs": 1.282976605198898e-06,
+      "_provisional": true
+    }
+  }
+}

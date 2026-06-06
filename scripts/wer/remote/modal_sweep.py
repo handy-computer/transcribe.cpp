@@ -818,11 +818,19 @@ def _env_fingerprint(root: pathlib.Path, family: str, runner_rel: str) -> str:
 
 
 def _ref_hyp_cache_paths(variant: str, dataset_spec: str, n_utts: int | None,
-                         batch_size: int, env_fp: str) -> tuple[str, str]:
+                         batch_size: int, env_fp: str,
+                         extra_args: list | None = None) -> tuple[str, str]:
     subset_tag = "full" if n_utts is None else f"n{n_utts}"
     bs_tag = "" if batch_size <= 1 else f".b{batch_size}"
+    # Fold extra runner args into the key so e.g. --language en and
+    # --language en-US do not share a cache entry.
+    if extra_args:
+        args_tag = "." + hashlib.sha256(
+            " ".join(extra_args).encode()).hexdigest()[:8]
+    else:
+        args_tag = ""
     base = (f"/data/wer/ref-hyps/{env_fp}/{variant}-REF."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{args_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 
@@ -854,12 +862,13 @@ def _ensure_local_venv(family: str) -> str:
 
 def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
                        subset_path, subset_count, venv, dataset_spec, n_utts,
-                       env_fp, batch_size, device) -> dict:
+                       env_fp, batch_size, device, extra_args=None) -> dict:
     """One reference run at a single batch size. Hyp-cached on /data (plain
     file writes, no flock, so the Volume is fine here — only uv needs local
     disk)."""
     cache_hyp, cache_sum = _ref_hyp_cache_paths(
-        variant, dataset_spec, n_utts, batch_size, env_fp)
+        variant, dataset_spec, n_utts, batch_size, env_fp,
+        extra_args=extra_args)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         print(f"[ref] cache hit: {cache_hyp}")
@@ -888,6 +897,8 @@ def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
         "--device", device,
         "--batch-size", str(batch_size),
     ]
+    if extra_args:
+        cmd.extend(extra_args)
     print(f"[ref] bs={batch_size} $ {' '.join(cmd)}")
     t0 = time.time()
     rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
@@ -941,6 +952,7 @@ def _run_reference_impl(
     env_fp: str,
     batch_sizes: list,
     device: str = "cuda",
+    extra_args: list | None = None,
 ) -> dict:
     """One container per variant: `uv sync` the env once (local disk), then run
     the reference runner at each requested batch size. Returns
@@ -968,7 +980,7 @@ def _run_reference_impl(
         results[str(bs)] = _run_one_reference(
             family, variant, framework, upstream_repo, runner_rel,
             subset_path, subset_count, venv, dataset_spec, n_utts, env_fp,
-            bs, device)
+            bs, device, extra_args=extra_args)
     return results
 
 
@@ -998,10 +1010,12 @@ def _register_reference_runner(gpu_id: str):
         n_utts: int | None = None,
         batch_sizes: list | None = None,
         device: str = "cuda",
+        extra_args: list | None = None,
     ) -> dict:
         return _run_reference_impl(
             family, variant, framework, upstream_repo, runner_rel,
-            dataset_spec, n_utts, env_fp, batch_sizes or [1], device=device)
+            dataset_spec, n_utts, env_fp, batch_sizes or [1], device=device,
+            extra_args=extra_args)
 
     runner.__name__ = name
     runner.__qualname__ = name
@@ -1431,6 +1445,7 @@ def reference_sweep(
     batch_sizes: str = "1",
     clean: bool = False,
     runner: str = "",
+    ref_args: str = "",
 ) -> None:
     """Fan the REFERENCE framework (NeMo / Transformers / author repo) across
     one or more variants on a GPU, producing `<variant>-REF.<dataset>.jsonl`
@@ -1447,6 +1462,10 @@ def reference_sweep(
     --clean        Rebuild the family venv (wipe /uvcache/<env_fp>).
     --runner       Explicit runner path override (needed when a family has
                    several run_reference_<family>_*.py, e.g. parakeet).
+    --ref-args     Extra args passed verbatim to every reference runner
+                   invocation, space-separated. Used for per-family knobs
+                   the uniform contract does not cover (e.g.
+                   '--language en-US' for prompt-conditioned parakeet).
 
     Examples:
       # Smoke one Transformers + one NeMo variant at bs 1 and 4 (4 cells):
@@ -1458,6 +1477,7 @@ def reference_sweep(
     if not specs:
         raise SystemExit("--variants is required (comma-separated)")
     sizes = [int(x) for x in batch_sizes.split(",") if x.strip()] or [1]
+    extra = ref_args.split() if ref_args else None
 
     resolved = [_resolve_reference(s, runner) for s in specs]
 
@@ -1488,7 +1508,7 @@ def reference_sweep(
           f"(batch sizes {sizes} each)...")
     futs = [(r, runner_fn.spawn(
                 r["family"], r["variant"], r["framework"], r["upstream_repo"],
-                r["runner_rel"], r["env_fp"], dataset, n, sizes, "cuda"))
+                r["runner_rel"], r["env_fp"], dataset, n, sizes, "cuda", extra))
             for r in resolved]
 
     rows, failures = [], []

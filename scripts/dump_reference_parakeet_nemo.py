@@ -455,6 +455,50 @@ def run_encoder_forward(model, audio_tensor, length_tensor):
     return encoded, encoded_len
 
 
+def is_prompt_aware(model) -> bool:
+    """True iff the model conditions the encoder output on a target_lang prompt
+    (EncDecRNNTBPEModelWithPrompt / EncDecHybridRNNTCTCBPEModelWithPrompt).
+    Predecessor English-only variants have neither attribute and short-circuit.
+    """
+    return bool(getattr(model, "concat", False)) and hasattr(model, "prompt_kernel")
+
+
+def resolve_prompt_id(model, lang: str) -> int:
+    """Map a target language tag (e.g. 'en-US') to its prompt embedding index.
+    Raises with the legal key list so misconfigured manifests fail loudly.
+    """
+    prompt_dict = model.cfg.model_defaults.get("prompt_dictionary", {})
+    if lang not in prompt_dict:
+        sample = list(prompt_dict.keys())[:12]
+        raise SystemExit(
+            f"error: unknown target_lang '{lang}'; not in prompt_dictionary. "
+            f"Sample keys: {sample}"
+        )
+    return int(prompt_dict[lang])
+
+
+def apply_prompt(model, encoded_bdt, prompt_id: int):
+    """Apply the prompt_kernel to a (B, D, T) encoder output, returning
+    a (B, D, T) prompt-conditioned encoder output. Mirrors the forward()
+    body of EncDecRNNTBPEModelWithPrompt so the joint head receives the
+    same input it would at transcribe() time.
+    """
+    import torch
+
+    enc_btd = encoded_bdt.transpose(1, 2)  # (B, D, T) -> (B, T, D)
+    batch_size, time_steps, _ = enc_btd.shape
+    num_prompts = int(model.num_prompts)
+    prompt = torch.zeros(batch_size, time_steps, num_prompts,
+                         dtype=enc_btd.dtype, device=enc_btd.device)
+    prompt_indices = torch.full((batch_size,), prompt_id, dtype=torch.long,
+                                device=enc_btd.device)
+    prompt.scatter_(2, prompt_indices.view(batch_size, 1, 1)
+                    .expand(-1, time_steps, -1), 1.0)
+    concat = torch.cat([enc_btd, prompt], dim=-1)
+    out_btd = model.prompt_kernel(concat).to(enc_btd.dtype)
+    return out_btd.transpose(1, 2)  # (B, T, D) -> (B, D, T)
+
+
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
@@ -556,6 +600,15 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     enc_final = encoded.transpose(1, 2)  # (B, D, T) -> (B, T, D)
     dump("enc.final", enc_final, "encoder.final")
+
+    # Prompt-aware (multilingual nemotron-3.5): also dump the post-prompt
+    # encoder output, since that is what feeds the joint/CTC head.
+    if is_prompt_aware(model):
+        prompt_id = resolve_prompt_id(model, args.language)
+        print(f"prompt: target_lang={args.language!r} prompt_id={prompt_id}")
+        with torch.inference_mode():
+            enc_prompted = apply_prompt(model, encoded, prompt_id)
+        dump("enc.prompted", enc_prompted.transpose(1, 2), "encoder.prompted")
 
     for h in hooks:
         h.remove()
@@ -1287,8 +1340,24 @@ def cmd_decode(args: argparse.Namespace) -> int:
     length_tensor = torch.tensor([pcm.size], dtype=torch.long)
 
     encoded, _encoded_len = run_encoder_forward(model, audio_tensor, length_tensor)
-    enc_t = encoded.transpose(1, 2)
-    dump("dec.enc_out", enc_t, "decoder.enc_out")
+
+    # For prompt-aware models the joint head sees the prompt-conditioned
+    # encoder output, not the bare encoder output. Compute it once and
+    # feed the joint dump from the conditioned version.
+    if is_prompt_aware(model):
+        prompt_id = resolve_prompt_id(model, args.language)
+        print(f"prompt: target_lang={args.language!r} prompt_id={prompt_id}")
+        with torch.inference_mode():
+            encoded_for_joint = apply_prompt(model, encoded, prompt_id)
+        # Capture both so Stage 4 can validate the bare encoder and the
+        # prompt-conditioned output independently.
+        dump("dec.enc_out", encoded.transpose(1, 2), "decoder.enc_out")
+        dump("dec.enc_out_prompted", encoded_for_joint.transpose(1, 2),
+             "decoder.enc_out_prompted")
+        enc_t = encoded_for_joint.transpose(1, 2)
+    else:
+        enc_t = encoded.transpose(1, 2)
+        dump("dec.enc_out", enc_t, "decoder.enc_out")
 
     with torch.inference_mode():
         if arch == "ctc":
@@ -1305,6 +1374,24 @@ def cmd_decode(args: argparse.Namespace) -> int:
         if getattr(model.cfg, "validation_ds", None) is None:
             from omegaconf import OmegaConf
             model.cfg.validation_ds = OmegaConf.create({"use_start_end_token": False})
+        if is_prompt_aware(model):
+            # The prompt model's transcribe() routes through a Lhotse
+            # dataloader whose dataset requires per-cut supervision language
+            # tags. NeMo's built-in temp manifest does not emit any, so the
+            # dataset throws on prompt_key='None'. Bypass it: run greedy
+            # decoding directly on the prompt-conditioned encoder output we
+            # already computed.
+            _, encoded_len = run_encoder_forward(model, audio_tensor, length_tensor)
+            hyps = model.decoding.rnnt_decoder_predictions_tensor(
+                encoder_output=encoded_for_joint,
+                encoded_lengths=encoded_len,
+                return_hypotheses=False,
+            )
+            first = hyps[0] if isinstance(hyps, (list, tuple)) and len(hyps) > 0 else hyps
+            text = first if isinstance(first, str) else getattr(first, "text", str(first))
+            print(f"  Transcription: {text}")
+            write_transcript(out_dir, text, source=source)
+            return 0
         transcriptions = model.transcribe(audio=[str(audio_path)], batch_size=1)
         if isinstance(transcriptions, (list, tuple)) and len(transcriptions) > 0:
             first = transcriptions[0]
@@ -1341,7 +1428,12 @@ def add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--language",
         default="en",
-        help="Accepted for validate.py compatibility; Parakeet is English-only.",
+        help=(
+            "Target language tag. Ignored by English-only parakeet variants. "
+            "For prompt-conditioned models (e.g. nemotron-3.5-asr-streaming-0.6b) "
+            "this MUST be a key in the model's prompt_dictionary "
+            "(e.g. 'en-US', 'en', 'es-ES'). Default 'en' (predecessor-compatible)."
+        ),
     )
     p.add_argument(
         "--offline-only",

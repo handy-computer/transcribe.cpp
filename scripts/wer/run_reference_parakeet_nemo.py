@@ -60,6 +60,13 @@ def main() -> int:
                        "nemotron-speech-streaming-en-0.6b must NOT pass this — "
                        "their published WER assumes chunked_limited attention."
                    ))
+    p.add_argument("--language", default="en",
+                   help=(
+                       "Target language tag. Ignored for English-only parakeet "
+                       "variants. For prompt-conditioned multilingual models "
+                       "(nemotron-3.5-asr-streaming-0.6b) this must be a key in "
+                       "the model's prompt_dictionary (e.g. 'en-US', 'es-ES')."
+                   ))
     args = p.parse_args()
 
     if not args.manifest.exists():
@@ -82,7 +89,12 @@ def main() -> int:
     # models (nemotron-speech-streaming-en-0.6b and similar) must
     # preserve their native chunked_limited style to score correct WER.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from dump_reference_parakeet_nemo import _patch_conformer_for_offline
+    from dump_reference_parakeet_nemo import (
+        _patch_conformer_for_offline,
+        is_prompt_aware,
+        resolve_prompt_id,
+        apply_prompt,
+    )
     _patch_conformer_for_offline(force_regular_att_style=args.offline_only)
 
     print(f"loading: {args.model}")
@@ -94,8 +106,14 @@ def main() -> int:
     # EncDecHybridRNNTCTCBPEModel for parakeet; iterate them as
     # fallbacks when the abstract dispatcher fails.
     from nemo.collections.asr.models import ASRModel
+    local = Path(args.model).expanduser()
+    is_local = local.exists()
+    loader = "restore_from" if is_local else "from_pretrained"
     try:
-        model = ASRModel.from_pretrained(args.model, map_location="cpu")
+        if is_local:
+            model = ASRModel.restore_from(str(local), map_location="cpu")
+        else:
+            model = ASRModel.from_pretrained(args.model, map_location="cpu")
     except TypeError as e:
         if "abstract class" not in str(e):
             raise
@@ -104,7 +122,10 @@ def main() -> int:
         last = e
         for cls in (EncDecRNNTBPEModel, EncDecCTCModelBPE):
             try:
-                model = cls.from_pretrained(args.model, map_location="cpu")
+                if is_local:
+                    model = cls.restore_from(str(local), map_location="cpu")
+                else:
+                    model = cls.from_pretrained(args.model, map_location="cpu")
                 break
             except Exception as e2:
                 last = e2
@@ -165,6 +186,50 @@ def main() -> int:
                 out = [out]
             return [_hyp_of(x) for x in out][:k]
 
+        # Prompt-aware multilingual models (nemotron-3.5-asr-streaming-0.6b)
+        # cannot use model.transcribe(): NeMo's temp manifest lacks per-cut
+        # language tags, and the Lhotse prompt_index dataset throws on
+        # prompt_key='None'. We bypass it by running preprocess + encoder +
+        # prompt_kernel + decoding directly. Mirrors the dump-side bypass.
+        prompt_mode = is_prompt_aware(model)
+        prompt_id = resolve_prompt_id(model, args.language) if prompt_mode else None
+        if prompt_mode:
+            print(f"prompt mode: target_lang={args.language!r} prompt_id={prompt_id}")
+        import soundfile as sf
+        import numpy as np
+
+        def _prompt_transcribe(paths):
+            audios = []
+            lens = []
+            for p_ in paths:
+                pcm, sr = sf.read(p_, dtype="float32", always_2d=False)
+                if pcm.ndim > 1:
+                    pcm = pcm.mean(axis=1).astype("float32")
+                if sr != 16000:
+                    raise RuntimeError(f"audio {p_} sample_rate={sr}, expected 16000")
+                audios.append(pcm)
+                lens.append(pcm.size)
+            T = max(lens)
+            batch = np.zeros((len(audios), T), dtype="float32")
+            for i, a in enumerate(audios):
+                batch[i, : a.size] = a
+            audio_t = torch.tensor(batch, device=args.device)
+            length_t = torch.tensor(lens, dtype=torch.long, device=args.device)
+            with torch.inference_mode():
+                processed, proc_len = model.preprocessor(
+                    input_signal=audio_t, length=length_t
+                )
+                encoded, encoded_len = model.encoder(
+                    audio_signal=processed, length=proc_len
+                )
+                encoded = apply_prompt(model, encoded, prompt_id)
+                hyps = model.decoding.rnnt_decoder_predictions_tensor(
+                    encoder_output=encoded,
+                    encoded_lengths=encoded_len,
+                    return_hypotheses=False,
+                )
+            return _texts(hyps, len(paths))
+
         bs = max(1, args.batch_size)
         for start in range(0, total, bs):
             group = manifest[start:start + bs]
@@ -174,16 +239,20 @@ def main() -> int:
             errs = [""] * k
             hyps = [""] * k
             try:
-                out = model.transcribe(audio=paths, batch_size=k)
-                texts = _texts(out, k)
+                if prompt_mode:
+                    texts = _prompt_transcribe(paths)
+                else:
+                    texts = _texts(model.transcribe(audio=paths, batch_size=k), k)
                 for i in range(k):
                     hyps[i] = texts[i] if i < len(texts) else ""
             except Exception:
-                # Per-utterance fallback for this group.
                 for i, e_ in enumerate(group):
                     try:
-                        t1 = _texts(model.transcribe(audio=[e_["audio"]],
-                                                     batch_size=1), 1)
+                        if prompt_mode:
+                            t1 = _prompt_transcribe([e_["audio"]])
+                        else:
+                            t1 = _texts(model.transcribe(audio=[e_["audio"]],
+                                                         batch_size=1), 1)
                         hyps[i] = t1[0] if t1 else ""
                     except Exception as e2:
                         errs[i] = f"{type(e2).__name__}: {e2}"

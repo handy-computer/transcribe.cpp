@@ -6,7 +6,55 @@
     "hf_repo": "nvidia/nemotron-3.5-asr-streaming-0.6b",
     "hf_revision": "24b151a851dd15909e1fc611b11bb2da52b9fc81"
   },
+  "reference": {
+    "kind": "nemo",
+    "source": "https://github.com/NVIDIA-NeMo/NeMo",
+    "revision": "6967f48fda2a",
+    "entrypoint": "scripts/dump_reference_parakeet_nemo.py"
+  },
   "expected_dtype": "float32",
   "dtype_source": "manual",
-  "_skeleton": true
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 1e-05
+  },
+  "tokenizer_summary": {
+    "type": "sentencepiece",
+    "vocab_size": 13087,
+    "special_tokens": {
+      "unk": 0,
+      "blank": 13087
+    },
+    "has_language_tokens": true
+  },
+  "capabilities": {
+    "languages": [
+      "en-US", "en-GB", "es-US", "es-ES", "fr-FR", "fr-CA", "it-IT",
+      "pt-BR", "pt-PT", "nl-NL", "de-DE", "tr-TR", "ru-RU", "ar-AR",
+      "hi-IN", "ja-JP", "ko-KR", "vi-VN", "uk-UA", "pl-PL", "sv-SE",
+      "cs-CZ", "nb-NO", "da-DK", "bg-BG", "fi-FI", "hr-HR", "sk-SK",
+      "zh-CN", "hu-HU", "ro-RO", "et-EE", "el-GR", "lt-LT", "lv-LV",
+      "mt-MT", "sl-SI", "he-IL", "th-TH", "nn-NO"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": [
+      "token",
+      "word"
+    ],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/nemotron-3.5-asr-streaming-0.6b.json",
+  "cases": [
+    {"audio": "jfk", "language": "en-US"}
+  ]
 }
