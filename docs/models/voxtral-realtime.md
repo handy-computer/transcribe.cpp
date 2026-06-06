@@ -77,7 +77,7 @@ CLI flags:
 
 Cells are wall-clock latency (mean over 3 iterations after 1 warmup), with
 speedup over realtime in parentheses. Units: `ms` below 1 s, `s` above (2
-decimal places). Measured on the offline path at the family-default `K=2`
+decimal places). Measured on the offline path at the family-default `K=1`
 speculative decoding.
 
 ### Apple M4 Max
@@ -90,6 +90,18 @@ speculative decoding.
 | CPU     | dots (35.3s) | 13.65 s (2.6×)  | 13.12 s (2.7×)  |
 
 macOS 15, transcribe.cpp `483c122`. Metal device: Apple M4 Max.
+
+### AMD Ryzen 7 4750U Pro
+
+| Backend | Sample       |            Q8_0 |          Q4_K_M |
+| ------- | ------------ | --------------: | --------------: |
+| Vulkan  | jfk (11.0s)  | 12.62 s (0.87×) | 10.97 s (1.00×) |
+| Vulkan  | dots (35.3s) | 39.29 s (0.90×) | 33.51 s (1.05×) |
+| CPU     | jfk (11.0s)  | 19.54 s (0.56×) | 13.80 s (0.80×) |
+| CPU     | dots (35.3s) | 58.00 s (0.61×) | 41.54 s (0.85×) |
+
+Fedora 43, transcribe.cpp `483c122`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:
 
@@ -116,22 +128,6 @@ phrases.
 
 The transcript is byte-identical to the K=0 (no-spec) path; only wall-clock
 time changes.
-
-Measured offline-decode wall reduction on an AMD Ryzen 7 PRO 4750U (Vega 7
-iGPU, LPDDR4-3200 shared memory) at the family default `K=2`:
-
-| Backend | Sample | K=0 decode | K=2 decode | Δ      |
-| ------- | ------ | ---------: | ---------: | -----: |
-| Vulkan  | jfk    |    10.3 s  |     8.5 s  | −17 %  |
-| CPU     | jfk    |    11.5 s  |     7.6 s  | −34 %  |
-
-The CPU win is larger because compute is the tightest budget on CPU; the
-verify-N pass amortizes the single-load weight bandwidth over more tokens
-without spilling compute headroom. On hardware with more compute relative to
-bandwidth (discrete GPUs, M-series, etc.) the curve shifts toward larger K;
-plausible sweet spots are K=4..8 there. K=1 is essentially tied with K=2 on
-this iGPU; K≥3 regresses because per-call cost grows faster than tokens per
-call. Tune via `--spec-k-drafts` or `transcribe_run_params::spec_k_drafts`.
 
 Capability gate: `transcribe_capabilities::supports_spec_decode = true`.
 Families that do not advertise this bit silently ignore the field.
