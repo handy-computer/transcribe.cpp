@@ -908,11 +908,20 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
     transcribe::debug::init();
     const bool dumps_on = transcribe::debug::enabled();
 
-    // params->spec_k_drafts: -1 = family default (=2), 0 = disabled,
+    // params->spec_k_drafts: -1 = family default (=1), 0 = disabled,
     // 1..VOXTRAL_REALTIME_SPEC_K_MAX = explicit. Clamp into range so a
     // misconfigured caller doesn't ask for an unbounded verify graph.
+    //
+    // Default K=1: the robust setting across backends. A metal Q4_K_M sweep
+    // (decode_ms vs K, jfk + dots) showed K=1 never regresses — best on
+    // short utterances (~1.12x) and break-even on long ones — while K>=2
+    // costs long-form decode because 1-gram draft acceptance is too low to
+    // amortize the T=K+1 verify graph (K=2 dots ~ -16%, K>=4 far worse).
+    // The win concentrates on bandwidth-bound hardware, where one extra
+    // drafted position rides along on weights already loaded for the
+    // verify step. See docs/models/voxtral-realtime.md.
     constexpr int VOXTRAL_REALTIME_SPEC_K_MAX = 8;
-    int k_drafts = 2;  // family default
+    int k_drafts = 1;  // family default
     if (params != nullptr && params->struct_size >=
         offsetof(transcribe_run_params, spec_k_drafts) + sizeof(params->spec_k_drafts)) {
         const int requested = params->spec_k_drafts;
