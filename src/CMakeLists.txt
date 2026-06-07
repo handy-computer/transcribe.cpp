@@ -108,12 +108,13 @@ add_library(transcribe
     arch/medasr/encoder.cpp
 )
 
-# EXPERIMENT (Stage 6, nemotron-3.5 decode): the host RNN-T decoder's
-# output projection (out_w: ~13k × joint_h) parallelizes cleanly across
-# rows. Compile ONLY the parakeet decoder TU with OpenMP so the
-# `#pragma omp parallel for` in linear() activates; libgomp is already
-# linked transitively via ggml. Scoped to one TU — no numerical change
-# (rows summed in the same order), just row-parallelism.
+# The parakeet host decoder's matmul fallback (linear()) parallelizes its
+# large output projection across rows. Compile ONLY this TU with OpenMP so
+# the `#pragma omp parallel for` in linear() activates; libgomp is already
+# linked transitively via ggml. Scoped to one TU and numerically identical
+# (rows summed in the same order). The primary out_w path is the ggml graph
+# in joint_step; this row-parallelism covers the host fallback and the
+# remaining host-side matmuls.
 find_package(OpenMP QUIET)
 if(OpenMP_CXX_FOUND)
     set_source_files_properties(arch/parakeet/decoder.cpp PROPERTIES

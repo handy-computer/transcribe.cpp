@@ -1,25 +1,30 @@
 // arch/parakeet/decoder.h - Parakeet TDT decoder.
 //
-// Phase 5 of the encoder/decoder bring-up. Implements the host-side
-// predictor (2-layer LSTM) + joint network forward + TDT greedy
-// decode driver.
+// Implements the predictor (2-layer LSTM) + joint network forward +
+// greedy decode driver (TDT, RNN-T, and CTC heads).
 //
-// Why this is on host (not a ggml backend graph): the per-step compute
-// is small (a 640-wide LSTM step is ~6.5 MFLOPs; the joint pass is
-// another ~2.7 MFLOPs for v2 / ~12 MFLOPs for v3), and an 11-second
-// jfk.wav clip emits ~70 tokens, so the total decoder cost is well
-// under a millisecond. Building a backend graph would add lifetime
-// complexity (per-step input/output buffers, allocator reuse, state
-// snapshotting on blank emission) for no measurable speedup. Both
-// CPU and Metal are dominated by the encoder forward (~63 ms on M4
-// Max) — the decoder is rounding error.
+// Execution model. The predictor LSTM, the joint's encoder/predictor
+// input projections, the activation, and the greedy search all run on
+// host in fp32: each is a small per-step operation (a 640-wide LSTM step
+// is ~6.5 MFLOPs; the joint input projections ~2.7 MFLOPs), so keeping
+// them on host avoids per-step graph dispatch and keeps the bring-up dump
+// points (compare_tensors.py) trivial to wire.
 //
-// Memory cost: a load-time host mirror of the predictor + joint
-// weights is ~35 MB on v2 and ~73 MB on v3, against an existing
-// ~2.4 GB encoder weight footprint. The mirror is built once in
-// build_host_decoder_weights via ggml_backend_tensor_get (universal
-// across host buffers, Metal unified memory, and future discrete
-// GPUs).
+// The exception is the joint OUTPUT projection (out_w: joint_n × joint_h).
+// At small vocab (~1k for the English parakeets) it is also negligible and
+// runs on host. At the multilingual vocab (13k) it grows to ~17 MFLOPs per
+// step and dominates decode, so it runs through a reused ggml graph
+// (build_joint_out_graph / HostJoint::g_*) with the weight kept in its
+// native dtype: ggml's threaded, SIMD, quantized matmul replaces a scalar
+// host loop and cuts weight bandwidth ~4×. The graph is built once and
+// recomputed in place per step; the host matmul remains as a fallback if
+// graph construction fails.
+//
+// Memory cost: a load-time host mirror of the predictor + joint weights
+// (~35 MB on v2, ~73 MB on v3) against the ~2.4 GB encoder footprint. The
+// mirror is built once in build_host_decoder_weights via
+// ggml_backend_tensor_get (universal across host buffers, Metal unified
+// memory, and discrete GPUs).
 //
 // This header is INTERNAL to src/arch/parakeet/. The public C ABI
 // only sees ParakeetSession::result populated by Parakeet::run.
@@ -27,6 +32,9 @@
 #pragma once
 
 #include "transcribe.h"
+
+#include "ggml.h"
+#include "ggml-backend.h"
 
 #include <cstdint>
 #include <string>
@@ -77,8 +85,38 @@ struct HostJoint {
     std::vector<float> enc_b;    // [joint_h]
     std::vector<float> pred_w;   // [joint_h, pred_hidden]
     std::vector<float> pred_b;   // [joint_h]
-    std::vector<float> out_w;    // [joint_n, joint_h]
+    std::vector<float> out_w;    // [joint_n, joint_h] (host fallback path)
     std::vector<float> out_b;    // [joint_n]
+
+    // --- ggml graph for the out_w projection ---
+    // The output projection (out_w: joint_n × joint_h) dominates RNN-T
+    // decode once the vocab is large (13k for the multilingual variant).
+    // Run it through a prebuilt, reused ggml graph with the weight kept in
+    // its native (quantized) dtype: this gets ggml's threaded + SIMD
+    // quantized matmul and ~4× less weight bandwidth than streaming the
+    // fp32 host mirror every step. Everything (weight, bias, the per-step
+    // activation input, and the logits output) lives in one CPU-backend
+    // buffer so the batch-1 graph recomputes in place with no realloc.
+    // Owned here; freed by ~HostJoint.
+    //
+    // NOT reentrant: g_act / g_logits are mutated per step, so concurrent
+    // decode on contexts sharing this (model-owned) mirror would race.
+    // Decode is serial today; if this lands, the mutable compute tensors
+    // move per-context while the weight tensor stays shared.
+    ggml_context *        g_ctx     = nullptr;
+    ggml_backend_t        g_backend = nullptr;
+    ggml_backend_buffer_t g_buf     = nullptr;
+    ggml_cgraph *         g_graph   = nullptr;
+    ggml_tensor *         g_act     = nullptr; // [joint_h] fp32 input
+    ggml_tensor *         g_logits  = nullptr; // [joint_n] fp32 output
+    bool                  g_ready   = false;
+
+    HostJoint() = default;
+    ~HostJoint();
+    HostJoint(const HostJoint &)             = delete;
+    HostJoint & operator=(const HostJoint &) = delete;
+    HostJoint(HostJoint &&)                  = delete;
+    HostJoint & operator=(HostJoint &&)      = delete;
 };
 
 // CTC head mirror. NeMo's `decoder.decoder_layers.0` is a 1×1 Conv1d

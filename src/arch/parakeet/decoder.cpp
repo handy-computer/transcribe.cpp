@@ -21,6 +21,10 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
+#include "ggml-alloc.h"
+
+#include <thread>
 
 #if TRANSCRIBE_HAS_BLAS
 #  ifdef __APPLE__
@@ -124,7 +128,75 @@ bool read_tensor_to_f32(const ggml_tensor * t,
     return true;
 }
 
+// Build the reusable ggml graph for the joint output projection:
+//   logits[joint_n] = out_w[joint_n, joint_h] @ act[joint_h] + out_b
+// out_w is copied in its native (possibly quantized) dtype straight from
+// the loaded model tensor — no fp32 dequant — so ggml's matmul streams the
+// quantized bytes and quantizes the activation on the fly (same path the
+// encoder already uses). Weight, bias, the per-step activation input, and
+// the logits output all share one CPU-backend buffer, so the batch-1 graph
+// recomputes in place. Returns false (and leaves g_ready=false → host
+// fallback) on any failure.
+bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w) {
+    const int joint_h = j.joint_h;
+    const int joint_n = j.joint_n;
+
+    j.g_backend = ggml_backend_cpu_init();
+    if (j.g_backend == nullptr) {
+        std::fprintf(stderr, "parakeet decoder: ggml CPU backend init failed\n");
+        return false;
+    }
+    {
+        const int n = std::min(8, std::max(1,
+            static_cast<int>(std::thread::hardware_concurrency())));
+        ggml_backend_cpu_set_n_threads(j.g_backend, n);
+    }
+
+    ggml_init_params ip {};
+    ip.mem_size   = ggml_tensor_overhead() * 16 + ggml_graph_overhead();
+    ip.mem_buffer = nullptr;
+    ip.no_alloc   = true;
+    j.g_ctx = ggml_init(ip);
+    if (j.g_ctx == nullptr) return false;
+
+    ggml_tensor * out_w = ggml_new_tensor_2d(j.g_ctx, src_out_w->type, joint_h, joint_n);
+    ggml_tensor * out_b = ggml_new_tensor_1d(j.g_ctx, GGML_TYPE_F32, joint_n);
+    j.g_act = ggml_new_tensor_1d(j.g_ctx, GGML_TYPE_F32, joint_h);
+    ggml_set_input(j.g_act);
+
+    ggml_tensor * mm = ggml_mul_mat(j.g_ctx, out_w, j.g_act); // [joint_n, 1]
+    j.g_logits = ggml_add(j.g_ctx, mm, out_b);                // [joint_n, 1]
+    ggml_set_output(j.g_logits);
+
+    // One backend buffer for every tensor in the ctx (weight + bias +
+    // activation + op results), so nothing is reallocated per step.
+    j.g_buf = ggml_backend_alloc_ctx_tensors(j.g_ctx, j.g_backend);
+    if (j.g_buf == nullptr) return false;
+
+    // Upload the weight verbatim (native dtype) and the fp32 bias.
+    {
+        const size_t nb = ggml_nbytes(src_out_w);
+        std::vector<uint8_t> tmp(nb);
+        ggml_backend_tensor_get(src_out_w, tmp.data(), 0, nb);
+        ggml_backend_tensor_set(out_w, tmp.data(), 0, nb);
+    }
+    ggml_backend_tensor_set(out_b, j.out_b.data(), 0,
+                            static_cast<size_t>(joint_n) * sizeof(float));
+
+    j.g_graph = ggml_new_graph(j.g_ctx);
+    ggml_build_forward_expand(j.g_graph, j.g_logits);
+
+    j.g_ready = true;
+    return true;
+}
+
 } // namespace
+
+HostJoint::~HostJoint() {
+    if (g_buf     != nullptr) ggml_backend_buffer_free(g_buf);
+    if (g_ctx     != nullptr) ggml_free(g_ctx);
+    if (g_backend != nullptr) ggml_backend_free(g_backend);
+}
 
 transcribe_status build_host_decoder_weights(const ParakeetModel & model,
                                              HostDecoderWeights &  out)
@@ -242,6 +314,23 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
     if (!read_tensor_to_f32(w.joint.pred_b, out.joint.pred_b)) return TRANSCRIBE_ERR_GGUF;
     if (!read_tensor_to_f32(w.joint.out_w,  out.joint.out_w))  return TRANSCRIBE_ERR_GGUF;
     if (!read_tensor_to_f32(w.joint.out_b,  out.joint.out_b))  return TRANSCRIBE_ERR_GGUF;
+
+    // Build the reusable ggml graph for the dominant out_w projection
+    // (native-quant weight, threaded ggml matmul). On any failure we leave
+    // g_ready=false and joint_step falls back to the host matmul.
+    if (w.joint.out_w != nullptr) {
+        const int ne0 = static_cast<int>(w.joint.out_w->ne[0]);
+        const int ne1 = static_cast<int>(w.joint.out_w->ne[1]);
+        if (ne0 != out.joint.joint_h || ne1 != out.joint.joint_n) {
+            std::fprintf(stderr,
+                "parakeet decoder: out_w ne [%d,%d] != [joint_h=%d, joint_n=%d]; "
+                "using host matmul\n",
+                ne0, ne1, out.joint.joint_h, out.joint.joint_n);
+        } else if (!build_joint_out_graph(out.joint, w.joint.out_w)) {
+            std::fprintf(stderr,
+                "parakeet decoder: joint ggml graph build failed; using host matmul\n");
+        }
+    }
 
     // ----- TDT params -----
     out.tdt_durations   = hp.tdt_durations;
@@ -504,8 +593,18 @@ void joint_step(const HostJoint &     j,
         }
     }
 
-    linear(j.out_w.data(), scratch_summed.data(), j.out_b.data(),
-           j.joint_n, j.joint_h, out_logits.data());
+    // Output projection: ggml graph (native-quant weight, threaded matmul,
+    // bias folded into the graph) when available, else the host matmul.
+    if (j.g_ready) {
+        ggml_backend_tensor_set(j.g_act, scratch_summed.data(), 0,
+                                static_cast<size_t>(j.joint_h) * sizeof(float));
+        ggml_backend_graph_compute(j.g_backend, j.g_graph);
+        ggml_backend_tensor_get(j.g_logits, out_logits.data(), 0,
+                                static_cast<size_t>(j.joint_n) * sizeof(float));
+    } else {
+        linear(j.out_w.data(), scratch_summed.data(), j.out_b.data(),
+               j.joint_n, j.joint_h, out_logits.data());
+    }
 
     // Apply log_softmax over the full joint output (vocab+blank+durations
     // for TDT, vocab+blank for RNNT) to match NeMo's CPU-inference
