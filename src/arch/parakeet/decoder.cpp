@@ -305,6 +305,13 @@ inline void linear(const float * W,
 #endif
     }
 #else
+    // Rows are independent, so the output projection (out_w: joint_n×joint_h,
+    // ~13k rows for the multilingual vocab) parallelizes cleanly across cores.
+    // Gate on out_dim so the small per-step matmuls (pred 640, lstm gates
+    // 2560) stay serial and don't pay OpenMP fork/join overhead.
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if(out_dim >= 4096)
+#endif
     for (int r = 0; r < out_dim; ++r) {
         const float * row = W + static_cast<size_t>(r) * static_cast<size_t>(in_dim);
         float acc = 0.0f;
