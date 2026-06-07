@@ -455,6 +455,63 @@ def run_encoder_forward(model, audio_tensor, length_tensor):
     return encoded, encoded_len
 
 
+def apply_att_context_right_override(model, att_context_right) -> None:
+    """Force the encoder's offline default att_context_size to
+    [model_left, att_context_right] before forward.
+
+    Cache-aware chunked_limited variants ship a multi-lookahead training
+    menu in `cfg.encoder.att_context_size`. NeMo uses the FIRST entry as
+    the runtime default during inference, which on
+    nemotron-3.5-asr-streaming-0.6b is `[56, 3]` (320 ms latency, NOT the
+    headline `[56, 13]` setting). The C++ converter sorts the menu by
+    descending R so the GGUF's primary default lines up with the
+    max-context / max-accuracy entry (`[56, 13]` here). Stage 4 numerical
+    parity therefore requires the reference dumper to run at the SAME
+    setting the C++ uses — pass `--att-context-right 13` for the offline
+    encoder/decode dumps on this family.
+
+    No-op when att_context_right is None, when the model does not expose
+    `set_default_att_context_size`, or when the encoder is not in a
+    chunked_limited style. Predecessors whose cfg already ships
+    [70, 13] first (parakeet `nemotron-speech-streaming-en-0.6b`) do not
+    need this override; passing it is still a no-op in the equality
+    case.
+    """
+    if att_context_right is None:
+        return
+    encoder = getattr(model, "encoder", None)
+    if encoder is None:
+        return
+    if not hasattr(encoder, "set_default_att_context_size"):
+        print(
+            "warning: model.encoder lacks set_default_att_context_size; "
+            "--att-context-right ignored",
+            file=sys.stderr,
+        )
+        return
+    style = getattr(encoder, "att_context_style", "regular")
+    if style != "chunked_limited":
+        print(
+            f"warning: encoder att_context_style={style!r}; "
+            f"--att-context-right is intended for chunked_limited models only "
+            f"(ignored)",
+            file=sys.stderr,
+        )
+        return
+    left = encoder.att_context_size[0]
+    target = [int(left), int(att_context_right)]
+    try:
+        encoder.set_default_att_context_size(att_context_size=target)
+    except Exception as e:
+        raise SystemExit(
+            f"error: set_default_att_context_size({target}) failed: {e}"
+        )
+    print(
+        f"[att-context] forced offline att_context_size {target} "
+        f"(was {list(encoder.att_context_size)})"
+    )
+
+
 def is_prompt_aware(model) -> bool:
     """True iff the model conditions the encoder output on a target_lang prompt
     (EncDecRNNTBPEModelWithPrompt / EncDecHybridRNNTCTCBPEModelWithPrompt).
@@ -558,6 +615,8 @@ def cmd_encoder(args: argparse.Namespace) -> int:
 
     print(f"audio: {audio_path.name} samples={pcm.size} sr={sr} arch={arch}")
     print(f"encoder: {len(model.encoder.layers)} layers")
+
+    apply_att_context_right_override(model, getattr(args, "att_context_right", None))
 
     source = make_source(
         args=args, audio_path=audio_path, n_samples=pcm.size, sample_rate=sr, arch=arch
@@ -1327,6 +1386,8 @@ def cmd_decode(args: argparse.Namespace) -> int:
 
     print(f"audio: {audio_path.name} samples={pcm.size} sr={sr} arch={arch}")
 
+    apply_att_context_right_override(model, getattr(args, "att_context_right", None))
+
     source = make_source(
         args=args, audio_path=audio_path, n_samples=pcm.size, sample_rate=sr, arch=arch
     )
@@ -1481,6 +1542,21 @@ def main() -> int:
             "tags. Default: empty (no sub-block dumps)."
         ),
     )
+    ep.add_argument(
+        "--att-context-right",
+        type=int,
+        default=None,
+        help=(
+            "Override the encoder's default right-context (chunked_limited "
+            "variants only). NeMo's `set_default_att_context_size` is called "
+            "with [model_left, --att-context-right] before forward, so the "
+            "reference dump matches the C++ runtime which always operates at "
+            "the GGUF-sorted primary setting (max-R). Without this override "
+            "NeMo defaults to the FIRST cfg entry, which on "
+            "nemotron-3.5-asr-streaming-0.6b is [56, 3] — not the [56, 13] "
+            "the C++ runs at — and Stage 4 numerical parity breaks."
+        ),
+    )
     ep.set_defaults(func=cmd_encoder)
 
     dp = sub.add_parser(
@@ -1492,6 +1568,16 @@ def main() -> int:
         "--skip-transcript",
         action="store_true",
         help="Only dump tensors; do not run full greedy transcription",
+    )
+    dp.add_argument(
+        "--att-context-right",
+        type=int,
+        default=None,
+        help=(
+            "Override the encoder's default right-context (chunked_limited "
+            "variants only). See `encoder --att-context-right` for the "
+            "rationale; same flag semantics."
+        ),
     )
     dp.set_defaults(func=cmd_decode)
 

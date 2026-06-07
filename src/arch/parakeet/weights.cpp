@@ -350,6 +350,110 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     if (auto st = read_required_f32_kv(gguf, "stt.frontend.f_min", kFamilyTag, hp.fe_f_min);        st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_f32_kv(gguf, "stt.frontend.f_max", kFamilyTag, hp.fe_f_max);        st != TRANSCRIBE_OK) return st;
 
+    // Prompt MLP. Optional — multilingual variants only
+    // (nemotron-3.5-asr-streaming-0.6b today). Presence of
+    // stt.parakeet.prompt.num_prompts (a uint32 KV) is the gate; when
+    // absent every prompt_* field is left zero/empty and the encoder
+    // skips the prompt path entirely.
+    if (gguf_find_key(gguf, "stt.parakeet.prompt.num_prompts") >= 0) {
+        if (auto st = read_required_u32_kv(gguf, "stt.parakeet.prompt.num_prompts",
+                                           kFamilyTag, hp.prompt_num_prompts);
+            st != TRANSCRIBE_OK) return st;
+        if (hp.prompt_num_prompts > 0) {
+            hp.has_prompt = true;
+
+            if (auto st = read_required_u32_kv(gguf, "stt.parakeet.prompt.hidden",
+                                               kFamilyTag, hp.prompt_hidden);
+                st != TRANSCRIBE_OK) return st;
+            if (auto st = read_required_string_kv(gguf, "stt.parakeet.prompt.field",
+                                                  kFamilyTag, hp.prompt_field);
+                st != TRANSCRIBE_OK) return st;
+            if (auto st = read_required_string_kv(gguf, "stt.parakeet.prompt.activation",
+                                                  kFamilyTag, hp.prompt_activation);
+                st != TRANSCRIBE_OK) return st;
+
+            switch (read_string_array_kv(gguf, "stt.parakeet.prompt.dictionary.locales",
+                                         hp.prompt_dictionary_locales)) {
+                case KvResult::Ok: break;
+                case KvResult::Absent:
+                    std::fprintf(stderr,
+                                 "parakeet: stt.parakeet.prompt.dictionary.locales "
+                                 "is required when prompt.num_prompts > 0\n");
+                    return TRANSCRIBE_ERR_GGUF;
+                case KvResult::BadType:
+                    std::fprintf(stderr,
+                                 "parakeet: stt.parakeet.prompt.dictionary.locales "
+                                 "has wrong type (expected string array)\n");
+                    return TRANSCRIBE_ERR_GGUF;
+            }
+            switch (read_int32_array_kv(gguf, "stt.parakeet.prompt.dictionary.indices",
+                                        hp.prompt_dictionary_indices)) {
+                case KvResult::Ok: break;
+                case KvResult::Absent:
+                    std::fprintf(stderr,
+                                 "parakeet: stt.parakeet.prompt.dictionary.indices "
+                                 "is required when prompt.num_prompts > 0\n");
+                    return TRANSCRIBE_ERR_GGUF;
+                case KvResult::BadType:
+                    std::fprintf(stderr,
+                                 "parakeet: stt.parakeet.prompt.dictionary.indices "
+                                 "has wrong type (expected int32 array)\n");
+                    return TRANSCRIBE_ERR_GGUF;
+            }
+            if (hp.prompt_dictionary_locales.size() !=
+                hp.prompt_dictionary_indices.size())
+            {
+                std::fprintf(stderr,
+                             "parakeet: prompt dictionary locales/indices length "
+                             "mismatch (%zu vs %zu)\n",
+                             hp.prompt_dictionary_locales.size(),
+                             hp.prompt_dictionary_indices.size());
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            if (gguf_find_key(gguf, "stt.parakeet.prompt.auto_id") >= 0) {
+                if (auto st = read_required_u32_kv(gguf, "stt.parakeet.prompt.auto_id",
+                                                   kFamilyTag, hp.prompt_auto_id);
+                    st != TRANSCRIBE_OK) return st;
+            } else {
+                hp.prompt_auto_id = -1;
+            }
+
+            // Activation allow-list. The C++ prompt MLP today
+            // implements ReLU only (matching NeMo's
+            // EncDecRNNTBPEModelWithPrompt). Other activations are a
+            // future-variant concern.
+            if (hp.prompt_activation != "relu") {
+                std::fprintf(stderr,
+                             "parakeet: unsupported prompt activation \"%s\" "
+                             "(only \"relu\" is implemented)\n",
+                             hp.prompt_activation.c_str());
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            if (hp.prompt_hidden <= 0) {
+                std::fprintf(stderr,
+                             "parakeet: prompt.hidden must be > 0 (got %d)\n",
+                             hp.prompt_hidden);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            for (int32_t idx : hp.prompt_dictionary_indices) {
+                if (idx < 0 || idx >= hp.prompt_num_prompts) {
+                    std::fprintf(stderr,
+                                 "parakeet: prompt dictionary index %d out of range "
+                                 "[0, %d)\n", idx, hp.prompt_num_prompts);
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+            }
+            if (hp.prompt_auto_id >= 0 &&
+                hp.prompt_auto_id >= hp.prompt_num_prompts)
+            {
+                std::fprintf(stderr,
+                             "parakeet: prompt.auto_id %d out of range [0, %d)\n",
+                             hp.prompt_auto_id, hp.prompt_num_prompts);
+                return TRANSCRIBE_ERR_GGUF;
+            }
+        }
+    }
+
     // Cross-field invariants. These have to hold or the model is
     // unbuildable; we catch them here rather than letting them
     // surface as confusing shape mismatches downstream.
@@ -807,6 +911,21 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_F32(weights.joint.pred_b, "joint.pred.bias", joint_h);
         GET_LIN(weights.joint.out_w,  "joint.out.weight", joint_h, joint_n);
         GET_F32(weights.joint.out_b,  "joint.out.bias", joint_n);
+    }
+
+    // ----- prompt MLP (multilingual variants) -----
+    //
+    // Loaded only when hp.has_prompt is true. The PyTorch nn.Sequential
+    // indexing is preserved as the canonical name (`.0` input linear,
+    // `.2` output linear; `.1` is the parameter-free activation).
+    if (hp.has_prompt) {
+        const int64_t prompt_h = hp.prompt_hidden;
+        const int64_t in_dim   = static_cast<int64_t>(d_model) +
+                                 static_cast<int64_t>(hp.prompt_num_prompts);
+        GET_LIN(weights.prompt.mlp0_w, "prompt.mlp.0.weight", in_dim,   prompt_h);
+        GET_F32(weights.prompt.mlp0_b, "prompt.mlp.0.bias",   prompt_h);
+        GET_LIN(weights.prompt.mlp2_w, "prompt.mlp.2.weight", prompt_h, d_model);
+        GET_F32(weights.prompt.mlp2_b, "prompt.mlp.2.bias",   d_model);
     }
 
     return TRANSCRIBE_OK;

@@ -10,7 +10,8 @@
     "kind": "nemo",
     "source": "https://github.com/NVIDIA-NeMo/NeMo",
     "revision": "6967f48fda2a",
-    "entrypoint": "scripts/dump_reference_parakeet_nemo.py"
+    "entrypoint": "scripts/dump_reference_parakeet_nemo.py",
+    "dump_args": ["--att-context-right", "13"]
   },
   "expected_dtype": "float32",
   "dtype_source": "manual",

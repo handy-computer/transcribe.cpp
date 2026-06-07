@@ -99,6 +99,13 @@ struct EncoderDumps {
     // only a vector allocation in the normal case.
     std::vector<ggml_tensor *> all_block_outs;
 
+    // Post-prompt-MLP encoder output (multilingual variants only).
+    // Populated when hp.has_prompt is true; mirrors NeMo's
+    // EncDecRNNTBPEModelWithPrompt: prompt_kernel(concat(enc, one_hot))
+    // -> [T_enc, d_model] that the RNN-T joint consumes in place of
+    // the raw encoder output. Null on variants without the prompt path.
+    ggml_tensor * prompted_out = nullptr;
+
     // Sub-block intermediates for blocks listed in
     // TRANSCRIBE_DUMP_SUB_BLOCKS. Each entry is (dump_name, tensor)
     // where dump_name is the on-disk file stem
@@ -143,6 +150,14 @@ struct EncoderBuild {
     // build_encoder_graph was called with batch_var_len and n_batch > 1.
     // The driver fills it host-side after the compute buffer is allocated.
     ggml_tensor * attn_pad_mask_in = nullptr;
+
+    // Per-utterance prompt one-hot vector, ne=[num_prompts, n_batch] f32.
+    // Null unless hp.has_prompt is true. The driver fills this with a
+    // one-hot (1.0 at prompt_id, 0.0 elsewhere) per utterance before
+    // graph_compute; the prompt MLP at the encoder tail consumes it via
+    // a host-precomputed broadcast across time frames (no in-graph
+    // one_hot op needed).
+    ggml_tensor * prompt_one_hot_in = nullptr;
 
     // Variable-length batch pre-encode valid-frame masks (NeMo masked
     // subsampling), one per ReLU stage, ne=[1, H_stage, 1, n_batch] f32

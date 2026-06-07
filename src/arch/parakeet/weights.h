@@ -283,6 +283,29 @@ struct ParakeetHParams {
     // Zero for TDT/RNNT.
     int32_t head_ctc_n_classes = 0;
 
+    // Language-conditioning prompt MLP (NeMo's
+    // EncDecRNNTBPEModelWithPrompt). Multilingual variants prepend a
+    // 2-layer MLP that mixes a one-hot prompt vector into the encoder
+    // output before the RNN-T joint sees it:
+    //
+    //     x = concat(enc[d_model], one_hot(prompt_id)[num_prompts])
+    //     h = relu(W0 @ x + b0)        // W0: [prompt_hidden, d_model+P]
+    //     y = W2 @ h + b2              // W2: [d_model, prompt_hidden]
+    //     enc_out := y
+    //
+    // Gated on `has_prompt` (true iff stt.parakeet.prompt.num_prompts
+    // is present in the GGUF). Today: nemotron-3.5-asr-streaming-0.6b.
+    // Loader reads stt.parakeet.prompt.{num_prompts, hidden, field,
+    // activation, dictionary.locales, dictionary.indices, auto_id}.
+    bool                       has_prompt              = false;
+    int32_t                    prompt_num_prompts      = 0;
+    int32_t                    prompt_hidden           = 0;
+    std::string                prompt_field;
+    std::string                prompt_activation;
+    std::vector<std::string>   prompt_dictionary_locales;
+    std::vector<int32_t>       prompt_dictionary_indices;
+    int32_t                    prompt_auto_id          = -1;
+
     // Derived. Convenience accessors keyed off the above.
     int32_t enc_head_dim() const { return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0; }
     int32_t joint_n_classes() const { return (pred_vocab - 1) + joint_num_extra_outputs + 1; }
@@ -422,12 +445,25 @@ struct ParakeetCtcHead {
     ggml_tensor * bias   = nullptr; // [vocab+1]
 };
 
+// Language-conditioning prompt MLP (multilingual variants). NeMo's
+// nn.Sequential indexing is preserved: `.0` is the input linear,
+// `.2` is the output linear, `.1` is the parameter-free activation.
+// Loaded only when hp.has_prompt is true; otherwise the slots stay
+// null and the encoder skips the prompt path.
+struct ParakeetPromptMlp {
+    ggml_tensor * mlp0_w = nullptr; // [prompt_hidden, d_model + num_prompts]
+    ggml_tensor * mlp0_b = nullptr; // [prompt_hidden]
+    ggml_tensor * mlp2_w = nullptr; // [d_model, prompt_hidden]
+    ggml_tensor * mlp2_b = nullptr; // [d_model]
+};
+
 struct ParakeetWeights {
     ParakeetPreEncode          pre_encode;
     std::vector<ParakeetBlock> blocks; // hp.enc_n_layers entries
     ParakeetPredictor          predictor; // empty when head_kind=CTC
     ParakeetJoint              joint;     // empty when head_kind=CTC
     ParakeetCtcHead            ctc_head;  // populated when head_kind=CTC
+    ParakeetPromptMlp          prompt;    // populated when hp.has_prompt
 };
 
 // Walk the canonical tensor list, look up each tensor by name in the

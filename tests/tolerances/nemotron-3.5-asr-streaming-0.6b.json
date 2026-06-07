@@ -7,107 +7,146 @@
     "  - C++ build: CPU backend, --threads 1 (default validate.py invocation)",
     "  - KV cache type: AUTO (resolves to F32 on the F32 weights)",
     "  - mel frontend: C++ transcribe-mel (no env-var ref injection)",
-    "  - reference: NeMo main @ 6967f48f (EncDecRNNTBPEModelWithPrompt)",
-    "    via scripts/dump_reference_parakeet_nemo.py with --language en-US",
-    "    (target_lang=en-US, prompt_id=0).",
+    "  - reference: NeMo main @ 6967f48f (EncDecRNNTBPEModelWithPrompt) via",
+    "    scripts/dump_reference_parakeet_nemo.py with --language en-US and",
+    "    --att-context-right 13 (matches the C++-side primary default).",
     "",
-    "PROVISIONAL \u2014 Stage 4 finalises against observed C++ drift.",
-    "  formula:  max_abs  = max(1e-4 * p99_abs, 1e-6)",
-    "            mean_abs = max(1e-5 * rms,     1e-6)",
-    "  Every entry carries _provisional: true; finalisation removes it.",
-    "  Do NOT ship while any _provisional flags remain.",
+    "STRUCTURAL FIX FOUND DURING STAGE 4 BRING-UP:",
+    "  The .nemo cfg ships att_context_size as a list of training-time",
+    "  pairs: [[56, 3], [56, 0], [56, 6], [56, 13]] — index 0 is the",
+    "  shortest right-context, NOT [56, 13]. NeMo's runtime uses the",
+    "  first entry as inference default, so an unmodified reference dumper",
+    "  runs at att_context_size=[56, 3] (320 ms latency). The C++",
+    "  converter sorts the menu by descending R so the GGUF's primary",
+    "  default is the max-context [56, 13] (1.12 s latency) the model card",
+    "  publishes WER for, and the C++ runtime always runs at [56, 13]",
+    "  unless --stream-att-right overrides it. Stage 4 numerical parity",
+    "  therefore requires the dumper to be told the active C++ setting",
+    "  via the new --att-context-right flag (wired through this",
+    "  variant's manifest as `reference.dump_args`). Without this fix,",
+    "  enc.block.*.out drift was ~14-23 max (1893% relative on the",
+    "  post-prompt tensor) — that was a real correctness gap masked as",
+    "  fp32 noise, not the actual numerical floor of the port.",
     "",
-    "PER-VARIANT SCOPING:",
-    "  Frontend has normalize='NA' (no per-feature normalization), so",
-    "  enc.mel.in is raw log-mel and pre-encode magnitudes are large",
-    "  (cascade pattern shared with predecessor nemotron-speech-streaming-en-0.6b).",
-    "  Sibling parakeet.json tolerances assume per-feature normalisation.",
+    "FINALISATION RECIPE (Stage 4):",
+    "  finalised = max(1.5 × observed_C++_drift,",
+    "                  provisional_magnitude_budget,",
+    "                  1e-6)",
+    "  Pure-lookup / pure-GGUF-read tensors keep exact 0.0 (no floor).",
+    "  Tensors whose observed drift is already below the provisional",
+    "  magnitude budget keep the provisional value (tightening requires",
+    "  explicit user sign-off).",
     "",
-    "NEW vs. predecessor:",
-    "  enc.prompted / dec.enc_out_prompted are post-prompt-kernel encoder",
-    "  outputs (language-conditioned). Stage 4 must implement the same",
-    "  prompt projection in C++ before comparing."
+    "DRIFT PROFILE (verified at att_context_size=[56,13], regenerated",
+    "after the dumper fix above; transcript matches reference exactly):",
+    "  Tensor               ref_p99  diff_max   rel_max    note",
+    "  enc.mel.in           16.6     3.0e-4     1.8e-5     C++ mel ≈ NeMo to fp32 noise floor.",
+    "  enc.pre_encode.out   331      3.5e-3     1.1e-5     CausalConv2D subsample, fp32 floor.",
+    "  enc.pos_emb          1.0      1.4e-5     1.4e-5     Host-built sinusoid, matches NeMo.",
+    "  enc.block.0.out      27.1     1.4e-2     5.1e-4     One Conformer block — accumulation",
+    "                                                       through ff1+attn+conv+ff2 matmuls",
+    "                                                       with chunked attention; rel_max",
+    "                                                       at the fp32 floor for d_model=1024",
+    "                                                       reductions.",
+    "  enc.block.12.out     28.5     6.1e-2     2.1e-3     12 blocks worth of compounding.",
+    "  enc.block.23.out     0.15     3.5e-4     2.4e-3     Post-final-LN collapses the",
+    "                                                       pre-LN drift (values centred",
+    "                                                       around 0 with std ~0.044).",
+    "  enc.final            0.15     3.5e-4     2.4e-3     Aliases enc.block.23.out.",
+    "  enc.prompted         0.26     7.9e-3     3.0e-2     Prompt MLP (W0 in R^(2048x1152),",
+    "                                                       W2 in R^(1024x2048)) two dense",
+    "                                                       matmuls amplify the upstream",
+    "                                                       encoder drift; bit-exact replay",
+    "                                                       in NumPy with the C++ encoder",
+    "                                                       output as input reproduces the",
+    "                                                       C++ enc.prompted (diff=0.0), so",
+    "                                                       this is purely upstream",
+    "                                                       propagation.",
+    "  dec.enc_out          0.15     3.5e-4     2.4e-3     Same as enc.final (post-readback).",
+    "  dec.enc_out_prompted 0.26     7.9e-3     3.0e-2     Same as enc.prompted.",
+    "  dec.joint.0          77.8     9.4e-3     1.2e-4     Joint = relu(enc_proj + pred_proj)",
+    "                                                       -> out_w; inherits enc.prompted",
+    "                                                       drift through one dense linear.",
+    "  dec.embed.0          0.0      0.0        N/A       Pure GGUF read of the blank-row.",
+    "  dec.lstm.{0,1}.{h,c} 0.27-0.75 <6e-8     <1.3e-7    Single LSTM step from zero state;",
+    "                                                       provisional 1e-4*p99 floor is",
+    "                                                       way above observed.",
+    "",
+    "WER sanity (Stage 4): subset WER on the first 32 utterances of",
+    "LibriSpeech test-clean = 1.05% (Sub=5 Del=1 Ins=1), measured BEFORE",
+    "this tolerance finalisation. Full ref-dtype WER gate runs at Stage 4",
+    "Step 11 on the complete acceptance manifest.",
+    "",
+    "FILE-FORMAT NOTE: compare_tensors.py reads a FLAT JSON object whose",
+    "keys are tensor names (top-level), with '_comment' as the sole",
+    "ignored sibling. The Stage 2 oracle previously emitted the entries",
+    "nested under a 'tolerances' wrapper — that wrapper was silently",
+    "ignored by the comparator (default 1e-3/1e-4 thresholds applied),",
+    "which masked the att_context_size structural bug above. Keep this",
+    "file flat."
   ],
-  "tolerances": {
-    "dec.embed.0": {
-      "max_abs": 1e-06,
-      "mean_abs": 1e-06,
-      "_provisional": true
-    },
-    "dec.enc_out": {
-      "max_abs": 1.465432442724704e-05,
-      "mean_abs": 1e-06,
-      "_provisional": true
-    },
-    "dec.enc_out_prompted": {
-      "max_abs": 5.039005130529398e-05,
-      "mean_abs": 1.282976605198898e-06,
-      "_provisional": true
-    },
-    "dec.joint.0": {
-      "max_abs": 0.00793398557281494,
-      "mean_abs": 0.0004225724844155834,
-      "_provisional": true
-    },
-    "dec.lstm.0.c.0": {
-      "max_abs": 7.453821927309038e-05,
-      "mean_abs": 1.7590211654083737e-06,
-      "_provisional": true
-    },
-    "dec.lstm.0.h.0": {
-      "max_abs": 2.7657646864652635e-05,
-      "mean_abs": 1e-06,
-      "_provisional": true
-    },
-    "dec.lstm.1.c.0": {
-      "max_abs": 5.9392072618007714e-05,
-      "mean_abs": 1.6393091961795505e-06,
-      "_provisional": true
-    },
-    "dec.lstm.1.h.0": {
-      "max_abs": 2.3285605683922784e-05,
-      "mean_abs": 1e-06,
-      "_provisional": true
-    },
-    "enc.block.0.out": {
-      "max_abs": 0.00270507164001464,
-      "mean_abs": 7.907331480576549e-05,
-      "_provisional": true
-    },
-    "enc.block.12.out": {
-      "max_abs": 0.0028537816143035886,
-      "mean_abs": 6.334790672435143e-05,
-      "_provisional": true
-    },
-    "enc.block.23.out": {
-      "max_abs": 1.465432442724704e-05,
-      "mean_abs": 1e-06,
-      "_provisional": true
-    },
-    "enc.final": {
-      "max_abs": 1.465432442724704e-05,
-      "mean_abs": 1e-06,
-      "_provisional": true
-    },
-    "enc.mel.in": {
-      "max_abs": 0.001661121837615967,
-      "mean_abs": 0.00010128634779341219,
-      "_provisional": true
-    },
-    "enc.pos_emb": {
-      "max_abs": 9.999976158142091e-05,
-      "mean_abs": 7.071067828517533e-06,
-      "_provisional": true
-    },
-    "enc.pre_encode.out": {
-      "max_abs": 0.03309354522705063,
-      "mean_abs": 0.0009286948139566373,
-      "_provisional": true
-    },
-    "enc.prompted": {
-      "max_abs": 5.039005130529398e-05,
-      "mean_abs": 1.282976605198898e-06,
-      "_provisional": true
-    }
+  "dec.embed.0": {
+    "max_abs": 0.0,
+    "mean_abs": 0.0
+  },
+  "dec.enc_out": {
+    "max_abs": 5.31e-04,
+    "mean_abs": 1.41e-05
+  },
+  "dec.enc_out_prompted": {
+    "max_abs": 1.19e-02,
+    "mean_abs": 9.84e-05
+  },
+  "dec.joint.0": {
+    "max_abs": 1.42e-02,
+    "mean_abs": 3.91e-03
+  },
+  "dec.lstm.0.c.0": {
+    "max_abs": 7.453821927309038e-05,
+    "mean_abs": 1.7590211654083737e-06
+  },
+  "dec.lstm.0.h.0": {
+    "max_abs": 2.7657646864652635e-05,
+    "mean_abs": 1e-06
+  },
+  "dec.lstm.1.c.0": {
+    "max_abs": 5.9392072618007714e-05,
+    "mean_abs": 1.6393091961795505e-06
+  },
+  "dec.lstm.1.h.0": {
+    "max_abs": 2.3285605683922784e-05,
+    "mean_abs": 1e-06
+  },
+  "enc.block.0.out": {
+    "max_abs": 2.08e-02,
+    "mean_abs": 1.40e-03
+  },
+  "enc.block.12.out": {
+    "max_abs": 9.12e-02,
+    "mean_abs": 1.90e-03
+  },
+  "enc.block.23.out": {
+    "max_abs": 5.31e-04,
+    "mean_abs": 1.41e-05
+  },
+  "enc.final": {
+    "max_abs": 5.31e-04,
+    "mean_abs": 1.41e-05
+  },
+  "enc.mel.in": {
+    "max_abs": 0.001661121837615967,
+    "mean_abs": 0.00010128634779341219
+  },
+  "enc.pos_emb": {
+    "max_abs": 9.999976158142091e-05,
+    "mean_abs": 7.071067828517533e-06
+  },
+  "enc.pre_encode.out": {
+    "max_abs": 0.03309354522705063,
+    "mean_abs": 0.0009286948139566373
+  },
+  "enc.prompted": {
+    "max_abs": 1.19e-02,
+    "mean_abs": 9.84e-05
   }
 }

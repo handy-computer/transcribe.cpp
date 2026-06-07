@@ -231,14 +231,23 @@ def main() -> int:
 
     # Cross-check / infer --language against the manifest's language
     # field. transcribe-cli batch mode applies one language per run, so a
-    # mixed-language manifest is a user error here.
+    # mixed-language manifest is a user error here. Comparison is BCP-47
+    # primary-tag-aware: "en" / "en-US" / "en-GB" are mutually compatible
+    # (same primary subtag), so a manifest written as "en" still satisfies
+    # a runtime hint of "en-US" — which prompt-conditioned multilingual
+    # models like nemotron-3.5-asr-streaming-0.6b require because their
+    # caps.languages list carries only the BCP-47 long forms.
+    def _primary(tag: str) -> str:
+        return tag.split("-", 1)[0].lower() if tag else tag
     manifest_langs = {
         e["language"] for e in manifest if e.get("language")
     }
+    manifest_primaries = {_primary(t) for t in manifest_langs}
     if args.language is None and len(manifest_langs) == 1:
         args.language = next(iter(manifest_langs))
         print(f"language: inferred {args.language!r} from manifest")
-    elif args.language and manifest_langs and manifest_langs != {args.language}:
+    elif (args.language and manifest_langs and
+          manifest_primaries != {_primary(args.language)}):
         bad = sorted(manifest_langs - {args.language})
         print(
             f"error: --language {args.language!r} disagrees with manifest "

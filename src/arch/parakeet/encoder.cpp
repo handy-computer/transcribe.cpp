@@ -622,6 +622,72 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     eb.dumps.final_out = x;
     x = conf::named(x, "enc.final");
     transcribe::debug::mark_tensor_for_dump(x);
+    // Force final_out to remain an output so the host can read it back
+    // separately from the prompted output below. Without this the
+    // scheduler may free the buffer once eb.out (= prompted) is
+    // realised and the host-side "dec.enc_out" dump would race the
+    // reuse. ggml_set_output also lets ggml_backend_tensor_get attach
+    // to the materialised slot.
+    if (hp.has_prompt) {
+        ggml_set_output(x);
+    }
+
+    // Prompt MLP (multilingual variants only — today
+    // nemotron-3.5-asr-streaming-0.6b). Mirrors NeMo's
+    // EncDecRNNTBPEModelWithPrompt.forward():
+    //
+    //   x_cat  = concat(enc[d_model], one_hot(prompt_id)[num_prompts])
+    //   h      = relu(W0 @ x_cat + b0)        // W0: [prompt_hidden, d_model+P]
+    //   y      = W2 @ h + b2                   // W2: [d_model, prompt_hidden]
+    //   enc_out := y
+    //
+    // The one-hot vector is replicated across the T_enc axis on the
+    // host (small buffer, num_prompts × T_enc × n_batch floats per
+    // call) so the in-graph step is plain concat + two matmuls + a
+    // ReLU. After the MLP the post-prompt output replaces eb.out so
+    // the decoder consumes the prompt-conditioned tensor unchanged
+    // from the non-prompt code path.
+    if (hp.has_prompt) {
+        const int T_enc_val = static_cast<int>(x->ne[1]);
+        const int P         = hp.prompt_num_prompts;
+        const int B         = n_batch;
+
+        // Input: per-utterance one-hot replicated across T frames.
+        // ne = [num_prompts, T_enc, n_batch, 1] — batch rides ne[2] to
+        // match the Conformer block output layout
+        // ([d_model, T_enc, B, 1]; see conformer.cpp reshape_3d). Memory
+        // layout is identical to [P, T_enc, 1, B] for the host filler.
+        ggml_tensor * one_hot = ggml_new_tensor_4d(
+            ctx, GGML_TYPE_F32, P, T_enc_val, B, 1);
+        if (one_hot == nullptr) {
+            std::fprintf(stderr,
+                         "parakeet encoder: failed to allocate "
+                         "prompt.one_hot.in tensor\n");
+            return eb;
+        }
+        ggml_set_name(one_hot, "prompt.one_hot.in");
+        ggml_set_input(one_hot);
+        eb.prompt_one_hot_in = one_hot;
+
+        // Concat along the feature axis (ne[0]) →
+        // [d_model + P, T_enc, 1, B]
+        ggml_tensor * cat = ggml_concat(ctx, x, one_hot, /*dim=*/0);
+
+        // Linear mlp.0: W0 @ cat + b0  →  [prompt_hidden, T_enc, 1, B]
+        ggml_tensor * h = ggml_mul_mat(ctx, w.prompt.mlp0_w, cat);
+        h = ggml_add(ctx, h, w.prompt.mlp0_b);
+        h = ggml_relu(ctx, h);
+
+        // Linear mlp.2: W2 @ h + b2    →  [d_model, T_enc, 1, B]
+        ggml_tensor * y = ggml_mul_mat(ctx, w.prompt.mlp2_w, h);
+        y = ggml_add(ctx, y, w.prompt.mlp2_b);
+
+        eb.dumps.prompted_out = y;
+        y = conf::named(y, "enc.prompted");
+        transcribe::debug::mark_tensor_for_dump(y);
+
+        x = y;
+    }
 
     eb.out = x;
     ggml_set_output(eb.out);
@@ -640,6 +706,14 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
+    // When the prompt MLP is present, `eb.out` already feeds into the
+    // prompted output, but `eb.dumps.final_out` is an unconnected node
+    // from the cgraph's POV. Adding it as a forward root keeps the
+    // un-prompted tensor materialised so the host can read it back for
+    // the "dec.enc_out" dump.
+    if (hp.has_prompt && eb.dumps.final_out != nullptr) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.final_out);
+    }
 
     return eb;
 }
@@ -850,9 +924,53 @@ EncoderBuild build_encoder_graph_streaming(
         cache_io.time_out[i]    = cache_tm_out;
     }
 
+    // Tag the streaming per-chunk encoder output so the host-side dump
+    // sees the same name as the offline path.
+    eb.dumps.final_out = x;
+    x = conf::named(x, "enc.final");
+    transcribe::debug::mark_tensor_for_dump(x);
+    if (hp.has_prompt) {
+        ggml_set_output(x);
+    }
+
+    // Prompt MLP on the per-chunk output (multilingual streaming
+    // variants). Same forward as the offline path; only the T axis
+    // size differs (T_q_new instead of full T_enc).
+    if (hp.has_prompt) {
+        const int T_q   = static_cast<int>(x->ne[1]);
+        const int P     = hp.prompt_num_prompts;
+
+        ggml_tensor * one_hot = ggml_new_tensor_4d(
+            ctx, GGML_TYPE_F32, P, T_q, 1, 1);
+        if (one_hot == nullptr) {
+            std::fprintf(stderr,
+                         "parakeet streaming encoder: failed to allocate "
+                         "prompt.one_hot.in tensor\n");
+            return eb;
+        }
+        ggml_set_name(one_hot, "prompt.one_hot.in");
+        ggml_set_input(one_hot);
+        eb.prompt_one_hot_in = one_hot;
+
+        ggml_tensor * cat = ggml_concat(ctx, x, one_hot, /*dim=*/0);
+        ggml_tensor * h   = ggml_mul_mat(ctx, w.prompt.mlp0_w, cat);
+        h = ggml_add(ctx, h, w.prompt.mlp0_b);
+        h = ggml_relu(ctx, h);
+        ggml_tensor * y = ggml_mul_mat(ctx, w.prompt.mlp2_w, h);
+        y = ggml_add(ctx, y, w.prompt.mlp2_b);
+
+        eb.dumps.prompted_out = y;
+        y = conf::named(y, "enc.prompted");
+        transcribe::debug::mark_tensor_for_dump(y);
+        x = y;
+    }
+
     eb.out = x;
     ggml_set_output(eb.out);
     ggml_build_forward_expand(eb.graph, eb.out);
+    if (hp.has_prompt && eb.dumps.final_out != nullptr) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.final_out);
+    }
     return eb;
 }
 

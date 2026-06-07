@@ -540,7 +540,8 @@ def _hyp_cache_paths(model_file: str, dataset_spec: str,
                      n_utts: int | None,
                      batch_size: int = 1,
                      sort_by_length: bool = True,
-                     timestamps: str = "none") -> tuple[str, str]:
+                     timestamps: str = "none",
+                     language: str = "") -> tuple[str, str]:
     """Deterministic Volume paths for the (model, dataset, subset, batch,
     sort) tuple.
 
@@ -559,8 +560,11 @@ def _hyp_cache_paths(model_file: str, dataset_spec: str,
     # Default "none" carries no tag so it stays compatible with already-cached
     # entries; any other timestamp mode gets its own cache slot.
     ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
+    # Language override (default "" = let run.py infer from dataset). Folded
+    # in so e.g. en vs en-US do not share a cache entry.
+    lang_tag = "" if not language else f".lang-{language}"
     base = (f"/data/wer/hyps/{HYP_FP}/{slug}."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{lang_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 
@@ -600,6 +604,7 @@ def _run_wer_impl(
     batch_size: int = 1,
     sort_by_length: bool = True,
     timestamps: str = "none",
+    language: str = "",
 ) -> dict:
     """Run scripts/wer/run.py on `n_utts` (or full manifest) and return the
     hyp JSONL contents + a summary dict back to the dispatcher.
@@ -613,7 +618,8 @@ def _run_wer_impl(
     # Cache lookup first; skips _prepare_work + model download + run.py entirely
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
     cache_hyp, cache_sum = _hyp_cache_paths(
-        model_file, dataset_spec, n_utts, batch_size, sort_by_length, timestamps)
+        model_file, dataset_spec, n_utts, batch_size, sort_by_length, timestamps,
+        language)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         print(f"[wer] cache hit: {cache_hyp}")
@@ -676,6 +682,8 @@ def _run_wer_impl(
             cmd += ["--sort-by-length"]
     if timestamps and timestamps != "none":
         cmd += ["--timestamps", timestamps]
+    if language:
+        cmd += ["--language", language]
     print(f"[wer] $ {' '.join(cmd)}")
     t0 = time.time()
     rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
@@ -768,6 +776,7 @@ def _register_runner(gpu_id: str):
         sort_by_length: bool = True,
         build_dir: str | None = None,
         timestamps: str = "none",
+        language: str = "",
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
         # SRC_FP can drift between the laptop and the container, so recomputing
@@ -777,7 +786,7 @@ def _register_runner(gpu_id: str):
             model_repo, model_file, dataset_spec, n_utts,
             build_dir or default_build_dir,
             batch_size=batch_size, sort_by_length=sort_by_length,
-            timestamps=timestamps,
+            timestamps=timestamps, language=language,
         )
 
     runner.__name__ = name
@@ -1161,6 +1170,7 @@ def sweep(
     batch_sizes: str = "1",
     sort_by_length: bool = True,
     timestamps: str = "none",
+    language: str = "",
 ) -> None:
     """Fan WER across one or more models on one GPU class.
 
@@ -1239,7 +1249,8 @@ def sweep(
     print(f">>> launching {len(cells)} {gpu} containers in parallel...")
     n = None if n_utts < 0 else n_utts
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
-                             c["bs"], sort_by_length, build_dir, timestamps))
+                             c["bs"], sort_by_length, build_dir, timestamps,
+                             language))
             for c in cells]
 
     rows, failures = [], []

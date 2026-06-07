@@ -67,6 +67,20 @@ def main() -> int:
                        "(nemotron-3.5-asr-streaming-0.6b) this must be a key in "
                        "the model's prompt_dictionary (e.g. 'en-US', 'es-ES')."
                    ))
+    p.add_argument("--att-context-right", type=int, default=None,
+                   help=(
+                       "Override the encoder's default right-context for "
+                       "chunked_limited variants. NeMo uses the first cfg "
+                       "entry as runtime default, which on "
+                       "nemotron-3.5-asr-streaming-0.6b is [56, 3] (320 ms "
+                       "latency, NOT the [56, 13] / 1.12 s setting the model "
+                       "card publishes WER for and the C++ runtime uses by "
+                       "default). Pass --att-context-right 13 to score the "
+                       "max-context / max-accuracy regime and produce an "
+                       "Oracle baseline that matches the C++ side at "
+                       "Stage 11. No-op for variants whose cfg already "
+                       "orders [L, max_R] first."
+                   ))
     args = p.parse_args()
 
     if not args.manifest.exists():
@@ -91,6 +105,7 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from dump_reference_parakeet_nemo import (
         _patch_conformer_for_offline,
+        apply_att_context_right_override,
         is_prompt_aware,
         resolve_prompt_id,
         apply_prompt,
@@ -132,6 +147,7 @@ def main() -> int:
         else:
             raise last
     model.eval()
+    apply_att_context_right_override(model, args.att_context_right)
     if args.device != "cpu":
         model = model.to(args.device)
     load_ms = (time.monotonic() - t0) * 1000

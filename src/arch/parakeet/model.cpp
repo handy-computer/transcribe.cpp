@@ -176,6 +176,78 @@ namespace {
 
 constexpr float kBnEps = 1e-5f;
 
+// Resolve the runtime language hint to a prompt-table index for the
+// multilingual prompt-conditioned variants
+// (NeMo's EncDecRNNTBPEModelWithPrompt). The dictionary carries both
+// canonical BCP-47 codes ("en-US") and short aliases ("en") that map
+// to the same index — we just do an exact-string lookup.
+//
+// Empty / null hint maps to the dictionary's `auto` slot (i.e.
+// `prompt.auto_id`). When the model exposes language detection (its
+// hparams declare auto_id), this is the "let the model emit a
+// <lang-XX> tag" path. Unknown hints return -1 (the caller should
+// surface this as TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE — capability
+// validation in transcribe.cpp will already have screened most
+// invalid hints; this is the prompt-dictionary-vs-caps mismatch case).
+int32_t resolve_prompt_id(const ParakeetHParams & hp,
+                          const char *            language_hint)
+{
+    if (!hp.has_prompt) return -1;
+    const bool empty_hint =
+        (language_hint == nullptr) || (*language_hint == '\0');
+    if (empty_hint) {
+        // Auto-language slot. Models without an explicit auto entry
+        // leave auto_id at -1; in that case the dictionary's first
+        // entry is the conservative default.
+        if (hp.prompt_auto_id >= 0) return hp.prompt_auto_id;
+        if (!hp.prompt_dictionary_indices.empty()) {
+            return hp.prompt_dictionary_indices.front();
+        }
+        return -1;
+    }
+    for (size_t i = 0; i < hp.prompt_dictionary_locales.size(); ++i) {
+        if (hp.prompt_dictionary_locales[i] == language_hint) {
+            return hp.prompt_dictionary_indices[i];
+        }
+    }
+    return -1;
+}
+
+// Fill a [num_prompts, T_enc, 1, n_batch] float buffer with a one-hot
+// vector at column `prompt_id` of each utterance, replicated across
+// the T_enc axis. The host-side replication keeps the in-graph
+// step a single concat + two matmuls, with no in-graph one_hot /
+// broadcast machinery. `prompt_ids` carries one id per utterance.
+//
+// Returns false if any per-utterance prompt_id is out of range.
+bool fill_prompt_one_hot(std::vector<float> &        out,
+                         int                         num_prompts,
+                         int                         T_enc,
+                         int                         n_batch,
+                         const std::vector<int32_t> & prompt_ids)
+{
+    const size_t total = static_cast<size_t>(num_prompts) *
+                         static_cast<size_t>(T_enc) *
+                         static_cast<size_t>(n_batch);
+    out.assign(total, 0.0f);
+    for (int b = 0; b < n_batch; ++b) {
+        const int32_t pid =
+            (b < static_cast<int>(prompt_ids.size()))
+                ? prompt_ids[static_cast<size_t>(b)]
+                : (prompt_ids.empty() ? -1 : prompt_ids.front());
+        if (pid < 0 || pid >= num_prompts) return false;
+        const size_t per_utt = static_cast<size_t>(num_prompts) *
+                               static_cast<size_t>(T_enc);
+        const size_t utt_off = static_cast<size_t>(b) * per_utt;
+        for (int t = 0; t < T_enc; ++t) {
+            const size_t row_off = utt_off +
+                static_cast<size_t>(t) * static_cast<size_t>(num_prompts);
+            out[row_off + static_cast<size_t>(pid)] = 1.0f;
+        }
+    }
+    return true;
+}
+
 // Fuse inference-time BatchNorm into precomputed scale + bias tensors.
 // BN eval: y = (x - mean) / sqrt(var + eps) * weight + bias
 // Fused:   y = x * scale + shift
@@ -770,9 +842,16 @@ static transcribe_status decode_and_populate(
     const float *                 enc,
     int                           T_enc,
     int                           d_enc,
-    int                           utt_index)
+    int                           utt_index,
+    const char *                  enc_dump_name_override = nullptr)
 {
-    std::string dump_name = "dec.enc_out";
+    // Default dump name is "dec.enc_out"; the prompt-conditioned path
+    // overrides to "dec.enc_out_prompted" so the comparator sees the
+    // post-prompt tensor under its expected filename.
+    std::string dump_name = (enc_dump_name_override != nullptr &&
+                             *enc_dump_name_override != '\0')
+        ? std::string(enc_dump_name_override)
+        : std::string("dec.enc_out");
     if (utt_index >= 0) {
         dump_name += ".b" + std::to_string(utt_index);
     }
@@ -781,10 +860,14 @@ static transcribe_status decode_and_populate(
     // before chasing decoder bugs.
     if (transcribe::debug::enabled()) {
         const long long shape[2] = { T_enc, d_enc };
+        const char * stage = (enc_dump_name_override != nullptr &&
+                              *enc_dump_name_override != '\0')
+            ? "decoder.enc_out_prompted"
+            : "decoder.enc_out";
         transcribe::debug::dump_host_f32(
             dump_name.c_str(), enc,
             static_cast<long long>(T_enc) * static_cast<long long>(d_enc),
-            shape, 2, "decoder.enc_out");
+            shape, 2, stage);
     }
 
     pc->raw_tokens.clear();
@@ -1154,6 +1237,40 @@ static transcribe_status run_one_shot_inner(
     transcribe::debug::dump_tensor(
         "enc.mel.in", eb.mel_in, "encoder.mel");
 
+    // Prompt one-hot input (multilingual variants only). The graph
+    // builder allocates `prompt_one_hot_in` of shape
+    // [num_prompts, T_enc, 1, 1] when hp.has_prompt is true; the
+    // host fills it with the resolved language's one-hot replicated
+    // across T_enc frames. See resolve_prompt_id for the language
+    // string → index lookup.
+    if (eb.prompt_one_hot_in != nullptr) {
+        const int P     = static_cast<int>(eb.prompt_one_hot_in->ne[0]);
+        const int T_oh  = static_cast<int>(eb.prompt_one_hot_in->ne[1]);
+        const char * lang_hint =
+            (params != nullptr) ? params->language : nullptr;
+        const int32_t pid = resolve_prompt_id(pm->hparams, lang_hint);
+        if (pid < 0) {
+            std::fprintf(stderr,
+                         "parakeet run: language %s%s%s not in prompt "
+                         "dictionary\n",
+                         lang_hint ? "\"" : "",
+                         lang_hint ? lang_hint : "<null>",
+                         lang_hint ? "\"" : "");
+            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+        }
+        std::vector<float> one_hot_buf;
+        if (!fill_prompt_one_hot(one_hot_buf, P, T_oh, /*n_batch=*/1,
+                                 {pid}))
+        {
+            std::fprintf(stderr,
+                         "parakeet run: prompt_id %d out of range "
+                         "[0, %d)\n", pid, P);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_tensor_set(eb.prompt_one_hot_in, one_hot_buf.data(),
+                                0, one_hot_buf.size() * sizeof(float));
+    }
+
     // ----- Host-side sinusoidal positional embedding ---------------
     //
     // Sub-stage 3c+: the attention sub-block needs a precomputed
@@ -1365,6 +1482,7 @@ static transcribe_status run_one_shot_inner(
                                        "encoder.block.subblock");
     }
     try_dump("enc.final",            eb.dumps.final_out,        "encoder.final");
+    try_dump("enc.prompted",         eb.dumps.prompted_out,     "encoder.prompted");
 
     // Stash the encoder output for the accuracy test (it reaches in
     // via the ParakeetSession view) and as a borrowed reference for
@@ -1397,8 +1515,31 @@ static transcribe_status run_one_shot_inner(
     ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
                             pc->enc_host.size() * sizeof(float));
 
+    // For prompt-conditioned models the pre-prompt encoder output is
+    // a distinct buffer from `eb.out` (which is the post-prompt
+    // tensor the decoder consumes). The reference dumper labels the
+    // pre-prompt tensor "dec.enc_out" and the post-prompt tensor
+    // "dec.enc_out_prompted"; read both back so the validate.py
+    // compare names match. decode_and_populate handles the prompted
+    // dump via the override below.
+    if (pm->hparams.has_prompt && eb.dumps.final_out != nullptr &&
+        transcribe::debug::enabled())
+    {
+        std::vector<float> unprompted(pc->enc_host.size());
+        ggml_backend_tensor_get(eb.dumps.final_out, unprompted.data(), 0,
+                                unprompted.size() * sizeof(float));
+        const long long shape[2] = { T_enc, d_enc };
+        transcribe::debug::dump_host_f32(
+            "dec.enc_out", unprompted.data(),
+            static_cast<long long>(T_enc) * static_cast<long long>(d_enc),
+            shape, 2, "decoder.enc_out");
+    }
+
+    const char * enc_dump_name =
+        pm->hparams.has_prompt ? "dec.enc_out_prompted" : nullptr;
     return decode_and_populate(pc, pm, params, pc->enc_host.data(),
-                               T_enc, d_enc, /*utt_index=*/-1);
+                               T_enc, d_enc, /*utt_index=*/-1,
+                               enc_dump_name);
 }
 
 // One-shot entry point. Validates session/pm, clears the previous result
@@ -1599,6 +1740,37 @@ static transcribe_status run_batch_encode(
                                 0, pc->pos_buf.size() * sizeof(float));
     }
 
+    // Prompt one-hot upload (multilingual variants). Resolves params->language
+    // ONCE for the whole batch (the public ABI doesn't expose a per-utterance
+    // language array yet — every utterance in a batched call shares the same
+    // language hint) and replicates the one-hot across all (T_enc, B) slots.
+    if (eb.prompt_one_hot_in != nullptr) {
+        const int P    = static_cast<int>(eb.prompt_one_hot_in->ne[0]);
+        const int T_oh = static_cast<int>(eb.prompt_one_hot_in->ne[1]);
+        const char * lang_hint =
+            (params != nullptr) ? params->language : nullptr;
+        const int32_t pid = resolve_prompt_id(pm->hparams, lang_hint);
+        if (pid < 0) {
+            std::fprintf(stderr,
+                         "parakeet run_batch: language %s%s%s not in prompt "
+                         "dictionary\n",
+                         lang_hint ? "\"" : "",
+                         lang_hint ? lang_hint : "<null>",
+                         lang_hint ? "\"" : "");
+            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+        }
+        std::vector<int32_t> pids(static_cast<size_t>(n), pid);
+        std::vector<float> one_hot_buf;
+        if (!fill_prompt_one_hot(one_hot_buf, P, T_oh, /*n_batch=*/n, pids)) {
+            std::fprintf(stderr,
+                         "parakeet run_batch: prompt_id %d out of range "
+                         "[0, %d)\n", pid, P);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_tensor_set(eb.prompt_one_hot_in, one_hot_buf.data(),
+                                0, one_hot_buf.size() * sizeof(float));
+    }
+
     // ChunkedLimited attention mask (cache-aware variants). Allocated by
     // build_encoder_graph when the model declares chunked attention; the
     // single-shot path fills it and the batched path must too (otherwise the
@@ -1680,6 +1852,33 @@ static transcribe_status run_batch_encode(
     ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
                             pc->enc_host.size() * sizeof(float));
 
+    // Prompt-conditioned variants: eb.out is the POST-prompt tensor (what
+    // the decoder consumes); the single-shot path dumps the PRE-prompt
+    // tensor as "dec.enc_out" and the POST-prompt as "dec.enc_out_prompted"
+    // so the comparator sees both under their reference names. Mirror that
+    // in the batched path with per-utterance .b{i} suffixes.
+    const bool has_prompt = pm->hparams.has_prompt &&
+                            eb.dumps.final_out != nullptr;
+    std::vector<float> unprompted_host;
+    if (has_prompt && transcribe::debug::enabled()) {
+        unprompted_host.resize(pc->enc_host.size());
+        ggml_backend_tensor_get(eb.dumps.final_out, unprompted_host.data(), 0,
+                                unprompted_host.size() * sizeof(float));
+        for (int b = 0; b < n; ++b) {
+            const long long shape[2] = { real_tenc[b], d_enc };
+            char namebuf[64];
+            std::snprintf(namebuf, sizeof(namebuf), "dec.enc_out.b%d", b);
+            transcribe::debug::dump_host_f32(
+                namebuf,
+                unprompted_host.data() + static_cast<size_t>(b) * utt_elems,
+                static_cast<long long>(real_tenc[b]) *
+                    static_cast<long long>(d_enc),
+                shape, 2, "decoder.enc_out");
+        }
+    }
+    const char * enc_dump_name =
+        has_prompt ? "dec.enc_out_prompted" : nullptr;
+
     // Host-slice the shared encoder output and decode each utterance. The
     // encoder is ONE shared dispatch, so decode_batch_slices amortizes its
     // total compute + the total mel cost across the batch (the per-utt sum then
@@ -1688,7 +1887,8 @@ static transcribe_status run_batch_encode(
         pc, n, pc->enc_host.data(), utt_elems, pc->t_encode_us, total_mel_us,
         [&](int b, const float * enc_b) {
             return decode_and_populate(pc, pm, params, enc_b, real_tenc[b],
-                                       d_enc, /*utt_index=*/b);
+                                       d_enc, /*utt_index=*/b,
+                                       enc_dump_name);
         });
 }
 
@@ -2090,6 +2290,38 @@ transcribe_status emit_streaming_chunk(
         pc->stream_caches.att_context_left,
         pc->stream_caches.att_context_right);
 
+    // Prompt one-hot upload (multilingual variants only). Same shape
+    // contract as the offline path: [num_prompts, T_q_new, 1, 1] holds
+    // a single one-hot column at the resolved language's index,
+    // replicated across T_q_new. The streaming language hint lives in
+    // pc->stream_run_params (captured at stream_begin).
+    if (eb.prompt_one_hot_in != nullptr) {
+        const int P    = static_cast<int>(eb.prompt_one_hot_in->ne[0]);
+        const int T_oh = static_cast<int>(eb.prompt_one_hot_in->ne[1]);
+        const char * lang_hint = pc->stream_run_params.language;
+        const int32_t pid = resolve_prompt_id(pm->hparams, lang_hint);
+        if (pid < 0) {
+            std::fprintf(stderr,
+                         "parakeet stream: language %s%s%s not in prompt "
+                         "dictionary\n",
+                         lang_hint ? "\"" : "",
+                         lang_hint ? lang_hint : "<null>",
+                         lang_hint ? "\"" : "");
+            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+        }
+        std::vector<float> one_hot_buf;
+        if (!fill_prompt_one_hot(one_hot_buf, P, T_oh, /*n_batch=*/1,
+                                 {pid}))
+        {
+            std::fprintf(stderr,
+                         "parakeet stream: prompt_id %d out of range "
+                         "[0, %d)\n", pid, P);
+            return TRANSCRIBE_ERR_GGUF;
+        }
+        ggml_backend_tensor_set(eb.prompt_one_hot_in, one_hot_buf.data(),
+                                0, one_hot_buf.size() * sizeof(float));
+    }
+
     // Thread count (same recipe as offline run()).
     {
         int n_threads = pc->n_threads;
@@ -2276,6 +2508,9 @@ void rebuild_streaming_result_text(ParakeetSession * pc,
     }
     pc->full_text = pm->tok.decode(all_ids.data(),
                                       static_cast<int>(all_ids.size()));
+    if (!pc->full_text.empty() && pc->full_text.front() == ' ') {
+        pc->full_text.erase(pc->full_text.begin());
+    }
     pc->has_result  = true;
     pc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 }
