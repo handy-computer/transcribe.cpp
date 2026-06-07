@@ -5,14 +5,21 @@ description: Brings up the C++ implementation for a new model family at the refe
 
 # porting-4-cpp
 
-Stage 4 of the porting pipeline. Implements `src/arch/<family>/*`, authors
-`tests/tolerances/<family>.json` from the first honest C++ drift, runs
-the family-doc Capability Validation table, and ends with a full
-ref-dtype WER gate (batch 1 + batch 8). Quant generation moved to Stage 5;
-this stage stays ref-dtype only.
+Implements `src/arch/<family>/*` and validates it against the
+ref-dtype WER gate (batch 1 + batch 8)
 
-First principle: the reference implementation is the source of truth. Open
-it before writing C++. Re-open it when debugging drift.
+## References
+
+Stage 4 uses three different things called "reference." Keep them straight:
+
+- **Canonical reference** — the implementation named in
+  `intake.reference_framework` / the golden manifest's `reference.source`.
+  This is the *only* semantic source of truth. Open it before writing each
+  piece of C++. When a gate tensor drifts, re-open it before changing code.
+- **In-tree analog** (`parakeet` / `cohere` / `qwen3_asr`) — a template for
+  ggml and file *structure* only, never for what the math should be.
+- **`docs/porting/ggml-reference-map.md`** — op-level ggml *patterns* only,
+  never for what the math should be.
 
 ## Preconditions
 
@@ -39,7 +46,7 @@ it before writing C++. Re-open it when debugging drift.
 CPP progress:
 - [ ] Step 0: Family-level forward-map.md
 - [ ] Step 1: Sibling-variant shortcut
-- [ ] Step 2: Implement src/arch/<family>/ (open-ended)
+- [ ] Step 2: Implement src/arch/<family>/ (drive from the forward map)
 - [ ] Step 3: First validate.py run (against provisional tolerances)
 - [ ] Step 4: Finalize tolerances (recipe below, replaces provisional)
 - [ ] Step 5: Human review of finalized tolerances
@@ -91,7 +98,17 @@ there — Steps 0/2/3/4/5/6 are already paid for. Existing tolerances hold.
 Step 2 — fix the `src/arch/<family>/` code that assumed the old shape, and
 update the forward-map's "Variant Notes" section.
 
-### Step 2: Implement src/arch/<family>/ (open-ended)
+### Step 2: Implement src/arch/<family>/ — drive from the forward map
+
+Walk the forward-map tables row by row. For each row: open the cited
+**Reference location** in the canonical reference and read it; port that op
+into ggml using the row's **ggml / C++ pattern** and **In-tree analog**
+columns for structure; verify against the row's **Gate tensor**. Do not
+implement a row whose Reference location you have not opened. If the map and
+the reference disagree, the reference is right — fix the map.
+
+The rest of this step is structure: how to lay out the files and which ggml
+patterns realize each row.
 
 For a new family, create `src/arch/<family>/` with these files, following
 the shape of the closest existing family:
@@ -111,9 +128,9 @@ Pick the closest existing family by architecture pattern:
 - `encoder-ctc` → no in-tree reference yet; combine parakeet's encoder
   with a minimal CTC head.
 
-**Use `docs/porting/ggml-reference-map.md` as the primary ggml-pattern
-lookup** (TOC at top of file). Read the relevant subsections only, not the
-whole file. Load the closest family's `src/arch/<family>/` as a working
+**Use `docs/porting/ggml-reference-map.md` for op-level ggml patterns only
+(not semantics)** (TOC at top of file). Read the relevant subsections only,
+not the whole file. Load the closest family's `src/arch/<family>/` as a working
 example.
 
 Wire the new family into the arch dispatch in `src/` per the existing
