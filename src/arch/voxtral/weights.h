@@ -183,7 +183,7 @@ struct VoxtralDecBlock {
     ggml_tensor * ffn_up_w      = nullptr;  // [hidden, intermediate]
     ggml_tensor * ffn_down_w    = nullptr;  // [intermediate, hidden]
     // Packed gate+up: [hidden, 2*intermediate]. Filled at load time by
-    // qwen3_lm::pack_gate_up(); the graph uses one mul_mat for both.
+    // causal_lm::pack_gate_up(); the graph uses one mul_mat for both.
     ggml_tensor * ffn_gate_up_w = nullptr;
 };
 

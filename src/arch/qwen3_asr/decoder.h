@@ -24,7 +24,7 @@
 #pragma once
 
 #include "qwen3_asr.h"
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -77,12 +77,12 @@ struct PrefillBuild {
 // kv_cache.n = T_prompt and kv_cache.head = T_prompt after compute.
 // kv_batch_slot / kv_n_batch: for offline batched decode, write this
 // utterance's KV into slab `kv_batch_slot` of a batched cache holding
-// `kv_n_batch` slabs (see qwen3_lm::block_prefill / kv_init_batched).
+// `kv_n_batch` slabs (see causal_lm::block_prefill / kv_init_batched).
 // Defaults (0, 1) reproduce the single-shot KV layout exactly.
 PrefillBuild build_prefill_graph(ggml_context *                ctx,
                                  const QwenAsrWeights &        weights,
                                  const QwenAsrHParams &        hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  int                           T_prompt,
                                  int                           T_enc,
                                  int                           prefix_len,
@@ -120,7 +120,7 @@ struct StepBuild {
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const QwenAsrWeights &          weights,
                            const QwenAsrHParams &          hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            int                             max_n_kv,
                            bool                            use_flash);
 
@@ -158,7 +158,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const QwenAsrWeights &          weights,
     const QwenAsrHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             T_prompt_max,
     int                             T_enc_max,
     int                             n_batch,
@@ -181,7 +181,7 @@ struct StepBuildBatched {
 
 // Build a static-shape batched step graph reused across every step of an
 // offline batch of `n_batch` utterances against a batched KV cache
-// (qwen3_lm::kv_init_batched). The four input tensors are updated per step:
+// (causal_lm::kv_init_batched). The four input tensors are updated per step:
 //   input_ids_in [B]            — the token to embed for each utterance
 //   position_in  [B]            — RoPE position per utterance (= its n_past)
 //   kv_idx_in    [1, B]         — KV write row per utterance (= its n_past)
@@ -191,7 +191,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const QwenAsrWeights &          weights,
     const QwenAsrHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             max_n_kv,
     int                             n_batch,
     bool                            use_flash);

@@ -1,12 +1,13 @@
-// src/qwen3_lm/qwen3_lm.cpp - shared Qwen3 LM block math.
+// src/causal_lm/causal_lm.cpp - shared causal-decoder LM block math
+// (Llama / Qwen3 lineage; Qwen3 adds the per-head Q/K RMSNorm noted below).
 //
-// See qwen3_lm.h for the API contract. The block forward functions are
+// See causal_lm.h for the API contract. The block forward functions are
 // strict extractions of the per-family code that lived in
 // arch/qwen3_asr/decoder.cpp and arch/funasr_nano/decoder.cpp before
 // this module landed; tensor topology, math, and KV memory layout are
 // preserved bit-for-bit.
 
-#include "qwen3_lm.h"
+#include "causal_lm.h"
 #include "transcribe-session.h"
 
 #include "ggml.h"
@@ -18,7 +19,7 @@
 #include <cstdio>
 #include <vector>
 
-namespace transcribe::qwen3_lm {
+namespace transcribe::causal_lm {
 
 namespace {
 
@@ -77,7 +78,7 @@ bool kv_init(KvCache &      cache,
 {
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
         std::fprintf(stderr,
-                     "qwen3_lm kv_init: unsupported kv_type=%d\n",
+                     "causal_lm kv_init: unsupported kv_type=%d\n",
                      static_cast<int>(kv_type));
         return false;
     }
@@ -90,7 +91,7 @@ bool kv_init(KvCache &      cache,
 
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "qwen3_lm kv_init: ggml_init failed\n");
+        std::fprintf(stderr, "causal_lm kv_init: ggml_init failed\n");
         return false;
     }
 
@@ -103,7 +104,7 @@ bool kv_init(KvCache &      cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "qwen3_lm kv_init: buffer alloc failed\n");
+        std::fprintf(stderr, "causal_lm kv_init: buffer alloc failed\n");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -136,7 +137,7 @@ bool kv_init_batched(KvCache &      cache,
     }
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
         std::fprintf(stderr,
-                     "qwen3_lm kv_init_batched: unsupported kv_type=%d\n",
+                     "causal_lm kv_init_batched: unsupported kv_type=%d\n",
                      static_cast<int>(kv_type));
         return false;
     }
@@ -149,7 +150,7 @@ bool kv_init_batched(KvCache &      cache,
 
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "qwen3_lm kv_init_batched: ggml_init failed\n");
+        std::fprintf(stderr, "causal_lm kv_init_batched: ggml_init failed\n");
         return false;
     }
 
@@ -167,7 +168,7 @@ bool kv_init_batched(KvCache &      cache,
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
         std::fprintf(stderr,
-                     "qwen3_lm kv_init_batched: buffer alloc failed\n");
+                     "causal_lm kv_init_batched: buffer alloc failed\n");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -783,7 +784,7 @@ ggml_tensor * block_step_batched(
         // The manual GQA path is single-shot only; batched decode requires
         // flash. Callers gate on use_flash and fall back to serial run().
         std::fprintf(stderr,
-                     "qwen3_lm block_step_batched: non-flash path unsupported\n");
+                     "causal_lm block_step_batched: non-flash path unsupported\n");
         return nullptr;
     }
 
@@ -911,7 +912,7 @@ ggml_tensor * block_prefill_batched(
         o = ggml_reshape_3d(ctx, o, q_dim, T, B);
     } else {
         std::fprintf(stderr,
-                     "qwen3_lm block_prefill_batched: non-flash unsupported\n");
+                     "causal_lm block_prefill_batched: non-flash unsupported\n");
         return nullptr;
     }
 
@@ -1135,4 +1136,4 @@ transcribe_status run_batched_step_loop(
     return TRANSCRIBE_OK;
 }
 
-} // namespace transcribe::qwen3_lm
+} // namespace transcribe::causal_lm

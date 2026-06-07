@@ -13,7 +13,7 @@
 
 #pragma once
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-backend.h"
 #include "transcribe-session.h"
 #include "transcribe-mel.h"
@@ -67,7 +67,7 @@ struct VoxtralModel final : public transcribe_model {
 
     transcribe::BackendPlan       plan;
     ggml_backend_buffer_t         backend_buffer = nullptr;
-    transcribe::qwen3_lm::PackedGateUpHandles packed_gate_up;
+    transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
     std::optional<transcribe::MelFrontend> mel;
 
@@ -83,12 +83,12 @@ struct VoxtralSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
-    transcribe::qwen3_lm::KvCache kv_cache;
+    transcribe::causal_lm::KvCache kv_cache;
 
     // Offline batched decode (transcribe_run_batch): a batched KV cache with
     // one slab per utterance, reused across calls and re-allocated only when
     // the batch size or context window grows.
-    transcribe::qwen3_lm::KvCache kv_cache_batch;
+    transcribe::causal_lm::KvCache kv_cache_batch;
     int kv_batch_cap   = 0;  // slabs allocated (== n_batch of last alloc)
     int kv_batch_n_ctx = 0;  // n_ctx of last alloc
 

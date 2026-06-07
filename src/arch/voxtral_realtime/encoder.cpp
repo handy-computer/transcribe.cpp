@@ -107,7 +107,7 @@ ggml_tensor * mha(ggml_context * ctx, ggml_tensor * x,
 // sw-causal `mask [T, T]` are SHARED across the batch (the encoder is causal, so
 // right-pad rows are numerically isolated and need no per-row mask). Flash-only.
 // Mirrors `mha` with the batch riding ne[2] of x (and ne[3] of the per-head
-// tensors), exactly like qwen3_lm::block_prefill_batched on the decoder side.
+// tensors), exactly like causal_lm::block_prefill_batched on the decoder side.
 ggml_tensor * mha_batched(ggml_context * ctx, ggml_tensor * x,
                           const EncBlock & b, ggml_tensor * positions, ggml_tensor * mask,
                           int n_heads, int head_dim, int /*d_model*/, float rope_theta,
@@ -173,7 +173,7 @@ ggml_tensor * mlp(ggml_context * ctx, ggml_tensor * x, const EncBlock & b) {
 // repeat. q/v/out carry bias; k none. NEOX RoPE at absolute positions.
 ggml_tensor * mha_cached(ggml_context * ctx, ggml_cgraph * gf, ggml_tensor * x,
                          const EncBlock & b, ggml_tensor * positions, ggml_tensor * mask,
-                         transcribe::qwen3_lm::KvCache & kv, int layer,
+                         transcribe::causal_lm::KvCache & kv, int layer,
                          int n_new, int write_slot, int read_start, int read_len,
                          int n_heads, int head_dim, float rope_theta,
                          int max_pos, bool use_flash) {
@@ -551,7 +551,7 @@ EmbedderChunkBuild build_embedder_chunk_graph(ggml_context * ctx,
 EncoderChunkBuild build_encoder_chunk_graph(ggml_context *                  ctx,
                                             const Weights &                 w,
                                             const HParams &                 hp,
-                                            transcribe::qwen3_lm::KvCache & enc_kv,
+                                            transcribe::causal_lm::KvCache & enc_kv,
                                             int                             n_new,
                                             int                             write_slot,
                                             int                             read_start,

@@ -17,7 +17,7 @@
 #include "encoder.h"
 #include "weights.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
@@ -353,12 +353,12 @@ transcribe_status load(
 
     // Pack gate+up for one-mul_mat SwiGLU.
     {
-        std::vector<transcribe::qwen3_lm::GateUpEntry> entries;
+        std::vector<transcribe::causal_lm::GateUpEntry> entries;
         entries.reserve(m->weights.dec_blocks.size());
         for (auto & b : m->weights.dec_blocks) {
             entries.push_back({b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w});
         }
-        if (!transcribe::qwen3_lm::pack_gate_up(
+        if (!transcribe::causal_lm::pack_gate_up(
                 m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
                 entries, m->packed_gate_up, "voxtral"))
         {
@@ -399,7 +399,7 @@ transcribe_status init_context(
         // Initial allocation only: run()/run_batch() grow the KV cache per
         // utterance up to the decoder's trained context (131072 for Mini-3B).
         // 4096 covers short clips (~5 min) without a realloc on the hot path.
-        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary,
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary,
                                            /*n_ctx=*/4096,
                                            cm->hparams.dec_n_kv_heads,
                                            cm->hparams.dec_head_dim,
@@ -627,7 +627,7 @@ transcribe_status run(
         const ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
                                 ? GGML_TYPE_F32 : GGML_TYPE_F16;
         cc->kv_cache.free();
-        if (!transcribe::qwen3_lm::kv_init(
+        if (!transcribe::causal_lm::kv_init(
                 cc->kv_cache, cm->plan.primary, want_ctx,
                 cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                 cm->hparams.dec_n_layers, kv_type)) {
@@ -834,7 +834,7 @@ transcribe_status run(
 // ---------------------------------------------------------------------------
 //
 // Batched encoder (all equal-length 30 s chunks stacked on ne[2]) + batched
-// prefill + the shared qwen3_lm batched step loop. Ragged prompts are
+// prefill + the shared causal_lm batched step loop. Ragged prompts are
 // right-padded to T_prompt_max; the decoder recipe mirrors arch/canary_qwen.
 // Falls back to a serial per-utterance loop for n==1, dump mode, or no-flash.
 
@@ -872,7 +872,7 @@ transcribe_status run_batch(
     if (cm == nullptr || cm->plan.scheduler_list.empty() || !cm->mel.has_value())
         return TRANSCRIBE_ERR_INVALID_ARG;
 
-    // The batched encoder + qwen3_lm batched blocks are flash-only; dump mode
+    // The batched encoder + causal_lm batched blocks are flash-only; dump mode
     // and n==1 take the established single-shot path for byte-parity.
     if (!cc->decoder_use_flash || !cc->encoder_use_flash ||
         transcribe::debug::enabled() || n == 1)
@@ -1080,7 +1080,7 @@ transcribe_status run_batch(
     if (cc->kv_cache_batch.self_k == nullptr ||
         cc->kv_batch_cap != n || cc->kv_batch_n_ctx != max_n_kv) {
         cc->kv_cache_batch.free();
-        if (!transcribe::qwen3_lm::kv_init_batched(
+        if (!transcribe::causal_lm::kv_init_batched(
                 cc->kv_cache_batch, cm->plan.primary, max_n_kv,
                 hp.dec_n_kv_heads, hp.dec_head_dim, hp.dec_n_layers, n, kv_type)) {
             std::fprintf(stderr, "voxtral run_batch: kv_init_batched failed\n");
@@ -1176,7 +1176,7 @@ transcribe_status run_batch(
         }
     }
 
-    // ----- Pass 3: batched greedy step loop (shared qwen3_lm driver) -----
+    // ----- Pass 3: batched greedy step loop (shared causal_lm driver) -----
     const int32_t eos_id = hp.eos_token_id;
     {
         if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
@@ -1194,7 +1194,7 @@ transcribe_status run_batch(
         if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
         set_sched_threads(cc->sched, cc->n_threads);
 
-        transcribe::qwen3_lm::StepBatchedIO io {};
+        transcribe::causal_lm::StepBatchedIO io {};
         io.input_ids = sb.input_ids_in;
         io.positions = sb.position_in;
         io.kv_idx    = sb.kv_idx_in;
@@ -1202,13 +1202,13 @@ transcribe_status run_batch(
         io.argmax    = sb.out;
         io.graph     = sb.graph;
 
-        transcribe::qwen3_lm::StepBatchedState step_state;
+        transcribe::causal_lm::StepBatchedState step_state;
         step_state.valid    = valid;
         step_state.next_tok = next_tok;
         step_state.n_past   = n_past;
 
-        transcribe::qwen3_lm::StepLoopStats step_stats;
-        if (const transcribe_status st = transcribe::qwen3_lm::run_batched_step_loop(
+        transcribe::causal_lm::StepLoopStats step_stats;
+        if (const transcribe_status st = transcribe::causal_lm::run_batched_step_loop(
                 cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
                 generated, &step_stats); st != TRANSCRIBE_OK)
             return st;

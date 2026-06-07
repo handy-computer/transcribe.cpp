@@ -1,13 +1,13 @@
 // arch/voxtral_realtime/decoder.cpp - Ministral LM prefill/step builders.
 //
 // Reference: VoxtralRealtimeForConditionalGeneration's inner language_model
-// (VoxtralRealtimeTextForCausalLM). Per-block math via shared qwen3_lm with
+// (VoxtralRealtimeTextForCausalLM). Per-block math via shared causal_lm with
 // null Q/K-norm and a per-layer ffn_scale = (1 + ada(t_cond)). ADDITIVE audio
 // fusion and TIED lm_head are owned here.
 
 #include "decoder.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-debug.h"
 
 #include "ggml.h"
@@ -27,8 +27,8 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
 // session (Stage 6 #2). Passing it as the FFN-norm weight lets the fused
 // rms_norm(·weight) apply the ada scale — no separate per-layer ggml_mul. Null
 // falls back to the raw FFN-norm weight (ada not yet computed).
-qwen3_lm::BlockView to_block_view(const DecBlock & b, ggml_tensor * ffn_norm_folded) {
-    qwen3_lm::BlockView v {};
+causal_lm::BlockView to_block_view(const DecBlock & b, ggml_tensor * ffn_norm_folded) {
+    causal_lm::BlockView v {};
     v.norm_attn_w   = b.norm_attn_w;
     v.norm_ffn_w    = (ffn_norm_folded != nullptr) ? ffn_norm_folded : b.norm_ffn_w;
     v.attn_q_w      = b.attn_q_w;
@@ -43,8 +43,8 @@ qwen3_lm::BlockView to_block_view(const DecBlock & b, ggml_tensor * ffn_norm_fol
     return v;
 }
 
-qwen3_lm::BlockParams to_block_params(const HParams & hp) {
-    qwen3_lm::BlockParams p {};
+causal_lm::BlockParams to_block_params(const HParams & hp) {
+    causal_lm::BlockParams p {};
     p.n_heads      = hp.dec_n_heads;
     p.n_kv_heads   = hp.dec_n_kv_heads;
     p.head_dim     = hp.dec_head_dim;
@@ -67,7 +67,7 @@ ggml_tensor * ada_scale_for(ggml_context * ctx, ggml_tensor * ada_scale_all,
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const Weights &                 weights,
                                  const HParams &                 hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  ggml_tensor *                   ada_scale_all,
                                  int                             T,
                                  bool                            use_flash,
@@ -117,10 +117,10 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     transcribe::debug::mark_tensor_for_dump(x);
 
     for (int il = 0; il < n_layer; ++il) {
-        qwen3_lm::BlockOpts opts {};
+        causal_lm::BlockOpts opts {};
         opts.use_flash = use_flash;
         ggml_tensor * scale = ada_scale_for(ctx, ada_scale_all, hidden, il);
-        x = qwen3_lm::block_prefill(ctx, gf, x, to_block_view(weights.dec_blocks[il], scale),
+        x = causal_lm::block_prefill(ctx, gf, x, to_block_view(weights.dec_blocks[il], scale),
                                     block_params, kv_cache, il, T,
                                     pb.mask_in, pb.positions_in, opts);
         if (il == 0) {
@@ -174,7 +174,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const Weights &                 weights,
                            const HParams &                 hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            ggml_tensor *                   ada_scale_all,
                            int                             max_n_kv,
                            bool                            use_flash) {
@@ -216,7 +216,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * scale = ada_scale_for(ctx, ada_scale_all, hidden, il);
-        x = qwen3_lm::block_step(ctx, gf, x, to_block_view(weights.dec_blocks[il], scale),
+        x = causal_lm::block_step(ctx, gf, x, to_block_view(weights.dec_blocks[il], scale),
                                  block_params, kv_cache, il, max_n_kv,
                                  sb.mask_in, sb.position_in, sb.kv_idx_in, use_flash);
     }
@@ -240,7 +240,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 VerifyBuild build_verify_graph(ggml_context *                  ctx,
                                const Weights &                 weights,
                                const HParams &                 hp,
-                               transcribe::qwen3_lm::KvCache & kv_cache,
+                               transcribe::causal_lm::KvCache & kv_cache,
                                ggml_tensor *                   ada_scale_all,
                                int                             T_verify,
                                int                             max_n_kv,
@@ -289,7 +289,7 @@ VerifyBuild build_verify_graph(ggml_context *                  ctx,
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * scale = ada_scale_for(ctx, ada_scale_all, hidden, il);
-        x = qwen3_lm::block_step_n(ctx, gf, x,
+        x = causal_lm::block_step_n(ctx, gf, x,
                                    to_block_view(weights.dec_blocks[il], scale),
                                    block_params, kv_cache, il, T_verify, max_n_kv,
                                    vb.mask_in, vb.positions_in, vb.kv_idx_in, use_flash);
@@ -318,7 +318,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const Weights &                 weights,
     const HParams &                 hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     ggml_tensor *                   ada_scale_all,
     int                             T_prompt,
     int                             n_batch,
@@ -376,7 +376,7 @@ PrefillBuildBatched build_prefill_graph_batched(
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * scale = ada_scale_for(ctx, ada_scale_all, hidden, il);
-        x = qwen3_lm::block_prefill_batched(
+        x = causal_lm::block_prefill_batched(
             ctx, gf, x, to_block_view(weights.dec_blocks[il], scale),
             block_params, kv_cache, il, T_prompt, B,
             pb.mask_in, pb.positions_in, pb.kv_idx_in, use_flash);
@@ -402,7 +402,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const Weights &                 weights,
     const HParams &                 hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     ggml_tensor *                   ada_scale_all,
     int                             max_n_kv,
     int                             n_batch,
@@ -450,7 +450,7 @@ StepBuildBatched build_step_graph_batched(
 
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * scale = ada_scale_for(ctx, ada_scale_all, hidden, il);
-        x = qwen3_lm::block_step_batched(
+        x = causal_lm::block_step_batched(
             ctx, gf, x, to_block_view(weights.dec_blocks[il], scale),
             block_params, kv_cache, il, max_n_kv, B,
             sb.mask_in, sb.position_in, sb.kv_idx_in, use_flash);

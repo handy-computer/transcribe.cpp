@@ -4,7 +4,7 @@
 //
 // The per-block math (pre-LN RMSNorm, GQA with per-head Q/K-RMSNorm,
 // NeoX RoPE @ θ=1e6, KV write/read, SwiGLU on packed gate_up) is
-// shared with arch/funasr_nano via `src/qwen3_lm/`. This file owns:
+// shared with arch/funasr_nano via `src/causal_lm/`. This file owns:
 //   - graph allocation
 //   - prompt + audio injection (3-way concat: prefix | enc_out | suffix)
 //   - tensor naming and dump-point preservation for validate.py parity
@@ -19,7 +19,7 @@
 
 #include "decoder.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-debug.h"
 
 #include "ggml.h"
@@ -37,8 +37,8 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
 }
 
 // Build a BlockView from one decoder-block weight slot.
-qwen3_lm::BlockView to_block_view(const QwenAsrDecBlock & b) {
-    qwen3_lm::BlockView v {};
+causal_lm::BlockView to_block_view(const QwenAsrDecBlock & b) {
+    causal_lm::BlockView v {};
     v.norm_attn_w   = b.norm_attn_w;
     v.norm_ffn_w    = b.norm_ffn_w;
     v.attn_q_w      = b.attn_q_w;
@@ -52,8 +52,8 @@ qwen3_lm::BlockView to_block_view(const QwenAsrDecBlock & b) {
     return v;
 }
 
-qwen3_lm::BlockParams to_block_params(const QwenAsrHParams & hp) {
-    qwen3_lm::BlockParams p {};
+causal_lm::BlockParams to_block_params(const QwenAsrHParams & hp) {
+    causal_lm::BlockParams p {};
     p.n_heads      = hp.dec_n_heads;
     p.n_kv_heads   = hp.dec_n_kv_heads;
     p.head_dim     = hp.dec_head_dim;
@@ -68,7 +68,7 @@ qwen3_lm::BlockParams to_block_params(const QwenAsrHParams & hp) {
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const QwenAsrWeights &          weights,
                                  const QwenAsrHParams &          hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  int                             T_prompt,
                                  int                             T_enc,
                                  int                             prefix_len,
@@ -187,13 +187,13 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 
     // ---------- Block stack ----------
     for (int il = 0; il < n_layer; ++il) {
-        qwen3_lm::BlockOpts opts {};
+        causal_lm::BlockOpts opts {};
         opts.use_flash             = use_flash;
         opts.slice_last_before_ffn = slice_last && (il == n_layer - 1);
         opts.kv_batch_slot         = kv_batch_slot;
         opts.kv_n_batch            = kv_n_batch;
 
-        x = qwen3_lm::block_prefill(
+        x = causal_lm::block_prefill(
             ctx, gf, x,
             to_block_view(weights.dec_blocks[il]),
             block_params,
@@ -265,7 +265,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const QwenAsrWeights &          weights,
                            const QwenAsrHParams &          hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            int                             max_n_kv,
                            bool                            use_flash)
 {
@@ -328,7 +328,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 
     // ---------- Block stack ----------
     for (int il = 0; il < n_layer; ++il) {
-        x = qwen3_lm::block_step(
+        x = causal_lm::block_step(
             ctx, gf, x,
             to_block_view(weights.dec_blocks[il]),
             block_params,
@@ -368,7 +368,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const QwenAsrWeights &          weights,
     const QwenAsrHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             T_prompt_max,
     int                             T_enc_max,
     int                             n_batch,
@@ -468,7 +468,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);
 
     for (int il = 0; il < n_layer; ++il) {
-        x = qwen3_lm::block_prefill_batched(
+        x = causal_lm::block_prefill_batched(
             ctx, gf, x,
             to_block_view(weights.dec_blocks[il]),
             block_params, kv_cache, il,
@@ -507,7 +507,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const QwenAsrWeights &          weights,
     const QwenAsrHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             max_n_kv,
     int                             n_batch,
     bool                            use_flash)
@@ -583,7 +583,7 @@ StepBuildBatched build_step_graph_batched(
 
     // ---------- Block stack ----------
     for (int il = 0; il < n_layer; ++il) {
-        x = qwen3_lm::block_step_batched(
+        x = causal_lm::block_step_batched(
             ctx, gf, x,
             to_block_view(weights.dec_blocks[il]),
             block_params,

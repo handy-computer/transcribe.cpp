@@ -17,7 +17,7 @@
 #include "encoder.h"
 #include "weights.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
@@ -234,15 +234,15 @@ transcribe_status load(Loader & loader,
     }
     gguf_free(gguf_data);
 
-    // Pack gate+up for the DECODER (the qwen3_lm block uses ffn_gate_up_w). The
+    // Pack gate+up for the DECODER (the causal_lm block uses ffn_gate_up_w). The
     // encoder FFN runs unpacked (one-shot, not the hot path).
     {
-        std::vector<transcribe::qwen3_lm::GateUpEntry> entries;
+        std::vector<transcribe::causal_lm::GateUpEntry> entries;
         entries.reserve(m->weights.dec_blocks.size());
         for (auto & b : m->weights.dec_blocks) {
             entries.push_back({b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w});
         }
-        if (!transcribe::qwen3_lm::pack_gate_up(
+        if (!transcribe::causal_lm::pack_gate_up(
                 m->plan.primary, m->hparams.dec_hidden, m->hparams.dec_intermediate,
                 entries, m->packed_gate_up, "voxtral_realtime")) {
             m->packed_gate_up.free();
@@ -277,7 +277,7 @@ transcribe_status init_context(transcribe_model * model,
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
 
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
-    if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary, /*n_ctx=*/2048,
+    if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, /*n_ctx=*/2048,
                                        cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                                        cm->hparams.dec_n_layers, kv_type)) {
         std::fprintf(stderr, "voxtral_realtime init_context: kv_init failed\n");
@@ -541,7 +541,7 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
         const ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
         int want = 2048; while (want < n_audio + 1) want *= 2;
         cc->kv_cache.free();
-        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary, want,
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, want,
                 cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                 cm->hparams.dec_n_layers, kv_type)) {
             std::fprintf(stderr, "voxtral_realtime run: kv grow failed\n");
@@ -1510,7 +1510,7 @@ transcribe_status stream_begin(transcribe_session * session,
     // k_enc_ring_ctx slots; compaction keeps the last sliding_window(750) frames
     // so any stream length runs in constant memory (the reference mechanism).
     cc->enc_kv.free();
-    if (!transcribe::qwen3_lm::kv_init(cc->enc_kv, cm->plan.primary, /*n_ctx=*/k_enc_ring_ctx,
+    if (!transcribe::causal_lm::kv_init(cc->enc_kv, cm->plan.primary, /*n_ctx=*/k_enc_ring_ctx,
             cm->hparams.enc_n_heads, cm->hparams.enc_head_dim,
             cm->hparams.enc_n_layers, GGML_TYPE_F32)) {
         std::fprintf(stderr, "voxtral_realtime stream_begin: enc kv_init failed\n");
@@ -1531,7 +1531,7 @@ transcribe_status stream_begin(transcribe_session * session,
     if (cc->kv_cache.n_ctx < dec_ring) {
         const ggml_type kt = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
         cc->kv_cache.free();
-        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary, dec_ring,
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary, dec_ring,
                 cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                 cm->hparams.dec_n_layers, kt)) {
             std::fprintf(stderr, "voxtral_realtime stream_begin: dec kv grow failed\n");
@@ -1644,7 +1644,7 @@ bool accepts_ext_kind(const transcribe_model * model, transcribe_ext_slot slot,
 // whole-clip encoder (not 30 s chunks), TIED head, the ada ffn_scale, ADDITIVE
 // audio injected at EVERY prefill position AND at every decode step, and a
 // per-row n_audio clamp. Falls back to serial for n==1, dump mode, or no decoder
-// flash (the batched qwen3_lm blocks are flash-only).
+// flash (the batched causal_lm blocks are flash-only).
 
 transcribe_status run_batch_serial(Session * cc, const float * const * pcm,
                                    const int * n_samples, int n,
@@ -1664,7 +1664,7 @@ transcribe_status run_batch_serial(Session * cc, const float * const * pcm,
     return TRANSCRIBE_OK;
 }
 
-// Lockstep batched greedy decode. Like qwen3_lm::run_batched_step_loop but adds
+// Lockstep batched greedy decode. Like causal_lm::run_batched_step_loop but adds
 // (1) per-step audio injection (a fresh audio embed per row at its position) and
 // (2) a per-row n_audio clamp. Mirrors forward_buffer's single-utterance step
 // loop: open the KV window [0, n_past] cumulatively (no sliding-window eviction;
@@ -1742,7 +1742,7 @@ transcribe_status run_batch(transcribe_session * session, const float * const * 
     if (cm == nullptr || cm->plan.scheduler_list.empty() || !cm->mel.has_value())
         return TRANSCRIBE_ERR_INVALID_ARG;
 
-    // The batched qwen3_lm decoder blocks are flash-only; dump mode and n==1 take
+    // The batched causal_lm decoder blocks are flash-only; dump mode and n==1 take
     // the established single-shot path. The batched encoder honors encoder_use_flash
     // (default non-flash = CPU source of truth), so it is not gated here.
     if (!cc->decoder_use_flash || transcribe::debug::enabled() || n == 1)
@@ -1890,7 +1890,7 @@ transcribe_status run_batch(transcribe_session * session, const float * const * 
     if (cc->kv_cache_batch.self_k == nullptr || cc->kv_batch_cap != n ||
         cc->kv_batch_n_ctx < max_n_kv) {
         cc->kv_cache_batch.free();
-        if (!transcribe::qwen3_lm::kv_init_batched(cc->kv_cache_batch, cm->plan.primary,
+        if (!transcribe::causal_lm::kv_init_batched(cc->kv_cache_batch, cm->plan.primary,
                 max_n_kv, cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                 cm->hparams.dec_n_layers, n, kv_type)) {
             std::fprintf(stderr, "voxtral_realtime run_batch: kv_init_batched failed\n");

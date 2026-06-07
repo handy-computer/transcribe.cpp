@@ -2,14 +2,14 @@
 //
 // Reference: VoxtralForConditionalGeneration's inner language_model
 // (LlamaForCausalLM). The per-block math (pre-LN RMSNorm, GQA, NEOX
-// RoPE, SwiGLU on packed gate_up) is the shared qwen3_lm module, called
+// RoPE, SwiGLU on packed gate_up) is the shared causal_lm module, called
 // with null Q/K-norm slots (Llama has no per-head Q/K norm). This file
 // owns graph allocation, audio injection (3-way concat), dump naming,
 // and the UNTIED lm_head head.
 
 #include "decoder.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-debug.h"
 
 #include "ggml.h"
@@ -27,9 +27,9 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
 
 // Build a BlockView from one decoder-block weight slot. attn_q_norm /
 // attn_k_norm are deliberately left null: Voxtral's Llama backbone has
-// no per-head Q/K norm, and qwen3_lm skips the norm when the slot is null.
-qwen3_lm::BlockView to_block_view(const VoxtralDecBlock & b) {
-    qwen3_lm::BlockView v {};
+// no per-head Q/K norm, and causal_lm skips the norm when the slot is null.
+causal_lm::BlockView to_block_view(const VoxtralDecBlock & b) {
+    causal_lm::BlockView v {};
     v.norm_attn_w   = b.norm_attn_w;
     v.norm_ffn_w    = b.norm_ffn_w;
     v.attn_q_w      = b.attn_q_w;
@@ -43,8 +43,8 @@ qwen3_lm::BlockView to_block_view(const VoxtralDecBlock & b) {
     return v;
 }
 
-qwen3_lm::BlockParams to_block_params(const VoxtralHParams & hp) {
-    qwen3_lm::BlockParams p {};
+causal_lm::BlockParams to_block_params(const VoxtralHParams & hp) {
+    causal_lm::BlockParams p {};
     p.n_heads      = hp.dec_n_heads;
     p.n_kv_heads   = hp.dec_n_kv_heads;
     p.head_dim     = hp.dec_head_dim;
@@ -59,7 +59,7 @@ qwen3_lm::BlockParams to_block_params(const VoxtralHParams & hp) {
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const VoxtralWeights &          weights,
                                  const VoxtralHParams &          hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  int                             T_prompt,
                                  int                             T_enc,
                                  int                             prefix_len,
@@ -162,11 +162,11 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 
     // ---------- Block stack ----------
     for (int il = 0; il < n_layer; ++il) {
-        qwen3_lm::BlockOpts opts {};
+        causal_lm::BlockOpts opts {};
         opts.use_flash             = use_flash;
         opts.slice_last_before_ffn = slice_last && (il == n_layer - 1);
 
-        x = qwen3_lm::block_prefill(
+        x = causal_lm::block_prefill(
             ctx, gf, x,
             to_block_view(weights.dec_blocks[il]),
             block_params, kv_cache, il, T_prompt,
@@ -230,7 +230,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const VoxtralWeights &          weights,
                            const VoxtralHParams &          hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            int                             max_n_kv,
                            bool                            use_flash)
 {
@@ -284,7 +284,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, sb.input_id_in);
 
     for (int il = 0; il < n_layer; ++il) {
-        x = qwen3_lm::block_step(
+        x = causal_lm::block_step(
             ctx, gf, x,
             to_block_view(weights.dec_blocks[il]),
             block_params, kv_cache, il, max_n_kv,
@@ -322,7 +322,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const VoxtralWeights &          weights,
     const VoxtralHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             T_prompt_max,
     int                             T_audio_max,
     int                             n_batch,
@@ -390,7 +390,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);
 
     for (int il = 0; il < n_layer; ++il) {
-        x = qwen3_lm::block_prefill_batched(
+        x = causal_lm::block_prefill_batched(
             ctx, gf, x, to_block_view(weights.dec_blocks[il]),
             block_params, kv_cache, il, T_prompt_max, B,
             pb.mask_in, pb.positions_in, pb.kv_idx_in, use_flash);
@@ -416,7 +416,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const VoxtralWeights &          weights,
     const VoxtralHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             max_n_kv,
     int                             n_batch,
     bool                            use_flash)
@@ -456,7 +456,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w,
                                     sb.input_ids_in);  // [hidden, B]
     for (int il = 0; il < n_layer; ++il) {
-        x = qwen3_lm::block_step_batched(
+        x = causal_lm::block_step_batched(
             ctx, gf, x, to_block_view(weights.dec_blocks[il]),
             block_params, kv_cache, il, max_n_kv, B,
             sb.mask_in, sb.position_in, sb.kv_idx_in, use_flash);

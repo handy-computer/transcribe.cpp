@@ -12,7 +12,7 @@ Ministral causal LM, with the projector output `masked_scatter`'d into the LM
 input embeddings at `audio_token_id=24` placeholder positions.
 
 Reuse strategy (see "Deviations" below): the **decoder block** is the shared
-`src/qwen3_lm/` module (GQA, NEOX RoPE w/ configurable θ, SwiGLU packed gate+up,
+`src/causal_lm/` module (GQA, NEOX RoPE w/ configurable θ, SwiGLU packed gate+up,
 KV cache, batched paths) with per-head Q/K-norm made optional. The **encoder**
 is a thin graph builder over the already-shared `conf::conv_1d_f32` /
 `conformer::layer_norm` / `ggml_gelu_erf` primitives (same math as
@@ -51,7 +51,7 @@ project policy #8).
 |-------|--------------------|--------------|-------------|--------------------|----------------|
 | token embed | `forward:512` `embed_tokens(input_ids)` | `[3072, 383]` | `dec.token_emb` | `ggml_get_rows(dec.token_embd.weight, ids)` | qwen3_asr |
 | audio inject | `:518-521` `masked_scatter` audio embeds at `input_ids==24` | `[3072, 383]` | `dec.audio_injected` | placeholder run is contiguous → 3-way concat (prefix ⊕ proj.out ⊕ suffix) like qwen3_asr; batched: `ggml_set_rows` | qwen3_asr audio injection |
-| block ×30 | Llama block: RMSNorm→GQA(32q/8kv, hd128)→res, RMSNorm→SwiGLU(silu, 8192)→res; **NEOX RoPE θ=1e8**; **no Q/K-norm**; no attn bias | `[3072, 383]` | `dec.block.{0,15,29}.out` | `qwen3_lm::block_prefill/step` with `attn_q_norm=attn_k_norm=nullptr` (Q/K-norm made optional) | qwen3_lm shared |
+| block ×30 | Llama block: RMSNorm→GQA(32q/8kv, hd128)→res, RMSNorm→SwiGLU(silu, 8192)→res; **NEOX RoPE θ=1e8**; **no Q/K-norm**; no attn bias | `[3072, 383]` | `dec.block.{0,15,29}.out` | `causal_lm::block_prefill/step` with `attn_q_norm=attn_k_norm=nullptr` (Q/K-norm made optional) | causal_lm shared |
 | final norm | `LlamaModel.norm` RMSNorm eps 1e-5 | `[3072, 383]` | `dec.out_before_head` | `ggml_rms_norm` × `dec.output_norm.weight` | qwen3_asr |
 | lm_head | **UNTIED** `lm_head.weight` (separate `dec.output.weight`) | `[131072]` | `dec.logits_raw` | `ggml_mul_mat(dec.output.weight, last_x)` — NOT tied to token_embd | (qwen3_asr ties; voxtral does not) |
 
@@ -62,7 +62,7 @@ project policy #8).
 | prompt (transcribe) | mistral-common `_encode_instruct_transcription`: `[BOS][INST][BEGIN_AUDIO]`+`[AUDIO]×375`+`[/INST]`(+`lang:<l>` if hint)+`[TRANSCRIBE]` | `[383]` (en) / `[378]` (auto) | — | host token builder; audio placeholders → enc positions | qwen3_asr build_prompt_tokens |
 | prompt (instruct) | `apply_chat_template`: `[BOS][INST][BEGIN_AUDIO]`+`[AUDIO]×375`+`BPE(instruction)`+`[/INST]` (no `[TRANSCRIBE]`) | `[378+k]` | — | host token builder; tekken BPE for instruction text; same audio injection | (new — translate/prompt path) |
 | prefill | `language_model(inputs_embeds=...)` greedy, `scores[0]` | `[131072]` | `dec.logits_raw` (`scores[0]`) | `build_prefill_graph` (causal mask, positions 0..382) | qwen3_asr prefill |
-| step | greedy `argmax`, KV-cached decode until EOS=2 | per-step `[131072]` | `dec.logits_raw.gen<N>` (N≥8) | `qwen3_lm::block_step` + on-device argmax; dump a gen>0 step | qwen3_asr step |
+| step | greedy `argmax`, KV-cached decode until EOS=2 | per-step `[131072]` | `dec.logits_raw.gen<N>` (N≥8) | `causal_lm::block_step` + on-device argmax; dump a gen>0 step | qwen3_asr step |
 
 ## Capabilities And Language Controls
 
@@ -79,7 +79,7 @@ project policy #8).
 - **Untied lm_head.** qwen3_asr ties lm_head to token_embd; Voxtral ships a
   separate `dec.output.weight`. Use it for the logits mul_mat; do not tie.
 - **No per-head Q/K RMSNorm.** Qwen3 blocks apply `attn_q_norm`/`attn_k_norm`
-  unconditionally (`qwen3_lm.cpp:229-230,396-397,547-548`). Voxtral's Llama has
+  unconditionally (`causal_lm.cpp:229-230,396-397,547-548`). Voxtral's Llama has
   none. Plan: make those `ggml_rms_norm×norm` steps conditional on a non-null
   `view.attn_q_norm` (backward-compatible; existing callers pass non-null). Then
   the shared block serves Voxtral unchanged otherwise.

@@ -1413,7 +1413,7 @@ transcribe_status run(
 // DECODE is batched — decode at one-token-per-step is memory-bandwidth-
 // bound, so batching B utterances amortizes the per-step weight reads.
 //
-// Cross-attention is the cohere-specific wrinkle vs the qwen3_lm families:
+// Cross-attention is the cohere-specific wrinkle vs the causal_lm families:
 // each utterance has its own encoder output (variable T_enc), so the cross
 // KV cache carries a batch dim and a per-utterance cross-pad mask discards
 // the frames past T_enc[b]. The short, uniform prompt is fed through the

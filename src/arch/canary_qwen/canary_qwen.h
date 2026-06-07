@@ -19,7 +19,7 @@
 
 #include "weights.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-backend.h"
 #include "transcribe-session.h"
 #include "transcribe-mel.h"
@@ -83,7 +83,7 @@ struct CanaryQwenModel final : public transcribe_model {
 
     // Qwen3 packed gate+up MLP weights — same as funasr_nano /
     // qwen3_asr.
-    transcribe::qwen3_lm::PackedGateUpHandles packed_gate_up;
+    transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
     // C++ mel frontend (constructed once at load).
     std::optional<transcribe::MelFrontend> mel;
@@ -107,10 +107,10 @@ struct CanaryQwenSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
-    transcribe::qwen3_lm::KvCache kv_cache;
+    transcribe::causal_lm::KvCache kv_cache;
 
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
-    transcribe::qwen3_lm::KvCache kv_cache_batch;
+    transcribe::causal_lm::KvCache kv_cache_batch;
     int                           kv_batch_cap   = 0;
     int                           kv_batch_n_ctx = 0;
 

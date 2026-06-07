@@ -30,7 +30,7 @@
 #pragma once
 
 #include "granite.h"
-#include "qwen3_lm/qwen3_lm.h"   // reuse KvCache only
+#include "causal_lm/causal_lm.h"   // reuse KvCache only
 #include "weights.h"
 
 #include "ggml.h"
@@ -77,7 +77,7 @@ struct PrefillBuild {
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const GraniteWeights &          weights,
                                  const GraniteHParams &          hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  int                             T_prompt,
                                  int                             n_audio_tokens,
                                  int                             prefix_len,
@@ -103,12 +103,12 @@ struct StepBuild {
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const GraniteWeights &          weights,
                            const GraniteHParams &          hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            int                             max_n_kv,
                            bool                            use_flash);
 
 // ---------- Batched prefill / step (offline transcribe_run_batch) ----------
-// Same recipe as the qwen3_lm families but with Granite block math (no Q/K
+// Same recipe as the causal_lm families but with Granite block math (no Q/K
 // norm, attention_multiplier scale, residual_multiplier, embedding_multiplier,
 // logits_scaling). Batch rides ne[2]; requires use_flash.
 
@@ -137,7 +137,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const GraniteWeights &          weights,
     const GraniteHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             T_prompt_max,
     int                             n_audio_max,
     int                             n_batch,
@@ -159,7 +159,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const GraniteWeights &          weights,
     const GraniteHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             max_n_kv,
     int                             n_batch,
     bool                            use_flash);
