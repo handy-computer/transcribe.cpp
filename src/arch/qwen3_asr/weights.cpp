@@ -373,7 +373,7 @@ transcribe_status build_qwen3_asr_weights(ggml_context *          ctx_meta,
                          static_cast<int>(b.ffn_up_w->type));
             return TRANSCRIBE_ERR_GGUF;
         }
-        // ffn_gate_up_w is allocated by qwen3_lm::pack_gate_up (see
+        // ffn_gate_up_w is allocated by causal_lm::pack_gate_up (see
         // model.cpp) into a separate ctx, because gguf_init sizes
         // ctx_meta exactly for the file tensors with no headroom.
     }

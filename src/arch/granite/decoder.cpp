@@ -3,7 +3,7 @@
 // Reference: GraniteForCausalLM + GraniteDecoderLayer in
 // transformers/models/granite/modeling_granite.py.
 //
-// Differences from src/qwen3_lm/block_prefill (which doesn't fit here):
+// Differences from src/causal_lm/block_prefill (which doesn't fit here):
 //   - No per-head Q/K-RMSNorm.
 //   - Attention scale = attention_multiplier (1/128), replacing
 //     1/sqrt(head_dim).
@@ -11,13 +11,13 @@
 //   - Embedding * embedding_multiplier (12) applied AFTER audio scatter.
 //   - Logits / logits_scaling (8) on the final mul_mat output.
 //
-// We reuse `transcribe::qwen3_lm::KvCache` because its memory layout
+// We reuse `transcribe::causal_lm::KvCache` because its memory layout
 // (layer, position, head, dim) matches what granite needs — only the
 // block math differs.
 
 #include "decoder.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-debug.h"
 
 #include "ggml.h"
@@ -71,7 +71,7 @@ ggml_tensor * block_prefill(
     ggml_tensor *                x,
     const GraniteDecBlock &      view,
     const GraniteBlockParams &   params,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                          layer_idx,
     int                          T_seq,
     ggml_tensor *                mask,
@@ -117,7 +117,7 @@ ggml_tensor * block_prefill(
                       rope_theta,
                       1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
 
-    // KV write (1D cpy; same memory order as qwen3_lm).
+    // KV write (1D cpy; same memory order as causal_lm).
     {
         const size_t layer_off = static_cast<size_t>(layer_idx) * n_ctx * kv_dim;
         const size_t n_elem    = static_cast<size_t>(T_seq) * kv_dim;
@@ -203,7 +203,7 @@ ggml_tensor * block_step(
     ggml_tensor *                   x,
     const GraniteDecBlock &         view,
     const GraniteBlockParams &      params,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             layer_idx,
     int                             max_n_kv,
     ggml_tensor *                   mask,
@@ -341,14 +341,14 @@ ggml_tensor * block_step(
 }
 
 // Granite batched block (prefill). x: [hidden, T, B], batch on ne[2].
-// Requires flash. Mirrors qwen3_lm::block_prefill_batched with Granite math.
+// Requires flash. Mirrors causal_lm::block_prefill_batched with Granite math.
 ggml_tensor * block_prefill_batched(
     ggml_context *                  ctx,
     ggml_cgraph *                   gf,
     ggml_tensor *                   x,
     const GraniteDecBlock &         view,
     const GraniteBlockParams &      params,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             layer_idx,
     int                             T_seq,
     int                             n_batch,
@@ -432,14 +432,14 @@ ggml_tensor * block_prefill_batched(
 }
 
 // Granite batched block (step). x: [hidden, B], batch on ne[2] for RoPE,
-// permute to ne[3] for flash. Mirrors qwen3_lm::block_step_batched.
+// permute to ne[3] for flash. Mirrors causal_lm::block_step_batched.
 ggml_tensor * block_step_batched(
     ggml_context *                  ctx,
     ggml_cgraph *                   gf,
     ggml_tensor *                   x,
     const GraniteDecBlock &         view,
     const GraniteBlockParams &      params,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             layer_idx,
     int                             max_n_kv,
     int                             n_batch,
@@ -529,7 +529,7 @@ ggml_tensor * block_step_batched(
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const GraniteWeights &          weights,
                                  const GraniteHParams &          hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  int                             T_prompt,
                                  int                             n_audio_tokens,
                                  int                             prefix_len,
@@ -726,7 +726,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const GraniteWeights &          weights,
                            const GraniteHParams &          hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            int                             max_n_kv,
                            bool                            use_flash)
 {
@@ -830,7 +830,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const GraniteWeights &          weights,
     const GraniteHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             T_prompt_max,
     int                             n_audio_max,
     int                             n_batch,
@@ -921,7 +921,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const GraniteWeights &          weights,
     const GraniteHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             max_n_kv,
     int                             n_batch,
     bool                            use_flash)

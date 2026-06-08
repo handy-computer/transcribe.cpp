@@ -45,6 +45,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -259,6 +260,89 @@ int main() {
         CHECK(q != nullptr && k != nullptr);
         if (q) CHECK_EQ_INT(q->ne[0], hp.dec_head_dim);
         if (k) CHECK_EQ_INT(k->ne[0], hp.dec_head_dim);
+    }
+
+    // ---- Input-length contract (docs/input-limits.md) ----
+    // qwen3_asr is a hard-context-cap family: it publishes a finite audio
+    // bound, the session limits query tracks the n_ctx cap, and an over-cap
+    // run is rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG before decoding.
+    CHECK(caps != nullptr && caps->max_audio_ms > 0);
+    {
+        transcribe_session_params sp; transcribe_session_params_init(&sp);
+        struct transcribe_session * s = nullptr;
+
+        // Default session: effective limits come from the full model context.
+        CHECK(transcribe_session_init(model, &sp, &s) == TRANSCRIBE_OK);
+        transcribe_session_limits lim; transcribe_session_limits_init(&lim);
+        CHECK(transcribe_session_get_limits(s, &lim) == TRANSCRIBE_OK);
+        CHECK_EQ_INT(lim.effective_n_ctx, hp.dec_max_position_embeddings);
+        CHECK(lim.effective_max_audio_ms > 0);
+        CHECK(lim.max_kv_bytes > 0);
+        const long long default_audio_ms = (long long) lim.effective_max_audio_ms;
+        const long long default_kv_bytes = (long long) lim.max_kv_bytes;
+        transcribe_session_free(s);
+
+        // A lowered n_ctx lowers the effective audio bound and KV ceiling.
+        sp.n_ctx = 4096;
+        s = nullptr;
+        CHECK(transcribe_session_init(model, &sp, &s) == TRANSCRIBE_OK);
+        transcribe_session_limits_init(&lim);
+        CHECK(transcribe_session_get_limits(s, &lim) == TRANSCRIBE_OK);
+        CHECK_EQ_INT(lim.effective_n_ctx, 4096);
+        CHECK(lim.effective_max_audio_ms > 0);
+        CHECK((long long) lim.effective_max_audio_ms < default_audio_ms);
+        CHECK((long long) lim.max_kv_bytes < default_kv_bytes);
+        transcribe_session_free(s);
+
+        // With a tiny n_ctx, any audio is too long: transcribe_run rejects it
+        // up front with INPUT_TOO_LONG (synthetic silence — the gate keys on
+        // sample count, not content). 1 s of 16 kHz mono silence.
+        sp.n_ctx = 64;
+        s = nullptr;
+        CHECK(transcribe_session_init(model, &sp, &s) == TRANSCRIBE_OK);
+        std::vector<float> silence(16000, 0.0f);
+        const transcribe_status rst = transcribe_run(
+            s, silence.data(), (int) silence.size(), nullptr);
+        CHECK(rst == TRANSCRIBE_ERR_INPUT_TOO_LONG);
+        CHECK(transcribe_was_truncated(s) == false);  // rejected, not truncated
+
+        // Batch parity: run_batch enforces the same contract PER UTTERANCE —
+        // the whole-batch call still returns OK, and each over-cap utterance
+        // carries INPUT_TOO_LONG in its per-utterance status.
+        std::vector<float> sil2 = silence;
+        const float * pcms[2] = { silence.data(), sil2.data() };
+        const int     lens[2] = { (int) silence.size(), (int) sil2.size() };
+        CHECK(transcribe_run_batch(s, pcms, lens, 2, nullptr) == TRANSCRIBE_OK);
+        CHECK_EQ_INT(transcribe_batch_n_results(s), 2);
+        CHECK(transcribe_batch_status(s, 0) == TRANSCRIBE_ERR_INPUT_TOO_LONG);
+        CHECK(transcribe_batch_status(s, 1) == TRANSCRIBE_ERR_INPUT_TOO_LONG);
+        transcribe_session_free(s);
+
+        // max_kv_bytes tracks the session's kv_type exactly: AUTO and F16 both
+        // resolve to an f16 KV cache (2 bytes/element); explicit F32 is 4
+        // bytes/element, so its byte ceiling is exactly double. The generic
+        // transcribe_session_get_limits() reads session->kv_type to compute
+        // this — this locks that in so a regression can't silently report the
+        // f16 size for an f32 session (or vice-versa).
+        {
+            auto kv_bytes_for = [&](transcribe_kv_type t) -> long long {
+                transcribe_session_params spk; transcribe_session_params_init(&spk);
+                spk.kv_type = t;
+                struct transcribe_session * sk = nullptr;
+                CHECK(transcribe_session_init(model, &spk, &sk) == TRANSCRIBE_OK);
+                transcribe_session_limits lk; transcribe_session_limits_init(&lk);
+                CHECK(transcribe_session_get_limits(sk, &lk) == TRANSCRIBE_OK);
+                const long long b = (long long) lk.max_kv_bytes;
+                transcribe_session_free(sk);
+                return b;
+            };
+            const long long kv_f16  = kv_bytes_for(TRANSCRIBE_KV_TYPE_F16);
+            const long long kv_auto = kv_bytes_for(TRANSCRIBE_KV_TYPE_AUTO);
+            const long long kv_f32  = kv_bytes_for(TRANSCRIBE_KV_TYPE_F32);
+            CHECK(kv_f16 > 0);
+            CHECK_EQ_INT(kv_auto, kv_f16);       // AUTO == f16 for the KV cache
+            CHECK_EQ_INT(kv_f32, kv_f16 * 2);    // f32 is exactly 2x f16
+        }
     }
 
     transcribe_model_free(model);

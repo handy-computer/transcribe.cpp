@@ -30,7 +30,7 @@ add_library(transcribe
     transcribe-batch-util.cpp
     conformer/conformer.cpp
     sanm/sanm.cpp
-    qwen3_lm/qwen3_lm.cpp
+    causal_lm/causal_lm.cpp
     granite_conformer/shaw_attn.cpp
     arch/parakeet/model.cpp
     arch/parakeet/capabilities.cpp

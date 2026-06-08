@@ -19,6 +19,13 @@ Licensed Apache-2.0. Ported from upstream commit
 [`76b8b23`](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026/commit/76b8b23e8607f35f0265a23d481b338fb0e26aea),
 pinned 2026-04-16.
 
+## Input limits
+
+Accepts up to about **6.7 minutes (400 s)** of 16 kHz mono audio per call — the
+encoder's positional table is the binding limit. Longer audio is rejected up
+front with `TRANSCRIBE_ERR_INPUT_TOO_LONG` rather than silently truncated; split
+it into shorter segments. See the [input-length contract](../input-limits.md).
+
 ## Download
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |

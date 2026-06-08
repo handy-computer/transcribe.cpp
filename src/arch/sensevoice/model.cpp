@@ -18,6 +18,7 @@
 #include "transcribe-kaldi-fbank.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-meta.h"
 
 #include "ggml.h"
@@ -78,6 +79,22 @@ namespace {
 
 constexpr const char k_default_variant[] = "sensevoice-small";
 
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). SenseVoice-Small is a
+// SOFT-WINDOW family: a single-pass non-autoregressive CTC encoder with no
+// hard architectural cap, but trained on short (≤ ~30 s) utterances. There is
+// no context window to reject against — over-window audio still runs, but the
+// self-attention cost is O(n^2) so accuracy degrades and memory grows
+// quadratically. We therefore WARN past the window and PROCEED (never reject,
+// never alter numerics); max_audio_ms advertises the window as advisory.
+// ---------------------------------------------------------------------------
+
+// Advisory training window. Upstream FunASR's runtime feeds SenseVoice-Small
+// from a 30 s VAD segmenter (its default `max_single_segment_time`), so 30 s is
+// the longest utterance the model is exercised on. Used both for the run-time
+// WARN and for transcribe_capabilities::max_audio_ms.
+constexpr int k_safe_audio_ms = 30000;
+
 extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
 extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
@@ -110,6 +127,13 @@ transcribe_status load(
     if (auto st = m->tok.load(loader.gguf());                  st != TRANSCRIBE_OK) return st;
     if (auto st = read_sensevoice_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK) return st;
     m->hparams.vocab_size = static_cast<int32_t>(m->tok.n_tokens());
+
+    // Publish the soft-window advisory now that the frontend sample rate is
+    // known (apply_family_invariants ran before the hparams were read, so it
+    // set native_sample_rate but left max_audio_ms unset). SenseVoice is a
+    // soft-window family: this is the trained window, not a hard limit — run()
+    // WARNs and proceeds past it rather than rejecting. See docs/input-limits.md.
+    m->caps.max_audio_ms = k_safe_audio_ms;
 
     gguf_init_params init_params {};
     init_params.no_alloc = true;
@@ -406,6 +430,27 @@ transcribe_status run(
     cc->t_encode_us = 0;
     cc->t_decode_us = 0;
 
+    // ---------- Soft-window advisory (see docs/input-limits.md) -------
+    // SenseVoice has no hard context cap, but past its ~30 s training
+    // window the SAN-M self-attention cost is O(n^2): accuracy degrades and
+    // memory grows quadratically. WARN once and proceed (never reject, never
+    // change numerics) so the degradation is never silent. The shorter-than-
+    // a-frame case is handled separately by the T_lfr <= 0 guard below.
+    {
+        const int64_t audio_ms =
+            static_cast<int64_t>(n_samples) * 1000 / hp.fe_sample_rate;
+        if (audio_ms > k_safe_audio_ms) {
+            transcribe::log_msg(
+                TRANSCRIBE_LOG_LEVEL_WARN,
+                "sensevoice run: audio is %.1f s, beyond the ~%d s window this "
+                "model was trained on; accuracy may degrade and memory use "
+                "grows quadratically. Split long audio into <=%d s segments "
+                "(e.g. with VAD). See transcribe_capabilities.max_audio_ms.",
+                static_cast<double>(audio_ms) / 1000.0,
+                k_safe_audio_ms / 1000, k_safe_audio_ms / 1000);
+        }
+    }
+
     // ---------- Frontend (host-side) ----------------------------------
     const int64_t t_mel_start = ggml_time_us();
     const int T_lfr = cm->frontend->compute(
@@ -435,8 +480,11 @@ transcribe_status run(
         init_params.no_alloc   = true;
         cc->compute_ctx = ggml_init(init_params);
         if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr, "sensevoice run: ggml_init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "sensevoice run: compute context allocation failed — out of "
+                "memory. Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -454,16 +502,20 @@ transcribe_status run(
             static_cast<int>(cm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr,
-                         "sensevoice run: ggml_backend_sched_new failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "sensevoice run: scheduler allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        std::fprintf(stderr,
-                     "sensevoice run: ggml_backend_sched_alloc_graph failed\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "sensevoice run: encoder graph allocation failed — out of memory. "
+            "Split long audio into shorter segments (see "
+            "transcribe_capabilities.max_audio_ms).");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // ---------- Upload inputs ----------------------------------------
@@ -610,6 +662,30 @@ static transcribe_status run_batch_encode(
         if (T_lfr[b] != T_max_lfr) { var_len = true; break; }
     }
 
+    // ---------- Soft-window advisory (see docs/input-limits.md) -------
+    // Same warn-and-proceed contract as single-shot run(), applied per
+    // utterance on the fused batched encode path so over-window clips in a
+    // batch are not silently degraded. The serial fallback in run_batch()
+    // re-enters run(), which warns there, so each clip is warned exactly once
+    // regardless of which path runs. Never reject, never change numerics.
+    if (hp.fe_sample_rate > 0 && n_samples != nullptr) {
+        for (int b = 0; b < n; ++b) {
+            const int64_t audio_ms =
+                static_cast<int64_t>(n_samples[b]) * 1000 / hp.fe_sample_rate;
+            if (audio_ms > k_safe_audio_ms) {
+                transcribe::log_msg(
+                    TRANSCRIBE_LOG_LEVEL_WARN,
+                    "sensevoice run: utterance %d: audio is %.1f s, beyond the "
+                    "~%d s window this model was trained on; accuracy may "
+                    "degrade and memory use grows quadratically. Split long "
+                    "audio into <=%d s segments (e.g. with VAD). See "
+                    "transcribe_capabilities.max_audio_ms.",
+                    b, static_cast<double>(audio_ms) / 1000.0,
+                    k_safe_audio_ms / 1000, k_safe_audio_ms / 1000);
+            }
+        }
+    }
+
     const int T_full_max = T_max_lfr + 4;  // 4 prepended prefix tokens
 
     // ---------- Pack features into [d_input, T_max_lfr, n] ------------
@@ -635,7 +711,13 @@ static transcribe_status run_batch_encode(
         init_params.mem_buffer = nullptr;
         init_params.no_alloc   = true;
         cc->compute_ctx = ggml_init(init_params);
-        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (cc->compute_ctx == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "sensevoice run: compute context allocation failed — out of "
+                "memory. Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
 
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp,
@@ -650,11 +732,21 @@ static transcribe_status run_batch_encode(
             cm->plan.scheduler_list.data(), nullptr,
             static_cast<int>(cm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
-        if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (cc->sched == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "sensevoice run: scheduler allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "sensevoice run: encoder graph allocation failed — out of memory. "
+            "Split long audio into shorter segments (see "
+            "transcribe_capabilities.max_audio_ms).");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // ---------- Upload inputs ----------------------------------------

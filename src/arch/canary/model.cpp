@@ -22,6 +22,7 @@
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
 
@@ -219,6 +220,100 @@ namespace {
 
 constexpr float kBnEps = 1e-5f;
 
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Canary is the same
+// shape as cohere ASR: a FastConformer encoder feeding an autoregressive
+// Transformer decoder, with TWO distinct limits:
+//
+//   (a) INPUT limit — the encoder's relative positional-encoding table
+//       (enc_pos_emb_max_len, 5000 encoder frames for every shipped
+//       checkpoint). Like cohere (and unlike parakeet's unbounded
+//       conformer), encode_positions() is generated at the subsampled
+//       sequence length T_enc, so T_enc must stay within the trained
+//       pos-emb span or the runtime-generated table aliases past the
+//       trained range. T_enc is a deterministic function of mel frames,
+//       so this is the binding INPUT bound and it is gated up front,
+//       before the encoder graph is built. For the shipped rate
+//       (5000 frames * subsampling 8 * hop 160 / 16 kHz) that is ~400 s.
+//
+//   (b) DECODER self-KV — dec_max_position (512 on canary-1b, 1024 on the
+//       flash / v2 variants) bounds prompt + transcript tokens, and a
+//       512 max-new-tokens cap bounds generation. These bound the
+//       *output*: a transcript that runs long enough to exhaust the budget
+//       is kept as a partial result and flagged via
+//       transcribe_was_truncated(), not rejected. The prompt is only
+//       ~5-9 tokens, so this is an output-length wall, not an audio-length
+//       one — a 60 s clip of dense speech can hit it while a 300 s clip of
+//       sparse speech does not.
+//
+// The encoder is the input limit, so transcribe_capabilities::max_audio_ms
+// is derived from (a); (b) is surfaced as the truncation flag.
+// ---------------------------------------------------------------------------
+
+// Predicted encoder frame count T_enc for a given mel frame count. The
+// FastConformer pre-encode downsamples time by enc_subsampling_factor via
+// stride-2, kernel-3, pad-1 convs; each stage maps T_in -> floor((T_in-1)/2)+1.
+// We fold that exact per-stage recurrence so the prediction matches the
+// graph's T_enc (the net result is floor(T_mel / subsampling_factor)). This
+// is a pure host-side count; it touches no graph math. Mirrors cohere's
+// cohere_predict_t_enc.
+int canary_predict_t_enc(int mel_n_frames, int subsampling_factor) {
+    if (mel_n_frames <= 0 || subsampling_factor <= 0) {
+        return 0;
+    }
+    // subsampling_factor 8 == three stride-2 stages. Derive the stage
+    // count from the factor (log2) so a future geometry change stays
+    // honest; fall back to floor(T_mel / factor) if it is not a power of two.
+    int stages = 0;
+    for (int f = subsampling_factor; f > 1; f >>= 1) {
+        ++stages;
+    }
+    if ((1 << stages) != subsampling_factor) {
+        return mel_n_frames / subsampling_factor;
+    }
+    int t = mel_n_frames;
+    for (int s = 0; s < stages; ++s) {
+        t = (t - 1) / 2 + 1;  // floor((T_in - 1)/2) + 1, k=3 s=2 p=1
+        if (t <= 0) {
+            return 0;
+        }
+    }
+    return t;
+}
+
+// Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
+// encoder frame count T_enc still fits the trained positional-encoding span
+// enc_pos_emb_max_len. Inverts the rate:
+//   T_enc       = mel_frames / subsampling_factor
+//   mel_frames  = ms * sample_rate / (hop_length * 1000)
+//   => ms       = T_enc * subsampling_factor * hop_length * 1000 / sr
+// at T_enc == enc_pos_emb_max_len. Returns 0 ("unknown / unbounded") if any
+// rate hparam is missing, so a misconfigured model is never advertised with
+// a wrong finite number. The decoder self-KV / max-new cap bounds the
+// OUTPUT, not the input, so it does not enter this figure (a long-but-fitting
+// clip may still truncate its transcript — see transcribe_was_truncated).
+int64_t canary_max_audio_ms(const CanaryHParams & hp) {
+    if (hp.enc_pos_emb_max_len <= 0 || hp.enc_subsampling_factor <= 0 ||
+        hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0) {
+        return 0;
+    }
+    const int64_t mel_frames =
+        static_cast<int64_t>(hp.enc_pos_emb_max_len) * hp.enc_subsampling_factor;
+    return mel_frames * hp.fe_hop_length * 1000 / hp.fe_sample_rate;
+}
+
+// Effective decoder self-KV ceiling, in tokens: the model's trained
+// dec_max_position, optionally lowered — never raised — by the caller's
+// session n_ctx knob. Used to size / clamp the autoregressive self-KV cache
+// and bound generation. Mirrors cohere's cohere_dec_ctx_ceiling.
+int canary_context_ceiling(int32_t n_ctx_knob, const CanaryHParams & hp) {
+    int ceiling = hp.dec_max_position > 0 ? hp.dec_max_position : 1024;
+    if (n_ctx_knob > 0 && n_ctx_knob < ceiling) {
+        ceiling = n_ctx_knob;
+    }
+    return ceiling;
+}
+
 // Fuse inference-time BatchNorm into precomputed scale + bias. Same as
 // parakeet/cohere — see those files for the math.
 transcribe_status fuse_batch_norm(CanaryModel & m) {
@@ -335,6 +430,32 @@ transcribe_status load(
         st != TRANSCRIBE_OK)
     {
         return st;
+    }
+
+    // Publish the input-length ceiling now that the encoder positional-
+    // encoding span and frontend rate are known (apply_family_invariants
+    // ran before the hparams were read, so it could not set this). The
+    // encoder is the binding INPUT limit for canary — see canary_max_audio_ms
+    // above and docs/input-limits.md.
+    m->caps.max_audio_ms = canary_max_audio_ms(m->hparams);
+
+    // Basis for the session-level limits query (transcribe_session_get_limits).
+    // Canary's INPUT bound is the ENCODER positional table (enc_pos_emb_max_len,
+    // ~400 s — see canary_max_audio_ms), not the decoder context: the decoder
+    // emits text tokens, so audio never consumes decoder context, and
+    // dec_max_position only bounds transcript LENGTH (surfaced via
+    // TRANSCRIBE_ERR_OUTPUT_TRUNCATED). So audio_from_caps = true keeps
+    // effective_max_audio_ms pinned to the encoder bound regardless of n_ctx,
+    // while effective_n_ctx / max_kv_bytes still reflect the decoder self-KV
+    // (which n_ctx does lower). Same shape as cohere. See docs/input-limits.md.
+    if (m->hparams.dec_max_position > 0) {
+        m->limits.has_context_cap = true;
+        m->limits.audio_from_caps = true;
+        m->limits.model_max_ctx   = m->hparams.dec_max_position;
+        m->limits.gen_reserve     = 512;  // run()'s max-new-tokens cap
+        // Whisper-style decoder self-KV: dec_d_model per layer, K and V, no GQA.
+        m->limits.kv_elems_per_ctx_token =
+            (int64_t) m->hparams.dec_d_model * m->hparams.dec_n_layers * 2;
     }
 
     // Cross-check tokenizer and KV-declared vocab sizes match.
@@ -484,6 +605,10 @@ transcribe_status init_context(
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
+    // Cache the caller's n_ctx knob. For canary this lowers the DECODER
+    // self-KV ceiling (dec_max_position); it does not affect the encoder
+    // input limit. See canary_context_ceiling and docs/input-limits.md.
+    cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
     auto * cm = static_cast<CanaryModel *>(model);
     const bool is_metal =
@@ -665,6 +790,32 @@ transcribe_status run(
     }
     cc->t_mel_us = ggml_time_us() - t_mel_start;
 
+    // ----- Input-length gate (see docs/input-limits.md) -------------
+    // The encoder's relative positional-encoding table is the binding
+    // INPUT limit: encode_positions() is generated at the subsampled
+    // sequence length T_enc, so T_enc must stay within the trained span
+    // enc_pos_emb_max_len or the runtime pos table aliases past the
+    // trained range (silent out-of-bounds before this gate existed).
+    // T_enc is a deterministic function of mel_n_frames, so reject an
+    // over-length clip here — before the encoder graph is even built —
+    // rather than paying for a compute pass that cannot fit. The
+    // rejection goes through the log callback, not raw stderr.
+    if (cm->hparams.enc_pos_emb_max_len > 0) {
+        const int t_enc_pred = canary_predict_t_enc(
+            mel_n_frames, cm->hparams.enc_subsampling_factor);
+        if (t_enc_pred > cm->hparams.enc_pos_emb_max_len) {
+            const double max_s =
+                static_cast<double>(cm->caps.max_audio_ms) / 1000.0;
+            transcribe::log_msg(
+                TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run: input too long — %d encoder frames exceed the %d "
+                "the model supports (~%.0f s max). See "
+                "transcribe_capabilities.max_audio_ms.",
+                t_enc_pred, cm->hparams.enc_pos_emb_max_len, max_s);
+            return TRANSCRIBE_ERR_INPUT_TOO_LONG;
+        }
+    }
+
     // ----- Reset compute state --------------------------------------
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
@@ -680,8 +831,9 @@ transcribe_status run(
         init_params.no_alloc   = true;
         cc->compute_ctx = ggml_init(init_params);
         if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr, "canary run: ggml_init for compute_ctx failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run: compute context allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -708,8 +860,9 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        std::fprintf(stderr, "canary run: alloc_graph failed (encoder)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "canary run: encoder graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(),
@@ -879,8 +1032,11 @@ transcribe_status run(
             cc->kv_cache.free();
         }
         if (cc->kv_cache.buffer == nullptr) {
-            const int n_ctx = cm->hparams.dec_max_position > 0
-                            ? cm->hparams.dec_max_position : 1024;
+            // Decoder self-KV ceiling: the model's trained dec_max_position,
+            // optionally lowered (never raised) by the caller's n_ctx knob.
+            // With the default knob (0) this is exactly dec_max_position, so
+            // in-spec decode is unchanged.
+            const int n_ctx = canary_context_ceiling(cc->n_ctx, cm->hparams);
             ggml_type cache_type = resolved_kv;
             if (cache_type == GGML_TYPE_COUNT) cache_type = GGML_TYPE_F16;
             if (!kv_cache_init(cc->kv_cache, cm->plan.primary,
@@ -889,8 +1045,13 @@ transcribe_status run(
                                cm->hparams.dec_n_layers,
                                cache_type))
             {
-                std::fprintf(stderr, "canary run: KV cache init failed\n");
-                return TRANSCRIBE_ERR_BACKEND;
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "canary run: KV cache allocation failed (n_ctx=%d, T_enc=%d, "
+                    "%d d_model x %d layers) — out of memory. Lower "
+                    "transcribe_session_params.n_ctx or shorten the audio.",
+                    n_ctx, T_enc, cm->hparams.dec_d_model,
+                    cm->hparams.dec_n_layers);
+                return TRANSCRIBE_ERR_OOM;
             }
         } else {
             cc->kv_cache.n    = 0;
@@ -931,8 +1092,10 @@ transcribe_status run(
     const int64_t t_dec_start = ggml_time_us();
     {
         if (!new_compute_ctx(4 * 1024 * 1024)) {
-            std::fprintf(stderr, "canary run: ggml_init for cross_kv failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run: cross-KV compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
 
         DecoderBuild cross_db = build_cross_kv_graph(
@@ -944,8 +1107,9 @@ transcribe_status run(
 
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
-            std::fprintf(stderr, "canary run: alloc_graph failed (cross_kv)\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run: cross-KV graph allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
 
         ggml_backend_tensor_set(cross_db.encoder_out_in,
@@ -966,8 +1130,10 @@ transcribe_status run(
     // ----- Prompt pass + autoregressive decode ---------------------
     {
         if (!new_compute_ctx(4 * 1024 * 1024)) {
-            std::fprintf(stderr, "canary run: ggml_init for decoder prompt failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run: decoder-prompt compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
 
         // When debug-dumping, we need full softmax'd logits for the
@@ -986,8 +1152,10 @@ transcribe_status run(
 
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) {
-            std::fprintf(stderr, "canary run: alloc_graph failed (decoder prompt)\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run: decoder-prompt graph allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
 
         ggml_backend_tensor_set(db.token_ids_in, prompt_ids.data(),
@@ -1160,9 +1328,11 @@ transcribe_status run(
             if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
 
             if (!new_compute_ctx(8 * 1024 * 1024)) {
-                std::fprintf(stderr, "canary run: new_compute_ctx failed (step)\n");
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "canary run: step compute context allocation failed — "
+                    "out of memory.");
                 commit_result();
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
             StepBuild sb = build_step_graph(
                 cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
@@ -1174,10 +1344,10 @@ transcribe_status run(
             }
             ggml_backend_sched_reset(cc->sched);
             if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-                std::fprintf(stderr,
-                             "canary run: sched_alloc_graph failed (step)\n");
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "canary run: step graph allocation failed — out of memory.");
                 commit_result();
-                return TRANSCRIBE_ERR_GGUF;
+                return TRANSCRIBE_ERR_OOM;
             }
 
             // Mask buffer: full max_n_kv span, reused host-side. Positions
@@ -1195,9 +1365,10 @@ transcribe_status run(
                     return TRANSCRIBE_ERR_ABORTED;
                 }
                 if (n_past + 1 > max_n_kv) {
-                    std::fprintf(stderr,
-                                 "canary run: hit max_n_kv=%d at n_past=%d\n",
-                                 max_n_kv, n_past);
+                    transcribe::log_msg(
+                        TRANSCRIBE_LOG_LEVEL_WARN,
+                        "canary run: hit max_n_kv=%d at n_past=%d",
+                        max_n_kv, n_past);
                     break;
                 }
 
@@ -1252,9 +1423,10 @@ transcribe_status run(
                     return TRANSCRIBE_ERR_ABORTED;
                 }
                 if (n_past + 1 > cc->kv_cache.n_ctx) {
-                    std::fprintf(stderr,
-                                 "canary run: KV cache full at n_past=%d\n",
-                                 n_past);
+                    transcribe::log_msg(
+                        TRANSCRIBE_LOG_LEVEL_WARN,
+                        "canary run: KV cache full at n_past=%d",
+                        n_past);
                     break;
                 }
 
@@ -1294,10 +1466,34 @@ transcribe_status run(
             }
         }
 
+        // The decode stopped either at EOS (complete) or at the generation
+        // cap / KV ceiling (truncated). Both step paths above share the same
+        // exit condition: the loop runs while `next_token != eos_id`, so a
+        // post-loop `next_token != eos_id` means it hit max_tokens / KV-full
+        // / a compute break without ever emitting end-of-stream. Surface that
+        // via transcribe_was_truncated() and a WARN rather than handing back
+        // a silently shortened transcript. A clean EOS decode leaves the flag
+        // false. See docs/input-limits.md. (The abort paths return early with
+        // a partial result and intentionally do NOT set the flag — abort is a
+        // caller-initiated stop, not a length truncation.)
+        if (next_token != eos_id) {
+            cc->was_truncated = true;
+            transcribe::log_msg(
+                TRANSCRIBE_LOG_LEVEL_WARN,
+                "canary run: output truncated at %d tokens — decode reached the "
+                "generation budget / decoder context (%d) before end-of-stream; "
+                "the transcript may be incomplete.",
+                static_cast<int>(generated_ids.size()), cc->kv_cache.n_ctx);
+        }
+
         commit_result();
     }
 
-    return TRANSCRIBE_OK;
+    // The partial transcript is committed by commit_result() above; a truncated
+    // decode returns the hard OUTPUT_TRUNCATED status (the result stays
+    // readable, like an aborted run). See docs/input-limits.md.
+    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                             : TRANSCRIBE_OK;
 }
 
 // ===========================================================================
@@ -1319,7 +1515,12 @@ transcribe_status encode_one_to_host(
     cc->encoder_out = nullptr;
     { ggml_init_params ip {}; ip.mem_size = 8 * 1024 * 1024; ip.mem_buffer = nullptr;
       ip.no_alloc = true; cc->compute_ctx = ggml_init(ip);
-      if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF; }
+      if (cc->compute_ctx == nullptr) {
+          transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+              "canary encode_one_to_host: compute context allocation failed — "
+              "out of memory.");
+          return TRANSCRIBE_ERR_OOM;
+      } }
 
     ggml_type resolved_kv = GGML_TYPE_COUNT;
     if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) resolved_kv = GGML_TYPE_F32;
@@ -1337,7 +1538,12 @@ transcribe_status encode_one_to_host(
         if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "canary encode_one_to_host: encoder graph allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
 
     ggml_backend_tensor_set(eb.mel_in, mel_buf.data(), 0, mel_buf.size() * sizeof(float));
 
@@ -1480,12 +1686,35 @@ transcribe_status run_batch(
     mel_us += ggml_time_us() - t_mel0;
 
     // ----- Pass 1: serial per-utterance encoder -----
+    // Per-utterance input-length gate (same binding limit as run(): the
+    // encoder positional-encoding span enc_pos_emb_max_len). An over-length
+    // utterance is marked invalid with INPUT_TOO_LONG so the rest of the
+    // batch still decodes, mirroring how an encode failure drops one row.
+    // See docs/input-limits.md.
+    std::vector<transcribe_status> reject_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<float>> enc_hosts(n);
     std::vector<int> T_enc(n, 0);
     int T_enc_max = 0;
     for (int b = 0; b < n; ++b) {
         if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
         if (!valid[b]) continue;
+        if (cm->hparams.enc_pos_emb_max_len > 0) {
+            const int t_enc_pred = canary_predict_t_enc(
+                mel_nf[b], cm->hparams.enc_subsampling_factor);
+            if (t_enc_pred > cm->hparams.enc_pos_emb_max_len) {
+                const double max_s =
+                    static_cast<double>(cm->caps.max_audio_ms) / 1000.0;
+                transcribe::log_msg(
+                    TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "canary run_batch: utterance %d too long — %d encoder frames "
+                    "exceed the %d the model supports (~%.0f s max). See "
+                    "transcribe_capabilities.max_audio_ms.",
+                    b, t_enc_pred, cm->hparams.enc_pos_emb_max_len, max_s);
+                reject_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
+                valid[b] = 0;
+                continue;
+            }
+        }
         if (encode_one_to_host(cc, cm, mel_bufs[b], mel_nf[b],
                                enc_hosts[b], T_enc[b], enc_us) != TRANSCRIBE_OK
             || T_enc[b] <= 0) { valid[b] = 0; continue; }
@@ -1493,7 +1722,7 @@ transcribe_status run_batch(
     }
     if (T_enc_max <= 0) {
         for (int b = 0; b < n; ++b) {
-            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            transcribe_session::ResultSet rs; rs.status = reject_status[b];
             cc->batch_results.push_back(std::move(rs));
         }
         return TRANSCRIBE_OK;
@@ -1503,7 +1732,10 @@ transcribe_status run_batch(
     const int max_new = 512;
     int max_n_kv = 1024;
     while (max_n_kv < prompt_len + max_new) max_n_kv *= 2;
-    const int n_ctx_cap = hp.dec_max_position > 0 ? hp.dec_max_position : 1024;
+    // Decoder self-KV ceiling: dec_max_position, optionally lowered (never
+    // raised) by the caller's n_ctx knob. Default knob (0) leaves it at
+    // dec_max_position, so in-spec batched decode is unchanged.
+    const int n_ctx_cap = canary_context_ceiling(cc->n_ctx, hp);
     if (max_n_kv > n_ctx_cap) max_n_kv = n_ctx_cap;
 
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
@@ -1515,8 +1747,12 @@ transcribe_status run_batch(
     if (cc->kv_cache.buffer == nullptr) {
         if (!kv_cache_init_batched(cc->kv_cache, cm->plan.primary,
                                    max_n_kv, T_enc_max, hidden, n_layer, n, kv_type)) {
-            std::fprintf(stderr, "canary run_batch: kv_cache_init_batched failed\n");
-            return TRANSCRIBE_ERR_BACKEND;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run_batch: batched KV cache allocation failed "
+                "(n_ctx=%d, T_enc=%d, %d d_model x %d layers x %d batch) — "
+                "out of memory.",
+                max_n_kv, T_enc_max, hidden, n_layer, n);
+            return TRANSCRIBE_ERR_OOM;
         }
     } else {
         ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
@@ -1535,12 +1771,22 @@ transcribe_status run_batch(
 
     // ----- Batched cross-attention K/V -----
     {
-        if (!new_compute_ctx(8 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+        if (!new_compute_ctx(8 * 1024 * 1024)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run_batch: cross-KV compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         DecoderBuild cross = build_cross_kv_graph_batched(
             cc->compute_ctx, cm->weights, hp, cc->kv_cache, T_enc_max, n);
         if (cross.graph == nullptr) return TRANSCRIBE_ERR_GGUF;
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) return TRANSCRIBE_ERR_GGUF;
+        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "canary run_batch: cross-KV graph allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         std::vector<float> packed(static_cast<size_t>(hidden) * T_enc_max * n, 0.0f);
         for (int b = 0; b < n; ++b) {
             if (!valid[b]) continue;
@@ -1596,9 +1842,11 @@ transcribe_status run_batch(
     };
 
     std::vector<std::vector<int32_t>> generated(n);
+    std::vector<char> truncated;
     if (const transcribe_status st = transcribe::run_batched_encdec_step_loop(
             cc, cc->sched, rebuild, prompt_ids, prompt_len, init_window,
-            max_new, max_n_kv, eos_id, n, valid, generated);
+            max_new, max_n_kv, eos_id, n, valid, generated,
+            /*n_steps_out=*/nullptr, &truncated);
         st != TRANSCRIBE_OK) {
         return st;
     }
@@ -1610,7 +1858,7 @@ transcribe_status run_batch(
         std::count(valid.begin(), valid.end(), char(1))));
     for (int b = 0; b < n; ++b) {
         transcribe_session::ResultSet rs;
-        if (!valid[b]) { rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+        if (!valid[b]) { rs.status = reject_status[b];
                          cc->batch_results.push_back(std::move(rs)); continue; }
         std::vector<int> text_ids;
         if (strip) {
@@ -1627,6 +1875,15 @@ transcribe_status run_batch(
         rs.full_text = full;
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result = true; rs.status = TRANSCRIBE_OK;
+        // Per-utterance truncation parity with the single-shot path: a valid row
+        // that hit the generation budget / context window before eos reports
+        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
+        // override an otherwise-OK status — never a worse one.
+        if (rs.status == TRANSCRIBE_OK &&
+            b < static_cast<int>(truncated.size()) && truncated[b]) {
+            cc->was_truncated = true;
+            rs.status = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        }
         rs.t_mel_us = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = dec_us / valid_count;

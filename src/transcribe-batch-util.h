@@ -138,6 +138,13 @@ using EncDecRebuildFn = std::function<bool(int win, EncDecStepIO & io)>;
 // rows keep stepping into their own KV slab). Polls session->poll_abort() each
 // step. Returns TRANSCRIBE_ERR_ABORTED / TRANSCRIBE_ERR_GGUF / TRANSCRIBE_OK;
 // *n_steps_out (if non-null) receives the number of compute steps run.
+//
+// truncated_out (if non-null) is sized to n_batch and set per row: 1 when that
+// (valid) row stopped because the loop hit the generation budget (max_new) or
+// the context window (max_n_kv) BEFORE emitting eos_id — i.e. its transcript
+// was truncated — and 0 otherwise (reached eos, or invalid). This lets a
+// family report per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED from run_batch,
+// matching the single-utterance contract. See docs/input-limits.md.
 transcribe_status run_batched_encdec_step_loop(
     transcribe_session *                session,
     ggml_backend_sched_t                sched,
@@ -151,6 +158,7 @@ transcribe_status run_batched_encdec_step_loop(
     int                                 n_batch,
     const std::vector<char> &           valid,
     std::vector<std::vector<int32_t>> & generated,
-    int *                               n_steps_out = nullptr);
+    int *                               n_steps_out = nullptr,
+    std::vector<char> *                 truncated_out = nullptr);
 
 } // namespace transcribe

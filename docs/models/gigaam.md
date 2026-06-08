@@ -46,6 +46,14 @@ Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
 each per-variant doc has direct download links.
 
+## Input limits
+
+GigaAM is trained for utterances up to about **25 seconds**. Longer audio is
+accepted, but the library logs a `WARN` and accuracy may degrade past that
+window — it is not rejected (upstream GigaAM rejects outright; transcribe.cpp
+leaves the choice to you). Segment long recordings (e.g. with VAD) for best
+results. See the [input-length contract](../input-limits.md).
+
 ## Quick start
 
 Pick a variant and run:

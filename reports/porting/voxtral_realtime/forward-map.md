@@ -4,7 +4,7 @@ Reference: HuggingFace transformers `VoxtralRealtimeForConditionalGeneration`
 (`transformers/models/voxtral_realtime/modeling_voxtral_realtime.py`, refs
 checkout 5.x); streaming feature extractor + tekken tokenizer via
 `mistral-common`. Closest in-tree analog: `src/arch/voxtral/` (sibling 2507
-audio-LLM) for the load/run/projector/qwen3_lm-decoder scaffold, and
+audio-LLM) for the load/run/projector/causal_lm-decoder scaffold, and
 `src/arch/qwen3_asr/` for the audio-token injection pattern.
 
 Voxtral Realtime (2602) is a **streaming audio-LLM**, architecturally DISTINCT
@@ -21,11 +21,11 @@ offline↔streaming numerical equivalence; then the incremental scheduler
 (conv padding cache + dual KV caches + windowed masks + 12.5 Hz chunk
 scheduling + delay tokens + `--stream-chunk-ms` CLI / stream hooks) lands.
 
-Reuse strategy: the **decoder block** is the shared `src/qwen3_lm/` module
+Reuse strategy: the **decoder block** is the shared `src/causal_lm/` module
 (GQA, NEOX RoPE, SwiGLU packed gate+up, KV cache, batched paths) with per-head
 Q/K-norm null (as voxtral 2507 does), PLUS a new optional per-layer FFN-branch
 scale (`view.ffn_scale`) for the ada-norm. The **encoder** is a new graph
-builder reusing `conf::conv_1d_f32` and the qwen3_lm RoPE/attention primitives
+builder reusing `conf::conv_1d_f32` and the causal_lm RoPE/attention primitives
 where possible (causal+sliding-window mask, NEOX RoPE, SwiGLU encoder MLP).
 
 ## Frontend
@@ -41,7 +41,7 @@ where possible (causal+sliding-window mask, NEOX RoPE, SwiGLU encoder MLP).
 |-------|--------------------|--------------|-------------|--------------------|----------------|
 | conv1 | Conv1d 128→1280 k3 s1, **LEFT-pad causal (pad=2)** + bias, GELU | `[1280, T_mel]` | — | `conf::conv_1d_f32` (F16 kernel) with left-only pad (asymmetric pad host-side) + bias + `ggml_gelu_erf` | none (causal conv new) |
 | conv2 | Conv1d 1280→1280 k3 s2, **LEFT-pad causal (pad=1)** + bias, GELU | `[1280, T_enc]` (jfk 748) | `enc.embedder.out` | same; stride 2 halves time | none |
-| block ×32 | pre-norm RMSNorm: `norm_attn→attn→res`, `norm_ffn→SwiGLU→res`. Attn: 32 heads hd 64 (q-dim 2048), **full MHA (kv_heads=32)**, q/v/o bias, **k NO bias**, q×hd^-0.5, **NEOX RoPE θ=1e6**, **causal + sliding-window(750) mask**. FFN: SwiGLU/silu, gate/up no bias, **down WITH bias** | `[1280, T_enc]` | `enc.block.{0,16,31}.out` | new builder; RMSNorm (`ggml_rms_norm×w`), NEOX `ggml_rope_ext`, windowed-causal mask, packed gate+up + `ggml_silu` | qwen3_lm primitives (forked, not block_*) |
+| block ×32 | pre-norm RMSNorm: `norm_attn→attn→res`, `norm_ffn→SwiGLU→res`. Attn: 32 heads hd 64 (q-dim 2048), **full MHA (kv_heads=32)**, q/v/o bias, **k NO bias**, q×hd^-0.5, **NEOX RoPE θ=1e6**, **causal + sliding-window(750) mask**. FFN: SwiGLU/silu, gate/up no bias, **down WITH bias** | `[1280, T_enc]` | `enc.block.{0,16,31}.out` | new builder; RMSNorm (`ggml_rms_norm×w`), NEOX `ggml_rope_ext`, windowed-causal mask, packed gate+up + `ggml_silu` | causal_lm primitives (forked, not block_*) |
 | final norm | RMSNorm `enc.final_norm.weight` | `[1280, T_enc]` | `enc.out` | `ggml_rms_norm × enc.final_norm.weight` | — |
 
 ## Projector (VoxtralRealtimeMultiModalProjector)
@@ -60,7 +60,7 @@ where possible (causal+sliding-window mask, NEOX RoPE, SwiGLU encoder MLP).
 | token embed | `embed_tokens(input_ids)` | `[3072, T_tok]` (jfk audio span 187) | `dec.token_emb` | `ggml_get_rows(dec.token_embd.weight, ids)` | voxtral-2507 |
 | audio inject | **ADDITIVE**: `inputs_embeds += projector_out` at aligned audio positions (NOT masked_scatter) | `[3072, T_tok]` | `dec.audio_injected` | `ggml_add(token_emb_view, proj_out)` over the audio span | none (additive new) |
 | time cond | `t_cond = [cos(d·inv_freq), sin(d·inv_freq)]` dim 3072, `d=num_delay_tokens` (default 6 = 480 ms); per-layer `ada(t)=linear2(gelu(linear1(t)))`; scale `s_l = 1 + ada(t)` is **constant per run** | per-layer `[3072]` | — | precompute `s_l` once at session setup from `dec.time_embed.inv_freq` + `dec.blocks.l.ada.linear_{1,2}` (tiny graph, host or device) | none (novel) |
-| block ×26 | `residual+attn(input_layernorm(h))`; then `residual + mlp(post_attention_layernorm(h) · s_l)`. GQA 32q/8kv hd128, **NEOX RoPE θ=1e6**, sliding 8192, SwiGLU silu (interm 9216), no attn/ffn bias | `[3072, T_tok]` | `dec.block.{0,13,25}.out` | `qwen3_lm::block_*` with `attn_q/k_norm=null` + new `view.ffn_scale=s_l` | qwen3_lm shared (+ffn_scale hook) |
+| block ×26 | `residual+attn(input_layernorm(h))`; then `residual + mlp(post_attention_layernorm(h) · s_l)`. GQA 32q/8kv hd128, **NEOX RoPE θ=1e6**, sliding 8192, SwiGLU silu (interm 9216), no attn/ffn bias | `[3072, T_tok]` | `dec.block.{0,13,25}.out` | `causal_lm::block_*` with `attn_q/k_norm=null` + new `view.ffn_scale=s_l` | causal_lm shared (+ffn_scale hook) |
 | final norm | `norm` RMSNorm eps 1e-5 | `[3072, T_tok]` | `dec.out_before_head` | `ggml_rms_norm × dec.output_norm.weight` | voxtral-2507 |
 | lm_head | **TIED** (`lm_head.weight == embed_tokens.weight`) | `[131072]` | `dec.logits_raw` | `ggml_mul_mat(dec.token_embd.weight, last_x)` — tied | qwen3_asr (tied); voxtral-2507 is untied |
 
@@ -70,7 +70,7 @@ where possible (causal+sliding-window mask, NEOX RoPE, SwiGLU encoder MLP).
 |-------|--------------------|--------------|-------------|--------------------|----------------|
 | prompt | `[BOS]` + `[STREAMING_PAD=32]·(n_left_pad + num_delay_tokens)`; audio embeds added at aligned positions; output length clamped to `ceil(mel_frames / audio_length_per_tok=8)` | — | — | host token builder; additive audio fusion; greedy clamp | none (streaming) |
 | prefill | offline whole-clip teacher-forced LM forward, `scores[0]` | `[131072]` | `dec.logits_raw` | `build_prefill_graph` (causal/sliding mask) | voxtral-2507 prefill |
-| step | greedy `argmax`, KV-cached decode | per-step `[131072]` | `dec.logits_raw.gen8` (n_past=T_prompt+7) | `qwen3_lm::block_step` + argmax; dump gen8 | voxtral-2507 step |
+| step | greedy `argmax`, KV-cached decode | per-step `[131072]` | `dec.logits_raw.gen8` (n_past=T_prompt+7) | `causal_lm::block_step` + argmax; dump gen8 | voxtral-2507 step |
 | stream | incremental: conv padding cache + encoder StaticCache(750) + decoder sliding-KV(8192) re-run per chunk; downsample_factor=4 enc frames fed / decode step; 12.5 Hz | per-step `[131072]` | `stream.logits_raw`, `stream.logits_raw.gen8` | streaming scheduler + 5 stream hooks; gated equal to offline | none (novel) |
 
 ## Capabilities And Language Controls
@@ -99,7 +99,7 @@ where possible (causal+sliding-window mask, NEOX RoPE, SwiGLU encoder MLP).
   (NO RMSNorm inside despite the name); `t_cond` depends only on
   `num_delay_tokens`, so `s_l` is a per-layer constant precomputed once per run.
   Plan: add optional `view.ffn_scale` (broadcast `[hidden,1]`) to the shared
-  qwen3_lm block; null for all existing callers (backward-compatible).
+  causal_lm block; null for all existing callers (backward-compatible).
 - **Tied lm_head** (`tie_word_embeddings=true`): reuse `dec.token_embd.weight`
   for logits. (voxtral-2507 is untied.)
 - **True streaming**: conv padding cache + encoder StaticCache(750) + decoder

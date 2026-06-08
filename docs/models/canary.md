@@ -42,6 +42,14 @@ Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
 each per-variant doc has direct download links.
 
+## Input limits
+
+Every variant accepts up to about **6.7 minutes (400 s)** of 16 kHz mono audio
+per call — the encoder's positional table is the binding limit, shared across
+the family. Longer audio is rejected up front with
+`TRANSCRIBE_ERR_INPUT_TOO_LONG` rather than silently truncated; split it into
+shorter segments. See the [input-length contract](../input-limits.md).
+
 ## Quick start
 
 Pick a variant and run:

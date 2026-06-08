@@ -38,6 +38,16 @@ Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
 each per-variant doc has direct download links.
 
+## Input limits
+
+Both variants accept up to about **87 minutes** of 16 kHz mono audio in a single
+call — the binding limit is the 65,536-token decoder context, shared across the
+family. That ceiling is there to bound memory and sits far beyond any normal
+clip; audio past it is rejected up front with `TRANSCRIBE_ERR_INPUT_TOO_LONG`
+rather than silently truncated. Lowering `--n-ctx` lowers the limit (and the
+KV-cache footprint), and `transcribe_session_get_limits()` reports the exact
+per-session value. See the [input-length contract](../input-limits.md).
+
 ## Quick start
 
 Pick a variant and run:

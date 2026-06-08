@@ -57,6 +57,15 @@ Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
 each per-variant doc has direct download links.
 
+## Input limits
+
+No input-length limit, but the decoder is capped at its output window — about
+**17 minutes** of typical speech (a 4,096-token decode window, shared across
+variants). Offline, a transcript that reaches the cap is returned with
+`TRANSCRIBE_ERR_OUTPUT_TRUNCATED` (partial text retained); when streaming, the
+stream keeps its committed text and sets `transcribe_was_truncated()` while
+finalize still returns OK. See the [input-length contract](../input-limits.md).
+
 ## Quick start
 
 Pick a variant and run:

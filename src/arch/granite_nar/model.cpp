@@ -29,6 +29,7 @@
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
 
@@ -96,6 +97,75 @@ namespace {
 constexpr const char k_default_variant[] = "granite-speech-nar";
 constexpr float kBnEps = 1e-5f;
 
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). granite_nar is a
+// hard-context-cap family: the bidirectional editor runs a SINGLE forward
+// pass over (audio_tokens + text) and every position uses RoPE bounded by
+// dec_max_pos_emb (typically 4096). Past that the RoPE positions silently
+// alias past the trained range and the output is garbage. Unlike AR granite
+// there is no decode loop / EOS / output truncation, so the only contract is
+// the up-front input gate on T_total plus an advisory max_audio_ms. Over-
+// length input is rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG before the
+// decoder graph is built.
+// ---------------------------------------------------------------------------
+
+// Representative text budget reserved when advertising max_audio_ms. The
+// editor's text side (initial BPE hypothesis + insertion slots) shares the
+// decoder context with the audio tokens; reserve room so the advertised
+// audio ceiling still leaves space for a typical hypothesis. This is advisory
+// only — the actual gate uses the real T_total = n_audio_tokens + n_text.
+constexpr int k_text_budget = 256;
+
+// Effective decoder context ceiling, in tokens: the model's trained maximum
+// (dec_max_pos_emb), optionally lowered — never raised — by the caller's
+// session n_ctx knob.
+int granite_nar_context_ceiling(int32_t n_ctx_knob, const GraniteNarHParams & hp) {
+    int ceiling = hp.dec_max_pos_emb;
+    if (n_ctx_knob > 0 && n_ctx_knob < ceiling) {
+        ceiling = n_ctx_knob;
+    }
+    return ceiling;
+}
+
+// Q-Former audio tokens per encoder window: block_size / downsample_rate
+// (== num_queries, 15/5 = 3 for the shipped granite_nar variant).
+int granite_nar_num_queries(const GraniteNarHParams & hp) {
+    if (hp.prj_downsample_rate > 0 && hp.prj_block_size > 0) {
+        return hp.prj_block_size / hp.prj_downsample_rate;
+    }
+    return 3;
+}
+
+// Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
+// audio tokens, a representative text hypothesis (k_text_budget), still fit
+// the decoder context ceiling. This is the input bound the gate enforces.
+// Returns 0 ("unknown / unbounded") if the rate constants are missing, so a
+// misconfigured model is never advertised with a wrong finite number.
+//
+// Mirrors granite/model.cpp's granite_max_audio_ms with granite_nar's hparam
+// field names (prj_block_size / prj_downsample_rate vs window_size /
+// downsample_rate) and reserves a text budget in place of AR's prompt +
+// generation reserve, because the NAR editor has no autoregressive output.
+int64_t granite_nar_max_audio_ms(const GraniteNarHParams & hp) {
+    const int num_queries = granite_nar_num_queries(hp);
+    if (num_queries <= 0 || hp.prj_block_size <= 0 ||
+        hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0 ||
+        hp.dec_max_pos_emb <= 0) {
+        return 0;
+    }
+    const int max_audio_tokens = hp.dec_max_pos_emb - k_text_budget;
+    if (max_audio_tokens <= 0) {
+        return 0;
+    }
+    // Invert the encoder/projector rate:
+    //   tokens = nblocks * num_queries ; t_enc <= nblocks * block_size
+    //   mel_frames = t_enc * 2 ; ms = mel_frames * hop * 1000 / sample_rate
+    const int64_t nblocks = max_audio_tokens / num_queries;
+    const int64_t t_enc   = nblocks * hp.prj_block_size;
+    const int64_t frames  = t_enc * 2;
+    return frames * hp.fe_hop_length * 1000 / hp.fe_sample_rate;
+}
+
 transcribe_status fuse_batch_norm(GraniteNarModel & m) {
     const size_t n_blocks = m.weights.enc_blocks.size();
     if (n_blocks == 0) return TRANSCRIBE_OK;
@@ -108,8 +178,10 @@ transcribe_status fuse_batch_norm(GraniteNarModel & m) {
     ggml_init_params params = { ctx_size, nullptr, /*no_alloc=*/true };
     m.bn_fused_ctx = ggml_init(params);
     if (m.bn_fused_ctx == nullptr) {
-        std::fprintf(stderr, "granite_nar: bn_fused ggml_init failed\n");
-        return TRANSCRIBE_ERR_BACKEND;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite_nar: BatchNorm-fusion context allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     for (size_t i = 0; i < n_blocks; ++i) {
@@ -123,8 +195,10 @@ transcribe_status fuse_batch_norm(GraniteNarModel & m) {
     m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(
         m.bn_fused_ctx, m.plan.scheduler_list.back());
     if (m.bn_fused_buffer == nullptr) {
-        std::fprintf(stderr, "granite_nar: bn_fused alloc failed\n");
-        return TRANSCRIBE_ERR_BACKEND;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite_nar: BatchNorm-fusion buffer allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     std::vector<float> bn_w(inner), bn_b(inner), rm(inner), rv(inner);
@@ -188,6 +262,43 @@ transcribe_status load(
                      "granite_nar: tokenizer vocab (%d) != dec_vocab_size (%d)\n",
                      m->tok.n_tokens(), m->hparams.dec_vocab_size);
         return TRANSCRIBE_ERR_GGUF;
+    }
+
+    // Publish the input-length ceiling now that the decoder context window and
+    // frontend rate are known (apply_family_invariants ran before the hparams
+    // were read, so it could not set this). See docs/input-limits.md.
+    m->caps.max_audio_ms = granite_nar_max_audio_ms(m->hparams);
+
+    // Basis for the session-level limits query (transcribe_session_get_limits):
+    // the same rate constants granite_nar_max_audio_ms uses, kept so the
+    // effective limit can be recomputed at a lowered session n_ctx. Mirrors
+    // granite/model.cpp with granite_nar's field names (prj_block_size /
+    // prj_downsample_rate, dec_max_pos_emb) and reserves the text budget in
+    // place of AR's prompt + generation reserve — the NAR editor has no
+    // autoregressive output, so prompt_overhead is 0 and the whole non-audio
+    // reserve lives in gen_reserve (k_text_budget). The guard mirrors
+    // granite_nar_max_audio_ms's: every rate field must be present, or the
+    // basis stays unset (zero model_max_ctx => the query reports "unbounded").
+    {
+        const int num_queries = granite_nar_num_queries(m->hparams);
+        if (num_queries > 0 && m->hparams.prj_block_size > 0 &&
+            m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0 &&
+            m->hparams.dec_max_pos_emb > 0) {
+            m->limits.has_context_cap = true;
+            m->limits.model_max_ctx   = m->hparams.dec_max_pos_emb;
+            m->limits.prompt_overhead = 0;             // text reserved via gen_reserve
+            m->limits.gen_reserve     = k_text_budget;  // match granite_nar_max_audio_ms
+            // ms per audio token: granite_nar emits num_queries tokens per
+            // prj_block_size encoder frames; t_enc = mel_frames/2;
+            // mel_frames = ms*sr/(hop*1000). Inverting
+            // granite_nar_max_audio_ms's forward rate gives ms-per-audio-token.
+            m->limits.ms_per_audio_token =
+                (static_cast<double>(m->hparams.prj_block_size) / num_queries) *
+                2.0 * m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
+            m->limits.kv_elems_per_ctx_token =
+                (int64_t) m->hparams.dec_n_kv_heads *
+                m->hparams.dec_head_dim * m->hparams.dec_n_layers * 2;
+        }
     }
 
     // ---------- Mel frontend ----------
@@ -303,6 +414,7 @@ transcribe_status init_context(
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
+    cc->n_ctx     = transcribe_session_params_n_ctx(params);
     cc->encoder_use_flash = false;
     cc->decoder_use_flash = false;  // bidirectional path doesn't use KV cache
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash,
@@ -388,8 +500,10 @@ transcribe_status run(
         ip.no_alloc   = true;
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr, "granite_nar run: ggml_init for compute_ctx failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite_nar run: compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -413,8 +527,9 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        std::fprintf(stderr, "granite_nar run: sched_alloc_graph (encoder) failed\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite_nar run: encoder graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload encoder inputs.
@@ -549,8 +664,10 @@ transcribe_status run(
         ip.no_alloc   = true;
         proj_ctx = ggml_init(ip);
         if (proj_ctx == nullptr) {
-            std::fprintf(stderr, "granite_nar run: proj_ctx init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite_nar run: projector compute context allocation failed "
+                "— out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     ProjectorBuild pb = build_projector_graph(proj_ctx, cm->weights,
@@ -562,9 +679,11 @@ transcribe_status run(
 
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-        std::fprintf(stderr, "granite_nar run: sched_alloc_graph (projector) failed\n");
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite_nar run: projector graph allocation failed — "
+            "out of memory.");
         ggml_free(proj_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // The encoder output sits as [cat_h, T_enc] in ggml ne order on the
@@ -616,6 +735,27 @@ transcribe_status run(
     add_insertion_slots(hyp_ids, cm->hparams.dec_eos_id, text_ids);
     const int n_text = static_cast<int>(text_ids.size());
 
+    // ---------- Input-length gate (see docs/input-limits.md) ----------
+    // The editor is non-autoregressive: a SINGLE bidirectional forward over
+    // (audio_tokens + text) where every position's RoPE is bounded by
+    // dec_max_pos_emb (optionally lowered by the caller's n_ctx knob). Both
+    // token counts are now fixed by the input, so reject an over-length clip
+    // here — before building/running the decoder graph — instead of letting
+    // RoPE silently alias past the trained range and emit garbage. There is
+    // no output budget to reserve (no decode loop / EOS), so the gate is the
+    // full T_total against the ceiling.
+    const int T_total = cc->n_audio_tokens + n_text;
+    const int ceiling = granite_nar_context_ceiling(cc->n_ctx, cm->hparams);
+    if (T_total > ceiling) {
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite_nar run: input too long — %d audio + %d text tokens "
+            "exceed the %d-token context. Shorten audio or see "
+            "transcribe_capabilities.max_audio_ms.",
+            cc->n_audio_tokens, n_text, ceiling);
+        return TRANSCRIBE_ERR_INPUT_TOO_LONG;
+    }
+
     // Divide projector output by embedding_multiplier so the post-
     // multiplier audio rows round-trip to the original values. We
     // could do this in the graph but keeping it host-side avoids one
@@ -634,8 +774,10 @@ transcribe_status run(
         ip.no_alloc   = true;
         dec_ctx = ggml_init(ip);
         if (dec_ctx == nullptr) {
-            std::fprintf(stderr, "granite_nar run: dec_ctx init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite_nar run: decoder compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     ForwardBuild fb = build_forward_graph(dec_ctx, cm->weights, cm->hparams,
@@ -647,9 +789,11 @@ transcribe_status run(
 
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, fb.graph)) {
-        std::fprintf(stderr, "granite_nar run: sched_alloc_graph (decoder) failed\n");
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite_nar run: decoder graph allocation failed — "
+            "out of memory.");
         ggml_free(dec_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     ggml_backend_tensor_set(fb.audio_in, cc->proj_out_host.data(), 0,

@@ -57,7 +57,6 @@ struct MedAsrSession final : public transcribe_session {
     std::vector<float>   enc_host;   // [d_enc * T_enc] f32 readback
     std::vector<float>   logits_buf; // [vocab * T_enc] f32 readback
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     MedAsrSession() = default;
     ~MedAsrSession() override;

@@ -1,7 +1,7 @@
 # Forward map - medasr
 
 Reference: `transformers.models.lasr.modeling_lasr` @ `65dc261512cbdb1ee72b88ae5b222f2605aad8e5` (v5.0.0.dev0)
-Closest in-tree analog: `src/arch/parakeet/` (Conformer + macaron) + `src/qwen3_lm/` (RoPE) + `src/arch/sensevoice/` (CTC head)
+Closest in-tree analog: `src/arch/parakeet/` (Conformer + macaron) + `src/causal_lm/` (RoPE) + `src/arch/sensevoice/` (CTC head)
 
 MedASR is the first in-tree `encoder-ctc` Conformer family. It does NOT
 fit `build_conformer_block` from `src/conformer/conformer.h` because the
@@ -12,7 +12,7 @@ relative-position. The block is therefore hand-built in
 `src/arch/medasr/encoder.cpp` using the lower-level shared helpers
 (`layer_norm`, `feed_forward`, `conv_1d_dw_f32`, `fused_batch_norm`,
 `add_conv_bias`) plus a per-family `rope_mhsa` written from
-`src/qwen3_lm/`'s `ggml_rope_ext` pattern.
+`src/causal_lm/`'s `ggml_rope_ext` pattern.
 
 ## Frontend
 
@@ -39,10 +39,10 @@ Input: `mel` ne `[T_mel, 128, 1, B]` f32 (matches MelFrontend row-major output).
 | Block ×17: ff1 | `LasrFeedForward` = `Linear → SiLU → Linear` (no biases) | `[T_enc, 512]` | — | `feed_forward(x, lin1_w, nullptr, lin2_w, nullptr)` | conformer `feed_forward` |
 | Block ×17: scaled-residual ff1 | `x = x*1.5 + ff1*0.5` | `[T_enc, 512]` | `enc.block.0.post_ff1` (block 0 only) | `ggml_add(ggml_scale(x, 1.5), ggml_scale(ff1, 0.5))` | NOT `macaron_ff_residual` (deviation) |
 | Block ×17: norm_attn | `LayerNorm` no bias | — | — | `layer_norm` w/ eps 1e-6 | conformer |
-| Block ×17: self-attn Q/K/V | `Linear` no bias each → reshape `[d_model] → [head_dim, n_head]` | `[head_dim=64, n_head=8, T_enc, B]` | — | three `mul_mat` then `reshape_3d`+`permute` for head layout | qwen3_lm Q/K/V projection |
-| Block ×17: RoPE on Q, K | `LasrEncoderRotaryEmbedding` (rope_theta=10 000, type=default) applied per-head | unchanged | — | `ggml_rope_ext(Q, positions, nullptr, head_dim, GGML_ROPE_TYPE_NEOX, max_pos=10000, rope_theta=10000, 1,0,1,32,1)` and same for K | qwen3_lm RoPE call site (deviation: no MRoPE, no extrapolation) |
-| Block ×17: scaled-dot attn | softmax(QK/√d_k)·V, no mask | `[head_dim, n_head, T_enc, B]` | — | `flash_attn_ext` or manual mul_mat+soft_max | qwen3_lm |
-| Block ×17: o_proj | `Linear` no bias | `[T_enc, 512]` | — | reshape back + `mul_mat` | qwen3_lm |
+| Block ×17: self-attn Q/K/V | `Linear` no bias each → reshape `[d_model] → [head_dim, n_head]` | `[head_dim=64, n_head=8, T_enc, B]` | — | three `mul_mat` then `reshape_3d`+`permute` for head layout | causal_lm Q/K/V projection |
+| Block ×17: RoPE on Q, K | `LasrEncoderRotaryEmbedding` (rope_theta=10 000, type=default) applied per-head | unchanged | — | `ggml_rope_ext(Q, positions, nullptr, head_dim, GGML_ROPE_TYPE_NEOX, max_pos=10000, rope_theta=10000, 1,0,1,32,1)` and same for K | causal_lm RoPE call site (deviation: no MRoPE, no extrapolation) |
+| Block ×17: scaled-dot attn | softmax(QK/√d_k)·V, no mask | `[head_dim, n_head, T_enc, B]` | — | `flash_attn_ext` or manual mul_mat+soft_max | causal_lm |
+| Block ×17: o_proj | `Linear` no bias | `[T_enc, 512]` | — | reshape back + `mul_mat` | causal_lm |
 | Block ×17: residual attn | `x = x + attn` (UNSCALED) | `[T_enc, 512]` | `enc.block.0.post_attn` | `ggml_add` | standard |
 | Block ×17: norm_conv | `LayerNorm` no bias | — | — | `layer_norm` | conformer |
 | Block ×17: conv module | `Conv1d pw1(512→1024,k=1)` → GLU → `Conv1d dw(512,k=32,p=15,g=512)` → `BatchNorm1d(512)` → `SiLU` → `Conv1d pw2(512→512,k=1)` | `[T_enc, 512]` | — | `mul_mat` + `ggml_swiglu` + `conv_1d_dw_f32` + `fused_batch_norm` + `silu` + `mul_mat`. Depthwise uses **non-centered** pad=15 (left=15, right=16 to keep T identical with k=32 even kernel) — verify against reference. | conformer `conv_module` (cannot reuse — that helper bakes in the unscaled `x + conv` residual; we need a custom scaled residual outside) |
@@ -84,7 +84,7 @@ graph, identical to parakeet's CTC variant.
 
 - **Macaron FF residual scalars are `[1.5, 0.5]`, NOT the standard `0.5`.** The shared `transcribe::conformer::macaron_ff_residual` helper hardcodes `x + 0.5 * FF(LN(x))` and is not reusable here. medasr hand-builds the FF1/FF2 residual as `ggml_add(ggml_scale(x, 1.5), ggml_scale(FF(LN(x)), 0.5))`.
 - **Conv module residual scalars are `[2.0, 1.0]`.** `transcribe::conformer::conv_module` itself is callable for the inner pw1+GLU+dw+BN+SiLU+pw2 sub-block, but the surrounding scaled residual is hand-built (`ggml_add(ggml_scale(x, 2.0), conv)`).
-- **Attention is RoPE, not relative-position.** `transcribe::conformer::rel_pos_mhsa` and `build_conformer_block` are not used. The Q/K projection + `ggml_rope_ext(..., GGML_ROPE_TYPE_NEOX, ...)` + softmax(QK/√d)·V + o_proj is implemented per-block in `src/arch/medasr/encoder.cpp` using the `qwen3_lm` pattern at `src/qwen3_lm/qwen3_lm.cpp:234-245`. `rope_theta=10 000`, `max_position_embeddings=10 000`.
+- **Attention is RoPE, not relative-position.** `transcribe::conformer::rel_pos_mhsa` and `build_conformer_block` are not used. The Q/K projection + `ggml_rope_ext(..., GGML_ROPE_TYPE_NEOX, ...)` + softmax(QK/√d)·V + o_proj is implemented per-block in `src/arch/medasr/encoder.cpp` using the `causal_lm` pattern at `src/causal_lm/causal_lm.cpp:234-245`. `rope_theta=10 000`, `max_position_embeddings=10 000`.
 - **`layer_norm` eps is `1e-6`, not the conformer-helper-hardcoded `1e-5`.** The shared helper uses `ggml_norm` with constant `kLayerNormEps = 1e-5f`. medasr loads `enc.layer_norm_eps` from the GGUF (`stt.medasr.encoder.layer_norm_eps`) and passes it through a local `medasr_layer_norm` shim that takes eps as a runtime argument.
 - **All encoder LayerNorms are `bias=False`.** Every `_b` slot on the medasr block view stays nullptr; `layer_norm` is called with `beta=nullptr`. Same null-bias treatment as parakeet's FFN/attn linears; just applied to LN this time.
 - **Subsampling is 1-D, not 2-D.** `LasrEncoderSubsampling` = `Linear(128→512) → ReLU → Conv1d(512,512,k=5,s=2) → ReLU → Conv1d(512,256,k=5,s=2) → ReLU → Linear(256→512)`. The leading `Linear(128→512)` reduces the mel dim to d_model BEFORE the convs, so the convs operate on `[T, 512]` channels (not `[F=128, T]` 2-D as in parakeet's DwStridingSubsampling). Two stride-2 convs → 4x effective downsampling. `transcribe::conformer::build_pre_encode` is not reusable; medasr writes its own `build_subsampling` in `encoder.cpp` using `conv_1d_f32`.

@@ -56,6 +56,13 @@ Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
 each per-variant doc has direct download links.
 
+## Input limits
+
+No practical per-call length limit (`transcribe_capabilities.max_audio_ms == 0`):
+the Conformer encoder's positional encoding is recomputed per call, so audio of
+any length is processed in a single pass — pass arbitrarily long recordings. See
+the [input-length contract](../input-limits.md).
+
 ## Quick start
 
 Pick a variant and run:

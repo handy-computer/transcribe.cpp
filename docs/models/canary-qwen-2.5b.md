@@ -21,6 +21,15 @@ Licensed CC-BY-4.0. Ported from upstream commit
 [`b1469e1`](https://huggingface.co/nvidia/canary-qwen-2.5b/commit/b1469e1bba1cfe140205529c79c434ca47180960),
 pinned 2026-05-15.
 
+## Input limits
+
+Accepts up to about **54 minutes** of 16 kHz mono audio per call — the
+40,960-token Qwen3 decoder context is the binding limit. That ceiling bounds
+memory and is far longer than any normal clip; audio past it is rejected up front
+with `TRANSCRIBE_ERR_INPUT_TOO_LONG` rather than silently truncated. Lowering
+`--n-ctx` lowers the limit, and `transcribe_session_get_limits()` reports the
+exact per-session value. See the [input-length contract](../input-limits.md).
+
 ## Download
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |

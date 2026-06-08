@@ -65,7 +65,7 @@ namespace conf = transcribe::conformer;
 // the GEMM in F32 instead, matching CPU/Metal which always F32-accumulate.
 // No-op on CPU/Metal; slight perf cost on CUDA. Skip on non-F16 weights
 // (BF16 already COMPUTE_32F; quantized routes through MMQ). Mirrors the
-// `mul_mat_f32acc` helper at src/qwen3_lm/qwen3_lm.cpp:40.
+// `mul_mat_f32acc` helper at src/causal_lm/causal_lm.cpp:40.
 ggml_tensor * mul_mat_f32acc(ggml_context * ctx,
                              ggml_tensor *  w,
                              ggml_tensor *  x)

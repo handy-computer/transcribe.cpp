@@ -336,7 +336,6 @@ struct ParakeetSession final : public transcribe_session {
     // decode. No per-family result fields here.
 
     // KV type for flash attention, resolved from the context params.
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // ---- streaming-of-whole state (Phase 4a) ----
     //

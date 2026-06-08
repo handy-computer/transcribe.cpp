@@ -12,6 +12,14 @@ Licensed under the [Health AI Developer Foundations terms](https://developers.go
 
 Ported from upstream commit [`ae1e484`](https://huggingface.co/google/medasr/commit/ae1e4845b4b07479735d93e1e591e566435b7104), pinned 2026-06-04.
 
+## Input limits
+
+MedASR is trained for audio up to about **400 seconds (~6.7 min)** — the
+encoder's rotary-position window. Longer audio is accepted, but the library logs
+a `WARN` and accuracy may degrade past that window; it is not rejected. Segment
+long recordings for best results. See the
+[input-length contract](../input-limits.md).
+
 ## Download
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |

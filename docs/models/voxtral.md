@@ -27,6 +27,16 @@ English normalizer. Both match the HuggingFace `transformers` reference
 within rounding (3B 1.87%, 24B 1.57%). See each variant's card for the full
 quant matrix, per-quant WER, and quick-start commands.
 
+## Input limits
+
+Both variants accept up to about **2.9 hours** of 16 kHz mono audio in a single
+call — the 131,072-token decoder context is the binding limit. That ceiling
+bounds memory and is far longer than any normal clip; audio past it is rejected
+up front with `TRANSCRIBE_ERR_INPUT_TOO_LONG` rather than silently truncated.
+Lowering `--n-ctx` lowers the limit, and `transcribe_session_get_limits()`
+reports the exact per-session value. See the
+[input-length contract](../input-limits.md).
+
 ## Notes
 
 - The 24B is the larger sibling — same architecture, scaled decoder. It is a

@@ -25,7 +25,7 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
 // path does not accumulate the adaptor's multi-token GEMMs in F16 (which
 // overflows F16's ~65504 range -> NaNs). Gated on F16 so BF16/quantized/F32
 // weights and CPU/Metal are bit-identical to before. See the matching helper
-// in sanm.cpp / qwen3_lm.cpp for the full rationale.
+// in sanm.cpp / causal_lm.cpp for the full rationale.
 ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
     if (w->type == GGML_TYPE_F16) {

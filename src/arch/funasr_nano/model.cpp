@@ -7,7 +7,7 @@
 #include "encoder.h"
 #include "weights.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "sanm/sanm.h"
 #include "transcribe-arch.h"
 #include "transcribe-debug.h"
@@ -16,6 +16,7 @@
 #include "transcribe-kaldi-fbank.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-meta.h"
 
 #include "ggml.h"
@@ -81,6 +82,69 @@ FunAsrNanoModel::~FunAsrNanoModel() {
 namespace {
 
 constexpr const char k_default_variant[] = "fun-asr-nano-2512";
+
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Fun-ASR-Nano is a
+// hard-context-cap family: audio tokens + chat prompt + generation share the
+// Qwen3 decoder's context window (dec_max_position_embeddings). The KV cache
+// grows to fit the prompt, clamped to that ceiling (replacing the earlier
+// fixed 2048 wall that ignored the model's real context). Over-length input
+// is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that
+// fills the per-run generation budget before end-of-stream is flagged via
+// transcribe_was_truncated().
+// ---------------------------------------------------------------------------
+
+// Per-run generation budget (matches the step-loop literal below; the decode
+// loop is intentionally left unchanged — see the family doc).
+constexpr int k_max_new = 256;
+
+// Effective decoder context ceiling, in tokens: the model's trained maximum,
+// optionally lowered — never raised — by the caller's session n_ctx knob. For
+// Fun-ASR-Nano dec_max_position_embeddings is the Qwen3 RoPE max (40960), huge
+// relative to any practical clip; grow-to-fit means we never allocate it all
+// at once, so using it as the ceiling matches the qwen3_asr reference exactly.
+int funasr_nano_context_ceiling(int32_t n_ctx_knob, const FunAsrNanoHParams & hp) {
+    int ceiling = hp.dec_max_position_embeddings;
+    if (n_ctx_knob > 0 && n_ctx_knob < ceiling) {
+        ceiling = n_ctx_knob;
+    }
+    return ceiling;
+}
+
+// Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
+// audio tokens plus a representative prompt and the generation reserve fit
+// the context ceiling. The audio-token count is a deterministic function of
+// sample count:
+//   T_frames    = 1 + floor((N - win) / hop)                  ~ N/hop
+//   T_lfr       = ceil(T_frames / lfr_n)                       ~ T_frames/lfr_n
+//   audio_tokens = fake_token_len(T_lfr) (3 stride-2 folds)    ~ T_lfr/8
+// so audio_tokens ≈ N / (hop * lfr_n * 8). Inverting:
+//   ms ≈ audio_tokens * 8 * lfr_n * hop * 1000 / sr.
+// Returns 0 ("unknown / unbounded") if the rate constants are missing. Note:
+// the ceiling (40960) is huge, so the number is large and honest — within it,
+// a long transcript can still truncate at the generation budget
+// (transcribe_was_truncated). We report it as-is (no 1-hour cap); a fully
+// dense clip near the ceiling is not physically reachable from real audio, so
+// capping the report would only hide the honest derived value.
+int64_t funasr_nano_max_audio_ms(const FunAsrNanoHParams & hp) {
+    if (hp.dec_max_position_embeddings <= 0 ||
+        hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0 ||
+        hp.fe_lfr_n <= 0) {
+        return 0;
+    }
+    constexpr int k_prompt_overhead = 48;  // chat affixes; advisory
+    const int max_audio_tokens =
+        hp.dec_max_position_embeddings - k_prompt_overhead - k_max_new;
+    if (max_audio_tokens <= 0) {
+        return 0;
+    }
+    // audio_tokens ≈ T_lfr / 8 ; T_lfr ≈ T_frames / lfr_n ; T_frames ≈ N / hop
+    //   => N ≈ audio_tokens * 8 * lfr_n * hop ; ms = N * 1000 / sr.
+    const int folds = hp.adaptor_use_low_frame_rate ? 8 : 1;
+    const int64_t samples = static_cast<int64_t>(max_audio_tokens) *
+                            folds * hp.fe_lfr_n * hp.fe_hop_length;
+    return samples * 1000 / hp.fe_sample_rate;
+}
 
 // Resolve chat-template special-token ids at load time.
 transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
@@ -274,6 +338,31 @@ transcribe_status load(
     if (auto st = read_funasr_nano_hparams(loader.gguf(), m->hparams);
         st != TRANSCRIBE_OK) return st;
 
+    // Publish the input-length ceiling now that the decoder context window
+    // and frontend rate are known. See docs/input-limits.md.
+    m->caps.max_audio_ms = funasr_nano_max_audio_ms(m->hparams);
+
+    // Basis for the session-level limits query (transcribe_session_get_limits):
+    // the same constants funasr_nano_max_audio_ms uses, kept so the effective
+    // limit can be recomputed at a lowered session n_ctx.
+    if (m->hparams.dec_max_position_embeddings > 0 &&
+        m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0 &&
+        m->hparams.fe_lfr_n > 0) {
+        const int folds = m->hparams.adaptor_use_low_frame_rate ? 8 : 1;
+        m->limits.has_context_cap = true;
+        m->limits.model_max_ctx   = m->hparams.dec_max_position_embeddings;
+        m->limits.prompt_overhead = 48;
+        m->limits.gen_reserve     = k_max_new;
+        // audio_tokens ≈ N / (hop * lfr_n * folds) ; ms = N * 1000 / sr
+        //   => ms per audio token = folds * lfr_n * hop * 1000 / sr
+        m->limits.ms_per_audio_token =
+            static_cast<double>(folds) * m->hparams.fe_lfr_n *
+            m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
+        m->limits.kv_elems_per_ctx_token =
+            (int64_t) m->hparams.dec_n_kv_heads *
+            m->hparams.dec_head_dim * m->hparams.dec_n_layers * 2;
+    }
+
     m->hparams.vocab_size   = m->tok.n_tokens();
     m->hparams.bos_token_id = m->tok.bos_id();
     m->hparams.eos_token_id = m->tok.eos_id();
@@ -340,14 +429,14 @@ transcribe_status load(
     gguf_free(gguf_data);
 
     // Pack gate+up into one tensor per layer so the FFN runs as a
-    // single mul_mat. Owned by qwen3_lm::pack_gate_up.
+    // single mul_mat. Owned by causal_lm::pack_gate_up.
     {
-        std::vector<transcribe::qwen3_lm::GateUpEntry> entries;
+        std::vector<transcribe::causal_lm::GateUpEntry> entries;
         entries.reserve(m->weights.dec_blocks.size());
         for (auto & b : m->weights.dec_blocks) {
             entries.push_back({b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w});
         }
-        if (!transcribe::qwen3_lm::pack_gate_up(
+        if (!transcribe::causal_lm::pack_gate_up(
                 m->plan.primary,
                 m->hparams.dec_hidden,
                 m->hparams.dec_intermediate,
@@ -394,6 +483,7 @@ transcribe_status init_context(
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
+    cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
     cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
@@ -403,16 +493,20 @@ transcribe_status init_context(
     {
         ggml_type kv_type = GGML_TYPE_F16;
         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
-        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary,
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary,
                                            /*n_ctx=*/2048,
                                            cm->hparams.dec_n_kv_heads,
                                            cm->hparams.dec_head_dim,
                                            cm->hparams.dec_n_layers,
                                            kv_type))
         {
-            std::fprintf(stderr,
-                         "funasr_nano init_context: kv_init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "funasr_nano init_context: KV cache allocation failed "
+                "(n_ctx=2048, %d kv-heads x %d head-dim x %d layers) — "
+                "out of memory.",
+                cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
+                cm->hparams.dec_n_layers);
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -456,9 +550,10 @@ transcribe_status run(
     cc->t_mel_us = ggml_time_us() - t_mel_start;
 
     if (T_lfr <= 0) {
-        std::fprintf(stderr,
-                     "funasr_nano run: input too short (n_samples=%d → T_lfr=0)\n",
-                     n_samples);
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_ERROR,
+            "funasr_nano run: input too short (n_samples=%d -> T_lfr=0)",
+            n_samples);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -509,9 +604,9 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        std::fprintf(stderr,
-                     "funasr_nano run: sched_alloc_graph failed (encoder)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "funasr_nano run: encoder graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload frontend output and PE.
@@ -587,9 +682,9 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, ab.graph)) {
-        std::fprintf(stderr,
-                     "funasr_nano run: sched_alloc_graph failed (adaptor)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "funasr_nano run: adaptor graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
     ggml_backend_tensor_set(ab.enc_in, cc->enc_host.data(),
                             0, cc->enc_host.size() * sizeof(float));
@@ -648,19 +743,62 @@ transcribe_status run(
     const int prefix_len = fbank_beg;
     const int suffix_len = T_prompt - prefix_len - T_audio;
 
-    if (T_prompt > cc->kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "funasr_nano run: prompt len %d exceeds kv_n_ctx %d\n",
-                     T_prompt, cc->kv_cache.n_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+    // ---- Input-length gate (see docs/input-limits.md) ----
+    // audio tokens + prompt + generation must fit the decoder context window
+    // (optionally lowered by the caller's n_ctx). The audio-token count is
+    // fixed by the input length, so reject an over-length clip here, before
+    // KV alloc / prefill / decode, instead of walling at a fixed size.
+    const int ceiling = funasr_nano_context_ceiling(cc->n_ctx, hp);
+    if (T_prompt + k_max_new > ceiling) {
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_ERROR,
+            "funasr_nano run: input too long — %d audio + %d prompt tokens "
+            "leave no room for output within the %d-token context (need %d). "
+            "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
+            "split it into segments.",
+            T_audio, prefix_len + suffix_len, ceiling, T_prompt + k_max_new);
+        return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // ---- Reset KV cache + build prefill ----
-    if (cc->kv_cache.buffer != nullptr) {
-        ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
+    // ---- KV cache init (grow-to-fit, clamped to the context ceiling) ----
+    // Size to hold the prompt plus the generation budget, rounded up to a
+    // power of two (the step graph's attention width wants pow2 for the fast
+    // flash-attn path). The cache grows across runs as audio length demands;
+    // a pre-allocated smaller cache is freed and re-allocated. For typical
+    // short clips this is the same 1024/2048 width as the prior fixed cache,
+    // so the decode is unchanged — only previously-walled long clips now fit.
+    int want_n_ctx = 1024;
+    while (want_n_ctx < T_prompt + k_max_new) want_n_ctx *= 2;
+    if (want_n_ctx > ceiling) want_n_ctx = ceiling;
+    if (cc->kv_cache.ctx != nullptr && cc->kv_cache.n_ctx < want_n_ctx) {
+        cc->kv_cache.free();
     }
-    cc->kv_cache.n    = 0;
-    cc->kv_cache.head = 0;
+    if (cc->kv_cache.ctx == nullptr) {
+        ggml_type kv_type = GGML_TYPE_F16;
+        if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary,
+                                           want_n_ctx,
+                                           cm->hparams.dec_n_kv_heads,
+                                           cm->hparams.dec_head_dim,
+                                           cm->hparams.dec_n_layers,
+                                           kv_type))
+        {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "funasr_nano run: KV cache allocation failed (n_ctx=%d, "
+                "%d kv-heads x %d head-dim x %d layers) — out of memory. "
+                "Lower transcribe_session_params.n_ctx or shorten the audio.",
+                want_n_ctx, cm->hparams.dec_n_kv_heads,
+                cm->hparams.dec_head_dim, cm->hparams.dec_n_layers);
+            return TRANSCRIBE_ERR_OOM;
+        }
+    } else {
+        // Clear stale positions for a fresh prefill.
+        if (cc->kv_cache.buffer != nullptr) {
+            ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
+        }
+        cc->kv_cache.n    = 0;
+        cc->kv_cache.head = 0;
+    }
 
     const int64_t t_dec_start = ggml_time_us();
 
@@ -688,9 +826,11 @@ transcribe_status run(
 
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-        std::fprintf(stderr,
-                     "funasr_nano run: sched_alloc_graph failed (prefill)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "funasr_nano run: prefill graph allocation failed (T_prompt=%d) — "
+            "out of memory. Lower transcribe_session_params.n_ctx or shorten "
+            "the audio.", T_prompt);
+        return TRANSCRIBE_ERR_OOM;
     }
 
     ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(),
@@ -770,9 +910,13 @@ transcribe_status run(
 
     // ---- Step loop ----
     const int32_t eos_id = hp.eos_token_id;
-    const int max_new = 256;
+    const int max_new = k_max_new;  // matches the per-run generation budget
     int cur_past = T_prompt;
 
+    // Static step-graph shape: T_prompt prefilled + up to max_new generated.
+    // Clamp to cc->kv_cache.n_ctx (the grown cache size) so the attention
+    // width never exceeds the allocation. For typical short clips this is the
+    // same 1024/2048 width as before — decode numerics are unchanged.
     int max_n_kv = 1024;
     while (max_n_kv < T_prompt + max_new) max_n_kv *= 2;
     if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
@@ -796,9 +940,10 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-        std::fprintf(stderr,
-                     "funasr_nano run: sched_alloc_graph failed (step)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "funasr_nano step: decode graph allocation failed — out of memory. "
+            "Lower transcribe_session_params.n_ctx or shorten the audio.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     const ggml_fp16_t mask_zero    = ggml_fp32_to_fp16(0.0f);
@@ -867,6 +1012,20 @@ transcribe_status run(
     }
     (void)n_steps;
 
+    // The decode stopped at EOS (complete) or at the generation budget /
+    // context width (truncated). Surface the latter via
+    // transcribe_was_truncated() and a WARN rather than returning a silently
+    // shortened transcript. See docs/input-limits.md.
+    if (next_tok != eos_id) {
+        cc->was_truncated = true;
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_WARN,
+            "funasr_nano run: output truncated at %d tokens — decode reached "
+            "the generation budget before end-of-stream; the transcript may be "
+            "incomplete.",
+            static_cast<int>(generated_ids.size()));
+    }
+
     if (!generated_ids.empty() && generated_ids.back() == eos_id) {
         generated_ids.pop_back();
     }
@@ -887,7 +1046,11 @@ transcribe_status run(
               / static_cast<int64_t>(hp.fe_sample_rate);
     cc->segments.push_back(std::move(seg));
 
-    return TRANSCRIBE_OK;
+    // The partial transcript is fully populated above; a truncated decode
+    // returns the hard OUTPUT_TRUNCATED status (the result stays readable,
+    // like an aborted run). See docs/input-limits.md.
+    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                             : TRANSCRIBE_OK;
 }
 
 } // namespace
@@ -897,7 +1060,7 @@ transcribe_status run(
 // ===========================================================================
 // Serial frontend+encoder+adaptor per utterance produce each one's audio
 // embedding (adaptor output, [hidden, T_audio]); then the prefill and the
-// autoregressive step loop are batched via the shared qwen3_lm primitives —
+// autoregressive step loop are batched via the shared causal_lm primitives —
 // the same recipe as arch/qwen3_asr.
 
 namespace {
@@ -1023,12 +1186,22 @@ transcribe_status run_batch(
 
     // ---- Pass 1: per-utterance frontend + encoder + adaptor (serial) ----
     std::vector<char> valid(n, 0);
+    // Per-utterance failure status for the result capture below. Defaults to
+    // INVALID_ARG (bad pcm / frontend / encode / prompt); the input-length gate
+    // upgrades it to INPUT_TOO_LONG for over-length clips.
+    std::vector<transcribe_status> fail_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<float>> audio_hosts(n);
     std::vector<int> T_audio(n, 0);
     std::vector<std::vector<int32_t>> prompt_ids(n);
     std::vector<int> T_prompt(n, 0);
     int prefix_len = 0;
     int64_t mel_us = 0, enc_us = 0;
+
+    // Decoder context ceiling for the per-utterance input-length gate (see
+    // docs/input-limits.md). Same value the single-utterance run() enforces;
+    // an over-length utterance is rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG
+    // rather than walling at a fixed KV size.
+    const int ceiling = funasr_nano_context_ceiling(cc->n_ctx, hp);
 
     const char * lang = (params != nullptr) ? params->language : nullptr;
     bool use_itn = (params != nullptr && params->itn == TRANSCRIBE_ITN_MODE_ON);
@@ -1064,6 +1237,24 @@ transcribe_status run_batch(
             continue;
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
         prefix_len  = fbank_beg;
+
+        // Input-length gate (see docs/input-limits.md). Audio tokens + prompt +
+        // generation must fit the decoder context window; reject an over-length
+        // utterance here instead of walling at a fixed KV size. Mirrors the
+        // single-shot run() gate (T_prompt + k_max_new > ceiling).
+        if (T_prompt[b] + k_max_new > ceiling) {
+            const int suffix = T_prompt[b] - fbank_beg - T_audio[b];
+            transcribe::log_msg(
+                TRANSCRIBE_LOG_LEVEL_ERROR,
+                "funasr_nano run_batch: utterance %d input too long — %d audio + "
+                "%d prompt tokens leave no room for output within the %d-token "
+                "context (need %d). Shorten the audio (see "
+                "transcribe_capabilities.max_audio_ms) or split it.",
+                b, T_audio[b], fbank_beg + suffix, ceiling,
+                T_prompt[b] + k_max_new);
+            fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
+            continue;
+        }
         valid[b]    = 1;
     }
 
@@ -1071,7 +1262,7 @@ transcribe_status run_batch(
     for (int b = 0; b < n; ++b) if (valid[b]) max_T_prompt = std::max(max_T_prompt, T_prompt[b]);
     if (max_T_prompt == 0) {
         for (int b = 0; b < n; ++b) {
-            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            transcribe_session::ResultSet rs; rs.status = fail_status[b];
             cc->batch_results.push_back(std::move(rs));
         }
         return TRANSCRIBE_OK;
@@ -1079,6 +1270,9 @@ transcribe_status run_batch(
     const int max_new = 256;
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
+    // Honor the session context cap: clamp the pow2-rounded width to the
+    // ceiling (the per-utterance gate guarantees every valid row fits).
+    if (max_n_kv > ceiling) max_n_kv = ceiling;
 
     // ---- Allocate batched KV cache ----
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
@@ -1086,11 +1280,15 @@ transcribe_status run_batch(
     if (cc->kv_cache_batch.self_k == nullptr ||
         cc->kv_batch_cap != n || cc->kv_batch_n_ctx != max_n_kv) {
         cc->kv_cache_batch.free();
-        if (!transcribe::qwen3_lm::kv_init_batched(
+        if (!transcribe::causal_lm::kv_init_batched(
                 cc->kv_cache_batch, cm->plan.primary, max_n_kv,
                 hp.dec_n_kv_heads, hp.dec_head_dim, hp.dec_n_layers, n, kv_type)) {
-            std::fprintf(stderr, "funasr_nano run_batch: kv_init_batched failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "funasr_nano run_batch: batched KV cache allocation failed "
+                "(n_ctx=%d x %d utterances) — out of memory. Lower "
+                "transcribe_session_params.n_ctx or the batch size.",
+                max_n_kv, n);
+            return TRANSCRIBE_ERR_OOM;
         }
         cc->kv_batch_cap = n; cc->kv_batch_n_ctx = max_n_kv;
     } else if (cc->kv_cache_batch.buffer != nullptr) {
@@ -1176,7 +1374,7 @@ transcribe_status run_batch(
         }
     }
 
-    // ---- Pass 3: batched step loop (shared qwen3_lm driver) ----
+    // ---- Pass 3: batched step loop (shared causal_lm driver) ----
     const int32_t eos_id = cm->hparams.eos_token_id;
 
     if (reset_ctx(cc, 16) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
@@ -1187,7 +1385,7 @@ transcribe_status run_batch(
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
 
-    transcribe::qwen3_lm::StepBatchedIO io {};
+    transcribe::causal_lm::StepBatchedIO io {};
     io.input_ids = sb.input_ids_in;
     io.positions = sb.position_in;
     io.kv_idx    = sb.kv_idx_in;
@@ -1195,15 +1393,16 @@ transcribe_status run_batch(
     io.argmax    = sb.out;
     io.graph     = sb.graph;
 
-    transcribe::qwen3_lm::StepBatchedState step_state;
+    transcribe::causal_lm::StepBatchedState step_state;
     step_state.valid    = valid;
     step_state.next_tok = next_tok;
     step_state.n_past   = n_past;
 
-    transcribe::qwen3_lm::StepLoopStats step_stats;
-    if (const transcribe_status st = transcribe::qwen3_lm::run_batched_step_loop(
+    transcribe::causal_lm::StepLoopStats step_stats;
+    std::vector<char> truncated;
+    if (const transcribe_status st = transcribe::causal_lm::run_batched_step_loop(
             cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
-            generated, &step_stats); st != TRANSCRIBE_OK) {
+            generated, &step_stats, &truncated); st != TRANSCRIBE_OK) {
         return st;
     }
     const int64_t step_us = step_stats.step_us;
@@ -1213,7 +1412,7 @@ transcribe_status run_batch(
         std::count(valid.begin(), valid.end(), char(1))));
     for (int b = 0; b < n; ++b) {
         if (!valid[b]) {
-            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            transcribe_session::ResultSet rs; rs.status = fail_status[b];
             cc->batch_results.push_back(std::move(rs));
             continue;
         }
@@ -1230,6 +1429,15 @@ transcribe_status run_batch(
         seg.t1_ms = static_cast<int64_t>(n_samples[b]) * 1000
                   / static_cast<int64_t>(hp.fe_sample_rate);
         rs.segments.push_back(std::move(seg));
+        // Per-utterance truncation parity with single-shot run(): a row cut at
+        // the generation budget / KV window before eos reports
+        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
+        // override a TRANSCRIBE_OK status, never a worse one.
+        if (b < static_cast<int>(truncated.size()) && truncated[b] &&
+            rs.status == TRANSCRIBE_OK) {
+            cc->was_truncated = true;
+            rs.status = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        }
         rs.t_mel_us = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = step_us / valid_count;
