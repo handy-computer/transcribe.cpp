@@ -14,11 +14,14 @@
 // At small vocab (~1k for the English parakeets) it is also negligible and
 // runs on host. At the multilingual vocab (13k) it grows to ~17 MFLOPs per
 // step and dominates decode, so it runs through a reused ggml graph
-// (build_joint_out_graph / HostJoint::g_*) with the weight kept in its
-// native dtype: ggml's threaded, SIMD, quantized matmul replaces a scalar
-// host loop and cuts weight bandwidth ~4×. The graph is built once and
-// recomputed in place per step; the host matmul remains as a fallback if
-// graph construction fails.
+// (build_joint_out_graph / HostJoint::g_*): ggml's threaded, SIMD matmul
+// replaces the scalar host loop. The weight is dequantized to fp32 in the
+// graph so the activation is not down-converted and the logits stay faithful
+// to the host reference (max rel diff ~3e-7 vs ~3e-3 for a native-quant
+// weight); this is perf-neutral because the threaded matmul, not weight
+// bandwidth, is the win (TRANSCRIBE_JOINT_NATIVE=1 restores the native dtype).
+// The graph is built once and recomputed in place per step; the host matmul
+// remains as a fallback if graph construction fails.
 //
 // Memory cost: a load-time host mirror of the predictor + joint weights
 // (~35 MB on v2, ~73 MB on v3) against the ~2.4 GB encoder footprint. The

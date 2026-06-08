@@ -37,8 +37,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <utility>
 #include <vector>
 
@@ -130,16 +130,30 @@ bool read_tensor_to_f32(const ggml_tensor * t,
 
 // Build the reusable ggml graph for the joint output projection:
 //   logits[joint_n] = out_w[joint_n, joint_h] @ act[joint_h] + out_b
-// out_w is copied in its native (possibly quantized) dtype straight from
-// the loaded model tensor — no fp32 dequant — so ggml's matmul streams the
-// quantized bytes and quantizes the activation on the fly (same path the
-// encoder already uses). Weight, bias, the per-step activation input, and
-// the logits output all share one CPU-backend buffer, so the batch-1 graph
-// recomputes in place. Returns false (and leaves g_ready=false → host
-// fallback) on any failure.
+// out_w is dequantized to fp32 by default so ggml accumulates in fp32 against
+// an fp32 activation (no down-conversion), matching the host reference path to
+// within SIMD reduction order; see the dtype rationale at w_type below.
+// Weight, bias, the per-step activation input, and the logits output all share
+// one CPU-backend buffer, so the batch-1 graph recomputes in place. Returns
+// false (and leaves g_ready=false → host fallback) on any failure.
 bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w) {
     const int joint_h = j.joint_h;
     const int joint_n = j.joint_n;
+
+    // The graph weight is fp32 by default (dequantized from the source dtype).
+    // ggml's vec_dot_type for an fp32 weight is fp32, so the activation is NOT
+    // down-converted (no F16 round-off, no Q8 activation quant) and the matmul
+    // matches the host F32-dequant-weight path up to SIMD reduction order. This
+    // keeps the per-tier joint logits faithful to the reference: measured max
+    // relative logit diff vs the host path is ~3e-7 in fp32 vs ~6e-4 (F16) /
+    // ~3e-3 (Q4) for the native-dtype weight. It is perf-neutral because the
+    // win here is the threaded+SIMD matmul replacing the scalar host loop, not
+    // weight bandwidth (the out_w matvec is not the decode bottleneck; measured
+    // ~0% wall delta on Metal and CPU). TRANSCRIBE_JOINT_NATIVE=1 restores the
+    // native-dtype weight (streams quantized bytes; lossier activation) as an
+    // escape hatch.
+    const bool use_native = std::getenv("TRANSCRIBE_JOINT_NATIVE") != nullptr;
+    const ggml_type w_type = use_native ? src_out_w->type : GGML_TYPE_F32;
 
     j.g_backend = ggml_backend_cpu_init();
     if (j.g_backend == nullptr) {
@@ -159,7 +173,7 @@ bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w) {
     j.g_ctx = ggml_init(ip);
     if (j.g_ctx == nullptr) return false;
 
-    ggml_tensor * out_w = ggml_new_tensor_2d(j.g_ctx, src_out_w->type, joint_h, joint_n);
+    ggml_tensor * out_w = ggml_new_tensor_2d(j.g_ctx, w_type, joint_h, joint_n);
     ggml_tensor * out_b = ggml_new_tensor_1d(j.g_ctx, GGML_TYPE_F32, joint_n);
     j.g_act = ggml_new_tensor_1d(j.g_ctx, GGML_TYPE_F32, joint_h);
     ggml_set_input(j.g_act);
@@ -173,12 +187,19 @@ bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w) {
     j.g_buf = ggml_backend_alloc_ctx_tensors(j.g_ctx, j.g_backend);
     if (j.g_buf == nullptr) return false;
 
-    // Upload the weight verbatim (native dtype) and the fp32 bias.
-    {
+    // Upload the weight (dequantized to fp32 by default, or verbatim native
+    // dtype under TRANSCRIBE_JOINT_NATIVE) and the fp32 bias.
+    if (w_type == src_out_w->type) {
         const size_t nb = ggml_nbytes(src_out_w);
         std::vector<uint8_t> tmp(nb);
         ggml_backend_tensor_get(src_out_w, tmp.data(), 0, nb);
         ggml_backend_tensor_set(out_w, tmp.data(), 0, nb);
+    } else {
+        // fp32 graph weight from a non-fp32 source: dequantize once into fp32.
+        std::vector<float> tmp;
+        if (!read_tensor_to_f32(src_out_w, tmp)) return false;
+        ggml_backend_tensor_set(out_w, tmp.data(), 0,
+                                tmp.size() * sizeof(float));
     }
     ggml_backend_tensor_set(out_b, j.out_b.data(), 0,
                             static_cast<size_t>(joint_n) * sizeof(float));
@@ -593,8 +614,8 @@ void joint_step(const HostJoint &     j,
         }
     }
 
-    // Output projection: ggml graph (native-quant weight, threaded matmul,
-    // bias folded into the graph) when available, else the host matmul.
+    // Output projection: reused ggml graph (fp32 weight by default, threaded
+    // matmul, bias folded into the graph) when available, else the host matmul.
     if (j.g_ready) {
         ggml_backend_tensor_set(j.g_act, scratch_summed.data(), 0,
                                 static_cast<size_t>(j.joint_h) * sizeof(float));
