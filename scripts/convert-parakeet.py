@@ -64,6 +64,7 @@ transcribe::parakeet::read_parakeet_hparams):
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -470,6 +471,22 @@ def load_nemo_model(model_spec: str, prefer_direct: bool = False):
 # ---------------------------------------------------------------------------
 
 
+# Multilingual language-tag pieces: '<' + 2-3 lowercase lang + '-' + 2-4
+# letter region + '>' (e.g. <en-US>, <zh-CN>, <nb-NO>). NVIDIA's multilingual
+# SentencePiece vocab stores these as plain NORMAL pieces, so without
+# intervention they leak into transcripts. We detect them by shape directly
+# from the vocab (NOT a hard-coded language list) and mark them CONTROL so the
+# runtime strips them via Tokenizer::is_control. Requiring the '-REGION' part
+# excludes control-ish pieces like <unk>. No-op for the English parakeets
+# (their 1024-token vocab has no such pieces). Mirrors is_lang_tag_piece() in
+# src/arch/parakeet/model.cpp.
+_LANG_TAG_RE = re.compile(r"^<[a-z]{2,3}-[A-Za-z]{2,4}>$")
+
+
+def _is_lang_tag(piece: str) -> bool:
+    return bool(_LANG_TAG_RE.match(piece))
+
+
 def extract_tokenizer(sp, blank_piece: str = "<blank>"):
     """Walk a SentencePieceProcessor and return the GGUF tokenizer payload.
 
@@ -495,6 +512,8 @@ def extract_tokenizer(sp, blank_piece: str = "<blank>"):
             ttype = TOKEN_TYPE_UNUSED
         elif sp.is_byte(i):
             ttype = TOKEN_TYPE_BYTE
+        elif _is_lang_tag(piece):
+            ttype = TOKEN_TYPE_CONTROL
         else:
             ttype = TOKEN_TYPE_NORMAL
 

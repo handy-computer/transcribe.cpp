@@ -830,6 +830,34 @@ transcribe_status init_context(
 //   parity test becomes meaningful.
 // Host-side TDT/RNNT/CTC decode + public result-hierarchy build for a
 // single utterance's encoder output. Shared by the single-shot path
+// True for a multilingual language-tag SentencePiece piece of the form
+// "<ll-RR>" (lowercase 2-3 letter language, '-', 2-4 letter region), e.g.
+// "<en-US>", "<zh-CN>", "<nb-NO>". The nemotron-3.5 multilingual vocab emits
+// one of these per segment to mark the (detected or requested) language. We
+// drop them from the public token/word/segment/text result by default so the
+// transcript stays clean and word/timestamp aggregation isn't polluted by a
+// zero-width tag "word". Requiring the '-REGION' part avoids matching control
+// pieces like "<unk>". No-op for the English parakeets (no such pieces in
+// their 1024-token vocab). Preserved when keep_special_tags is set
+// (CLI --raw-tokens).
+static bool is_lang_tag_piece(const std::string & p) {
+    const size_t n = p.size();
+    if (n < 7 || p.front() != '<' || p.back() != '>') return false; // min "<aa-AA>"
+    size_t i = 1;
+    const size_t end = n - 1;
+    const size_t lang0 = i;
+    while (i < end && p[i] >= 'a' && p[i] <= 'z') ++i;
+    const size_t lang_len = i - lang0;
+    if (lang_len < 2 || lang_len > 3) return false;
+    if (i >= end || p[i] != '-') return false;
+    ++i;
+    const size_t reg0 = i;
+    while (i < end && std::isalpha(static_cast<unsigned char>(p[i]))) ++i;
+    const size_t reg_len = i - reg0;
+    if (reg_len < 2 || reg_len > 4) return false;
+    return i == end; // interior consumed exactly up to '>'
+}
+
 // (run_one_shot_inner) and the batched path (run_batch_inner). `enc` is
 // the row-major [T_enc, d_enc] encoder activation for ONE utterance;
 // utt_index >= 0 tags the optional tensor dump per utterance, -1 for the
@@ -920,7 +948,22 @@ static transcribe_status decode_and_populate(
     const transcribe::Tokenizer & tok = pm->tok;
 
     pc->tokens.reserve(pc->raw_tokens.size());
+    // Strip multilingual <ll-RR> language tags from the public result by
+    // default (clean transcript + uncorrupted word/timestamp aggregation).
+    // Gated on the standard keep_special_tags run param (CLI --raw-tokens) —
+    // the same switch canary/sensevoice use for their <|...|> tags.
+    //
+    // Primary detection is Tokenizer::is_control: convert-parakeet.py marks the
+    // tag pieces CONTROL in the GGUF token_type (read from the vocab shape, not
+    // a hard-coded list). The is_lang_tag_piece() pattern is a transitional
+    // fallback for GGUFs produced before that converter change; it can be
+    // dropped once all shipped artifacts carry the metadata.
+    const bool strip_tags = (params == nullptr) ? true : !params->keep_special_tags;
     for (const TdtToken & rt : pc->raw_tokens) {
+        if (strip_tags &&
+            (tok.is_control(rt.id) || is_lang_tag_piece(tok.token(rt.id)))) {
+            continue;
+        }
         transcribe_session::TokenEntry te;
         te.id    = rt.id;
         te.p     = rt.p;
@@ -1030,8 +1073,24 @@ static transcribe_status decode_and_populate(
         for (const auto & tk : pc->tokens) all_ids.push_back(tk.id);
         std::string full = tok.decode(all_ids.data(),
                                       static_cast<int>(all_ids.size()));
-        if (!full.empty() && full.front() == ' ') {
-            full.erase(full.begin());
+        // Normalize whitespace: removing a <ll-RR> language tag from the id
+        // sequence leaves its neighbours' spaces adjacent (double space), and
+        // a stripped trailing tag leaves a trailing space. Collapse runs of
+        // spaces to one and trim both ends — an ASR transcript never carries
+        // meaningful double/edge whitespace. No-op when nothing was stripped.
+        {
+            std::string norm;
+            norm.reserve(full.size());
+            bool prev_space = false;
+            for (char ch : full) {
+                const bool is_space = (ch == ' ');
+                if (is_space && prev_space) continue;
+                norm.push_back(ch);
+                prev_space = is_space;
+            }
+            while (!norm.empty() && norm.front() == ' ') norm.erase(norm.begin());
+            while (!norm.empty() && norm.back()  == ' ') norm.pop_back();
+            full.swap(norm);
         }
         seg.text       = full;
         pc->full_text  = std::move(full);
