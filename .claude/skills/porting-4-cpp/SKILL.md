@@ -154,6 +154,14 @@ one `n_past > 0` step tensor on both sides, conventionally
 `dec.logits_raw.gen<N>` after N ≥ 8 greedy steps. If coverage is missing,
 add it to the reference dumper and C++ runner.
 
+**Input-length and memory contract.** Implement the family's behavior in
+code and tests, not as prose-only policy. Expose consumer-visible limits
+where meaningful, reject hard architectural over-limit inputs before
+decode, warn-but-proceed for soft trained windows, surface output caps as
+truncation, and return OOM errors rather than silently shrinking context.
+`n_ctx` should lower a real context/KV ceiling only when that is truthful
+for the family; otherwise document and test that it is ignored.
+
 ### Step 3: First validate.py run (execute)
 
 ```bash
@@ -413,6 +421,9 @@ Report:
 - Batch parity: text + tensor parity result, the golden fixture path
   (`tests/golden/batch/<variant>.cpu.json`), and the `Batch (offline)`
   row status (PASS or ACCEPTED GAP — serial fallback).
+- Input/memory contract: advertised limits, `n_ctx` behavior,
+  single/batch/stream parity, truncation status, and OOM behavior have
+  focused tests where applicable.
 - Private HF repo URL where the ref-dtype GGUF was pushed (Step 10).
 - Full ref-dtype WER: Oracle reference WER, C++ batch-1 WER, max allowed,
   pass/blocked; plus the batch-8 WER and the user's sign-off that batching
