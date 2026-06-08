@@ -15,13 +15,14 @@
 // runs on host. At the multilingual vocab (13k) it grows to ~17 MFLOPs per
 // step and dominates decode, so it runs through a reused ggml graph
 // (build_joint_out_graph / HostJoint::g_*): ggml's threaded, SIMD matmul
-// replaces the scalar host loop. The weight is dequantized to fp32 in the
-// graph so the activation is not down-converted and the logits stay faithful
-// to the host reference (max rel diff ~3e-7 vs ~3e-3 for a native-quant
-// weight); this is perf-neutral because the threaded matmul, not weight
-// bandwidth, is the win (TRANSCRIBE_JOINT_NATIVE=1 restores the native dtype).
-// The graph is built once and recomputed in place per step; the host matmul
-// remains as a fallback if graph construction fails.
+// replaces the scalar host loop. The weight keeps its native (quantized) dtype
+// by default — ggml streams the quantized bytes (~4× less weight bandwidth) and
+// quantizes the activation on the fly, the same regime the encoder runs in and
+// WER-validated equal to fp32 on English. The caller falls back to an
+// fp32-dequant graph (faithful to the host reference: max rel logit diff ~3e-7
+// vs ~3e-3 for the native weight) if the native build fails or when
+// TRANSCRIBE_JOINT_FP32=1 forces it; failing both, the host matmul still serves.
+// The graph is built once and recomputed in place per step.
 //
 // Memory cost: a load-time host mirror of the predictor + joint weights
 // (~35 MB on v2, ~73 MB on v3) against the ~2.4 GB encoder footprint. The
@@ -164,6 +165,12 @@ struct HostDecoderWeights {
 // `out` in an indeterminate state.
 transcribe_status build_host_decoder_weights(const ParakeetModel & model,
                                              HostDecoderWeights &  out);
+
+// Apply the session thread count to the host-decode threading systems (the
+// joint graph's CPU backend and the predictor/CTC OpenMP loops). Call once
+// before each decode; n_threads <= 0 selects the min(8, cores) default. The
+// encoder backend's threads are set separately (see model.cpp).
+void apply_decode_threads(const HostDecoderWeights & w, int n_threads);
 
 // ---------------------------------------------------------------------------
 // LSTM hidden state

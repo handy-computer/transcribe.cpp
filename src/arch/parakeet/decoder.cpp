@@ -25,6 +25,9 @@
 #include "ggml-alloc.h"
 
 #include <thread>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #if TRANSCRIBE_HAS_BLAS
 #  ifdef __APPLE__
@@ -130,35 +133,40 @@ bool read_tensor_to_f32(const ggml_tensor * t,
 
 // Build the reusable ggml graph for the joint output projection:
 //   logits[joint_n] = out_w[joint_n, joint_h] @ act[joint_h] + out_b
-// out_w is dequantized to fp32 by default so ggml accumulates in fp32 against
-// an fp32 activation (no down-conversion), matching the host reference path to
-// within SIMD reduction order; see the dtype rationale at w_type below.
 // Weight, bias, the per-step activation input, and the logits output all share
-// one CPU-backend buffer, so the batch-1 graph recomputes in place. Returns
-// false (and leaves g_ready=false → host fallback) on any failure.
-bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w) {
+// one CPU-backend buffer, so the batch-1 graph recomputes in place. On any
+// failure it frees its partial state and returns false, so the caller can
+// retry (native→fp32) or fall back to the host matmul (g_ready stays false).
+//
+// `use_native` selects the weight dtype:
+//   - true  (default): keep the source quant dtype. ggml streams the quantized
+//     bytes (~4× less weight bandwidth) and quantizes the activation on the fly
+//     — the same regime the encoder runs in, WER-validated equal to fp32 on
+//     English. This is the faster path on bandwidth-bound CPUs/iGPUs.
+//   - false (fallback): dequantize the weight to fp32 once, so ggml accumulates
+//     fp32×fp32 with no activation down-conversion. Numerically faithful to the
+//     host reference (max rel logit diff ~3e-7 vs ~3e-3 for a Q4 native weight).
+// The caller tries native first; TRANSCRIBE_JOINT_FP32=1 forces fp32.
+bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w,
+                           bool use_native) {
     const int joint_h = j.joint_h;
     const int joint_n = j.joint_n;
 
-    // The graph weight is fp32 by default (dequantized from the source dtype).
-    // ggml's vec_dot_type for an fp32 weight is fp32, so the activation is NOT
-    // down-converted (no F16 round-off, no Q8 activation quant) and the matmul
-    // matches the host F32-dequant-weight path up to SIMD reduction order. This
-    // keeps the per-tier joint logits faithful to the reference: measured max
-    // relative logit diff vs the host path is ~3e-7 in fp32 vs ~6e-4 (F16) /
-    // ~3e-3 (Q4) for the native-dtype weight. It is perf-neutral because the
-    // win here is the threaded+SIMD matmul replacing the scalar host loop, not
-    // weight bandwidth (the out_w matvec is not the decode bottleneck; measured
-    // ~0% wall delta on Metal and CPU). TRANSCRIBE_JOINT_NATIVE=1 restores the
-    // native-dtype weight (streams quantized bytes; lossier activation) as an
-    // escape hatch.
-    const bool use_native = std::getenv("TRANSCRIBE_JOINT_NATIVE") != nullptr;
+    // Free any partial state so the caller can cleanly retry (e.g. native→fp32).
+    auto fail = [&]() -> bool {
+        if (j.g_buf     != nullptr) { ggml_backend_buffer_free(j.g_buf); j.g_buf = nullptr; }
+        if (j.g_ctx     != nullptr) { ggml_free(j.g_ctx);                j.g_ctx = nullptr; }
+        if (j.g_backend != nullptr) { ggml_backend_free(j.g_backend);    j.g_backend = nullptr; }
+        j.g_act = nullptr; j.g_logits = nullptr; j.g_graph = nullptr; j.g_ready = false;
+        return false;
+    };
+
     const ggml_type w_type = use_native ? src_out_w->type : GGML_TYPE_F32;
 
     j.g_backend = ggml_backend_cpu_init();
     if (j.g_backend == nullptr) {
         std::fprintf(stderr, "parakeet decoder: ggml CPU backend init failed\n");
-        return false;
+        return fail();
     }
     {
         const int n = std::min(8, std::max(1,
@@ -171,7 +179,7 @@ bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w) {
     ip.mem_buffer = nullptr;
     ip.no_alloc   = true;
     j.g_ctx = ggml_init(ip);
-    if (j.g_ctx == nullptr) return false;
+    if (j.g_ctx == nullptr) return fail();
 
     ggml_tensor * out_w = ggml_new_tensor_2d(j.g_ctx, w_type, joint_h, joint_n);
     ggml_tensor * out_b = ggml_new_tensor_1d(j.g_ctx, GGML_TYPE_F32, joint_n);
@@ -185,7 +193,7 @@ bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w) {
     // One backend buffer for every tensor in the ctx (weight + bias +
     // activation + op results), so nothing is reallocated per step.
     j.g_buf = ggml_backend_alloc_ctx_tensors(j.g_ctx, j.g_backend);
-    if (j.g_buf == nullptr) return false;
+    if (j.g_buf == nullptr) return fail();
 
     // Upload the weight (dequantized to fp32 by default, or verbatim native
     // dtype under TRANSCRIBE_JOINT_NATIVE) and the fp32 bias.
@@ -197,7 +205,7 @@ bool build_joint_out_graph(HostJoint & j, const ggml_tensor * src_out_w) {
     } else {
         // fp32 graph weight from a non-fp32 source: dequantize once into fp32.
         std::vector<float> tmp;
-        if (!read_tensor_to_f32(src_out_w, tmp)) return false;
+        if (!read_tensor_to_f32(src_out_w, tmp)) return fail();
         ggml_backend_tensor_set(out_w, tmp.data(), 0,
                                 tmp.size() * sizeof(float));
     }
@@ -217,6 +225,24 @@ HostJoint::~HostJoint() {
     if (g_buf     != nullptr) ggml_backend_buffer_free(g_buf);
     if (g_ctx     != nullptr) ggml_free(g_ctx);
     if (g_backend != nullptr) ggml_backend_free(g_backend);
+}
+
+// Fan the session thread count out to the two host-decode threading systems:
+// the joint graph's dedicated CPU backend and the predictor/CTC OpenMP loops
+// in linear(). The encoder's backend threads are set separately in model.cpp.
+// n_threads <= 0 means "auto" → min(8, cores), matching the encoder default.
+// Called once per decode (cheap); both knobs are process/backend-global and
+// decode is serial, so this is safe to set per run.
+void apply_decode_threads(const HostDecoderWeights & w, int n_threads) {
+    const int n = n_threads > 0
+        ? n_threads
+        : std::min(8, std::max(1, static_cast<int>(std::thread::hardware_concurrency())));
+    if (w.joint.g_ready && w.joint.g_backend != nullptr) {
+        ggml_backend_cpu_set_n_threads(w.joint.g_backend, n);
+    }
+#ifdef _OPENMP
+    omp_set_num_threads(n);
+#endif
 }
 
 transcribe_status build_host_decoder_weights(const ParakeetModel & model,
@@ -336,9 +362,10 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
     if (!read_tensor_to_f32(w.joint.out_w,  out.joint.out_w))  return TRANSCRIBE_ERR_GGUF;
     if (!read_tensor_to_f32(w.joint.out_b,  out.joint.out_b))  return TRANSCRIBE_ERR_GGUF;
 
-    // Build the reusable ggml graph for the dominant out_w projection
-    // (native-quant weight, threaded ggml matmul). On any failure we leave
-    // g_ready=false and joint_step falls back to the host matmul.
+    // Build the reusable ggml graph for the dominant out_w projection.
+    // Default to the native-quant weight (faster, WER-validated); fall back to
+    // the fp32-dequant graph on failure, then to the host matmul (g_ready stays
+    // false) if even that fails. TRANSCRIBE_JOINT_FP32=1 forces the fp32 path.
     if (w.joint.out_w != nullptr) {
         const int ne0 = static_cast<int>(w.joint.out_w->ne[0]);
         const int ne1 = static_cast<int>(w.joint.out_w->ne[1]);
@@ -347,9 +374,23 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
                 "parakeet decoder: out_w ne [%d,%d] != [joint_h=%d, joint_n=%d]; "
                 "using host matmul\n",
                 ne0, ne1, out.joint.joint_h, out.joint.joint_n);
-        } else if (!build_joint_out_graph(out.joint, w.joint.out_w)) {
-            std::fprintf(stderr,
-                "parakeet decoder: joint ggml graph build failed; using host matmul\n");
+        } else {
+            const bool force_fp32 = std::getenv("TRANSCRIBE_JOINT_FP32") != nullptr;
+            bool ok = false;
+            if (!force_fp32) {
+                ok = build_joint_out_graph(out.joint, w.joint.out_w, /*use_native=*/true);
+                if (!ok) {
+                    std::fprintf(stderr,
+                        "parakeet decoder: native joint graph failed; retrying fp32\n");
+                }
+            }
+            if (!ok) {
+                ok = build_joint_out_graph(out.joint, w.joint.out_w, /*use_native=*/false);
+            }
+            if (!ok) {
+                std::fprintf(stderr,
+                    "parakeet decoder: joint ggml graph build failed; using host matmul\n");
+            }
         }
     }
 
@@ -415,12 +456,14 @@ inline void linear(const float * W,
 #endif
     }
 #else
-    // Rows are independent, so the output projection (out_w: joint_n×joint_h,
-    // ~13k rows for the multilingual vocab) parallelizes cleanly across cores.
-    // Gate on out_dim so the small per-step matmuls (pred 640, lstm gates
-    // 2560) stay serial and don't pay OpenMP fork/join overhead.
+    // Rows are independent, so larger projections parallelize cleanly across
+    // cores. Gate on out_dim (>= 2048) to thread the LSTM gate matmuls
+    // (4*640 = 2560) and the CTC head, while the tiny 640-wide enc/pred
+    // projections stay serial and don't pay OpenMP fork/join overhead. The
+    // thread count is set per decode via apply_decode_threads (min(8, cores)
+    // default). The joint out_w projection runs in its own ggml graph, not here.
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if(out_dim >= 4096)
+    #pragma omp parallel for schedule(static) if(out_dim >= 2048)
 #endif
     for (int r = 0; r < out_dim; ++r) {
         const float * row = W + static_cast<size_t>(r) * static_cast<size_t>(in_dim);

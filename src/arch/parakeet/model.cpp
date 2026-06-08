@@ -874,6 +874,7 @@ static transcribe_status decode_and_populate(
     const int64_t t_dec_start = ggml_time_us();
     {
         transcribe_status st = TRANSCRIBE_OK;
+        apply_decode_threads(pm->host_decoder, pc->n_threads);
         switch (pm->host_decoder.head_kind) {
             case HostHeadKind::TDT:
                 st = decode_tdt_greedy(pm->host_decoder, enc,
@@ -2434,6 +2435,7 @@ transcribe_status emit_streaming_chunk(
     pc->stream_caches.chunk_step += 1;
 
     // Run streaming RNN-T decoder on the new encoder frames.
+    apply_decode_threads(pm->host_decoder, pc->n_threads);
     if (const transcribe_status st = decode_rnnt_greedy_streaming(
             pm->host_decoder, pc->enc_host.data(),
             T_q_new, d_enc,
@@ -2927,6 +2929,7 @@ transcribe_status emit_buffered_chunk(
 
     // ----- Decode with carried RNN-T state -----
     const int64_t t_dec_start = ggml_time_us();
+    apply_decode_threads(pm->host_decoder, pc->n_threads);
     if (const transcribe_status st = decode_rnnt_greedy_streaming(
             pm->host_decoder, enc_chunk, T_to_decode, d_enc,
             pc->stream_dec_state.lstm_state,
