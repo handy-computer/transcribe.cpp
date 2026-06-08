@@ -61,6 +61,13 @@ Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
 each per-variant doc has direct download links.
 
+## Input limits
+
+No practical per-call length limit (`transcribe_capabilities.max_audio_ms == 0`):
+Whisper slices long audio into 30-second windows internally and stitches the
+results, so you can pass arbitrarily long recordings. See the
+[input-length contract](../input-limits.md).
+
 ## Quick start
 
 Pick a variant and run:

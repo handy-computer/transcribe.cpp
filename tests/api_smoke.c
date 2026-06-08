@@ -76,6 +76,8 @@ static void test_status_string(void) {
         TRANSCRIBE_ERR_BAD_STRUCT_SIZE,
         TRANSCRIBE_ERR_UNSUPPORTED_PNC,
         TRANSCRIBE_ERR_UNSUPPORTED_ITN,
+        TRANSCRIBE_ERR_INPUT_TOO_LONG,
+        TRANSCRIBE_ERR_OUTPUT_TRUNCATED,
     };
     for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
         const char * s = transcribe_status_string(all[i]);
@@ -128,6 +130,7 @@ static void test_init_macros(void) {
     CHECK(cp_macro.struct_size == sizeof(struct transcribe_session_params));
     CHECK(cp_macro.n_threads   == 0);
     CHECK(cp_macro.kv_type     == TRANSCRIBE_KV_TYPE_AUTO);
+    CHECK(cp_macro.n_ctx       == 0);  /* 0 = model max (session context cap) */
 
     struct transcribe_run_params rp_macro;
     transcribe_run_params_init(&rp_macro);
@@ -219,6 +222,13 @@ static void test_init_macros(void) {
     CHECK(ms.ext.size               == sizeof(struct transcribe_moonshine_streaming_stream_ext));
     CHECK(ms.ext.kind               == TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM);
     CHECK(ms.min_decode_interval_ms == -1);
+
+    struct transcribe_voxtral_realtime_stream_ext vr;
+    transcribe_voxtral_realtime_stream_ext_init(&vr);
+    CHECK(vr.ext.size               == sizeof(struct transcribe_voxtral_realtime_stream_ext));
+    CHECK(vr.ext.kind               == TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM);
+    CHECK(vr.num_delay_tokens       == -1);
+    CHECK(vr.min_decode_interval_ms == -1);
 
     struct transcribe_whisper_chunk_trace wtr;
     transcribe_whisper_chunk_trace_init(&wtr);
@@ -667,6 +677,33 @@ static void test_stream_entries_null(void) {
           == TRANSCRIBE_ERR_INVALID_ARG);
 }
 
+/* Input-limits ABI surface (no model needed): the session-limits struct, the
+ * get_limits arg validation, and the supplemental truncation flag. The
+ * model-dependent behavior (real effective values, INPUT_TOO_LONG / OUTPUT_
+ * TRUNCATED firing) is exercised by the family real-smoke tests. */
+static void test_session_limits_abi(void) {
+    struct transcribe_session_limits lim;
+    transcribe_session_limits_init(&lim);
+    CHECK(lim.struct_size            == sizeof(struct transcribe_session_limits));
+    CHECK(lim.effective_n_ctx        == 0);
+    CHECK(lim.effective_max_audio_ms == 0);
+    CHECK(lim.max_kv_bytes           == 0);
+
+    /* NULL args -> INVALID_ARG (checked before struct_size / model deref). */
+    CHECK(transcribe_session_get_limits(NULL, &lim) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_session_get_limits((struct transcribe_session *)0x1, NULL)
+          == TRANSCRIBE_ERR_INVALID_ARG);
+
+    /* Non-NULL session + struct_size 0 -> BAD_STRUCT_SIZE, returned before the
+     * session is dereferenced (mirrors the stream-param fake-handle tests). */
+    struct transcribe_session_limits lim0 = {0};
+    CHECK(transcribe_session_get_limits((struct transcribe_session *)0x1, &lim0)
+          == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
+
+    /* Supplemental truncation flag on a NULL session is false, not a crash. */
+    CHECK(transcribe_was_truncated(NULL) == false);
+}
+
 int main(void) {
     test_status_string();
     test_log_level_values();
@@ -687,6 +724,7 @@ int main(void) {
     test_stream_state_values();
     test_stream_accessors_null();
     test_stream_entries_null();
+    test_session_limits_abi();
 
     if (g_failures > 0) {
         fprintf(stderr, "api_smoke: %d failures\n", g_failures);

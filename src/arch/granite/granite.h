@@ -123,7 +123,6 @@ struct GraniteSession final : public transcribe_session {
     std::vector<float> audio_tokens_host;
     int32_t            n_audio_tokens = 0;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;

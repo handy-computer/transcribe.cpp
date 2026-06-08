@@ -114,7 +114,6 @@ struct CanaryQwenSession final : public transcribe_session {
     int                           kv_batch_cap   = 0;
     int                           kv_batch_n_ctx = 0;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Reusable host scratch.
     std::vector<float> mel_buf;       // [num_mels, n_frames]

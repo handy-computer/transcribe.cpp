@@ -90,7 +90,6 @@ struct Session final : public transcribe_session {
     std::vector<ggml_tensor *> ada_scale;              // per-layer views
     int ada_num_delay = -1;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     bool encoder_use_flash = false;
     bool decoder_use_flash = true;

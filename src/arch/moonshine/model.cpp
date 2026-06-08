@@ -17,6 +17,7 @@
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-meta.h"
 
 #include "ggml.h"
@@ -72,6 +73,38 @@ MoonshineModel::~MoonshineModel() {
     plan.scheduler_list.clear();
     plan.primary      = nullptr;
     plan.primary_kind = transcribe::BackendKind::Unknown;
+}
+
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Moonshine is the honest
+// edge case in the soft-window bucket: its only wall is on *output*, not
+// input. The conv-stem encoder is effectively unbounded (it processes any
+// PCM length), so a long clip is never rejected. Instead the greedy decode
+// loop stops when it hits the decoder's position cap
+// (dec_max_position_embeddings = 194 for moonshine) before emitting EOS, and
+// the transcript silently truncates. We do not gate on audio length — a dense
+// short clip can hit the cap too — so there is no upfront INPUT_TOO_LONG
+// rejection here. Instead, when a decode loop exits on the cap rather than on
+// EOS, we set transcribe_was_truncated() and emit a WARN (same convention as
+// qwen3_asr's generation-budget guard).
+// ---------------------------------------------------------------------------
+
+// Advisory transcribe_capabilities::max_audio_ms. Because the limit is
+// output-bound and content-dependent (it counts decode tokens, not audio
+// frames), there is no exact audio-length ceiling. We report a conservative
+// advisory: the audio duration the output budget (dec_max_position_embeddings
+// tokens) can realistically cover at a typical speaking rate of ~4 output
+// tokens/sec. For moonshine (194 tokens) that is ~48 s — moonshine is intended
+// for short utterances. Returns 0 ("unknown / unbounded") if the cap is
+// missing. Crossing this advisory does not reject the clip; it only makes a
+// mid-decode truncation (transcribe_was_truncated) more likely.
+constexpr int k_tokens_per_sec = 4;  // rough speech-rate estimate; advisory only
+int64_t moonshine_max_audio_ms(const MoonshineHParams & hp) {
+    if (hp.dec_max_position_embeddings <= 0) {
+        return 0;
+    }
+    return static_cast<int64_t>(hp.dec_max_position_embeddings) * 1000 /
+           k_tokens_per_sec;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +247,11 @@ transcribe_status load(
 
     if (auto st = m->tok.load(loader.gguf());                 st != TRANSCRIBE_OK) return st;
     if (auto st = read_moonshine_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK) return st;
+
+    // Publish the advisory input-length window now that the decoder position
+    // cap is known. apply_family_invariants() ran above (before hparams), so
+    // this is the first point the cap is available. See docs/input-limits.md.
+    m->caps.max_audio_ms = moonshine_max_audio_ms(m->hparams);
 
     // Stage 2: reopen GGUF with no_alloc to wire weight slots.
     gguf_init_params init_params {};
@@ -371,8 +409,10 @@ transcribe_status run(
 
     // ----- Encoder: build + compute -----
     if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
-        std::fprintf(stderr, "moonshine run: ensure_compute_ctx failed (encoder)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "moonshine run: compute context allocation failed (encoder) — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     EncoderBuild eb = build_encoder_graph(
@@ -394,9 +434,9 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        std::fprintf(stderr,
-                     "moonshine run: alloc_graph failed (encoder)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "moonshine run: encoder graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload PCM and encoder pos_ids.
@@ -458,7 +498,9 @@ transcribe_status run(
                                n_ctx, T_enc, d_model, hp.dec_n_layers,
                                cache_type))
             {
-                return TRANSCRIBE_ERR_BACKEND;
+                transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "moonshine run: KV cache allocation failed — out of memory.");
+                return TRANSCRIBE_ERR_OOM;
             }
         } else {
             cc->kv_cache.n               = 0;
@@ -470,7 +512,10 @@ transcribe_status run(
     // ----- Cross-KV precompute -----
     {
         if (!ensure_compute_ctx(cc, 4 * 1024 * 1024)) {
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run: compute context allocation failed (cross_kv) — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
         DecoderBuild cross_db = build_cross_kv_graph(
             cc->compute_ctx, cm->weights, hp, cc->kv_cache, T_enc);
@@ -479,7 +524,9 @@ transcribe_status run(
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run: cross_kv graph allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
         ggml_backend_tensor_set(cross_db.encoder_out_in,
                                 cc->enc_host.data(), 0,
@@ -514,7 +561,10 @@ transcribe_status run(
         // capture dec.logits; otherwise we skip log_softmax (argmax is
         // invariant) and read raw logits.
         if (!ensure_compute_ctx(cc, 4 * 1024 * 1024)) {
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run: compute context allocation failed (step) — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
         const bool skip_log_softmax = !dump_prompt;
         DecoderBuild db = build_decoder_graph_kv(
@@ -526,7 +576,9 @@ transcribe_status run(
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) {
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run: step graph allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
         // Upload tokens + position ids.
         std::vector<int32_t> token_ids(static_cast<size_t>(n_tokens));
@@ -661,9 +713,10 @@ transcribe_status run(
         if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
 
         if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
-            std::fprintf(stderr,
-                         "moonshine run: ensure_compute_ctx failed (step)\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run: compute context allocation failed (step) — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
         StepBuild sb = build_step_graph(
             cc->compute_ctx, cm->weights, hp, cc->kv_cache,
@@ -675,9 +728,9 @@ transcribe_status run(
         }
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-            std::fprintf(stderr,
-                         "moonshine run: sched_alloc_graph failed (step)\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run: step graph allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
 
         // Mask buffer: [0, n_past) populated by the prompt pass start
@@ -754,6 +807,25 @@ transcribe_status run(
         }
     }
 
+    // Both greedy paths above (GPU static-graph loop and CPU/debug dynamic
+    // loop) exit either because next_token == eos (complete) or because
+    // n_past reached the position cap (max_pos) — or, on the GPU path, the
+    // KV-width break, which only fires once n_past has reached max_pos. When
+    // the last token was not eos the transcript hit the output cap before
+    // end-of-stream and is incomplete: flag it via transcribe_was_truncated()
+    // and emit one WARN, mirroring qwen3_asr. The decode loops themselves are
+    // unchanged — this only observes their exit. See docs/input-limits.md.
+    if (next_token != eos) {
+        cc->was_truncated = true;
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_WARN,
+            "moonshine run: output truncated at %d tokens — decode reached the "
+            "position cap (%d) before end-of-stream; the transcript may be "
+            "incomplete. This model is intended for short utterances. See "
+            "transcribe_capabilities.max_audio_ms.",
+            static_cast<int>(generated_ids.size()), max_pos);
+    }
+
     cc->t_decode_us = ggml_time_us() - t_decode_start;
 
     // Decode IDs to text.
@@ -782,7 +854,12 @@ transcribe_status run(
         cc->has_result  = true;
     }
 
-    return TRANSCRIBE_OK;
+    // Output truncation is a hard status (see docs/input-limits.md): the
+    // partial transcript above stays readable, but the caller is told the
+    // run did not reach end-of-stream. was_truncated was set in the
+    // OFFLINE single-utterance decode-exit check above.
+    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                             : TRANSCRIBE_OK;
 }
 
 // ===========================================================================
@@ -803,7 +880,12 @@ transcribe_status encode_one_to_host(
     if (pcm == nullptr || n_samples <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
     const auto & hp = cm->hparams;
 
-    if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+    if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "moonshine encode: compute context allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
     EncoderBuild eb = build_encoder_graph(
         cc->compute_ctx, cm->weights, hp, n_samples, cc->encoder_use_flash);
     if (eb.audio_in == nullptr || eb.out == nullptr || eb.graph == nullptr)
@@ -818,7 +900,11 @@ transcribe_status encode_one_to_host(
         if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "moonshine encode: encoder graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
 
     ggml_backend_tensor_set(eb.audio_in, pcm, 0,
                             static_cast<size_t>(n_samples) * sizeof(float));
@@ -934,8 +1020,10 @@ transcribe_status run_batch(
     if (cc->kv_cache.buffer == nullptr) {
         if (!kv_cache_init_batched(cc->kv_cache, cm->plan.primary,
                                    max_n_kv, T_enc_max, d_model, n_layer, n, kv_type)) {
-            std::fprintf(stderr, "moonshine run_batch: kv_cache_init_batched failed\n");
-            return TRANSCRIBE_ERR_BACKEND;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run_batch: batched KV cache allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     } else {
         ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
@@ -946,12 +1034,22 @@ transcribe_status run_batch(
 
     // ----- Batched cross-attention K/V -----
     {
-        if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) return TRANSCRIBE_ERR_GGUF;
+        if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run_batch: compute context allocation failed "
+                "(cross_kv) — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         DecoderBuild cross = build_cross_kv_graph_batched(
             cc->compute_ctx, cm->weights, hp, cc->kv_cache, T_enc_max, n);
         if (cross.graph == nullptr) return TRANSCRIBE_ERR_GGUF;
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) return TRANSCRIBE_ERR_GGUF;
+        if (!ggml_backend_sched_alloc_graph(cc->sched, cross.graph)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run_batch: cross_kv graph allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         std::vector<float> packed(static_cast<size_t>(d_model) * T_enc_max * n, 0.0f);
         for (int b = 0; b < n; ++b) {
             if (!valid[b]) continue;
@@ -981,12 +1079,22 @@ transcribe_status run_batch(
 
     StepBuildBatched sb {};
     auto rebuild = [&](int win, transcribe::EncDecStepIO & io) -> bool {
-        if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) return false;
+        if (!ensure_compute_ctx(cc, 16 * 1024 * 1024)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run_batch: compute context allocation failed "
+                "(step) — out of memory.");
+            return false;
+        }
         sb = build_step_graph_batched(cc->compute_ctx, cm->weights, hp,
                                       cc->kv_cache, win, T_enc_max, n, /*use_flash=*/true);
         if (sb.graph == nullptr || sb.argmax_out == nullptr) return false;
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return false;
+        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "moonshine run_batch: step graph allocation failed — "
+                "out of memory.");
+            return false;
+        }
         ggml_backend_tensor_set(sb.cross_mask_in, cmask.data(), 0,
                                 cmask.size() * sizeof(ggml_fp16_t));
         io.token_ids = sb.token_ids_in;
@@ -1000,14 +1108,40 @@ transcribe_status run_batch(
 
     const std::vector<int32_t> prompt_ids = { static_cast<int32_t>(decoder_start) };
     std::vector<std::vector<int32_t>> generated(n);
+    std::vector<char> truncated;
     if (const transcribe_status st = transcribe::run_batched_encdec_step_loop(
             cc, cc->sched, rebuild, prompt_ids, /*prompt_len=*/1,
             /*init_window=*/max_n_kv, /*max_new=*/max_pos, max_n_kv,
-            static_cast<int32_t>(eos), n, valid, generated);
+            static_cast<int32_t>(eos), n, valid, generated,
+            /*n_steps_out=*/nullptr, &truncated);
         st != TRANSCRIBE_OK) {
         return st;
     }
     const int64_t dec_us = ggml_time_us() - t_dec0;
+
+    // Batched truncation flag. The shared step loop marks each valid row that
+    // stopped on the output cap (max_pos) / context window before end-of-stream
+    // — its transcript is incomplete. Mirror the serial path: set
+    // transcribe_was_truncated() and emit one WARN. (The decode is unchanged.)
+    // See docs/input-limits.md.
+    {
+        int n_truncated = 0;
+        for (int b = 0; b < n; ++b) {
+            if (b < static_cast<int>(truncated.size()) && truncated[b]) {
+                ++n_truncated;
+            }
+        }
+        if (n_truncated > 0) {
+            cc->was_truncated = true;
+            transcribe::log_msg(
+                TRANSCRIBE_LOG_LEVEL_WARN,
+                "moonshine run_batch: %d of %d utterances truncated — decode "
+                "reached the position cap (%d) before end-of-stream; those "
+                "transcripts may be incomplete. This model is intended for "
+                "short utterances. See transcribe_capabilities.max_audio_ms.",
+                n_truncated, n, max_pos);
+        }
+    }
 
     // ----- Capture -----
     const int valid_count = std::max(1, static_cast<int>(
@@ -1025,6 +1159,14 @@ transcribe_status run_batch(
         rs.full_text = full;
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result = true; rs.status = TRANSCRIBE_OK;
+        // Per-utterance truncation parity with the single-shot path: a valid row
+        // marked truncated by the shared loop reports
+        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
+        // override an otherwise-OK status — never a worse one.
+        if (rs.status == TRANSCRIBE_OK &&
+            b < static_cast<int>(truncated.size()) && truncated[b]) {
+            rs.status = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        }
         rs.t_mel_us = 0;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = dec_us / valid_count;

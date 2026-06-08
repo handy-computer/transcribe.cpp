@@ -135,7 +135,6 @@ struct MoonshineSession final : public transcribe_session {
 
     MoonshineKvCache kv_cache;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Flash-attention defaults — finalized per-backend in init_context.
     //

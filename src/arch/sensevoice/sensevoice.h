@@ -53,7 +53,6 @@ struct SenseVoiceSession final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Reusable host scratch.
     std::vector<float>   frontend_buf;   // [T_lfr, d_input]

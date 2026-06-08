@@ -25,6 +25,7 @@
 
 #include "transcribe-abi.h"
 #include "transcribe-arch.h"
+#include "transcribe-log.h"
 #include "transcribe-session.h"
 #include "transcribe-loader.h"
 #include "transcribe-model.h"
@@ -39,6 +40,7 @@
 #include <cerrno>
 #include <climits>
 #include <cmath>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -75,6 +77,8 @@ extern "C" const char * transcribe_status_string(int status) {
         case TRANSCRIBE_ERR_BAD_STRUCT_SIZE:      return "caller-owned struct missing or has bad struct_size";
         case TRANSCRIBE_ERR_UNSUPPORTED_PNC:      return "model does not support runtime PNC control (reserved; not currently returned)";
         case TRANSCRIBE_ERR_UNSUPPORTED_ITN:      return "model does not support runtime ITN control (reserved; not currently returned)";
+        case TRANSCRIBE_ERR_INPUT_TOO_LONG:       return "input audio too long for model context";
+        case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:     return "output truncated: decode hit the context/generation cap before end-of-stream";
         default:                                  return "unknown status";
     }
 }
@@ -229,6 +233,22 @@ static void transcribe_log_emit_or_stderr(
     }
 }
 
+// Internal printf-style logger declared in transcribe-log.h. Renders into
+// a bounded stack buffer and forwards to the stderr-fallback emitter, so
+// library internals (including per-family run() drivers) reach the
+// caller's installed log sink instead of writing raw stderr. See
+// transcribe-log.h and docs/input-limits.md.
+namespace transcribe {
+void log_msg(transcribe_log_level level, const char * fmt, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    transcribe_log_emit_or_stderr(level, buf);
+}
+} // namespace transcribe
+
 // ---------------------------------------------------------------------------
 // Params init functions
 // ---------------------------------------------------------------------------
@@ -288,6 +308,12 @@ extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * 
 // is a real "you forgot to init the buffer" error.)
 
 extern "C" void transcribe_capabilities_init(struct transcribe_capabilities * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
+extern "C" void transcribe_session_limits_init(struct transcribe_session_limits * p) {
     if (p == nullptr) { return; }
     std::memset(p, 0, sizeof(*p));
     p->struct_size = sizeof(*p);
@@ -418,6 +444,8 @@ constexpr size_t k_min_stream_text_size =
     TRANSCRIBE_FIELD_END(transcribe_stream_text, raw_tentative_start_bytes);
 constexpr size_t k_min_capabilities_size =
     TRANSCRIBE_FIELD_END(transcribe_capabilities, supports_streaming);
+constexpr size_t k_min_session_limits_size =
+    TRANSCRIBE_FIELD_END(transcribe_session_limits, max_kv_bytes);
 constexpr size_t k_min_segment_size =
     TRANSCRIBE_FIELD_END(transcribe_segment, text);
 constexpr size_t k_min_word_size =
@@ -1012,6 +1040,18 @@ extern "C" transcribe_status transcribe_session_init(
     if (params->n_threads < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    // n_ctx is a trailing field (appended after kv_type), so only read it
+    // when the caller's struct_size actually covers it; an older caller's
+    // smaller struct leaves it at the default 0 = "model max". A negative
+    // value is undefined input, not a documented sentinel. The family that
+    // honors n_ctx clamps a too-large value down to the model maximum, so
+    // only the negative case is rejected here. See include/transcribe.h.
+    if (has_field(params->struct_size,
+                  offsetof(struct transcribe_session_params, n_ctx) +
+                      sizeof(params->n_ctx)) &&
+        params->n_ctx < 0) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
     // The model carries its own arch dispatch pointer. A model that
     // came from a load() call always has arch set; the null check is
     // defensive against a hypothetical malformed model object.
@@ -1121,6 +1161,13 @@ extern "C" bool transcribe_was_aborted(const struct transcribe_session * session
         return false;
     }
     return session->was_aborted;
+}
+
+extern "C" bool transcribe_was_truncated(const struct transcribe_session * session) {
+    if (session == nullptr) {
+        return false;
+    }
+    return session->was_truncated;
 }
 
 // ---------------------------------------------------------------------------
@@ -1259,6 +1306,7 @@ extern "C" transcribe_status transcribe_stream_begin(
     session->t_encode_us = 0;
     session->t_decode_us = 0;
     session->was_aborted = false;
+    session->was_truncated = false;
     session->stream_state = TRANSCRIBE_STREAM_ACTIVE;
     session->stream_commit_policy = commit_policy;
     session->stream_stable_prefix_agreement_n = stable_prefix_agreement_n;
@@ -1660,6 +1708,7 @@ static transcribe_status run_one_inner(
     session->t_encode_us = 0;
     session->t_decode_us = 0;
     session->was_aborted = false;
+    session->was_truncated = false;
     // Force stream_state to IDLE: clear_result deliberately preserves
     // lifecycle state, but a well-formed transcribe_run subsumes any
     // prior FINISHED/FAILED stream — after a one-shot run the context
@@ -1835,6 +1884,7 @@ extern "C" transcribe_status transcribe_run_batch(
     session->t_encode_us = 0;
     session->t_decode_us = 0;
     session->was_aborted = false;
+    session->was_truncated = false;
     session->stream_state = TRANSCRIBE_STREAM_IDLE;
     session->batch_results.clear();
 
@@ -1933,6 +1983,76 @@ extern "C" transcribe_status transcribe_model_get_capabilities(
     transcribe_capabilities staged = model->caps;
     staged.struct_size = caller_size;
     copy_out_prefix(out_caps, &staged, caller_size, sizeof(staged));
+    return TRANSCRIBE_OK;
+}
+
+extern "C" transcribe_status transcribe_session_get_limits(
+    const struct transcribe_session *  session,
+    struct transcribe_session_limits * out)
+{
+    if (session == nullptr || out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_session_limits_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+
+    transcribe_session_limits staged;
+    transcribe_session_limits_init(&staged);
+
+    const transcribe_model * model = session->model;
+    const auto & lb = model->limits;
+
+    if (lb.has_context_cap && lb.model_max_ctx > 0) {
+        // effective_n_ctx = model max, lowered (never raised) by the session
+        // n_ctx cap. This mirrors the per-family context_ceiling helpers.
+        int32_t eff = lb.model_max_ctx;
+        if (session->n_ctx > 0 && session->n_ctx < eff) {
+            eff = session->n_ctx;
+        }
+        staged.effective_n_ctx = eff;
+
+        // effective_max_audio_ms: for families whose audio tokens consume the
+        // decoder context, invert the input gate at the effective ceiling so
+        // the audio bound tracks n_ctx. For families whose audio bound is the
+        // encoder (audio_from_caps), the audio limit is independent of the
+        // decoder context, so report caps.max_audio_ms unchanged. Either way
+        // it is advisory (representative prompt), not an exact per-call bound.
+        if (lb.audio_from_caps) {
+            staged.effective_max_audio_ms = model->caps.max_audio_ms;
+        } else {
+            const int64_t audio_tokens =
+                (int64_t) eff - lb.prompt_overhead - lb.gen_reserve;
+            staged.effective_max_audio_ms =
+                (audio_tokens > 0 && lb.ms_per_audio_token > 0.0)
+                    ? (int64_t) ((double) audio_tokens * lb.ms_per_audio_token)
+                    : 0;
+        }
+
+        // max_kv_bytes: worst-case single-utterance KV allocation at the
+        // effective ceiling, exact for the session's kv_type. The families
+        // resolve AUTO (and F16) to f16 for the KV cache and use f32 only for
+        // an explicit F32 request, so the byte size is 4/elem for F32 and
+        // 2/elem otherwise. This is the ceiling for one utterance, not the
+        // per-run allocation (the cache grows to fit input); transcribe_run_batch
+        // allocates roughly batch_size x this.
+        const int64_t kv_bytes_per_elem =
+            (session->kv_type == TRANSCRIBE_KV_TYPE_F32) ? 4 : 2;
+        staged.max_kv_bytes =
+            lb.kv_elems_per_ctx_token * (int64_t) eff * kv_bytes_per_elem;
+    } else {
+        // Unbounded / soft-window family: no decoder context cap. Report the
+        // soft window (if any) from caps.max_audio_ms, independent of n_ctx.
+        staged.effective_n_ctx        = 0;
+        staged.effective_max_audio_ms = model->caps.max_audio_ms;
+        staged.max_kv_bytes           = 0;
+    }
+
+    const uint64_t caller_size = out->struct_size;
+    staged.struct_size = caller_size;
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
     return TRANSCRIBE_OK;
 }
 

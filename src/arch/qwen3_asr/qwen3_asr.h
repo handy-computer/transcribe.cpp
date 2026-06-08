@@ -128,7 +128,6 @@ struct QwenAsrSession final : public transcribe_session {
     std::vector<float> mel_buf;
     std::vector<float> enc_host;  // audio encoder output, pre-injection
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;

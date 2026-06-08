@@ -24,6 +24,7 @@
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
 
@@ -116,6 +117,68 @@ int pick_kv_ctx(int needed, int model_max) {
     while (want < needed) want *= 2;
     if (want > model_max) want = model_max;
     return want;
+}
+
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Voxtral is a
+// hard-context-cap family: the audio tokens, the instruct/transcription
+// prompt, and the generated transcript all share the Llama/Ministral decoder's
+// context window (dec_max_position_embeddings). The Whisper encoder already
+// chunks audio into 30 s windows (375 audio tokens per chunk via the 4x
+// projector downsample), so the binding limit is the decoder context, not the
+// encoder. Over-length input is rejected up front with
+// TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that fills the generation budget
+// before end-of-stream is flagged via transcribe_was_truncated().
+// ---------------------------------------------------------------------------
+
+// Generation room the up-front gate reserves, in tokens. Mirrors the floor of
+// pick_decode_budget(): an accepted clip is always guaranteed at least this
+// many output tokens within the context window. (Longer audio raises the
+// actual decode budget above this floor, but the gate only needs to guarantee
+// the minimum useful transcript fits.)
+constexpr int k_gen_reserve = k_decode_budget_min;
+
+// Effective decoder context ceiling, in tokens: the model's trained maximum,
+// optionally lowered — never raised — by the caller's session n_ctx knob.
+int voxtral_context_ceiling(int32_t n_ctx_knob, const VoxtralHParams & hp) {
+    int ceiling = hp.dec_max_position_embeddings;
+    if (n_ctx_knob > 0 && n_ctx_knob < ceiling) {
+        ceiling = n_ctx_knob;
+    }
+    return ceiling;
+}
+
+// Advisory transcribe_capabilities::max_audio_ms: the longest audio whose audio
+// tokens, a representative prompt, and the generation reserve still fit the
+// context ceiling. The encoder rate is fixed by the 30 s chunk geometry:
+// audio_tokens_per_chunk() tokens (375) cover one fe_nb_max_frames-frame chunk
+// (3000 mel frames = 30 s), so ms-per-audio-token = chunk_ms / tokens_per_chunk.
+// Returns 0 ("unknown / unbounded") if the rate hparams are missing, so a
+// misconfigured model is never advertised with a wrong finite number. Note:
+// even within this bound a long transcript may truncate at the generation
+// budget (transcribe_was_truncated) — max_audio_ms is the input bound.
+int64_t voxtral_max_audio_ms(const VoxtralHParams & hp) {
+    const int tokens_per_chunk = hp.audio_tokens_per_chunk();
+    if (tokens_per_chunk <= 0 || hp.fe_nb_max_frames <= 0 ||
+        hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0 ||
+        hp.dec_max_position_embeddings <= 0) {
+        return 0;
+    }
+    // Representative non-audio prompt overhead (instruct/transcription
+    // affixes: BOS/INST/BEGIN_AUDIO/[/INST]/TRANSCRIBE plus an optional
+    // language hint). Advisory; the real gate uses the actual prompt length.
+    constexpr int k_prompt_overhead = 16;
+    const int max_audio_tokens =
+        hp.dec_max_position_embeddings - k_prompt_overhead - k_gen_reserve;
+    if (max_audio_tokens <= 0) {
+        return 0;
+    }
+    // One 30 s chunk = fe_nb_max_frames mel frames; chunk_ms = frames * hop_ms.
+    //   ms_per_audio_token = chunk_ms / tokens_per_chunk
+    //   max_audio_ms       = max_audio_tokens * ms_per_audio_token
+    const int64_t chunk_ms = static_cast<int64_t>(hp.fe_nb_max_frames) *
+                             hp.fe_hop_length * 1000 / hp.fe_sample_rate;
+    return static_cast<int64_t>(max_audio_tokens) * chunk_ms / tokens_per_chunk;
 }
 
 // BCP-47 -> English language name for the synthesized translate
@@ -258,6 +321,41 @@ transcribe_status load(
     if (const transcribe_status st = read_voxtral_hparams(loader.gguf(), m->hparams);
         st != TRANSCRIBE_OK) return st;
 
+    // Publish the input-length ceiling now that the decoder context window
+    // and the 30 s-chunk encoder rate are known (apply_family_invariants ran
+    // before the hparams were read, so it could not set this). See
+    // docs/input-limits.md.
+    m->caps.max_audio_ms = voxtral_max_audio_ms(m->hparams);
+
+    // Basis for the session-level limits query (transcribe_session_get_limits):
+    // the same constants voxtral_max_audio_ms uses, kept so the effective limit
+    // can be recomputed at a lowered session n_ctx. The decoder context window
+    // is the binding cap (audio tokens + prompt + transcript share it), so the
+    // n_ctx knob and KV-byte estimate agree with caps.max_audio_ms at n_ctx=0.
+    // See docs/input-limits.md.
+    {
+        const int tokens_per_chunk = m->hparams.audio_tokens_per_chunk();
+        if (m->hparams.dec_max_position_embeddings > 0 && tokens_per_chunk > 0 &&
+            m->hparams.fe_nb_max_frames > 0 &&
+            m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
+            m->limits.has_context_cap = true;
+            m->limits.model_max_ctx   = m->hparams.dec_max_position_embeddings;
+            m->limits.prompt_overhead = 16;            // k_prompt_overhead in
+                                                       // voxtral_max_audio_ms
+            m->limits.gen_reserve     = k_gen_reserve;
+            // ms-per-audio-token = chunk_ms / tokens_per_chunk, where one 30 s
+            // chunk = fe_nb_max_frames mel frames (same rate the max_audio_ms
+            // helper inverts).
+            const double chunk_ms =
+                static_cast<double>(m->hparams.fe_nb_max_frames) *
+                m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
+            m->limits.ms_per_audio_token = chunk_ms / tokens_per_chunk;
+            m->limits.kv_elems_per_ctx_token =
+                (int64_t) m->hparams.dec_n_kv_heads *
+                m->hparams.dec_head_dim * m->hparams.dec_n_layers * 2;
+        }
+    }
+
     m->hparams.vocab_size   = m->tok.n_tokens();
     m->hparams.bos_token_id = m->tok.bos_id();
     m->hparams.eos_token_id = m->tok.eos_id();
@@ -383,6 +481,7 @@ transcribe_status init_context(
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
+    cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
     // Encoder is the Whisper-large-v3 encoder (head_dim 64, full
     // bidirectional attention, null mask) — flash-supported on every
@@ -406,8 +505,13 @@ transcribe_status init_context(
                                            cm->hparams.dec_n_layers,
                                            kv_type))
         {
-            std::fprintf(stderr, "voxtral init_context: kv_init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral init_context: KV cache allocation failed "
+                "(n_ctx=4096, %d kv-heads x %d head-dim x %d layers) — "
+                "out of memory.",
+                cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
+                cm->hparams.dec_n_layers);
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -540,8 +644,9 @@ transcribe_status run(
         ip.no_alloc = true;
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr, "voxtral run: ggml_init (encoder) failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run: ggml_init (encoder) failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
 
         EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, cm->hparams,
@@ -550,8 +655,9 @@ transcribe_status run(
 
         ggml_backend_sched_reset(cc->sched);
         if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-            std::fprintf(stderr, "voxtral run: sched_alloc_graph (encoder) failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run: encoder graph allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
 
         // Frame-major mel for this chunk: chunk_mel[t*n_mels + m] =
@@ -609,17 +715,27 @@ transcribe_status run(
     }
     const int T_prompt = static_cast<int>(prompt_ids.size());
 
+    // ----- Input-length gate (see docs/input-limits.md) -----
     // Auto-size the KV cache to this utterance. The initial allocation from
     // init_context is a conservative starting point; long audio produces a
     // longer audio prompt than that, so grow the cache to fit (capped at the
-    // decoder's trained context). Only the audio prompt can realistically push
-    // past the model max, so that stays a hard error.
-    const int model_max = cm->hparams.dec_max_position_embeddings;
-    if (T_prompt + 1 > model_max) {
-        std::fprintf(stderr,
-                     "voxtral run: prompt len %d exceeds model max context %d\n",
-                     T_prompt, model_max);
-        return TRANSCRIBE_ERR_GGUF;
+    // context ceiling). The audio-token count is fixed by the input length, so
+    // reject an over-length clip here, before prefill/decode, instead of
+    // growing the cache past the trained context and aliasing RoPE. Reserving
+    // the generation budget means an accepted clip always has room for a real
+    // transcript. The ceiling honors the caller's n_ctx knob (lowered, never
+    // raised).
+    const int model_max = voxtral_context_ceiling(cc->n_ctx, cm->hparams);
+    if (T_prompt + k_gen_reserve > model_max) {
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_ERROR,
+            "voxtral run: input too long — %d audio tokens + %d prompt exceed "
+            "the %d-token context (need %d incl. generation reserve). Shorten "
+            "the audio (see transcribe_capabilities.max_audio_ms) or split it "
+            "into segments.",
+            n_audio_total, T_prompt - n_audio_total, model_max,
+            T_prompt + k_gen_reserve);
+        return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
     const int max_new = pick_decode_budget(n_audio_total, T_prompt, model_max);
     const int want_ctx = pick_kv_ctx(T_prompt + max_new, model_max);
@@ -631,9 +747,11 @@ transcribe_status run(
                 cc->kv_cache, cm->plan.primary, want_ctx,
                 cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                 cm->hparams.dec_n_layers, kv_type)) {
-            std::fprintf(stderr, "voxtral run: kv_init (grow to %d) failed\n",
-                         want_ctx);
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run: KV cache allocation failed (grow to n_ctx=%d) — "
+                "out of memory. Lower transcribe_session_params.n_ctx or shorten "
+                "the audio.", want_ctx);
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -652,7 +770,11 @@ transcribe_status run(
         ip.mem_size = 64 * 1024 * 1024;
         ip.no_alloc = true;
         cc->compute_ctx = ggml_init(ip);
-        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (cc->compute_ctx == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run: ggml_init (prefill) failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
     PrefillBuild pb = build_prefill_graph(
         cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
@@ -662,8 +784,10 @@ transcribe_status run(
 
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-        std::fprintf(stderr, "voxtral run: sched_alloc_graph (prefill) failed\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "voxtral run: prefill graph allocation failed — out of memory. "
+            "Lower transcribe_session_params.n_ctx or shorten the audio.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     ggml_backend_tensor_set(pb.input_ids_in, prompt_ids.data(),
@@ -746,15 +870,21 @@ transcribe_status run(
         ip.mem_size = 16 * 1024 * 1024;
         ip.no_alloc = true;
         cc->compute_ctx = ggml_init(ip);
-        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (cc->compute_ctx == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run: ggml_init (step) failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
     StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights, cm->hparams,
                                     cc->kv_cache, max_n_kv, cc->decoder_use_flash);
     if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-        std::fprintf(stderr, "voxtral run: sched_alloc_graph (step) failed\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "voxtral run: step graph allocation failed — out of memory. "
+            "Lower transcribe_session_params.n_ctx or shorten the audio.");
+        return TRANSCRIBE_ERR_OOM;
     }
     set_sched_threads(cc->sched, cc->n_threads);
 
@@ -803,6 +933,20 @@ transcribe_status run(
     }
     cc->t_decode_us = ggml_time_us() - t_dec_start;
 
+    // The decode stopped at EOS (complete) or at the generation budget /
+    // context width (truncated). Surface the latter via
+    // transcribe_was_truncated() and a WARN rather than returning a silently
+    // shortened transcript. See docs/input-limits.md.
+    if (next_tok != eos_id) {
+        cc->was_truncated = true;
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_WARN,
+            "voxtral run: output truncated at %d tokens — decode reached the "
+            "generation budget before end-of-stream; the transcript may be "
+            "incomplete.",
+            static_cast<int>(generated_ids.size()));
+    }
+
     if (!generated_ids.empty() && generated_ids.back() == eos_id) {
         generated_ids.pop_back();
     }
@@ -826,7 +970,12 @@ transcribe_status run(
               / static_cast<int64_t>(cm->hparams.fe_sample_rate);
     cc->segments.push_back(std::move(seg));
 
-    return TRANSCRIBE_OK;
+    // Output truncation is a hard status: when the single-shot decode stopped
+    // before EOS (the post-loop check above set cc->was_truncated) the partial
+    // transcript is already populated and stays readable (like an aborted run);
+    // surface the truncation to the caller rather than reporting a clean OK.
+    // See docs/input-limits.md.
+    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -906,6 +1055,10 @@ transcribe_status run_batch(
 
     // ----- Pass 0: per-utterance chunking + parallel mel -----
     std::vector<char> valid(n, 0);
+    // Utterances rejected by the input-length gate below. Tracked separately
+    // from `valid` so the result-capture pass can report the precise
+    // TRANSCRIBE_ERR_INPUT_TOO_LONG status rather than a generic invalid-arg.
+    std::vector<char> over_length(n, 0);
     std::vector<int>  n_chunks(n, 0);
     std::vector<std::vector<float>> mel_bufs(n);
     std::vector<int>  mel_nf(n, 0);
@@ -993,7 +1146,11 @@ transcribe_status run_batch(
         ip.mem_size = 64 * 1024 * 1024;
         ip.no_alloc = true;
         cc->compute_ctx = ggml_init(ip);
-        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (cc->compute_ctx == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run_batch: ggml_init (encoder) failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
 
         EncoderBuild eb = build_encoder_graph_batched(
             cc->compute_ctx, cm->weights, hp, frames_per_chunk, total_chunks,
@@ -1001,7 +1158,11 @@ transcribe_status run_batch(
         if (eb.graph == nullptr || eb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
 
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+        if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run_batch: encoder graph allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         ggml_backend_tensor_set(eb.mel_in, slab.data(), 0, slab.size() * sizeof(float));
         set_sched_threads(cc->sched, cc->n_threads);
 
@@ -1026,6 +1187,12 @@ transcribe_status run_batch(
     }
 
     // ----- Prompts (ragged: n_audio differs per utterance) -----
+    // Input-length gate (see docs/input-limits.md): per-utterance, the audio
+    // tokens + prompt + generation reserve must fit the decoder context ceiling
+    // (the trained max, lowered by the caller's n_ctx knob). An over-length
+    // utterance is dropped from the batch and flagged so its captured result
+    // carries TRANSCRIBE_ERR_INPUT_TOO_LONG.
+    const int ctx_ceiling = voxtral_context_ceiling(cc->n_ctx, hp);
     std::vector<std::vector<int32_t>> prompt_ids(n);
     std::vector<int> T_prompt(n, 0), T_audio(n, 0);
     int prefix_len = 0, suffix_len = 0;
@@ -1038,12 +1205,17 @@ transcribe_status run_batch(
             : build_transcription_prompt(*cm, lang, n_audio, prompt_ids[b], pfx, sfx);
         if (st != TRANSCRIBE_OK) { valid[b] = 0; continue; }
         const int t_prompt = static_cast<int>(prompt_ids[b].size());
-        if (t_prompt + 1 > cm->hparams.dec_max_position_embeddings) {
-            std::fprintf(stderr,
-                         "voxtral run_batch: utterance %d prompt len %d exceeds "
-                         "model max context %d\n",
-                         b, t_prompt, cm->hparams.dec_max_position_embeddings);
-            valid[b] = 0; continue;
+        if (t_prompt + k_gen_reserve > ctx_ceiling) {
+            transcribe::log_msg(
+                TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run_batch: utterance %d input too long — %d audio "
+                "tokens + %d prompt exceed the %d-token context (need %d incl. "
+                "generation reserve). Shorten the audio (see "
+                "transcribe_capabilities.max_audio_ms) or split it into "
+                "segments.",
+                b, n_audio, t_prompt - n_audio, ctx_ceiling,
+                t_prompt + k_gen_reserve);
+            valid[b] = 0; over_length[b] = 1; continue;
         }
         prefix_len = pfx; suffix_len = sfx;  // uniform across the batch
         T_prompt[b] = t_prompt;
@@ -1057,7 +1229,9 @@ transcribe_status run_batch(
     }
     if (max_T_prompt == 0) {
         for (int b = 0; b < n; ++b) {
-            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            transcribe_session::ResultSet rs;
+            rs.status = over_length[b] ? TRANSCRIBE_ERR_INPUT_TOO_LONG
+                                       : TRANSCRIBE_ERR_INVALID_ARG;
             cc->batch_results.push_back(std::move(rs));
         }
         return TRANSCRIBE_OK;
@@ -1065,10 +1239,10 @@ transcribe_status run_batch(
     T_audio_max = std::max(1, T_audio_max);
 
     // Size the batched KV cache to the longest prompt in the batch plus the
-    // decode budget, clamped to the decoder's trained context (not the
-    // single-shot cache's initial allocation). kv_init_batched below grows the
-    // cache to this on demand.
-    const int model_max = cm->hparams.dec_max_position_embeddings;
+    // decode budget, clamped to the decoder context ceiling (the trained max,
+    // lowered by the caller's n_ctx knob — not the single-shot cache's initial
+    // allocation). kv_init_batched below grows the cache to this on demand.
+    const int model_max = ctx_ceiling;
     const int max_new = pick_decode_budget(T_audio_max, max_T_prompt, model_max);
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
@@ -1083,8 +1257,11 @@ transcribe_status run_batch(
         if (!transcribe::causal_lm::kv_init_batched(
                 cc->kv_cache_batch, cm->plan.primary, max_n_kv,
                 hp.dec_n_kv_heads, hp.dec_head_dim, hp.dec_n_layers, n, kv_type)) {
-            std::fprintf(stderr, "voxtral run_batch: kv_init_batched failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run_batch: batched KV cache allocation failed — "
+                "out of memory. Lower transcribe_session_params.n_ctx or "
+                "shorten the audio.");
+            return TRANSCRIBE_ERR_OOM;
         }
         cc->kv_batch_cap = n; cc->kv_batch_n_ctx = max_n_kv;
     } else if (cc->kv_cache_batch.buffer != nullptr) {
@@ -1102,14 +1279,22 @@ transcribe_status run_batch(
         ip.mem_size = 64 * 1024 * 1024;
         ip.no_alloc = true;
         cc->compute_ctx = ggml_init(ip);
-        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (cc->compute_ctx == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run_batch: ggml_init (prefill) failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
 
         PrefillBuildBatched pb = build_prefill_graph_batched(
             cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch,
             max_T_prompt, T_audio_max, n, cc->decoder_use_flash);
         if (pb.graph == nullptr || pb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) return TRANSCRIBE_ERR_GGUF;
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run_batch: prefill graph allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
 
         std::vector<int32_t> ids(static_cast<size_t>(max_T_prompt) * n, 0);
         // Audio injection by elementwise blend: audio_dense holds each
@@ -1178,20 +1363,31 @@ transcribe_status run_batch(
 
     // ----- Pass 3: batched greedy step loop (shared causal_lm driver) -----
     const int32_t eos_id = hp.eos_token_id;
+    // Per-utterance truncation flags from the step loop (consumed in the
+    // result-capture pass below, outside this block's scope).
+    std::vector<char> truncated;
     {
         if (cc->compute_ctx != nullptr) { ggml_free(cc->compute_ctx); cc->compute_ctx = nullptr; }
         ggml_init_params ip {};
         ip.mem_size = 32 * 1024 * 1024;
         ip.no_alloc = true;
         cc->compute_ctx = ggml_init(ip);
-        if (cc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (cc->compute_ctx == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run_batch: ggml_init (step) failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
 
         StepBuildBatched sb = build_step_graph_batched(
             cc->compute_ctx, cm->weights, hp, cc->kv_cache_batch,
             max_n_kv, n, cc->decoder_use_flash);
         if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
+        if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "voxtral run_batch: step graph allocation failed — out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         set_sched_threads(cc->sched, cc->n_threads);
 
         transcribe::causal_lm::StepBatchedIO io {};
@@ -1210,7 +1406,7 @@ transcribe_status run_batch(
         transcribe::causal_lm::StepLoopStats step_stats;
         if (const transcribe_status st = transcribe::causal_lm::run_batched_step_loop(
                 cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
-                generated, &step_stats); st != TRANSCRIBE_OK)
+                generated, &step_stats, &truncated); st != TRANSCRIBE_OK)
             return st;
         dec_us += step_stats.step_us;
     }
@@ -1220,7 +1416,9 @@ transcribe_status run_batch(
         static_cast<int>(std::count(valid.begin(), valid.end(), char(1))));
     for (int b = 0; b < n; ++b) {
         if (!valid[b]) {
-            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            transcribe_session::ResultSet rs;
+            rs.status = over_length[b] ? TRANSCRIBE_ERR_INPUT_TOO_LONG
+                                       : TRANSCRIBE_ERR_INVALID_ARG;
             cc->batch_results.push_back(std::move(rs));
             continue;
         }
@@ -1243,6 +1441,15 @@ transcribe_status run_batch(
         seg.t1_ms = static_cast<int64_t>(n_samples[b]) * 1000
                   / static_cast<int64_t>(hp.fe_sample_rate);
         rs.segments.push_back(std::move(seg));
+        // Per-utterance truncation parity with single-shot run(): a row cut at
+        // the generation budget / KV window before eos reports
+        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
+        // override a TRANSCRIBE_OK status, never a worse one.
+        if (b < static_cast<int>(truncated.size()) && truncated[b] &&
+            rs.status == TRANSCRIBE_OK) {
+            cc->was_truncated = true;
+            rs.status = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        }
         rs.t_mel_us    = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = dec_us / valid_count;

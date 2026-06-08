@@ -148,7 +148,6 @@ struct CanarySession final : public transcribe_session {
     std::vector<float> pos_div_term;
     std::vector<float> enc_host;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Per-stage flash-attention controls. Same rationale as cohere:
     // encoder rel-pos MHSA dk depends on enc_d_model/n_heads (96 for

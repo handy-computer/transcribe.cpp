@@ -1052,7 +1052,8 @@ transcribe_status run_batched_step_loop(
     int                                 max_new,
     const StepBatchedState &            state,
     std::vector<std::vector<int32_t>> & generated,
-    StepLoopStats *                     stats)
+    StepLoopStats *                     stats,
+    std::vector<char> *                 truncated_out)
 {
     const int n = n_batch;
 
@@ -1132,6 +1133,24 @@ transcribe_status run_batched_step_loop(
     if (stats != nullptr) {
         stats->n_steps = n_steps;
         stats->step_us = ggml_time_us() - t_step0;
+    }
+
+    // A valid row was truncated if it stopped for a reason OTHER than emitting
+    // eos — i.e. it hit the generation budget (max_new) or the KV window. Note
+    // `finished` is NOT the discriminator: it is set on every stop reason (eos
+    // AND budget AND KV exhaustion, above), and the loop only exits once every
+    // valid row is finished, so `!finished[b]` is always false here. The actual
+    // signal is the last sampled token: `next_tok[b]` equals `eos_id` exactly
+    // when the row stopped by emitting eos (line `next_tok[b] = tok;` runs
+    // before the eos test, and `next_tok` is frozen once the row finishes), so
+    // `next_tok[b] != eos_id` means the row was cut off mid-transcript. This
+    // lets the family return per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED. See
+    // docs/input-limits.md.
+    if (truncated_out != nullptr) {
+        truncated_out->assign(n, 0);
+        for (int b = 0; b < n; ++b) {
+            (*truncated_out)[b] = (valid[b] && next_tok[b] != eos_id) ? 1 : 0;
+        }
     }
     return TRANSCRIBE_OK;
 }

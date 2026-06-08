@@ -36,6 +36,7 @@
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
 
@@ -107,6 +108,67 @@ namespace {
 constexpr const char k_default_variant[] = "granite-speech";
 constexpr float kBnEps = 1e-5f;
 
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Granite is a
+// hard-context-cap family: audio tokens + prompt + generation share the LLM
+// decoder's context window (dec_max_position_embeddings, typically 4096).
+// Over-length input is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG
+// rather than silently aliasing RoPE past the trained range.
+// ---------------------------------------------------------------------------
+
+// Generation budget reserved per run. Also the KV grow-to-fit step budget,
+// so an accepted clip always has room for up to this many output tokens.
+constexpr int k_gen_budget = 256;
+
+// Effective decoder context ceiling, in tokens: the model's trained maximum,
+// optionally lowered — never raised — by the caller's session n_ctx knob.
+int granite_context_ceiling(int32_t n_ctx_knob, const GraniteHParams & hp) {
+    int ceiling = hp.dec_max_position_embeddings;
+    if (n_ctx_knob > 0 && n_ctx_knob < ceiling) {
+        ceiling = n_ctx_knob;
+    }
+    return ceiling;
+}
+
+// Q-Former audio tokens per encoder window: window_size / downsample_rate
+// (== num_queries, 15/5 = 3 for shipped granite variants).
+int granite_num_queries(const GraniteHParams & hp) {
+    if (hp.downsample_rate > 0 && hp.window_size > 0) {
+        return hp.window_size / hp.downsample_rate;
+    }
+    return 3;
+}
+
+// Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
+// audio tokens, a representative prompt, and the generation reserve still fit
+// the context ceiling. This is the input bound the gate enforces; transcripts
+// of long-but-fitting audio may still truncate (transcribe_was_truncated)
+// because the per-run output is bounded by k_gen_budget. Returns 0 ("unknown
+// / unbounded") if the rate constants are missing, so a misconfigured model
+// is never advertised with a wrong finite number.
+int64_t granite_max_audio_ms(const GraniteHParams & hp) {
+    const int num_queries = granite_num_queries(hp);
+    if (num_queries <= 0 || hp.window_size <= 0 ||
+        hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0 ||
+        hp.dec_max_position_embeddings <= 0) {
+        return 0;
+    }
+    // Representative non-audio prompt overhead (chat affixes); advisory.
+    constexpr int k_prompt_overhead = 64;
+    const int max_audio_tokens =
+        hp.dec_max_position_embeddings - k_prompt_overhead - k_gen_budget;
+    if (max_audio_tokens <= 0) {
+        return 0;
+    }
+    // Invert the encoder/projector rate:
+    //   tokens = nblocks * num_queries ; t_enc <= nblocks * window_size
+    //   mel_frames = t_enc * 2 ; ms = mel_frames * hop * 1000 / sample_rate
+    const int64_t nblocks = max_audio_tokens / num_queries;
+    const int64_t t_enc   = nblocks * hp.window_size;
+    const int64_t frames  = t_enc * 2;
+    return frames * hp.fe_hop_length * 1000 / hp.fe_sample_rate;
+}
+
 // Pre-fuse BatchNorm scale/bias per encoder block. Mirrors parakeet's
 // fuse_batch_norm: allocates a separate ggml context + CPU buffer for
 // the [inner_dim] fused tensors, copies the raw BN tensors out,
@@ -124,8 +186,10 @@ transcribe_status fuse_batch_norm(GraniteModel & m) {
     ggml_init_params params = { ctx_size, nullptr, /*no_alloc=*/true };
     m.bn_fused_ctx = ggml_init(params);
     if (m.bn_fused_ctx == nullptr) {
-        std::fprintf(stderr, "granite: bn_fused ggml_init failed\n");
-        return TRANSCRIBE_ERR_BACKEND;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite: BatchNorm-fusion context allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     for (size_t i = 0; i < n_blocks; ++i) {
@@ -143,8 +207,10 @@ transcribe_status fuse_batch_norm(GraniteModel & m) {
     m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(
         m.bn_fused_ctx, m.plan.scheduler_list.back());
     if (m.bn_fused_buffer == nullptr) {
-        std::fprintf(stderr, "granite: bn_fused alloc_ctx_tensors failed\n");
-        return TRANSCRIBE_ERR_BACKEND;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite: BatchNorm-fusion buffer allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     std::vector<float> bn_w(inner), bn_b(inner), rm(inner), rv(inner);
@@ -243,6 +309,38 @@ transcribe_status load(
     // Hparams.
     if (const transcribe_status st = read_granite_hparams(loader.gguf(), m->hparams);
         st != TRANSCRIBE_OK) return st;
+
+    // Publish the input-length ceiling now that the decoder context window
+    // and frontend rate are known (apply_family_invariants ran before the
+    // hparams were read, so it could not set this). See docs/input-limits.md.
+    m->caps.max_audio_ms = granite_max_audio_ms(m->hparams);
+
+    // Basis for the session-level limits query (transcribe_session_get_limits):
+    // the same rate constants granite_max_audio_ms uses, kept so the effective
+    // limit can be recomputed at a lowered session n_ctx. The guard mirrors
+    // granite_max_audio_ms's: every rate field must be present, or we leave the
+    // basis unset (zero model_max_ctx => the query reports "unbounded").
+    {
+        const int num_queries = granite_num_queries(m->hparams);
+        if (num_queries > 0 && m->hparams.window_size > 0 &&
+            m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0 &&
+            m->hparams.dec_max_position_embeddings > 0) {
+            m->limits.has_context_cap = true;
+            m->limits.model_max_ctx   = m->hparams.dec_max_position_embeddings;
+            m->limits.prompt_overhead = 64;  // match granite_max_audio_ms's k_prompt_overhead
+            m->limits.gen_reserve     = k_gen_budget;
+            // ms per audio token: granite emits num_queries tokens per
+            // window_size encoder frames; t_enc = mel_frames/2;
+            // mel_frames = ms*sr/(hop*1000). Inverting granite_max_audio_ms's
+            // forward rate gives ms-per-audio-token below.
+            m->limits.ms_per_audio_token =
+                (static_cast<double>(m->hparams.window_size) / num_queries) *
+                2.0 * m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
+            m->limits.kv_elems_per_ctx_token =
+                (int64_t) m->hparams.dec_n_kv_heads *
+                m->hparams.dec_head_dim * m->hparams.dec_n_layers * 2;
+        }
+    }
 
     m->hparams.vocab_size   = m->tok.n_tokens();
     m->hparams.bos_token_id = m->tok.bos_id();
@@ -410,6 +508,7 @@ transcribe_status init_context(
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
+    cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
     // Encoder uses manual mul_mat + soft_max (no flash) because the
     // Shaw bias requires a per-(head, block) additive term that
@@ -606,9 +705,10 @@ transcribe_status run(
         ip.no_alloc   = true;
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr,
-                         "granite run: ggml_init for compute_ctx failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite run: compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -638,9 +738,9 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        std::fprintf(stderr,
-                     "granite run: sched_alloc_graph failed (encoder)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite run: encoder graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // ----- Upload inputs -----
@@ -762,8 +862,10 @@ transcribe_status run(
         ip.no_alloc   = true;
         proj_ctx = ggml_init(ip);
         if (proj_ctx == nullptr) {
-            std::fprintf(stderr, "granite run: ggml_init for proj_ctx failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite run: projector compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     ProjectorBuild pb = build_projector_graph(proj_ctx, cm->weights,
@@ -776,10 +878,10 @@ transcribe_status run(
 
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-        std::fprintf(stderr,
-                     "granite run: sched_alloc_graph failed (projector)\n");
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite run: projector graph allocation failed — out of memory.");
         ggml_free(proj_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload encoder output to the projector's enc_in input.
@@ -871,15 +973,36 @@ transcribe_status run(
     }
     input_ids.insert(input_ids.end(), suffix_ids.begin(), suffix_ids.end());
 
+    // ----- Input-length gate (see docs/input-limits.md) -----
+    // The decoder context window is the binding limit: audio tokens +
+    // prompt + generation must fit dec_max_position_embeddings (optionally
+    // lowered by the caller's n_ctx knob). The audio-token count is fixed
+    // by the input length, so reject an over-length clip here, before the
+    // autoregressive decode, instead of growing the cache unboundedly and
+    // aliasing RoPE past the trained range. Reserving the full generation
+    // budget means an accepted clip always has room for a real transcript.
+    const int ceiling = granite_context_ceiling(cc->n_ctx, cm->hparams);
+    if (T_prompt + k_gen_budget > ceiling) {
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite run: input too long — %d audio + %d prompt tokens leave "
+            "no room for output within the %d-token context (need %d). "
+            "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
+            "split it into segments.",
+            n_audio_tokens, prefix_len + suffix_len, ceiling,
+            T_prompt + k_gen_budget);
+        return TRANSCRIBE_ERR_INPUT_TOO_LONG;
+    }
+
     // Size the KV cache dynamically: T_prompt + room for the longest
-    // generation we'll emit. Matches the HF reference's DynamicCache
-    // semantics (grows as needed) without paying for a worst-case
-    // pre-alloc. If the existing cache is too small for this prompt,
-    // free and re-allocate. Round up to a 256-row bucket so back-to-back
-    // runs of similar audio lengths don't keep re-allocating.
-    constexpr int kStepBudget = 256;
+    // generation we'll emit, clamped to the context ceiling. Matches the
+    // HF reference's DynamicCache semantics (grows as needed) without
+    // paying for a worst-case pre-alloc. If the existing cache is too small
+    // for this prompt, free and re-allocate. Round up to a 256-row bucket
+    // so back-to-back runs of similar audio lengths don't keep
+    // re-allocating.
     constexpr int kKvBucket   = 256;
-    const int needed_raw = T_prompt + kStepBudget;
+    const int needed_raw = std::min(T_prompt + k_gen_budget, ceiling);
     const int needed_n_ctx =
         ((needed_raw + kKvBucket - 1) / kKvBucket) * kKvBucket;
 
@@ -894,19 +1017,22 @@ transcribe_status run(
                 cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                 cm->hparams.dec_n_layers, kv_t))
         {
-            std::fprintf(stderr,
-                         "granite run: kv_init failed (n_ctx=%d)\n",
-                         needed_n_ctx);
-            return TRANSCRIBE_ERR_BACKEND;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite run: KV cache allocation failed (n_ctx=%d, "
+                "%d kv-heads x %d head-dim x %d layers) — out of memory. "
+                "Lower transcribe_session_params.n_ctx or shorten the audio.",
+                needed_n_ctx, cm->hparams.dec_n_kv_heads,
+                cm->hparams.dec_head_dim, cm->hparams.dec_n_layers);
+            return TRANSCRIBE_ERR_OOM;
         }
     }
-    // After dynamic sizing this should be unreachable; keep as a
+    // After the gate + dynamic sizing this should be unreachable; keep as a
     // belt-and-braces invariant check.
     if (T_prompt > cc->kv.n_ctx) {
-        std::fprintf(stderr,
-                     "granite run: T_prompt=%d exceeds kv.n_ctx=%d\n",
-                     T_prompt, cc->kv.n_ctx);
-        return TRANSCRIBE_ERR_INVALID_ARG;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                            "granite run: T_prompt=%d exceeds kv.n_ctx=%d",
+                            T_prompt, cc->kv.n_ctx);
+        return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
     // Prefill graph in its own compute context.
@@ -918,8 +1044,10 @@ transcribe_status run(
         ip.no_alloc   = true;
         dec_ctx = ggml_init(ip);
         if (dec_ctx == nullptr) {
-            std::fprintf(stderr, "granite run: ggml_init for dec_ctx failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite run: decoder compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     PrefillBuild dec = build_prefill_graph(
@@ -933,10 +1061,11 @@ transcribe_status run(
 
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, dec.graph)) {
-        std::fprintf(stderr,
-                     "granite run: sched_alloc_graph failed (decoder)\n");
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite run: decoder prefill graph allocation failed — "
+            "out of memory.");
         ggml_free(dec_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload decoder inputs.
@@ -1024,7 +1153,12 @@ transcribe_status run(
     // n_ctx of the KV cache bounds the max generation length we can
     // attend over.
     const int max_n_kv  = cc->kv.n_ctx;
-    const int max_steps = std::min(256, max_n_kv - T_prompt);
+    // Bound generation by the step budget, the allocated cache, AND the
+    // context ceiling (the gate guarantees ceiling - T_prompt >= k_gen_budget,
+    // so for in-spec input this stays k_gen_budget and decode is unchanged).
+    const int max_steps = std::min({ k_gen_budget,
+                                     max_n_kv - T_prompt,
+                                     ceiling  - T_prompt });
 
     ggml_context * step_ctx = nullptr;
     {
@@ -1043,10 +1177,11 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, step.graph)) {
-        std::fprintf(stderr,
-                     "granite run: sched_alloc_graph failed (step)\n");
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite run: decode step graph allocation failed — "
+            "out of memory.");
         ggml_free(step_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_OOM;
     }
 
     std::vector<int32_t> gen_ids;
@@ -1097,6 +1232,20 @@ transcribe_status run(
 
     ggml_free(step_ctx);
 
+    // The decode stopped either at EOS (complete) or at the generation
+    // budget / context ceiling (truncated). Surface the latter via
+    // transcribe_was_truncated() and a WARN rather than handing back a
+    // silently shortened transcript. See docs/input-limits.md.
+    if (next_id != eos_id) {
+        cc->was_truncated = true;
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_WARN,
+            "granite run: output truncated at %d tokens — decode reached the "
+            "generation budget before end-of-stream; the transcript may be "
+            "incomplete.",
+            static_cast<int>(gen_ids.size()));
+    }
+
     // ----- Detokenize -----
     cc->full_text = cm->tok.decode(gen_ids.data(),
                                    static_cast<int>(gen_ids.size()));
@@ -1110,7 +1259,12 @@ transcribe_status run(
               / static_cast<int64_t>(cm->hparams.fe_sample_rate);
     cc->segments.push_back(std::move(seg));
 
-    return TRANSCRIBE_OK;
+    // Output truncation (decode hit the generation budget / context ceiling
+    // before EOS) is a hard status, not a silent success: surface it so the
+    // caller can distinguish a complete transcript from one cut short. The
+    // partial transcript is still attached above for inspection.
+    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                             : TRANSCRIBE_OK;
 }
 
 // ===========================================================================
@@ -1169,7 +1323,12 @@ transcribe_status encode_one(
     const auto & hp = cm->hparams;
     if (t_enc <= 0) return TRANSCRIBE_ERR_GGUF;
 
-    if (reset_ctx_g(cc, 32) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+    if (reset_ctx_g(cc, 32) != TRANSCRIBE_OK) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite encode_one: compute context allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights, hp,
                                           t_enc, cc->encoder_use_flash);
     if (eb.graph == nullptr || eb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
@@ -1181,7 +1340,12 @@ transcribe_status encode_one(
         if (cc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) return TRANSCRIBE_ERR_GGUF;
+    if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite encode_one: encoder graph allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
 
     ggml_backend_tensor_set(eb.mel_in, mel_buf.data(), 0,
                             mel_buf.size() * sizeof(float));
@@ -1224,12 +1388,24 @@ transcribe_status encode_one(
 
     ggml_context * proj_ctx = nullptr;
     { ggml_init_params ip {}; ip.mem_size = 16 * 1024 * 1024; ip.no_alloc = true;
-      proj_ctx = ggml_init(ip); if (proj_ctx == nullptr) return TRANSCRIBE_ERR_GGUF; }
+      proj_ctx = ggml_init(ip);
+      if (proj_ctx == nullptr) {
+          transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+              "granite encode_one: projector compute context allocation "
+              "failed — out of memory.");
+          return TRANSCRIBE_ERR_OOM;
+      } }
     ProjectorBuild pb = build_projector_graph(proj_ctx, cm->weights, hp,
                                               static_cast<int>(enc_T));
     if (pb.graph == nullptr || pb.out == nullptr) { ggml_free(proj_ctx); return TRANSCRIBE_ERR_GGUF; }
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) { ggml_free(proj_ctx); return TRANSCRIBE_ERR_GGUF; }
+    if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite encode_one: projector graph allocation failed — "
+            "out of memory.");
+        ggml_free(proj_ctx);
+        return TRANSCRIBE_ERR_OOM;
+    }
     ggml_backend_tensor_set(pb.enc_in, enc_host.data(), 0, enc_host.size() * sizeof(float));
     if (pb.enc_pad != nullptr) {
         const size_t n = static_cast<size_t>(pb.enc_pad->ne[0]) * pb.enc_pad->ne[1];
@@ -1299,11 +1475,21 @@ transcribe_status run_batch(
 
     // ---- Pass 1: per-utterance mel + encoder + projector (serial) ----
     std::vector<char> valid(n, 0);
+    // Per-utterance failure status for the result capture below. Defaults to
+    // INVALID_ARG (bad pcm / mel / encode); the input-length gate upgrades it
+    // to INPUT_TOO_LONG for over-length clips.
+    std::vector<transcribe_status> fail_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<float>> audio_hosts(n);
     std::vector<int> n_audio(n, 0);
     std::vector<std::vector<int32_t>> prompt_ids(n);
     std::vector<int> T_prompt(n, 0);
     int64_t mel_us = 0, enc_us = 0;
+
+    // Decoder context ceiling for the per-utterance input-length gate (see
+    // docs/input-limits.md). Same value the single-utterance run() enforces;
+    // an over-length utterance is rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG
+    // rather than growing the cache unboundedly.
+    const int ceiling = granite_context_ceiling(cc->n_ctx, cm->hparams);
 
     // ---- Pass 0: parallel mel + 2-frame stack (host-side, thread-safe) ----
     std::vector<std::vector<float>> mel_bufs(n);
@@ -1340,6 +1526,23 @@ transcribe_status run_batch(
         for (int i = 0; i < n_audio[b]; ++i) prompt_ids[b].push_back(0);  // placeholder
         prompt_ids[b].insert(prompt_ids[b].end(), suffix_ids.begin(), suffix_ids.end());
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
+
+        // Input-length gate (see docs/input-limits.md). Audio tokens + prompt +
+        // generation must fit the decoder context window; reject an over-length
+        // utterance here instead of growing the cache unboundedly. Mirrors the
+        // single-shot run() gate (T_prompt + k_gen_budget > ceiling).
+        if (T_prompt[b] + k_gen_budget > ceiling) {
+            transcribe::log_msg(
+                TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite run_batch: utterance %d input too long — %d audio + %d "
+                "prompt tokens leave no room for output within the %d-token "
+                "context (need %d). Shorten the audio (see "
+                "transcribe_capabilities.max_audio_ms) or split it.",
+                b, n_audio[b], T_prompt[b] - n_audio[b], ceiling,
+                T_prompt[b] + k_gen_budget);
+            fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
+            continue;
+        }
         valid[b] = 1;
     }
 
@@ -1350,7 +1553,7 @@ transcribe_status run_batch(
     }
     if (max_T_prompt == 0) {
         for (int b = 0; b < n; ++b) {
-            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            transcribe_session::ResultSet rs; rs.status = fail_status[b];
             cc->batch_results.push_back(std::move(rs));
         }
         return TRANSCRIBE_OK;
@@ -1359,6 +1562,9 @@ transcribe_status run_batch(
     const int max_new = 256;
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
+    // Honor the session context cap: clamp the pow2-rounded width to the
+    // ceiling (the per-utterance gate guarantees every valid row fits).
+    if (max_n_kv > ceiling) max_n_kv = ceiling;
 
     // ---- Allocate batched KV cache ----
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
@@ -1369,8 +1575,10 @@ transcribe_status run_batch(
         if (!transcribe::causal_lm::kv_init_batched(
                 cc->kv_batch, cm->plan.primary, max_n_kv,
                 hp.dec_n_kv_heads, hp.dec_head_dim, hp.dec_n_layers, n, kv_type)) {
-            std::fprintf(stderr, "granite run_batch: kv_init_batched failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite run_batch: batched KV cache allocation failed "
+                "(n_ctx=%d, batch=%d) — out of memory.", max_n_kv, n);
+            return TRANSCRIBE_ERR_OOM;
         }
         cc->kv_batch_cap = n; cc->kv_batch_n_ctx = max_n_kv;
     } else if (cc->kv_batch.buffer != nullptr) {
@@ -1383,13 +1591,23 @@ transcribe_status run_batch(
     std::vector<std::vector<int32_t>> generated(n);
     const int64_t t_pref0 = ggml_time_us();
     {
-        if (reset_ctx_g(cc, 64) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+        if (reset_ctx_g(cc, 64) != TRANSCRIBE_OK) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite run_batch: prefill compute context allocation failed "
+                "— out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         PrefillBuildBatched pb = build_prefill_graph_batched(
             cc->compute_ctx, cm->weights, hp, cc->kv_batch,
             max_T_prompt, n_audio_max, n, cc->decoder_use_flash);
         if (pb.graph == nullptr || pb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
         ggml_backend_sched_reset(cc->sched);
-        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) return TRANSCRIBE_ERR_GGUF;
+        if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "granite run_batch: batched prefill graph allocation failed "
+                "— out of memory.");
+            return TRANSCRIBE_ERR_OOM;
+        }
 
         const int hidden = hp.dec_hidden;
         std::vector<int32_t> ids(static_cast<size_t>(max_T_prompt) * n, 0);
@@ -1456,13 +1674,23 @@ transcribe_status run_batch(
     // ---- Pass 3: batched step loop (shared causal_lm driver) ----
     const int32_t eos_id = cm->hparams.eos_token_id;
 
-    if (reset_ctx_g(cc, 32) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
+    if (reset_ctx_g(cc, 32) != TRANSCRIBE_OK) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite run_batch: step compute context allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
     StepBuildBatched sb = build_step_graph_batched(
         cc->compute_ctx, cm->weights, hp, cc->kv_batch, max_n_kv, n,
         cc->decoder_use_flash);
     if (sb.graph == nullptr || sb.out == nullptr) return TRANSCRIBE_ERR_GGUF;
     ggml_backend_sched_reset(cc->sched);
-    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) return TRANSCRIBE_ERR_GGUF;
+    if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "granite run_batch: batched step graph allocation failed — "
+            "out of memory.");
+        return TRANSCRIBE_ERR_OOM;
+    }
 
     transcribe::causal_lm::StepBatchedIO io {};
     io.input_ids = sb.input_ids_in;
@@ -1478,9 +1706,10 @@ transcribe_status run_batch(
     step_state.n_past   = n_past;
 
     transcribe::causal_lm::StepLoopStats step_stats;
+    std::vector<char> truncated;
     if (const transcribe_status st = transcribe::causal_lm::run_batched_step_loop(
             cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
-            generated, &step_stats); st != TRANSCRIBE_OK) {
+            generated, &step_stats, &truncated); st != TRANSCRIBE_OK) {
         return st;
     }
     const int64_t step_us = step_stats.step_us;
@@ -1503,7 +1732,7 @@ transcribe_status run_batch(
         std::count(valid.begin(), valid.end(), char(1))));
     for (int b = 0; b < n; ++b) {
         if (!valid[b]) {
-            transcribe_session::ResultSet rs; rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            transcribe_session::ResultSet rs; rs.status = fail_status[b];
             cc->batch_results.push_back(std::move(rs));
             continue;
         }
@@ -1519,6 +1748,15 @@ transcribe_status run_batch(
         seg.t1_ms = static_cast<int64_t>(n_samples[b]) * 1000
                   / static_cast<int64_t>(hp.fe_sample_rate);
         rs.segments.push_back(std::move(seg));
+        // Per-utterance truncation parity with single-shot run(): a row cut at
+        // the generation budget / KV window before eos reports
+        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
+        // override a TRANSCRIBE_OK status, never a worse one.
+        if (b < static_cast<int>(truncated.size()) && truncated[b] &&
+            rs.status == TRANSCRIBE_OK) {
+            cc->was_truncated = true;
+            rs.status = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        }
         rs.t_mel_us = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = step_us / valid_count;

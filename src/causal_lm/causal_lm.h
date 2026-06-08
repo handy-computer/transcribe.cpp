@@ -439,6 +439,7 @@ transcribe_status run_batched_step_loop(
     int                                 max_new,
     const StepBatchedState &            state,
     std::vector<std::vector<int32_t>> & generated,
-    StepLoopStats *                     stats = nullptr);
+    StepLoopStats *                     stats = nullptr,
+    std::vector<char> *                 truncated_out = nullptr);
 
 } // namespace transcribe::causal_lm

@@ -17,12 +17,34 @@
 
 #include "transcribe.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <string>
 #include <vector>
 
 struct transcribe_model;
+
+// Read transcribe_session_params::n_ctx with a struct_size guard. n_ctx is
+// a trailing field appended after kv_type, so an older caller's smaller
+// struct may not include it; in that case (or a NULL params) the default 0
+// = "use the model's true max" is returned. Per-family init_context() that
+// honors n_ctx should cache the result onto the base session's n_ctx field.
+// The negative-value rejection happens once, generically, in
+// transcribe_session_init().
+inline int32_t transcribe_session_params_n_ctx(
+    const struct transcribe_session_params * params) {
+    if (params == nullptr) {
+        return 0;
+    }
+    const size_t field_end =
+        offsetof(struct transcribe_session_params, n_ctx) +
+        sizeof(params->n_ctx);
+    if (params->struct_size < static_cast<uint64_t>(field_end)) {
+        return 0;
+    }
+    return params->n_ctx;
+}
 
 struct transcribe_session {
     // The model this session was constructed from. Borrowed pointer:
@@ -41,6 +63,22 @@ struct transcribe_session {
     // Cached n_threads value the caller passed at init time. 0 means
     // "library picks a sensible default" (matches the factory).
     int n_threads = 0;
+
+    // Cached n_ctx value the caller passed at init time (decoder context
+    // cap in tokens). 0 means "use the model's true maximum from GGUF".
+    // A positive value lowers the ceiling to bound KV-cache memory and is
+    // clamped down to the model maximum by the family that honors it.
+    // Only hard-context-cap families read this; chunked / unbounded
+    // families ignore it. See include/transcribe.h
+    // (transcribe_session_params::n_ctx) and docs/input-limits.md.
+    int32_t n_ctx = 0;
+
+    // Cached kv_type the caller passed at init time. Hoisted to the base so
+    // generic code (e.g. transcribe_session_get_limits's KV-byte estimate)
+    // can read it without a per-family hook. Every family's init_context sets
+    // this from params; the families resolve AUTO to f16 for the KV cache, so
+    // for byte accounting only F32 differs (4 bytes/elem vs 2).
+    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Per-call timings, populated by the most recent transcribe_run.
     // Surfaced via the public transcribe_get_timings accessor; reset
@@ -200,6 +238,17 @@ struct transcribe_session {
         }
         return false;
     }
+
+    // Set by a per-family run() driver when greedy decode stops because it
+    // reached the model's context / position cap before end-of-stream,
+    // i.e. the output transcript was truncated. The partial result is
+    // retained. Surfaced via transcribe_was_truncated(); like was_aborted
+    // it is cleared at the top of every transcribe_run (NOT by
+    // clear_result, since the partial result is preserved). Distinct from
+    // the up-front TRANSCRIBE_ERR_INPUT_TOO_LONG rejection: this is the
+    // "couldn't finish", that is the "couldn't start". See
+    // docs/input-limits.md.
+    bool                         was_truncated   = false;
 
     // -----------------------------------------------------------------
     // Streaming state.

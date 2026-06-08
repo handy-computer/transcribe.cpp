@@ -95,7 +95,6 @@ struct VoxtralSession final : public transcribe_session {
     std::vector<float> mel_buf;
     std::vector<float> enc_host;  // projector output (audio embeds), all chunks
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     bool encoder_use_flash = false;
     bool decoder_use_flash = true;

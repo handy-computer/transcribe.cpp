@@ -25,6 +25,14 @@ Licensed under the **FunASR Model Open Source License Agreement** —
 the legacy "model-license" form
 ([MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)).
 
+## Input limits
+
+SenseVoice runs on short segments — up to about **30 seconds** per call (the
+window its upstream pipeline feeds via VAD). Longer audio is accepted, but the
+library logs a `WARN` and accuracy may degrade; it is not rejected. Segment long
+recordings (e.g. with VAD) for best results. See the
+[input-length contract](../input-limits.md).
+
 ## Download
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |

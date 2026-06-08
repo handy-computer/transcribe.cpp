@@ -82,6 +82,15 @@ Pre-built GGUFs for every variant and quant are hosted under
 each per-variant repo's `README.md` has direct download links and the
 full F32 / F16 / Q8_0 measurement table.
 
+## Input limits
+
+Moonshine has no input-length limit, but its decoder is capped at a short output
+window — about **48 seconds** of typical speech. A clip whose transcript reaches
+that cap is returned with the hard status `TRANSCRIBE_ERR_OUTPUT_TRUNCATED`, the
+partial text retained and `transcribe_was_truncated()` set — never silently cut.
+It is built for short utterances; segment longer audio (e.g. with VAD). See the
+[input-length contract](../input-limits.md).
+
 ## Quick start
 
 Pick a variant and run:

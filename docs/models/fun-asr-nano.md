@@ -43,6 +43,17 @@ Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);
 each per-variant doc has direct download links.
 
+## Input limits
+
+Both variants are bounded by the 40,960-token decoder context, but they admit
+different amounts of audio because of their frame rates: **Fun-ASR-Nano** accepts
+up to about **5.4 hours** per call, **Fun-ASR-MLT-Nano** up to about **41
+minutes**. These ceilings bound memory and sit far beyond normal clips; audio
+past them is rejected up front with `TRANSCRIBE_ERR_INPUT_TOO_LONG` rather than
+silently truncated. `transcribe_session_get_limits()` reports the exact
+per-session value (and it drops if you lower `--n-ctx`). See the
+[input-length contract](../input-limits.md).
+
 ## Quick start
 
 Pick a variant and run:

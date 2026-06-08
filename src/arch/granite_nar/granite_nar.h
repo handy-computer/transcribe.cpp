@@ -69,7 +69,6 @@ struct GraniteNarSession final : public transcribe_session {
     int32_t            t_enc          = 0;
     int32_t            n_audio_tokens = 0;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     bool encoder_use_flash = false;
     bool decoder_use_flash = false;  // bidirectional path doesn't use flash-attn KV cache
