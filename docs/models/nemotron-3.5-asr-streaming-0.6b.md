@@ -124,6 +124,18 @@ are out-of-the-box numbers with no tuning.
 Fedora 43, transcribe.cpp `ef35659`. Vulkan device: `AMD Radeon
 Graphics (RADV RENOIR)`.
 
+### Apple M4 Max
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Metal   | jfk (11.0s)  |  113 ms (98×) |  113 ms (98×) |
+| Metal   | dots (35.3s) |  361 ms (98×) |  368 ms (96×) |
+| CPU     | jfk (11.0s)  |  367 ms (30×) |  362 ms (30×) |
+| CPU     | dots (35.3s) |  1.28 s (28×) |  1.25 s (28×) |
+
+macOS 26.5 (Darwin 25.5.0), transcribe.cpp `d9708f1`. Metal device:
+Apple M4 Max (`MTLGPUFamilyApple9`).
+
 Benchmark reproduction:
 
 ```bash
