@@ -426,7 +426,11 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         cmd = [
             str(cli),
             "--backend", args.backend,
-            "--threads", "1",
+            # Default 1 thread for the documented reproducible gate; ggml CPU
+            # parallelizes over independent output rows (full per-element
+            # reductions), so VALIDATE_CPP_THREADS>1 only speeds the dump up —
+            # the compared tensors are bit-identical.
+            "--threads", os.environ.get("VALIDATE_CPP_THREADS", "1"),
             "-m", str(gguf),
         ]
         if language is not None:

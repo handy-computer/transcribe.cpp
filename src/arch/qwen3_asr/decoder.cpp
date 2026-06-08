@@ -415,14 +415,19 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_set_name(pb.input_ids_in, "prefill.input_ids");
     ggml_set_input(pb.input_ids_in);
 
-    pb.enc_out_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
-                                       hp.enc_output_dim, T_enc_max, B);
-    ggml_set_name(pb.enc_out_in, "prefill.enc_out");
-    ggml_set_input(pb.enc_out_in);
+    // Audio injection is an elementwise blend over the flat token axis (no
+    // set_rows): a k-quant token_embd get_rows is unsupported on CUDA and runs
+    // on CPU; a set_rows consuming that CPU tensor straddles the CPU/CUDA split
+    // and faults. x*keep_mask + audio_dense crosses the split cleanly.
+    pb.audio_dense_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden,
+                                           static_cast<int64_t>(T_prompt_max) * B);
+    ggml_set_name(pb.audio_dense_in, "prefill.audio_dense");
+    ggml_set_input(pb.audio_dense_in);
 
-    pb.enc_idx_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I64, T_enc_max, B);
-    ggml_set_name(pb.enc_idx_in, "prefill.enc_idx");
-    ggml_set_input(pb.enc_idx_in);
+    pb.keep_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1,
+                                         static_cast<int64_t>(T_prompt_max) * B);
+    ggml_set_name(pb.keep_mask_in, "prefill.keep_mask");
+    ggml_set_input(pb.keep_mask_in);
 
     pb.positions_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_prompt_max);
     ggml_set_name(pb.positions_in, "prefill.positions");
@@ -454,11 +459,13 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_tensor * ids_flat =
         ggml_reshape_1d(ctx, pb.input_ids_in,
                         static_cast<int64_t>(T_prompt_max) * B);
+    // x is 2D [hidden, T_prompt_max*B] (contiguous). Audio injection: blend the
+    // enc_out embeds in elementwise, x = x*keep_mask + audio_dense, where
+    // keep_mask broadcasts over hidden (ne[0]). Then reshape to 3D for the
+    // batched block stack.
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, ids_flat);
+    x = ggml_add(ctx, ggml_mul(ctx, x, pb.keep_mask_in), pb.audio_dense_in);
     x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);
-
-    // Audio injection: scatter enc_out over the audio placeholder positions.
-    x = ggml_set_rows(ctx, x, pb.enc_out_in, pb.enc_idx_in);
 
     for (int il = 0; il < n_layer; ++il) {
         x = qwen3_lm::block_prefill_batched(

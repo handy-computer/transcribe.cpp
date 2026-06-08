@@ -1,0 +1,95 @@
+# Spec for the HF README of handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: mistralai/Voxtral-Mini-4B-Realtime-2602
+target_repo: handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/voxtral-realtime.md
+
+upstream_commit: "2769294"
+pin_date: 2026-06-06
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: Transformers
+  commit: 483c122
+  date: 2026-06-06
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+  - fr
+  - es
+  - de
+  - ru
+  - zh
+  - ja
+  - it
+  - pt
+  - nl
+  - ar
+  - hi
+  - ko
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - voxtral
+  - audio-llm
+  - streaming
+  - multilingual
+
+summary: |
+  Streaming audio-LLM speech-to-text. A ~970M causal audio encoder (left-pad
+  causal conv stem + 32-layer sliding-window RoPE transformer) feeds a
+  4-frame-group projector whose audio embeddings are added onto a ~3.4B
+  Ministral decoder (26 layers, GQA 32/8, NEOX RoPE) with delay-token latency
+  conditioning, emitting one text token per 80 ms audio slot (12.5 Hz). Takes a
+  16 kHz mono WAV and supports both incremental streaming (configurable
+  latency/quality via --stream-chunk-ms and --stream-voxtral-delay) and offline
+  transcription with a byte-equal final transcript. Architecturally distinct
+  from the offline Voxtral 2507 family — own arch, streaming frontend, causal
+  encoder, additive audio fusion.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with
+    the Whisper English text normalizer, offline path, batch size 8 on an NVIDIA
+    L40S. Same-machine HuggingFace transformers reference
+    (VoxtralRealtimeForConditionalGeneration, BF16, greedy): 2.08%; the BF16 GGUF
+    matches at 2.08%. Every shipped quant stays within bootstrap noise
+    (2.07-2.09%), so the quantization ladder is WER-neutral down to Q4_K_M. The
+    model is multilingual (13 languages, auto-detect); the published WER is
+    English only.
+
+quants:
+  - name: BF16
+    filename: Voxtral-Mini-4B-Realtime-2602-BF16.gguf
+    size: 8.87 GB
+    wer: 2.08%
+  - name: F16
+    filename: Voxtral-Mini-4B-Realtime-2602-F16.gguf
+    size: 8.88 GB
+    wer: 2.09%
+  - name: Q8_0
+    filename: Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf
+    size: 4.73 GB
+    wer: 2.07%
+  - name: Q6_K
+    filename: Voxtral-Mini-4B-Realtime-2602-Q6_K.gguf
+    size: 3.66 GB
+    wer: 2.08%
+  - name: Q5_K_M
+    filename: Voxtral-Mini-4B-Realtime-2602-Q5_K_M.gguf
+    size: 3.28 GB
+    wer: 2.08%
+  - name: Q4_K_M
+    filename: Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf
+    size: 2.83 GB
+    wer: 2.08%

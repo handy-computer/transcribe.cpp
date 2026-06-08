@@ -283,10 +283,14 @@ For each row:
 
 A `Target: MUST PASS` row must resolve to `PASS` unless the user re-signs
 it as `OUT OF SCOPE`. `SKIP` / `ACCEPTED GAP` are legal only on
-`OUT OF SCOPE` rows, plus the batch serial-fallback exception in Step 9.
+`OUT OF SCOPE` rows, plus the conditional batch serial-fallback exception in
+Step 9 (only when a real `run_batch()` benchmarked no faster than serial).
 No row may remain `TODO`. If `capabilities.streaming: true`, the
 streaming row is forced `MUST PASS`; a blocked streaming implementation
-requires explicit user sign-off as a blocker.
+requires explicit user sign-off as a blocker. The `Batch (offline)` row is
+likewise forced `MUST PASS` for every family: a real `run_batch()` parallel
+path ships (Step 9), and serial fallback is legal only with Stage-6 bench
+evidence that parallel is no faster than serial after optimization.
 
 ### Step 9: Batch parity (execute)
 
@@ -314,13 +318,18 @@ uv run scripts/batch_tensor_parity.py \
   --samples-dir samples/wer/<dataset> --batch-size 4 --backend cpu
 ```
 
-Add/update the `Batch (offline)` Capability Validation row:
-- `PASS` — text byte-identical and CPU tensor parity bit-exact at the
-  tested batch sizes (the family implements an explicit `run_batch()`
-  fast path).
-- `ACCEPTED GAP — serial fallback` — the family has no batched fast path
-  and runs the serial per-utterance loop. Name why the fast path was
-  skipped.
+Batching **`MUST PASS`** - Every family MUST implement an explicit
+`run_batch()` parallel path. Add/update the `Batch (offline)` Capability Validation
+row:
+- `PASS` — the family implements an explicit `run_batch()` fast path AND its
+  output is within 0.01% of WER of batch size 1, over a large set
+- `ACCEPTED GAP — serial (benchmarked no faster)` — legal ONLY when a real
+  `run_batch()` WAS implemented and the Stage-6 batch-throughput sweep
+  (`transcribe-batch-bench`) measured it at **no faster than the serial
+  loop** on the target backend(s).
+- A missing `run_batch()` (serial fallback with no parallel path written) is
+  **NOT** an accepted gap — it is a `BLOCKER` requiring explicit user
+  sign-off, the same bar as a blocked streaming implementation.
 
 A text or tensor parity mismatch is a batching bug, never an accepted gap.
 
@@ -414,9 +423,9 @@ Report:
   unless the user explicitly re-signed scope.
 - If `capabilities.streaming` is true, the streaming row is `PASS` or an
   explicit user-signed `BLOCKER`.
-- Batch parity is gated: text + CPU tensor checks pass at 2/4/8, the
-  golden fixture exists, and the family doc records `Batch (offline)` as
-  `PASS` or `ACCEPTED GAP — serial fallback`.
+- Batch parity is gated: an explicit `run_batch()` parallel path ships, text
+  + CPU tensor checks pass at 2/4/8, the golden fixture exists, and the
+  family doc records `Batch (offline)` as `PASS`.
 - Full ref-dtype WER ran on the complete acceptance manifest at batch 1
   and batch 8; batch 1 passes the `Oracle reference WER + 0.01pp`
   (percentage points, NOT fraction) gate, and batch 8 is user-reviewed as

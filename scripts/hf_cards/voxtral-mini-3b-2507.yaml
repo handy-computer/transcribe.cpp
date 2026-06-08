@@ -1,0 +1,86 @@
+# Spec for the HF README of handy-computer/Voxtral-Mini-3B-2507-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: mistralai/Voxtral-Mini-3B-2507
+target_repo: handy-computer/Voxtral-Mini-3B-2507-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/voxtral-mini-3b-2507.md
+
+upstream_commit: "3060fe3"
+pin_date: 2026-06-06
+
+# Validation pin for the most recent upload. Updated on each release —
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: Transformers
+  commit: 483c122
+  date: 2026-06-06
+
+license: apache-2.0
+license_display: Apache-2.0
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+  - fr
+  - de
+  - es
+  - it
+  - pt
+  - nl
+  - hi
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - voxtral
+  - audio-llm
+  - multilingual
+
+summary: |
+  Offline audio-LLM speech-to-text and speech translation. A Whisper-large-v3
+  bidirectional audio encoder feeds a 4-frame-group projector (375 audio tokens
+  per 30 s chunk) into a Ministral-3B causal LM (30 layers, GQA 32/8, NEOX RoPE,
+  SwiGLU) via audio-token injection. Takes a 16 kHz mono WAV and produces a
+  transcript via greedy decoding; speech translation runs through the
+  mistral-common instruct template. The smaller sibling of Voxtral Small 24B —
+  same encoder, projector, log-mel frontend, and tekken tokenizer, with a 3B
+  decoder in place of Mistral-Small-24B.
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: LibriSpeech test-clean
+  notes: |
+    WER measured on the full LibriSpeech test-clean split (2620 utterances) with
+    the Whisper English text normalizer, batch size 8 on an NVIDIA L40S.
+    Same-machine HuggingFace transformers reference
+    (VoxtralForConditionalGeneration, BF16, attn_implementation=eager, greedy):
+    1.87%; the BF16 GGUF matches within rounding. The BF16-vs-reference parity is
+    the family's tensor-level numerical gate — 43 checkpointed tensors within
+    tolerance, transcript byte-exact.
+
+quants:
+  - name: BF16
+    filename: Voxtral-Mini-3B-2507-BF16.gguf
+    size: 9.37 GB
+    wer: 1.88%
+  - name: F16
+    filename: Voxtral-Mini-3B-2507-F16.gguf
+    size: 9.38 GB
+    wer: 1.89%
+  - name: Q8_0
+    filename: Voxtral-Mini-3B-2507-Q8_0.gguf
+    size: 5.00 GB
+    wer: 1.87%
+  - name: Q6_K
+    filename: Voxtral-Mini-3B-2507-Q6_K.gguf
+    size: 3.87 GB
+    wer: 1.87%
+  - name: Q5_K_M
+    filename: Voxtral-Mini-3B-2507-Q5_K_M.gguf
+    size: 3.46 GB
+    wer: 1.91%
+  - name: Q4_K_M
+    filename: Voxtral-Mini-3B-2507-Q4_K_M.gguf
+    size: 2.98 GB
+    wer: 1.94%

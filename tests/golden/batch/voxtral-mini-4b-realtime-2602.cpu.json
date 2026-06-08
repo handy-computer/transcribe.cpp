@@ -1,0 +1,11 @@
+{
+  "model": "models/voxtral-mini-4b-realtime-2602/voxtral-mini-4b-realtime-2602-BF16.gguf",
+  "backend": "cpu",
+  "language": null,
+  "texts": {
+    "samples/wer/test-clean/237-134500-0025.wav": "Oh, Emil.",
+    "samples/wer/test-clean/2830-3980-0026.wav": "Verse 2.",
+    "samples/wer/test-clean/2094-142345-0041.wav": "Direction.",
+    "samples/wer/test-clean/672-122797-0033.wav": "A story?"
+  }
+}

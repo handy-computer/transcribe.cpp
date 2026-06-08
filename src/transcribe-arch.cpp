@@ -22,6 +22,8 @@ namespace parakeet           { extern const Arch arch; }
 namespace cohere             { extern const Arch arch; }
 namespace canary             { extern const Arch arch; }
 namespace qwen3_asr          { extern const Arch arch; }
+namespace voxtral            { extern const Arch arch; }
+namespace voxtral_realtime   { extern const Arch arch; }
 namespace canary_qwen        { extern const Arch arch; }
 namespace whisper            { extern const Arch arch; }
 namespace moonshine          { extern const Arch arch; }
@@ -43,6 +45,8 @@ const Arch * find_arch(const char * name) {
         &cohere::arch,
         &canary::arch,
         &qwen3_asr::arch,
+        &voxtral::arch,
+        &voxtral_realtime::arch,
         &canary_qwen::arch,
         &whisper::arch,
         &moonshine::arch,

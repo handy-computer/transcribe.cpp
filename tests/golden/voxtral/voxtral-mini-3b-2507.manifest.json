@@ -1,0 +1,50 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "voxtral",
+  "variant": "voxtral-mini-3b-2507",
+  "source_model": {
+    "hf_repo": "mistralai/Voxtral-Mini-3B-2507",
+    "hf_revision": "3060fe34b35ba5d44202ce9ff3c097642914f8f3"
+  },
+  "reference": {
+    "kind": "transformers",
+    "source": "https://github.com/huggingface/transformers",
+    "revision": "v4.57.6",
+    "entrypoint": "scripts/dump_reference_voxtral_transformers.py",
+    "dump_args": ["--language", "en"]
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "config",
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 400,
+    "win_length": 400,
+    "window": "hann_periodic",
+    "normalization": "per_utterance",
+    "preemphasis": null,
+    "dither": 0.0
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 131072,
+    "special_tokens": {
+      "bos": 1,
+      "eos": 2,
+      "pad": 11,
+      "audio": 24
+    }
+  },
+  "capabilities": {
+    "languages": ["en", "fr", "de", "es", "it", "pt", "nl", "hi"],
+    "language_detection": true,
+    "translation": true,
+    "timestamps": ["none"],
+    "streaming": false,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "tolerance_file": "tests/tolerances/voxtral.json",
+  "cases": ["jfk"]
+}
