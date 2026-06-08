@@ -13,13 +13,14 @@
 #include "encoder.h"
 #include "weights.h"
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
 
@@ -85,6 +86,55 @@ namespace {
 
 constexpr const char k_default_variant[] = "qwen3-asr";
 
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Qwen3-ASR is a
+// hard-context-cap family: audio tokens + chat prompt + generation share the
+// Qwen3 decoder's context window (dec_max_position_embeddings). The KV cache
+// grows to fit the prompt, clamped to that ceiling (replacing the earlier
+// fixed 2048 wall that ignored the model's real context). Over-length input
+// is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that
+// fills the per-run generation budget before end-of-stream is flagged via
+// transcribe_was_truncated().
+// ---------------------------------------------------------------------------
+
+// Per-run generation budget (matches the reference dumper default; the
+// decode loop is intentionally left unchanged — see the family doc).
+constexpr int k_max_new = 256;
+
+// Effective decoder context ceiling, in tokens: the model's trained maximum,
+// optionally lowered — never raised — by the caller's session n_ctx knob.
+int qwen3_context_ceiling(int32_t n_ctx_knob, const QwenAsrHParams & hp) {
+    int ceiling = hp.dec_max_position_embeddings;
+    if (n_ctx_knob > 0 && n_ctx_knob < ceiling) {
+        ceiling = n_ctx_knob;
+    }
+    return ceiling;
+}
+
+// Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
+// audio tokens plus a representative prompt and the generation reserve fit
+// the context ceiling. The audio encoder downsamples mel frames 8x (three
+// stride-2 convs, see aftercnn_len); inverting that gives ms. Returns 0
+// ("unknown / unbounded") if the rate constants are missing. Note: even
+// within this bound a long transcript may truncate at the generation budget
+// (transcribe_was_truncated) — max_audio_ms is the input bound.
+int64_t qwen3_max_audio_ms(const QwenAsrHParams & hp) {
+    if (hp.dec_max_position_embeddings <= 0 ||
+        hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0) {
+        return 0;
+    }
+    constexpr int k_prompt_overhead = 48;  // chat affixes; advisory
+    const int max_audio_tokens =
+        hp.dec_max_position_embeddings - k_prompt_overhead - k_max_new;
+    if (max_audio_tokens <= 0) {
+        return 0;
+    }
+    // audio_tokens ≈ mel_frames / 8 ; mel_frames = ms * sr / (hop * 1000)
+    //   => ms ≈ audio_tokens * 8 * hop * 1000 / sr
+    const int64_t mel_frames = static_cast<int64_t>(max_audio_tokens) * 8;
+    return mel_frames * hp.fe_hop_length * 1000 / hp.fe_sample_rate;
+}
+
 // Forward declarations for helpers defined further down in this file.
 transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
                                       ChatTokens &                  out);
@@ -131,6 +181,27 @@ transcribe_status load(
     // Hparams.
     if (const transcribe_status st = read_qwen3_asr_hparams(loader.gguf(), m->hparams);
         st != TRANSCRIBE_OK) return st;
+
+    // Publish the input-length ceiling now that the decoder context window
+    // and frontend rate are known. See docs/input-limits.md.
+    m->caps.max_audio_ms = qwen3_max_audio_ms(m->hparams);
+
+    // Basis for the session-level limits query (transcribe_session_get_limits):
+    // the same constants qwen3_max_audio_ms uses, kept so the effective limit
+    // can be recomputed at a lowered session n_ctx.
+    if (m->hparams.dec_max_position_embeddings > 0 &&
+        m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
+        m->limits.has_context_cap = true;
+        m->limits.model_max_ctx   = m->hparams.dec_max_position_embeddings;
+        m->limits.prompt_overhead = 48;
+        m->limits.gen_reserve     = k_max_new;
+        // audio_tokens ≈ mel_frames / 8 ; mel_frames = ms*sr/(hop*1000)
+        m->limits.ms_per_audio_token =
+            8.0 * m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
+        m->limits.kv_elems_per_ctx_token =
+            (int64_t) m->hparams.dec_n_kv_heads *
+            m->hparams.dec_head_dim * m->hparams.dec_n_layers * 2;
+    }
 
     m->hparams.vocab_size   = m->tok.n_tokens();
     m->hparams.bos_token_id = m->tok.bos_id();
@@ -248,14 +319,14 @@ transcribe_status load(
     // Pack gate+up into a separate session + backend buffer so the FFN
     // can run a single mul_mat instead of two. ctx_meta is sized
     // exactly for GGUF file tensors with no headroom, so packed
-    // tensors live in their own context owned by `qwen3_lm::pack_gate_up`.
+    // tensors live in their own context owned by `causal_lm::pack_gate_up`.
     {
-        std::vector<transcribe::qwen3_lm::GateUpEntry> entries;
+        std::vector<transcribe::causal_lm::GateUpEntry> entries;
         entries.reserve(m->weights.dec_blocks.size());
         for (auto & b : m->weights.dec_blocks) {
             entries.push_back({b.ffn_gate_w, b.ffn_up_w, &b.ffn_gate_up_w});
         }
-        if (!transcribe::qwen3_lm::pack_gate_up(
+        if (!transcribe::causal_lm::pack_gate_up(
                 m->plan.primary,
                 m->hparams.dec_hidden,
                 m->hparams.dec_intermediate,
@@ -286,6 +357,7 @@ transcribe_status init_context(
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
+    cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
     cc->encoder_use_flash = false;
     cc->decoder_use_flash = true;
@@ -297,15 +369,20 @@ transcribe_status init_context(
     {
         ggml_type kv_type = GGML_TYPE_F16;
         if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
-        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary,
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary,
                                            /*n_ctx=*/2048,
                                            cm->hparams.dec_n_kv_heads,
                                            cm->hparams.dec_head_dim,
                                            cm->hparams.dec_n_layers,
                                            kv_type))
         {
-            std::fprintf(stderr, "qwen3_asr init_context: kv_init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "qwen3_asr init_context: KV cache allocation failed "
+                "(n_ctx=2048, %d kv-heads x %d head-dim x %d layers) — "
+                "out of memory.",
+                cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
+                cm->hparams.dec_n_layers);
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -702,9 +779,9 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        std::fprintf(stderr,
-                     "qwen3_asr run: sched_alloc_graph failed (encoder)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "qwen3_asr run: encoder graph allocation failed — out of memory.");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Pack + upload mel.
@@ -800,39 +877,12 @@ transcribe_status run(
                             cc->enc_host.size() * sizeof(float));
     t_enc_d2h_us = ggml_time_us() - t_d2h_start;
 
-    // ----- KV cache init -----
-    // Size for a generous default context; the step loop caps
-    // max_new_tokens so the cache is never touched past T_prompt +
-    // max_new_tokens. 2048 * 28 * 8 * 128 * 2 bytes (f16) = ~117 MiB.
-    //
-    // t_dec_start covers the whole decode phase (KV init + prompt +
-    // prefill build/compute + step loop). Earlier versions started it
-    // after prefill compute, which bucketed prefill into the wall/phase
-    // gap. Prefill is part of "decode" as users understand it.
+    // ----- Decode phase begins -----
+    // t_dec_start covers the whole decode phase (prompt + KV init +
+    // prefill build/compute + step loop). Prefill is part of "decode" as
+    // users understand it.
     const int64_t t_dec_start = ggml_time_us();
     const int64_t t_prefill_build_start = t_dec_start;
-    const int kv_n_ctx = 2048;
-    if (cc->kv_cache.ctx == nullptr) {
-        ggml_type kv_type = GGML_TYPE_F16;
-        if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
-        if (!transcribe::qwen3_lm::kv_init(cc->kv_cache, cm->plan.primary,
-                                           kv_n_ctx,
-                                           cm->hparams.dec_n_kv_heads,
-                                           cm->hparams.dec_head_dim,
-                                           cm->hparams.dec_n_layers,
-                                           kv_type))
-        {
-            std::fprintf(stderr, "qwen3_asr run: kv_init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
-        }
-    } else {
-        // Clear stale positions for a fresh prefill.
-        if (cc->kv_cache.buffer != nullptr) {
-            ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
-        }
-        cc->kv_cache.n    = 0;
-        cc->kv_cache.head = 0;
-    }
 
     // ----- Prompt construction -----
     std::vector<int32_t> prompt_ids;
@@ -844,11 +894,62 @@ transcribe_status run(
                          ? 0 : static_cast<int>(audio_positions.front());
     const int suffix_len = T_prompt - prefix_len - T_enc;
     (void)audio_positions;  // no longer fed to the graph
-    if (T_prompt > kv_n_ctx) {
-        std::fprintf(stderr,
-                     "qwen3_asr run: prompt len %d exceeds kv_n_ctx %d\n",
-                     T_prompt, kv_n_ctx);
-        return TRANSCRIBE_ERR_GGUF;
+
+    // ----- Input-length gate (see docs/input-limits.md) -----
+    // audio tokens + prompt + generation must fit the decoder context
+    // window (optionally lowered by the caller's n_ctx). The audio-token
+    // count is fixed by the input length, so reject an over-length clip
+    // here, before prefill/decode, instead of walling at a fixed size.
+    const int ceiling = qwen3_context_ceiling(cc->n_ctx, cm->hparams);
+    if (T_prompt + k_max_new > ceiling) {
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_ERROR,
+            "qwen3_asr run: input too long — %d audio + %d prompt tokens "
+            "leave no room for output within the %d-token context (need %d). "
+            "Shorten the audio (see transcribe_capabilities.max_audio_ms) or "
+            "split it into segments.",
+            T_enc, prefix_len + suffix_len, ceiling, T_prompt + k_max_new);
+        return TRANSCRIBE_ERR_INPUT_TOO_LONG;
+    }
+
+    // ----- KV cache init (grow-to-fit, clamped to the context ceiling) -----
+    // Size to hold the prompt plus the generation budget, rounded up to a
+    // power of two (the step graph's attention width wants pow2 for the
+    // fast flash-attn path). The cache grows across runs as audio length
+    // demands; a pre-allocated smaller cache is freed and re-allocated. For
+    // typical short clips this is the same 1024/2048 width as before, so the
+    // decode is unchanged — only previously-walled long clips now fit.
+    int want_n_ctx = 1024;
+    while (want_n_ctx < T_prompt + k_max_new) want_n_ctx *= 2;
+    if (want_n_ctx > ceiling) want_n_ctx = ceiling;
+    if (cc->kv_cache.ctx != nullptr && cc->kv_cache.n_ctx < want_n_ctx) {
+        cc->kv_cache.free();
+    }
+    if (cc->kv_cache.ctx == nullptr) {
+        ggml_type kv_type = GGML_TYPE_F16;
+        if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) kv_type = GGML_TYPE_F32;
+        if (!transcribe::causal_lm::kv_init(cc->kv_cache, cm->plan.primary,
+                                           want_n_ctx,
+                                           cm->hparams.dec_n_kv_heads,
+                                           cm->hparams.dec_head_dim,
+                                           cm->hparams.dec_n_layers,
+                                           kv_type))
+        {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "qwen3_asr run: KV cache allocation failed (n_ctx=%d, "
+                "%d kv-heads x %d head-dim x %d layers) — out of memory. "
+                "Lower transcribe_session_params.n_ctx or shorten the audio.",
+                want_n_ctx, cm->hparams.dec_n_kv_heads,
+                cm->hparams.dec_head_dim, cm->hparams.dec_n_layers);
+            return TRANSCRIBE_ERR_OOM;
+        }
+    } else {
+        // Clear stale positions for a fresh prefill.
+        if (cc->kv_cache.buffer != nullptr) {
+            ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
+        }
+        cc->kv_cache.n    = 0;
+        cc->kv_cache.head = 0;
     }
 
     // ----- Prefill graph -----
@@ -869,9 +970,11 @@ transcribe_status run(
     // Allocate + compute prefill on the same scheduler.
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, pb.graph)) {
-        std::fprintf(stderr,
-                     "qwen3_asr run: sched_alloc_graph failed (prefill)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "qwen3_asr run: prefill graph allocation failed (T_prompt=%d) — "
+            "out of memory. Lower transcribe_session_params.n_ctx or shorten "
+            "the audio.", T_prompt);
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload prefill inputs.
@@ -956,7 +1059,7 @@ transcribe_status run(
 
     // ----- Step loop -----
     const int32_t eos_id = cm->hparams.eos_token_id;
-    const int32_t max_new = 256;  // matches reference dumper default
+    const int32_t max_new = k_max_new;  // matches reference dumper default
     int cur_past = T_prompt;
 
     // ---------- Build step graph ONCE and reuse every step ----------
@@ -968,7 +1071,7 @@ transcribe_status run(
     // misaligned" branch without saving meaningful bandwidth.
     int max_n_kv = 1024;
     while (max_n_kv < T_prompt + max_new) max_n_kv *= 2;
-    if (max_n_kv > kv_n_ctx) max_n_kv = kv_n_ctx;
+    if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
     const int64_t t_step_build_start = ggml_time_us();
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
@@ -981,9 +1084,10 @@ transcribe_status run(
         ip.no_alloc   = true;
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr,
-                         "qwen3_asr step: ggml_init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "qwen3_asr step: compute context allocation failed — "
+                "out of memory.");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     StepBuild sb = build_step_graph(cc->compute_ctx, cm->weights,
@@ -994,9 +1098,10 @@ transcribe_status run(
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-        std::fprintf(stderr,
-                     "qwen3_asr step: sched_alloc_graph failed (build-once)\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "qwen3_asr step: decode graph allocation failed — out of memory. "
+            "Lower transcribe_session_params.n_ctx or shorten the audio.");
+        return TRANSCRIBE_ERR_OOM;
     }
     const int64_t t_step_build_once_us = ggml_time_us() - t_step_build_start;
 
@@ -1066,6 +1171,20 @@ transcribe_status run(
     }
     t_step_loop_us = ggml_time_us() - t_step_loop_start;
     n_steps = static_cast<int>(generated_ids.size()) - 1;
+
+    // The decode stopped at EOS (complete) or at the generation budget /
+    // context width (truncated). Surface the latter via
+    // transcribe_was_truncated() and a WARN rather than returning a
+    // silently shortened transcript. See docs/input-limits.md.
+    if (next_tok != eos_id) {
+        cc->was_truncated = true;
+        transcribe::log_msg(
+            TRANSCRIBE_LOG_LEVEL_WARN,
+            "qwen3_asr run: output truncated at %d tokens — decode reached the "
+            "generation budget before end-of-stream; the transcript may be "
+            "incomplete.",
+            static_cast<int>(generated_ids.size()));
+    }
 
     // Map the granular diagnostic counters to the shape the debug
     // print expects. With graph reuse all per-step overhead collapses
@@ -1190,7 +1309,11 @@ transcribe_status run(
               / static_cast<int64_t>(cm->hparams.fe_sample_rate);
     cc->segments.push_back(std::move(seg));
 
-    return TRANSCRIBE_OK;
+    // The partial transcript is fully populated above; a truncated decode
+    // returns the hard OUTPUT_TRUNCATED status (the result stays readable,
+    // like an aborted run). See docs/input-limits.md.
+    return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+                             : TRANSCRIBE_OK;
 }
 
 // ===========================================================================
@@ -1659,6 +1782,12 @@ transcribe_status run_batch(
     const int max_new = 256;
     int max_T_prompt = 0;
     int prefix_len   = 0;
+    // Per-utterance terminal status for rows we reject before decode. Defaults
+    // to INVALID_ARG (the encode pass already invalidated malformed rows);
+    // over-length rows below are upgraded to INPUT_TOO_LONG so run_batch
+    // enforces the same input-length contract as the single-shot run().
+    const int ceiling = qwen3_context_ceiling(cc->n_ctx, cm->hparams);
+    std::vector<transcribe_status> fail_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<int32_t>> prompt_ids(n);
     for (int b = 0; b < n; ++b) {
         if (!valid[b]) continue;
@@ -1667,19 +1796,36 @@ transcribe_status run_batch(
                             lang_prefix_ptr, prompt_ids[b], ap);
         T_prompt[b]  = static_cast<int>(prompt_ids[b].size());
         prefix_len   = ap.empty() ? 0 : static_cast<int>(ap.front());
+        // Same gate as single-shot run(): audio + prompt + generation must fit
+        // the context ceiling. Reject the over-length utterance (the rest of
+        // the batch still runs); see docs/input-limits.md.
+        if (T_prompt[b] + max_new > ceiling) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "qwen3_asr run_batch: utterance %d input too long — %d audio + "
+                "%d prompt tokens exceed the %d-token context. See "
+                "transcribe_capabilities.max_audio_ms.",
+                b, T_enc[b], T_prompt[b] - T_enc[b], ceiling);
+            valid[b]       = 0;
+            fail_status[b] = TRANSCRIBE_ERR_INPUT_TOO_LONG;
+            continue;
+        }
         max_T_prompt = std::max(max_T_prompt, T_prompt[b]);
     }
     if (max_T_prompt == 0) {
         // No usable utterance — emit per-row errors and return.
         for (int b = 0; b < n; ++b) {
             transcribe_session::ResultSet rs;
-            rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            rs.status = fail_status[b];
             cc->batch_results.push_back(std::move(rs));
         }
         return TRANSCRIBE_OK;
     }
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
+    // Honor the session context cap: the pow2 rounding above can overshoot the
+    // ceiling, so clamp (the per-utterance gate guarantees every valid row's
+    // T_prompt + max_new <= ceiling, so the cache still fits all rows).
+    if (max_n_kv > ceiling) max_n_kv = ceiling;
 
     // Allocate / reuse the batched KV cache (n_ctx == max_n_kv, n slabs).
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
@@ -1687,12 +1833,16 @@ transcribe_status run_batch(
     if (cc->kv_cache_batch.self_k == nullptr ||
         cc->kv_batch_cap != n || cc->kv_batch_n_ctx != max_n_kv) {
         cc->kv_cache_batch.free();
-        if (!transcribe::qwen3_lm::kv_init_batched(
+        if (!transcribe::causal_lm::kv_init_batched(
                 cc->kv_cache_batch, cm->plan.primary, max_n_kv,
                 cm->hparams.dec_n_kv_heads, cm->hparams.dec_head_dim,
                 cm->hparams.dec_n_layers, n, kv_type)) {
-            std::fprintf(stderr, "qwen3_asr run_batch: kv_init_batched failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "qwen3_asr run_batch: batched KV cache allocation failed "
+                "(n_ctx=%d x %d utterances) — out of memory. Lower "
+                "transcribe_session_params.n_ctx or the batch size.",
+                max_n_kv, n);
+            return TRANSCRIBE_ERR_OOM;
         }
         cc->kv_batch_cap   = n;
         cc->kv_batch_n_ctx = max_n_kv;
@@ -1717,7 +1867,7 @@ transcribe_status run_batch(
     }
     const int64_t prefill_pass_us = ggml_time_us() - t_prefpass0;
 
-    // ---- Pass 2: batched step loop (shared qwen3_lm driver) ----
+    // ---- Pass 2: batched step loop (shared causal_lm driver) ----
     const int32_t eos_id = cm->hparams.eos_token_id;
 
     if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK)
@@ -1730,7 +1880,7 @@ transcribe_status run_batch(
     if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph))
         return TRANSCRIBE_ERR_GGUF;
 
-    transcribe::qwen3_lm::StepBatchedIO io {};
+    transcribe::causal_lm::StepBatchedIO io {};
     io.input_ids = sb.input_ids_in;
     io.positions = sb.position_in;
     io.kv_idx    = sb.kv_idx_in;
@@ -1738,15 +1888,16 @@ transcribe_status run_batch(
     io.argmax    = sb.out;
     io.graph     = sb.graph;
 
-    transcribe::qwen3_lm::StepBatchedState step_state;
+    transcribe::causal_lm::StepBatchedState step_state;
     step_state.valid    = valid;
     step_state.next_tok = next_tok;
     step_state.n_past   = n_past;
 
-    transcribe::qwen3_lm::StepLoopStats step_stats;
-    if (const transcribe_status st = transcribe::qwen3_lm::run_batched_step_loop(
+    transcribe::causal_lm::StepLoopStats step_stats;
+    std::vector<char> truncated;
+    if (const transcribe_status st = transcribe::causal_lm::run_batched_step_loop(
             cc, cc->sched, io, n, max_n_kv, eos_id, max_new, step_state,
-            generated, &step_stats); st != TRANSCRIBE_OK) {
+            generated, &step_stats, &truncated); st != TRANSCRIBE_OK) {
         return st;
     }
     const int64_t step_us = step_stats.step_us;
@@ -1758,12 +1909,19 @@ transcribe_status run_batch(
     for (int b = 0; b < n; ++b) {
         if (!valid[b]) {
             transcribe_session::ResultSet rs;
-            rs.status = TRANSCRIBE_ERR_INVALID_ARG;
+            rs.status = fail_status[b];
             cc->batch_results.push_back(std::move(rs));
             continue;
         }
         transcribe_session::ResultSet rs =
             finalize_utterance(cm, generated[b], lang_prefix_ptr, n_samples[b]);
+        // Per-utterance truncation parity with the single-shot path: a row that
+        // hit the generation budget / context before eos reports
+        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained).
+        if (b < static_cast<int>(truncated.size()) && truncated[b]) {
+            cc->was_truncated = true;
+            rs.status = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;
+        }
         rs.t_mel_us    = mel_us / valid_count;
         rs.t_encode_us = enc_us / valid_count;
         rs.t_decode_us = step_us / valid_count;

@@ -214,6 +214,60 @@ typedef enum {
      * transcribe_run_params::itn. Not currently returned.
      */
     TRANSCRIBE_ERR_UNSUPPORTED_ITN      = 16,
+    /*
+     * Returned by transcribe_run / transcribe_run_batch when the input
+     * audio is longer than the loaded model can process in a single
+     * decode. Hard-context-cap families (LLM-style decoders: qwen3_asr,
+     * canary_qwen, funasr_nano, granite, granite_nar, voxtral, cohere,
+     * canary) reject an over-length clip UP FRONT — before the decode
+     * (and, where the binding limit is the encoder's positional table,
+     * before the encoder) — by comparing the audio's prefill token count
+     * against the model's context window. The usable ceiling is published
+     * as transcribe_capabilities::max_audio_ms, so a caller can size input
+     * before calling rather than discovering the limit on failure.
+     *
+     * Distinct from INVALID_ARG so a caller can tell "audio too long for
+     * this model" from a malformed argument. This is the "couldn't start"
+     * signal; the symmetric "started, couldn't finish" outcome is
+     * TRANSCRIBE_ERR_OUTPUT_TRUNCATED.
+     *
+     * Chunked / unbounded families normally report max_audio_ms == 0 and
+     * have no practical input limit. Whisper and parakeet never return this
+     * for length. voxtral_realtime is the exception: it still reports
+     * unbounded because its wall is far beyond practical clips, but
+     * transcribe_run / transcribe_run_batch return this if input crosses the
+     * decoder's absolute position cap.
+     *
+     * See docs/input-limits.md for the full contract.
+     */
+    TRANSCRIBE_ERR_INPUT_TOO_LONG       = 17,
+    /*
+     * Returned by transcribe_run when the decode stopped because it hit
+     * the model's context / generation budget BEFORE the model emitted
+     * end-of-stream — i.e. the transcript is incomplete. This is the
+     * "started, couldn't finish" counterpart to INPUT_TOO_LONG, and it is
+     * a hard non-OK status by design: a truncated transcript must not be
+     * mistaken for a complete one.
+     *
+     * The partial transcript IS preserved and readable through the normal
+     * result accessors (transcribe_full_text, segments, words, tokens),
+     * exactly like TRANSCRIBE_ERR_ABORTED — a caller that wants the partial
+     * output reads it after checking the status. transcribe_was_truncated()
+     * remains as supplemental state (it is true whenever this status is
+     * returned). Unlike INPUT_TOO_LONG this cannot be predicted from input
+     * length (it depends on how long the transcript runs), so it is
+     * reported after the fact rather than gated up front.
+     *
+     * In transcribe_run_batch this is a PER-UTTERANCE status: the whole-
+     * batch call still returns TRANSCRIBE_OK and the truncated utterance
+     * carries this code in transcribe_batch_status(session, i), the same
+     * way per-utterance INVALID_ARG / INPUT_TOO_LONG are reported.
+     *
+     * Streaming does NOT use this code: an active stream is incremental and
+     * has its own terminal-state machine (see transcribe_stream_*).
+     * See docs/input-limits.md for the full contract.
+     */
+    TRANSCRIBE_ERR_OUTPUT_TRUNCATED     = 18,
 } transcribe_status;
 
 /*
@@ -577,11 +631,35 @@ TRANSCRIBE_API void transcribe_model_load_params_init(
  *
  * kv_type:   data type for K/V activations in flash attention.
  *            AUTO (default) uses f16 for quantized models, f32 for f32.
+ *
+ * n_ctx:     optional cap on the decoder context window, in tokens, for
+ *            families with a decoder KV cache. It is a memory knob, not an
+ *            accuracy knob.
+ *              0 (default): use the model's true maximum, read from GGUF
+ *                           metadata. This is the right value for almost
+ *                           every caller.
+ *              > 0:         lower the ceiling to bound KV-cache memory. A
+ *                           value above the model maximum is clamped DOWN
+ *                           to it — the knob can only narrow, never extend
+ *                           past what the model was trained to support.
+ *            For decoder-context-bound families (audio-tokens + prompt +
+ *            generation share one window), lowering n_ctx lowers the
+ *            effective input limit. That effective limit is a per-session
+ *            value: read it via transcribe_session_get_limits()
+ *            (effective_max_audio_ms), NOT transcribe_capabilities::
+ *            max_audio_ms, which is model-level and reflects only the
+ *            default context. For encoder-bound families, n_ctx may lower
+ *            decoder KV memory / output budget without lowering the input-
+ *            audio bound. Ignored by chunked / unbounded families (whisper,
+ *            parakeet, voxtral_realtime) — they have no lowerable ceiling, so
+ *            a non-zero n_ctx is a no-op there. A negative value returns
+ *            TRANSCRIBE_ERR_INVALID_ARG.
  */
 struct transcribe_session_params {
     uint64_t           struct_size;
     int                n_threads;
     transcribe_kv_type kv_type;
+    int32_t            n_ctx;
 };
 
 TRANSCRIBE_API void transcribe_session_params_init(
@@ -780,6 +858,38 @@ struct transcribe_capabilities {
      * consumer ever needs a generic latency menu, the right shape is a
      * dedicated streaming-preset enumeration query, not flat fields here.
      */
+
+    /*
+     * max_audio_ms: the longest audio this model can process in one
+     * transcribe_run, in milliseconds of 16 kHz mono input. This is the
+     * single number a caller checks to size input before calling.
+     *
+     *   0  = no practical limit. The family chunks long audio internally
+     *        (whisper), is otherwise unbounded by sequence length
+     *        (parakeet), or has only an impractically large absolute safety
+     *        cap (voxtral_realtime). A family-specific absolute cap may still
+     *        reject input past the model's true wall; see docs/input-limits.md.
+     *   >0 = a usable ceiling. Its meaning depends on the family's limit
+     *        kind, but the number is honest in both cases:
+     *          - hard-context-cap families: the bound the library ENFORCES
+     *            up front. It is derived from the decoder context window
+     *            minus the fixed prompt and a minimum generation reserve.
+     *            A longer clip returns TRANSCRIBE_ERR_INPUT_TOO_LONG before
+     *            the decode. This is a MODEL-level value reported at the
+     *            model's default context (transcribe_session_params::n_ctx
+     *            == 0); a session that lowers n_ctx lowers the effective
+     *            limit below this number, but this field is not re-derived
+     *            per session.
+     *          - soft-window families (gigaam, sensevoice, medasr): the
+     *            advisory window the model was trained on. Longer input is
+     *            accepted but emits a WARN and may be less accurate; it is
+     *            not rejected.
+     *
+     * Zero-init via transcribe_capabilities_init() yields 0; a family that
+     * does not set it is therefore reported as unbounded. See
+     * docs/input-limits.md for the full contract.
+     */
+    int64_t                   max_audio_ms;
 };
 
 TRANSCRIBE_API void transcribe_capabilities_init(
@@ -1154,6 +1264,107 @@ TRANSCRIBE_API void transcribe_set_abort_callback(
  * transcribe_run. Returns false if session is NULL.
  */
 TRANSCRIBE_API bool transcribe_was_aborted(const struct transcribe_session * session);
+
+/*
+ * Supplemental flag for output truncation. True if the most recent decode
+ * stopped at the model's context / generation cap before end-of-stream,
+ * leaving the transcript incomplete. The partial transcript is preserved
+ * and readable through the normal result accessors. Reset to false at the
+ * start of each new decode — transcribe_run, transcribe_run_batch, and
+ * transcribe_stream_begin (the same lifecycle as transcribe_was_aborted).
+ * Returns false if session is NULL.
+ *
+ * Two paths set it, and they differ in whether a status also reports it:
+ *
+ *   - Offline (transcribe_run / transcribe_run_batch): the flag is true
+ *     exactly when the run returned TRANSCRIBE_ERR_OUTPUT_TRUNCATED (or, in
+ *     a batch, when a per-utterance status is OUTPUT_TRUNCATED), so the run
+ *     status is the authoritative signal and this accessor is a convenience
+ *     for a caller that has lost it.
+ *
+ *   - Streaming (transcribe_stream_*): OUTPUT_TRUNCATED is NOT used. An
+ *     active stream has its own terminal-state machine, and stream_feed /
+ *     stream_finalize return the status of that step, not a verdict on the
+ *     whole transcript — so they return TRANSCRIBE_OK even when the stream
+ *     reached its absolute position cap (forcing the stream to FAILED would
+ *     discard the committed text the caller has been consuming). There, this
+ *     flag is the ONLY signal of truncation: a streaming caller must check
+ *     it after finalize.
+ *
+ * Distinct from the "couldn't start" rejection: input that cannot fit at
+ * all is rejected before the decode with TRANSCRIBE_ERR_INPUT_TOO_LONG;
+ * output truncation cannot be predicted from input length (it depends on
+ * how long the transcript runs), so it is reported after the fact. A WARN
+ * is also logged. See docs/input-limits.md.
+ */
+TRANSCRIBE_API bool transcribe_was_truncated(const struct transcribe_session * session);
+
+/* ----------------------------------------------------------------------- */
+/* Session limits                                                          */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Effective limits for a specific session. This is the session-level companion
+ * to the model-level transcribe_capabilities::max_audio_ms: for families whose
+ * audio consumes decoder context, it accounts for the session's
+ * transcribe_session_params::n_ctx cap. For encoder-bound families, n_ctx may
+ * lower decoder KV memory without lowering the input-audio bound.
+ *
+ *   effective_n_ctx:        the decoder context cap, in tokens, in force for
+ *                           this session: model_max_ctx when n_ctx == 0,
+ *                           else min(n_ctx, model_max_ctx). 0 means the
+ *                           family has no context cap (chunked / unbounded).
+ *
+ *   effective_max_audio_ms: the longest audio this session accepts before
+ *                           TRANSCRIBE_ERR_INPUT_TOO_LONG, in milliseconds
+ *                           of 16 kHz mono input. For decoder-context-bound
+ *                           families this is derived from effective_n_ctx; for
+ *                           encoder-bound families it remains the encoder
+ *                           input bound even when n_ctx lowers decoder memory.
+ *                           0 means no practical limit. Advisory /
+ *                           representative in the same way as
+ *                           transcribe_capabilities::max_audio_ms (it assumes
+ *                           a representative prompt; the exact per-call bound
+ *                           shifts slightly with the prompt).
+ *
+ *   max_kv_bytes:           the worst-case decoder KV-cache bytes for ONE
+ *                           utterance at effective_n_ctx, for memory
+ *                           budgeting. It is exact for the session's kv_type
+ *                           (the families resolve AUTO and F16 to f16 KV and
+ *                           use f32 only for an explicit F32 request, so this
+ *                           reflects 2 or 4 bytes/element accordingly). It is
+ *                           the ceiling, not the amount allocated for any
+ *                           single run (the cache grows to fit each input).
+ *                           One scaling caveat the caller applies itself: it
+ *                           is per-utterance, so transcribe_run_batch
+ *                           allocates roughly batch_size x this. 0 if the
+ *                           family has no decoder KV cache.
+ */
+struct transcribe_session_limits {
+    uint64_t struct_size;
+    int32_t  effective_n_ctx;
+    int64_t  effective_max_audio_ms;
+    int64_t  max_kv_bytes;
+};
+
+TRANSCRIBE_API void transcribe_session_limits_init(
+    struct transcribe_session_limits * out);
+
+/*
+ * Read the effective limits for a session into caller-owned storage. The
+ * caller initializes *out via transcribe_session_limits_init(); the library
+ * writes only the prefix that fits in both the caller's struct_size and the
+ * library's view.
+ *
+ * Returns:
+ *   TRANSCRIBE_ERR_INVALID_ARG     session or out is NULL.
+ *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE out->struct_size is 0 or below the
+ *                                  library minimum.
+ *   TRANSCRIBE_OK                  otherwise.
+ */
+TRANSCRIBE_API transcribe_status transcribe_session_get_limits(
+    const struct transcribe_session *   session,
+    struct transcribe_session_limits *  out);
 
 /* ----------------------------------------------------------------------- */
 /* Streaming                                                               */

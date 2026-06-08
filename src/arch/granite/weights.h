@@ -294,7 +294,7 @@ struct GraniteDecBlock {
     ggml_tensor * ffn_up_w    = nullptr;  // [hidden, intermediate]
     ggml_tensor * ffn_down_w  = nullptr;  // [intermediate, hidden]
     // Optional gate/up pack: [hidden, 2*intermediate]. Allocated by
-    // qwen3_lm::pack_gate_up at load time.
+    // causal_lm::pack_gate_up at load time.
     ggml_tensor * ffn_gate_up_w = nullptr;
 };
 

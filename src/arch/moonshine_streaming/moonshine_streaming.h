@@ -136,7 +136,6 @@ struct MoonshineStreamingSession final : public transcribe_session {
 
     MoonshineStreamingKvCache kv_cache;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;

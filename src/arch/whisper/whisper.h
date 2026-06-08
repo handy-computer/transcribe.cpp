@@ -355,7 +355,6 @@ struct WhisperSession final : public transcribe_session {
     // KV cache for the autoregressive decoder.
     WhisperKvCache kv_cache;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Flash-attention policy. Encoder runs at seqlen=1500 and always
     // benefits from flash kernels where available; decoder runs at

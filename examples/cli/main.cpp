@@ -127,6 +127,7 @@ struct cli_args {
     bool        batch_jsonl = false; // --batch-jsonl: output JSONL
     int         repeat    = 1;
     int         n_threads = 0; // 0 = library default (all cores)
+    int         n_ctx     = 0; // 0 = model's true max; >0 lowers the cap
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
     transcribe_backend_request backend = TRANSCRIBE_BACKEND_AUTO;
     transcribe_timestamp_kind timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
@@ -197,6 +198,10 @@ void print_usage(const char * argv0) {
         "  -q, --quiet           suppress library log output\n"
         "  -r, --repeat N        run N times per file (benchmark)\n"
         "  --threads N           CPU threads (default: all cores)\n"
+        "  --n-ctx N             session context/KV cap in tokens (bounds decoder\n"
+        "                        KV memory; cannot extend the model): 0 = model\n"
+        "                        max, >max is clamped down. Lowers the effective\n"
+        "                        max audio.\n"
         "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
         "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan (default: auto)\n"
         "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: none)\n"
@@ -274,6 +279,15 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             if (!v) return false;
             out.repeat = std::atoi(v);
             if (out.repeat < 1) out.repeat = 1;
+        } else if (a == "--n-ctx") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.n_ctx = std::atoi(v);
+            if (out.n_ctx < 0) {
+                std::fprintf(stderr,
+                             "error: --n-ctx must be >= 0 (0 = model max)\n");
+                return false;
+            }
         } else if (a == "--threads") {
             const char * v = take_value(a.c_str());
             if (!v) return false;
@@ -527,6 +541,7 @@ int main(int argc, char ** argv) {
         // Init context once (reused across all files via run()).
         struct transcribe_session_params cp; transcribe_session_params_init(&cp);
         cp.n_threads = args.n_threads;
+        cp.n_ctx     = args.n_ctx;
         cp.kv_type   = args.kv_type;
         struct transcribe_session *      ctx = nullptr;
         const transcribe_status          init_st =
@@ -886,6 +901,7 @@ int main(int argc, char ** argv) {
 
         struct transcribe_session_params cp; transcribe_session_params_init(&cp);
         cp.n_threads = args.n_threads;
+        cp.n_ctx     = args.n_ctx;
         cp.kv_type   = args.kv_type;
         struct transcribe_session *      ctx = nullptr;
         const transcribe_status          init_st =
@@ -896,6 +912,32 @@ int main(int argc, char ** argv) {
                          transcribe_status_string(init_st));
             transcribe_model_free(model);
             return EXIT_FAILURE;
+        }
+
+        // Surface the effective input-length limit so it's obvious how much
+        // audio this session accepts (reflects --n-ctx). 0 means "no practical
+        // limit" — the family chunks internally or is unbounded. See
+        // docs/input-limits.md.
+        {
+            struct transcribe_session_limits lim; transcribe_session_limits_init(&lim);
+            if (transcribe_session_get_limits(ctx, &lim) == TRANSCRIBE_OK) {
+                if (lim.effective_max_audio_ms > 0) {
+                    std::printf("  max audio:  %.1f s", (double) lim.effective_max_audio_ms / 1000.0);
+                    if (lim.effective_n_ctx > 0) {
+                        std::printf("  (context %d tok, ~%lld MiB KV max)",
+                                    lim.effective_n_ctx,
+                                    (long long) (lim.max_kv_bytes >> 20));
+                    }
+                    std::printf("\n");
+                } else if (lim.effective_n_ctx > 0) {
+                    // Capped family whose context is too small to fit any audio
+                    // plus a prompt (e.g. an aggressively low --n-ctx).
+                    std::printf("  max audio:  ~0 s (context %d tok too small for "
+                                "audio + prompt)\n", lim.effective_n_ctx);
+                } else {
+                    std::printf("  max audio:  unbounded (long audio chunked internally)\n");
+                }
+            }
         }
 
         struct transcribe_run_params rp; transcribe_run_params_init(&rp);
@@ -1064,9 +1106,24 @@ int main(int argc, char ** argv) {
             }
         }
         std::printf("run: %s\n", transcribe_status_string(run_st));
-        if (run_st == TRANSCRIBE_OK) {
+        // OUTPUT_TRUNCATED and ABORTED are non-OK but preserve the partial
+        // transcript (see docs/input-limits.md), so show the result for them
+        // too — just flagged.
+        const bool result_present =
+            run_st == TRANSCRIBE_OK ||
+            run_st == TRANSCRIBE_ERR_OUTPUT_TRUNCATED ||
+            run_st == TRANSCRIBE_ERR_ABORTED;
+        if (result_present) {
             const char * text = transcribe_full_text(ctx);
             std::printf("text: %s\n", (text && *text) ? text : "(empty)");
+
+            // A truncated decode hit the model's context/output budget before
+            // end-of-stream; the text above is incomplete.
+            if (transcribe_was_truncated(ctx)) {
+                std::printf("  note:      output truncated (hit the model's "
+                            "context/generation cap before end-of-stream); "
+                            "transcript is incomplete\n");
+            }
 
             const char * dl = transcribe_detected_language(ctx);
             if (dl && *dl) {

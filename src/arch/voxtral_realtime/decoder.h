@@ -1,6 +1,6 @@
 // arch/voxtral_realtime/decoder.h - Ministral LM prefill/step builders.
 //
-// The per-block math is the shared qwen3_lm module (GQA, NEOX RoPE, SwiGLU,
+// The per-block math is the shared causal_lm module (GQA, NEOX RoPE, SwiGLU,
 // KV cache) with null Q/K-norm and a per-layer FFN-branch scale (ffn_scale)
 // carrying the delay-conditioned adaptive-norm `1 + ada(t_cond)`. This file
 // owns graph allocation, ADDITIVE audio fusion (inputs_embeds += audio at
@@ -14,7 +14,7 @@
 #pragma once
 
 #include "voxtral_realtime.h"
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -52,7 +52,7 @@ struct PrefillBuild {
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const Weights &                 weights,
                                  const HParams &                 hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  ggml_tensor *                   ada_scale_all,
                                  int                             T,
                                  bool                            use_flash,
@@ -73,7 +73,7 @@ struct StepBuild {
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const Weights &                 weights,
                            const HParams &                 hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            ggml_tensor *                   ada_scale_all,
                            int                             max_n_kv,
                            bool                            use_flash);
@@ -105,7 +105,7 @@ struct VerifyBuild {
 VerifyBuild build_verify_graph(ggml_context *                  ctx,
                                const Weights &                 weights,
                                const HParams &                 hp,
-                               transcribe::qwen3_lm::KvCache & kv_cache,
+                               transcribe::causal_lm::KvCache & kv_cache,
                                ggml_tensor *                   ada_scale_all,
                                int                             T_verify,
                                int                             max_n_kv,
@@ -116,13 +116,13 @@ VerifyBuild build_verify_graph(ggml_context *                  ctx,
 // ---------------------------------------------------------------------------
 //
 // Mirrors the single-utterance builders with the batch on ne[2], via the shared
-// qwen3_lm::block_{prefill,step}_batched (flash-only, n_batch=B kv cache). The
+// causal_lm::block_{prefill,step}_batched (flash-only, n_batch=B kv cache). The
 // realtime specifics ride along: TIED lm_head, the per-layer ada ffn_scale view,
 // and ADDITIVE audio fusion. The prompt is uniform length across the batch (BOS
 // + STREAMING_PAD*(32+delay) with `num_delay` shared), so the prefill is
 // rectangular [hidden, T_prompt, B] — no ragged padding; the last real position
 // is T_prompt-1 for every row. Per-step audio injection (a fresh audio embed per
-// position) is why the decode loop cannot reuse qwen3_lm::run_batched_step_loop.
+// position) is why the decode loop cannot reuse causal_lm::run_batched_step_loop.
 
 struct PrefillBuildBatched {
     ggml_tensor * input_ids_in   = nullptr;  // [T_prompt, B] i32
@@ -142,7 +142,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const Weights &                 weights,
     const HParams &                 hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     ggml_tensor *                   ada_scale_all,
     int                             T_prompt,
     int                             n_batch,
@@ -165,7 +165,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const Weights &                 weights,
     const HParams &                 hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     ggml_tensor *                   ada_scale_all,
     int                             max_n_kv,
     int                             n_batch,

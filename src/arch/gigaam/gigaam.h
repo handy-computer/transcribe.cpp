@@ -84,7 +84,6 @@ struct GigaamSession final : public transcribe_session {
     // RNN-T greedy decoder scratch goes here when M3 lands; CTC greedy
     // scratch lands at M4.
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     GigaamSession() = default;
     ~GigaamSession() override;

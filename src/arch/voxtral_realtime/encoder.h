@@ -12,7 +12,7 @@
 
 #pragma once
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 
 #include "ggml.h"
 
@@ -165,7 +165,7 @@ struct EncoderChunkBuild {
 EncoderChunkBuild build_encoder_chunk_graph(ggml_context *                  ctx,
                                             const Weights &                 weights,
                                             const HParams &                 hp,
-                                            transcribe::qwen3_lm::KvCache & enc_kv,
+                                            transcribe::causal_lm::KvCache & enc_kv,
                                             int                             n_new,
                                             int                             write_slot,
                                             int                             read_start,

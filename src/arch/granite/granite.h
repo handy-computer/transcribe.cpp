@@ -29,7 +29,7 @@
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -92,8 +92,8 @@ struct GraniteModel final : public transcribe_model {
     ggml_backend_buffer_t bn_fused_buffer = nullptr;
 
     // Packed FFN gate+up: one mul_mat per block instead of two. Owned by
-    // qwen3_lm::pack_gate_up; freed in ~GraniteModel().
-    transcribe::qwen3_lm::PackedGateUpHandles packed_gate_up;
+    // causal_lm::pack_gate_up; freed in ~GraniteModel().
+    transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
     std::optional<transcribe::MelFrontend> mel;
 
@@ -123,7 +123,6 @@ struct GraniteSession final : public transcribe_session {
     std::vector<float> audio_tokens_host;
     int32_t            n_audio_tokens = 0;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
@@ -131,10 +130,10 @@ struct GraniteSession final : public transcribe_session {
     // Self-attention KV cache (40 layers, 4 kv heads × 128 head_dim).
     // Allocated lazily on the first run() call so we can size n_ctx to
     // the actual prompt+gen budget.
-    transcribe::qwen3_lm::KvCache kv;
+    transcribe::causal_lm::KvCache kv;
 
     // Batched KV cache for offline transcribe_run_batch (n_batch slabs).
-    transcribe::qwen3_lm::KvCache kv_batch;
+    transcribe::causal_lm::KvCache kv_batch;
     int                           kv_batch_cap   = 0;
     int                           kv_batch_n_ctx = 0;
 

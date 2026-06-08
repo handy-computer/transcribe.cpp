@@ -25,6 +25,16 @@ Real-time and offline speech-to-text from a 16 kHz mono WAV.
   range 80 ms–2.4 s) sets the transcription delay.
 - Auto language detection (the streaming processor is auto-detect only).
 
+## Input limits
+
+No practical per-call length limit (`transcribe_capabilities.max_audio_ms == 0`):
+the streaming encoder runs in constant memory, so you can feed arbitrarily long
+audio. The only ceiling is an absolute decoder-position wall at about 2.9 hours
+of continuous audio — a one-shot or batch clip past it returns
+`TRANSCRIBE_ERR_INPUT_TOO_LONG`, and a stream that reaches it keeps its committed
+text and sets `transcribe_was_truncated()` (finalize still returns OK). See the
+[input-length contract](../input-limits.md).
+
 ## Download
 
 `handy-computer/Voxtral-Mini-4B-Realtime-2602-gguf`:

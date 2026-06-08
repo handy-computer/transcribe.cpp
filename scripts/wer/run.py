@@ -36,6 +36,8 @@ Usage:
     --dataset SPEC  shorthand for ingest + manifest. Supported forms:
                       fleurs:<code>        -> samples/wer/fleurs-<code>.manifest.jsonl
                       librispeech:<split>  -> samples/wer/librispeech-<split>.manifest.jsonl
+                      eka-medical-asr:<code>
+                                            -> samples/wer/eka-medical-asr-<code>.manifest.jsonl
                     Runs ingest.py if the manifest is missing. Overrides
                     --manifest. Auto-sets --language when applicable.
     --language CODE BCP-47 hint passed through to transcribe-cli. If the
@@ -64,6 +66,17 @@ import tempfile
 import time
 from pathlib import Path
 
+REMOTE_HELPERS = Path(__file__).resolve().parent / "remote"
+if REMOTE_HELPERS.is_dir() and str(REMOTE_HELPERS) not in sys.path:
+    sys.path.insert(0, str(REMOTE_HELPERS))
+
+from dataset_specs import (  # noqa: E402
+    default_language_for,
+    ingest_args_for,
+    local_manifest_path_for,
+    parse_dataset_spec,
+)
+
 
 def find_repo_root(start: Path) -> Path:
     p = start.resolve()
@@ -90,32 +103,18 @@ def resolve_dataset(repo: Path, spec: str) -> tuple[Path, str | None]:
     Supported specs:
       fleurs:<code>        e.g. fleurs:es, fleurs:zh-tw
       librispeech:<split>  e.g. librispeech:test-clean
+      eka-medical-asr:<code>
 
-    Adding a new protocol means adding a branch here and a matching
-    adapter in ingest.py.
+    Adding a new protocol means adding it to the shared dataset spec helper
+    plus a matching adapter in ingest.py.
     """
-    if ":" not in spec:
-        raise SystemExit(
-            f"error: --dataset must be PROTO:ARG (e.g. fleurs:es), got {spec!r}"
-        )
-    proto, arg = spec.split(":", 1)
-    if proto == "fleurs":
-        manifest = repo / f"samples/wer/fleurs-{arg}.manifest.jsonl"
-        ingest_args = ["fleurs", "--lang", arg]
-        default_lang: str | None = arg
-    elif proto == "librispeech":
-        manifest = repo / f"samples/wer/librispeech-{arg}.manifest.jsonl"
-        ingest_args = ["librispeech", "--split", arg]
-        default_lang = "en"
-    elif proto == "eka-medical-asr":
-        manifest = repo / f"samples/wer/eka-medical-asr-{arg}.manifest.jsonl"
-        ingest_args = ["eka-medical-asr", "--lang", arg]
-        default_lang = arg
-    else:
-        raise SystemExit(
-            f"error: unknown --dataset protocol {proto!r}; "
-            f"supported: fleurs, librispeech, eka-medical-asr"
-        )
+    try:
+        parse_dataset_spec(spec)
+        manifest = local_manifest_path_for(repo, spec)
+        ingest_args = ingest_args_for(spec)
+        default_lang = default_language_for(spec)
+    except ValueError as e:
+        raise SystemExit(f"error: {e}") from e
 
     if not manifest.exists():
         print(f"manifest missing; running scripts/wer/ingest.py {' '.join(ingest_args)}")
@@ -146,9 +145,9 @@ def main() -> int:
                         "samples/wer/test-clean.manifest.jsonl). "
                         "Overridden by --dataset.")
     p.add_argument("--dataset", default=None,
-                   help="Dataset shorthand: fleurs:<code> or "
-                        "librispeech:<split>. Runs ingest.py on first use; "
-                        "auto-sets --language.")
+                   help="Dataset shorthand: fleurs:<code>, "
+                        "librispeech:<split>, or eka-medical-asr:<code>. "
+                        "Runs ingest.py on first use; auto-sets --language.")
     p.add_argument("--language", default=None,
                    help="BCP-47 code passed to transcribe-cli --language. "
                         "Auto-set from --dataset when applicable. "

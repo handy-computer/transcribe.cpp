@@ -8,7 +8,7 @@
 #pragma once
 
 #include "funasr_nano.h"
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -46,7 +46,7 @@ struct PrefillBuild {
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const FunAsrNanoWeights &       weights,
                                  const FunAsrNanoHParams &       hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  int                             T_prompt,
                                  int                             T_audio,
                                  int                             prefix_len,
@@ -72,14 +72,14 @@ struct StepBuild {
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const FunAsrNanoWeights &       weights,
                            const FunAsrNanoHParams &       hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            int                             max_n_kv,
                            bool                            use_flash);
 
 // ---------- Batched prefill / step (offline transcribe_run_batch) ----------
 // Mirror arch/qwen3_asr's batched builders; the only family difference is the
 // audio block is the adaptor output (already in llm_dim space). See
-// qwen3_lm::block_prefill_batched / block_step_batched.
+// causal_lm::block_prefill_batched / block_step_batched.
 
 struct PrefillBuildBatched {
     ggml_tensor * input_ids_in = nullptr;  // [T_prompt_max, B] i32
@@ -106,7 +106,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const FunAsrNanoWeights &       weights,
     const FunAsrNanoHParams &       hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             T_prompt_max,
     int                             T_audio_max,
     int                             n_batch,
@@ -128,7 +128,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const FunAsrNanoWeights &       weights,
     const FunAsrNanoHParams &       hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             max_n_kv,
     int                             n_batch,
     bool                            use_flash);

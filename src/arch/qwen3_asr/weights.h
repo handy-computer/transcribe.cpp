@@ -190,7 +190,7 @@ struct QwenAsrDecBlock {
     ggml_tensor * ffn_up_w      = nullptr;  // [hidden, intermediate]
     ggml_tensor * ffn_down_w    = nullptr;  // [intermediate, hidden]
     // Packed gate+up projection: [hidden, 2*intermediate]. Filled at
-    // load time from ffn_gate_w + ffn_up_w by qwen3_lm::pack_gate_up();
+    // load time from ffn_gate_w + ffn_up_w by causal_lm::pack_gate_up();
     // the graph uses this for one mul_mat instead of two.
     ggml_tensor * ffn_gate_up_w = nullptr;  // [hidden, 2*intermediate]
 };

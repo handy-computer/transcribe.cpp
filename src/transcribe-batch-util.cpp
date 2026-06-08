@@ -1,6 +1,7 @@
 // transcribe-batch-util.cpp - see transcribe-batch-util.h.
 
 #include "transcribe-batch-util.h"
+#include "transcribe-log.h"
 #include "transcribe-session.h"
 
 #include "ggml.h"
@@ -133,7 +134,8 @@ transcribe_status run_batched_encdec_step_loop(
     int                                 n_batch,
     const std::vector<char> &           valid,
     std::vector<std::vector<int32_t>> & generated,
-    int *                               n_steps_out)
+    int *                               n_steps_out,
+    std::vector<char> *                 truncated_out)
 {
     const int         n        = n_batch;
     const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
@@ -188,7 +190,12 @@ transcribe_status run_batched_encdec_step_loop(
     int pos = 0;
     for (; pos < prompt_len; ++pos) {
         if (session->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
-        if (!ensure_window(pos)) return TRANSCRIBE_ERR_GGUF;
+        if (!ensure_window(pos)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "batched decode: step graph allocation failed — out of memory. "
+                "Lower transcribe_session_params.n_ctx or the batch size.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         for (int b = 0; b < n; ++b) tok_buf[b] = prompt_ids[static_cast<size_t>(pos)];
         if (run_step(pos) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
     }
@@ -206,7 +213,12 @@ transcribe_status run_batched_encdec_step_loop(
         bool all_done = true;
         for (int b = 0; b < n; ++b) if (!finished[b]) { all_done = false; break; }
         if (all_done || pos + 1 > max_n_kv) break;
-        if (!ensure_window(pos)) return TRANSCRIBE_ERR_GGUF;
+        if (!ensure_window(pos)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "batched decode: step graph allocation failed — out of memory. "
+                "Lower transcribe_session_params.n_ctx or the batch size.");
+            return TRANSCRIBE_ERR_OOM;
+        }
         for (int b = 0; b < n; ++b) tok_buf[b] = finished[b] ? eos_id : next_tok[b];
         if (run_step(pos) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
         for (int b = 0; b < n; ++b) {
@@ -218,6 +230,16 @@ transcribe_status run_batched_encdec_step_loop(
     }
 
     if (n_steps_out != nullptr) *n_steps_out = n_steps;
+
+    // A valid row that never reached eos was cut off at the generation budget
+    // or the context window — report it as truncated so the family can return
+    // per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED. See docs/input-limits.md.
+    if (truncated_out != nullptr) {
+        truncated_out->assign(n, 0);
+        for (int b = 0; b < n; ++b) {
+            (*truncated_out)[b] = (valid[b] && !finished[b]) ? 1 : 0;
+        }
+    }
     return TRANSCRIBE_OK;
 }
 

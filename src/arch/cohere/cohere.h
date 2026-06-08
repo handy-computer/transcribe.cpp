@@ -178,7 +178,6 @@ struct CohereSession final : public transcribe_session {
     std::vector<float> pos_div_term;
     std::vector<float> enc_host;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     // Flash-attention is controlled per-stage because the encoder and
     // decoder have different head dimensions and therefore different

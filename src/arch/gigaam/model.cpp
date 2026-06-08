@@ -24,6 +24,7 @@
 #include "transcribe-debug.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-meta.h"
 
 #include "ggml.h"
@@ -86,6 +87,26 @@ namespace {
 
 constexpr const char k_default_variant[] = "gigaam-v3-e2e-rnnt";
 
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). GigaAM is a SOFT-WINDOW
+// family: the Conformer encoder has no hard architectural cap (the rotary
+// positional table is recomputed per run), but every published variant was
+// trained on utterances up to ~25 s. Beyond that, accuracy degrades rather
+// than failing. Upstream gigaam rejects over-length audio outright ("Too long
+// wav file"); transcribe.cpp deliberately WARNS-and-PROCEEDS instead so the
+// caller keeps control of the degradation. No input gate, no decode/encode
+// numeric change — we only warn once past the window.
+// ---------------------------------------------------------------------------
+
+// Advisory training window. No hparam encodes it (the GGUF has no
+// max-utterance KV), so we hardcode the upstream "Too long wav file" limit of
+// 25 s. k_safe_audio_ms is reported via transcribe_capabilities::max_audio_ms
+// and is the threshold for the run() soft-window WARN; the run() check derives
+// the clip's duration in ms from n_samples and the frontend sample rate.
+// k_safe_s is the same value in seconds, used only in the WARN text.
+constexpr int     k_safe_s        = 25;
+constexpr int64_t k_safe_audio_ms = 25000;
+
 transcribe_status load(Loader &                         loader,
                        const transcribe_model_load_params *  params,
                        transcribe_model **              out_model)
@@ -111,6 +132,12 @@ transcribe_status load(Loader &                         loader,
         return st;
     if (auto st = read_gigaam_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK)
         return st;
+
+    // Publish the advisory soft-window now that the frontend hparams are
+    // known (apply_family_invariants ran before the hparams were read, so it
+    // could not set this). GigaAM warns-and-proceeds past this window rather
+    // than rejecting; see docs/input-limits.md.
+    m->caps.max_audio_ms = k_safe_audio_ms;
 
     // Stage 2: reopen for tensor metadata.
     gguf_init_params init_params {};
@@ -338,6 +365,29 @@ transcribe_status run(transcribe_session *      session,
 
     transcribe::debug::init();
 
+    // ----- Soft-window advisory (see docs/input-limits.md) ---------------
+    // GigaAM has no hard cap, but accuracy degrades past the ~25 s window it
+    // was trained on. Warn once and proceed unchanged — never reject, never
+    // alter the numerics. The duration is known here from n_samples and the
+    // frontend sample rate, before any heavy compute.
+    {
+        const int sr = gm->hparams.fe_sample_rate;
+        if (sr > 0) {
+            const int64_t audio_ms =
+                static_cast<int64_t>(n_samples) * 1000 / sr;
+            if (audio_ms > k_safe_audio_ms) {
+                const double seconds = static_cast<double>(audio_ms) / 1000.0;
+                transcribe::log_msg(
+                    TRANSCRIBE_LOG_LEVEL_WARN,
+                    "gigaam run: audio is %.1f s, beyond the ~%d s window this "
+                    "model was trained on; transcription may be degraded. "
+                    "Split long audio into <=%d s segments. See "
+                    "transcribe_capabilities.max_audio_ms.",
+                    seconds, k_safe_s, k_safe_s);
+            }
+        }
+    }
+
     // ----- Mel acquisition -----------------------------------------------
     // Production path: the family mel (HTK + power=2 + log-clamp +
     // center=False + periodic Hann). The env-var injection stays as a
@@ -382,8 +432,11 @@ transcribe_status run(transcribe_session *      session,
         ip.no_alloc = true;
         gc->compute_ctx = ggml_init(ip);
         if (gc->compute_ctx == nullptr) {
-            std::fprintf(stderr, "gigaam: ggml_init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "gigaam run: compute context allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -404,14 +457,20 @@ transcribe_status run(transcribe_session *      session,
             static_cast<int>(gm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
         if (gc->sched == nullptr) {
-            std::fprintf(stderr, "gigaam: ggml_backend_sched_new failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "gigaam run: scheduler allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     ggml_backend_sched_reset(gc->sched);
     if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
-        std::fprintf(stderr, "gigaam: sched_alloc_graph failed\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "gigaam run: encoder graph allocation failed — out of memory. "
+            "Split long audio into shorter segments (see "
+            "transcribe_capabilities.max_audio_ms).");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload mel.
@@ -551,7 +610,13 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
         ip.mem_buffer = nullptr;
         ip.no_alloc   = true;
         gc->compute_ctx = ggml_init(ip);
-        if (gc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (gc->compute_ctx == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "gigaam run: compute context allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
 
     EncoderBuild eb = build_encoder_graph(
@@ -567,11 +632,21 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
             gm->plan.scheduler_list.data(), nullptr,
             static_cast<int>(gm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
-        if (gc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (gc->sched == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "gigaam run: scheduler allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
     ggml_backend_sched_reset(gc->sched);
     if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "gigaam run: encoder graph allocation failed — out of memory. "
+            "Split long audio into shorter segments (see "
+            "transcribe_capabilities.max_audio_ms).");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     ggml_backend_tensor_set(eb.mel_in, gc->mel_buf.data(),
@@ -729,6 +804,30 @@ transcribe_status run_batch(transcribe_session *          session,
     const int64_t total_mel_us = ggml_time_us() - t_mel_start;
 
     if (all_ok) {
+        // ----- Soft-window advisory (see docs/input-limits.md) -----------
+        // Same warn-and-proceed contract as single-shot run(), applied per
+        // utterance before the shared fast-path encode. The per-utterance
+        // fallback below re-enters run(), which warns there, so each
+        // over-length clip is warned about exactly once.
+        const int sr = gm->hparams.fe_sample_rate;
+        if (sr > 0) {
+            for (int i = 0; i < n; ++i) {
+                const int64_t audio_ms =
+                    static_cast<int64_t>(n_samples[i]) * 1000 / sr;
+                if (audio_ms > k_safe_audio_ms) {
+                    const double seconds =
+                        static_cast<double>(audio_ms) / 1000.0;
+                    transcribe::log_msg(
+                        TRANSCRIBE_LOG_LEVEL_WARN,
+                        "gigaam run: audio is %.1f s, beyond the ~%d s window "
+                        "this model was trained on; transcription may be "
+                        "degraded. Split long audio into <=%d s segments. See "
+                        "transcribe_capabilities.max_audio_ms.",
+                        seconds, k_safe_s, k_safe_s);
+                }
+            }
+        }
+
         int T_max = 0;
         for (int i = 0; i < n; ++i) T_max = std::max(T_max, nf[i]);
         return run_batch_encode(gc, gm, mels, nf, n_mels, T_max, total_mel_us);

@@ -50,15 +50,11 @@ Requirements
   - CUDA wiring in CMakeLists / source on the current branch.
 """
 
-import hashlib
 import json
 import os
 import pathlib
 import shutil
 import subprocess
-import sys
-import threading
-from collections import deque
 import sys
 import time
 
@@ -69,104 +65,45 @@ import modal
 # ---------------------------------------------------------------------------
 
 # REPO is only used on the local invoker: by add_local_dir at image build time
-# and by _write_hyp in the local entrypoint. Inside Modal containers the module
+# and by write_hyp in the local entrypoint. Inside Modal containers the module
 # is re-imported from /root/modal_sweep.py, where parents[3] does not exist.
 _parents = pathlib.Path(__file__).resolve().parents
 REPO = str(_parents[3]) if len(_parents) > 3 else "/src"
 
+_REMOTE_DIR = pathlib.Path(__file__).resolve().parent
+_REPO_REMOTE_DIR = pathlib.Path(REPO) / "scripts" / "wer" / "remote"
+for _import_dir in (_REMOTE_DIR, _REPO_REMOTE_DIR):
+    if _import_dir.is_dir() and str(_import_dir) not in sys.path:
+        sys.path.insert(0, str(_import_dir))
 
-def _source_fingerprint(root: pathlib.Path) -> str:
-    """Hash of the C++ source set that affects the build binary.
-
-    Includes CMakeLists.txt content + the path list of C++ source/header
-    files. Does NOT include Python scripts (they don't affect the build).
-    Both the laptop (REPO = repo root) and the container (REPO = /src) reach
-    the same hash because add_local_dir's ignore list mirrors the skip set.
-    """
-    if not root.is_dir():
-        return "unknown"
-    # Mirrors the add_local_dir(ignore=...) list. envs is the big one:
-    # scripts/envs/<family>/ contains tens of thousands of vendored Python
-    # files. Pruning at traversal time keeps this function sub-second.
-    #
-    # `skip_dir_prefixes` mirrors the glob patterns in add_local_dir's
-    # ignore list ("build-*/**", ...) — the bare set above only catches
-    # literal name matches, which leaves stale `build-vulkan/`,
-    # `build-san/`, etc. visible to the laptop while the container's
-    # add_local_dir excludes them. The two enumerators must agree or
-    # the build-cache lookup downstream looks at a different SRC_FP
-    # than the build wrote.
-    skip_dirs = {"build", ".cache", ".git", ".venv", "__pycache__",
-                 "reports", "models", "samples", "envs", "node_modules"}
-    skip_dir_prefixes = ("build-",)
-    h = hashlib.sha256()
-    entries: list[tuple[str, pathlib.Path]] = []
-    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
-        dirnames[:] = [d for d in dirnames
-                       if d not in skip_dirs
-                       and not d.startswith(".")
-                       and not any(d.startswith(p) for p in skip_dir_prefixes)]
-        for fn in filenames:
-            p = pathlib.Path(dirpath, fn)
-            entries.append((str(p.relative_to(root)), p))
-    entries.sort()
-    for rel, p in entries:
-        rel_b = rel.encode()
-        if p.name == "CMakeLists.txt":
-            h.update(b"cm\0"); h.update(rel_b); h.update(b"\0")
-            h.update(p.read_bytes()); h.update(b"\0")
-        elif p.suffix in (".cpp", ".cu", ".h", ".hpp", ".cuh"):
-            # Content is hashed: source edits rotate BUILD_DIR, sidestepping
-            # ninja mtime quirks when /src is uploaded with reset timestamps.
-            h.update(b"src\0"); h.update(rel_b); h.update(b"\0")
-            h.update(p.read_bytes()); h.update(b"\0")
-    return h.hexdigest()[:12]
-
-
-def _hyp_extra_hash(root: pathlib.Path) -> str:
-    """Hash of the Python pieces that affect hyp output: run.py + ingest.py.
-
-    Folded with SRC_FP into the hyp cache key. Edits to the dispatcher
-    (modal_sweep.py) or to local-only scripts (score.py) do NOT invalidate
-    the hyp cache because they cannot change what the cell produces.
-    """
-    h = hashlib.sha256()
-    for name in ("run.py", "ingest.py"):
-        p = root / "scripts" / "wer" / name
-        if p.is_file():
-            h.update(name.encode()); h.update(b"\0")
-            h.update(p.read_bytes()); h.update(b"\0")
-    return h.hexdigest()[:12]
+from cache_paths import hyp_cache_paths, ref_hyp_cache_paths
+from dataset_specs import (
+    dataset_id,
+    dataset_prepare_status,
+    dataset_summary_fields,
+    format_dataset_status,
+    ingest_args_for,
+    parse_dataset_spec,
+)
+from fingerprints import hyp_fingerprint, source_fingerprint
+from gpu_config import GPU_TO_ARCH, build_dir
+from model_specs import resolve_model
+from output_paths import write_hyp, write_ref_hyp
+from reference_specs import resolve_reference
+from subprocess_io import run_subprocess_capturing_stderr
+from workdir import prepare_work
 
 
 # SRC_FP keys the build cache (C++ binary). HYP_FP keys the hyp cache and
 # folds SRC_FP in so a binary change invalidates hyps too. Splitting them
 # means dispatcher edits (modal_sweep.py) rotate NEITHER cache; only the
 # files that actually affect the artifact rotate their respective cache.
-SRC_FP = _source_fingerprint(pathlib.Path(REPO))
-HYP_FP = hashlib.sha256(
-    (SRC_FP + _hyp_extra_hash(pathlib.Path(REPO))).encode()
-).hexdigest()[:12]
-
-# Per-GPU SM arch. Single-arch builds finish nvcc in ~2 min vs ~6 min for a
-# fat 75;86;89 build. Switching --gpu rebuilds for the new arch the first time
-# (then sits cached in the build Volume alongside any other arch you've used).
-GPU_TO_ARCH = {
-    "T4": "75",
-    "L4": "89",
-    "A10G": "86",
-    "L40S": "89",
-    "A100": "80",
-    "A100-80GB": "80",
-    "H100": "90",
-    "H200": "90",
-}
+SRC_FP = source_fingerprint(pathlib.Path(REPO))
+HYP_FP = hyp_fingerprint(pathlib.Path(REPO), SRC_FP)
 
 
 def _build_dir(gpu_id: str) -> str:
-    """Build dir for (current source fingerprint, this GPU's SM arch).
-    Co-keyed so two GPUs never collide and source changes always rebuild."""
-    return f"/build/cuda-{SRC_FP}-sm{GPU_TO_ARCH[gpu_id]}"
+    return build_dir(SRC_FP, gpu_id)
 
 # ---------------------------------------------------------------------------
 # Modal image + volumes.
@@ -245,99 +182,6 @@ data_vol = modal.Volume.from_name("transcribe-data", create_if_missing=True)
 ccache_vol = modal.Volume.from_name("transcribe-ccache", create_if_missing=True)
 
 app = modal.App("transcribe-wer-remote")
-
-
-# ---------------------------------------------------------------------------
-# Dataset spec helpers.
-# ---------------------------------------------------------------------------
-
-def parse_dataset_spec(spec: str) -> tuple[str, str]:
-    """'librispeech:test-clean'      -> ('librispeech', 'test-clean')
-       'fleurs:zh'                   -> ('fleurs', 'zh')
-       'eka-medical-asr:en'          -> ('eka-medical-asr', 'en')
-       'librispeech'                 -> ('librispeech', 'test-clean') (default)
-    """
-    kind, _, val = spec.partition(":")
-    kind = kind.strip().lower()
-    val = val.strip()
-    if kind == "librispeech":
-        return "librispeech", val or "test-clean"
-    if kind == "fleurs":
-        if not val:
-            raise ValueError("fleurs: requires a language, e.g. fleurs:zh")
-        return "fleurs", val
-    if kind == "eka-medical-asr":
-        if not val:
-            raise ValueError("eka-medical-asr: requires a language, e.g. eka-medical-asr:en")
-        return "eka-medical-asr", val
-    raise ValueError(f"unknown dataset kind: {spec!r}")
-
-
-def dataset_id(spec: str) -> str:
-    """Slug used in filenames + volume paths. 'librispeech-test-clean' / 'fleurs-zh'."""
-    kind, val = parse_dataset_spec(spec)
-    return f"{kind}-{val}"
-
-
-def manifest_path_for(spec: str) -> str:
-    return f"/data/wer/{dataset_id(spec)}.manifest.jsonl"
-
-
-def ingest_args_for(spec: str) -> list[str]:
-    kind, val = parse_dataset_spec(spec)
-    if kind == "librispeech":
-        return ["librispeech", "--split", val]
-    if kind == "fleurs":
-        return ["fleurs", "--lang", val]
-    if kind == "eka-medical-asr":
-        return ["eka-medical-asr", "--lang", val]
-    raise ValueError(spec)
-
-
-# ---------------------------------------------------------------------------
-# Workdir setup (called inside any function that uses ingest/run.py).
-# /src is read-only; copy to /work and symlink samples/wer/* into /data.
-# ---------------------------------------------------------------------------
-
-def _prepare_work(spec: str | None = None) -> str:
-    """Build a writable /work mirror of /src with samples/wer/* pointed at the
-    /data volume. Returns the manifest path for the given spec (if any)."""
-    if os.path.exists("/work"):
-        shutil.rmtree("/work")
-    shutil.copytree("/src", "/work")
-    os.makedirs("/data/wer", exist_ok=True)
-    samples_wer = "/work/samples/wer"
-    os.makedirs(samples_wer, exist_ok=True)
-
-    # Per-known-subdir symlinks. Keeps unrelated /src/samples/wer/* untouched.
-    for sub in ("raw",):
-        link, target = os.path.join(samples_wer, sub), f"/data/wer/{sub}"
-        os.makedirs(target, exist_ok=True)
-        _replace_with_symlink(link, target)
-
-    if spec is not None:
-        ds_id = dataset_id(spec)
-        for sub in (ds_id,):
-            link, target = os.path.join(samples_wer, sub), f"/data/wer/{sub}"
-            os.makedirs(target, exist_ok=True)
-            _replace_with_symlink(link, target)
-        manifest_link = os.path.join(samples_wer, f"{ds_id}.manifest.jsonl")
-        manifest_target = f"/data/wer/{ds_id}.manifest.jsonl"
-        _replace_with_symlink(manifest_link, manifest_target)
-        return manifest_target
-    return ""
-
-
-def _replace_with_symlink(link: str, target: str) -> None:
-    # The rmtree branch only fires on real dirs at /work/samples/wer/<sub>; the
-    # add_local_dir ignore list keeps those paths empty in /src, so we are only
-    # deleting the placeholder dir created moments earlier by _prepare_work.
-    if os.path.lexists(link):
-        if os.path.islink(link) or os.path.isfile(link):
-            os.unlink(link)
-        elif os.path.isdir(link):
-            shutil.rmtree(link)
-    os.symlink(target, link)
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +271,7 @@ def debug_dump(model_repo: str, model_file: str) -> dict:
     caller can grep for the first divergence point between F16 and Q4_K_M.
     """
     from huggingface_hub import hf_hub_download
-    _prepare_work()
+    prepare_work()
     build_dir = _build_dir("L4")
     build.remote(arch=GPU_TO_ARCH["L4"], build_dir=build_dir, clean=False)
     # build runs in a different container that commits build_vol; our view
@@ -480,28 +324,98 @@ def dump_debug(model_repo: str, model_file: str) -> None:
             print(line)
 
 
-@app.function(image=image, timeout=3600, volumes={"/data": data_vol})
-def prefetch_dataset(spec: str) -> str:
-    """Ensure the manifest for `spec` is present on /data. Returns its path."""
-    manifest = _prepare_work(spec)
-    if os.path.exists(manifest) and os.path.getsize(manifest) > 0:
-        n = sum(1 for _ in open(manifest))
-        print(f"[data] {spec}: cached at {manifest} ({n} utts)")
-        return manifest
+@app.function(
+    image=image,
+    timeout=3600,
+    volumes={"/data": data_vol},
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+)
+def prefetch_dataset(spec: str) -> dict:
+    """Ensure the manifest for `spec` is present on /data.
 
-    kind, _ = parse_dataset_spec(spec)
-    if kind == "librispeech":
-        print(f"[data] {spec}: downloading + extracting LibriSpeech raw...")
-        subprocess.check_call(["bash", "scripts/wer/setup.sh"], cwd="/work")
-    print(f"[data] {spec}: ingest.py {' '.join(ingest_args_for(spec))}")
-    subprocess.check_call(
-        ["uv", "run", "scripts/wer/ingest.py", *ingest_args_for(spec)],
-        cwd="/work",
+    Returns a structured dataset-preparation record so dispatchers and worker
+    cells can report the same artifact state instead of inferring it from logs.
+    """
+    t0 = time.time()
+    manifest = prepare_work(spec)
+    if os.path.exists(manifest) and os.path.getsize(manifest) > 0:
+        status = dataset_prepare_status(spec, manifest, "cached", time.time() - t0)
+        print(format_dataset_status(status))
+        return status
+
+    try:
+        kind, _ = parse_dataset_spec(spec)
+        if kind == "librispeech":
+            print(f"[data] {spec}: downloading + extracting LibriSpeech raw...")
+            subprocess.check_call(["bash", "scripts/wer/setup.sh"], cwd="/work")
+        print(f"[data] {spec}: ingest.py {' '.join(ingest_args_for(spec))}")
+        subprocess.check_call(
+            ["uv", "run", "scripts/wer/ingest.py", *ingest_args_for(spec)],
+            cwd="/work",
+        )
+        data_vol.commit()
+        status = dataset_prepare_status(spec, manifest, "created", time.time() - t0)
+        print(format_dataset_status(status))
+        return status
+    except Exception as e:
+        status = dataset_prepare_status(
+            spec, manifest, "failed", time.time() - t0, error=repr(e)
+        )
+        print(format_dataset_status(status))
+        raise
+
+
+def _log_prepared_dataset(prefix: str, dataset_status: dict | None) -> None:
+    if dataset_status:
+        print(format_dataset_status(dataset_status, prefix=f"[{prefix}:data]"))
+
+
+def _prepare_manifest_for_cell(
+    prefix: str,
+    dataset_spec: str,
+    dataset_status: dict | None,
+) -> str:
+    manifest = prepare_work(dataset_spec)
+    _log_prepared_dataset(prefix, dataset_status)
+    if dataset_status and dataset_status.get("manifest") != manifest:
+        print(
+            f"[{prefix}:data] WARN prepared manifest path "
+            f"{dataset_status.get('manifest')} != cell path {manifest}"
+        )
+    assert os.path.exists(manifest), (
+        f"manifest missing at {manifest}; call prefetch_dataset first"
     )
-    data_vol.commit()
-    n = sum(1 for _ in open(manifest))
-    print(f"[data] {spec}: manifest ready ({n} utts)")
     return manifest
+
+
+def _subset_manifest_for_cell(
+    prefix: str,
+    manifest: str,
+    n_utts: int | None,
+    dataset_status: dict | None,
+) -> tuple[str, int]:
+    total = dataset_status.get("utterances") if dataset_status else None
+    if n_utts is None:
+        subset_path = manifest
+        subset_count = sum(1 for _ in open(subset_path))
+        scope = "full manifest"
+    else:
+        subset_path = "/tmp/subset.manifest.jsonl"
+        with open(manifest) as fin, open(subset_path, "w") as fout:
+            for i, line in enumerate(fin):
+                if i >= n_utts:
+                    break
+                fout.write(line)
+        subset_count = sum(1 for _ in open(subset_path))
+        total_display = total if total is not None else "?"
+        scope = f"first {subset_count}/{total_display} requested={n_utts}"
+    print(f"[{prefix}:data] subset={scope} path={subset_path}")
+    if n_utts is not None and subset_count < n_utts:
+        print(
+            f"[{prefix}:data] WARN requested {n_utts} utterances but only "
+            f"{subset_count} were available"
+        )
+    return subset_path, subset_count
 
 
 # ---------------------------------------------------------------------------
@@ -536,65 +450,6 @@ def list_ggufs(repos: list[str]) -> list[tuple[str, list[str]]]:
 # streams to Modal logs.
 # ---------------------------------------------------------------------------
 
-def _hyp_cache_paths(model_file: str, dataset_spec: str,
-                     n_utts: int | None,
-                     batch_size: int = 1,
-                     sort_by_length: bool = True,
-                     timestamps: str = "none",
-                     stream_chunk_ms: int = 0) -> tuple[str, str]:
-    """Deterministic Volume paths for the (model, dataset, subset, batch,
-    sort) tuple.
-
-    Keyed under HYP_FP (source + run.py + ingest.py); changes to any of
-    these invalidate the cache. Dispatcher edits do not. batch_size and the
-    sort flag are part of the key because, while the hyp text is identical,
-    the summary's wall_s / rtf are not (length-sorting changes how much
-    padding each batch wastes). The default sorted case carries no extra
-    tag so it stays compatible with already-cached entries. Returns
-    (hyp_jsonl_path, summary_json_path).
-    """
-    slug = model_file.replace(".gguf", "")
-    subset_tag = "full" if n_utts is None else f"n{n_utts}"
-    bs_tag = "" if batch_size <= 1 else f".b{batch_size}"
-    sort_tag = "" if sort_by_length else ".nosort"
-    # Default "none" carries no tag so it stays compatible with already-cached
-    # entries; any other timestamp mode gets its own cache slot.
-    ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
-    # Streaming (--stream-chunk-ms) produces different hyps than the offline
-    # path, so it gets its own cache slot. 0 = offline (no tag, compatible).
-    stream_tag = "" if stream_chunk_ms <= 0 else f".stream{stream_chunk_ms}ms"
-    base = (f"/data/wer/hyps/{HYP_FP}/{slug}."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{stream_tag}")
-    return f"{base}.jsonl", f"{base}.summary.json"
-
-
-def _run_subprocess_capturing_stderr(cmd: list[str], cwd: str,
-                                     env: dict) -> tuple[int, str]:
-    """Run cmd with stdout inheriting (live progress to Modal logs) and stderr
-    tee'd through a background thread so we both stream and capture it.
-
-    Returns (returncode, stderr_tail) where stderr_tail is up to the last 80
-    lines, suitable for inclusion in a failure exception.
-    """
-    tail: deque[str] = deque(maxlen=80)
-
-    def _tee(stream):
-        for line in stream:
-            sys.stderr.write(line)
-            sys.stderr.flush()
-            tail.append(line)
-
-    proc = subprocess.Popen(
-        cmd, cwd=cwd, env=env, stderr=subprocess.PIPE,
-        text=True, bufsize=1,
-    )
-    thr = threading.Thread(target=_tee, args=(proc.stderr,), daemon=True)
-    thr.start()
-    rc = proc.wait()
-    thr.join(timeout=5)
-    return rc, "".join(tail)
-
-
 def _run_wer_impl(
     model_repo: str,
     model_file: str,
@@ -605,6 +460,7 @@ def _run_wer_impl(
     sort_by_length: bool = True,
     timestamps: str = "none",
     stream_chunk_ms: int = 0,
+    dataset_status: dict | None = None,
 ) -> dict:
     """Run scripts/wer/run.py on `n_utts` (or full manifest) and return the
     hyp JSONL contents + a summary dict back to the dispatcher.
@@ -619,24 +475,23 @@ def _run_wer_impl(
     """
     from huggingface_hub import hf_hub_download
 
-    # Cache lookup first; skips _prepare_work + model download + run.py entirely
+    # Cache lookup first; skips prepare_work + model download + run.py entirely
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
-    cache_hyp, cache_sum = _hyp_cache_paths(
-        model_file, dataset_spec, n_utts, batch_size, sort_by_length, timestamps,
-        stream_chunk_ms)
+    cache_hyp, cache_sum = hyp_cache_paths(
+        HYP_FP, model_file, dataset_spec, n_utts, batch_size, sort_by_length,
+        timestamps, stream_chunk_ms)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
+        _log_prepared_dataset("wer", dataset_status)
         print(f"[wer] cache hit: {cache_hyp}")
         with open(cache_sum) as f:
             summary = json.load(f)
+        summary.update(dataset_summary_fields(dataset_status))
         with open(cache_hyp) as f:
             hyp_jsonl = f.read()
         return {"hyp_jsonl": hyp_jsonl, "summary": summary, "cached": True}
 
-    manifest = _prepare_work(dataset_spec)
-    assert os.path.exists(manifest), (
-        f"manifest missing at {manifest}; call prefetch_dataset first"
-    )
+    manifest = _prepare_manifest_for_cell("wer", dataset_spec, dataset_status)
 
     cli_path = f"{build_dir}/bin/transcribe-cli"
     assert os.path.exists(cli_path), (
@@ -654,18 +509,9 @@ def _run_wer_impl(
     size_gb = os.path.getsize(model_path) / 1e9
     print(f"[wer] model {size_gb:.2f} GB ready in {time.time()-t0:.1f}s")
 
-    if n_utts is None:
-        subset_path = manifest
-        subset_count = sum(1 for _ in open(subset_path))
-    else:
-        subset_path = "/tmp/subset.manifest.jsonl"
-        with open(manifest) as fin, open(subset_path, "w") as fout:
-            for i, line in enumerate(fin):
-                if i >= n_utts:
-                    break
-                fout.write(line)
-        subset_count = sum(1 for _ in open(subset_path))
-    print(f"[wer] manifest: {subset_count} utts")
+    subset_path, subset_count = _subset_manifest_for_cell(
+        "wer", manifest, n_utts, dataset_status
+    )
 
     hyp_path = "/tmp/hyps.jsonl"
     if os.path.exists(hyp_path):
@@ -690,7 +536,7 @@ def _run_wer_impl(
         cmd += ["--stream-chunk-ms", str(stream_chunk_ms)]
     print(f"[wer] $ {' '.join(cmd)}")
     t0 = time.time()
-    rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
+    rc, stderr_tail = run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
     wall_s = time.time() - t0
     if rc != 0:
         raise RuntimeError(
@@ -740,6 +586,7 @@ def _run_wer_impl(
         "decode_s": dec_ms / 1000.0,
         "gpu": gpu,
     }
+    summary.update(dataset_summary_fields(dataset_status))
     print(f"[wer] done: {summary}")
 
     # Persist to Volume for future resume / re-invocation.
@@ -782,6 +629,7 @@ def _register_runner(gpu_id: str):
         build_dir: str | None = None,
         timestamps: str = "none",
         stream_chunk_ms: int = 0,
+        dataset_status: dict | None = None,
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
         # SRC_FP can drift between the laptop and the container, so recomputing
@@ -792,6 +640,7 @@ def _register_runner(gpu_id: str):
             build_dir or default_build_dir,
             batch_size=batch_size, sort_by_length=sort_by_length,
             timestamps=timestamps, stream_chunk_ms=stream_chunk_ms,
+            dataset_status=dataset_status,
         )
 
     runner.__name__ = name
@@ -814,35 +663,6 @@ _GPU_FNS = {gpu: _register_runner(gpu) for gpu in GPU_TO_ARCH}
 # (SRC_FP), and the model download is delegated to the runner's own
 # `from_pretrained`.
 # ===========================================================================
-
-def _env_fingerprint(root: pathlib.Path, family: str, runner_rel: str) -> str:
-    """Hash of what determines a family's reference venv + runner behavior:
-    its pyproject.toml + uv.lock + the runner script. Computed identically on
-    the laptop and in the container (ref_image keeps these files under /src)."""
-    h = hashlib.sha256()
-    for rel in (f"scripts/envs/{family}/pyproject.toml",
-                f"scripts/envs/{family}/uv.lock",
-                runner_rel):
-        p = root / rel
-        h.update(rel.encode()); h.update(b"\0")
-        if p.is_file():
-            h.update(p.read_bytes())
-        h.update(b"\0")
-    return h.hexdigest()[:12]
-
-
-def _ref_hyp_cache_paths(variant: str, dataset_spec: str, n_utts: int | None,
-                         batch_size: int, env_fp: str,
-                         mode: str = "offline") -> tuple[str, str]:
-    subset_tag = "full" if n_utts is None else f"n{n_utts}"
-    bs_tag = "" if batch_size <= 1 else f".b{batch_size}"
-    # "offline" carries no tag (compatible with already-cached entries); any
-    # other mode (e.g. "streaming") gets its own cache slot.
-    mode_tag = "" if mode == "offline" else f".{mode}"
-    base = (f"/data/wer/ref-hyps/{env_fp}/{variant}-REF."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{mode_tag}")
-    return f"{base}.jsonl", f"{base}.summary.json"
-
 
 def _ensure_local_venv(family: str) -> str:
     """`uv sync` the family env onto LOCAL container disk and return the venv
@@ -872,17 +692,19 @@ def _ensure_local_venv(family: str) -> str:
 
 def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
                        subset_path, subset_count, venv, dataset_spec, n_utts,
-                       env_fp, batch_size, device, mode="offline") -> dict:
+                       env_fp, batch_size, device, mode="offline",
+                       dataset_status=None) -> dict:
     """One reference run at a single batch size. Hyp-cached on /data (plain
     file writes, no flock, so the Volume is fine here — only uv needs local
     disk)."""
-    cache_hyp, cache_sum = _ref_hyp_cache_paths(
+    cache_hyp, cache_sum = ref_hyp_cache_paths(
         variant, dataset_spec, n_utts, batch_size, env_fp, mode)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         print(f"[ref] cache hit: {cache_hyp}")
         with open(cache_sum) as f:
             summary = json.load(f)
+        summary.update(dataset_summary_fields(dataset_status))
         return {"hyp_jsonl": open(cache_hyp).read(), "summary": summary,
                 "cached": True}
 
@@ -913,7 +735,7 @@ def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
         cmd += ["--mode", mode]
     print(f"[ref] bs={batch_size} mode={mode} $ {' '.join(cmd)}")
     t0 = time.time()
-    rc, stderr_tail = _run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
+    rc, stderr_tail = run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
     wall_s = time.time() - t0
     hf_vol.commit()
     if rc != 0:
@@ -944,6 +766,7 @@ def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
         "utt_per_s": subset_count / wall_s if wall_s > 0 else 0.0,
         "batch_size": batch_size, "mode": mode, "device": device, "gpu": gpu,
     }
+    summary.update(dataset_summary_fields(dataset_status))
     print(f"[ref] done bs={batch_size}: {summary}")
     os.makedirs(os.path.dirname(cache_hyp), exist_ok=True)
     shutil.copyfile(out_path, cache_hyp)
@@ -965,25 +788,17 @@ def _run_reference_impl(
     batch_sizes: list,
     device: str = "cuda",
     mode: str = "offline",
+    dataset_status: dict | None = None,
 ) -> dict:
     """One container per variant: `uv sync` the env once (local disk), then run
     the reference runner at each requested batch size. Returns
     {str(batch_size): {hyp_jsonl, summary, cached}}."""
-    manifest = _prepare_work(dataset_spec)
-    assert os.path.exists(manifest), (
-        f"manifest missing at {manifest}; call prefetch_dataset first")
+    manifest = _prepare_manifest_for_cell("ref", dataset_spec, dataset_status)
     venv = _ensure_local_venv(family)
 
-    if n_utts is None:
-        subset_path = manifest
-    else:
-        subset_path = "/tmp/subset.manifest.jsonl"
-        with open(manifest) as fin, open(subset_path, "w") as fout:
-            for i, line in enumerate(fin):
-                if i >= n_utts:
-                    break
-                fout.write(line)
-    subset_count = sum(1 for _ in open(subset_path))
+    subset_path, subset_count = _subset_manifest_for_cell(
+        "ref", manifest, n_utts, dataset_status
+    )
     print(f"[ref] {family}/{variant} fw={framework} batches={batch_sizes}: "
           f"{subset_count} utts")
 
@@ -992,7 +807,7 @@ def _run_reference_impl(
         results[str(bs)] = _run_one_reference(
             family, variant, framework, upstream_repo, runner_rel,
             subset_path, subset_count, venv, dataset_spec, n_utts, env_fp,
-            bs, device, mode)
+            bs, device, mode, dataset_status)
     return results
 
 
@@ -1023,11 +838,12 @@ def _register_reference_runner(gpu_id: str):
         batch_sizes: list | None = None,
         device: str = "cuda",
         mode: str = "offline",
+        dataset_status: dict | None = None,
     ) -> dict:
         return _run_reference_impl(
             family, variant, framework, upstream_repo, runner_rel,
             dataset_spec, n_utts, env_fp, batch_sizes or [1], device=device,
-            mode=mode)
+            mode=mode, dataset_status=dataset_status)
 
     runner.__name__ = name
     runner.__qualname__ = name
@@ -1037,129 +853,6 @@ def _register_reference_runner(gpu_id: str):
 
 
 _REF_GPU_FNS = {gpu: _register_reference_runner(gpu) for gpu in GPU_TO_ARCH}
-
-
-def _resolve_reference(spec: str, runner_override: str = "") -> dict:
-    """Map a variant spec to everything the reference cell needs.
-
-    spec is '<family>:<variant>' (unambiguous, preferred) or '<variant>'
-    (resolved by scanning reports/porting/*/<variant>/intake.json). Reads the
-    intake for the upstream repo + framework, picks the runner by globbing
-    scripts/wer/run_reference_<family>_*.py (shortest name wins; pass --runner
-    to override when a family has several, e.g. parakeet's streaming variants).
-    """
-    root = pathlib.Path(REPO)
-    if ":" in spec:
-        family, variant = spec.split(":", 1)
-        intake = root / "reports" / "porting" / family / variant / "intake.json"
-    else:
-        variant = spec
-        hits = list(root.glob(f"reports/porting/*/{variant}/intake.json"))
-        if len(hits) != 1:
-            raise SystemExit(
-                f"{spec!r}: found {len(hits)} matching intakes; "
-                f"disambiguate with '<family>:{variant}'")
-        intake = hits[0]
-        family = intake.parents[1].name
-    if not intake.exists():
-        raise SystemExit(f"no intake.json at {intake}")
-    d = json.loads(intake.read_text())
-    upstream_repo = d.get("hf_repo")
-    framework = d.get("reference_framework") or "unknown"
-    if not upstream_repo:
-        raise SystemExit(f"{intake}: missing hf_repo")
-
-    if runner_override:
-        runner_rel = runner_override
-        if not (root / runner_rel).is_file():
-            raise SystemExit(f"--runner {runner_rel} not found under {REPO}")
-    else:
-        cands = sorted(root.glob(f"scripts/wer/run_reference_{family}_*.py"),
-                       key=lambda p: len(p.name))
-        if not cands:
-            raise SystemExit(
-                f"no scripts/wer/run_reference_{family}_*.py; "
-                f"pass --runner <path> (a new family needs one — copy the "
-                f"closest same-framework runner)")
-        runner_rel = str(cands[0].relative_to(root))
-
-    env_dir = root / "scripts" / "envs" / family
-    if not (env_dir / "pyproject.toml").is_file():
-        raise SystemExit(f"no reference env at {env_dir}/pyproject.toml")
-
-    return {
-        "family": family, "variant": variant, "framework": framework,
-        "upstream_repo": upstream_repo, "runner_rel": runner_rel,
-        "env_fp": _env_fingerprint(root, family, runner_rel),
-    }
-
-
-def _write_ref_hyp(hyp_jsonl: str, variant: str, dataset_spec: str,
-                   batch_size: int | None = None,
-                   mode: str = "offline") -> pathlib.Path:
-    out_dir = pathlib.Path(REPO) / "reports" / "wer"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    bs_tag = "" if not batch_size or batch_size <= 1 else f".b{batch_size}"
-    mode_tag = "" if mode == "offline" else f".{mode}"
-    out_path = out_dir / f"{variant}-REF.{dataset_id(dataset_spec)}{bs_tag}{mode_tag}.jsonl"
-    out_path.write_text(hyp_jsonl)
-    return out_path
-
-
-# ---------------------------------------------------------------------------
-# Model resolution: a spec is either an hf_card slug or a bare HF repo.
-# ---------------------------------------------------------------------------
-
-def _resolve_model(spec: str) -> tuple[str, list[str] | None]:
-    """Map a model spec to (HF repo, filenames or None).
-
-    Rules:
-    - Spec contains '/': treat as a HF repo path. Filenames are None
-      (caller will discover via the HF API at dispatch time).
-    - Otherwise: treat as an hf_card slug. Reads
-      scripts/hf_cards/<slug>.yaml, returns its target_repo and the
-      pinned `quants[].filename` list.
-    """
-    if "/" in spec:
-        return spec, None
-    card_path = pathlib.Path(__file__).resolve().parents[2] / "hf_cards" / f"{spec}.yaml"
-    if not card_path.exists():
-        raise SystemExit(
-            f"no hf_card at {card_path}; pass a HF repo path "
-            f"(e.g. handy-computer/{spec}-gguf) if the card doesn't exist yet"
-        )
-    # Tiny manual parser so the local entrypoint has no non-stdlib deps. The card
-    # schema has target_repo at top level and filename: only under quants[].
-    target_repo: str | None = None
-    filenames: list[str] = []
-    for raw in open(card_path):
-        line = raw.split("#", 1)[0].rstrip()
-        stripped = line.strip()
-        if line.startswith("target_repo:"):
-            target_repo = line.split(":", 1)[1].strip()
-        elif stripped.startswith("filename:"):
-            filenames.append(stripped.split(":", 1)[1].strip())
-    if not target_repo:
-        raise SystemExit(f"hf_card {spec!r}: missing target_repo")
-    if not filenames:
-        raise SystemExit(f"hf_card {spec!r} has no quants[].filename entries")
-    return target_repo, filenames
-
-
-def _write_hyp(hyp_jsonl: str, model_file: str, dataset_spec: str,
-               batch_size: int | None = None,
-               timestamps: str = "none",
-               stream_chunk_ms: int = 0) -> pathlib.Path:
-    out_dir = pathlib.Path(REPO) / "reports" / "wer"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    slug = model_file.replace(".gguf", "")
-    ds = dataset_id(dataset_spec)
-    bs_tag = "" if batch_size is None else f".b{batch_size}"
-    ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
-    stream_tag = "" if stream_chunk_ms <= 0 else f".stream{stream_chunk_ms}ms"
-    out_path = out_dir / f"{slug}.{ds}{bs_tag}{ts_tag}{stream_tag}.jsonl"
-    out_path.write_text(hyp_jsonl)
-    return out_path
 
 
 # ---------------------------------------------------------------------------
@@ -1208,7 +901,8 @@ def sweep(
     print(f"  clean    = {clean}")
     print("======================================================")
 
-    resolved = [(s, *_resolve_model(s)) for s in specs]
+    repo_root = pathlib.Path(REPO)
+    resolved = [(s, *resolve_model(repo_root, s)) for s in specs]
 
     needs_listing = sorted({repo for _, repo, fns in resolved if fns is None})
     listings = dict(list_ggufs.remote(needs_listing)) if needs_listing else {}
@@ -1251,13 +945,16 @@ def sweep(
     print(f">>> build (arch sm_{arch} -> {build_dir})")
     build.remote(arch=arch, build_dir=build_dir, clean=clean)
     print(f">>> prefetch dataset ({dataset})")
-    prefetch_dataset.remote(dataset)
+    dataset_status = prefetch_dataset.remote(dataset)
+    print(f">>> dataset ready: {dataset_status['dataset_id']} "
+          f"n={dataset_status['utterances']} "
+          f"sha={dataset_status['manifest_sha256'][:12]}")
 
     print(f">>> launching {len(cells)} {gpu} containers in parallel...")
     n = None if n_utts < 0 else n_utts
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
                              c["bs"], sort_by_length, build_dir, timestamps,
-                             stream_chunk_ms))
+                             stream_chunk_ms, dataset_status))
             for c in cells]
 
     rows, failures = [], []
@@ -1268,10 +965,10 @@ def sweep(
             res = fut.get()
             # b1 stays untagged (matches the published-run filenames); b>1 is
             # tagged .b{bs} so batched hyps score independently for comparison.
-            p = _write_hyp(res["hyp_jsonl"], c["file"], c["dataset"],
-                           batch_size=(bs if bs != 1 else None),
-                           timestamps=timestamps,
-                           stream_chunk_ms=stream_chunk_ms)
+            p = write_hyp(repo_root, res["hyp_jsonl"], c["file"], c["dataset"],
+                          batch_size=(bs if bs != 1 else None),
+                          timestamps=timestamps,
+                          stream_chunk_ms=stream_chunk_ms)
             s = res["summary"]
             rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
                          s["wall_s"], s["rtf_wall"], str(p)))
@@ -1340,7 +1037,8 @@ def batch_sweep(
           --model parakeet-tdt-0.6b-v2 --gpu L40S --n-utts 128 \\
           --batch-sizes 1,2,4,8,16
     """
-    repo, fns = _resolve_model(model)
+    repo_root = pathlib.Path(REPO)
+    repo, fns = resolve_model(repo_root, model)
     if fns is None:
         fns = dict(list_ggufs.remote([repo])).get(repo, [])
     fns = [f for f in fns if quant in f]
@@ -1368,13 +1066,16 @@ def batch_sweep(
     print(f">>> build (arch sm_{arch} -> {build_dir})")
     build.remote(arch=arch, build_dir=build_dir, clean=clean)
     print(f">>> prefetch dataset ({dataset})")
-    prefetch_dataset.remote(dataset)
+    dataset_status = prefetch_dataset.remote(dataset)
+    print(f">>> dataset ready: {dataset_status['dataset_id']} "
+          f"n={dataset_status['utterances']} "
+          f"sha={dataset_status['manifest_sha256'][:12]}")
 
     n = None if n_utts < 0 else n_utts
     # Launch all batch sizes in parallel (each its own container). Pass the
     # locally-computed build_dir so the runner reads exactly what build() wrote.
     futs = [(bs, runner.spawn(repo, model_file, dataset, n, bs, sort_by_length,
-                              build_dir))
+                              build_dir, "none", 0, dataset_status))
             for bs in sizes]
 
     rows: list[tuple] = []
@@ -1393,7 +1094,7 @@ def batch_sweep(
                   f"decode {s.get('decode_s', 0.0):.1f}s)")
             # Write a hyp per batch size so WER can be scored and compared
             # independently (verifies the "identical across batch sizes" claim).
-            p = _write_hyp(res["hyp_jsonl"], model_file, dataset, batch_size=bs)
+            p = write_hyp(repo_root, res["hyp_jsonl"], model_file, dataset, batch_size=bs)
             hyp_paths.append((bs, p))
         except Exception as e:
             print(f"  [FAIL] b{bs}: {e} (check Modal dashboard for stderr)")
@@ -1494,7 +1195,8 @@ def reference_sweep(
         raise SystemExit("--variants is required (comma-separated)")
     sizes = [int(x) for x in batch_sizes.split(",") if x.strip()] or [1]
 
-    resolved = [_resolve_reference(s, runner) for s in specs]
+    repo_root = pathlib.Path(REPO)
+    resolved = [resolve_reference(repo_root, s, runner) for s in specs]
     # Optional: redirect from the intake's upstream repo (e.g. a gated
     # mistralai/... repo) to a private mirror the Modal HF token can reach.
     if model_override:
@@ -1522,7 +1224,10 @@ def reference_sweep(
             f"--gpu {gpu!r} not registered; choose one of: {sorted(_REF_GPU_FNS)}")
 
     print(f">>> prefetch dataset ({dataset})")
-    prefetch_dataset.remote(dataset)
+    dataset_status = prefetch_dataset.remote(dataset)
+    print(f">>> dataset ready: {dataset_status['dataset_id']} "
+          f"n={dataset_status['utterances']} "
+          f"sha={dataset_status['manifest_sha256'][:12]}")
 
     # One container per variant: it `uv sync`s the env once (on local disk) and
     # runs all requested batch sizes. Distinct variants fan out in parallel.
@@ -1531,7 +1236,8 @@ def reference_sweep(
           f"(batch sizes {sizes} each)...")
     futs = [(r, runner_fn.spawn(
                 r["family"], r["variant"], r["framework"], r["upstream_repo"],
-                r["runner_rel"], r["env_fp"], dataset, n, sizes, "cuda", mode))
+                r["runner_rel"], r["env_fp"], dataset, n, sizes, "cuda", mode,
+                dataset_status))
             for r in resolved]
 
     rows, failures = [], []
@@ -1548,9 +1254,9 @@ def reference_sweep(
             if res is None:
                 failures.append((slug, "no result for this batch size"))
                 continue
-            p = _write_ref_hyp(res["hyp_jsonl"], r["variant"], dataset,
-                               batch_size=(bs if bs != 1 else None),
-                               mode=mode)
+            p = write_ref_hyp(repo_root, res["hyp_jsonl"], r["variant"], dataset,
+                              batch_size=(bs if bs != 1 else None),
+                              mode=mode)
             s = res["summary"]
             rows.append((slug, s["n_utts"], s["audio_s"], s["wall_s"],
                          s["rtf_wall"], str(p)))
@@ -1568,4 +1274,3 @@ def reference_sweep(
             print(f"  {slug}: {err}")
     print(f"\nscore locally:  for f in reports/wer/*-REF.{dataset_id(dataset)}*.jsonl; "
           f"do uv run scripts/wer/score.py \"$f\"; done")
-

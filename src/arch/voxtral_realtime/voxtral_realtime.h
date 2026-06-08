@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "transcribe-backend.h"
 #include "transcribe-session.h"
 #include "transcribe-mel.h"
@@ -53,7 +53,7 @@ struct Model final : public transcribe_model {
 
     transcribe::BackendPlan       plan;
     ggml_backend_buffer_t         backend_buffer = nullptr;
-    transcribe::qwen3_lm::PackedGateUpHandles packed_gate_up;
+    transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
     std::optional<transcribe::MelFrontend> mel;
 
@@ -69,12 +69,12 @@ struct Session final : public transcribe_session {
     ggml_context *       compute_ctx = nullptr;
     ggml_backend_sched_t sched       = nullptr;
 
-    transcribe::qwen3_lm::KvCache kv_cache;
+    transcribe::causal_lm::KvCache kv_cache;
 
     // Offline batched decode (transcribe_run_batch): a batched KV cache with one
     // slab per utterance, reused across calls, re-allocated only when the batch
     // size or context window grows. Mirrors VoxtralSession.
-    transcribe::qwen3_lm::KvCache kv_cache_batch;
+    transcribe::causal_lm::KvCache kv_cache_batch;
     int kv_batch_cap   = 0;  // slabs allocated (== n_batch of last alloc)
     int kv_batch_n_ctx = 0;  // n_ctx of last alloc
 
@@ -90,7 +90,6 @@ struct Session final : public transcribe_session {
     std::vector<ggml_tensor *> ada_scale;              // per-layer views
     int ada_num_delay = -1;
 
-    transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
 
     bool encoder_use_flash = false;
     bool decoder_use_flash = true;
@@ -108,7 +107,7 @@ struct Session final : public transcribe_session {
     int                stream_min_decode_ms = -1;   // partial-decode throttle
     int64_t            stream_last_decode_samples = 0;
 
-    transcribe::qwen3_lm::KvCache enc_kv;           // encoder StaticCache (ring)
+    transcribe::causal_lm::KvCache enc_kv;           // encoder StaticCache (ring)
     int     stream_enc_slot     = 0;                // ring write head (slot units)
     int     stream_enc_abs_base = 0;                // absolute frame index of slot 0
     int     stream_n_enc_committed = 0;             // enc frames committed (absolute)

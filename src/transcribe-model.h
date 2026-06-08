@@ -74,6 +74,46 @@ struct transcribe_model {
     // unknown enum values out of range.
     uint64_t feature_bits = 0;
 
+    // Basis for the session-level limits query (transcribe_session_get_limits).
+    // A hard-context-cap family fills this at load() — the same place it
+    // computes caps.max_audio_ms — so the generic query in transcribe.cpp can
+    // recompute the effective limits for any session n_ctx without a
+    // per-family hook. Left zero by unbounded / soft-window families (which
+    // have no decoder context cap): zero model_max_ctx => the query reports
+    // effective_n_ctx 0 (unbounded), effective_max_audio_ms = caps.max_audio_ms
+    // (the soft window, independent of n_ctx), and max_kv_bytes 0.
+    // See docs/input-limits.md.
+    struct LimitsBasis {
+        // True for families whose decoder has a context window the session
+        // n_ctx cap applies to (qwen3_asr, granite, voxtral, cohere, canary,
+        // ...). When false the family has no decoder context cap and the
+        // fields below stay zero.
+        bool    has_context_cap = false;
+        // When true, effective_max_audio_ms comes straight from
+        // caps.max_audio_ms rather than being derived from effective_n_ctx.
+        // Set by families whose AUDIO bound is the encoder positional table
+        // (cohere, canary), where the decoder context bounds the transcript
+        // length, not how much audio fits — so the audio limit must not shrink
+        // when the caller lowers n_ctx. effective_n_ctx / max_kv_bytes still
+        // come from the decoder (n_ctx-sensitive). Left false by families
+        // whose audio tokens consume the decoder context (qwen3_asr, granite,
+        // voxtral, ...), where the audio bound legitimately scales with n_ctx.
+        bool    audio_from_caps = false;
+        // The model's trained decoder context window, in tokens.
+        int32_t model_max_ctx   = 0;
+        // Representative non-audio prompt token overhead (chat affixes etc.).
+        int32_t prompt_overhead = 0;
+        // Generation budget reserved when sizing the input bound.
+        int32_t gen_reserve     = 0;
+        // Milliseconds of 16 kHz audio per audio token (inverse encoder rate),
+        // used to turn an audio-token budget into effective_max_audio_ms.
+        double  ms_per_audio_token = 0.0;
+        // KV elements per context token (n_kv_heads * head_dim * n_layers * 2,
+        // for K and V). The query multiplies by the session kv_type byte size
+        // and effective_n_ctx to estimate max_kv_bytes.
+        int64_t kv_elems_per_ctx_token = 0;
+    } limits{};
+
     // Wall-clock load time in microseconds, captured by per-family
     // load() (start at function entry, stop just before *out_model
     // is set). Surfaced via transcribe_get_timings on any context

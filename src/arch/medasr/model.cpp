@@ -26,6 +26,7 @@
 #include "transcribe-debug.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
+#include "transcribe-log.h"
 #include "transcribe-meta.h"
 
 #include "ggml.h"
@@ -88,6 +89,58 @@ namespace {
 
 constexpr const char k_default_variant[] = "medasr";
 
+// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). MedASR is a soft-window
+// family: the encoder is a CTC Conformer with no hard context cap, but its
+// RoPE was trained to enc_max_pos_emb encoder positions. Past that the rotary
+// embeddings extrapolate and accuracy degrades, so over-window audio is WARNED
+// and PROCESSED — never rejected, never altered. The decode numerics are
+// untouched: this contract only observes the frame count and logs.
+// ---------------------------------------------------------------------------
+
+// Time downsampling from mel frames to encoder frames: each of the
+// sub_n_layers subsampling convs strides by sub_stride (validated to 2x2 in
+// read_medasr_hparams), so the effective factor is sub_stride ^ sub_n_layers
+// (== 4 for the shipped checkpoint). Falls back to 4 if either hparam is
+// missing so we never divide by an unset factor.
+int medasr_subsample_factor(const MedAsrHParams & hp) {
+    if (hp.enc_sub_stride <= 0 || hp.enc_sub_n_layers <= 0) {
+        return 4;
+    }
+    int factor = 1;
+    for (int i = 0; i < hp.enc_sub_n_layers; ++i) factor *= hp.enc_sub_stride;
+    return factor;
+}
+
+// Milliseconds of 16 kHz audio per encoder frame: one mel frame is
+// hop_length / sample_rate seconds, and the subsampling stack keeps one
+// encoder frame per `subsample_factor` mel frames. For the shipped hparams
+// (hop=160, sr=16000, 4x) this is 160 * 4 * 1000 / 16000 = 40 ms/frame
+// (100 fps mel -> 25 fps encoder), matching the per-token stride used by the
+// CTC decoder below. Returns 0 if a rate hparam is missing.
+int64_t medasr_ms_per_encoder_frame(const MedAsrHParams & hp) {
+    if (hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0) {
+        return 0;
+    }
+    return static_cast<int64_t>(hp.fe_hop_length) *
+           medasr_subsample_factor(hp) * 1000 / hp.fe_sample_rate;
+}
+
+// Advisory transcribe_capabilities::max_audio_ms: the RoPE-trained window,
+// enc_max_pos_emb encoder frames * ms_per_encoder_frame. This is the point
+// past which RoPE extrapolates; longer audio is accepted with a WARN (see
+// run()), not rejected. Returns 0 ("unknown / unbounded") if enc_max_pos_emb
+// or a frontend rate is missing, so a misconfigured model is never advertised
+// with a wrong finite number. For the shipped hparams this is
+// 10000 * 40 ms = 400000 ms (~400 s).
+int64_t medasr_max_audio_ms(const MedAsrHParams & hp) {
+    const int64_t ms_per_frame = medasr_ms_per_encoder_frame(hp);
+    if (hp.enc_max_pos_emb <= 0 || ms_per_frame <= 0) {
+        return 0;
+    }
+    return static_cast<int64_t>(hp.enc_max_pos_emb) * ms_per_frame;
+}
+
 transcribe_status load(Loader &                              loader,
                        const transcribe_model_load_params *  params,
                        transcribe_model **                   out_model)
@@ -113,6 +166,13 @@ transcribe_status load(Loader &                              loader,
         return st;
     if (auto st = read_medasr_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK)
         return st;
+
+    // Publish the soft-window input-length advisory now that the RoPE range
+    // and frontend rate are known (apply_family_invariants ran before the
+    // hparams were read, so it could not set this). MedASR never rejects on
+    // length; this is the window past which RoPE degrades. See
+    // docs/input-limits.md.
+    m->caps.max_audio_ms = medasr_max_audio_ms(m->hparams);
 
     // Reopen for tensor metadata.
     gguf_init_params init_params {};
@@ -383,6 +443,36 @@ transcribe_status run(transcribe_session *      session,
     gc->t_mel_us = ggml_time_us() - t_mel_start;
     if (mel_n_frames <= 0) return TRANSCRIBE_ERR_GGUF;
 
+    // ----- Soft-window input-length advisory (see docs/input-limits.md) -----
+    // MedASR has no hard context cap, but its RoPE was trained to
+    // enc_max_pos_emb encoder frames. Predict the encoder frame count from the
+    // mel frames via the two stride-2 subsampling convs (same formula as the
+    // run_batch path's subsampling_t_out, applied twice). If it exceeds the
+    // trained range, WARN once and PROCEED — we do not reject and do not touch
+    // the numerics; accuracy may simply degrade past this point.
+    {
+        const int sub_k = gm->hparams.enc_sub_kernel;
+        const int sub_s = gm->hparams.enc_sub_stride;
+        auto sub_t = [&](int t_in) {
+            return (t_in < sub_k) ? 0 : (t_in - sub_k) / sub_s + 1;
+        };
+        const int enc_frames = sub_t(sub_t(mel_n_frames));
+        if (enc_frames > gm->hparams.enc_max_pos_emb) {
+            const int64_t ms_per_frame =
+                medasr_ms_per_encoder_frame(gm->hparams);
+            const double audio_s =
+                static_cast<double>(enc_frames) *
+                static_cast<double>(ms_per_frame) / 1000.0;
+            transcribe::log_msg(
+                TRANSCRIBE_LOG_LEVEL_WARN,
+                "medasr run: audio is %.1f s (%d encoder frames), beyond the "
+                "%d-frame RoPE range this model was trained on; transcription "
+                "may be degraded past this point. See "
+                "transcribe_capabilities.max_audio_ms.",
+                audio_s, enc_frames, gm->hparams.enc_max_pos_emb);
+        }
+    }
+
     // ----- Reset per-call compute state ---------------------------------
     if (gc->compute_ctx != nullptr) {
         ggml_free(gc->compute_ctx);
@@ -396,8 +486,11 @@ transcribe_status run(transcribe_session *      session,
         ip.no_alloc   = true;
         gc->compute_ctx = ggml_init(ip);
         if (gc->compute_ctx == nullptr) {
-            std::fprintf(stderr, "medasr: ggml_init failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "medasr run: compute context allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
 
@@ -417,14 +510,20 @@ transcribe_status run(transcribe_session *      session,
             static_cast<int>(gm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
         if (gc->sched == nullptr) {
-            std::fprintf(stderr, "medasr: ggml_backend_sched_new failed\n");
-            return TRANSCRIBE_ERR_GGUF;
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "medasr run: scheduler allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
         }
     }
     ggml_backend_sched_reset(gc->sched);
     if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
-        std::fprintf(stderr, "medasr: sched_alloc_graph failed\n");
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "medasr run: encoder graph allocation failed — out of memory. "
+            "Split long audio into shorter segments (see "
+            "transcribe_capabilities.max_audio_ms).");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // ----- Upload inputs ------------------------------------------------
@@ -720,7 +819,13 @@ transcribe_status run_batch_encode(MedAsrSession *                         gc,
         ip.mem_buffer = nullptr;
         ip.no_alloc   = true;
         gc->compute_ctx = ggml_init(ip);
-        if (gc->compute_ctx == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (gc->compute_ctx == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "medasr run: compute context allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
 
     EncoderBuild eb = build_encoder_graph(
@@ -735,11 +840,21 @@ transcribe_status run_batch_encode(MedAsrSession *                         gc,
             gm->plan.scheduler_list.data(), nullptr,
             static_cast<int>(gm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
-        if (gc->sched == nullptr) return TRANSCRIBE_ERR_GGUF;
+        if (gc->sched == nullptr) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "medasr run: scheduler allocation failed — out of memory. "
+                "Split long audio into shorter segments (see "
+                "transcribe_capabilities.max_audio_ms).");
+            return TRANSCRIBE_ERR_OOM;
+        }
     }
     ggml_backend_sched_reset(gc->sched);
     if (!ggml_backend_sched_alloc_graph(gc->sched, eb.graph)) {
-        return TRANSCRIBE_ERR_GGUF;
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "medasr run: encoder graph allocation failed — out of memory. "
+            "Split long audio into shorter segments (see "
+            "transcribe_capabilities.max_audio_ms).");
+        return TRANSCRIBE_ERR_OOM;
     }
 
     // Upload mel + positions.
@@ -783,6 +898,32 @@ transcribe_status run_batch_encode(MedAsrSession *                         gc,
         int t = subsampling_t_out(nf[b], sub_k, sub_s);
         t     = subsampling_t_out(t,     sub_k, sub_s);
         real_tenc[b] = t;
+    }
+
+    // ----- Soft-window input-length advisory (see docs/input-limits.md) -----
+    // Same warn-and-proceed contract as single-shot run(), applied per
+    // utterance on the fused batched encode path so over-window clips in a
+    // batch are not silently degraded. real_tenc[b] is the encoder frame count
+    // (the same double-subsampling derivation run() uses); compare it to the
+    // RoPE-trained range and WARN once per over-window utterance. The serial
+    // fallback in run_batch() re-enters run(), which warns there, so each clip
+    // is warned exactly once. Never reject, never touch the numerics.
+    {
+        const int64_t ms_per_frame = medasr_ms_per_encoder_frame(gm->hparams);
+        for (int b = 0; b < n; ++b) {
+            if (real_tenc[b] > gm->hparams.enc_max_pos_emb) {
+                const double audio_s =
+                    static_cast<double>(real_tenc[b]) *
+                    static_cast<double>(ms_per_frame) / 1000.0;
+                transcribe::log_msg(
+                    TRANSCRIBE_LOG_LEVEL_WARN,
+                    "medasr run: utterance %d: audio is %.1f s (%d encoder "
+                    "frames), beyond the %d-frame RoPE range this model was "
+                    "trained on; transcription may be degraded past this point. "
+                    "See transcribe_capabilities.max_audio_ms.",
+                    b, audio_s, real_tenc[b], gm->hparams.enc_max_pos_emb);
+            }
+        }
     }
 
     if (var_len) {

@@ -50,6 +50,31 @@ data, intended use, and upstream evaluation methodology.
 Licensed {{ license_display }}. Ported from upstream commit
 [`{{ upstream_commit_short }}`]({{ upstream_commit_url }}), pinned {{ pin_date }}.
 
+## Input limits
+
+{% if input_limit_prose is defined and input_limit_prose -%}
+{{ input_limit_prose }}
+{%- else -%}
+{%- if max_audio_seconds is defined and max_audio_seconds -%}
+This model accepts up to about **{{ max_audio_seconds }} s** of 16 kHz mono audio
+per call (`transcribe_capabilities.max_audio_ms`). Longer input is rejected with
+`TRANSCRIBE_ERR_INPUT_TOO_LONG` before transcription, or — for soft-window
+families — accepted with a `WARN` and possibly reduced accuracy. Split longer
+audio into segments.
+{%- else -%}
+This model has no practical per-call length limit
+(`transcribe_capabilities.max_audio_ms == 0`): long audio is windowed
+internally. Query `max_audio_ms` at runtime to confirm.
+{%- endif -%}
+{%- endif %}
+
+A transcript that reaches the model's context or generation budget before the
+end of speech is returned with the hard status `TRANSCRIBE_ERR_OUTPUT_TRUNCATED`
+(the partial transcript stays readable, and `transcribe_was_truncated()` is
+also set, with a `WARN`); it is never silently cut or reported as `OK`. See
+[docs/input-limits.md](../input-limits.md) for the
+full contract and the per-family bucket table.
+
 ## Download
 
 | Quantization | Download | Size | WER ({{ dataset_display }}) |

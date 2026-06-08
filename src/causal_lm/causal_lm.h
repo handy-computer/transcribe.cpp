@@ -1,14 +1,30 @@
-// src/qwen3_lm/qwen3_lm.h - shared Qwen3 LM block math, KV cache,
-// and packed gate/up MLP packing.
+// src/causal_lm/causal_lm.h - shared causal-decoder LM block math,
+// KV cache, and packed gate/up MLP packing.
 //
-// Both Qwen3-ASR (`Qwen3ASRThinkerTextModel`) and Fun-ASR-Nano
-// (the bundled `Qwen3-0.6B` LLM) ship identical Qwen3 decoder
-// block code: pre-LN RMSNorm (eps ~1e-6), GQA with per-head Q/K
-// RMSNorm before RoPE, NeoX rotate_half RoPE @ θ=1e6 (text-only,
-// MRoPE collapses to NeoX), SwiGLU MLP via packed gate+up, tied
-// lm_head. Both also pack ffn_gate_w + ffn_up_w into a single
-// [hidden, 2·intermediate] tensor at load time so the FFN can
-// run with one mul_mat instead of two.
+// This is the dense decoder-only transformer block of the Llama / Qwen3
+// lineage: pre-LN RMSNorm (model-provided eps via BlockParams::rms_eps),
+// GQA, NeoX rotate_half RoPE, SwiGLU MLP via packed gate+up, with
+// OPTIONAL per-head Q/K RMSNorm.
+// It is NOT Qwen3-specific despite the families that first used it — the
+// optional slots and `BlockParams` cover several backbones:
+//
+//   - Qwen3 decoder (per-head Q/K RMSNorm present, θ=1e6 NeoX RoPE;
+//     text-only MRoPE collapses to NeoX): used by arch/qwen3_asr
+//     (`Qwen3ASRThinkerTextModel`), arch/funasr_nano (bundled
+//     `Qwen3-0.6B`), and arch/canary_qwen (`Qwen3-1.7B`). These pass
+//     attn_q_norm / attn_k_norm.
+//   - Llama / Ministral decoder (no per-head Q/K norm): used by
+//     arch/voxtral and arch/voxtral_realtime, which leave the q/k-norm
+//     slots null. voxtral_realtime additionally drives a per-layer
+//     delay-conditioned FFN scale through the optional `ffn_scale` slot.
+//   - Infra-only reuse: arch/granite reuses KvCache, pack_gate_up, and
+//     run_batched_step_loop but keeps its OWN block math (Granite's
+//     attention/residual/embedding/logits multipliers don't fit the
+//     shared block). See arch/granite/decoder.cpp.
+//
+// All callers pack ffn_gate_w + ffn_up_w into a single
+// [hidden, 2·intermediate] tensor at load time so the FFN can run with
+// one mul_mat instead of two.
 //
 // This module exposes those primitives via the same view +
 // free-function pattern used by `src/sanm/` and `src/conformer/`:
@@ -35,14 +51,15 @@
 //
 // What deliberately stays per-family (audio-LLM call sites):
 //
-//   - Token embedding lookup, audio injection (different shapes:
-//     enc_out for qwen3_asr, adaptor_out for funasr_nano), final
-//     RMSNorm + tied lm_head, dump-tensor naming for
-//     validate.py parity, prefill / step graph allocation, the
-//     autoregressive driver loop, and the chat-template /
-//     special-token handling. The block-forward helpers below
-//     return raw `ggml_tensor*` so each family keeps full control
-//     of its dump points and tensor names.
+//   - Token embedding lookup and audio injection (the encoder/adaptor
+//     output shape and splice point differ per family), the final norm
+//     and lm_head (tied for the Qwen3 families, UNTIED for voxtral, and
+//     Granite additionally scales embeddings/logits), dump-tensor naming
+//     for validate.py parity, prefill / step graph allocation, the
+//     autoregressive driver loop, and the chat-template / special-token
+//     handling. The block-forward helpers below return raw `ggml_tensor*`
+//     so each family keeps full control of its dump points and tensor
+//     names.
 
 #pragma once
 
@@ -56,20 +73,21 @@
 
 struct transcribe_session;
 
-namespace transcribe::qwen3_lm {
+namespace transcribe::causal_lm {
 
 // ---------------------------------------------------------------------------
 // Block view
 // ---------------------------------------------------------------------------
 
-// Nullable-pointer projection over one Qwen3 decoder block's weights.
+// Nullable-pointer projection over one causal-decoder block's weights.
 // Field names match `arch/qwen3_asr/QwenAsrDecBlock` and
 // `arch/funasr_nano/DecBlock` so the call-site builder is a struct
 // initializer.
 //
-// All slots are required for block_prefill / block_step EXCEPT
-// attn_q_norm / attn_k_norm, which are optional (null = skip, for
-// Llama-style decoders without per-head Q/K norm).
+// All slots are required for block_prefill / block_step EXCEPT three
+// optional ones (null = skip): attn_q_norm / attn_k_norm (per-head Q/K
+// norm, absent on Llama-style decoders) and ffn_scale (per-layer FFN
+// scale, used only by voxtral_realtime). See each field's note below.
 struct BlockView {
     ggml_tensor * norm_attn_w   = nullptr;  // input_layernorm (RMSNorm, no bias)
     ggml_tensor * norm_ffn_w    = nullptr;  // post_attention_layernorm
@@ -176,7 +194,7 @@ struct BlockOpts {
     int  kv_n_batch    = 1;
 };
 
-// Run one Qwen3 block on `x` (ne = [hidden, T_seq]). Writes K/V for
+// Run one causal-LM block on `x` (ne = [hidden, T_seq]). Writes K/V for
 // positions [0, T_seq) at layer `layer_idx` of `kv_cache`. Mask is
 // [T_seq, T_seq] f16 (causal, host-prepared); positions are [T_seq] i32.
 //
@@ -203,7 +221,7 @@ ggml_tensor * block_prefill(
 // Block forward (step: T_seq == 1)
 // ---------------------------------------------------------------------------
 
-// Run one Qwen3 block on a single new token. Writes K/V for the row
+// Run one causal-LM block on a single new token. Writes K/V for the row
 // indexed by `kv_idx` (i64 [1]) into layer `layer_idx`. Reads the full
 // [0, max_n_kv) KV window for attention; `mask` is [max_n_kv, 1] f16
 // with zeros at positions ≤ n_past and -inf beyond (host-prepared).
@@ -253,7 +271,7 @@ ggml_tensor * block_step_n(
 // Block forward (batched step: B utterances, one new token each)
 // ---------------------------------------------------------------------------
 
-// Run one Qwen3 block on B new tokens (x = [hidden, B]), one per utterance
+// Run one causal-LM block on B new tokens (x = [hidden, B]), one per utterance
 // stepping in lockstep against a batched KV cache (kv_init_batched, n_batch=B).
 //
 // Layout choice: the batch axis sits on ne[2] (the "position/token" axis)
@@ -293,7 +311,7 @@ ggml_tensor * block_step_batched(
 // Block forward (batched prefill: B utterances, T tokens each)
 // ---------------------------------------------------------------------------
 
-// Run one Qwen3 block over B prompts of T tokens each (x = [hidden, T, B]),
+// Run one causal-LM block over B prompts of T tokens each (x = [hidden, T, B]),
 // writing each utterance's K/V to positions [0, T) of its own slab in a
 // batched KV cache (kv_init_batched, n_batch=B). Batch rides ne[2]; RoPE
 // positions [T] are shared (every prompt starts at position 0); the causal
@@ -365,7 +383,7 @@ bool pack_gate_up(ggml_backend_t                  backend,
                   int                             intermediate,
                   const std::vector<GateUpEntry> & entries,
                   PackedGateUpHandles &           out_handles,
-                  const char *                    error_tag = "qwen3_lm");
+                  const char *                    error_tag = "causal_lm");
 
 // ---------------------------------------------------------------------------
 // Batched greedy step loop (offline transcribe_run_batch decode)
@@ -407,7 +425,7 @@ struct StepLoopStats {
 // be built and allocated on `sched`. Returns TRANSCRIBE_ERR_ABORTED on abort,
 // TRANSCRIBE_ERR_GGUF on a compute failure, else TRANSCRIBE_OK.
 //
-// Extracted verbatim from the four qwen3_lm-family run_batch() drivers
+// Extracted verbatim from the four causal_lm-family run_batch() drivers
 // (qwen3_asr / funasr_nano / canary_qwen / granite), which were byte-identical
 // here apart from granite hand-coding the f16 mask literals (0x0000 / 0xFC00 ==
 // ggml_fp32_to_fp16(0) / ggml_fp32_to_fp16(-inf), so this is bit-identical).
@@ -421,6 +439,7 @@ transcribe_status run_batched_step_loop(
     int                                 max_new,
     const StepBatchedState &            state,
     std::vector<std::vector<int32_t>> & generated,
-    StepLoopStats *                     stats = nullptr);
+    StepLoopStats *                     stats = nullptr,
+    std::vector<char> *                 truncated_out = nullptr);
 
-} // namespace transcribe::qwen3_lm
+} // namespace transcribe::causal_lm

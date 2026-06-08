@@ -464,6 +464,71 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
         SKIP_RETURN_CODE 77)
 endif()
 
+# Per-utterance OUTPUT_TRUNCATED in transcribe_run_batch (moonshine_streaming).
+# Skipped (RC 77) when TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF is unset.
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_moonshine_streaming_batch_truncation
+        moonshine_streaming_batch_truncation.cpp)
+
+    target_link_libraries(transcribe_moonshine_streaming_batch_truncation
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_moonshine_streaming_batch_truncation PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_moonshine_streaming_batch_truncation)
+
+    add_test(NAME transcribe_moonshine_streaming_batch_truncation
+        COMMAND transcribe_moonshine_streaming_batch_truncation)
+    set_tests_properties(transcribe_moonshine_streaming_batch_truncation PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# Per-utterance OUTPUT_TRUNCATED in transcribe_run / transcribe_run_batch for a
+# causal_lm (LLM-decoder) family. Guards the shared src/causal_lm batched step
+# loop's truncation detection (the encoder-decoder twin is covered by
+# transcribe_moonshine_streaming_batch_truncation). Skipped (RC 77) when
+# TRANSCRIBE_QWEN3_ASR_0_6B_GGUF is unset.
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_qwen3_asr_batch_truncation
+        qwen3_asr_batch_truncation.cpp)
+
+    target_link_libraries(transcribe_qwen3_asr_batch_truncation
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_qwen3_asr_batch_truncation PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_qwen3_asr_batch_truncation)
+
+    add_test(NAME transcribe_qwen3_asr_batch_truncation
+        COMMAND transcribe_qwen3_asr_batch_truncation)
+    set_tests_properties(transcribe_qwen3_asr_batch_truncation PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
+# Input-length contract for the chunked/unbounded voxtral_realtime family:
+# n_ctx is a no-op, limits stay unbounded, and a tiny n_ctx neither rejects
+# (one-shot) nor crashes (batch). Skipped (RC 77) when
+# TRANSCRIBE_VOXTRAL_REALTIME_GGUF is unset.
+if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
+    add_executable(transcribe_voxtral_realtime_real_smoke
+        voxtral_realtime_real_smoke.cpp)
+
+    target_link_libraries(transcribe_voxtral_realtime_real_smoke
+        PRIVATE transcribe transcribe-common-example)
+
+    target_compile_definitions(transcribe_voxtral_realtime_real_smoke PRIVATE
+        "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
+
+    transcribe_apply_warnings(transcribe_voxtral_realtime_real_smoke)
+
+    add_test(NAME transcribe_voxtral_realtime_real_smoke
+        COMMAND transcribe_voxtral_realtime_real_smoke)
+    set_tests_properties(transcribe_voxtral_realtime_real_smoke PROPERTIES
+        SKIP_RETURN_CODE 77)
+endif()
+
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     add_executable(transcribe_stream_committed_pointer_stability
         stream_committed_pointer_stability.cpp)

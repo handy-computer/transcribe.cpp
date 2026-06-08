@@ -64,8 +64,12 @@ field semantics.
 
 4. **Known risks.** List critical risks that affect later stages
    (frontend/tokenizer ambiguity, custom attention masks, streaming,
-   long-sequence behavior, dtype quirks, etc.). One risk per entry. Do
-   not ask the user about routine or low-impact observations.
+   long-sequence behavior, input-length or memory behavior, dtype quirks,
+   etc.). Include hard architectural caps, soft trained windows,
+   output-token caps, chunking/streaming behavior, and whether
+   context/memory knobs are meaningful or intentionally ignored when they
+   are relevant. One risk per entry. Do not ask the user about routine or
+   low-impact observations.
 
 5. **Capability validation table.** Draft one row per advertised
    capability in `docs/porting/families/<family>.md`, fill `Target`, and

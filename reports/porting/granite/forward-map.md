@@ -82,11 +82,11 @@ SwiGLU, RoPE theta=10000, max_position=4096, vocab=100353.
 
 | Stage | Reference location | Output shape | Gate tensor | ggml / C++ pattern | In-tree analog |
 |-------|--------------------|--------------|-------------|--------------------|----------------|
-| Token embed + multiplier | `embed_tokens(input_ids) * embedding_multiplier` | `[seq, 2048]` | `dec.token_emb` | `ggml_get_rows(token_embd, ids); ggml_scale(emb, 12.0)` | `qwen3_lm` (without scale) |
+| Token embed + multiplier | `embed_tokens(input_ids) * embedding_multiplier` | `[seq, 2048]` | `dec.token_emb` | `ggml_get_rows(token_embd, ids); ggml_scale(emb, 12.0)` | `causal_lm` (without scale) |
 | Audio injection (scatter projector output at `audio_token_id` positions) | `GraniteSpeechForConditionalGeneration.get_audio_embeddings_for_replace` | `[seq, 2048]` | `dec.audio_injected` | host-side scatter into the embed buffer before upload. The audio token positions are known at prompt-build time. Same pattern as qwen3_asr's audio-token scatter. | qwen3_asr |
-| Granite-4 layer (RMSNorm pre-attn → GQA attn with attention_multiplier scale + RoPE → residual×0.22 → RMSNorm pre-MLP → SwiGLU MLP → residual×0.22) | `GraniteModel.layers[i]` | `[seq, 2048]` | `dec.block.{0, n/2, n-1}.out` = `dec.block.{0,20,39}.out` | new `transcribe::granite_lm::build_layer`. Mirrors `qwen3_lm` minus q_norm/k_norm and with the residual_multiplier baked in. | `qwen3_lm` |
-| Final RMSNorm | `GraniteModel.norm` | `[seq, 2048]` | `dec.out_before_head` | `rms_norm(out_norm)` | `qwen3_lm` |
-| LM head (tied for -plus, separate for 1b/2b) + logits_scaling | `lm_head(out) / logits_scaling` | `[seq, 100353]` | `dec.logits_raw` | `linear(output.w or token_embd.w, x); ggml_scale(logits, 1/8)` | `qwen3_lm` plus the scale |
+| Granite-4 layer (RMSNorm pre-attn → GQA attn with attention_multiplier scale + RoPE → residual×0.22 → RMSNorm pre-MLP → SwiGLU MLP → residual×0.22) | `GraniteModel.layers[i]` | `[seq, 2048]` | `dec.block.{0, n/2, n-1}.out` = `dec.block.{0,20,39}.out` | new `transcribe::granite_lm::build_layer`. Mirrors `causal_lm` minus q_norm/k_norm and with the residual_multiplier baked in. | `causal_lm` |
+| Final RMSNorm | `GraniteModel.norm` | `[seq, 2048]` | `dec.out_before_head` | `rms_norm(out_norm)` | `causal_lm` |
+| LM head (tied for -plus, separate for 1b/2b) + logits_scaling | `lm_head(out) / logits_scaling` | `[seq, 100353]` | `dec.logits_raw` | `linear(output.w or token_embd.w, x); ggml_scale(logits, 1/8)` | `causal_lm` plus the scale |
 
 The forward graph is built once with `n_past=0, n_tokens=seq_len` for
 the prompt pass and once with `n_past=K, n_tokens=1` for each step in
@@ -161,7 +161,7 @@ iteration (it ships alongside the `-plus` `cat_hidden_layers` work).
   multipliers (embedding, logits, attention, residual) — every other
   scalar in the forward is parameterised by these. A missing multiplier
   silently degrades accuracy without crashing. New
-  `src/granite_lm/granite_lm.{h,cpp}` mirrors `src/qwen3_lm/` but bakes
+  `src/granite_lm/granite_lm.{h,cpp}` mirrors `src/causal_lm/` but bakes
   the multipliers into the graph and drops q_norm/k_norm.
 - **Audio-token scatter** is unchanged from qwen3_asr: build
   `inputs_embeds = embed(input_ids) * embedding_multiplier`, then host-

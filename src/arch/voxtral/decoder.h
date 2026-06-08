@@ -7,7 +7,7 @@
 //   - SwiGLU MLP: down(silu(gate(x)) * up(x)) via packed gate+up
 //   - UNTIED lm_head (dec.output.weight, separate from token_embd)
 //
-// The per-block math is the shared qwen3_lm module; this file owns graph
+// The per-block math is the shared causal_lm module; this file owns graph
 // allocation, prompt + audio injection (3-way concat of
 // prefix | proj.out | suffix), tensor naming / dump parity, the untied
 // head, and the driver-facing build structs.
@@ -19,7 +19,7 @@
 #pragma once
 
 #include "voxtral.h"
-#include "qwen3_lm/qwen3_lm.h"
+#include "causal_lm/causal_lm.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -61,7 +61,7 @@ struct PrefillBuild {
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const VoxtralWeights &          weights,
                                  const VoxtralHParams &          hp,
-                                 transcribe::qwen3_lm::KvCache & kv_cache,
+                                 transcribe::causal_lm::KvCache & kv_cache,
                                  int                             T_prompt,
                                  int                             T_enc,
                                  int                             prefix_len,
@@ -85,7 +85,7 @@ struct StepBuild {
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const VoxtralWeights &          weights,
                            const VoxtralHParams &          hp,
-                           transcribe::qwen3_lm::KvCache & kv_cache,
+                           transcribe::causal_lm::KvCache & kv_cache,
                            int                             max_n_kv,
                            bool                            use_flash);
 
@@ -93,12 +93,12 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 // Batched prefill / step (offline transcribe_run_batch fast path)
 //
 // B utterances decoded in lockstep against a batched KV cache
-// (qwen3_lm::kv_init_batched, n_batch=B). Ragged prompts are right-padded
+// (causal_lm::kv_init_batched, n_batch=B). Ragged prompts are right-padded
 // to T_prompt_max; the shared causal mask works because pads land after
 // each utterance's real tokens, and per-row last_idx selects each real
 // final position. Audio embeddings are scattered into the token-embedding
 // sequence via ggml_set_rows at the audio_token_id positions. Both require
-// use_flash (the qwen3_lm batched blocks have no manual GQA path). Mirrors
+// use_flash (the causal_lm batched blocks have no manual GQA path). Mirrors
 // arch/canary_qwen, with Voxtral's UNTIED lm_head (dec.output.weight).
 // ---------------------------------------------------------------------------
 
@@ -128,7 +128,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const VoxtralWeights &          weights,
     const VoxtralHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             T_prompt_max,
     int                             T_audio_max,
     int                             n_batch,
@@ -151,7 +151,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_context *                  ctx,
     const VoxtralWeights &          weights,
     const VoxtralHParams &          hp,
-    transcribe::qwen3_lm::KvCache & kv_cache,
+    transcribe::causal_lm::KvCache & kv_cache,
     int                             max_n_kv,
     int                             n_batch,
     bool                            use_flash);
