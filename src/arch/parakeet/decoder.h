@@ -13,9 +13,12 @@
 // The exception is the joint OUTPUT projection (out_w: joint_n × joint_h).
 // At small vocab (~1k for the English parakeets) it is also negligible and
 // runs on host. At the multilingual vocab (13k) it grows to ~17 MFLOPs per
-// step and dominates decode, so it runs through a reused ggml graph
-// (build_joint_out_graph / HostJoint::g_*): ggml's threaded, SIMD matmul
-// replaces the scalar host loop. The weight keeps its native (quantized) dtype
+// step and dominates decode, so it runs through a ggml graph: the weight
+// stays resident on the model (build_joint_weight / HostJoint::gw_*) while
+// each decode call builds its own stack-local JointGraph (act/logits/graph/
+// backend) around it, keeping concurrent decode reentrant. ggml's threaded,
+// SIMD matmul replaces the scalar host loop. The weight keeps its native
+// (quantized) dtype
 // by default — ggml streams the quantized bytes (~4× less weight bandwidth) and
 // quantizes the activation on the fly, the same regime the encoder runs in and
 // WER-validated equal to fp32 on English. The caller falls back to an
@@ -92,28 +95,27 @@ struct HostJoint {
     std::vector<float> out_w;    // [joint_n, joint_h] (host fallback path)
     std::vector<float> out_b;    // [joint_n]
 
-    // --- ggml graph for the out_w projection ---
+    // --- resident ggml weight for the out_w projection ---
     // The output projection (out_w: joint_n × joint_h) dominates RNN-T
     // decode once the vocab is large (13k for the multilingual variant).
-    // Run it through a prebuilt, reused ggml graph with the weight kept in
-    // its native (quantized) dtype: this gets ggml's threaded + SIMD
-    // quantized matmul and ~4× less weight bandwidth than streaming the
-    // fp32 host mirror every step. Everything (weight, bias, the per-step
-    // activation input, and the logits output) lives in one CPU-backend
-    // buffer so the batch-1 graph recomputes in place with no realloc.
-    // Owned here; freed by ~HostJoint.
+    // We keep the weight + bias resident as ggml tensors in their native
+    // (quantized) dtype so the per-step matmul gets ggml's threaded + SIMD
+    // quantized kernel and ~4× less weight bandwidth than streaming the
+    // fp32 host mirror every step.
     //
-    // NOT reentrant: g_act / g_logits are mutated per step, so concurrent
-    // decode on contexts sharing this (model-owned) mirror would race.
-    // Decode is serial today; if this lands, the mutable compute tensors
-    // move per-context while the weight tensor stays shared.
-    ggml_context *        g_ctx     = nullptr;
-    ggml_backend_t        g_backend = nullptr;
-    ggml_backend_buffer_t g_buf     = nullptr;
-    ggml_cgraph *         g_graph   = nullptr;
-    ggml_tensor *         g_act     = nullptr; // [joint_h] fp32 input
-    ggml_tensor *         g_logits  = nullptr; // [joint_n] fp32 output
-    bool                  g_ready   = false;
+    // This is the IMMUTABLE, model-owned half: built once at load and only
+    // ever read after that, so it is safe to share across every context.
+    // The MUTABLE per-step compute state (activation input, logits output,
+    // the graph, and a compute backend) lives in a stack-local JointGraph
+    // built per decode call (see decoder.cpp) — that is what makes
+    // concurrent decode on contexts sharing this model reentrant.
+    // Owned here; freed by ~HostJoint.
+    ggml_context *        w_ctx     = nullptr;
+    ggml_backend_t        w_backend = nullptr; // alloc-only; never graph_compute'd
+    ggml_backend_buffer_t w_buf     = nullptr;
+    ggml_tensor *         gw_w      = nullptr; // [joint_h, joint_n] native/fp32 weight
+    ggml_tensor *         gw_b      = nullptr; // [joint_n] fp32 bias
+    bool                  w_ready   = false;
 
     HostJoint() = default;
     ~HostJoint();
@@ -165,12 +167,6 @@ struct HostDecoderWeights {
 // `out` in an indeterminate state.
 transcribe_status build_host_decoder_weights(const ParakeetModel & model,
                                              HostDecoderWeights &  out);
-
-// Apply the session thread count to the host-decode threading systems (the
-// joint graph's CPU backend and the predictor/CTC OpenMP loops). Call once
-// before each decode; n_threads <= 0 selects the min(8, cores) default. The
-// encoder backend's threads are set separately (see model.cpp).
-void apply_decode_threads(const HostDecoderWeights & w, int n_threads);
 
 // ---------------------------------------------------------------------------
 // LSTM hidden state
@@ -238,6 +234,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
                                     const float *              enc_out,
                                     int                        T_enc,
                                     int                        d_enc,
+                                    int                        n_threads,
                                     std::vector<TdtToken> &    out_tokens);
 
 // Run RNNT greedy decode end-to-end. Same predictor + joint code as TDT,
@@ -254,6 +251,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
                                      const float *              enc_out,
                                      int                        T_enc,
                                      int                        d_enc,
+                                     int                        n_threads,
                                      std::vector<TdtToken> &    out_tokens);
 
 // Streaming variant of RNN-T greedy decode. Consumes T_enc_new
@@ -277,6 +275,7 @@ transcribe_status decode_rnnt_greedy_streaming(
     LstmState &                state_io,
     int &                      last_token_io,
     int                        frame_offset,
+    int                        n_threads,
     std::vector<TdtToken> &    out_tokens);
 
 // Run CTC greedy decode end-to-end. Per-frame: logits = W @ enc[t] + b,
@@ -292,6 +291,7 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
                                     const float *              enc_out,
                                     int                        T_enc,
                                     int                        d_enc,
+                                    int                        n_threads,
                                     std::vector<TdtToken> &    out_tokens);
 
 } // namespace transcribe::parakeet
