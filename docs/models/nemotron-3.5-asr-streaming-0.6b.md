@@ -22,10 +22,13 @@ an unsupported tag returns "unsupported language".
 
 The encoder is cache-aware and trained with four runtime latency
 settings (`att_context_size` ∈ `[56, 0]` / `[56, 3]` / `[56, 6]` /
-`[56, 13]` = 0 / 240 / 480 / 1040 ms lookahead). This port currently
-ships and benchmarks the **offline** path (`transcribe_run`) at the
-`[56, 13]` (1.12 s) setting that yields the headline accuracy; streaming
-bring-up follows the predecessor's cache-aware design.
+`[56, 13]` = 0 / 240 / 480 / 1040 ms lookahead). Both paths ship: the
+**offline** path (`transcribe_run`) defaults to `[56, 13]` (1.12 s) for
+the headline accuracy, and **chunked streaming** is selectable at runtime
+via `--stream-chunk-ms 1120 --stream-att-right {0,3,6,13}`. Streaming at
+R=13 is byte-equal to the offline transcript; lower-R settings trade
+lookahead for latency. Accuracy and latency numbers below are for the
+offline `[56, 13]` path.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
 for training data, the full language list, intended use, and the
@@ -42,8 +45,7 @@ the FastConformer encoder's positional encoding is recomputed per call and the
 RNN-T transducer has no decoder context window, so audio of any length is
 processed in a single pass — pass arbitrarily long recordings. `n_ctx` is a
 no-op for this model — there is no context/KV ceiling to lower. The cache-aware
-streaming design (offline-only in this port; streaming bring-up follows the
-predecessor) carries constant-memory caches rather than a growing KV, so it
+streaming path carries constant-memory caches rather than a growing KV, so it
 stays unbounded for the same reason. See the
 [input-length contract](../input-limits.md).
 
@@ -58,11 +60,28 @@ stays unbounded for the same reason. See the
 | Q5_K_M | [nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf) | 534 MB |
 | Q4_K_M | [nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf](https://huggingface.co/handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf/resolve/main/nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf) | 473 MB |
 
-**Accuracy:** the authoritative per-quant WER sweep (Stage 7) is pending.
-For context, NVIDIA's self-reported FLEURS WER at `att_context_size=[56,13]`
-(LangID mode) is **7.91%** for en-US and a **8.84%** macro-average across
-the 19 transcription-ready locales (from the
-[HF model card](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)).
+**Accuracy.** Word error rate at the offline `att_context_size=[56,13]`
+(1.12 s) setting, `--language en-US`, greedy RNN-T. C++ hypotheses were
+generated on an L4 GPU and scored with the whisper-normalizer; the
+reference column is NVIDIA NeMo measured on the same manifests. For
+context, NVIDIA's self-reported FLEURS en-US WER is **7.91%** (and an
+**8.84%** 19-locale macro-average) per the
+[HF model card](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b).
+
+| Preset | FLEURS test en (n=647) | LibriSpeech test-clean (n=2620) |
+| --- | ---: | ---: |
+| Reference (NeMo) | 7.99 | 3.03 |
+| F32    | 7.97 | 3.04 |
+| F16    | 7.97 | 3.04 |
+| Q8_0   | 7.88 | 3.05 |
+| Q6_K   | 8.02 | 3.08 |
+| Q5_K_M | 8.15 | 3.10 |
+| Q4_K_M | 8.49 | 3.30 |
+
+The F32 reference dtype meets the measured-Oracle gate on both datasets.
+F16/Q8_0/Q6_K/Q5_K_M land inside the reference 95% CI; Q4_K_M carries the
+largest quantization loss (+0.50 on FLEURS, +0.27 on LibriSpeech) but is
+accepted for shipping.
 
 ## Quick Start
 
@@ -146,9 +165,10 @@ on WER (Stage 7), not tensor tolerances.
   transcript.
 - **Punctuation & capitalization:** native (PnC).
 - **Timestamps:** token- and word-level.
-- **Streaming:** cache-aware streaming is supported by the architecture
-  (four trained latency settings); detailed streaming parity for this
-  variant is pending validation.
+- **Streaming:** cache-aware chunked streaming, selectable via
+  `--stream-chunk-ms 1120 --stream-att-right {0,3,6,13}` (the four trained
+  latency settings). R=13 is byte-equal to the offline transcript;
+  lower-R settings commit earlier for lower latency.
 - **Translation / diarization / VAD:** not supported.
 
 ## Known limitations
@@ -158,8 +178,12 @@ on WER (Stage 7), not tensor tolerances.
 - The auxiliary CTC head present in the upstream checkpoint is dropped at
   conversion (the RNN-T head is the inference path); CTC-argmax timestamps
   are not available.
-- The Stage 7 multilingual WER sweep and streaming-parity validation are
-  pending; only the offline `[56, 13]` path has been benchmarked.
+- WER is gated on English only (FLEURS test en + LibriSpeech test-clean
+  against the NeMo Oracle). The other 39 locales are exercised
+  functionally but not WER-scored here. Published latency numbers cover
+  the offline `[56, 13]` path; the sub-1.12 s streaming settings are
+  functionally validated (byte-equal at R=13) but not separately
+  benchmarked.
 
 ## Reproduction
 
