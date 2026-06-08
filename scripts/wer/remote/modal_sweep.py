@@ -459,6 +459,7 @@ def _run_wer_impl(
     batch_size: int = 1,
     sort_by_length: bool = True,
     timestamps: str = "none",
+    language: str = "",
     stream_chunk_ms: int = 0,
     dataset_status: dict | None = None,
 ) -> dict:
@@ -479,7 +480,7 @@ def _run_wer_impl(
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
     cache_hyp, cache_sum = hyp_cache_paths(
         HYP_FP, model_file, dataset_spec, n_utts, batch_size, sort_by_length,
-        timestamps, stream_chunk_ms)
+        timestamps, language, stream_chunk_ms)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         _log_prepared_dataset("wer", dataset_status)
@@ -532,6 +533,8 @@ def _run_wer_impl(
             cmd += ["--sort-by-length"]
     if timestamps and timestamps != "none":
         cmd += ["--timestamps", timestamps]
+    if language:
+        cmd += ["--language", language]
     if stream_chunk_ms and stream_chunk_ms > 0:
         cmd += ["--stream-chunk-ms", str(stream_chunk_ms)]
     print(f"[wer] $ {' '.join(cmd)}")
@@ -628,6 +631,7 @@ def _register_runner(gpu_id: str):
         sort_by_length: bool = True,
         build_dir: str | None = None,
         timestamps: str = "none",
+        language: str = "",
         stream_chunk_ms: int = 0,
         dataset_status: dict | None = None,
     ) -> dict:
@@ -639,7 +643,8 @@ def _register_runner(gpu_id: str):
             model_repo, model_file, dataset_spec, n_utts,
             build_dir or default_build_dir,
             batch_size=batch_size, sort_by_length=sort_by_length,
-            timestamps=timestamps, stream_chunk_ms=stream_chunk_ms,
+            timestamps=timestamps, language=language,
+            stream_chunk_ms=stream_chunk_ms,
             dataset_status=dataset_status,
         )
 
@@ -693,12 +698,13 @@ def _ensure_local_venv(family: str) -> str:
 def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
                        subset_path, subset_count, venv, dataset_spec, n_utts,
                        env_fp, batch_size, device, mode="offline",
-                       dataset_status=None) -> dict:
+                       extra_args=None, dataset_status=None) -> dict:
     """One reference run at a single batch size. Hyp-cached on /data (plain
     file writes, no flock, so the Volume is fine here — only uv needs local
     disk)."""
     cache_hyp, cache_sum = ref_hyp_cache_paths(
-        variant, dataset_spec, n_utts, batch_size, env_fp, mode)
+        variant, dataset_spec, n_utts, batch_size, env_fp, mode,
+        extra_args=extra_args)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         print(f"[ref] cache hit: {cache_hyp}")
@@ -733,6 +739,10 @@ def _run_one_reference(family, variant, framework, upstream_repo, runner_rel,
     # predate the flag (every family but voxtral_realtime) are unaffected.
     if mode and mode != "offline":
         cmd += ["--mode", mode]
+    # Extra per-family runner args (e.g. '--language en-US' for prompt-
+    # conditioned parakeet), passed verbatim after the uniform contract.
+    if extra_args:
+        cmd.extend(extra_args)
     print(f"[ref] bs={batch_size} mode={mode} $ {' '.join(cmd)}")
     t0 = time.time()
     rc, stderr_tail = run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
@@ -788,6 +798,7 @@ def _run_reference_impl(
     batch_sizes: list,
     device: str = "cuda",
     mode: str = "offline",
+    extra_args: list | None = None,
     dataset_status: dict | None = None,
 ) -> dict:
     """One container per variant: `uv sync` the env once (local disk), then run
@@ -807,7 +818,8 @@ def _run_reference_impl(
         results[str(bs)] = _run_one_reference(
             family, variant, framework, upstream_repo, runner_rel,
             subset_path, subset_count, venv, dataset_spec, n_utts, env_fp,
-            bs, device, mode, dataset_status)
+            bs, device, mode, extra_args=extra_args,
+            dataset_status=dataset_status)
     return results
 
 
@@ -838,12 +850,13 @@ def _register_reference_runner(gpu_id: str):
         batch_sizes: list | None = None,
         device: str = "cuda",
         mode: str = "offline",
+        extra_args: list | None = None,
         dataset_status: dict | None = None,
     ) -> dict:
         return _run_reference_impl(
             family, variant, framework, upstream_repo, runner_rel,
             dataset_spec, n_utts, env_fp, batch_sizes or [1], device=device,
-            mode=mode, dataset_status=dataset_status)
+            mode=mode, extra_args=extra_args, dataset_status=dataset_status)
 
     runner.__name__ = name
     runner.__qualname__ = name
@@ -870,6 +883,7 @@ def sweep(
     batch_sizes: str = "1",
     sort_by_length: bool = True,
     timestamps: str = "none",
+    language: str = "",
     stream_chunk_ms: int = 0,
 ) -> None:
     """Fan WER across one or more models on one GPU class.
@@ -954,7 +968,7 @@ def sweep(
     n = None if n_utts < 0 else n_utts
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
                              c["bs"], sort_by_length, build_dir, timestamps,
-                             stream_chunk_ms, dataset_status))
+                             language, stream_chunk_ms, dataset_status))
             for c in cells]
 
     rows, failures = [], []
@@ -1167,6 +1181,7 @@ def reference_sweep(
     runner: str = "",
     mode: str = "offline",
     model_override: str = "",
+    ref_args: str = "",
 ) -> None:
     """Fan the REFERENCE framework (NeMo / Transformers / author repo) across
     one or more variants on a GPU, producing `<variant>-REF.<dataset>.jsonl`
@@ -1183,6 +1198,10 @@ def reference_sweep(
     --clean        Rebuild the family venv (wipe /uvcache/<env_fp>).
     --runner       Explicit runner path override (needed when a family has
                    several run_reference_<family>_*.py, e.g. parakeet).
+    --ref-args     Extra args passed verbatim to every reference runner
+                   invocation, space-separated. Used for per-family knobs
+                   the uniform contract does not cover (e.g.
+                   '--language en-US' for prompt-conditioned parakeet).
 
     Examples:
       # Smoke one Transformers + one NeMo variant at bs 1 and 4 (4 cells):
@@ -1194,6 +1213,7 @@ def reference_sweep(
     if not specs:
         raise SystemExit("--variants is required (comma-separated)")
     sizes = [int(x) for x in batch_sizes.split(",") if x.strip()] or [1]
+    extra = ref_args.split() if ref_args else None
 
     repo_root = pathlib.Path(REPO)
     resolved = [resolve_reference(repo_root, s, runner) for s in specs]
@@ -1237,7 +1257,7 @@ def reference_sweep(
     futs = [(r, runner_fn.spawn(
                 r["family"], r["variant"], r["framework"], r["upstream_repo"],
                 r["runner_rel"], r["env_fp"], dataset, n, sizes, "cuda", mode,
-                dataset_status))
+                extra, dataset_status))
             for r in resolved]
 
     rows, failures = [], []

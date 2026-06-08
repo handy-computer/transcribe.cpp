@@ -1,0 +1,230 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "parakeet",
+  "hf_repo": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+  "hf_revision": "24b151a851dd15909e1fc611b11bb2da52b9fc81",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "missing",
+      "detail": "NeMo .nemo archive only. Values below derive from the model card (Cache-Aware FastConformer-RNNT, 24 enc layers, 600M params) and from parity with the predecessor intake reports/porting/parakeet/nemotron-speech-streaming-en-0.6b/intake.json. Lock at convert time from model_config.yaml inside the .nemo archive."
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json",
+      "status": "missing",
+      "detail": "Inside .nemo (model.cfg.preprocessor, NeMo AudioToMelSpectrogramPreprocessor / FilterbankFeatures). Predecessor variant set: n_mels=128, sample_rate=16000, hop_length=160, fft_size=512, win_length=400, window=hann, dither=1e-05, normalize=NA (no per-feature normalization), preemphasis=null. Same cache-aware streaming family, so the same frontend shape is expected; verify at convert time by streaming model_config.yaml from the .nemo."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "missing",
+      "detail": "SentencePiece BPE inside .nemo (tokenizer.model, tokenizer.vocab). The model card lists 40 supported language-locales with PnC; vocab likely contains either explicit language tag tokens (e.g. <en-US>) or is conditioned via the encoder language one-hot path. Vocab size is NOT stated on the card; verify at convert time. Predecessor had vocab_size=1024 (English-only PnC) so this multilingual variant's vocab is expected to be larger."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "missing",
+      "detail": "No fast-tokenizer JSON; SentencePiece proto only."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "RNN-T decoding config lives in the .nemo archive under model.cfg.decoding. att_context_size is the inference-time latency selector (model card: [56,0] / [56,1] / [56,3] / [56,6] / [56,13]). Note left context is 56 here vs 70 in the English predecessor."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "missing",
+      "detail": "PyTorch state_dict inside .nemo tarball, not safetensors."
+    },
+    "model_card": {
+      "kind": "hf_api",
+      "path": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+      "status": "found",
+      "detail": "Cache-Aware FastConformer-RNNT, 600M params, 24 encoder layers, multilingual extension of nemotron-speech-streaming-en-0.6b. 5 runtime-configurable latency settings via att_context_size: [56,0]=80ms / [56,1]=160ms / [56,3]=320ms / [56,6]=560ms / [56,13]=1120ms. Native PnC. 40 language-locales in 3 tiers (19 transcription-ready, 13 broad-coverage, 8 adaptation-ready). Language conditioning is a 128-dim one-hot vector concatenated to the (D=512) encoder output along the feature axis, then projected into the RNNT decoder. Supports explicit target_lang=<id> and target_lang=auto modes; auto mode emits a <lang-XX> language tag in the transcript (toggleable via strip_lang_tags). License: OpenMDW-1.1. WER reported on FLEURS only; LibriSpeech is not published."
+    },
+    "reference_modeling_code": {
+      "kind": "reference_code",
+      "path": "scripts/convert-parakeet.py, src/arch/parakeet/, NeMo examples/asr/asr_cache_aware_streaming/speech_to_text_cache_aware_streaming_infer.py",
+      "status": "found",
+      "detail": "Existing parakeet converter and arch tree (including the predecessor's cache-aware bring-up) cover FastConformer encoder + RNN-T decoder + cache-aware streaming. NEW relative to the predecessor: the language one-hot conditioning path (128-d one-hot → concat to encoder output (D=512) → projection → RNNT joint enc-hidden) and the larger multilingual SentencePiece vocab (with or without explicit language tag tokens — verify at convert time)."
+    }
+  },
+  "variants": [
+    {
+      "name": "nemotron-3.5-asr-streaming-0.6b",
+      "memory_gb": 2.5,
+      "files": ["nemotron-3.5-asr-streaming-0.6b.nemo"]
+    }
+  ],
+  "config": {
+    "architecture_candidates": ["encoder-transducer"],
+    "key_fields": {
+      "architectures": ["EncDecRNNTBPEModel"],
+      "model_type": "parakeet_rnnt_cache_aware_multilingual",
+      "encoder.type": "Cache-Aware FastConformer (sliding-window attention + chunked convolutions)",
+      "encoder.n_layers": 24,
+      "encoder.d_model": 1024,
+      "encoder.n_heads": 8,
+      "encoder.ff_expansion_factor": 4,
+      "encoder.conv_kernel_size": 9,
+      "encoder.subsampling": "dw_striding",
+      "encoder.subsampling_factor": 8,
+      "encoder.subsampling_conv_channels": 256,
+      "encoder.self_attention_model": "rel_pos with cache-aware sliding-window masking",
+      "encoder.feat_in": 128,
+      "encoder.att_context_size.options": [[56, 0], [56, 3], [56, 6], [56, 13]],
+      "encoder.att_context_size.units": "80ms frames",
+      "encoder.att_context_size.v1_target": [56, 13],
+      "encoder.att_context_size.v1_target_rationale": "1.12s latency = 14 × 80ms — yields the headline WER (FLEURS LangID mode) and gives the most attention context, the simplest target for v1 batch bring-up. Same latency setting as the English predecessor's v1 target ([70,13]); the left context changed from 70 to 56 frames between the two checkpoints. The .nemo's model_config.yaml ships 4 trained options (NOT the 5 listed on the model card — [56,1]=160ms is on the card but absent from the config).",
+      "encoder.use_bias": false,
+      "encoder.causal_downsampling": true,
+      "encoder.conv_norm_type": "layer_norm",
+      "encoder.conv_context_size": "causal",
+      "encoder.att_context_style": "chunked_limited",
+      "encoder.untie_biases": true,
+      "encoder.xscaling": false,
+      "encoder.pos_emb_max_len": 5000,
+      "language_conditioning.kind": "EncDecRNNTBPEModelWithPrompt (NeMo prompt-conditioned RNN-T)",
+      "language_conditioning.nemo_target_class": "nemo.collections.asr.models.rnnt_bpe_models_prompt.EncDecRNNTBPEModelWithPrompt",
+      "language_conditioning.num_prompts": 128,
+      "language_conditioning.prompt_field": "target_lang",
+      "language_conditioning.modes": ["explicit target_lang=<id>", "target_lang=auto"],
+      "language_conditioning.auto_emits_tag": true,
+      "language_conditioning.tag_format": "<lang-XX>",
+      "language_conditioning.tag_strip_flag": "strip_lang_tags",
+      "language_conditioning.tag_tokens_in_spm_vocab": true,
+      "language_conditioning.num_tag_tokens": 39,
+      "decoder.type": "RNNTDecoder (predictor)",
+      "decoder.pred_rnn_layers": 2,
+      "decoder.pred_hidden": 640,
+      "decoder.blank_as_pad": true,
+      "joint.type": "RNNTJoint",
+      "joint.encoder_hidden": 1024,
+      "joint.joint_hidden": 640,
+      "joint.activation": "relu",
+      "joint.durations": null,
+      "joint.num_extra_outputs": 0,
+      "aux_ctc.kind": "RNNTHybridBPEModel-style auxiliary CTC head",
+      "aux_ctc.ctc_loss_weight": 0.1,
+      "aux_ctc.decoder_target": "nemo.collections.asr.modules.ConvASRDecoder",
+      "tokenizer.vocab_size": 13087,
+      "tokenizer.has_punctuation_capitalization": true,
+      "tokenizer.has_language_tag_tokens": true
+    },
+    "varying_across_variants": []
+  },
+  "dtype": {
+    "expected": "float32",
+    "source": "manual",
+    "evidence": "NeMo .nemo archive ships the model as float32 PyTorch state_dict (no safetensors), consistent with every parakeet-family variant in this repo including the English predecessor nemotron-speech-streaming-en-0.6b.",
+    "details": {
+      "config_declared": null,
+      "header_distribution": {}
+    },
+    "expected_f32_tensors": []
+  },
+  "frontend": {
+    "sample_rate": 16000,
+    "n_mels": 128,
+    "hop_length": 160,
+    "fft_size": 512,
+    "window": "hann_periodic",
+    "normalization": "none",
+    "preemphasis": null,
+    "dither": 1e-05,
+    "center": true,
+    "padding_mode": "reflect",
+    "mel_filterbank_norm": "slaney"
+  },
+  "tokenizer": {
+    "type": "sentencepiece",
+    "vocab_size": 13087,
+    "special_tokens": {
+      "unk": 0
+    },
+    "has_language_tokens": true,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": [
+      "en-US", "en-GB", "es-US", "es-ES", "fr-FR", "fr-CA", "it-IT", "pt-BR", "pt-PT", "nl-NL", "de-DE", "tr-TR", "ru-RU", "ar-AR", "hi-IN", "ja-JP", "ko-KR", "vi-VN", "uk-UA",
+      "pl-PL", "sv-SE", "cs-CZ", "nb-NO", "da-DK", "bg-BG", "fi-FI", "hr-HR", "sk-SK", "zh-CN", "hu-HU", "ro-RO", "et-EE",
+      "el-GR", "lt-LT", "lv-LV", "mt-MT", "sl-SI", "he-IL", "th-TH", "nn-NO"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": ["token", "word"],
+    "streaming": true,
+    "voice_activity_detection": false,
+    "speaker_diarization": false
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "FLEURS test en-US/en-GB (1.12s chunk, LangID mode)",
+      "language": "en",
+      "metric": "wer",
+      "score": 7.91,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+      "notes": "att_context_size=[56,13], target_lang=en-US (or en-GB); whisper-normalizer scoring. The card publishes FLEURS WER per language; English number reported here is for context. Used as a publisher cross-check, not the Stage 7 gate target."
+    },
+    {
+      "dataset": "FLEURS test (19 transcription-ready locales avg, 1.12s chunk, LangID mode)",
+      "language": null,
+      "metric": "wer",
+      "score": 8.84,
+      "score_unit": "percent",
+      "source": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+      "notes": "Macro-average across the 19 transcription-ready locales at att_context_size=[56,13]. Japanese and Korean are scored with CER and folded into this average per the model card. Context only."
+    }
+  ],
+  "reference_framework": "nemo",
+  "reference_rationale": "NVIDIA NeMo first-party framework. Same rationale as the rest of the parakeet family and the English predecessor nemotron-speech-streaming-en-0.6b: the HF repo ships only a `.nemo` tar archive consumable by `nemo.collections.asr.models.ASRModel.from_pretrained`; there is no Transformers modeling class, no safetensors. The cache-aware streaming forward path lives in NeMo's `asr_cache_aware_streaming` example (`speech_to_text_cache_aware_streaming_infer.py`) — that's the authoritative oracle for the sliding-window attention mask shape, cached-conv layout, and per-chunk vs full-utterance behavior. NeMo is also the only reference that exercises the language one-hot conditioning and the target_lang/auto modes end to end.",
+  "architecture_pattern": "encoder-transducer",
+  "known_risks": [
+    "NEW vs predecessor: prompt-conditioned RNN-T. The NeMo class is `EncDecRNNTBPEModelWithPrompt` (`nemo.collections.asr.models.rnnt_bpe_models_prompt`), `num_prompts=128`, prompt_field=`target_lang`, with a built-in `prompt_dictionary` mapping locale strings (and aliases like `en`/`en-US`/`enGB`) to a 128-d prompt index. The model card's described path (broadcast one-hot, concat to encoder output, project before RNNT joint) is the textual summary; the authoritative shape lives in the NeMo Prompt class. Stage 3 converter MUST emit the prompt-embedding/projection weights, the prompt_dictionary, AND a GGUF KV recording the prompt dimension and locale→index map; Stage 4 C++ MUST implement the prompt path conditioned on a target_lang argument (no implicit default). A silent zero-prompt fallback will produce nonsense for non-English audio and may still look plausible on English jfk.wav — textbook structural-cfg-distinction failure mode.",
+    "NEW vs predecessor: target_lang=auto language-detection mode emits a `<lang-XX>` tag inside the transcript that can be stripped via `strip_lang_tags`. Stage 4 must decide how to surface this in the CLI/API (explicit `--lang auto` vs default to a hint, and whether to strip the tag by default for clean transcripts vs preserve it for diarization-style downstreams). Decision is OUT OF SCOPE for v1 numerical bring-up but in scope for the capability table.",
+    "NEW vs predecessor: tokenizer vocab is 13087 (vs predecessor's 1024). The SPM vocab carries 39 explicit `<lang-XX>` language-tag tokens (e.g. `<en-US>`, `<de-DE>`, `<zh-CN>`) — the auto-language tag mentioned on the card IS a real SPM token, not runtime-injected text. Word-aggregation code at Stage 4 must skip/handle these tag tokens when computing word boundaries. Mis-sized vocab silently corrupts the RNN-T joint output dim. vocab_sha256 still to be computed at convert time.",
+    "NEW vs predecessor: `aux_ctc` head present (ctc_loss_weight=0.1 in cfg, ConvASRDecoder). This makes the model a hybrid RNNT+CTC checkpoint, similar to the `tdt_ctc-*` parakeet variants. Stage 3 converter MUST decide ship-vs-drop: per family Open-Decision #1 (`tdt_ctc` precedent), drop the aux CTC head from the GGUF — the RNNT head is the primary inference path and the aux CTC weights are training scaffolding (`ctc_loss_weight=0.1` is a regularization weight, not a runtime selector). If preserving the aux CTC head is desired (e.g. for CTC-argmax timestamps as a sanity check), call it out in Stage 3 notes.",
+    "CHANGED vs predecessor: att_context_size left context is 56 frames (4480ms) here vs 70 frames (5600ms) in nemotron-speech-streaming-en-0.6b. The .nemo's `model_config.yaml` ships 4 trained options ([56,0]/[56,3]/[56,6]/[56,13]); the model card lists 5 settings including [56,1]=160ms, but that setting is NOT in the trained set. The attention mask code must read the .nemo's training-time setting and configure the chunked_limited mask accordingly; do NOT hardcode the predecessor's 70 frames and do NOT include [56,1] in the runtime selector unless verified live.",
+    "Cache-aware FastConformer attention with att_context_style='chunked_limited'. Encoder trained with the chunked_limited mask — frames are grouped into chunks of size R+1=14 (for the 1.12s setting) and each chunk sees itself + floor(L/(R+1)) prior chunks (L=56 here). This is NOT the same shape as 'regular' per-frame sliding window with the same [L,R]; the masks are mathematically distinct and produce different outputs. Stage 2 oracle preserves the model's native 'chunked_limited' (dumper run without --offline-only); Stage 4 C++ MUST implement the chunked mask shape, NOT a per-frame sliding window. Already implemented in the predecessor port — Stage 4 here re-uses it, adjusted for L=56.",
+    "Chunked depthwise convolutions in the encoder. Cache-aware design replaces vanilla 1-D dw conv with per-chunk causal conv that maintains state across chunks. In batch (one-shot) mode the per-chunk state collapses to zero-init, but the kernel must still be applied in the chunked causal pattern. Already implemented in the predecessor port — Stage 4 here re-uses it.",
+    "Four runtime latency settings ship in cfg: att_context_size of [56,0]/[56,3]/[56,6]/[56,13] map to 80/320/560/1120ms chunks. The predecessor port runtime-selects 4 settings via `--stream-att-right`; Stage 4 here must extend the selector to accept the new 320ms setting (right=3) and decide whether to expose [56,1]=160ms as an unverified option or drop it (see above).",
+    "PnC + multilingual WER eval. Same whisper-normalizer 0.1.12 normalization as the predecessor for English; for non-English locales the Stage 7 WER scorer must use a per-language text normalizer that matches the FLEURS-style pre-processing the card reports against. For v1 LibriSpeech (English-only) acceptance this is moot; it becomes a hard requirement if/when a FLEURS-style multilingual acceptance subset is added.",
+    "Plain RNN-T joint (no duration head). Identical to predecessor and parakeet-rnnt-0.6b — the existing TDT joint code branches on `joint.durations is None` to skip the duration head.",
+    "Encoder dims confirmed identical to FastConformer-Large 0.6B and the English predecessor (24L / d_model=1024 / 8h / kernel=9 / subsampling=8). The model card's 'encoder output dimension D=512' was misleading — `model_config.yaml` shows `jointnet.encoder_hidden=1024`, so the encoder output feeds the RNN-T joint at 1024-d (NeMo's internal projection at the joint, not a separate 512-d encoder projection). The prompt path's 128-d vector composes with the 1024-d encoder output, not 512.",
+    "Frontend differs from non-cache-aware parakeet variants: normalize=NA (no per-feature normalization) and preemphasis=null, same as the predecessor. Cache-aware streaming cannot compute per-utterance mean/var because the encoder consumes audio in chunks; the model is trained without that step. Already encoded in the predecessor converter and frontend code path — verify the same GGUF KV is emitted here.",
+    "License: OpenMDW-1.1 (was 'NVIDIA Open Model License' on the predecessor). Different upstream license string; the HF model-card YAML at Stage 8 must match. The scripts/hf_cards/ template from the predecessor needs a license string update for this variant.",
+    "Standard parakeet bring-up risks (dw_striding subsampling mask, rel_pos relative-shift trick, blank id at vocab_size) apply identically and are already handled by scripts/convert-parakeet.py and src/arch/parakeet/."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.vocab_sha256",
+      "reason": "SentencePiece proto extracted from .nemo at convert time; SHA computed then."
+    },
+    {
+      "field": "config.key_fields.language_conditioning (prompt path internals)",
+      "reason": "The NeMo class name (`EncDecRNNTBPEModelWithPrompt`) and `num_prompts=128`, `prompt_field=target_lang`, and `prompt_dictionary` are confirmed from `model_config.yaml`. The exact prompt-embedding/projection weight tensor names (and where in the joint they hook in) must be read from `model_weights.ckpt` at convert time by inspecting the live module after `ASRModel.from_pretrained()` (or via a direct .nemo state_dict walk). Wrong tensor wiring silently produces wrong-language outputs."
+    },
+    {
+      "field": "variants[].memory_gb",
+      "reason": "Estimated 2.5 GB from F32 GGUF size by parity with the predecessor; not measured against actual peak inference memory. The larger multilingual vocab (13087 vs 1024) and any prompt-embedding/projection weights will increase the joint/embed sizes — verify after Stage 3."
+    },
+    {
+      "field": "upstream_benchmarks (LibriSpeech)",
+      "reason": "The model card does NOT report a LibriSpeech score. LibriSpeech test-clean is still the default English acceptance dataset for Stage 7; downstream gates use the measured Oracle reference baseline, not a publisher number. The recorded FLEURS scores are context only."
+    },
+    {
+      "field": "streaming_disposition",
+      "reason": "Predecessor delivered the full streaming session API (chunked feed + per-chunk K/V cache + per-layer conv state + decoder-state preservation) and runtime selection of all 4 latency settings. This variant inherits the same disposition by default. Stage 4 must extend the runtime selector to accept the new 320ms setting (right=3), decide whether to expose the model-card-listed-but-config-absent [56,1]=160ms option, and verify streaming-final == one-shot at att_context_size=[56,13]."
+    },
+    {
+      "field": "aux_ctc head disposition",
+      "reason": "`aux_ctc` head is present in `model_config.yaml` (ctc_loss_weight=0.1, ConvASRDecoder). Per family Open-Decision #1 the default is to drop aux CTC weights in Stage 3 (RNN-T head is primary) — confirm explicitly during porting-3-convert. CTC-argmax timestamps could be an alternative timestamp path if the RNN-T emit-frame path needs a backup."
+    }
+  ]
+}

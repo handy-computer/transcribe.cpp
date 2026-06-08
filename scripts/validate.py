@@ -437,10 +437,13 @@ def cmd_cpp(args: argparse.Namespace) -> int:
             cmd += ["--language", language]
         if args.family == "whisper":
             cmd += ["--timestamps", "none"]
-        if args.family == "sensevoice":
+        if args.family in ("sensevoice", "parakeet"):
             # The reference dumper emits the raw token stream including
-            # the language / event / emotion / itn control tokens, so
-            # the C++ dump must keep them too for exact-string compare.
+            # control / language tags (sensevoice: language / event /
+            # emotion / itn; multilingual parakeet: the <xx-XX> language
+            # tag from auto language detection). The production C++ path
+            # strips these by default, so the validate dump must pass
+            # --raw-tokens to keep them and match the reference exactly.
             cmd += ["--raw-tokens"]
         cmd.append(str(audio))
 

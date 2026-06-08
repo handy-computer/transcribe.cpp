@@ -1,0 +1,109 @@
+# Spec for the HF README of handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf.
+# Consumed by scripts/hf_cards/generate.py.
+
+hf_repo: nvidia/nemotron-3.5-asr-streaming-0.6b
+target_repo: handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf
+transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/nemotron-3.5-asr-streaming-0.6b.md
+
+upstream_commit: 24b151a
+pin_date: 2026-06-08
+
+# Validation pin for the most recent upload. Updated on each release;
+# older HF revisions carry whatever value was current at their upload time.
+validation:
+  reference: NeMo
+  commit: 909e94e
+  date: 2026-06-08
+
+# Upstream is OpenMDW-1.1, not a standard SPDX id, so the HF `license`
+# field gets `other` and `license_name` / `license_link` carry the actual
+# identifier + URL. `license_display` is the human-facing form.
+license: other
+license_name: openmdw-1.1
+license_link: https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b
+license_display: OpenMDW-1.1
+pipeline_tag: automatic-speech-recognition
+languages:
+  - en
+  - es
+  - fr
+  - it
+  - pt
+  - nl
+  - de
+  - tr
+  - ru
+  - ar
+  - hi
+  - ja
+  - ko
+  - vi
+  - uk
+  - pl
+  - sv
+  - cs
+  - nb
+  - da
+  - bg
+  - fi
+  - hr
+  - sk
+  - zh
+  - hu
+  - ro
+  - et
+  - el
+  - lt
+  - lv
+  - mt
+  - sl
+  - he
+  - th
+  - nn
+tags:
+  - gguf
+  - transcribe.cpp
+  - asr
+  - speech-to-text
+  - parakeet
+  - conformer
+  - rnnt
+  - streaming
+  - cache-aware
+  - multilingual
+
+summary: |
+  Multilingual speech-to-text across 40 language-locales with punctuation and capitalization. A 0.6B-parameter cache-aware streaming FastConformer encoder with a prompt-conditioned RNN-T transducer decoder; the target language is selected per call (--language en-US, fr-FR, de-DE, ...) and an auto mode emits a <lang-XX> tag. Ships both the offline path (att_context_size=[56, 13], 1.12s, headline accuracy) and runtime-selectable chunked streaming (--stream-chunk-ms 1120 --stream-att-right {0,3,6,13}).
+
+default_quant_index: 2  # Q8_0
+
+wer:
+  source: FLEURS test en (en-US), offline att_context_size=[56, 13]
+  notes: |
+    WER measured on FLEURS test en (647 utterances), greedy RNN-T, --language en-US, whisper-normalizer scoring; the per-quant column is FLEURS en. NeMo reference baseline on the same manifest: 7.99% (NVIDIA self-reports 7.91% en-US). On LibriSpeech test-clean (2620 utterances) the same presets score F32 3.04 / F16 3.04 / Q8_0 3.05 / Q6_K 3.08 / Q5_K_M 3.10 / Q4_K_M 3.30, against a 3.03% NeMo reference.
+
+quants:
+  - name: F32
+    filename: nemotron-3.5-asr-streaming-0.6b-F32.gguf
+    size: 2.38 GB
+    wer: 7.97%
+  - name: F16
+    filename: nemotron-3.5-asr-streaming-0.6b-F16.gguf
+    size: 1.19 GB
+    wer: 7.97%
+  - name: Q8_0
+    filename: nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf
+    size: 716 MB
+    wer: 7.88%
+  - name: Q6_K
+    filename: nemotron-3.5-asr-streaming-0.6b-Q6_K.gguf
+    size: 593 MB
+    wer: 8.02%
+  - name: Q5_K_M
+    filename: nemotron-3.5-asr-streaming-0.6b-Q5_K_M.gguf
+    size: 534 MB
+    wer: 8.15%
+  - name: Q4_K_M
+    filename: nemotron-3.5-asr-streaming-0.6b-Q4_K_M.gguf
+    size: 473 MB
+    wer: 8.49%

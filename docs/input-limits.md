@@ -60,8 +60,12 @@ value at the default context; for the effective limit under a lowered
 
 Whisper slices audio into 30 s windows with prev-context stitching; parakeet's
 conformer is effectively unbounded (the encoder positional table is recomputed
-per run, not a fixed wall). These families do not need and do not have a length
-gate.
+per run, not a fixed wall). This holds for every parakeet variant, including the
+cache-aware streaming RNN-T member (`nemotron-3.5-asr-streaming-0.6b`): the
+RNN-T transducer has no decoder context window, and the cache-aware path carries
+constant-memory caches (`cache_last_channel` / `cache_last_time` + the decoder
+LSTM state) rather than a growing KV, so it is unbounded. These families do not
+need and do not have a length gate.
 
 ### 2. Hard context cap — reject up front
 

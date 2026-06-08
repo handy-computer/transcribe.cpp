@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from dataset_specs import dataset_id
 
 
@@ -11,6 +13,7 @@ def hyp_cache_paths(
     batch_size: int = 1,
     sort_by_length: bool = True,
     timestamps: str = "none",
+    language: str = "",
     stream_chunk_ms: int = 0,
 ) -> tuple[str, str]:
     """Deterministic Volume paths for the (model, dataset, subset, batch,
@@ -31,11 +34,14 @@ def hyp_cache_paths(
     # Default "none" carries no tag so it stays compatible with already-cached
     # entries; any other timestamp mode gets its own cache slot.
     ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
+    # Language override (default "" = let run.py infer from dataset). Folded
+    # in so e.g. en vs en-US do not share a cache entry.
+    lang_tag = "" if not language else f".lang-{language}"
     # Streaming (--stream-chunk-ms) produces different hyps than the offline
     # path, so it gets its own cache slot. 0 = offline (no tag, compatible).
     stream_tag = "" if stream_chunk_ms <= 0 else f".stream{stream_chunk_ms}ms"
     base = (f"/data/wer/hyps/{hyp_fp}/{slug}."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{stream_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{lang_tag}{stream_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 
@@ -46,12 +52,20 @@ def ref_hyp_cache_paths(
     batch_size: int,
     env_fp: str,
     mode: str = "offline",
+    extra_args: list | None = None,
 ) -> tuple[str, str]:
     subset_tag = "full" if n_utts is None else f"n{n_utts}"
     bs_tag = "" if batch_size <= 1 else f".b{batch_size}"
     # "offline" carries no tag (compatible with already-cached entries); any
     # other mode (e.g. "streaming") gets its own cache slot.
     mode_tag = "" if mode == "offline" else f".{mode}"
+    # Fold extra runner args into the key so e.g. --language en and
+    # --language en-US do not share a cache entry.
+    if extra_args:
+        args_tag = "." + hashlib.sha256(
+            " ".join(extra_args).encode()).hexdigest()[:8]
+    else:
+        args_tag = ""
     base = (f"/data/wer/ref-hyps/{env_fp}/{variant}-REF."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{mode_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{mode_tag}{args_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"

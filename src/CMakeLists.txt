@@ -118,6 +118,20 @@ add_library(transcribe
     arch/medasr/encoder.cpp
 )
 
+# The parakeet host decoder's matmul fallback (linear()) parallelizes its
+# large output projection across rows. Compile ONLY this TU with OpenMP so
+# the `#pragma omp parallel for` in linear() activates; libgomp is already
+# linked transitively via ggml. Scoped to one TU and numerically identical
+# (rows summed in the same order). The primary out_w path is the ggml graph
+# in joint_step; this row-parallelism covers the host fallback and the
+# remaining host-side matmuls.
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    set_source_files_properties(arch/parakeet/decoder.cpp PROPERTIES
+        COMPILE_OPTIONS "${OpenMP_CXX_FLAGS}")
+    target_link_libraries(transcribe PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
 target_include_directories(transcribe
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>

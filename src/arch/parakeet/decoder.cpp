@@ -21,6 +21,13 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
+#include "ggml-alloc.h"
+
+#include <thread>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #if TRANSCRIBE_HAS_BLAS
 #  ifdef __APPLE__
@@ -33,8 +40,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <utility>
 #include <vector>
 
@@ -124,7 +131,177 @@ bool read_tensor_to_f32(const ggml_tensor * t,
     return true;
 }
 
+// Make the joint output-projection weight + bias resident as ggml tensors on
+// the model (the immutable half). Built once at load; only ever read after
+// that, so it is safe to share across every context. The per-step compute
+// graph that consumes this is built per decode call (build_joint_graph below).
+// On any failure it frees its partial state and returns false, so the caller
+// can retry (native→fp32) or fall back to the host matmul (w_ready stays false).
+//
+// `use_native` selects the weight dtype:
+//   - true  (default): keep the source quant dtype. ggml streams the quantized
+//     bytes (~4× less weight bandwidth) and quantizes the activation on the fly
+//     — the same regime the encoder runs in, WER-validated equal to fp32 on
+//     English. This is the faster path on bandwidth-bound CPUs/iGPUs.
+//   - false (fallback): dequantize the weight to fp32 once, so ggml accumulates
+//     fp32×fp32 with no activation down-conversion. Numerically faithful to the
+//     host reference (max rel logit diff ~3e-7 vs ~3e-3 for a Q4 native weight).
+// The caller tries native first; TRANSCRIBE_JOINT_FP32=1 forces fp32.
+bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w,
+                        bool use_native) {
+    const int joint_h = j.joint_h;
+    const int joint_n = j.joint_n;
+
+    // Free any partial state so the caller can cleanly retry (e.g. native→fp32).
+    auto fail = [&]() -> bool {
+        if (j.w_buf     != nullptr) { ggml_backend_buffer_free(j.w_buf); j.w_buf = nullptr; }
+        if (j.w_ctx     != nullptr) { ggml_free(j.w_ctx);                j.w_ctx = nullptr; }
+        if (j.w_backend != nullptr) { ggml_backend_free(j.w_backend);    j.w_backend = nullptr; }
+        j.gw_w = nullptr; j.gw_b = nullptr; j.w_ready = false;
+        return false;
+    };
+
+    const ggml_type w_type = use_native ? src_out_w->type : GGML_TYPE_F32;
+
+    // A CPU backend used ONLY to allocate the resident weight buffer — never
+    // graph_compute'd (each decode call owns its own compute backend), so it
+    // carries no per-step state and is safe to keep on the shared model.
+    j.w_backend = ggml_backend_cpu_init();
+    if (j.w_backend == nullptr) {
+        std::fprintf(stderr, "parakeet decoder: ggml CPU backend init failed\n");
+        return fail();
+    }
+
+    ggml_init_params ip {};
+    ip.mem_size   = ggml_tensor_overhead() * 4;
+    ip.mem_buffer = nullptr;
+    ip.no_alloc   = true;
+    j.w_ctx = ggml_init(ip);
+    if (j.w_ctx == nullptr) return fail();
+
+    j.gw_w = ggml_new_tensor_2d(j.w_ctx, w_type, joint_h, joint_n);
+    j.gw_b = ggml_new_tensor_1d(j.w_ctx, GGML_TYPE_F32, joint_n);
+
+    j.w_buf = ggml_backend_alloc_ctx_tensors(j.w_ctx, j.w_backend);
+    if (j.w_buf == nullptr) return fail();
+
+    // Upload the weight (verbatim native dtype, or dequantized to fp32 under
+    // TRANSCRIBE_JOINT_FP32) and the fp32 bias.
+    if (w_type == src_out_w->type) {
+        const size_t nb = ggml_nbytes(src_out_w);
+        std::vector<uint8_t> tmp(nb);
+        ggml_backend_tensor_get(src_out_w, tmp.data(), 0, nb);
+        ggml_backend_tensor_set(j.gw_w, tmp.data(), 0, nb);
+    } else {
+        // fp32 graph weight from a non-fp32 source: dequantize once into fp32.
+        std::vector<float> tmp;
+        if (!read_tensor_to_f32(src_out_w, tmp)) return fail();
+        ggml_backend_tensor_set(j.gw_w, tmp.data(), 0,
+                                tmp.size() * sizeof(float));
+    }
+    ggml_backend_tensor_set(j.gw_b, j.out_b.data(), 0,
+                            static_cast<size_t>(joint_n) * sizeof(float));
+
+    j.w_ready = true;
+    return true;
+}
+
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Per-call joint compute graph
+// ---------------------------------------------------------------------------
+//
+// The MUTABLE half of the joint output projection. Built fresh on the stack in
+// each decode call (cheap: it allocates only the [joint_h] activation input,
+// the matmul node, and the [joint_n] logits output — the weight is the shared
+// resident HostJoint::gw_w/gw_b, not re-uploaded), and torn down at function
+// exit. Because every concurrent decode owns its own JointGraph (its own
+// compute backend + I/O tensors), decode on contexts sharing one model is
+// reentrant — nothing per-step is shared.
+namespace {
+
+struct JointGraph {
+    ggml_context *        ctx     = nullptr;
+    ggml_backend_t        backend = nullptr;
+    ggml_backend_buffer_t buf     = nullptr;
+    ggml_cgraph *         graph   = nullptr;
+    ggml_tensor *         act     = nullptr; // [joint_h] fp32 input
+    ggml_tensor *         logits  = nullptr; // [joint_n] fp32 output
+    bool                  ready   = false;
+
+    JointGraph() = default;
+    ~JointGraph() {
+        if (buf     != nullptr) ggml_backend_buffer_free(buf);
+        if (ctx     != nullptr) ggml_free(ctx);
+        if (backend != nullptr) ggml_backend_free(backend);
+    }
+    JointGraph(const JointGraph &)             = delete;
+    JointGraph & operator=(const JointGraph &) = delete;
+};
+
+// Build a per-call compute graph around the model-resident weight j.gw_w/gw_b.
+// Returns false (and leaves g.ready == false) if the weight is absent or any
+// ggml step fails; the caller then uses the host matmul fallback. n_threads is
+// the resolved (>0) decode thread count.
+bool build_joint_graph(JointGraph & g, const HostJoint & j, int n_threads) {
+    if (!j.w_ready || j.gw_w == nullptr || j.gw_b == nullptr) return false;
+
+    auto fail = [&]() -> bool {
+        if (g.buf     != nullptr) { ggml_backend_buffer_free(g.buf); g.buf = nullptr; }
+        if (g.ctx     != nullptr) { ggml_free(g.ctx);                g.ctx = nullptr; }
+        if (g.backend != nullptr) { ggml_backend_free(g.backend);    g.backend = nullptr; }
+        g.act = nullptr; g.logits = nullptr; g.graph = nullptr; g.ready = false;
+        return false;
+    };
+
+    g.backend = ggml_backend_cpu_init();
+    if (g.backend == nullptr) return fail();
+    ggml_backend_cpu_set_n_threads(g.backend, std::max(1, n_threads));
+
+    ggml_init_params ip {};
+    ip.mem_size   = ggml_tensor_overhead() * 8 + ggml_graph_overhead();
+    ip.mem_buffer = nullptr;
+    ip.no_alloc   = true;
+    g.ctx = ggml_init(ip);
+    if (g.ctx == nullptr) return fail();
+
+    g.act = ggml_new_tensor_1d(g.ctx, GGML_TYPE_F32, j.joint_h);
+    ggml_set_input(g.act);
+    // References the shared resident weight (in j.w_ctx) — ggml stores the
+    // pointer; the CPU backend reads its bytes directly at compute time.
+    ggml_tensor * mm = ggml_mul_mat(g.ctx, j.gw_w, g.act); // [joint_n, 1]
+    g.logits = ggml_add(g.ctx, mm, j.gw_b);                // [joint_n, 1]
+    ggml_set_output(g.logits);
+
+    // Allocates only the tensors created in g.ctx (act + op results); the
+    // shared weight/bias live in another ctx and are already resident.
+    g.buf = ggml_backend_alloc_ctx_tensors(g.ctx, g.backend);
+    if (g.buf == nullptr) return fail();
+
+    g.graph = ggml_new_graph(g.ctx);
+    ggml_build_forward_expand(g.graph, g.logits);
+    g.ready = true;
+    return true;
+}
+
+} // namespace
+
+HostJoint::~HostJoint() {
+    if (w_buf     != nullptr) ggml_backend_buffer_free(w_buf);
+    if (w_ctx     != nullptr) ggml_free(w_ctx);
+    if (w_backend != nullptr) ggml_backend_free(w_backend);
+}
+
+// Resolve a decode thread count: n_threads <= 0 means "auto" → min(8, cores),
+// matching the encoder default. Threaded through to the joint compute backend
+// and linear()'s OpenMP loop per decode call; no process-global state is set,
+// so concurrent decodes on one model do not stomp each other.
+static int resolve_decode_threads(int n_threads) {
+    return n_threads > 0
+        ? n_threads
+        : std::min(8, std::max(1, static_cast<int>(std::thread::hardware_concurrency())));
+}
 
 transcribe_status build_host_decoder_weights(const ParakeetModel & model,
                                              HostDecoderWeights &  out)
@@ -243,6 +420,38 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
     if (!read_tensor_to_f32(w.joint.out_w,  out.joint.out_w))  return TRANSCRIBE_ERR_GGUF;
     if (!read_tensor_to_f32(w.joint.out_b,  out.joint.out_b))  return TRANSCRIBE_ERR_GGUF;
 
+    // Make the dominant out_w projection weight resident as a ggml tensor.
+    // Default to the native-quant weight (faster, WER-validated); fall back to
+    // the fp32-dequant weight on failure, then to the host matmul (w_ready stays
+    // false) if even that fails. TRANSCRIBE_JOINT_FP32=1 forces the fp32 path.
+    if (w.joint.out_w != nullptr) {
+        const int ne0 = static_cast<int>(w.joint.out_w->ne[0]);
+        const int ne1 = static_cast<int>(w.joint.out_w->ne[1]);
+        if (ne0 != out.joint.joint_h || ne1 != out.joint.joint_n) {
+            std::fprintf(stderr,
+                "parakeet decoder: out_w ne [%d,%d] != [joint_h=%d, joint_n=%d]; "
+                "using host matmul\n",
+                ne0, ne1, out.joint.joint_h, out.joint.joint_n);
+        } else {
+            const bool force_fp32 = std::getenv("TRANSCRIBE_JOINT_FP32") != nullptr;
+            bool ok = false;
+            if (!force_fp32) {
+                ok = build_joint_weight(out.joint, w.joint.out_w, /*use_native=*/true);
+                if (!ok) {
+                    std::fprintf(stderr,
+                        "parakeet decoder: native joint weight failed; retrying fp32\n");
+                }
+            }
+            if (!ok) {
+                ok = build_joint_weight(out.joint, w.joint.out_w, /*use_native=*/false);
+            }
+            if (!ok) {
+                std::fprintf(stderr,
+                    "parakeet decoder: joint ggml weight build failed; using host matmul\n");
+            }
+        }
+    }
+
     // ----- TDT params -----
     out.tdt_durations   = hp.tdt_durations;
     out.tdt_max_symbols = hp.tdt_max_symbols;
@@ -289,9 +498,11 @@ inline void linear(const float * W,
                    const float * b,
                    int           out_dim,
                    int           in_dim,
-                   float *       y)
+                   float *       y,
+                   int           n_threads)
 {
 #if TRANSCRIBE_HAS_BLAS
+    (void) n_threads; // BLAS manages its own threads
     // y = 1.0 * W @ x + 0.0 * y
     cblas_sgemv(CblasRowMajor, CblasNoTrans,
                 out_dim, in_dim,
@@ -305,6 +516,18 @@ inline void linear(const float * W,
 #endif
     }
 #else
+    // Rows are independent, so larger projections parallelize cleanly across
+    // cores. Gate on out_dim (>= 2048) to thread the LSTM gate matmuls
+    // (4*640 = 2560) and the CTC head, while the tiny 640-wide enc/pred
+    // projections stay serial and don't pay OpenMP fork/join overhead. The
+    // thread count is passed in per decode (resolved min(8, cores) default) via
+    // a num_threads clause — no process-global omp_set_num_threads, so
+    // concurrent decodes don't stomp each other. The joint out_w projection
+    // runs in its own ggml graph, not here.
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if(out_dim >= 2048) \
+        num_threads(n_threads > 0 ? n_threads : 1)
+#endif
     for (int r = 0; r < out_dim; ++r) {
         const float * row = W + static_cast<size_t>(r) * static_cast<size_t>(in_dim);
         float acc = 0.0f;
@@ -357,7 +580,8 @@ void lstm_step(const HostLstmLayer & layer,
                std::vector<float> &  scratch_gates,
                std::vector<float> &  scratch_hh,
                float *               new_h,
-               float *               new_c)
+               float *               new_c,
+               int                   n_threads)
 {
     const int four_H = 4 * H;
     if (static_cast<int>(scratch_gates.size()) < four_H) {
@@ -368,9 +592,9 @@ void lstm_step(const HostLstmLayer & layer,
     }
 
     // gates = Wx @ x + b
-    linear(layer.Wx.data(), x, layer.b.data(), four_H, H, scratch_gates.data());
+    linear(layer.Wx.data(), x, layer.b.data(), four_H, H, scratch_gates.data(), n_threads);
     // gates += Wh @ prev_h
-    linear(layer.Wh.data(), prev_h, nullptr, four_H, H, scratch_hh.data());
+    linear(layer.Wh.data(), prev_h, nullptr, four_H, H, scratch_hh.data(), n_threads);
     for (int i = 0; i < four_H; ++i) {
         scratch_gates[i] += scratch_hh[i];
     }
@@ -412,7 +636,8 @@ const float * predictor_step(const HostPredictor & predictor,
                              LstmState &           new_state,
                              std::vector<float> &  scratch_x,
                              std::vector<float> &  scratch_gates,
-                             std::vector<float> &  scratch_hh)
+                             std::vector<float> &  scratch_hh,
+                             int                   n_threads)
 {
     const int H = predictor.pred_hidden;
     if (static_cast<int>(scratch_x.size()) < H) {
@@ -443,7 +668,8 @@ const float * predictor_step(const HostPredictor & predictor,
                   scratch_gates,
                   scratch_hh,
                   new_state.h[layer].data(),
-                  new_state.c[layer].data());
+                  new_state.c[layer].data(),
+                  n_threads);
         layer_input = new_state.h[layer].data();
     }
 
@@ -466,6 +692,8 @@ const float * predictor_step(const HostPredictor & predictor,
 // allow-list guarantees we'll see exactly one of those at run
 // time. Parakeet 0.6B v2/v3 ship "relu".
 void joint_step(const HostJoint &     j,
+                const JointGraph &    g,
+                int                   n_threads,
                 const float *         enc_proj,
                 const float *         pred_state,
                 std::vector<float> &  scratch_pred_proj,
@@ -477,7 +705,7 @@ void joint_step(const HostJoint &     j,
     if (static_cast<int>(out_logits.size())        < j.joint_n) out_logits.resize(static_cast<size_t>(j.joint_n));
 
     linear(j.pred_w.data(), pred_state, j.pred_b.data(), j.joint_h, j.pred_hidden,
-           scratch_pred_proj.data());
+           scratch_pred_proj.data(), n_threads);
 
     for (int i = 0; i < j.joint_h; ++i) {
         scratch_summed[i] = enc_proj[i] + scratch_pred_proj[i];
@@ -497,8 +725,18 @@ void joint_step(const HostJoint &     j,
         }
     }
 
-    linear(j.out_w.data(), scratch_summed.data(), j.out_b.data(),
-           j.joint_n, j.joint_h, out_logits.data());
+    // Output projection: per-call ggml graph (native/fp32 weight, threaded
+    // matmul, bias folded into the graph) when available, else the host matmul.
+    if (g.ready) {
+        ggml_backend_tensor_set(g.act, scratch_summed.data(), 0,
+                                static_cast<size_t>(j.joint_h) * sizeof(float));
+        ggml_backend_graph_compute(g.backend, g.graph);
+        ggml_backend_tensor_get(g.logits, out_logits.data(), 0,
+                                static_cast<size_t>(j.joint_n) * sizeof(float));
+    } else {
+        linear(j.out_w.data(), scratch_summed.data(), j.out_b.data(),
+               j.joint_n, j.joint_h, out_logits.data(), n_threads);
+    }
 
     // Apply log_softmax over the full joint output (vocab+blank+durations
     // for TDT, vocab+blank for RNNT) to match NeMo's CPU-inference
@@ -532,6 +770,45 @@ void joint_step(const HostJoint &     j,
         const float log_sum = static_cast<float>(std::log(sum)) + max_v;
         for (int i = 0; i < j.joint_n; ++i) {
             out_logits[i] -= log_sum;
+        }
+    }
+}
+
+// Precompute the joint encoder projection for `T` frames into `out`
+// (row-major [T, joint_h]): out[t] = enc_w @ enc_out[t] + enc_b. The
+// projection is decode-state-independent, so batching it into one sgemm (or T
+// sgemv calls without BLAS) before the greedy loop eliminates redundant
+// per-iteration work and gives BLAS a large matrix. Shared by the TDT, RNN-T,
+// and streaming RNN-T drivers.
+void precompute_enc_proj(const HostJoint &    j,
+                         const float *        enc_out,
+                         int                  T,
+                         int                  d_enc,
+                         std::vector<float> & out,
+                         int                  n_threads)
+{
+    const int joint_h = j.joint_h;
+    out.resize(static_cast<size_t>(T) * static_cast<size_t>(joint_h));
+#if TRANSCRIBE_HAS_BLAS
+    (void) n_threads;
+    // C[T, joint_h] = enc_out[T, d_enc] @ enc_w^T[d_enc, joint_h]
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                T, joint_h, d_enc,
+                1.0f, enc_out, d_enc,
+                j.enc_w.data(), d_enc,
+                0.0f, out.data(), joint_h);
+#else
+    for (int t = 0; t < T; ++t) {
+        const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
+        float * proj = out.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        linear(j.enc_w.data(), frame, nullptr, joint_h, d_enc, proj, n_threads);
+    }
+#endif
+    // Add bias to every row.
+    for (int t = 0; t < T; ++t) {
+        float * proj = out.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        for (int k = 0; k < joint_h; ++k) {
+            proj[k] += j.enc_b[static_cast<size_t>(k)];
         }
     }
 }
@@ -606,6 +883,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
                                     const float *              enc_out,
                                     int                        T_enc,
                                     int                        d_enc,
+                                    int                        n_threads,
                                     std::vector<TdtToken> &    out_tokens)
 {
     if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
@@ -618,11 +896,18 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    const int nt           = resolve_decode_threads(n_threads);
     const int n_layers     = static_cast<int>(w.predictor.lstm.size());
     const int H            = w.predictor.pred_hidden;
     const int n_token_cls  = w.predictor.pred_vocab; // == vocab_size + 1
     const int n_dur        = static_cast<int>(w.tdt_durations.size());
     const int blank_id     = w.blank_id;
+
+    // Per-call joint compute graph around the shared resident weight. Owns its
+    // own backend + I/O tensors, so concurrent decodes don't share mutable
+    // state. Falls back to the host matmul if the graph isn't available.
+    JointGraph jg;
+    build_joint_graph(jg, w.joint, nt);
 
     // Two LSTM states, both pre-sized: `state` is the committed
     // state we read from each iteration; `next_state` is where the
@@ -634,37 +919,12 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     state.reset(n_layers, H);
     next_state.reset(n_layers, H);
 
-    // Precompute encoder projections for all T_enc frames. The joint
-    // network's enc_w @ enc_frame + enc_b is independent of decode
-    // state, so batching it into one sgemm (or T_enc sgemv calls
-    // without BLAS) eliminates redundant per-iteration projections
-    // and gives BLAS a much larger matrix to work with.
+    // Precompute encoder projections for all T_enc frames (decode-state
+    // independent; one sgemm before the loop). See precompute_enc_proj.
     const int joint_h = w.joint.joint_h;
-    std::vector<float> enc_proj_all(
-        static_cast<size_t>(T_enc) * static_cast<size_t>(joint_h));
-
+    std::vector<float> enc_proj_all;
     const int64_t t_enc_proj_start = ggml_time_us();
-#if TRANSCRIBE_HAS_BLAS
-    // C[T_enc, joint_h] = enc_out[T_enc, d_enc] @ enc_w^T[d_enc, joint_h]
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                T_enc, joint_h, d_enc,
-                1.0f, enc_out, d_enc,
-                w.joint.enc_w.data(), d_enc,
-                0.0f, enc_proj_all.data(), joint_h);
-#else
-    for (int t = 0; t < T_enc; ++t) {
-        const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
-        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
-        linear(w.joint.enc_w.data(), frame, nullptr, joint_h, d_enc, proj);
-    }
-#endif
-    // Add bias to every row.
-    for (int t = 0; t < T_enc; ++t) {
-        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
-        for (int j = 0; j < joint_h; ++j) {
-            proj[j] += w.joint.enc_b[static_cast<size_t>(j)];
-        }
-    }
+    precompute_enc_proj(w.joint, enc_out, T_enc, d_enc, enc_proj_all, nt);
     const int64_t t_enc_proj_us = ggml_time_us() - t_enc_proj_start;
 
     // Per-call scratch reused across every decode step.
@@ -710,7 +970,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         if (predictor_dirty) {
             decoder_out = predictor_step(
                 w.predictor, last_token, state, next_state,
-                scratch_x, scratch_gates, scratch_hh);
+                scratch_x, scratch_gates, scratch_hh, nt);
             predictor_dirty = false;
         } else {
             decoder_out = next_state.h.back().data();
@@ -720,7 +980,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         // ----- Joint (using precomputed encoder projection) -----
         const float * enc_proj =
             enc_proj_all.data() + static_cast<size_t>(step) * static_cast<size_t>(joint_h);
-        joint_step(w.joint, enc_proj, decoder_out,
+        joint_step(w.joint, jg, nt, enc_proj, decoder_out,
                    scratch_pred_proj, scratch_summed,
                    logits);
         const int64_t t2 = ggml_time_us();
@@ -867,6 +1127,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
                                      const float *              enc_out,
                                      int                        T_enc,
                                      int                        d_enc,
+                                     int                        n_threads,
                                      std::vector<TdtToken> &    out_tokens)
 {
     if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
@@ -879,10 +1140,15 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    const int nt           = resolve_decode_threads(n_threads);
     const int n_layers     = static_cast<int>(w.predictor.lstm.size());
     const int H            = w.predictor.pred_hidden;
     const int n_token_cls  = w.predictor.pred_vocab; // == vocab + 1
     const int blank_id     = w.blank_id;
+
+    // Per-call joint compute graph (see decode_tdt_greedy).
+    JointGraph jg;
+    build_joint_graph(jg, w.joint, nt);
 
     LstmState state;
     LstmState next_state;
@@ -891,29 +1157,9 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 
     // Precompute encoder projections for all T_enc frames (same as TDT).
     const int joint_h = w.joint.joint_h;
-    std::vector<float> enc_proj_all(
-        static_cast<size_t>(T_enc) * static_cast<size_t>(joint_h));
-
+    std::vector<float> enc_proj_all;
     const int64_t t_enc_proj_start = ggml_time_us();
-#if TRANSCRIBE_HAS_BLAS
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                T_enc, joint_h, d_enc,
-                1.0f, enc_out, d_enc,
-                w.joint.enc_w.data(), d_enc,
-                0.0f, enc_proj_all.data(), joint_h);
-#else
-    for (int t = 0; t < T_enc; ++t) {
-        const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
-        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
-        linear(w.joint.enc_w.data(), frame, nullptr, joint_h, d_enc, proj);
-    }
-#endif
-    for (int t = 0; t < T_enc; ++t) {
-        float * proj = enc_proj_all.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
-        for (int j = 0; j < joint_h; ++j) {
-            proj[j] += w.joint.enc_b[static_cast<size_t>(j)];
-        }
-    }
+    precompute_enc_proj(w.joint, enc_out, T_enc, d_enc, enc_proj_all, nt);
     const int64_t t_enc_proj_us = ggml_time_us() - t_enc_proj_start;
 
     std::vector<float> scratch_x;
@@ -950,7 +1196,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
         if (predictor_dirty) {
             decoder_out = predictor_step(
                 w.predictor, last_token, state, next_state,
-                scratch_x, scratch_gates, scratch_hh);
+                scratch_x, scratch_gates, scratch_hh, nt);
             predictor_dirty = false;
         } else {
             decoder_out = next_state.h.back().data();
@@ -959,7 +1205,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 
         const float * enc_proj =
             enc_proj_all.data() + static_cast<size_t>(step) * static_cast<size_t>(joint_h);
-        joint_step(w.joint, enc_proj, decoder_out,
+        joint_step(w.joint, jg, nt, enc_proj, decoder_out,
                    scratch_pred_proj, scratch_summed,
                    logits);
         const int64_t t2 = ggml_time_us();
@@ -1057,6 +1303,7 @@ transcribe_status decode_rnnt_greedy_streaming(
     LstmState &                state_io,
     int &                      last_token_io,
     int                        frame_offset,
+    int                        n_threads,
     std::vector<TdtToken> &    out_tokens)
 {
     if (enc_out == nullptr || T_enc_new <= 0 || d_enc <= 0) {
@@ -1084,10 +1331,15 @@ transcribe_status decode_rnnt_greedy_streaming(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    const int nt           = resolve_decode_threads(n_threads);
     const int n_layers     = static_cast<int>(w.predictor.lstm.size());
     const int H            = w.predictor.pred_hidden;
     const int n_token_cls  = w.predictor.pred_vocab;
     const int blank_id     = w.blank_id;
+
+    // Per-call joint compute graph (see decode_tdt_greedy).
+    JointGraph jg;
+    build_joint_graph(jg, w.joint, nt);
 
     // Validate state_io shape; reset if degenerate (paranoid guard).
     if (static_cast<int>(state_io.h.size()) != n_layers ||
@@ -1108,31 +1360,8 @@ transcribe_status decode_rnnt_greedy_streaming(
 
     // Precompute encoder projections for this chunk only.
     const int joint_h = w.joint.joint_h;
-    std::vector<float> enc_proj_all(
-        static_cast<size_t>(T_enc_new) * static_cast<size_t>(joint_h));
-
-#if TRANSCRIBE_HAS_BLAS
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                T_enc_new, joint_h, d_enc,
-                1.0f, enc_out, d_enc,
-                w.joint.enc_w.data(), d_enc,
-                0.0f, enc_proj_all.data(), joint_h);
-#else
-    for (int t = 0; t < T_enc_new; ++t) {
-        const float * frame = enc_out +
-            static_cast<size_t>(t) * static_cast<size_t>(d_enc);
-        float * proj = enc_proj_all.data() +
-            static_cast<size_t>(t) * static_cast<size_t>(joint_h);
-        linear(w.joint.enc_w.data(), frame, nullptr, joint_h, d_enc, proj);
-    }
-#endif
-    for (int t = 0; t < T_enc_new; ++t) {
-        float * proj = enc_proj_all.data() +
-            static_cast<size_t>(t) * static_cast<size_t>(joint_h);
-        for (int j = 0; j < joint_h; ++j) {
-            proj[j] += w.joint.enc_b[static_cast<size_t>(j)];
-        }
-    }
+    std::vector<float> enc_proj_all;
+    precompute_enc_proj(w.joint, enc_out, T_enc_new, d_enc, enc_proj_all, nt);
 
     // Working state. We mutate `state` and `next_state`; on return we
     // copy `state` (the COMMITTED state after the last non-blank
@@ -1166,7 +1395,7 @@ transcribe_status decode_rnnt_greedy_streaming(
         if (predictor_dirty) {
             decoder_out = predictor_step(
                 w.predictor, last_token, state, next_state,
-                scratch_x, scratch_gates, scratch_hh);
+                scratch_x, scratch_gates, scratch_hh, nt);
             predictor_dirty = false;
         } else {
             decoder_out = next_state.h.back().data();
@@ -1174,7 +1403,7 @@ transcribe_status decode_rnnt_greedy_streaming(
 
         const float * enc_proj = enc_proj_all.data() +
             static_cast<size_t>(step) * static_cast<size_t>(joint_h);
-        joint_step(w.joint, enc_proj, decoder_out,
+        joint_step(w.joint, jg, nt, enc_proj, decoder_out,
                    scratch_pred_proj, scratch_summed, logits);
 
         const float * token_logits = logits.data();
@@ -1237,6 +1466,7 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
                                     const float *              enc_out,
                                     int                        T_enc,
                                     int                        d_enc,
+                                    int                        n_threads,
                                     std::vector<TdtToken> &    out_tokens)
 {
     if (enc_out == nullptr || T_enc <= 0 || d_enc <= 0) {
@@ -1249,6 +1479,7 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    const int nt        = resolve_decode_threads(n_threads);
     const int n_classes = w.ctc_head.n_classes;
     const int blank_id  = w.ctc_head.blank_id;
 
@@ -1267,7 +1498,7 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
     for (int t = 0; t < T_enc; ++t) {
         const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
         float * row = logits_all.data() + static_cast<size_t>(t) * static_cast<size_t>(n_classes);
-        linear(w.ctc_head.weight.data(), frame, nullptr, n_classes, d_enc, row);
+        linear(w.ctc_head.weight.data(), frame, nullptr, n_classes, d_enc, row, nt);
     }
 #endif
     for (int t = 0; t < T_enc; ++t) {

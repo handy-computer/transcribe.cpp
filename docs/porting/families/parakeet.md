@@ -28,6 +28,10 @@ CI-overlap grounds; see the family WER summary for rationale.
   - **RNN-T (encoder-transducer, no duration head)**: `rnnt-1.1b`,
     `rnnt-0.6b`, `unified-en-0.6b`
   - **CTC (encoder-ctc)**: `ctc-1.1b`, `ctc-0.6b`
+  - **Cache-aware streaming RNN-T (encoder-transducer)**:
+    `nemotron-speech-streaming-en-0.6b` (English-only),
+    `nemotron-3.5-asr-streaming-0.6b` (multilingual, 40 locales,
+    language one-hot conditioning) — intake only, Stages 2-8 TODO
 
 Per-variant intake JSON: `reports/porting/parakeet/<variant>/intake.json`.
 
@@ -132,6 +136,14 @@ Allowed statuses: `PASS` | `SKIP — not exposed by runtime` |
 | nemotron-speech-streaming-en-0.6b | Punctuation/casing | output | same as above | output contains capital letters and `,.?!` | PASS |
 | nemotron-speech-streaming-en-0.6b | Streaming (cache reuse across chunks) | streaming | `build/bin/transcribe-cli -m models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b-F32.gguf --language en --backend cpu --threads 1 --stream-chunk-ms 1120 --stream-att-right 13 samples/jfk.wav` | byte-equal transcript vs one-shot at the default `att_context_size=[70,13]` (1.12s chunk) | PASS |
 | nemotron-speech-streaming-en-0.6b | Other latency settings ([70,0]/[70,1]/[70,6]/[70,13]) | runtime-selectable att_context_size | `… --stream-chunk-ms 1120 --stream-att-right {0,1,6,13} …` (R selects the right-context from the training menu) | all four R settings stream a valid transcript; R=6/13 byte-equal to one-shot, R=0/1 differ only in trailing punctuation (lower lookahead) | PASS |
+| nemotron-3.5-asr-streaming-0.6b | Transcribe (offline / cache-aware att_context_size=[56,13], 1.12s chunk) | explicit en-US | `build/bin/transcribe-cli -m models/nemotron-3.5-asr-streaming-0.6b/nemotron-3.5-asr-streaming-0.6b-F32.gguf --language en-US samples/jfk.wav` | English transcript with PnC | PASS |
+| nemotron-3.5-asr-streaming-0.6b | Transcribe (offline) — non-English explicit language | explicit es-US | `build/bin/transcribe-cli -m <gguf> --language es-US samples/wer/fleurs-es/<es-clip>.wav` | Spanish transcript with PnC matching reference | PASS |
+| nemotron-3.5-asr-streaming-0.6b | Auto language detection (`target_lang=auto`) | auto | `build/bin/transcribe-cli -m <gguf> samples/jfk.wav` (no `--language`; empty hint → prompt.auto_id) | transcript followed by a `<lang-XX>` tag emitted by the model (e.g. `<en-US>` for jfk.wav) | PASS |
+| nemotron-3.5-asr-streaming-0.6b | Punctuation/casing | output | same as the explicit-en-US row | output contains capital letters and `,.?!` | PASS |
+| nemotron-3.5-asr-streaming-0.6b | Streaming (cache reuse across chunks) | streaming | `build/bin/transcribe-cli -m <gguf> --language en-US --backend cpu --threads 1 --stream-chunk-ms 1120 --stream-att-right 13 samples/jfk.wav` | byte-equal transcript vs one-shot at the default `att_context_size=[56,13]` (1.12s chunk) | PASS |
+| nemotron-3.5-asr-streaming-0.6b | Other latency settings ([56,0]/[56,3]/[56,6]/[56,13]) | runtime-selectable att_context_size | `… --stream-chunk-ms 1120 --stream-att-right {0,3,6,13} …` (R selects the right-context from the training menu; 4 settings on this checkpoint — `.nemo` ships `[[56,3],[56,0],[56,6],[56,13]]`, R=1 was a doc guess that does NOT exist on this checkpoint) | all four R settings stream a valid transcript; R=13 byte-equal to one-shot; R=0/3/6 differ from one-shot in word/sentence boundary placement (each lower-R chunk decoder commits earlier and adds an extra `<en-US>` tag mid-utterance) | PASS |
+| nemotron-3.5-asr-streaming-0.6b | Word timestamps | only if exposed | `transcribe-cli --timestamps word --language en-US -m <gguf> samples/jfk.wav` | per-word `t0_ms`/`t1_ms` via the family-wide RNN-T emit-frame derivation | PASS |
+| nemotron-3.5-asr-streaming-0.6b | Batch (offline) | run_batch fast path | `uv run scripts/batch_parity.py --model <gguf> --list <list.txt> --batch-sizes 2,4,8 --backend cpu --language en-US` + `uv run scripts/batch_tensor_parity.py --model <gguf> --wav samples/jfk.wav --batch 4 --backend cpu` | text byte-equal vs serial at sizes 2/4/8 (golden frozen at `tests/golden/batch/nemotron-3.5-asr-streaming-0.6b.cpu.json`); CPU tensor parity bit-exact (max_abs=0.0) at batch=4 on jfk.wav | PASS |
 | ctc-1.1b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-1.1b/parakeet-ctc-1.1b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
 | ctc-0.6b | Transcribe (CTC head) | explicit en | `build/bin/transcribe-cli -m models/parakeet-ctc-0.6b/parakeet-ctc-0.6b-F32.gguf --language en samples/jfk.wav` | English transcript | PASS |
 | all variants | Word timestamps | only if exposed | `transcribe-cli --timestamps word -m <gguf> <wav>` (any variant) | per-word `t0_ms`/`t1_ms` in JSON output | PASS — derived host-side from emit-frame indices (TDT/RNNT) or per-frame argmax (CTC); same code path as the existing v2/v3 word-timestamp gate, no per-variant differences |
@@ -410,3 +422,65 @@ published 2.32% LibriSpeech test-clean WER at `att_context_size=[70,13]`
   within ±0.02; Q5_K_M / Q4_K_M drift to 2.34% / 2.38% (still within
   the bootstrap CI overlap with F32 but flagged per the Stage 7
   "> ref + 0.01" rule).
+
+### `nemotron-3.5-asr-streaming-0.6b`
+
+The multilingual successor to `nemotron-speech-streaming-en-0.6b`. Same
+cache-aware streaming FastConformer geometry (24L / d_model=1024 /
+n_mels=128 / subsampling=8 / RNN-T head), so the chunked_limited
+attention mask, causal `CausalConv2D` subsampling, `conv_norm_type=
+layer_norm`, and `fe_normalize="none"` notes above all carry over
+unchanged. The deltas this variant adds:
+
+- **Prompt-conditioned RNN-T (`EncDecRNNTBPEModelWithPrompt`)** — the
+  single biggest difference from the predecessor. The NeMo class carries
+  a `target_lang` prompt with `num_prompts=128` and a built-in
+  `prompt_dictionary` mapping locale strings (and aliases like `en` →
+  `en-US`, `enGB` → `en-GB`) to a prompt index. At inference the resolved
+  index becomes a 128-d one-hot, broadcast over time and concatenated to
+  the 1024-d encoder output (`in_dim = 1024 + 128 = 1152`), then projected
+  by a 2-layer MLP back to d_model before the RNN-T joint
+  (`prompt.mlp.0` input linear → activation → `prompt.mlp.2` output
+  linear). The converter emits the MLP weights plus three GGUF KVs the
+  loader requires when prompts are present:
+  `stt.parakeet.prompt.num_prompts`, the `stt.parakeet.prompt.dictionary`
+  locale→index map, and `stt.parakeet.prompt.auto_id` (the index used for
+  `target_lang=auto`). A target language **must** be resolved per call —
+  there is no implicit default; a silent zero-prompt fallback would
+  transcribe non-English audio as nonsense while still looking plausible
+  on English `jfk.wav` (textbook structural-cfg failure mode), so the
+  loader hard-errors on an unsupported tag instead.
+
+- **13087-token SPM vocab with 39 explicit `<lang-XX>` tokens** — vs the
+  predecessor's 1024. The auto-language tag (`<en-US>`, `<de-DE>`,
+  `<zh-CN>`, …) is a real SPM token emitted by the model in
+  `target_lang=auto` mode, not runtime-injected text; word-boundary
+  aggregation skips these tag tokens. The RNN-T joint output dim tracks
+  the full 13087 vocab.
+
+- **Aux CTC head dropped at conversion** — the checkpoint is a hybrid
+  RNNT+CTC model (`ctc_loss_weight=0.1`, a regularization weight, not a
+  runtime selector). Per family Open-Decision #1 (the `tdt_ctc`
+  precedent) the converter ships only the RNN-T head; the aux CTC weights
+  are training scaffolding, so CTC-argmax timestamps are not available.
+
+- **`att_context_size` left context is 56 frames (4480 ms)** vs the
+  predecessor's 70. The `.nemo` ships four trained settings —
+  `[[56,3],[56,0],[56,6],[56,13]]` (320 / 80 / 560 / 1120 ms chunks). The
+  runtime selector exposes all four via `--stream-att-right {0,3,6,13}`
+  with `--stream-chunk-ms 1120`; R=1 (160 ms) appears on the model card
+  but is NOT in the trained set, so it is deliberately not exposed.
+  Offline transcribe defaults to `[56,13]` and is byte-equal to streaming
+  R=13.
+
+- **License: OpenMDW-1.1** (the predecessor was "NVIDIA Open Model
+  License"); the Stage 8 HF card YAML carries the updated string.
+
+- **WER reproducibility** — Stage 7 sweep (offline `[56,13]`,
+  `--language en-US`, Modal L4 CUDA) hits the measured-Oracle gate on both
+  the intake acceptance set and the supplementary LibriSpeech set. FLEURS
+  test en: F32 C++ **7.97%** vs NeMo Oracle 7.99% (gate ≤ 8.00, PASS).
+  LibriSpeech test-clean: F32 C++ **3.04%** vs Oracle 3.03% (gate ≤ 3.04,
+  PASS, at ceiling). F16/Q8_0/Q6_K/Q5_K_M sit inside the REF 95% CI on
+  both sets; Q4_K_M is the outlier (FLEURS 8.49%, LS 3.30%). All quants
+  user-accepted. See `reports/wer/nemotron-3.5-asr-streaming-0.6b.*.summary.md`.
