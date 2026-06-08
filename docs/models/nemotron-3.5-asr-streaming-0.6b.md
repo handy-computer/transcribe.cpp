@@ -35,6 +35,18 @@ Licensed under [OpenMDW-1.1](https://huggingface.co/nvidia/nemotron-3.5-asr-stre
 Ported from upstream commit
 [`24b151a`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/commit/24b151a851dd15909e1fc611b11bb2da52b9fc81).
 
+## Input limits
+
+No practical per-call length limit (`transcribe_capabilities.max_audio_ms == 0`):
+the FastConformer encoder's positional encoding is recomputed per call and the
+RNN-T transducer has no decoder context window, so audio of any length is
+processed in a single pass — pass arbitrarily long recordings. `n_ctx` is a
+no-op for this model — there is no context/KV ceiling to lower. The cache-aware
+streaming design (offline-only in this port; streaming bring-up follows the
+predecessor) carries constant-memory caches rather than a growing KV, so it
+stays unbounded for the same reason. See the
+[input-length contract](../input-limits.md).
+
 ## Download
 
 | Quantization | Download | Size |

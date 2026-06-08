@@ -33,19 +33,6 @@ Ported from upstream commit
 [`ef3bf40`](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b/commit/ef3bf40c90df5cd2de55cc07e06681e03d8e6ee4),
 pinned 2026-05-11.
 
-## Input limits
-
-No practical per-call length limit (`transcribe_capabilities.max_audio_ms == 0`):
-the FastConformer encoder's positional encoding is recomputed per call and the
-RNN-T transducer has no decoder context window, so audio of any length is
-processed without a hard cap — pass arbitrarily long recordings. Cache-aware
-streaming carries constant-memory caches (`cache_last_channel` /
-`cache_last_time` plus the RNN-T decoder's LSTM state) across chunks rather than
-a growing KV, so the streaming path is unbounded for the same reason and never
-reaches the streaming-truncation case. `n_ctx` is a no-op for this model — there
-is no context/KV ceiling to lower. See the
-[input-length contract](../input-limits.md).
-
 ## Download
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean, offline) |

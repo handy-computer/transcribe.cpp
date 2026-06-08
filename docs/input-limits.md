@@ -61,11 +61,11 @@ value at the default context; for the effective limit under a lowered
 Whisper slices audio into 30 s windows with prev-context stitching; parakeet's
 conformer is effectively unbounded (the encoder positional table is recomputed
 per run, not a fixed wall). This holds for every parakeet variant, including the
-cache-aware streaming RNN-T member (`nemotron-speech-streaming-en-0.6b`): the
-RNN-T transducer has no decoder context window, and streaming carries
+cache-aware streaming RNN-T member (`nemotron-3.5-asr-streaming-0.6b`): the
+RNN-T transducer has no decoder context window, and the cache-aware path carries
 constant-memory caches (`cache_last_channel` / `cache_last_time` + the decoder
-LSTM state) rather than a growing KV, so it is unbounded in both offline and
-streaming modes. These families do not need and do not have a length gate.
+LSTM state) rather than a growing KV, so it is unbounded. These families do not
+need and do not have a length gate.
 
 ### 2. Hard context cap — reject up front
 
@@ -189,11 +189,6 @@ returns `TRANSCRIBE_OK`; the truncation is surfaced through
 forcing a stream into a failed terminal state on truncation would discard the
 committed text the caller has been consuming. A streaming caller that needs to
 detect truncation should check `transcribe_was_truncated()` after finalize.
-
-A streaming family with no context cap at all — parakeet's cache-aware RNN-T
-variant (`nemotron-speech-streaming-en-0.6b`) — never reaches this case: its
-caches are constant-memory and the RNN-T decoder has no position limit, so a
-stream of any length runs unbounded and `was_truncated` stays false.
 
 ## Design notes (for maintainers)
 
