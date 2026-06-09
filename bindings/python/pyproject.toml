@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "transcribe-cpp"
+version = "0.0.0"
+description = "Python bindings for transcribe.cpp (pre-release name reservation placeholder)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "The transcribe.cpp authors" }]
+keywords = ["transcription", "speech-to-text", "asr", "ggml", "whisper", "parakeet"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/handy-computer/transcribe.cpp"
+Repository = "https://github.com/handy-computer/transcribe.cpp"
+Issues = "https://github.com/handy-computer/transcribe.cpp/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/transcribe_cpp"]
