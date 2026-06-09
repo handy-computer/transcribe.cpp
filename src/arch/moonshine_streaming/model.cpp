@@ -138,9 +138,9 @@ bool kv_cache_init(MoonshineStreamingKvCache & cache,
                    ggml_type                   kv_type)
 {
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming kv_cache: unsupported kv_type=%d "
-                     "(only F16/F32)\n", static_cast<int>(kv_type));
+                     "(only F16/F32)", static_cast<int>(kv_type));
         return false;
     }
 
@@ -148,7 +148,7 @@ bool kv_cache_init(MoonshineStreamingKvCache & cache,
     ggml_init_params params { ctx_size, nullptr, /*no_alloc=*/true };
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "moonshine_streaming kv_cache: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming kv_cache: ggml_init failed");
         return false;
     }
 
@@ -167,7 +167,7 @@ bool kv_cache_init(MoonshineStreamingKvCache & cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "moonshine_streaming kv_cache: buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming kv_cache: buffer alloc failed");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -199,7 +199,7 @@ bool kv_cache_init_batched(MoonshineStreamingKvCache & cache,
         return true;
     }
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr, "moonshine_streaming kv_cache(batched): unsupported kv_type\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming kv_cache(batched): unsupported kv_type");
         return false;
     }
     const size_t ctx_size = 4 * ggml_tensor_overhead() + 256;
@@ -298,8 +298,8 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "moonshine_streaming: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -412,8 +412,8 @@ transcribe_status ensure_sched(MoonshineStreamingSession * cc,
         static_cast<int>(cm->plan.scheduler_list.size()),
         16384, false, true);
     if (cc->sched == nullptr) {
-        std::fprintf(stderr,
-                     "moonshine_streaming: ggml_backend_sched_new failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: ggml_backend_sched_new failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_OK;
@@ -493,9 +493,9 @@ transcribe_status encode_window_to_host(
     if (n_samples <= 0 || hp.enc_frame_len <= 0 ||
         n_samples % hp.enc_frame_len != 0)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming encode_window: invalid n_samples=%d "
-                     "(frame_len=%d)\n", n_samples, hp.enc_frame_len);
+                     "(frame_len=%d)", n_samples, hp.enc_frame_len);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -541,8 +541,8 @@ transcribe_status encode_window_to_host(
     apply_thread_policy(cc);
 
     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-        std::fprintf(stderr,
-                     "moonshine_streaming encode_window: encoder compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming encode_window: encoder compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -633,8 +633,8 @@ transcribe_status apply_adapter_window(
                             pos_ids.size() * sizeof(int32_t));
 
     if (ggml_backend_sched_graph_compute(cc->sched, ab.graph) != GGML_STATUS_SUCCESS) {
-        std::fprintf(stderr,
-                     "moonshine_streaming adapter: compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming adapter: compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -681,9 +681,9 @@ transcribe_status project_cross_kv_window(
     if (static_cast<int>(out_per_layer_k.size()) != n_layers ||
         static_cast<int>(out_per_layer_v.size()) != n_layers)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming cross_kv_proj: per-layer buffer "
-                     "size mismatch (got K=%zu V=%zu, expected %d)\n",
+                     "size mismatch (got K=%zu V=%zu, expected %d)",
                      out_per_layer_k.size(), out_per_layer_v.size(), n_layers);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -717,8 +717,8 @@ transcribe_status project_cross_kv_window(
     if (ggml_backend_sched_graph_compute(cc->sched, pb.graph)
         != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "moonshine_streaming cross_kv_proj: compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming cross_kv_proj: compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -813,9 +813,9 @@ transcribe_status commit_cross_kv_from_host(
         if (per_layer_k[il].size() != expected_floats ||
             per_layer_v[il].size() != expected_floats)
         {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "moonshine_streaming cross_kv_commit: layer %d size "
-                         "mismatch (K=%zu V=%zu, expected %zu)\n",
+                         "mismatch (K=%zu V=%zu, expected %zu)",
                          il, per_layer_k[il].size(), per_layer_v[il].size(),
                          expected_floats);
             return TRANSCRIBE_ERR_INVALID_ARG;
@@ -854,8 +854,8 @@ transcribe_status commit_cross_kv_from_host(
     if (ggml_backend_sched_graph_compute(cc->sched, cb.graph)
         != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "moonshine_streaming cross_kv_commit: compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming cross_kv_commit: compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     cc->kv_cache.cross_populated = true;
@@ -956,8 +956,8 @@ transcribe_status decode_from_kv_cache(
         if (ggml_backend_sched_graph_compute(cc->sched, db.graph)
             != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "moonshine_streaming decode: decoder compute failed (n_past=%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "moonshine_streaming decode: decoder compute failed (n_past=%d)",
                          n_past_in);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -1171,8 +1171,8 @@ transcribe_status decode_from_committed_enc(
         if (ggml_backend_sched_graph_compute(cc->sched, cross_db.graph)
             != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "moonshine_streaming decode: cross_kv compute failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "moonshine_streaming decode: cross_kv compute failed");
             return TRANSCRIBE_ERR_GGUF;
         }
         cc->kv_cache.cross_populated = true;
@@ -1608,9 +1608,9 @@ transcribe_status flush_stable_frames(
     const int64_t abs_pcm_start = static_cast<int64_t>(slice_start_frame) * spf;
     const int64_t abs_pcm_end   = static_cast<int64_t>(slice_end_frame)   * spf;
     if (abs_pcm_start < cc->stream_pcm_start_sample) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming flush: slice underruns trimmed "
-                     "PCM (slice_start_abs=%lld, pcm_start=%lld)\n",
+                     "PCM (slice_start_abs=%lld, pcm_start=%lld)",
                      static_cast<long long>(abs_pcm_start),
                      static_cast<long long>(cc->stream_pcm_start_sample));
         return TRANSCRIBE_ERR_GGUF;
@@ -1639,9 +1639,9 @@ transcribe_status flush_stable_frames(
     }
     const int expected_T = slice_end_frame - slice_start_frame;
     if (slice_T_enc != expected_T) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming flush: slice T_enc mismatch "
-                     "(got %d, expected %d)\n", slice_T_enc, expected_T);
+                     "(got %d, expected %d)", slice_T_enc, expected_T);
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -2288,9 +2288,9 @@ transcribe_status run_batch(
     }
 
     if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "moonshine_streaming run_batch: n=%d T_enc_max=%d kv_window=%d (cap %d)\n"
-            "  enc+adapter=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
+            "  enc+adapter=%.1fms (serial x%d)  decode=%.1fms (batched)",
             n, T_enc_max, kv_window, n_ctx_cap, enc_us / 1000.0, n, dec_us / 1000.0);
     }
     return TRANSCRIBE_OK;

@@ -25,6 +25,7 @@
 
 #include "causal_lm/causal_lm.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -86,26 +87,26 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     pb.suffix_len = suffix_len;
 
     if (ctx == nullptr || T_prompt <= 0 || T_audio < 0) {
-        std::fprintf(stderr,
-                     "funasr_nano decoder: invalid arg (T_prompt=%d, T_audio=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano decoder: invalid arg (T_prompt=%d, T_audio=%d)",
                      T_prompt, T_audio);
         return pb;
     }
     if (prefix_len < 0 || suffix_len < 0 ||
         prefix_len + T_audio + suffix_len != T_prompt)
     {
-        std::fprintf(stderr,
-                     "funasr_nano decoder: prefix_len(%d) + T_audio(%d) + suffix_len(%d) != T_prompt(%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano decoder: prefix_len(%d) + T_audio(%d) + suffix_len(%d) != T_prompt(%d)",
                      prefix_len, T_audio, suffix_len, T_prompt);
         return pb;
     }
     if (kv_cache.self_k == nullptr || kv_cache.self_v == nullptr) {
-        std::fprintf(stderr, "funasr_nano decoder: kv_cache not initialized\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano decoder: kv_cache not initialized");
         return pb;
     }
     if (T_prompt > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "funasr_nano decoder: T_prompt=%d exceeds kv_cache.n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano decoder: T_prompt=%d exceeds kv_cache.n_ctx=%d",
                      T_prompt, kv_cache.n_ctx);
         return pb;
     }
@@ -138,8 +139,8 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr,
-                     "funasr_nano decoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano decoder: ggml_new_graph_custom failed");
         return pb;
     }
     pb.graph = gf;
@@ -265,17 +266,17 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     sb.max_n_kv = max_n_kv;
 
     if (ctx == nullptr || max_n_kv <= 0) {
-        std::fprintf(stderr,
-                     "funasr_nano step: invalid arg (max_n_kv=%d)\n", max_n_kv);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano step: invalid arg (max_n_kv=%d)", max_n_kv);
         return sb;
     }
     if (kv_cache.self_k == nullptr) {
-        std::fprintf(stderr, "funasr_nano step: kv_cache not initialized\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano step: kv_cache not initialized");
         return sb;
     }
     if (max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "funasr_nano step: max_n_kv=%d exceeds kv_cache.n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano step: max_n_kv=%d exceeds kv_cache.n_ctx=%d",
                      max_n_kv, kv_cache.n_ctx);
         return sb;
     }
@@ -304,8 +305,8 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr,
-                     "funasr_nano step: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano step: ggml_new_graph_custom failed");
         return sb;
     }
     sb.graph = gf;
@@ -368,7 +369,7 @@ PrefillBuildBatched build_prefill_graph_batched(
         n_batch <= 0 || !use_flash ||
         kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
         T_prompt_max > kv_cache.n_ctx) {
-        std::fprintf(stderr, "funasr_nano prefill(batched): invalid arg\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano prefill(batched): invalid arg");
         return pb;
     }
 
@@ -451,7 +452,7 @@ StepBuildBatched build_step_graph_batched(
     if (ctx == nullptr || max_n_kv <= 0 || n_batch <= 0 || !use_flash ||
         kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
         max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr, "funasr_nano step(batched): invalid arg\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano step(batched): invalid arg");
         return sb;
     }
 

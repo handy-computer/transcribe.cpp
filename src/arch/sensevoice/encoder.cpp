@@ -35,6 +35,7 @@
 #include "conformer/conformer.h"
 #include "sanm/sanm.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -89,9 +90,9 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_lfr_frames <= 0 || n_batch <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice encoder: invalid arg "
-                     "(ctx=%p, n_lfr_frames=%d, n_batch=%d)\n",
+                     "(ctx=%p, n_lfr_frames=%d, n_batch=%d)",
                      static_cast<void *>(ctx), n_lfr_frames, n_batch);
         return eb;
     }
@@ -268,8 +269,8 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     // 8192 leaves ample headroom.
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "sensevoice encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "sensevoice encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

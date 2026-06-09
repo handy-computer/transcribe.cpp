@@ -1,6 +1,7 @@
 // transcribe-bin-loader.cpp - whisper.cpp `.bin` parser implementation.
 
 #include "transcribe-bin-loader.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -139,24 +140,24 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
 
     std::ifstream fin(path, std::ios::binary);
     if (!fin) {
-        std::fprintf(stderr,
-                     "%s: failed to open %s\n", kTag, path);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: failed to open %s", kTag, path);
         return TRANSCRIBE_ERR_GGUF;
     }
 
     // ---- magic ----
     uint32_t magic = 0;
     if (!read_pod(fin, magic)) {
-        std::fprintf(stderr, "%s: short read on magic\n", kTag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read on magic", kTag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (magic != k_whisper_bin_magic) {
         // Caller (transcribe_model_load_file) is responsible for
         // routing GGUF magic to the GGUF loader before reaching here.
         // Anything else with non-`ggml` magic is just unsupported.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s: bad magic 0x%08x (expected 0x%08x for legacy "
-                     "whisper.cpp .bin)\n",
+                     "whisper.cpp .bin)",
                      kTag, magic, k_whisper_bin_magic);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -175,7 +176,7 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         !read_pod(fin, hp.n_mels)         ||
         !read_pod(fin, hp.ftype))
     {
-        std::fprintf(stderr, "%s: short read on hparams\n", kTag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read on hparams", kTag);
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -183,10 +184,10 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         // Magic was `ggml` but the geometry isn't Whisper. Likely a
         // Silero VAD `.bin` or some other ggml artifact — reject
         // cleanly so the caller surfaces UNSUPPORTED_ARCH.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s: hparams do not match a known Whisper geometry "
                      "(n_audio_layer=%d n_text_layer=%d n_mels=%d "
-                     "n_vocab=%d) — refusing to load as Whisper\n",
+                     "n_vocab=%d) — refusing to load as Whisper",
                      kTag, hp.n_audio_layer, hp.n_text_layer,
                      hp.n_mels, hp.n_vocab);
         return TRANSCRIBE_ERR_UNSUPPORTED_ARCH;
@@ -201,19 +202,19 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
     if (!read_pod(fin, out.n_mel_filters) ||
         !read_pod(fin, out.n_fft_filters))
     {
-        std::fprintf(stderr,
-                     "%s: short read on mel filter dims\n", kTag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: short read on mel filter dims", kTag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (out.n_mel_filters != hp.n_mels) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s: mel filter n_mel=%d disagrees with hparams "
-                     "n_mels=%d\n", kTag, out.n_mel_filters, hp.n_mels);
+                     "n_mels=%d", kTag, out.n_mel_filters, hp.n_mels);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (out.n_fft_filters <= 0 || out.n_mel_filters <= 0) {
-        std::fprintf(stderr,
-                     "%s: invalid mel filter dims n_mel=%d n_fft=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: invalid mel filter dims n_mel=%d n_fft=%d",
                      kTag, out.n_mel_filters, out.n_fft_filters);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -223,10 +224,10 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
     // other value here would mean a size-mismatched ggml_backend_tensor_set
     // later (partial write at best, OOB at worst).
     if (out.n_fft_filters != 201) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s: mel filter n_fft=%d is not 201 (whisper "
                      "canonical n_fft=400 → n_fft/2+1=201); refusing "
-                     "to load\n", kTag, out.n_fft_filters);
+                     "to load", kTag, out.n_fft_filters);
         return TRANSCRIBE_ERR_GGUF;
     }
     const size_t fb_elems =
@@ -236,8 +237,8 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
     fin.read(reinterpret_cast<char *>(out.mel_filterbank.data()),
              static_cast<std::streamsize>(fb_elems * sizeof(float)));
     if (!fin) {
-        std::fprintf(stderr,
-                     "%s: short read on mel filterbank (%zu floats)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: short read on mel filterbank (%zu floats)",
                      kTag, fb_elems);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -245,15 +246,15 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
     // ---- vocab ----
     int32_t n_vocab_in_file = 0;
     if (!read_pod(fin, n_vocab_in_file)) {
-        std::fprintf(stderr, "%s: short read on vocab count\n", kTag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: short read on vocab count", kTag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (n_vocab_in_file <= 0 || n_vocab_in_file > hp.n_vocab + 64) {
         // The file's vocab count may legitimately be smaller than
         // hparams.n_vocab (whisper.cpp synthesizes the missing tokens
         // at load), but it should never overshoot by much.
-        std::fprintf(stderr,
-                     "%s: implausible vocab count %d (hparams n_vocab=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: implausible vocab count %d (hparams n_vocab=%d)",
                      kTag, n_vocab_in_file, hp.n_vocab);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -262,15 +263,15 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
     for (int32_t i = 0; i < n_vocab_in_file; ++i) {
         uint32_t len = 0;
         if (!read_pod(fin, len)) {
-            std::fprintf(stderr,
-                         "%s: short read on vocab token %d length\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: short read on vocab token %d length",
                          kTag, i);
             return TRANSCRIBE_ERR_GGUF;
         }
         if (len > 1024) {
             // No legitimate Whisper token is anywhere near this long.
-            std::fprintf(stderr,
-                         "%s: vocab token %d claims absurd length %u\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: vocab token %d claims absurd length %u",
                          kTag, i, len);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -278,8 +279,8 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         if (len > 0) {
             fin.read(scratch.data(), static_cast<std::streamsize>(len));
             if (!fin) {
-                std::fprintf(stderr,
-                             "%s: short read on vocab token %d body\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "%s: short read on vocab token %d body",
                              kTag, i);
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -301,8 +302,8 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
             break;
         }
         if (!fin || fin.gcount() != sizeof(n_dims)) {
-            std::fprintf(stderr,
-                         "%s: truncated tensor header (after %zu tensors)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: truncated tensor header (after %zu tensors)",
                          kTag, out.tensors.size());
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -310,26 +311,26 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         int32_t name_len = 0;
         int32_t ttype    = 0;
         if (!read_pod(fin, name_len) || !read_pod(fin, ttype)) {
-            std::fprintf(stderr,
-                         "%s: truncated tensor header (after %zu tensors)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: truncated tensor header (after %zu tensors)",
                          kTag, out.tensors.size());
             return TRANSCRIBE_ERR_GGUF;
         }
         if (n_dims < 1 || n_dims > 4) {
-            std::fprintf(stderr,
-                         "%s: tensor n_dims=%d out of range\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: tensor n_dims=%d out of range",
                          kTag, n_dims);
             return TRANSCRIBE_ERR_GGUF;
         }
         if (name_len <= 0 || name_len > 256) {
-            std::fprintf(stderr,
-                         "%s: tensor name_len=%d out of range\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: tensor name_len=%d out of range",
                          kTag, name_len);
             return TRANSCRIBE_ERR_GGUF;
         }
         if (!is_known_ggml_type(ttype)) {
-            std::fprintf(stderr,
-                         "%s: unknown ttype %d\n", kTag, ttype);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: unknown ttype %d", kTag, ttype);
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -346,13 +347,13 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         for (int32_t i = 0; i < n_dims; ++i) {
             int32_t v = 0;
             if (!read_pod(fin, v)) {
-                std::fprintf(stderr,
-                             "%s: truncated tensor dims\n", kTag);
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "%s: truncated tensor dims", kTag);
                 return TRANSCRIBE_ERR_GGUF;
             }
             if (v <= 0) {
-                std::fprintf(stderr,
-                             "%s: tensor dim ne[%d]=%d non-positive\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "%s: tensor dim ne[%d]=%d non-positive",
                              kTag, i, v);
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -362,8 +363,8 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         std::string name(static_cast<size_t>(name_len), '\0');
         fin.read(name.data(), name_len);
         if (!fin) {
-            std::fprintf(stderr,
-                         "%s: truncated tensor name\n", kTag);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: truncated tensor name", kTag);
             return TRANSCRIBE_ERR_GGUF;
         }
         entry.name = std::move(name);
@@ -372,10 +373,10 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         // for the declared (type, ne).
         entry.nbytes = tensor_nbytes(entry.type, entry.ne);
         if (entry.nbytes == 0) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "%s: tensor \"%s\" has 0 nbytes (type=%s, "
                          "ne=[%lld,%lld,%lld,%lld] not a multiple of "
-                         "block size)\n",
+                         "block size)",
                          kTag, entry.name.c_str(),
                          ggml_type_name(entry.type),
                          (long long)entry.ne[0], (long long)entry.ne[1],
@@ -388,9 +389,9 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
         fin.seekg(static_cast<std::streamoff>(entry.nbytes),
                   std::ios::cur);
         if (!fin) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "%s: tensor \"%s\" payload runs past end of file "
-                         "(offset=%llu nbytes=%llu) — file is truncated\n",
+                         "(offset=%llu nbytes=%llu) — file is truncated",
                          kTag, entry.name.c_str(),
                          (unsigned long long)entry.offset,
                          (unsigned long long)entry.nbytes);
@@ -401,7 +402,7 @@ transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out) {
     }
 
     if (out.tensors.empty()) {
-        std::fprintf(stderr, "%s: file declares no tensors\n", kTag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: file declares no tensors", kTag);
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -415,8 +416,8 @@ transcribe_status stream_tensor_data_from_bin(
 {
     std::ifstream fin(path, std::ios::binary);
     if (!fin) {
-        std::fprintf(stderr,
-                     "%s: failed to reopen %s for tensor data\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: failed to reopen %s for tensor data",
                      error_tag, path.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -427,16 +428,16 @@ transcribe_status stream_tensor_data_from_bin(
 
     for (const BinStreamSlot & s : slots) {
         if (s.dst == nullptr) {
-            std::fprintf(stderr,
-                         "%s: stream slot has null dst tensor\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: stream slot has null dst tensor",
                          error_tag);
             return TRANSCRIBE_ERR_GGUF;
         }
         const size_t want = ggml_nbytes(s.dst);
         if (s.src_bytes != want) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "%s: tensor \"%s\" byte-size mismatch "
-                         "(.bin says %llu, ggml expects %zu)\n",
+                         "(.bin says %llu, ggml expects %zu)",
                          error_tag, s.dst->name,
                          (unsigned long long)s.src_bytes, want);
             return TRANSCRIBE_ERR_GGUF;
@@ -446,16 +447,16 @@ transcribe_status stream_tensor_data_from_bin(
         }
         fin.seekg(static_cast<std::streamoff>(s.src_off));
         if (!fin) {
-            std::fprintf(stderr,
-                         "%s: seek failed for tensor \"%s\"\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: seek failed for tensor \"%s\"",
                          error_tag, s.dst->name);
             return TRANSCRIBE_ERR_GGUF;
         }
         fin.read(reinterpret_cast<char *>(staging.data()),
                  static_cast<std::streamsize>(want));
         if (!fin || static_cast<size_t>(fin.gcount()) != want) {
-            std::fprintf(stderr,
-                         "%s: short read for tensor \"%s\"\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: short read for tensor \"%s\"",
                          error_tag, s.dst->name);
             return TRANSCRIBE_ERR_GGUF;
         }

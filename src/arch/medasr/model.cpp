@@ -204,8 +204,8 @@ transcribe_status load(Loader &                              loader,
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "medasr: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "medasr: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -323,9 +323,9 @@ transcribe_status load_ref_mel(const std::string & dir,
         used = base + "frontend.mel.out.f32";
     }
     if (!f) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "medasr: cannot open mel ref under '%s' "
-                     "(expected mel.in.f32 or frontend.mel.out.f32)\n",
+                     "(expected mel.in.f32 or frontend.mel.out.f32)",
                      dir.c_str());
         return TRANSCRIBE_ERR_FILE_NOT_FOUND;
     }
@@ -335,9 +335,9 @@ transcribe_status load_ref_mel(const std::string & dir,
     if (total_bytes <= 0 ||
         (static_cast<size_t>(total_bytes) % (sizeof(float) * n_mels)) != 0)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "medasr: mel ref '%s' size %lld not divisible by "
-                     "n_mels=%d * 4\n",
+                     "n_mels=%d * 4",
                      used.c_str(), static_cast<long long>(total_bytes),
                      n_mels);
         return TRANSCRIBE_ERR_GGUF;
@@ -348,7 +348,7 @@ transcribe_status load_ref_mel(const std::string & dir,
     f.read(reinterpret_cast<char *>(out.data()),
            static_cast<std::streamsize>(total_bytes));
     if (static_cast<std::streamsize>(f.gcount()) != total_bytes) {
-        std::fprintf(stderr, "medasr: short read on mel ref\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "medasr: short read on mel ref");
         return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_OK;
@@ -564,7 +564,7 @@ transcribe_status run(transcribe_session *      session,
     const int64_t t_enc_start = ggml_time_us();
     if (ggml_backend_sched_graph_compute(gc->sched, eb.graph)
             != GGML_STATUS_SUCCESS) {
-        std::fprintf(stderr, "medasr: graph_compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "medasr: graph_compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     gc->t_encode_us = ggml_time_us() - t_enc_start;
@@ -613,8 +613,8 @@ transcribe_status run(transcribe_session *      session,
                 if (v > mx) mx = v;
             }
             const double mean = n > 0 ? sum / static_cast<double>(n) : 0.0;
-            std::fprintf(stderr,
-                         "STATS %-26s n=%zu  min=%+.4e  max=%+.4e  mean=%+.4e  nan=%d  inf=%d\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                         "STATS %-26s n=%zu  min=%+.4e  max=%+.4e  mean=%+.4e  nan=%d  inf=%d",
                          name, n, mn, mx, mean, n_nan, n_inf);
         };
         report("mel.in",                eb.mel_in);
@@ -661,8 +661,8 @@ transcribe_status run(transcribe_session *      session,
     const int vocab = static_cast<int>(logits_t->ne[0]);
     const int T_enc = static_cast<int>(logits_t->ne[1]);
     if (vocab != gm->hparams.ctc_vocab_size || T_enc <= 0) {
-        std::fprintf(stderr,
-                     "medasr: ctc_logits shape mismatch (vocab=%d T_enc=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "medasr: ctc_logits shape mismatch (vocab=%d T_enc=%d)",
                      vocab, T_enc);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -957,7 +957,7 @@ transcribe_status run_batch_encode(MedAsrSession *                         gc,
     const int64_t t_enc_start = ggml_time_us();
     if (ggml_backend_sched_graph_compute(gc->sched, eb.graph)
             != GGML_STATUS_SUCCESS) {
-        std::fprintf(stderr, "medasr run_batch: graph_compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "medasr run_batch: graph_compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     gc->t_encode_us = ggml_time_us() - t_enc_start;

@@ -23,6 +23,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -299,8 +300,8 @@ AdapterBuild build_adapter_graph(ggml_context *                       ctx,
     AdapterBuild ab {};
 
     if (ctx == nullptr || T_enc <= 0) {
-        std::fprintf(stderr,
-                     "moonshine_streaming adapter: invalid arg (ctx=%p, T_enc=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming adapter: invalid arg (ctx=%p, T_enc=%d)",
                      static_cast<void *>(ctx), T_enc);
         return ab;
     }
@@ -327,8 +328,8 @@ AdapterBuild build_adapter_graph(ggml_context *                       ctx,
         // proj_w ne=[enc_h, dec_h]; result ne=[dec_h, T_enc]
         y = ggml_mul_mat(ctx, w.adapter.proj_w, y);
     } else if (enc_h != dec_h) {
-        std::fprintf(stderr,
-                     "moonshine_streaming adapter: enc_h (%d) != dec_h (%d) but adapter_has_proj=false\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming adapter: enc_h (%d) != dec_h (%d) but adapter_has_proj=false",
                      enc_h, dec_h);
         return ab;
     }
@@ -339,8 +340,8 @@ AdapterBuild build_adapter_graph(ggml_context *                       ctx,
 
     ab.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (ab.graph == nullptr) {
-        std::fprintf(stderr,
-                     "moonshine_streaming adapter: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming adapter: ggml_new_graph_custom failed");
         return ab;
     }
     // Build forward through both pos_emb (for the dump) and out.
@@ -363,8 +364,8 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
     DecoderBuild db {};
 
     if (ctx == nullptr || T_enc <= 0) {
-        std::fprintf(stderr,
-                     "moonshine_streaming cross_kv: invalid arg (ctx=%p, T_enc=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming cross_kv: invalid arg (ctx=%p, T_enc=%d)",
                      static_cast<void *>(ctx), T_enc);
         return db;
     }
@@ -378,8 +379,8 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
 
     db.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (db.graph == nullptr) {
-        std::fprintf(stderr,
-                     "moonshine_streaming cross_kv: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming cross_kv: ggml_new_graph_custom failed");
         return db;
     }
 
@@ -424,9 +425,9 @@ CrossKVProjectionBuild build_cross_kv_projection_graph(
     CrossKVProjectionBuild pb {};
 
     if (ctx == nullptr || n_frames <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming cross_kv_proj: invalid arg "
-                     "(ctx=%p, n_frames=%d)\n",
+                     "(ctx=%p, n_frames=%d)",
                      static_cast<void *>(ctx), n_frames);
         return pb;
     }
@@ -439,8 +440,8 @@ CrossKVProjectionBuild build_cross_kv_projection_graph(
 
     pb.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (pb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "moonshine_streaming cross_kv_proj: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming cross_kv_proj: ggml_new_graph_custom failed");
         return pb;
     }
 
@@ -486,9 +487,9 @@ CrossKVCommitBuild build_cross_kv_commit_graph(
     if (ctx == nullptr || T_enc <= 0 || kv_cache.cross_k == nullptr ||
         kv_cache.cross_v == nullptr)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming cross_kv_commit: invalid arg "
-                     "(ctx=%p, T_enc=%d, cache=%s)\n",
+                     "(ctx=%p, T_enc=%d, cache=%s)",
                      static_cast<void *>(ctx), T_enc,
                      (kv_cache.cross_k == nullptr ||
                       kv_cache.cross_v == nullptr) ? "null" : "ok");
@@ -498,8 +499,8 @@ CrossKVCommitBuild build_cross_kv_commit_graph(
     const int d_model = hp.dec_d_model;
     cb.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (cb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "moonshine_streaming cross_kv_commit: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming cross_kv_commit: ggml_new_graph_custom failed");
         return cb;
     }
 
@@ -558,16 +559,16 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
     DecoderBuild db {};
 
     if (ctx == nullptr || n_tokens <= 0 || T_enc <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming decoder_kv: invalid arg "
-                     "(ctx=%p, n_tokens=%d, T_enc=%d)\n",
+                     "(ctx=%p, n_tokens=%d, T_enc=%d)",
                      static_cast<void *>(ctx), n_tokens, T_enc);
         return db;
     }
     const int n_kv = n_past + n_tokens;
     if (n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "moonshine_streaming decoder_kv: n_kv=%d exceeds n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming decoder_kv: n_kv=%d exceeds n_ctx=%d",
                      n_kv, kv_cache.n_ctx);
         return db;
     }
@@ -613,8 +614,8 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
 
     db.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (db.graph == nullptr) {
-        std::fprintf(stderr,
-                     "moonshine_streaming decoder_kv: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming decoder_kv: ggml_new_graph_custom failed");
         return db;
     }
 
@@ -888,7 +889,7 @@ StepBuildBatched build_step_graph_batched(ggml_context *                    ctx,
     sb.n_batch  = n_batch;
     if (ctx == nullptr || max_n_kv <= 0 || T_enc_max <= 0 || n_batch <= 0) return sb;
     if (!use_flash) {
-        std::fprintf(stderr, "moonshine_streaming step(batched): requires flash path\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming step(batched): requires flash path");
         return sb;
     }
 

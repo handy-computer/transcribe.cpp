@@ -14,6 +14,7 @@
 // shared detect_direct_pw, which is identical across families.
 
 #include "conformer/conformer.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -1222,9 +1223,9 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     // here as a clear assertion rather than letting mul_mat fail
     // with a confusing shape mismatch.
     if (pe.out_w != nullptr && pre_encode_in != pe.out_w->ne[0]) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s encoder: pre_encode_in mismatch: "
-                     "F'*C=%lld but out_w expects %lld\n",
+                     "F'*C=%lld but out_w expects %lld",
                      error_tag != nullptr ? error_tag : "conformer",
                      static_cast<long long>(pre_encode_in),
                      static_cast<long long>(pe.out_w->ne[0]));

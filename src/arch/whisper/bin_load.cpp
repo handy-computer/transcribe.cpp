@@ -15,6 +15,7 @@
 #include "transcribe-bin-loader.h"
 #include "transcribe-load-common.h"
 #include "transcribe-tokenizer.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -374,8 +375,8 @@ ggml_tensor * create_canonical_tensor(
 
     ggml_tensor * t = ggml_new_tensor(ctx_meta, src.type, n_dims, ne);
     if (t == nullptr) {
-        std::fprintf(stderr,
-                     "%s: ggml_new_tensor failed for \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: ggml_new_tensor failed for \"%s\"",
                      kTag, canonical_name.c_str());
         return nullptr;
     }
@@ -395,8 +396,8 @@ transcribe_status resolve_tensors(
     by_name.reserve(bm.tensors.size() * 2);
     for (const auto & e : bm.tensors) {
         if (!by_name.emplace(e.name, &e).second) {
-            std::fprintf(stderr,
-                         "%s: duplicate tensor \"%s\" in .bin\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: duplicate tensor \"%s\" in .bin",
                          kTag, e.name.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -430,9 +431,9 @@ transcribe_status resolve_tensors(
     auto add_slot = [&](const StaticRename & rule) -> transcribe_status {
         auto it = by_name.find(rule.legacy);
         if (it == by_name.end()) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "%s: missing tensor \"%s\" (canonical \"%s\") "
-                         "— .bin is incomplete or not a whisper model\n",
+                         "— .bin is incomplete or not a whisper model",
                          kTag, rule.legacy, rule.canonical);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -480,9 +481,9 @@ transcribe_status resolve_tensors(
     if (consumed.size() != bm.tensors.size()) {
         for (const auto & e : bm.tensors) {
             if (consumed.find(e.name) == consumed.end()) {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
                              "%s: unconsumed .bin tensor \"%s\" — "
-                             "this loader does not yet support it\n",
+                             "this loader does not yet support it",
                              kTag, e.name.c_str());
             }
         }
@@ -696,8 +697,8 @@ transcribe_status load_from_bin(const char *                           path,
     ggml_backend_buffer_t buf =
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (buf == nullptr) {
-        std::fprintf(stderr,
-                     "%s: ggml_backend_alloc_ctx_tensors failed\n", kTag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: ggml_backend_alloc_ctx_tensors failed", kTag);
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = buf;
@@ -727,9 +728,9 @@ transcribe_status load_from_bin(const char *                           path,
             const size_t want = ggml_nbytes(m->weights.frontend.mel_filterbank);
             const size_t have = filterbank.size() * sizeof(float);
             if (have != want) {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "%s: mel filterbank size mismatch "
-                             "(have %zu bytes, expected %zu)\n",
+                             "(have %zu bytes, expected %zu)",
                              kTag, have, want);
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -741,9 +742,9 @@ transcribe_status load_from_bin(const char *                           path,
             const size_t want = ggml_nbytes(m->weights.frontend.window);
             const size_t have = window.size() * sizeof(float);
             if (have != want) {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "%s: hann window size mismatch "
-                             "(have %zu bytes, expected %zu)\n",
+                             "(have %zu bytes, expected %zu)",
                              kTag, have, want);
                 return TRANSCRIBE_ERR_GGUF;
             }

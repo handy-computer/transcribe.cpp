@@ -45,6 +45,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -274,8 +275,8 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_samples <= 0) {
-        std::fprintf(stderr,
-                     "moonshine encoder: invalid arg (ctx=%p, n_samples=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine encoder: invalid arg (ctx=%p, n_samples=%d)",
                      static_cast<void *>(ctx), n_samples);
         return eb;
     }
@@ -285,9 +286,9 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     const int T_enc   = encoder_t_enc(hp, n_samples);
 
     if (T_enc <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine encoder: input too short (n_samples=%d "
-                     "produces T_enc<=0)\n", n_samples);
+                     "produces T_enc<=0)", n_samples);
         return eb;
     }
 
@@ -413,8 +414,8 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "moonshine encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

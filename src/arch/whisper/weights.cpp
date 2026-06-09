@@ -29,6 +29,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -58,7 +59,7 @@ transcribe_status read_optional_u32_kv(const gguf_context * gguf,
     if (st == transcribe::KvResult::Absent) {
         return TRANSCRIBE_OK;
     }
-    std::fprintf(stderr, "%s: KV %s has wrong type\n", error_tag, key);
+    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: KV %s has wrong type", error_tag, key);
     return TRANSCRIBE_ERR_GGUF;
 }
 
@@ -77,7 +78,7 @@ transcribe_status read_optional_i32_array_kv(const gguf_context * gguf,
     if (st == transcribe::KvResult::Absent) {
         return TRANSCRIBE_OK;
     }
-    std::fprintf(stderr, "%s: KV %s has wrong type (expected int32 array)\n",
+    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: KV %s has wrong type (expected int32 array)",
                  error_tag, key);
     return TRANSCRIBE_ERR_GGUF;
 }
@@ -99,7 +100,7 @@ transcribe_status read_optional_f32_kv(const gguf_context * gguf,
         out = default_value;
         return TRANSCRIBE_OK;
     }
-    std::fprintf(stderr, "%s: KV %s has wrong type\n", error_tag, key);
+    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: KV %s has wrong type", error_tag, key);
     return TRANSCRIBE_ERR_GGUF;
 }
 
@@ -187,12 +188,12 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
         hp.enc_ffn_dim <= 0 || hp.enc_num_mel_bins <= 0 ||
         hp.enc_max_source_positions <= 0)
     {
-        std::fprintf(stderr, "whisper: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
-                     "whisper: encoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper: encoder d_model (%d) not divisible by n_heads (%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -200,28 +201,28 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
         hp.dec_ffn_dim <= 0 || hp.dec_max_target_positions <= 0 ||
         hp.dec_vocab_size <= 0)
     {
-        std::fprintf(stderr, "whisper: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_d_model % hp.dec_n_heads != 0) {
-        std::fprintf(stderr,
-                     "whisper: decoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper: decoder d_model (%d) not divisible by n_heads (%d)",
                      hp.dec_d_model, hp.dec_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model != hp.dec_d_model) {
         // Upstream whisper always uses d_model=d_model; a mismatch would
         // break the cross-attention K/V dim contract.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: encoder d_model (%d) != decoder d_model (%d); "
-                     "cross-attention would mismatch\n",
+                     "cross-attention would mismatch",
                      hp.enc_d_model, hp.dec_d_model);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_activation != "gelu" || hp.dec_activation != "gelu") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: only \"gelu\" activation is supported "
-                     "(enc=\"%s\", dec=\"%s\")\n",
+                     "(enc=\"%s\", dec=\"%s\")",
                      hp.enc_activation.c_str(), hp.dec_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -229,10 +230,10 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
         // Whisper always ties lm_head to token_embedding; a false here
         // would mean the converter shipped a separate head tensor we
         // don't currently load.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: stt.whisper.decoder.tie_word_embeddings=false "
                      "is not supported (no separate lm_head tensor in the "
-                     "catalog)\n");
+                     "catalog)");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_scale_embedding) {
@@ -240,77 +241,77 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
         // config.scale_embedding=True. Upstream Whisper always ships False;
         // if this ever flips we need to add the scale to the decoder graph
         // (both prefill and KV paths, after get_rows(token_embd, ...)).
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: stt.whisper.decoder.scale_embedding=true is "
                      "not supported (decoder graph does not apply the "
-                     "sqrt(d_model) embed scale)\n");
+                     "sqrt(d_model) embed scale)");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.decoder_start_token_id < 0 || hp.no_timestamps_token_id < 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: decoder_start_token_id / no_timestamps_token_id "
-                     "must be set\n");
+                     "must be set");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_num_mels <= 0 || hp.fe_sample_rate <= 0 ||
         hp.fe_n_fft <= 0 || hp.fe_win_length <= 0 || hp.fe_hop_length <= 0)
     {
-        std::fprintf(stderr, "whisper: frontend dimensions must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper: frontend dimensions must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_win_length != hp.fe_n_fft) {
         // Whisper uses a full-length periodic Hann window (win=n_fft=400).
         // A mismatch would require a windowed-shorter-than-FFT code path
         // that we don't implement.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: frontend win_length (%d) != n_fft (%d); "
-                     "only full-length window is supported\n",
+                     "only full-length window is supported",
                      hp.fe_win_length, hp.fe_n_fft);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_num_mels != hp.enc_num_mel_bins) {
-        std::fprintf(stderr,
-                     "whisper: frontend num_mels (%d) != encoder num_mel_bins (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper: frontend num_mels (%d) != encoder num_mel_bins (%d)",
                      hp.fe_num_mels, hp.enc_num_mel_bins);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        std::fprintf(stderr,
-                     "whisper: unsupported frontend type \"%s\" (only \"mel\")\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper: unsupported frontend type \"%s\" (only \"mel\")",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_window != "hann" && hp.fe_window != "hann_periodic") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: unsupported frontend window \"%s\" "
-                     "(only \"hann\"/\"hann_periodic\" is supported)\n",
+                     "(only \"hann\"/\"hann_periodic\" is supported)",
                      hp.fe_window.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_normalize != "whisper_logmel") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: unsupported frontend normalize \"%s\" "
-                     "(only \"whisper_logmel\" is supported)\n",
+                     "(only \"whisper_logmel\" is supported)",
                      hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_mel_norm != "slaney") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: unsupported frontend mel_norm \"%s\" "
-                     "(only \"slaney\" is supported)\n",
+                     "(only \"slaney\" is supported)",
                      hp.fe_mel_norm.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_pad_mode != "reflect") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: unsupported frontend pad_mode \"%s\" "
-                     "(only \"reflect\" is supported)\n",
+                     "(only \"reflect\" is supported)",
                      hp.fe_pad_mode.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (!hp.fe_center) {
-        std::fprintf(stderr,
-                     "whisper: non-centered STFT is not supported\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper: non-centered STFT is not supported");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_dither != 0.0f) {
@@ -319,9 +320,9 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
         // A non-zero value in the GGUF would be silently dropped, so
         // reject it at load time rather than producing a silently-wrong
         // spectrogram.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper: stt.frontend.dither=%g is not supported "
-                     "(frontend is deterministic; expected 0.0)\n",
+                     "(frontend is deterministic; expected 0.0)",
                      hp.fe_dither);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -360,8 +361,8 @@ transcribe_status install_mel_from_buffers(
     {
         cfg.normalize = "per_utterance";
     } else {
-        std::fprintf(stderr,
-                     "whisper: unsupported fe_normalize='%s'\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper: unsupported fe_normalize='%s'",
                      hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }

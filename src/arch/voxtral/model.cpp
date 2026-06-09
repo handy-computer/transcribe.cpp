@@ -216,8 +216,8 @@ transcribe_status resolve_specials(const transcribe::Tokenizer & tok,
     for (const auto & p : pieces) {
         const int id = tok.find(p.piece);
         if (id < 0) {
-            std::fprintf(stderr,
-                         "voxtral: control token \"%s\" not in tokenizer\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "voxtral: control token \"%s\" not in tokenizer",
                          p.piece);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -226,7 +226,7 @@ transcribe_status resolve_specials(const transcribe::Tokenizer & tok,
     out.bos = tok.bos_id();
     out.eos = tok.eos_id();
     if (out.bos < 0 || out.eos < 0) {
-        std::fprintf(stderr, "voxtral: tokenizer missing bos/eos id\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: tokenizer missing bos/eos id");
         return TRANSCRIBE_ERR_GGUF;
     }
     (void)hp;
@@ -255,7 +255,7 @@ transcribe_status build_transcription_prompt(const VoxtralModel & m,
         if (const transcribe_status st = m.tok.encode(lang_str, lang_ids);
             st != TRANSCRIBE_OK)
         {
-            std::fprintf(stderr, "voxtral: failed to encode \"%s\"\n", lang_str.c_str());
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: failed to encode \"%s\"", lang_str.c_str());
             return st;
         }
         out_ids.insert(out_ids.end(), lang_ids.begin(), lang_ids.end());
@@ -284,7 +284,7 @@ transcribe_status build_instruct_prompt(const VoxtralModel & m,
     if (const transcribe_status st = m.tok.encode(instruction, instr_ids);
         st != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr, "voxtral: failed to encode instruction text\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: failed to encode instruction text");
         return st;
     }
     out_ids.insert(out_ids.end(), instr_ids.begin(), instr_ids.end());
@@ -361,13 +361,13 @@ transcribe_status load(
     m->hparams.eos_token_id = m->tok.eos_id();
 
     if (m->hparams.vocab_size != m->hparams.dec_vocab_size) {
-        std::fprintf(stderr,
-                     "voxtral: tokenizer vocab (%d) != decoder vocab_size (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: tokenizer vocab (%d) != decoder vocab_size (%d)",
                      m->hparams.vocab_size, m->hparams.dec_vocab_size);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (m->hparams.eos_token_id < 0) {
-        std::fprintf(stderr, "voxtral: GGUF tokenizer has no eos_token_id\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: GGUF tokenizer has no eos_token_id");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -434,7 +434,7 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr, "voxtral: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -564,7 +564,7 @@ transcribe_status run(
     }
 
     if (!cm->mel.has_value()) {
-        std::fprintf(stderr, "voxtral run: model has no MelFrontend\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: model has no MelFrontend");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -593,19 +593,19 @@ transcribe_status run(
             cc->n_threads);
         mst != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr, "voxtral run: MelFrontend::compute failed (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: MelFrontend::compute failed (%s)",
                      transcribe_status_string(mst));
         return mst;
     }
     cc->t_mel_us = ggml_time_us() - t_mel_start;
 
     if (mel_n_mels != cm->hparams.enc_num_mel_bins) {
-        std::fprintf(stderr, "voxtral run: mel bins %d != %d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: mel bins %d != %d",
                      mel_n_mels, cm->hparams.enc_num_mel_bins);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (mel_n_frames < n_chunks * frames_per_chunk) {
-        std::fprintf(stderr, "voxtral run: mel frames %d < %d*%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: mel frames %d < %d*%d",
                      mel_n_frames, n_chunks, frames_per_chunk);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -628,7 +628,7 @@ transcribe_status run(
             cm->plan.scheduler_list.data(), nullptr,
             static_cast<int>(cm->plan.scheduler_list.size()), 16384, false, true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr, "voxtral run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -676,7 +676,7 @@ transcribe_status run(
         if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr, "voxtral run: encoder compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: encoder compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -814,7 +814,7 @@ transcribe_status run(
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, pb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr, "voxtral run: prefill compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: prefill compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -912,7 +912,7 @@ transcribe_status run(
         if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, sb.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr, "voxtral run: step compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral run: step compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }

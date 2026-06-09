@@ -25,6 +25,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -219,8 +220,8 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_mel_frames <= 0 || n_mel_frames % 2 != 0) {
-        std::fprintf(stderr,
-                     "voxtral encoder: invalid n_mel_frames=%d (must be positive even)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral encoder: invalid n_mel_frames=%d (must be positive even)",
                      n_mel_frames);
         return eb;
     }
@@ -231,9 +232,9 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     const int T_enc   = n_mel_frames / 2;
 
     if (T_enc != hp.enc_max_source_positions) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "voxtral encoder: T_enc=%d != max_source_positions=%d "
-                     "(mel must be padded to %d frames)\n",
+                     "(mel must be padded to %d frames)",
                      T_enc, hp.enc_max_source_positions,
                      2 * hp.enc_max_source_positions);
         return eb;
@@ -296,7 +297,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr, "voxtral encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -320,9 +321,9 @@ EncoderBuild build_encoder_graph_batched(ggml_context *         ctx,
 
     if (ctx == nullptr || n_mel_frames <= 0 || n_mel_frames % 2 != 0 ||
         n_chunks <= 0 || !use_flash) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "voxtral encoder(batched): invalid arg "
-                     "(n_mel_frames=%d, n_chunks=%d, use_flash=%d)\n",
+                     "(n_mel_frames=%d, n_chunks=%d, use_flash=%d)",
                      n_mel_frames, n_chunks, static_cast<int>(use_flash));
         return eb;
     }
@@ -334,8 +335,8 @@ EncoderBuild build_encoder_graph_batched(ggml_context *         ctx,
     const int B       = n_chunks;
 
     if (T_enc != hp.enc_max_source_positions) {
-        std::fprintf(stderr,
-                     "voxtral encoder(batched): T_enc=%d != max_source_positions=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral encoder(batched): T_enc=%d != max_source_positions=%d",
                      T_enc, hp.enc_max_source_positions);
         return eb;
     }
@@ -382,7 +383,7 @@ EncoderBuild build_encoder_graph_batched(ggml_context *         ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr, "voxtral encoder(batched): ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral encoder(batched): ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

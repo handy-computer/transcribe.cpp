@@ -21,6 +21,7 @@
 
 #include "causal_lm/causal_lm.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -85,27 +86,27 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     pb.suffix_len = suffix_len;
 
     if (ctx == nullptr || T_prompt <= 0 || T_enc <= 0) {
-        std::fprintf(stderr,
-                     "qwen3_asr decoder: invalid arg (T_prompt=%d, T_enc=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr decoder: invalid arg (T_prompt=%d, T_enc=%d)",
                      T_prompt, T_enc);
         return pb;
     }
     if (prefix_len < 0 || suffix_len < 0 ||
         prefix_len + T_enc + suffix_len != T_prompt)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr decoder: prefix_len(%d) + T_enc(%d) + "
-                     "suffix_len(%d) != T_prompt(%d)\n",
+                     "suffix_len(%d) != T_prompt(%d)",
                      prefix_len, T_enc, suffix_len, T_prompt);
         return pb;
     }
     if (kv_cache.self_k == nullptr || kv_cache.self_v == nullptr) {
-        std::fprintf(stderr, "qwen3_asr decoder: kv_cache not initialized\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr decoder: kv_cache not initialized");
         return pb;
     }
     if (T_prompt > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "qwen3_asr decoder: T_prompt=%d exceeds kv_cache.n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr decoder: T_prompt=%d exceeds kv_cache.n_ctx=%d",
                      T_prompt, kv_cache.n_ctx);
         return pb;
     }
@@ -141,8 +142,8 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr,
-                     "qwen3_asr decoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr decoder: ggml_new_graph_custom failed");
         return pb;
     }
     pb.graph = gf;
@@ -273,17 +274,17 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     sb.max_n_kv = max_n_kv;
 
     if (ctx == nullptr || max_n_kv <= 0) {
-        std::fprintf(stderr,
-                     "qwen3_asr step: invalid arg (max_n_kv=%d)\n", max_n_kv);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr step: invalid arg (max_n_kv=%d)", max_n_kv);
         return sb;
     }
     if (kv_cache.self_k == nullptr) {
-        std::fprintf(stderr, "qwen3_asr step: kv_cache not initialized\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr step: kv_cache not initialized");
         return sb;
     }
     if (max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "qwen3_asr step: max_n_kv=%d exceeds kv_cache.n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr step: max_n_kv=%d exceeds kv_cache.n_ctx=%d",
                      max_n_kv, kv_cache.n_ctx);
         return sb;
     }
@@ -316,8 +317,8 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr,
-                     "qwen3_asr step: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr step: ggml_new_graph_custom failed");
         return sb;
     }
     sb.graph = gf;
@@ -380,25 +381,25 @@ PrefillBuildBatched build_prefill_graph_batched(
     pb.n_batch      = n_batch;
 
     if (ctx == nullptr || T_prompt_max <= 0 || T_enc_max <= 0 || n_batch <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr prefill(batched): invalid arg "
-                     "(T_prompt_max=%d, T_enc_max=%d, n_batch=%d)\n",
+                     "(T_prompt_max=%d, T_enc_max=%d, n_batch=%d)",
                      T_prompt_max, T_enc_max, n_batch);
         return pb;
     }
     if (kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch) {
-        std::fprintf(stderr,
-                     "qwen3_asr prefill(batched): kv_cache mismatch\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr prefill(batched): kv_cache mismatch");
         return pb;
     }
     if (!use_flash) {
-        std::fprintf(stderr,
-                     "qwen3_asr prefill(batched): requires use_flash\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr prefill(batched): requires use_flash");
         return pb;
     }
     if (T_prompt_max > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "qwen3_asr prefill(batched): T_prompt_max=%d > n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr prefill(batched): T_prompt_max=%d > n_ctx=%d",
                      T_prompt_max, kv_cache.n_ctx);
         return pb;
     }
@@ -447,8 +448,8 @@ PrefillBuildBatched build_prefill_graph_batched(
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr,
-                     "qwen3_asr prefill(batched): ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr prefill(batched): ggml_new_graph_custom failed");
         return pb;
     }
     pb.graph = gf;
@@ -475,8 +476,8 @@ PrefillBuildBatched build_prefill_graph_batched(
             T_prompt_max, B,
             pb.mask_in, pb.positions_in, pb.kv_idx_in, use_flash);
         if (x == nullptr) {
-            std::fprintf(stderr,
-                         "qwen3_asr prefill(batched): block %d failed\n", il);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "qwen3_asr prefill(batched): block %d failed", il);
             pb.graph = nullptr;
             return pb;
         }
@@ -517,31 +518,31 @@ StepBuildBatched build_step_graph_batched(
     sb.n_batch  = n_batch;
 
     if (ctx == nullptr || max_n_kv <= 0 || n_batch <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr step(batched): invalid arg "
-                     "(max_n_kv=%d, n_batch=%d)\n", max_n_kv, n_batch);
+                     "(max_n_kv=%d, n_batch=%d)", max_n_kv, n_batch);
         return sb;
     }
     if (kv_cache.self_k == nullptr) {
-        std::fprintf(stderr,
-                     "qwen3_asr step(batched): kv_cache not initialized\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr step(batched): kv_cache not initialized");
         return sb;
     }
     if (kv_cache.n_batch != n_batch) {
-        std::fprintf(stderr,
-                     "qwen3_asr step(batched): kv_cache.n_batch=%d != %d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr step(batched): kv_cache.n_batch=%d != %d",
                      kv_cache.n_batch, n_batch);
         return sb;
     }
     if (max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "qwen3_asr step(batched): max_n_kv=%d exceeds n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr step(batched): max_n_kv=%d exceeds n_ctx=%d",
                      max_n_kv, kv_cache.n_ctx);
         return sb;
     }
     if (!use_flash) {
-        std::fprintf(stderr,
-                     "qwen3_asr step(batched): requires use_flash\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr step(batched): requires use_flash");
         return sb;
     }
 
@@ -571,8 +572,8 @@ StepBuildBatched build_step_graph_batched(
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr,
-                     "qwen3_asr step(batched): ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr step(batched): ggml_new_graph_custom failed");
         return sb;
     }
     sb.graph = gf;
@@ -596,8 +597,8 @@ StepBuildBatched build_step_graph_batched(
             sb.kv_idx_in,
             use_flash);
         if (x == nullptr) {
-            std::fprintf(stderr,
-                         "qwen3_asr step(batched): block %d build failed\n", il);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "qwen3_asr step(batched): block %d build failed", il);
             sb.graph = nullptr;
             return sb;
         }

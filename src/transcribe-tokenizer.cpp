@@ -14,6 +14,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-unicode.h"
+#include "transcribe-log.h"
 
 #include "gguf.h"
 
@@ -340,9 +341,9 @@ transcribe_status encode_tiktoken_raw_bytes(
         // Whisper / tiktoken uses the GPT-2 regex; falling back to
         // raw bytes without a regex would produce a different
         // tokenization. Reject loudly.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "tokenizer.encode: pretokenizer \"%s\" not "
-                     "supported with raw-bytes vocab\n",
+                     "supported with raw-bytes vocab",
                      pre.c_str());
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -436,9 +437,9 @@ transcribe_status encode_tiktoken_raw_bytes(
                 const std::string sub(piece, j, 1);
                 const auto it2 = piece_to_id.find(sub);
                 if (it2 == piece_to_id.end()) {
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "tokenizer.encode: byte 0x%02X not in "
-                                 "vocab\n",
+                                 "vocab",
                                  static_cast<unsigned>(static_cast<unsigned char>(piece[j])));
                     return TRANSCRIBE_ERR_GGUF;
                 }
@@ -475,9 +476,9 @@ transcribe_status Tokenizer::encode(const std::string &    text,
         // under-merged output (every character its own token), which
         // is never what a caller wants. Surface the configuration
         // gap instead.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "tokenizer.encode: \"gpt2\" tokenizer loaded without "
-                     "tokenizer.ggml.merges; encode unavailable\n");
+                     "tokenizer.ggml.merges; encode unavailable");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (text.empty()) {
@@ -496,9 +497,9 @@ transcribe_status Tokenizer::encode(const std::string &    text,
         words = unicode::pretokenize_granite(text);
     } else {
         if (pre_ != "qwen2" && !pre_.empty()) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
                          "tokenizer.encode: unknown tokenizer.ggml.pre "
-                         "\"%s\"; falling back to qwen2\n", pre_.c_str());
+                         "\"%s\"; falling back to qwen2", pre_.c_str());
         }
         words = unicode::pretokenize_qwen2(text);
     }
@@ -614,9 +615,9 @@ transcribe_status Tokenizer::encode(const std::string &    text,
                 const std::string sub(piece, j, clen);
                 const auto it2 = piece_to_id_.find(sub);
                 if (it2 == piece_to_id_.end()) {
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "tokenizer.encode: byte-fallback piece "
-                                 "not in vocab (\"%s\")\n", sub.c_str());
+                                 "not in vocab (\"%s\")", sub.c_str());
                     return TRANSCRIBE_ERR_GGUF;
                 }
                 out_ids.push_back(it2->second);
@@ -767,9 +768,9 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
                 // llama.cpp's bpe_ranks loader.
                 const size_t sp = line.find(' ', 1);
                 if (sp == std::string::npos) {
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "tokenizer.load: merge %zu has no space "
-                                 "separator: \"%s\"\n", i, line.c_str());
+                                 "separator: \"%s\"", i, line.c_str());
                     return TRANSCRIBE_ERR_GGUF;
                 }
                 std::string key;

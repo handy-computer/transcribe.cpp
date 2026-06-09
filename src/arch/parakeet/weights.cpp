@@ -18,6 +18,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -86,9 +87,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         switch (read_int32_array_kv(gguf, "stt.parakeet.encoder.att_context_size_choices", flat)) {
             case KvResult::Ok:
                 if (flat.empty() || (flat.size() % 2) != 0) {
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: stt.parakeet.encoder.att_context_size_choices "
-                                 "has odd length %zu (expected pairs)\n", flat.size());
+                                 "has odd length %zu (expected pairs)", flat.size());
                     return TRANSCRIBE_ERR_GGUF;
                 }
                 hp.enc_att_context_size_choices.clear();
@@ -99,10 +100,10 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                 if (hp.enc_att_context_size_choices.front().first  != hp.enc_att_context_left ||
                     hp.enc_att_context_size_choices.front().second != hp.enc_att_context_right)
                 {
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: att_context_size_choices[0] = (%d, %d) "
                                  "but att_context_left/right = (%d, %d); "
-                                 "GGUF is inconsistent\n",
+                                 "GGUF is inconsistent",
                                  hp.enc_att_context_size_choices.front().first,
                                  hp.enc_att_context_size_choices.front().second,
                                  hp.enc_att_context_left, hp.enc_att_context_right);
@@ -118,9 +119,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                     hp.enc_att_context_left, hp.enc_att_context_right);
                 break;
             case KvResult::BadType:
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "parakeet: stt.parakeet.encoder.att_context_size_choices "
-                             "has wrong type (expected int32 array)\n");
+                             "has wrong type (expected int32 array)");
                 return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -141,9 +142,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                     out.clear();
                     return TRANSCRIBE_OK;
                 case KvResult::BadType:
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: %s has wrong type "
-                                 "(expected int32 array)\n", key);
+                                 "(expected int32 array)", key);
                     return TRANSCRIBE_ERR_GGUF;
             }
             return TRANSCRIBE_ERR_GGUF;
@@ -180,19 +181,19 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                 hp.enc_att_chunk_chunk_choices.empty() ||
                 hp.enc_att_chunk_right_choices.empty())
             {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "parakeet: att_context_style=chunked_limited_with_rc "
                              "requires non-empty att_chunk_{left,chunk,right}_choices "
-                             "arrays in the GGUF; got %zu/%zu/%zu entries\n",
+                             "arrays in the GGUF; got %zu/%zu/%zu entries",
                              hp.enc_att_chunk_left_choices.size(),
                              hp.enc_att_chunk_chunk_choices.size(),
                              hp.enc_att_chunk_right_choices.size());
                 return TRANSCRIBE_ERR_GGUF;
             }
         } else {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: unsupported att_context_style \"%s\" "
-                         "(allowed: regular, chunked_limited, chunked_limited_with_rc)\n",
+                         "(allowed: regular, chunked_limited, chunked_limited_with_rc)",
                          style.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -217,9 +218,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         } else if (norm_type == "layer_norm") {
             hp.enc_conv_norm_type = ParakeetHParams::ConvNormType::LayerNorm;
         } else {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: unsupported conv_norm_type \"%s\" "
-                         "(allowed: batch_norm, layer_norm)\n",
+                         "(allowed: batch_norm, layer_norm)",
                          norm_type.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -265,9 +266,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         } else if (head_kind_str == "ctc") {
             hp.head_kind = HeadKind::CTC;
         } else {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: unsupported head_kind \"%s\" "
-                         "(allowed: tdt, rnnt, ctc)\n",
+                         "(allowed: tdt, rnnt, ctc)",
                          head_kind_str.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -296,9 +297,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                 break;
             case KvResult::Absent:
             case KvResult::BadType:
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "parakeet: required KV \"stt.parakeet.tdt.durations\" "
-                             "missing or wrong type (head_kind=tdt)\n");
+                             "missing or wrong type (head_kind=tdt)");
                 return TRANSCRIBE_ERR_GGUF;
         }
         {
@@ -309,9 +310,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                     hp.tdt_max_symbols = static_cast<int32_t>(max_sym);
                     break;
                 case KvResult::BadType:
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: optional KV \"stt.parakeet.tdt.max_symbols\" "
-                                 "has wrong type\n");
+                                 "has wrong type");
                     return TRANSCRIBE_ERR_GGUF;
             }
         }
@@ -376,36 +377,36 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                                          hp.prompt_dictionary_locales)) {
                 case KvResult::Ok: break;
                 case KvResult::Absent:
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: stt.parakeet.prompt.dictionary.locales "
-                                 "is required when prompt.num_prompts > 0\n");
+                                 "is required when prompt.num_prompts > 0");
                     return TRANSCRIBE_ERR_GGUF;
                 case KvResult::BadType:
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: stt.parakeet.prompt.dictionary.locales "
-                                 "has wrong type (expected string array)\n");
+                                 "has wrong type (expected string array)");
                     return TRANSCRIBE_ERR_GGUF;
             }
             switch (read_int32_array_kv(gguf, "stt.parakeet.prompt.dictionary.indices",
                                         hp.prompt_dictionary_indices)) {
                 case KvResult::Ok: break;
                 case KvResult::Absent:
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: stt.parakeet.prompt.dictionary.indices "
-                                 "is required when prompt.num_prompts > 0\n");
+                                 "is required when prompt.num_prompts > 0");
                     return TRANSCRIBE_ERR_GGUF;
                 case KvResult::BadType:
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: stt.parakeet.prompt.dictionary.indices "
-                                 "has wrong type (expected int32 array)\n");
+                                 "has wrong type (expected int32 array)");
                     return TRANSCRIBE_ERR_GGUF;
             }
             if (hp.prompt_dictionary_locales.size() !=
                 hp.prompt_dictionary_indices.size())
             {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "parakeet: prompt dictionary locales/indices length "
-                             "mismatch (%zu vs %zu)\n",
+                             "mismatch (%zu vs %zu)",
                              hp.prompt_dictionary_locales.size(),
                              hp.prompt_dictionary_indices.size());
                 return TRANSCRIBE_ERR_GGUF;
@@ -423,31 +424,31 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
             // EncDecRNNTBPEModelWithPrompt). Other activations are a
             // future-variant concern.
             if (hp.prompt_activation != "relu") {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "parakeet: unsupported prompt activation \"%s\" "
-                             "(only \"relu\" is implemented)\n",
+                             "(only \"relu\" is implemented)",
                              hp.prompt_activation.c_str());
                 return TRANSCRIBE_ERR_GGUF;
             }
             if (hp.prompt_hidden <= 0) {
-                std::fprintf(stderr,
-                             "parakeet: prompt.hidden must be > 0 (got %d)\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "parakeet: prompt.hidden must be > 0 (got %d)",
                              hp.prompt_hidden);
                 return TRANSCRIBE_ERR_GGUF;
             }
             for (int32_t idx : hp.prompt_dictionary_indices) {
                 if (idx < 0 || idx >= hp.prompt_num_prompts) {
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "parakeet: prompt dictionary index %d out of range "
-                                 "[0, %d)\n", idx, hp.prompt_num_prompts);
+                                 "[0, %d)", idx, hp.prompt_num_prompts);
                     return TRANSCRIBE_ERR_GGUF;
                 }
             }
             if (hp.prompt_auto_id >= 0 &&
                 hp.prompt_auto_id >= hp.prompt_num_prompts)
             {
-                std::fprintf(stderr,
-                             "parakeet: prompt.auto_id %d out of range [0, %d)\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "parakeet: prompt.auto_id %d out of range [0, %d)",
                              hp.prompt_auto_id, hp.prompt_num_prompts);
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -461,22 +462,22 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         hp.enc_d_ff <= 0 || hp.enc_conv_kernel <= 0 ||
         hp.enc_subsampling_factor <= 0 || hp.enc_subsampling_channels <= 0)
     {
-        std::fprintf(stderr, "parakeet: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
-                     "parakeet: encoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet: encoder d_model (%d) not divisible by n_heads (%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.head_kind != HeadKind::CTC) {
         if (hp.pred_hidden <= 0 || hp.pred_n_layers <= 0 || hp.pred_vocab <= 1) {
-            std::fprintf(stderr, "parakeet: predictor hparams must be positive\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: predictor hparams must be positive");
             return TRANSCRIBE_ERR_GGUF;
         }
         if (hp.joint_hidden <= 0 || hp.joint_num_extra_outputs < 0) {
-            std::fprintf(stderr, "parakeet: joint hparams invalid\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: joint hparams invalid");
             return TRANSCRIBE_ERR_GGUF;
         }
         // Joint activation allow-list. The C++ joint forward implements
@@ -488,9 +489,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
             hp.joint_activation != "sigmoid" &&
             hp.joint_activation != "tanh")
         {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: unsupported joint activation \"%s\" "
-                         "(only relu, sigmoid, tanh are implemented)\n",
+                         "(only relu, sigmoid, tanh are implemented)",
                          hp.joint_activation.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -503,61 +504,61 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         // Zero is allowed and is the standard "stay on this frame, just
         // emit a token without advancing" duration.
         if (hp.tdt_durations.empty()) {
-            std::fprintf(stderr,
-                         "parakeet: stt.parakeet.tdt.durations must be non-empty (head_kind=tdt)\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "parakeet: stt.parakeet.tdt.durations must be non-empty (head_kind=tdt)");
             return TRANSCRIBE_ERR_GGUF;
         }
         if (static_cast<int32_t>(hp.tdt_durations.size()) != hp.joint_num_extra_outputs) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: stt.parakeet.tdt.durations length (%zu) "
-                         "must equal joint.num_extra_outputs (%d)\n",
+                         "must equal joint.num_extra_outputs (%d)",
                          hp.tdt_durations.size(), hp.joint_num_extra_outputs);
             return TRANSCRIBE_ERR_GGUF;
         }
         for (int32_t d : hp.tdt_durations) {
             if (d < 0) {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "parakeet: stt.parakeet.tdt.durations contains "
-                             "negative value %d\n", d);
+                             "negative value %d", d);
                 return TRANSCRIBE_ERR_GGUF;
             }
         }
         if (hp.tdt_max_symbols < 0) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: stt.parakeet.tdt.max_symbols must be >= 0 "
-                         "(got %d)\n", hp.tdt_max_symbols);
+                         "(got %d)", hp.tdt_max_symbols);
             return TRANSCRIBE_ERR_GGUF;
         }
     } else if (hp.head_kind == HeadKind::RNNT) {
         // RNNT joint emits exactly vocab+1 — no duration extras.
         if (hp.joint_num_extra_outputs != 0) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: head_kind=rnnt requires joint.num_extra_outputs=0 "
-                         "(got %d)\n", hp.joint_num_extra_outputs);
+                         "(got %d)", hp.joint_num_extra_outputs);
             return TRANSCRIBE_ERR_GGUF;
         }
     }
     if (hp.fe_num_mels <= 0 || hp.fe_sample_rate <= 0 ||
         hp.fe_n_fft <= 0 || hp.fe_win_length <= 0 || hp.fe_hop_length <= 0)
     {
-        std::fprintf(stderr, "parakeet: frontend dimensions must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: frontend dimensions must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_win_length > hp.fe_n_fft) {
-        std::fprintf(stderr,
-                     "parakeet: frontend win_length (%d) > n_fft (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet: frontend win_length (%d) > n_fft (%d)",
                      hp.fe_win_length, hp.fe_n_fft);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_f_min < 0.0f || hp.fe_f_max <= hp.fe_f_min) {
-        std::fprintf(stderr,
-                     "parakeet: frontend mel band invalid: f_min=%f f_max=%f\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet: frontend mel band invalid: f_min=%f f_max=%f",
                      hp.fe_f_min, hp.fe_f_max);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_dither < 0.0f) {
-        std::fprintf(stderr,
-                     "parakeet: frontend dither must be >= 0 (got %f)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet: frontend dither must be >= 0 (got %f)",
                      hp.fe_dither);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -565,8 +566,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         // Recognized-but-unsupported frontend type. Surfaces as
         // ERR_GGUF for now; if we add a non-mel STT family later,
         // this turns into a NOT_IMPLEMENTED branch.
-        std::fprintf(stderr,
-                     "parakeet: unsupported frontend type \"%s\" (only \"mel\")\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet: unsupported frontend type \"%s\" (only \"mel\")",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -586,9 +587,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     // Window: only symmetric Hann is implemented
     // (build_hann_window_symmetric_padded in transcribe-mel.cpp).
     if (hp.fe_window != "hann") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet: unsupported frontend window \"%s\" "
-                     "(only \"hann\" is implemented)\n",
+                     "(only \"hann\" is implemented)",
                      hp.fe_window.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -602,9 +603,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     // substituting per-feature on a GGUF that asked for something else
     // would be a confusing bug.
     if (hp.fe_normalize != "per_feature" && hp.fe_normalize != "none") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet: unsupported frontend normalize \"%s\" "
-                     "(only \"per_feature\" and \"none\" are implemented)\n",
+                     "(only \"per_feature\" and \"none\" are implemented)",
                      hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -616,9 +617,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     // n_fft=400 fails at load instead of producing nonsense mels.
     // (fe_n_fft > 0 was already enforced above.)
     if ((hp.fe_n_fft & (hp.fe_n_fft - 1)) != 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet: frontend n_fft (%d) must be a power of 2 "
-                     "(radix-2 FFT requirement)\n",
+                     "(radix-2 FFT requirement)",
                      hp.fe_n_fft);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -864,13 +865,13 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         // specified expected shape so the type+rank checks still fire.
         ggml_tensor * ctc_peek = ggml_get_tensor(ctx_meta, "head.ctc.weight");
         if (ctc_peek == nullptr) {
-            std::fprintf(stderr, "parakeet: missing tensor \"head.ctc.weight\"\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: missing tensor \"head.ctc.weight\"");
             return TRANSCRIBE_ERR_GGUF;
         }
         const int64_t n_classes = ctc_peek->ne[2];
         if (n_classes <= 1) {
-            std::fprintf(stderr,
-                         "parakeet: head.ctc.weight vocab+1 (=%lld) must be > 1\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "parakeet: head.ctc.weight vocab+1 (=%lld) must be > 1",
                          (long long)n_classes);
             return TRANSCRIBE_ERR_GGUF;
         }

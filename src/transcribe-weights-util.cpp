@@ -7,6 +7,7 @@
 // identical apart from the "parakeet:"/"cohere:" log prefix).
 
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -22,7 +23,7 @@ ggml_tensor * find_tensor(ggml_context *                    ctx_meta,
 {
     ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
     if (t == nullptr) {
-        std::fprintf(stderr, "%s: missing tensor \"%s\"\n", error_tag, name);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: missing tensor \"%s\"", error_tag, name);
         return nullptr;
     }
 
@@ -50,17 +51,17 @@ ggml_tensor * find_tensor(ggml_context *                    ctx_meta,
             off += static_cast<size_t>(n);
             first = false;
         }
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s: tensor \"%s\" type mismatch: "
-                     "expected one of {%s}, got %s\n",
+                     "expected one of {%s}, got %s",
                      error_tag, name, allowed_buf, ggml_type_name(t->type));
         return nullptr;
     }
 
     const size_t n_expected = expected_ne.size();
     if (n_expected == 0 || n_expected > GGML_MAX_DIMS) {
-        std::fprintf(stderr,
-                     "%s: bad expected_ne size %zu for \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: bad expected_ne size %zu for \"%s\"",
                      error_tag, n_expected, name);
         return nullptr;
     }
@@ -68,9 +69,9 @@ ggml_tensor * find_tensor(ggml_context *                    ctx_meta,
     auto it = expected_ne.begin();
     for (size_t i = 0; i < n_expected; ++i, ++it) {
         if (t->ne[i] != *it) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "%s: tensor \"%s\" shape mismatch: "
-                         "expected ne[%zu]=%lld, got %lld\n",
+                         "expected ne[%zu]=%lld, got %lld",
                          error_tag, name, i,
                          static_cast<long long>(*it),
                          static_cast<long long>(t->ne[i]));
@@ -82,9 +83,9 @@ ggml_tensor * find_tensor(ggml_context *                    ctx_meta,
     // higher-rank tensor with matching leading dims.
     for (size_t i = n_expected; i < GGML_MAX_DIMS; ++i) {
         if (t->ne[i] != 1) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "%s: tensor \"%s\" has unexpected non-1 "
-                         "ne[%zu]=%lld (rank too high)\n",
+                         "ne[%zu]=%lld (rank too high)",
                          error_tag, name, i,
                          static_cast<long long>(t->ne[i]));
             return nullptr;

@@ -88,11 +88,11 @@ transcribe_status resolve_specials(const transcribe::Tokenizer & tok,
     out.streaming_pad = hp.streaming_pad_token_id;
     out.n_left_pad   = 32;  // tekken streaming_n_left_pad_tokens
     if (out.bos < 0 || out.eos < 0) {
-        std::fprintf(stderr, "voxtral_realtime: tokenizer missing bos/eos id\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: tokenizer missing bos/eos id");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (out.streaming_pad < 0) {
-        std::fprintf(stderr, "voxtral_realtime: invalid streaming_pad token id\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: invalid streaming_pad token id");
         return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_OK;
@@ -225,7 +225,7 @@ transcribe_status load(Loader & loader,
     m->hparams.bos_token_id = m->tok.bos_id();
     m->hparams.eos_token_id = m->tok.eos_id();
     if (m->hparams.vocab_size != m->hparams.dec_vocab_size) {
-        std::fprintf(stderr, "voxtral_realtime: tokenizer vocab (%d) != decoder vocab_size (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: tokenizer vocab (%d) != decoder vocab_size (%d)",
                      m->hparams.vocab_size, m->hparams.dec_vocab_size);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -287,7 +287,7 @@ transcribe_status load(Loader & loader,
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr, "voxtral_realtime: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -483,7 +483,7 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
                                  int k_drafts,
                                  std::string & out_text) {
     if (!cm->mel.has_value()) {
-        std::fprintf(stderr, "voxtral_realtime run: model has no MelFrontend\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: model has no MelFrontend");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -494,7 +494,7 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
     const int64_t t_mel_start = ggml_time_us();
     if (ref_mel_dir != nullptr && ref_mel_dir[0] != '\0') {
         if (!read_ref_mel(ref_mel_dir, n_mels, cc->mel_buf, mel_n_frames)) {
-            std::fprintf(stderr, "voxtral_realtime run: failed to read ref mel from %s\n", ref_mel_dir);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: failed to read ref mel from %s", ref_mel_dir);
             return TRANSCRIBE_ERR_GGUF;
         }
     } else {
@@ -518,12 +518,12 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
         int mm = 0;
         if (auto st = cm->mel->compute(padded.data(), total, cc->mel_buf,
                                        mm, mel_n_frames, cc->n_threads); st != TRANSCRIBE_OK) {
-            std::fprintf(stderr, "voxtral_realtime run: mel compute failed (%s)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: mel compute failed (%s)",
                          transcribe_status_string(st));
             return st;
         }
         if (mm != n_mels) {
-            std::fprintf(stderr, "voxtral_realtime run: mel bins %d != %d\n", mm, n_mels);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: mel bins %d != %d", mm, n_mels);
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -597,7 +597,7 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
         }
         apply_threads(cc->sched, cc->n_threads);
         if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-            std::fprintf(stderr, "voxtral_realtime run: encoder compute failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: encoder compute failed");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -716,7 +716,7 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
         }
         apply_threads(cc->sched, cc->n_threads);
         if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
-            std::fprintf(stderr, "voxtral_realtime run: prefill compute failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: prefill compute failed");
             return TRANSCRIBE_ERR_GGUF;
         }
         cc->kv_cache.n = T_prompt; cc->kv_cache.head = T_prompt;
@@ -790,7 +790,7 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
                 ggml_backend_tensor_set(sb.mask_in, step_mask.data(), 0,
                                         static_cast<size_t>(max_n_kv) * sizeof(ggml_fp16_t));
                 if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
-                    std::fprintf(stderr, "voxtral_realtime run: step compute failed\n");
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: step compute failed");
                     return TRANSCRIBE_ERR_GGUF;
                 }
                 int32_t tok = 0;
@@ -892,7 +892,7 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
                                         verify_mask.size() * sizeof(ggml_fp16_t));
 
                 if (ggml_backend_sched_graph_compute(cc->sched, vb.graph) != GGML_STATUS_SUCCESS) {
-                    std::fprintf(stderr, "voxtral_realtime run: verify compute failed\n");
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: verify compute failed");
                     return TRANSCRIBE_ERR_GGUF;
                 }
 
@@ -930,9 +930,9 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
                 // spin on the same cur_pos.
                 if (static_cast<int>(all_ids.size()) == prev_size) {
                     if (!hit_eos) {
-                        std::fprintf(stderr,
+                        log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
                             "voxtral_realtime spec: no commit at cur_pos=%d "
-                            "(n_audio=%d, predicted[0]=%d) — breaking\n",
+                            "(n_audio=%d, predicted[0]=%d) — breaking",
                             cur_pos, n_audio, predicted[0]);
                     }
                     break;
@@ -997,7 +997,7 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
         }
         apply_threads(cc->sched, cc->n_threads);
         if (ggml_backend_sched_graph_compute(cc->sched, tf.graph) != GGML_STATUS_SUCCESS) {
-            std::fprintf(stderr, "voxtral_realtime run: teacher-forced dump compute failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: teacher-forced dump compute failed");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -1640,14 +1640,14 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
         const double enc_c = cc->stream_t_enc_compute_us / 1000.0;  // pure graph_compute
         const double enc_o = enc - enc_c;                           // build + alloc + host prep
         const double tot = mel + conv + enc + dec;
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "[stream-timing] mel=%.0fms (%.1f%%)  conv=%.0fms (%.1f%%)  enc=%.0fms (%.1f%%)"
-            " [compute=%.0f overhead=%.0f]  dec=%.0fms (%.1f%%)  sum=%.0fms\n",
+            " [compute=%.0f overhead=%.0f]  dec=%.0fms (%.1f%%)  sum=%.0fms",
             mel, tot > 0 ? 100.0 * mel / tot : 0.0, conv, tot > 0 ? 100.0 * conv / tot : 0.0,
             enc, tot > 0 ? 100.0 * enc / tot : 0.0, enc_c, enc_o,
             dec, tot > 0 ? 100.0 * dec / tot : 0.0, tot);
-        std::fprintf(stderr,
-            "[stream-mem] retained PCM=%zu samples (%.1fs)  audio-embeds=%zu frames  (vs %d total tokens)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+            "[stream-mem] retained PCM=%zu samples (%.1fs)  audio-embeds=%zu frames  (vs %d total tokens)",
             cc->stream_pcm.size(), static_cast<double>(cc->stream_pcm.size()) / std::max(1, hp.fe_sample_rate),
             cc->stream_audio_embeds.size() / std::max<size_t>(1, dec_h), cc->stream_n_tok_ready);
     }
@@ -1924,7 +1924,7 @@ transcribe_status run_batch_step_loop(
         ggml_backend_tensor_set(sb.kv_idx_in, kvidx_buf.data(), 0, kvidx_buf.size() * sizeof(int64_t));
         ggml_backend_tensor_set(sb.mask_in, mask_buf.data(), 0, mask_buf.size() * sizeof(ggml_fp16_t));
         if (ggml_backend_sched_graph_compute(cc->sched, sb.graph) != GGML_STATUS_SUCCESS) {
-            std::fprintf(stderr, "voxtral_realtime run_batch: step compute failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run_batch: step compute failed");
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_tensor_get(sb.out, out_buf.data(), 0, out_buf.size() * sizeof(int32_t));
@@ -2066,7 +2066,7 @@ transcribe_status run_batch(transcribe_session * session, const float * const * 
         }
         apply_threads(cc->sched, cc->n_threads);
         if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-            std::fprintf(stderr, "voxtral_realtime run_batch: encoder compute failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run_batch: encoder compute failed");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -2213,7 +2213,7 @@ transcribe_status run_batch(transcribe_session * session, const float * const * 
 
         apply_threads(cc->sched, cc->n_threads);
         if (ggml_backend_sched_graph_compute(cc->sched, pb.graph) != GGML_STATUS_SUCCESS) {
-            std::fprintf(stderr, "voxtral_realtime run_batch: prefill compute failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run_batch: prefill compute failed");
             return TRANSCRIBE_ERR_GGUF;
         }
         std::vector<int32_t> first(n, 0);

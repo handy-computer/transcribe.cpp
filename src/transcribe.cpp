@@ -83,6 +83,73 @@ extern "C" const char * transcribe_status_string(int status) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------------------
+
+// TRANSCRIBE_COMMIT is stamped by the build: the top-level CMakeLists.txt
+// captures `git rev-parse --short HEAD` at configure time and passes it as a
+// compile definition. Fall back to "unknown" for builds without git metadata
+// (source tarballs, etc.) so the accessor never returns NULL. TRANSCRIBE_VERSION
+// comes from <transcribe.h>, the single source of truth for the version.
+#ifndef TRANSCRIBE_COMMIT
+#define TRANSCRIBE_COMMIT "unknown"
+#endif
+
+extern "C" const char * transcribe_version(void) {
+    return TRANSCRIBE_VERSION;
+}
+
+extern "C" const char * transcribe_version_commit(void) {
+    return TRANSCRIBE_COMMIT;
+}
+
+// ---------------------------------------------------------------------------
+// ABI metadata
+// ---------------------------------------------------------------------------
+//
+// sizeof/alignof for the public structs, so a binding can verify its own
+// layout against this build before constructing instances. See the contract in
+// <transcribe.h>. Keep this switch in sync with the transcribe_abi_struct enum.
+
+extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
+    switch (which) {
+        case TRANSCRIBE_ABI_MODEL_LOAD_PARAMS: return sizeof(struct transcribe_model_load_params);
+        case TRANSCRIBE_ABI_SESSION_PARAMS:    return sizeof(struct transcribe_session_params);
+        case TRANSCRIBE_ABI_RUN_PARAMS:        return sizeof(struct transcribe_run_params);
+        case TRANSCRIBE_ABI_STREAM_PARAMS:     return sizeof(struct transcribe_stream_params);
+        case TRANSCRIBE_ABI_CAPABILITIES:      return sizeof(struct transcribe_capabilities);
+        case TRANSCRIBE_ABI_TIMINGS:           return sizeof(struct transcribe_timings);
+        case TRANSCRIBE_ABI_SEGMENT:           return sizeof(struct transcribe_segment);
+        case TRANSCRIBE_ABI_WORD:              return sizeof(struct transcribe_word);
+        case TRANSCRIBE_ABI_TOKEN:             return sizeof(struct transcribe_token);
+        case TRANSCRIBE_ABI_STREAM_UPDATE:     return sizeof(struct transcribe_stream_update);
+        case TRANSCRIBE_ABI_STREAM_TEXT:       return sizeof(struct transcribe_stream_text);
+        case TRANSCRIBE_ABI_SESSION_LIMITS:    return sizeof(struct transcribe_session_limits);
+        case TRANSCRIBE_ABI_EXT:               return sizeof(struct transcribe_ext);
+    }
+    return 0;  // unknown id: "cannot verify", never a real size
+}
+
+extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
+    switch (which) {
+        case TRANSCRIBE_ABI_MODEL_LOAD_PARAMS: return alignof(struct transcribe_model_load_params);
+        case TRANSCRIBE_ABI_SESSION_PARAMS:    return alignof(struct transcribe_session_params);
+        case TRANSCRIBE_ABI_RUN_PARAMS:        return alignof(struct transcribe_run_params);
+        case TRANSCRIBE_ABI_STREAM_PARAMS:     return alignof(struct transcribe_stream_params);
+        case TRANSCRIBE_ABI_CAPABILITIES:      return alignof(struct transcribe_capabilities);
+        case TRANSCRIBE_ABI_TIMINGS:           return alignof(struct transcribe_timings);
+        case TRANSCRIBE_ABI_SEGMENT:           return alignof(struct transcribe_segment);
+        case TRANSCRIBE_ABI_WORD:              return alignof(struct transcribe_word);
+        case TRANSCRIBE_ABI_TOKEN:             return alignof(struct transcribe_token);
+        case TRANSCRIBE_ABI_STREAM_UPDATE:     return alignof(struct transcribe_stream_update);
+        case TRANSCRIBE_ABI_STREAM_TEXT:       return alignof(struct transcribe_stream_text);
+        case TRANSCRIBE_ABI_SESSION_LIMITS:    return alignof(struct transcribe_session_limits);
+        case TRANSCRIBE_ABI_EXT:               return alignof(struct transcribe_ext);
+    }
+    return 0;
+}
+
 namespace {
 
 // Ordered rank for timestamp granularities, used by the dispatcher to
@@ -915,10 +982,10 @@ extern "C" transcribe_status transcribe_model_load_file(
     // argument" alone doesn't tell the caller which field tripped. When
     // multi-device support lands this check relaxes to `< 0 || >= n_devices`.
     if (params->gpu_device != 0) {
-        std::fprintf(stderr,
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
             "transcribe_model_load_file: gpu_device must be 0 (auto) in 0.x "
             "(got %d); multi-device selection is reserved for a "
-            "future release\n", params->gpu_device);
+            "future release", params->gpu_device);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -954,9 +1021,9 @@ extern "C" transcribe_status transcribe_model_load_file(
         }
         fin.read(reinterpret_cast<char *>(&magic), sizeof(magic));
         if (!fin || fin.gcount() != sizeof(magic)) {
-            std::fprintf(stderr,
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "transcribe_model_load_file: short read on file "
-                         "magic for %s\n", path);
+                         "magic for %s", path);
             return TRANSCRIBE_ERR_GGUF;
         }
     }

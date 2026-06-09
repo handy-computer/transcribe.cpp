@@ -4,6 +4,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -83,7 +84,7 @@ transcribe_status read_granite_nar_hparams(const gguf_context * gguf,
             case KvResult::Ok:     hp.enc_layer_indices = std::move(tmp); break;
             case KvResult::Absent: hp.enc_layer_indices = {-1}; break;
             case KvResult::BadType:
-                std::fprintf(stderr, "%s: encoder.layer_indices wrong type\n", kTag);
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: encoder.layer_indices wrong type", kTag);
                 return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -149,20 +150,20 @@ transcribe_status read_granite_nar_hparams(const gguf_context * gguf,
             case KvResult::Ok:     hp.ctc_chars = std::move(tmp); break;
             case KvResult::Absent: hp.ctc_chars.clear(); break;
             case KvResult::BadType:
-                std::fprintf(stderr, "%s: ctc_chars wrong type\n", kTag);
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: ctc_chars wrong type", kTag);
                 return TRANSCRIBE_ERR_GGUF;
         }
     }
 
     // Cross-field invariants.
     if (hp.prj_num_encoder_layers != (int32_t)hp.enc_layer_indices.size()) {
-        std::fprintf(stderr, "%s: prj_num_encoder_layers (%d) != "
-                     "len(enc_layer_indices) (%zu)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: prj_num_encoder_layers (%d) != "
+                     "len(enc_layer_indices) (%zu)",
                      kTag, hp.prj_num_encoder_layers, hp.enc_layer_indices.size());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_hidden != hp.prj_llm_dim) {
-        std::fprintf(stderr, "%s: dec_hidden (%d) != prj_llm_dim (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: dec_hidden (%d) != prj_llm_dim (%d)",
                      kTag, hp.dec_hidden, hp.prj_llm_dim);
         return TRANSCRIBE_ERR_GGUF;
     }

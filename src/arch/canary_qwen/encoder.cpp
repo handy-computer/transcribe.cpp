@@ -17,6 +17,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -101,16 +102,16 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_mel_frames <= 0) {
-        std::fprintf(stderr,
-                     "canary_qwen encoder: invalid arg (ctx=%p, n_mel_frames=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary_qwen encoder: invalid arg (ctx=%p, n_mel_frames=%d)",
                      static_cast<void *>(ctx), n_mel_frames);
         return eb;
     }
 
     if (hp.enc_subsampling_factor != 8 || hp.fe_num_mels != 128) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "canary_qwen encoder: unsupported geometry "
-                     "subsampling_factor=%d num_mels=%d\n",
+                     "subsampling_factor=%d num_mels=%d",
                      hp.enc_subsampling_factor, hp.fe_num_mels);
         return eb;
     }
@@ -214,7 +215,7 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, 16384, false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr, "canary_qwen encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

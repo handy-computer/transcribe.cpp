@@ -8,6 +8,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -39,8 +40,8 @@ transcribe_status read_gigaam_hparams(const gguf_context * gguf,
         } else if (head_kind_str == "ctc") {
             hp.head_kind = HeadKind::CTC;
         } else {
-            std::fprintf(stderr,
-                         "gigaam: unsupported stt.gigaam.head_kind=%s\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "gigaam: unsupported stt.gigaam.head_kind=%s",
                          head_kind_str.c_str());
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -60,21 +61,21 @@ transcribe_status read_gigaam_hparams(const gguf_context * gguf,
     if (auto st = read_required_string_kv(gguf, "stt.gigaam.encoder.conv_norm_type",  kFamilyTag, hp.enc_conv_norm_type);  st != TRANSCRIBE_OK) return st;
 
     if (hp.enc_n_heads <= 0 || hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "gigaam: invariant d_model %% n_heads != 0 "
-                     "(d_model=%d, n_heads=%d)\n",
+                     "(d_model=%d, n_heads=%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_self_attention_model != "rotary") {
-        std::fprintf(stderr,
-                     "gigaam: unsupported self_attention_model=%s (expected rotary)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "gigaam: unsupported self_attention_model=%s (expected rotary)",
                      hp.enc_self_attention_model.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_conv_norm_type != "layer_norm") {
-        std::fprintf(stderr,
-                     "gigaam: unsupported conv_norm_type=%s (expected layer_norm)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "gigaam: unsupported conv_norm_type=%s (expected layer_norm)",
                      hp.enc_conv_norm_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -87,8 +88,8 @@ transcribe_status read_gigaam_hparams(const gguf_context * gguf,
         if (auto st = read_required_u32_kv(gguf, "stt.gigaam.joint.num_classes",  kFamilyTag, hp.joint_n_classes); st != TRANSCRIBE_OK) return st;
         if (auto st = read_required_string_kv(gguf, "stt.gigaam.joint.activation", kFamilyTag, hp.joint_activation); st != TRANSCRIBE_OK) return st;
         if (hp.pred_vocab != hp.joint_n_classes) {
-            std::fprintf(stderr,
-                         "gigaam: pred_vocab (%d) != joint_n_classes (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "gigaam: pred_vocab (%d) != joint_n_classes (%d)",
                          hp.pred_vocab, hp.joint_n_classes);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -96,8 +97,8 @@ transcribe_status read_gigaam_hparams(const gguf_context * gguf,
         if (auto st = read_required_u32_kv(gguf, "stt.gigaam.head.feat_in",     kFamilyTag, hp.head_feat_in);   st != TRANSCRIBE_OK) return st;
         if (auto st = read_required_u32_kv(gguf, "stt.gigaam.head.num_classes", kFamilyTag, hp.head_n_classes); st != TRANSCRIBE_OK) return st;
         if (hp.head_feat_in != hp.enc_d_model) {
-            std::fprintf(stderr,
-                         "gigaam: ctc head.feat_in (%d) != encoder.d_model (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "gigaam: ctc head.feat_in (%d) != encoder.d_model (%d)",
                          hp.head_feat_in, hp.enc_d_model);
             return TRANSCRIBE_ERR_GGUF;
         }

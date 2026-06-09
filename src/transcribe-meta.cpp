@@ -11,6 +11,7 @@
 #include "transcribe-meta.h"
 
 #include "transcribe-model.h"
+#include "transcribe-log.h"
 
 #include "gguf.h"
 
@@ -198,8 +199,8 @@ transcribe_status read_required_u32_kv(const gguf_context * gguf,
             return TRANSCRIBE_OK;
         case KvResult::Absent:
         case KvResult::BadType:
-            std::fprintf(stderr,
-                         "%s: required KV \"%s\" missing or wrong type\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: required KV \"%s\" missing or wrong type",
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
@@ -218,8 +219,8 @@ transcribe_status read_required_f32_kv(const gguf_context * gguf,
             return TRANSCRIBE_OK;
         case KvResult::Absent:
         case KvResult::BadType:
-            std::fprintf(stderr,
-                         "%s: required KV \"%s\" missing or wrong type\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: required KV \"%s\" missing or wrong type",
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
@@ -238,8 +239,8 @@ transcribe_status read_required_string_kv(const gguf_context * gguf,
             return TRANSCRIBE_OK;
         case KvResult::Absent:
         case KvResult::BadType:
-            std::fprintf(stderr,
-                         "%s: required KV \"%s\" missing or wrong type\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: required KV \"%s\" missing or wrong type",
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
@@ -261,8 +262,8 @@ transcribe_status read_optional_bool_kv(const gguf_context * gguf,
             out = tmp;
             return TRANSCRIBE_OK;
         case KvResult::BadType:
-            std::fprintf(stderr,
-                         "%s: optional KV \"%s\" has wrong type\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: optional KV \"%s\" has wrong type",
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
@@ -284,8 +285,8 @@ transcribe_status read_optional_string_kv(const gguf_context * gguf,
             out = std::move(v);
             return TRANSCRIBE_OK;
         case KvResult::BadType:
-            std::fprintf(stderr,
-                         "%s: optional KV \"%s\" has wrong type\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: optional KV \"%s\" has wrong type",
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
@@ -307,8 +308,8 @@ transcribe_status read_optional_int32_kv(const gguf_context * gguf,
             out = tmp;
             return TRANSCRIBE_OK;
         case KvResult::BadType:
-            std::fprintf(stderr,
-                         "%s: optional KV \"%s\" has wrong type\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: optional KV \"%s\" has wrong type",
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }

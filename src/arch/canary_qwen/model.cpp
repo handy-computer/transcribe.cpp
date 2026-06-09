@@ -219,8 +219,8 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
     for (const auto & p : pieces) {
         const int id = tok.find(p.piece);
         if (id < 0) {
-            std::fprintf(stderr,
-                         "canary_qwen: chat-template piece \"%s\" not in tokenizer\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "canary_qwen: chat-template piece \"%s\" not in tokenizer",
                          p.piece);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -231,9 +231,9 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
 
 transcribe_status build_static_prompt_segments(CanaryQwenModel & m) {
     if (!m.tok.has_encoder()) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "canary_qwen: tokenizer has no BPE encoder — cannot "
-                     "tokenize chat template at load time\n");
+                     "tokenize chat template at load time");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -245,7 +245,7 @@ transcribe_status build_static_prompt_segments(CanaryQwenModel & m) {
         if (auto st = m.tok.encode("user\nTranscribe the following: ", ids);
             st != TRANSCRIBE_OK)
         {
-            std::fprintf(stderr, "canary_qwen: prefix BPE encode failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen: prefix BPE encode failed");
             return st;
         }
         m.prompt_prefix_ids.insert(m.prompt_prefix_ids.end(),
@@ -387,8 +387,8 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
     m.conv_pw_f32_buffer = ggml_backend_alloc_ctx_tensors(
         m.conv_pw_f32_ctx, m.plan.primary);
     if (m.conv_pw_f32_buffer == nullptr) {
-        std::fprintf(stderr,
-            "canary_qwen: conv F16->F32 promotion buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "canary_qwen: conv F16->F32 promotion buffer alloc failed");
         ggml_free(m.conv_pw_f32_ctx);
         m.conv_pw_f32_ctx = nullptr;
         return TRANSCRIBE_ERR_BACKEND;
@@ -398,8 +398,8 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
 
     const auto * f16_traits = ggml_get_type_traits(GGML_TYPE_F16);
     if (f16_traits == nullptr || f16_traits->to_float == nullptr) {
-        std::fprintf(stderr,
-            "canary_qwen: no f16 to_float trait — skipping conv promotion\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+            "canary_qwen: no f16 to_float trait — skipping conv promotion");
         ggml_backend_buffer_free(m.conv_pw_f32_buffer);
         m.conv_pw_f32_buffer = nullptr;
         ggml_free(m.conv_pw_f32_ctx);
@@ -428,8 +428,8 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
         *slots[i].dst_slot = dst;
     }
 
-    std::fprintf(stderr,
-        "canary_qwen: promoted %zu F16 conv weights to F32\n", slots.size());
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+        "canary_qwen: promoted %zu F16 conv weights to F32", slots.size());
     return TRANSCRIBE_OK;
 }
 
@@ -518,8 +518,8 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
     m.linear_f32_buffer = ggml_backend_alloc_ctx_tensors(
         m.linear_f32_ctx, m.plan.primary);
     if (m.linear_f32_buffer == nullptr) {
-        std::fprintf(stderr,
-            "canary_qwen: BF16→F32 linear promotion buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "canary_qwen: BF16→F32 linear promotion buffer alloc failed");
         ggml_free(m.linear_f32_ctx);
         m.linear_f32_ctx = nullptr;
         return TRANSCRIBE_ERR_BACKEND;
@@ -529,8 +529,8 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
 
     const auto * bf16_traits = ggml_get_type_traits(GGML_TYPE_BF16);
     if (bf16_traits == nullptr || bf16_traits->to_float == nullptr) {
-        std::fprintf(stderr,
-            "canary_qwen: no bf16 to_float trait — skipping linear promotion\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+            "canary_qwen: no bf16 to_float trait — skipping linear promotion");
         ggml_backend_buffer_free(m.linear_f32_buffer);
         m.linear_f32_buffer = nullptr;
         ggml_free(m.linear_f32_ctx);
@@ -559,8 +559,8 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
         *slots[i].dst_slot = dst;
     }
 
-    std::fprintf(stderr,
-        "canary_qwen: promoted %zu BF16 linear weights to F32 for CPU backend\n",
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+        "canary_qwen: promoted %zu BF16 linear weights to F32 for CPU backend",
         slots.size());
     return TRANSCRIBE_OK;
 }
@@ -634,14 +634,14 @@ transcribe_status load(
     m->hparams.eos_token_id = m->tok.eos_id();
 
     if (m->hparams.vocab_size != m->hparams.dec_vocab_size) {
-        std::fprintf(stderr,
-                     "canary_qwen: tokenizer vocab (%d) != decoder vocab_size (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary_qwen: tokenizer vocab (%d) != decoder vocab_size (%d)",
                      m->hparams.vocab_size, m->hparams.dec_vocab_size);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (m->hparams.eos_token_id < 0) {
-        std::fprintf(stderr,
-                     "canary_qwen: GGUF tokenizer has no eos_token_id\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary_qwen: GGUF tokenizer has no eos_token_id");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -719,8 +719,8 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "canary_qwen: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary_qwen: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -908,8 +908,8 @@ transcribe_status run(transcribe_session *      context,
                                     cc->n_threads);
         mst != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr,
-                     "canary_qwen run: MelFrontend::compute failed (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary_qwen run: MelFrontend::compute failed (%s)",
                      transcribe_status_string(mst));
         return mst;
     }
@@ -927,7 +927,7 @@ transcribe_status run(transcribe_session *      context,
         ip.no_alloc   = true;
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr, "canary_qwen run: ggml_init failed (encoder)\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary_qwen run: ggml_init failed (encoder)");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -944,8 +944,8 @@ transcribe_status run(transcribe_session *      context,
             static_cast<int>(cm->plan.scheduler_list.size()),
             16384, /*parallel=*/false, /*op_offload=*/true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr,
-                         "canary_qwen run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "canary_qwen run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -988,8 +988,8 @@ transcribe_status run(transcribe_session *      context,
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "canary_qwen run: encoder compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary_qwen run: encoder compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -1167,8 +1167,8 @@ transcribe_status run(transcribe_session *      context,
                 ggml_backend_sched_graph_compute(cc->sched, pb.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "canary_qwen run: prefill compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "canary_qwen run: prefill compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -1251,12 +1251,12 @@ transcribe_status run(transcribe_session *      context,
             ggml_tensor * t = ggml_graph_node(sb.graph, ni);
             if (t != nullptr) op_counts[t->op] += 1;
         }
-        std::fprintf(stderr, "[profile_decode] step graph: n_nodes=%d\n", n_nodes);
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG, "[profile_decode] step graph: n_nodes=%d", n_nodes);
         int shown = 0;
         for (int o = 0; o < GGML_OP_COUNT && shown < 12; ++o) {
             if (op_counts[o] > 0) {
-                std::fprintf(stderr,
-                    "[profile_decode]   op %-22s x %4d\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                    "[profile_decode]   op %-22s x %4d",
                     ggml_op_name(static_cast<ggml_op>(o)), op_counts[o]);
                 ++shown;
             }
@@ -1316,8 +1316,8 @@ transcribe_status run(transcribe_session *      context,
                 ggml_backend_sched_graph_compute(cc->sched, sb.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "canary_qwen run: step compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "canary_qwen run: step compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -1358,14 +1358,14 @@ transcribe_status run(transcribe_session *      context,
 
     if (profile_decode) {
         const int n = n_steps;
-        std::fprintf(stderr,
-            "[profile_decode] T_prompt=%d max_n_kv=%d steps=%d use_flash=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+            "[profile_decode] T_prompt=%d max_n_kv=%d steps=%d use_flash=%d",
             T_prompt, max_n_kv, n, cc->decoder_use_flash ? 1 : 0);
-        std::fprintf(stderr,
-            "[profile_decode] prefill_compute=%.2f ms\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+            "[profile_decode] prefill_compute=%.2f ms",
             t_prefill_compute_us / 1000.0);
-        std::fprintf(stderr,
-            "[profile_decode] step totals: input_set=%.2f ms compute=%.2f ms argmax_get=%.2f ms\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+            "[profile_decode] step totals: input_set=%.2f ms compute=%.2f ms argmax_get=%.2f ms",
             t_step_input_set_us / 1000.0, t_step_compute_us / 1000.0,
             t_step_argmax_get_us / 1000.0);
         if (n > 0) {
@@ -1376,16 +1376,16 @@ transcribe_status run(transcribe_session *      context,
                 if (idx >= sorted.size()) idx = sorted.size() - 1;
                 return sorted[idx] / 1000.0;
             };
-            std::fprintf(stderr,
-                "[profile_decode] per-step compute ms: mean=%.2f p50=%.2f p90=%.2f p99=%.2f min=%.2f max=%.2f\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                "[profile_decode] per-step compute ms: mean=%.2f p50=%.2f p90=%.2f p99=%.2f min=%.2f max=%.2f",
                 (t_step_compute_us / 1000.0) / n,
                 pct(0.50), pct(0.90), pct(0.99),
                 sorted.front() / 1000.0, sorted.back() / 1000.0);
-            std::fprintf(stderr,
-                "[profile_decode] per-step input_set ms: mean=%.3f\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                "[profile_decode] per-step input_set ms: mean=%.3f",
                 (t_step_input_set_us / 1000.0) / n);
-            std::fprintf(stderr,
-                "[profile_decode] per-step argmax_get ms: mean=%.3f\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                "[profile_decode] per-step argmax_get ms: mean=%.3f",
                 (t_step_argmax_get_us / 1000.0) / n);
         }
     }

@@ -9,6 +9,7 @@
 
 #include "causal_lm.h"
 #include "transcribe-session.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -77,8 +78,8 @@ bool kv_init(KvCache &      cache,
              ggml_type      kv_type)
 {
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr,
-                     "causal_lm kv_init: unsupported kv_type=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "causal_lm kv_init: unsupported kv_type=%d",
                      static_cast<int>(kv_type));
         return false;
     }
@@ -91,7 +92,7 @@ bool kv_init(KvCache &      cache,
 
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "causal_lm kv_init: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "causal_lm kv_init: ggml_init failed");
         return false;
     }
 
@@ -104,7 +105,7 @@ bool kv_init(KvCache &      cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "causal_lm kv_init: buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "causal_lm kv_init: buffer alloc failed");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -136,8 +137,8 @@ bool kv_init_batched(KvCache &      cache,
         return true;
     }
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr,
-                     "causal_lm kv_init_batched: unsupported kv_type=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "causal_lm kv_init_batched: unsupported kv_type=%d",
                      static_cast<int>(kv_type));
         return false;
     }
@@ -150,7 +151,7 @@ bool kv_init_batched(KvCache &      cache,
 
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "causal_lm kv_init_batched: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "causal_lm kv_init_batched: ggml_init failed");
         return false;
     }
 
@@ -167,8 +168,8 @@ bool kv_init_batched(KvCache &      cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr,
-                     "causal_lm kv_init_batched: buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "causal_lm kv_init_batched: buffer alloc failed");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -783,8 +784,8 @@ ggml_tensor * block_step_batched(
     } else {
         // The manual GQA path is single-shot only; batched decode requires
         // flash. Callers gate on use_flash and fall back to serial run().
-        std::fprintf(stderr,
-                     "causal_lm block_step_batched: non-flash path unsupported\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "causal_lm block_step_batched: non-flash path unsupported");
         return nullptr;
     }
 
@@ -911,8 +912,8 @@ ggml_tensor * block_prefill_batched(
                                 scale_attn, 0.0f, 0.0f);
         o = ggml_reshape_3d(ctx, o, q_dim, T, B);
     } else {
-        std::fprintf(stderr,
-                     "causal_lm block_prefill_batched: non-flash unsupported\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "causal_lm block_prefill_batched: non-flash unsupported");
         return nullptr;
     }
 
@@ -956,8 +957,8 @@ bool pack_gate_up(ggml_backend_t                  backend,
     if (backend == nullptr || hidden <= 0 || intermediate <= 0 ||
         entries.empty())
     {
-        std::fprintf(stderr,
-                     "%s: pack_gate_up invalid args (hidden=%d intermediate=%d n=%zu)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: pack_gate_up invalid args (hidden=%d intermediate=%d n=%zu)",
                      error_tag, hidden, intermediate, entries.size());
         return false;
     }
@@ -971,8 +972,8 @@ bool pack_gate_up(ggml_backend_t                  backend,
 
     out_handles.ctx = ggml_init(packed_params);
     if (out_handles.ctx == nullptr) {
-        std::fprintf(stderr,
-                     "%s: pack_gate_up ggml_init failed\n", error_tag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: pack_gate_up ggml_init failed", error_tag);
         return false;
     }
 
@@ -984,14 +985,14 @@ bool pack_gate_up(ggml_backend_t                  backend,
         if (e.gate_w == nullptr || e.up_w == nullptr ||
             e.gate_up_w_out == nullptr)
         {
-            std::fprintf(stderr,
-                         "%s: pack_gate_up entry %zu has null member\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: pack_gate_up entry %zu has null member",
                          error_tag, i);
             return false;
         }
         if (e.gate_w->type != e.up_w->type) {
-            std::fprintf(stderr,
-                         "%s: pack_gate_up entry %zu gate/up type mismatch (%d vs %d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: pack_gate_up entry %zu gate/up type mismatch (%d vs %d)",
                          error_tag, i,
                          static_cast<int>(e.gate_w->type),
                          static_cast<int>(e.up_w->type));
@@ -1000,8 +1001,8 @@ bool pack_gate_up(ggml_backend_t                  backend,
         ggml_tensor * t = ggml_new_tensor_2d(
             out_handles.ctx, e.gate_w->type, hidden, 2 * intermediate);
         if (t == nullptr) {
-            std::fprintf(stderr,
-                         "%s: pack_gate_up new_tensor_2d failed at %zu\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: pack_gate_up new_tensor_2d failed at %zu",
                          error_tag, i);
             return false;
         }
@@ -1011,8 +1012,8 @@ bool pack_gate_up(ggml_backend_t                  backend,
     out_handles.buffer = ggml_backend_alloc_ctx_tensors(
         out_handles.ctx, backend);
     if (out_handles.buffer == nullptr) {
-        std::fprintf(stderr,
-                     "%s: pack_gate_up backend buffer alloc failed\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: pack_gate_up backend buffer alloc failed",
                      error_tag);
         return false;
     }
@@ -1028,8 +1029,8 @@ bool pack_gate_up(ggml_backend_t                  backend,
         const size_t  gate_bytes = ggml_nbytes(e.gate_w);
         const size_t  up_bytes   = ggml_nbytes(e.up_w);
         if (ggml_nbytes(gate_up) != gate_bytes + up_bytes) {
-            std::fprintf(stderr,
-                         "%s: pack_gate_up size mismatch (%zu vs %zu + %zu)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: pack_gate_up size mismatch (%zu vs %zu + %zu)",
                          error_tag, ggml_nbytes(gate_up), gate_bytes, up_bytes);
             return false;
         }

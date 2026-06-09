@@ -6,6 +6,7 @@
 #include "encoder.h"
 
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -215,9 +216,9 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     eb.timing = timing;
 
     if (ctx == nullptr || timing.n_chunks <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr encoder: invalid arg "
-                     "(ctx=%p, n_chunks=%d)\n",
+                     "(ctx=%p, n_chunks=%d)",
                      static_cast<void *>(ctx), timing.n_chunks);
         return eb;
     }
@@ -294,9 +295,9 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     const int64_t W_ds = x->ne[0];
     const int64_t H_ds = x->ne[1];
     if (W_ds != T_per_chunk) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr encoder: post-conv W=%lld does not match "
-                     "per_chunk_aftercnn=%lld\n",
+                     "per_chunk_aftercnn=%lld",
                      static_cast<long long>(W_ds),
                      static_cast<long long>(T_per_chunk));
         return eb;
@@ -406,8 +407,8 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // leaves headroom for debug-name nodes.
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "qwen3_asr encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -433,9 +434,9 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
 {
     EncoderBuildBatched eb {};
     if (ctx == nullptr || n_chunks_max <= 0 || n_batch <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr encoder(batched): invalid arg "
-                     "(n_chunks_max=%d, n_batch=%d)\n", n_chunks_max, n_batch);
+                     "(n_chunks_max=%d, n_batch=%d)", n_chunks_max, n_batch);
         return eb;
     }
 
@@ -487,9 +488,9 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
     const int64_t W_ds = x->ne[0];
     const int64_t H_ds = x->ne[1];
     if (W_ds != T_per_chunk) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr encoder(batched): post-conv W=%lld != "
-                     "per_chunk_aftercnn=%lld\n",
+                     "per_chunk_aftercnn=%lld",
                      static_cast<long long>(W_ds),
                      static_cast<long long>(T_per_chunk));
         return eb;
@@ -531,8 +532,8 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "qwen3_asr encoder(batched): ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr encoder(batched): ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

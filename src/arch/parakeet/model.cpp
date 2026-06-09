@@ -51,6 +51,7 @@
 #include "transcribe-loader.h"
 #include "transcribe-mel.h"
 #include "transcribe-meta.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -377,9 +378,9 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
                              : (hp.enc_conv_kernel - 1);
 
     if (n_layer <= 0 || d_model <= 0 || T_cache <= 0 || k_minus_1 <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet stream init_caches: degenerate sizes "
-                     "(n_layer=%d, d_model=%d, T_cache=%d, k-1=%d)\n",
+                     "(n_layer=%d, d_model=%d, T_cache=%d, k-1=%d)",
                      n_layer, d_model, T_cache, k_minus_1);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -394,8 +395,8 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
     ip.no_alloc   = true;
     pc->stream_caches.ctx = ggml_init(ip);
     if (pc->stream_caches.ctx == nullptr) {
-        std::fprintf(stderr,
-                     "parakeet stream init_caches: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet stream init_caches: ggml_init failed");
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -425,8 +426,8 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
     pc->stream_caches.buffer =
         ggml_backend_alloc_ctx_tensors(pc->stream_caches.ctx, pm->plan.primary);
     if (pc->stream_caches.buffer == nullptr) {
-        std::fprintf(stderr,
-                     "parakeet stream init_caches: backend buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet stream init_caches: backend buffer alloc failed");
         ggml_free(pc->stream_caches.ctx);
         pc->stream_caches.ctx = nullptr;
         return TRANSCRIBE_ERR_BACKEND;
@@ -707,8 +708,8 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "parakeet: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -1190,8 +1191,8 @@ static transcribe_status run_one_shot_inner(
     // on the model. compute() is documented thread-safe across
     // contexts since the instance is const-after-construction.
     if (!pm->mel.has_value()) {
-        std::fprintf(stderr,
-                     "parakeet run: model has no MelFrontend (load skipped?)\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet run: model has no MelFrontend (load skipped?)");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     const int64_t t_mel_start = ggml_time_us();
@@ -1202,8 +1203,8 @@ static transcribe_status run_one_shot_inner(
             pc->mel_buf, mel_n_mels, mel_n_frames);
         mst != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr,
-                     "parakeet run: MelFrontend::compute failed (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet run: MelFrontend::compute failed (%s)",
                      transcribe_status_string(mst));
         return mst;
     }
@@ -1239,8 +1240,8 @@ static transcribe_status run_one_shot_inner(
         init_params.no_alloc   = true;
         pc->compute_ctx = ggml_init(init_params);
         if (pc->compute_ctx == nullptr) {
-            std::fprintf(stderr,
-                         "parakeet run: ggml_init for compute_ctx failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "parakeet run: ggml_init for compute_ctx failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -1271,15 +1272,15 @@ static transcribe_status run_one_shot_inner(
             static_cast<int>(pm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
         if (pc->sched == nullptr) {
-            std::fprintf(stderr,
-                         "parakeet run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "parakeet run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
     ggml_backend_sched_reset(pc->sched);
     if (!ggml_backend_sched_alloc_graph(pc->sched, eb.graph)) {
-        std::fprintf(stderr,
-                     "parakeet run: ggml_backend_sched_alloc_graph failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet run: ggml_backend_sched_alloc_graph failed");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -1309,9 +1310,9 @@ static transcribe_status run_one_shot_inner(
             (params != nullptr) ? params->language : nullptr;
         const int32_t pid = resolve_prompt_id(pm->hparams, lang_hint);
         if (pid < 0) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet run: language %s%s%s not in prompt "
-                         "dictionary\n",
+                         "dictionary",
                          lang_hint ? "\"" : "",
                          lang_hint ? lang_hint : "<null>",
                          lang_hint ? "\"" : "");
@@ -1321,9 +1322,9 @@ static transcribe_status run_one_shot_inner(
         if (!fill_prompt_one_hot(one_hot_buf, P, T_oh, /*n_batch=*/1,
                                  {pid}))
         {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet run: prompt_id %d out of range "
-                         "[0, %d)\n", pid, P);
+                         "[0, %d)", pid, P);
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_tensor_set(eb.prompt_one_hot_in, one_hot_buf.data(),
@@ -1469,8 +1470,8 @@ static transcribe_status run_one_shot_inner(
             ggml_backend_sched_graph_compute(pc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "parakeet run: ggml_backend_sched_graph_compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet run: ggml_backend_sched_graph_compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -1564,9 +1565,9 @@ static transcribe_status run_one_shot_inner(
     const int d_enc = static_cast<int>(eb.out->ne[0]);
     const int T_enc = static_cast<int>(eb.out->ne[1]);
     if (d_enc <= 0 || T_enc <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet run: encoder output has degenerate shape "
-                     "[%d, %d]\n", d_enc, T_enc);
+                     "[%d, %d]", d_enc, T_enc);
         return TRANSCRIBE_ERR_GGUF;
     }
     pc->enc_host.resize(static_cast<size_t>(d_enc) *
@@ -1810,9 +1811,9 @@ static transcribe_status run_batch_encode(
             (params != nullptr) ? params->language : nullptr;
         const int32_t pid = resolve_prompt_id(pm->hparams, lang_hint);
         if (pid < 0) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet run_batch: language %s%s%s not in prompt "
-                         "dictionary\n",
+                         "dictionary",
                          lang_hint ? "\"" : "",
                          lang_hint ? lang_hint : "<null>",
                          lang_hint ? "\"" : "");
@@ -1821,9 +1822,9 @@ static transcribe_status run_batch_encode(
         std::vector<int32_t> pids(static_cast<size_t>(n), pid);
         std::vector<float> one_hot_buf;
         if (!fill_prompt_one_hot(one_hot_buf, P, T_oh, /*n_batch=*/n, pids)) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet run_batch: prompt_id %d out of range "
-                         "[0, %d)\n", pid, P);
+                         "[0, %d)", pid, P);
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_tensor_set(eb.prompt_one_hot_in, one_hot_buf.data(),
@@ -1880,7 +1881,7 @@ static transcribe_status run_batch_encode(
             ggml_backend_sched_graph_compute(pc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr, "parakeet run_batch: graph_compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet run_batch: graph_compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -2251,7 +2252,7 @@ transcribe_status emit_streaming_chunk(
     ip.no_alloc   = true;
     pc->compute_ctx = ggml_init(ip);
     if (pc->compute_ctx == nullptr) {
-        std::fprintf(stderr, "parakeet stream: ggml_init compute_ctx failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: ggml_init compute_ctx failed");
         return TRANSCRIBE_ERR_OOM;
     }
 
@@ -2312,13 +2313,13 @@ transcribe_status emit_streaming_chunk(
             static_cast<int>(pm->plan.scheduler_list.size()),
             /*graph_size=*/8192, /*parallel=*/false, /*op_offload=*/true);
         if (pc->sched == nullptr) {
-            std::fprintf(stderr, "parakeet stream: sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: sched_new failed");
             return TRANSCRIBE_ERR_BACKEND;
         }
     }
     ggml_backend_sched_reset(pc->sched);
     if (!ggml_backend_sched_alloc_graph(pc->sched, eb.graph)) {
-        std::fprintf(stderr, "parakeet stream: alloc_graph failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet stream: alloc_graph failed");
         return TRANSCRIBE_ERR_BACKEND;
     }
 
@@ -2360,9 +2361,9 @@ transcribe_status emit_streaming_chunk(
         const char * lang_hint = pc->stream_run_params.language;
         const int32_t pid = resolve_prompt_id(pm->hparams, lang_hint);
         if (pid < 0) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet stream: language %s%s%s not in prompt "
-                         "dictionary\n",
+                         "dictionary",
                          lang_hint ? "\"" : "",
                          lang_hint ? lang_hint : "<null>",
                          lang_hint ? "\"" : "");
@@ -2372,9 +2373,9 @@ transcribe_status emit_streaming_chunk(
         if (!fill_prompt_one_hot(one_hot_buf, P, T_oh, /*n_batch=*/1,
                                  {pid}))
         {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet stream: prompt_id %d out of range "
-                         "[0, %d)\n", pid, P);
+                         "[0, %d)", pid, P);
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_tensor_set(eb.prompt_one_hot_in, one_hot_buf.data(),
@@ -2403,8 +2404,8 @@ transcribe_status emit_streaming_chunk(
             ggml_backend_sched_graph_compute(pc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "parakeet stream: graph_compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet stream: graph_compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -2466,9 +2467,9 @@ transcribe_status emit_streaming_chunk(
         if (cache_io.channel_out[i] == nullptr || cache_io.channel_out[i]->buffer == nullptr ||
             cache_io.time_out[i]    == nullptr || cache_io.time_out[i]->buffer    == nullptr)
         {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "parakeet stream: cache_out unallocated at layer %d "
-                "(att_context_right=%d) — builder bug\n",
+                "(att_context_right=%d) — builder bug",
                 i, pc->stream_caches.att_context_right);
             return TRANSCRIBE_ERR_BACKEND;
         }
@@ -2629,8 +2630,8 @@ transcribe_status emit_buffered_chunk(
 
     const auto & hp = pm->hparams;
     if (!pm->mel.has_value()) {
-        std::fprintf(stderr,
-                     "parakeet buffered: model has no MelFrontend\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet buffered: model has no MelFrontend");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -2691,8 +2692,8 @@ transcribe_status emit_buffered_chunk(
             pc->mel_buf, mel_n_mels, mel_n_frames);
         mst != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr,
-                     "parakeet buffered: MelFrontend::compute failed (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet buffered: MelFrontend::compute failed (%s)",
                      transcribe_status_string(mst));
         return mst;
     }
@@ -2711,8 +2712,8 @@ transcribe_status emit_buffered_chunk(
         init_params.no_alloc   = true;
         pc->compute_ctx = ggml_init(init_params);
         if (pc->compute_ctx == nullptr) {
-            std::fprintf(stderr,
-                         "parakeet buffered: ggml_init for compute_ctx failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "parakeet buffered: ggml_init for compute_ctx failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -2853,8 +2854,8 @@ transcribe_status emit_buffered_chunk(
             ggml_backend_sched_graph_compute(pc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "parakeet buffered: sched_graph_compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet buffered: sched_graph_compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -2917,8 +2918,8 @@ transcribe_status emit_buffered_chunk(
     const int d_enc      = static_cast<int>(eb.out->ne[0]);
     const int T_enc_full = static_cast<int>(eb.out->ne[1]);
     if (T_enc_full <= 0) {
-        std::fprintf(stderr,
-                     "parakeet buffered: encoder produced %d frames\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet buffered: encoder produced %d frames",
                      T_enc_full);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -3058,12 +3059,12 @@ transcribe_status resolve_buffered_stream_geom(
         !ms_to_exact_frames(req_C_ms, default_C, &C_frames) ||
         !ms_to_exact_frames(req_R_ms, default_R, &R_frames))
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet buffered: requested (L, C, R)_ms = "
                      "(%d, %d, %d) is invalid. Use -1 on any field to "
                      "select the model default; otherwise the value "
                      "must be 0 or a positive exact multiple of the "
-                     "%d ms encoder frame.\n",
+                     "%d ms encoder frame.",
                      req_L_ms, req_C_ms, req_R_ms, safe_frame_ms);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -3076,16 +3077,16 @@ transcribe_status resolve_buffered_stream_geom(
         !contains(pm->hparams.enc_att_chunk_chunk_choices, C_frames) ||
         !contains(pm->hparams.enc_att_chunk_right_choices, R_frames))
     {
-        std::fprintf(stderr,
-                     "parakeet buffered: requested (L, C, R) = (%d, %d, %d) "
-                     "encoder frames not in model menu. "
-                     "Allowed L=", L_frames, C_frames, R_frames);
-        for (auto v : pm->hparams.enc_att_chunk_left_choices)  std::fprintf(stderr, "%d,", v);
-        std::fprintf(stderr, " C=");
-        for (auto v : pm->hparams.enc_att_chunk_chunk_choices) std::fprintf(stderr, "%d,", v);
-        std::fprintf(stderr, " R=");
-        for (auto v : pm->hparams.enc_att_chunk_right_choices) std::fprintf(stderr, "%d,", v);
-        std::fprintf(stderr, "\n");
+        std::string allowed = "L=";
+        for (auto v : pm->hparams.enc_att_chunk_left_choices)  allowed += std::to_string(v) + ",";
+        allowed += " C=";
+        for (auto v : pm->hparams.enc_att_chunk_chunk_choices) allowed += std::to_string(v) + ",";
+        allowed += " R=";
+        for (auto v : pm->hparams.enc_att_chunk_right_choices) allowed += std::to_string(v) + ",";
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "parakeet buffered: requested (L, C, R) = (%d, %d, %d) "
+                "encoder frames not in model menu. Allowed %s",
+                L_frames, C_frames, R_frames, allowed.c_str());
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (C_frames < 1) return TRANSCRIBE_ERR_INVALID_ARG;
@@ -3122,10 +3123,10 @@ transcribe_status resolve_cache_aware_stream_geom(
         const auto * px = reinterpret_cast<const transcribe_parakeet_stream_ext *>(family);
         const int requested = px->att_context_right;
         if (requested < -1) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: att_context_right=%d is invalid; "
                          "use -1 for the model default or >=0 to pick "
-                         "an entry from the model's training menu\n",
+                         "an entry from the model's training menu",
                          requested);
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
@@ -3140,14 +3141,14 @@ transcribe_status resolve_cache_aware_stream_geom(
                 }
             }
             if (!matched) {
-                std::fprintf(stderr,
-                             "parakeet: requested att_context_right=%d "
-                             "not in model's training menu; available: ",
-                             requested);
+                std::string available;
                 for (const auto & p : pm->hparams.enc_att_context_size_choices) {
-                    std::fprintf(stderr, "%d ", p.second);
+                    available += std::to_string(p.second) + " ";
                 }
-                std::fprintf(stderr, "\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "parakeet: requested att_context_right=%d "
+                        "not in model's training menu; available: %s",
+                        requested, available.c_str());
                 return TRANSCRIBE_ERR_INVALID_ARG;
             }
         }

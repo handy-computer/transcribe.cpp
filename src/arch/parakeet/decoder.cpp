@@ -18,6 +18,7 @@
 #include "weights.h"
 
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -77,19 +78,19 @@ bool read_tensor_to_f32(const ggml_tensor * t,
                         std::vector<float> & out)
 {
     if (t == nullptr) {
-        std::fprintf(stderr, "parakeet decoder: read_tensor_to_f32: null tensor\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: read_tensor_to_f32: null tensor");
         return false;
     }
     const size_t nbytes = ggml_nbytes(t);
     if (nbytes == 0) {
-        std::fprintf(stderr,
-                     "parakeet decoder: tensor \"%s\" has 0 bytes\n", t->name);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet decoder: tensor \"%s\" has 0 bytes", t->name);
         return false;
     }
     const int64_t nelem = ggml_nelements(t);
     if (nelem <= 0) {
-        std::fprintf(stderr,
-                     "parakeet decoder: tensor \"%s\" has nelem=%lld\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet decoder: tensor \"%s\" has nelem=%lld",
                      t->name, static_cast<long long>(nelem));
         return false;
     }
@@ -102,9 +103,9 @@ bool read_tensor_to_f32(const ggml_tensor * t,
     // Read straight from the backend into the output buffer.
     if (t->type == GGML_TYPE_F32) {
         if (nbytes != static_cast<size_t>(nelem) * sizeof(float)) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet decoder: tensor \"%s\" f32 nbytes %zu "
-                         "!= nelem*sizeof(float) %zu\n",
+                         "!= nelem*sizeof(float) %zu",
                          t->name, nbytes,
                          static_cast<size_t>(nelem) * sizeof(float));
             return false;
@@ -119,8 +120,8 @@ bool read_tensor_to_f32(const ggml_tensor * t,
     // table.
     const auto * tt = ggml_get_type_traits(t->type);
     if (tt == nullptr || tt->to_float == nullptr) {
-        std::fprintf(stderr,
-                     "parakeet decoder: tensor \"%s\" type %s has no to_float\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet decoder: tensor \"%s\" type %s has no to_float",
                      t->name, ggml_type_name(t->type));
         return false;
     }
@@ -168,7 +169,7 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w,
     // carries no per-step state and is safe to keep on the shared model.
     j.w_backend = ggml_backend_cpu_init();
     if (j.w_backend == nullptr) {
-        std::fprintf(stderr, "parakeet decoder: ggml CPU backend init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: ggml CPU backend init failed");
         return fail();
     }
 
@@ -340,16 +341,16 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
             static_cast<size_t>(out.ctc_head.n_classes) *
             static_cast<size_t>(out.ctc_head.d_enc);
         if (out.ctc_head.weight.size() != expected_w) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet decoder: head.ctc.weight size %zu "
-                         "!= n_classes*d_enc %zu\n",
+                         "!= n_classes*d_enc %zu",
                          out.ctc_head.weight.size(), expected_w);
             return TRANSCRIBE_ERR_GGUF;
         }
         if (static_cast<int>(out.ctc_head.bias.size()) != out.ctc_head.n_classes) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet decoder: head.ctc.bias size %zu "
-                         "!= n_classes %d\n",
+                         "!= n_classes %d",
                          out.ctc_head.bias.size(), out.ctc_head.n_classes);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -376,9 +377,9 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
         const size_t expected =
             static_cast<size_t>(hp.pred_vocab) * static_cast<size_t>(hp.pred_hidden);
         if (out.predictor.embed_w.size() != expected) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet decoder: pred.embed.weight size %zu "
-                         "!= pred_vocab*pred_hidden %zu\n",
+                         "!= pred_vocab*pred_hidden %zu",
                          out.predictor.embed_w.size(), expected);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -395,13 +396,13 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
         const size_t gates    = static_cast<size_t>(4 * hp.pred_hidden);
         const size_t mat_size = gates * static_cast<size_t>(hp.pred_hidden);
         if (lh.Wx.size() != mat_size || lh.Wh.size() != mat_size) {
-            std::fprintf(stderr,
-                         "parakeet decoder: pred.lstm.%d Wx/Wh wrong size\n", i);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "parakeet decoder: pred.lstm.%d Wx/Wh wrong size", i);
             return TRANSCRIBE_ERR_GGUF;
         }
         if (lh.b.size() != gates) {
-            std::fprintf(stderr,
-                         "parakeet decoder: pred.lstm.%d bias wrong size\n", i);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "parakeet decoder: pred.lstm.%d bias wrong size", i);
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -428,9 +429,9 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
         const int ne0 = static_cast<int>(w.joint.out_w->ne[0]);
         const int ne1 = static_cast<int>(w.joint.out_w->ne[1]);
         if (ne0 != out.joint.joint_h || ne1 != out.joint.joint_n) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "parakeet decoder: out_w ne [%d,%d] != [joint_h=%d, joint_n=%d]; "
-                "using host matmul\n",
+                "using host matmul",
                 ne0, ne1, out.joint.joint_h, out.joint.joint_n);
         } else {
             const bool force_fp32 = std::getenv("TRANSCRIBE_JOINT_FP32") != nullptr;
@@ -438,16 +439,16 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
             if (!force_fp32) {
                 ok = build_joint_weight(out.joint, w.joint.out_w, /*use_native=*/true);
                 if (!ok) {
-                    std::fprintf(stderr,
-                        "parakeet decoder: native joint weight failed; retrying fp32\n");
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                        "parakeet decoder: native joint weight failed; retrying fp32");
                 }
             }
             if (!ok) {
                 ok = build_joint_weight(out.joint, w.joint.out_w, /*use_native=*/false);
             }
             if (!ok) {
-                std::fprintf(stderr,
-                    "parakeet decoder: joint ggml weight build failed; using host matmul\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "parakeet decoder: joint ggml weight build failed; using host matmul");
             }
         }
     }
@@ -890,9 +891,9 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (d_enc != w.joint.d_enc) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet decoder: enc d_model mismatch (got %d, "
-                     "expected %d)\n", d_enc, w.joint.d_enc);
+                     "expected %d)", d_enc, w.joint.d_enc);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -1078,10 +1079,10 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         }
     }
 
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
                  "decoder: %d iters, %d tokens, T_enc=%d  "
                  "enc_proj=%.1f ms  pred=%.1f ms  joint=%.1f ms  conf=%.1f ms  "
-                 "total=%.1f ms  per_iter=%.0f us\n",
+                 "total=%.1f ms  per_iter=%.0f us",
                  iter, static_cast<int>(out_tokens.size()), T_enc,
                  t_enc_proj_us / 1000.0,
                  t_pred_us  / 1000.0,
@@ -1091,9 +1092,9 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
                  static_cast<double>(t_pred_us + t_joint_us) / std::max(iter, 1));
 
     if (iter >= max_iters) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet decoder: hit iteration cap (%d) — pathological "
-                     "logits or loop bug\n", max_iters);
+                     "logits or loop bug", max_iters);
         return TRANSCRIBE_ERR_BACKEND;
     }
     return TRANSCRIBE_OK;
@@ -1134,9 +1135,9 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (d_enc != w.joint.d_enc) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet decoder (rnnt): enc d_model mismatch (got %d, "
-                     "expected %d)\n", d_enc, w.joint.d_enc);
+                     "expected %d)", d_enc, w.joint.d_enc);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -1267,10 +1268,10 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
         }
     }
 
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
                  "decoder (rnnt): %d iters, %d tokens, T_enc=%d  "
                  "enc_proj=%.1f ms  pred=%.1f ms  joint=%.1f ms  conf=%.1f ms  "
-                 "total=%.1f ms\n",
+                 "total=%.1f ms",
                  iter, static_cast<int>(out_tokens.size()), T_enc,
                  t_enc_proj_us / 1000.0,
                  t_pred_us  / 1000.0,
@@ -1279,9 +1280,9 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
                  (t_enc_proj_us + t_pred_us + t_joint_us + t_conf_us) / 1000.0);
 
     if (iter >= max_iters) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet decoder (rnnt): hit iteration cap (%d) — "
-                     "pathological logits or loop bug\n", max_iters);
+                     "pathological logits or loop bug", max_iters);
         return TRANSCRIBE_ERR_BACKEND;
     }
     return TRANSCRIBE_OK;
@@ -1318,16 +1319,16 @@ transcribe_status decode_rnnt_greedy_streaming(
     // a hypothetical future TDT/CTC streaming model — but it fails loud at
     // the exact point of mis-decode rather than emitting wrong tokens.
     if (w.head_kind != HostHeadKind::RNNT) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet decoder (rnnt-stream): streaming decode "
                      "requires an RNN-T head; this model's head is not "
-                     "RNN-T\n");
+                     "RNN-T");
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
     if (d_enc != w.joint.d_enc) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet decoder (rnnt-stream): enc d_model mismatch "
-                     "(got %d, expected %d)\n", d_enc, w.joint.d_enc);
+                     "(got %d, expected %d)", d_enc, w.joint.d_enc);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -1436,8 +1437,8 @@ transcribe_status decode_rnnt_greedy_streaming(
     }
 
     if (iter >= max_iters) {
-        std::fprintf(stderr,
-                     "parakeet decoder (rnnt-stream): hit iteration cap (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet decoder (rnnt-stream): hit iteration cap (%d)",
                      max_iters);
         return TRANSCRIBE_ERR_BACKEND;
     }
@@ -1473,9 +1474,9 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (d_enc != w.ctc_head.d_enc) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet decoder (ctc): enc d_model mismatch "
-                     "(got %d, expected %d)\n", d_enc, w.ctc_head.d_enc);
+                     "(got %d, expected %d)", d_enc, w.ctc_head.d_enc);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -1562,8 +1563,8 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
         out_tokens.push_back(tok);
     }
 
-    std::fprintf(stderr,
-                 "decoder (ctc): T_enc=%d  proj=%.1f ms  emitted=%d\n",
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+                 "decoder (ctc): T_enc=%d  proj=%.1f ms  emitted=%d",
                  T_enc, t_proj_us / 1000.0,
                  static_cast<int>(out_tokens.size()));
 

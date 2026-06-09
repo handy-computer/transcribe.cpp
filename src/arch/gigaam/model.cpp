@@ -169,8 +169,8 @@ transcribe_status load(Loader &                         loader,
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "gigaam: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "gigaam: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -239,8 +239,8 @@ transcribe_status load_ref_mel(const std::string & dir,
 
     std::ifstream f(path, std::ios::binary | std::ios::ate);
     if (!f) {
-        std::fprintf(stderr,
-                     "gigaam: cannot open mel ref '%s'\n", path.c_str());
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "gigaam: cannot open mel ref '%s'", path.c_str());
         return TRANSCRIBE_ERR_FILE_NOT_FOUND;
     }
     const std::streamsize total_bytes = f.tellg();
@@ -248,9 +248,9 @@ transcribe_status load_ref_mel(const std::string & dir,
     if (total_bytes <= 0 ||
         (static_cast<size_t>(total_bytes) % (sizeof(float) * n_mels)) != 0)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "gigaam: mel ref '%s' size %lld not divisible by "
-                     "n_mels=%d * 4\n",
+                     "n_mels=%d * 4",
                      path.c_str(), static_cast<long long>(total_bytes), n_mels);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -261,7 +261,7 @@ transcribe_status load_ref_mel(const std::string & dir,
     f.read(reinterpret_cast<char *>(out.data()),
            static_cast<std::streamsize>(total_bytes));
     if (static_cast<std::streamsize>(f.gcount()) != total_bytes) {
-        std::fprintf(stderr, "gigaam: short read on mel ref\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: short read on mel ref");
         return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_OK;
@@ -490,7 +490,7 @@ transcribe_status run(transcribe_session *      session,
     // ----- Compute -------------------------------------------------------
     const int64_t t_enc_start = ggml_time_us();
     if (ggml_backend_sched_graph_compute(gc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-        std::fprintf(stderr, "gigaam: graph_compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: graph_compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     gc->t_encode_us = ggml_time_us() - t_enc_start;
@@ -536,7 +536,7 @@ transcribe_status run(transcribe_session *      session,
     {
         ggml_tensor * enc_t = eb.dumps.rnnt_encoded;
         if (enc_t == nullptr) {
-            std::fprintf(stderr, "gigaam: rnnt.encoded missing\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: rnnt.encoded missing");
             return TRANSCRIBE_ERR_GGUF;
         }
         const int T_enc = static_cast<int>(enc_t->ne[1]);
@@ -719,7 +719,7 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
 
     const int64_t t_enc_start = ggml_time_us();
     if (ggml_backend_sched_graph_compute(gc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-        std::fprintf(stderr, "gigaam run_batch: graph_compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam run_batch: graph_compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     gc->t_encode_us = ggml_time_us() - t_enc_start;

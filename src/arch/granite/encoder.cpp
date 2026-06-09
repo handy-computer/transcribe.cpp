@@ -35,6 +35,7 @@
 #include "granite_conformer/shaw_attn.h"
 #include "transcribe-debug.h"
 #include "transcribe-mel.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -134,8 +135,8 @@ transcribe_status compute_mel_encoder_input(
     // recover that as raw.size() / n_mels.
     const int stride = static_cast<int>(raw.size() / static_cast<size_t>(n_mels));
     if (stride <= 0 || stride < n_frames) {
-        std::fprintf(stderr,
-                     "granite: mel buffer stride (%d) < expected frames (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite: mel buffer stride (%d) < expected frames (%d)",
                      stride, n_frames);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -558,7 +559,7 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr, "granite encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

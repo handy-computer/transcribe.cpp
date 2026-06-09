@@ -120,9 +120,9 @@ bool kv_cache_init(MoonshineKvCache & cache,
                    ggml_type          kv_type)
 {
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine kv_cache: unsupported kv_type=%d "
-                     "(only F16/F32)\n", static_cast<int>(kv_type));
+                     "(only F16/F32)", static_cast<int>(kv_type));
         return false;
     }
 
@@ -130,7 +130,7 @@ bool kv_cache_init(MoonshineKvCache & cache,
     ggml_init_params params { ctx_size, nullptr, /*no_alloc=*/true };
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "moonshine kv_cache: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine kv_cache: ggml_init failed");
         return false;
     }
 
@@ -149,7 +149,7 @@ bool kv_cache_init(MoonshineKvCache & cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "moonshine kv_cache: buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine kv_cache: buffer alloc failed");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -181,7 +181,7 @@ bool kv_cache_init_batched(MoonshineKvCache & cache,
         return true;
     }
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr, "moonshine kv_cache(batched): unsupported kv_type\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine kv_cache(batched): unsupported kv_type");
         return false;
     }
     const size_t ctx_size = 4 * ggml_tensor_overhead() + 256;
@@ -281,8 +281,8 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "moonshine: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -428,7 +428,7 @@ transcribe_status run(
             static_cast<int>(cm->plan.scheduler_list.size()),
             16384, false, true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr, "moonshine run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -452,7 +452,7 @@ transcribe_status run(
     apply_thread_policy(cc);
 
     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
-        std::fprintf(stderr, "moonshine run: encoder compute failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine run: encoder compute failed");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -534,7 +534,7 @@ transcribe_status run(
         if (ggml_backend_sched_graph_compute(cc->sched, cross_db.graph)
             != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr, "moonshine run: cross_kv compute failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine run: cross_kv compute failed");
             return TRANSCRIBE_ERR_GGUF;
         }
         cc->kv_cache.cross_populated = true;
@@ -615,8 +615,8 @@ transcribe_status run(
         if (ggml_backend_sched_graph_compute(cc->sched, db.graph)
             != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "moonshine run: decoder compute failed (n_past=%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "moonshine run: decoder compute failed (n_past=%d)",
                          n_past_in);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -722,8 +722,8 @@ transcribe_status run(
             cc->compute_ctx, cm->weights, hp, cc->kv_cache,
             max_n_kv, T_enc, cc->decoder_use_flash);
         if (sb.graph == nullptr || sb.argmax_out == nullptr) {
-            std::fprintf(stderr,
-                         "moonshine run: build_step_graph failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "moonshine run: build_step_graph failed");
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_sched_reset(cc->sched);
@@ -744,8 +744,8 @@ transcribe_status run(
         while (next_token != eos && n_past < max_pos) {
             if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
             if (n_past + 1 > max_n_kv) {
-                std::fprintf(stderr,
-                             "moonshine run: hit max_n_kv=%d at n_past=%d\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+                             "moonshine run: hit max_n_kv=%d at n_past=%d",
                              max_n_kv, n_past);
                 break;
             }
@@ -765,8 +765,8 @@ transcribe_status run(
             if (ggml_backend_sched_graph_compute(cc->sched, sb.graph)
                 != GGML_STATUS_SUCCESS)
             {
-                std::fprintf(stderr,
-                             "moonshine run: step compute failed (n_past=%d)\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "moonshine run: step compute failed (n_past=%d)",
                              n_past);
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -1174,9 +1174,9 @@ transcribe_status run_batch(
     }
 
     if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "moonshine run_batch: n=%d T_enc_max=%d max_n_kv=%d\n"
-            "  enc=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
+            "  enc=%.1fms (serial x%d)  decode=%.1fms (batched)",
             n, T_enc_max, max_n_kv, enc_us / 1000.0, n, dec_us / 1000.0);
     }
     return TRANSCRIBE_OK;

@@ -255,8 +255,8 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
     for (const auto & p : required) {
         const int id = tok.find(p.piece);
         if (id < 0) {
-            std::fprintf(stderr,
-                         "granite: tokenizer missing required piece \"%s\"\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "granite: tokenizer missing required piece \"%s\"",
                          p.piece);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -350,13 +350,13 @@ transcribe_status load(
     m->hparams.pad_token_id = m->chat_tokens.pad;
 
     if (m->hparams.vocab_size != m->hparams.dec_vocab_size) {
-        std::fprintf(stderr,
-                     "granite: tokenizer vocab (%d) != decoder vocab_size (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite: tokenizer vocab (%d) != decoder vocab_size (%d)",
                      m->hparams.vocab_size, m->hparams.dec_vocab_size);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (m->hparams.eos_token_id < 0) {
-        std::fprintf(stderr, "granite: tokenizer has no eos_token_id\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: tokenizer has no eos_token_id");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -444,8 +444,8 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "granite: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -565,15 +565,15 @@ static transcribe_status build_granite_affixes(
         if (params->task == TRANSCRIBE_TASK_TRANSLATE) {
             if (params->target_language == nullptr ||
                 params->target_language[0] == '\0') {
-                std::fprintf(stderr,
-                             "granite: translate task requires --target-language\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "granite: translate task requires --target-language");
                 return TRANSCRIBE_ERR_INVALID_ARG;
             }
             const char * lang_name =
                 granite_target_language_name(params->target_language);
             if (lang_name == nullptr) {
-                std::fprintf(stderr,
-                             "granite: target_language '%s' is not advertised\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "granite: target_language '%s' is not advertised",
                              params->target_language);
                 return TRANSCRIBE_ERR_INVALID_ARG;
             }
@@ -636,12 +636,12 @@ static transcribe_status build_granite_affixes(
         const std::string suffix_text = instruction + "\n ASSISTANT:";
         if (const transcribe_status st = cm->tok.encode(prefix_text, prefix_ids);
             st != TRANSCRIBE_OK) {
-            std::fprintf(stderr, "granite: tokenize(prefix) failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: tokenize(prefix) failed");
             return st;
         }
         if (const transcribe_status st = cm->tok.encode(suffix_text, suffix_ids);
             st != TRANSCRIBE_OK) {
-            std::fprintf(stderr, "granite: tokenize(suffix) failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: tokenize(suffix) failed");
             return st;
         }
     }
@@ -663,7 +663,7 @@ transcribe_status run(
     transcribe::debug::init();
 
     if (!cm->mel.has_value()) {
-        std::fprintf(stderr, "granite run: model has no MelFrontend\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite run: model has no MelFrontend");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -674,8 +674,8 @@ transcribe_status run(
             *cm->mel, pcm, n_samples, cc->n_threads, cc->mel_buf, t_enc);
         mst != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr,
-                     "granite run: mel/stack failed (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite run: mel/stack failed (%s)",
                      transcribe_status_string(mst));
         return mst;
     }
@@ -731,8 +731,8 @@ transcribe_status run(
             static_cast<int>(cm->plan.scheduler_list.size()),
             32768, false, true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr,
-                         "granite run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "granite run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -807,8 +807,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "granite run: encoder graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite run: encoder graph compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -899,8 +899,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, pb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "granite run: projector graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite run: projector graph compute failed (%d)",
                      static_cast<int>(gs));
         ggml_free(proj_ctx);
         return TRANSCRIBE_ERR_GGUF;
@@ -1102,8 +1102,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, dec.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "granite run: decoder prefill compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite run: decoder prefill compute failed (%d)",
                      static_cast<int>(gs));
         ggml_free(dec_ctx);
         return TRANSCRIBE_ERR_GGUF;
@@ -1216,8 +1216,8 @@ transcribe_status run(
                 ggml_backend_sched_graph_compute(cc->sched, step.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "granite run: step compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "granite run: step compute failed (%d)",
                          static_cast<int>(gs));
             ggml_free(step_ctx);
             return TRANSCRIBE_ERR_GGUF;
@@ -1718,9 +1718,9 @@ transcribe_status run_batch(
         int total_steps = 0;
         for (int b = 0; b < n; ++b)
             total_steps = std::max<int>(total_steps, static_cast<int>(generated[b].size()));
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "granite run_batch: n=%d max_n_kv=%d steps=%d max_T_prompt=%d n_audio_max=%d\n"
-            "  mel=%.1fms enc+proj=%.1fms (serial x%d)  prefill=%.1fms (batched)  step_loop=%.1fms (%.2fms/step, batched)\n",
+            "  mel=%.1fms enc+proj=%.1fms (serial x%d)  prefill=%.1fms (batched)  step_loop=%.1fms (%.2fms/step, batched)",
             n, max_n_kv, total_steps, max_T_prompt, n_audio_max,
             mel_us / 1000.0, enc_us / 1000.0, n,
             prefill_us / 1000.0, step_us / 1000.0,

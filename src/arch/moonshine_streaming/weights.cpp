@@ -23,6 +23,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -54,7 +55,7 @@ transcribe_status read_optional_u32_kv(const gguf_context * gguf,
         out = default_value;
         return TRANSCRIBE_OK;
     }
-    std::fprintf(stderr, "%s: KV %s has wrong type\n", error_tag, key);
+    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: KV %s has wrong type", error_tag, key);
     return TRANSCRIBE_ERR_GGUF;
 }
 
@@ -74,7 +75,7 @@ transcribe_status read_optional_f32_kv(const gguf_context * gguf,
         out = default_value;
         return TRANSCRIBE_OK;
     }
-    std::fprintf(stderr, "%s: KV %s has wrong type\n", error_tag, key);
+    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: KV %s has wrong type", error_tag, key);
     return TRANSCRIBE_ERR_GGUF;
 }
 
@@ -86,17 +87,17 @@ transcribe_status read_required_u32_array_kv(const gguf_context * gguf,
     if (gguf == nullptr) return TRANSCRIBE_ERR_INVALID_ARG;
     const int64_t kid = gguf_find_key(gguf, key);
     if (kid < 0) {
-        std::fprintf(stderr, "%s: missing required KV %s\n", error_tag, key);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: missing required KV %s", error_tag, key);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (gguf_get_kv_type(gguf, kid) != GGUF_TYPE_ARRAY) {
-        std::fprintf(stderr, "%s: KV %s is not an array\n", error_tag, key);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: KV %s is not an array", error_tag, key);
         return TRANSCRIBE_ERR_GGUF;
     }
     const gguf_type elem_type = gguf_get_arr_type(gguf, kid);
     if (elem_type != GGUF_TYPE_UINT32 && elem_type != GGUF_TYPE_INT32) {
-        std::fprintf(stderr,
-                     "%s: KV %s array element type is not u32/i32 (got %d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: KV %s array element type is not u32/i32 (got %d)",
                      error_tag, key, static_cast<int>(elem_type));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -191,7 +192,7 @@ transcribe_status read_moonshine_streaming_hparams(const gguf_context *         
     if (hp.enc_n_layers <= 0 || hp.enc_d_model <= 0 || hp.enc_n_heads <= 0 ||
         hp.enc_head_dim <= 0 || hp.enc_ffn_dim <= 0)
     {
-        std::fprintf(stderr, "moonshine_streaming: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     // Encoder allows enc_d_model > n_heads * head_dim (small: 620 vs 512;
@@ -201,8 +202,8 @@ transcribe_status read_moonshine_streaming_hparams(const gguf_context *         
     // the residual stream dim in any in-the-wild moonshine_streaming
     // variant; flag the inverted case to catch a malformed config early.
     if (hp.enc_d_model < hp.enc_n_heads * hp.enc_head_dim) {
-        std::fprintf(stderr,
-                     "moonshine_streaming: encoder d_model (%d) < n_heads (%d) * head_dim (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: encoder d_model (%d) < n_heads (%d) * head_dim (%d)",
                      hp.enc_d_model, hp.enc_n_heads, hp.enc_head_dim);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -210,80 +211,80 @@ transcribe_status read_moonshine_streaming_hparams(const gguf_context *         
         hp.dec_head_dim <= 0 || hp.dec_ffn_dim <= 0 ||
         hp.dec_max_position_embeddings <= 0 || hp.dec_vocab_size <= 0)
     {
-        std::fprintf(stderr, "moonshine_streaming: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_d_model != hp.dec_n_heads * hp.dec_head_dim) {
-        std::fprintf(stderr,
-                     "moonshine_streaming: decoder d_model (%d) != n_heads (%d) * head_dim (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: decoder d_model (%d) != n_heads (%d) * head_dim (%d)",
                      hp.dec_d_model, hp.dec_n_heads, hp.dec_head_dim);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_activation != "gelu") {
-        std::fprintf(stderr,
-                     "moonshine_streaming: only \"gelu\" encoder activation supported (got \"%s\")\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: only \"gelu\" encoder activation supported (got \"%s\")",
                      hp.enc_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_activation != "silu") {
-        std::fprintf(stderr,
-                     "moonshine_streaming: only \"silu\" decoder activation supported (got \"%s\")\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: only \"silu\" decoder activation supported (got \"%s\")",
                      hp.dec_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_tie_word_embeddings) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming: tie_word_embeddings=true is not supported "
-                     "(reference always carries a separate proj_out.weight)\n");
+                     "(reference always carries a separate proj_out.weight)");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.attention_bias) {
-        std::fprintf(stderr,
-                     "moonshine_streaming: attention_bias=true is not supported\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: attention_bias=true is not supported");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.partial_rotary_factor <= 0.0f || hp.partial_rotary_factor > 1.0f) {
-        std::fprintf(stderr,
-                     "moonshine_streaming: invalid partial_rotary_factor=%g (expected (0, 1])\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: invalid partial_rotary_factor=%g (expected (0, 1])",
                      hp.partial_rotary_factor);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "raw") {
-        std::fprintf(stderr,
-                     "moonshine_streaming: unsupported frontend type \"%s\" (only \"raw\")\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: unsupported frontend type \"%s\" (only \"raw\")",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_sample_rate != 16000) {
-        std::fprintf(stderr,
-                     "moonshine_streaming: unsupported sample_rate=%d (only 16000 Hz)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: unsupported sample_rate=%d (only 16000 Hz)",
                      hp.fe_sample_rate);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_frame_len <= 0) {
-        std::fprintf(stderr,
-                     "moonshine_streaming: invalid encoder frame_len=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: invalid encoder frame_len=%d",
                      hp.enc_frame_len);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_sliding_windows.size() !=
         static_cast<size_t>(hp.enc_n_layers) * 2)
     {
-        std::fprintf(stderr,
-                     "moonshine_streaming: encoder.sliding_windows length %zu != 2 * n_layers (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: encoder.sliding_windows length %zu != 2 * n_layers (%d)",
                      hp.enc_sliding_windows.size(), hp.enc_n_layers);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.encoder_hidden_size != hp.enc_d_model) {
-        std::fprintf(stderr,
-                     "moonshine_streaming: encoder_hidden_size (%d) disagrees with encoder.d_model (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "moonshine_streaming: encoder_hidden_size (%d) disagrees with encoder.d_model (%d)",
                      hp.encoder_hidden_size, hp.enc_d_model);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.bos_token_id < 0 || hp.eos_token_id < 0 ||
         hp.pad_token_id < 0 || hp.decoder_start_token_id < 0)
     {
-        std::fprintf(stderr, "moonshine_streaming: special token IDs must be set\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "moonshine_streaming: special token IDs must be set");
         return TRANSCRIBE_ERR_GGUF;
     }
 

@@ -162,8 +162,8 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
     for (const auto & p : pieces) {
         const int id = tok.find(p.piece);
         if (id < 0) {
-            std::fprintf(stderr,
-                         "funasr_nano: chat-template piece \"%s\" not in tokenizer\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "funasr_nano: chat-template piece \"%s\" not in tokenizer",
                          p.piece);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -368,14 +368,14 @@ transcribe_status load(
     m->hparams.eos_token_id = m->tok.eos_id();
 
     if (m->hparams.vocab_size != m->hparams.dec_vocab_size) {
-        std::fprintf(stderr,
-                     "funasr_nano: tokenizer vocab (%d) != decoder vocab_size (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: tokenizer vocab (%d) != decoder vocab_size (%d)",
                      m->hparams.vocab_size, m->hparams.dec_vocab_size);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (m->hparams.eos_token_id < 0) {
-        std::fprintf(stderr,
-                     "funasr_nano: GGUF tokenizer has no eos_token_id\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: GGUF tokenizer has no eos_token_id");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -411,8 +411,8 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "funasr_nano: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -579,8 +579,8 @@ transcribe_status run(
         ip.no_alloc   = true;
         cc->compute_ctx = ggml_init(ip);
         if (cc->compute_ctx == nullptr) {
-            std::fprintf(stderr,
-                         "funasr_nano run: ggml_init for compute_ctx failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "funasr_nano run: ggml_init for compute_ctx failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -598,7 +598,7 @@ transcribe_status run(
             static_cast<int>(cm->plan.scheduler_list.size()),
             16384, /*parallel=*/false, /*op_offload=*/true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr, "funasr_nano run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -623,8 +623,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "funasr_nano run: encoder graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano run: encoder graph compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -693,8 +693,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, ab.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "funasr_nano run: adaptor graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano run: adaptor graph compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -870,8 +870,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, pb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "funasr_nano run: prefill graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano run: prefill graph compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -986,8 +986,8 @@ transcribe_status run(
                 ggml_backend_sched_graph_compute(cc->sched, sb.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "funasr_nano run: step graph compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "funasr_nano run: step graph compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }

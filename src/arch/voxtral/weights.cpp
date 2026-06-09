@@ -12,6 +12,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -86,7 +87,7 @@ transcribe_status read_voxtral_hparams(const gguf_context * gguf,
                 case KvResult::Ok:      dst = static_cast<int32_t>(tmp); return TRANSCRIBE_OK;
                 case KvResult::Absent:                                    return TRANSCRIBE_OK;
                 case KvResult::BadType:
-                    std::fprintf(stderr, "voxtral: \"%s\" has wrong type\n", key);
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: \"%s\" has wrong type", key);
                     return TRANSCRIBE_ERR_GGUF;
             }
             return TRANSCRIBE_ERR_GGUF;
@@ -101,69 +102,69 @@ transcribe_status read_voxtral_hparams(const gguf_context * gguf,
         hp.enc_ffn_dim <= 0 || hp.enc_num_mel_bins <= 0 ||
         hp.enc_max_source_positions <= 0)
     {
-        std::fprintf(stderr, "voxtral: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
-                     "voxtral: encoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: encoder d_model (%d) not divisible by n_heads (%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_head_dim != hp.enc_d_model / hp.enc_n_heads) {
-        std::fprintf(stderr,
-                     "voxtral: encoder head_dim (%d) != d_model/n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: encoder head_dim (%d) != d_model/n_heads (%d)",
                      hp.enc_head_dim, hp.enc_d_model / hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.proj_downsample <= 0 || hp.proj_in <= 0) {
-        std::fprintf(stderr, "voxtral: projector hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: projector hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.proj_in != hp.enc_d_model * hp.proj_downsample) {
-        std::fprintf(stderr,
-                     "voxtral: projector input_dim (%d) != enc_d_model*downsample (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: projector input_dim (%d) != enc_d_model*downsample (%d)",
                      hp.proj_in, hp.enc_d_model * hp.proj_downsample);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_max_source_positions % hp.proj_downsample != 0) {
-        std::fprintf(stderr,
-                     "voxtral: max_source_positions (%d) not divisible by downsample (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: max_source_positions (%d) not divisible by downsample (%d)",
                      hp.enc_max_source_positions, hp.proj_downsample);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_layers <= 0 || hp.dec_hidden <= 0 || hp.dec_n_heads <= 0 ||
         hp.dec_n_kv_heads <= 0 || hp.dec_head_dim <= 0 || hp.dec_intermediate <= 0)
     {
-        std::fprintf(stderr, "voxtral: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_heads % hp.dec_n_kv_heads != 0) {
-        std::fprintf(stderr,
-                     "voxtral: n_heads (%d) not divisible by n_kv_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: n_heads (%d) not divisible by n_kv_heads (%d)",
                      hp.dec_n_heads, hp.dec_n_kv_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_hidden_act != "silu" && hp.dec_hidden_act != "swish") {
-        std::fprintf(stderr,
-                     "voxtral: unsupported decoder hidden_act \"%s\" (only silu/swish)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: unsupported decoder hidden_act \"%s\" (only silu/swish)",
                      hp.dec_hidden_act.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_activation != "gelu") {
-        std::fprintf(stderr,
-                     "voxtral: unsupported encoder activation \"%s\" (only gelu)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: unsupported encoder activation \"%s\" (only gelu)",
                      hp.enc_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.proj_hidden_act != "gelu") {
-        std::fprintf(stderr,
-                     "voxtral: unsupported projector hidden_act \"%s\" (only gelu)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "voxtral: unsupported projector hidden_act \"%s\" (only gelu)",
                      hp.proj_hidden_act.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        std::fprintf(stderr, "voxtral: unsupported frontend type \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral: unsupported frontend type \"%s\"",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -284,8 +285,8 @@ transcribe_status build_voxtral_weights(ggml_context *         ctx_meta,
         GET_LIN(b.ffn_down_w,  lname("dec.blocks.%d.ffn.down.weight", i), dec_im, dec_h);
 
         if (b.ffn_gate_w->type != b.ffn_up_w->type) {
-            std::fprintf(stderr,
-                         "voxtral: ffn gate/up dtype mismatch at layer %d (%d vs %d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "voxtral: ffn gate/up dtype mismatch at layer %d (%d vs %d)",
                          i, static_cast<int>(b.ffn_gate_w->type),
                          static_cast<int>(b.ffn_up_w->type));
             return TRANSCRIBE_ERR_GGUF;

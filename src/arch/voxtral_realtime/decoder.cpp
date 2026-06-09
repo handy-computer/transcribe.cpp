@@ -9,6 +9,7 @@
 
 #include "causal_lm/causal_lm.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -75,7 +76,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     PrefillBuild pb {};
     pb.T = T;
     if (ctx == nullptr || T <= 0 || kv_cache.self_k == nullptr || T > kv_cache.n_ctx) {
-        std::fprintf(stderr, "voxtral_realtime prefill: invalid arg (T=%d)\n", T);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime prefill: invalid arg (T=%d)", T);
         return pb;
     }
 
@@ -102,7 +103,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     ggml_set_input(pb.mask_in);
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
-    if (gf == nullptr) { std::fprintf(stderr, "voxtral_realtime prefill: graph alloc failed\n"); return pb; }
+    if (gf == nullptr) { log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime prefill: graph alloc failed"); return pb; }
     pb.graph = gf;
 
     // Token embedding + additive audio overlay.
@@ -181,7 +182,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     StepBuild sb {};
     sb.max_n_kv = max_n_kv;
     if (ctx == nullptr || max_n_kv <= 0 || kv_cache.self_k == nullptr || max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr, "voxtral_realtime step: invalid arg (max_n_kv=%d)\n", max_n_kv);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime step: invalid arg (max_n_kv=%d)", max_n_kv);
         return sb;
     }
 
@@ -208,7 +209,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     ggml_set_input(sb.mask_in);
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
-    if (gf == nullptr) { std::fprintf(stderr, "voxtral_realtime step: graph alloc failed\n"); return sb; }
+    if (gf == nullptr) { log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime step: graph alloc failed"); return sb; }
     sb.graph = gf;
 
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, sb.input_id_in);
@@ -250,7 +251,7 @@ VerifyBuild build_verify_graph(ggml_context *                  ctx,
     vb.max_n_kv = max_n_kv;
     if (ctx == nullptr || T_verify <= 0 || max_n_kv <= 0 ||
         kv_cache.self_k == nullptr || max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr, "voxtral_realtime verify: invalid arg (T_verify=%d max_n_kv=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime verify: invalid arg (T_verify=%d max_n_kv=%d)",
                      T_verify, max_n_kv);
         return vb;
     }
@@ -279,7 +280,7 @@ VerifyBuild build_verify_graph(ggml_context *                  ctx,
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr, "voxtral_realtime verify: graph alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime verify: graph alloc failed");
         return vb;
     }
     vb.graph = gf;
@@ -329,7 +330,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     if (ctx == nullptr || T_prompt <= 0 || n_batch <= 0 || !use_flash ||
         kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
         T_prompt > kv_cache.n_ctx) {
-        std::fprintf(stderr, "voxtral_realtime prefill(batched): invalid arg (T_prompt=%d, n_batch=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime prefill(batched): invalid arg (T_prompt=%d, n_batch=%d)",
                      T_prompt, n_batch);
         return pb;
     }
@@ -362,7 +363,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_set_input(pb.last_idx_in);
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
-    if (gf == nullptr) { std::fprintf(stderr, "voxtral_realtime prefill(batched): graph alloc failed\n"); return pb; }
+    if (gf == nullptr) { log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime prefill(batched): graph alloc failed"); return pb; }
     pb.graph = gf;
 
     // Token-embed the (rectangular) prompt rows, then ADD the audio embeds at
@@ -413,7 +414,7 @@ StepBuildBatched build_step_graph_batched(
     if (ctx == nullptr || max_n_kv <= 0 || n_batch <= 0 || !use_flash ||
         kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
         max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr, "voxtral_realtime step(batched): invalid arg (max_n_kv=%d, n_batch=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime step(batched): invalid arg (max_n_kv=%d, n_batch=%d)",
                      max_n_kv, n_batch);
         return sb;
     }
@@ -442,7 +443,7 @@ StepBuildBatched build_step_graph_batched(
     ggml_set_input(sb.mask_in);
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
-    if (gf == nullptr) { std::fprintf(stderr, "voxtral_realtime step(batched): graph alloc failed\n"); return sb; }
+    if (gf == nullptr) { log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime step(batched): graph alloc failed"); return sb; }
     sb.graph = gf;
 
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, sb.input_ids_in);  // [hidden, B]

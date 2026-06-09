@@ -32,6 +32,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -198,15 +199,15 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_mel_frames <= 0) {
-        std::fprintf(stderr,
-                     "whisper encoder: invalid arg (ctx=%p, n_mel_frames=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper encoder: invalid arg (ctx=%p, n_mel_frames=%d)",
                      static_cast<void *>(ctx), n_mel_frames);
         return eb;
     }
     if (n_mel_frames % 2 != 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper encoder: n_mel_frames=%d must be even "
-                     "(stride-2 conv2 would produce fractional T_enc)\n",
+                     "(stride-2 conv2 would produce fractional T_enc)",
                      n_mel_frames);
         return eb;
     }
@@ -217,8 +218,8 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     const int T_enc   = n_mel_frames / 2;
 
     if (T_enc > hp.enc_max_source_positions) {
-        std::fprintf(stderr,
-                     "whisper encoder: T_enc=%d exceeds max_source_positions=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper encoder: T_enc=%d exceeds max_source_positions=%d",
                      T_enc, hp.enc_max_source_positions);
         return eb;
     }
@@ -327,8 +328,8 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     // go up to 32 (large). 8192 leaves headroom for the block ops.
     eb.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "whisper encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

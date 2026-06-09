@@ -23,6 +23,7 @@
 #include "granite_conformer/shaw_attn.h"
 #include "transcribe-debug.h"
 #include "transcribe-mel.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -101,8 +102,8 @@ transcribe_status compute_mel_encoder_input(
 
     const int stride = static_cast<int>(raw.size() / static_cast<size_t>(n_mels));
     if (stride <= 0 || stride < n_frames) {
-        std::fprintf(stderr,
-                     "granite_nar: mel buffer stride (%d) < expected frames (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar: mel buffer stride (%d) < expected frames (%d)",
                      stride, n_frames);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -437,8 +438,8 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     ggml_tensor * cat = nullptr;
     for (size_t k = 0; k < captures.size(); ++k) {
         if (captures[k] == nullptr) {
-            std::fprintf(stderr,
-                         "granite_nar encoder: missing capture for layer index %d\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "granite_nar encoder: missing capture for layer index %d",
                          (int)hp.enc_layer_indices[k]);
             return eb;
         }
@@ -451,7 +452,7 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr, "granite_nar encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.cat_out);
@@ -489,8 +490,8 @@ void compute_bpe_ctc_initial_hypothesis(
         return;
     }
     if (static_cast<int>(importance_non_blank.size()) < T_enc) {
-        std::fprintf(stderr,
-                     "granite_nar BPE CTC: importance has %zu entries, need >= %d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar BPE CTC: importance has %zu entries, need >= %d",
                      importance_non_blank.size(), T_enc);
         return;
     }

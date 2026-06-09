@@ -4,6 +4,7 @@
 // inline this op identically; this file is the single source of truth.
 
 #include "shaw_attn.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -61,9 +62,9 @@ ggml_tensor * shaw_block_attn(ggml_context *           ctx,
     // error.
     if (T_pad > T_enc) {
         if (zero_pad == nullptr) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "granite_conformer::shaw_block_attn: "
-                         "zero_pad is null but T_pad > T_enc\n");
+                         "zero_pad is null but T_pad > T_enc");
             return nullptr;
         }
         h = ggml_concat(ctx, h, zero_pad, /*dim=*/1);
