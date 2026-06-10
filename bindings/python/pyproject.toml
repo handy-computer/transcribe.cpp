@@ -28,6 +28,14 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
+# The pure-Python API package hard-depends on the default native provider so
+# `pip install transcribe-cpp` transcribes out of the box. The `==X.Y.Z.*` pin
+# is the pre-1.0 base-version contract enforced at the resolver level (a .postN
+# packaging fix still resolves); the import-time version/header-hash check in
+# _library.py is the runtime backstop. check_version_sync.py gates this pin
+# against include/transcribe.h.
+dependencies = ["transcribe-cpp-native==0.0.1.*"]
+
 [project.optional-dependencies]
 # Test-only deps. Run with: uv run --extra test pytest (from bindings/python).
 test = ["pytest>=7"]
@@ -39,6 +47,14 @@ Issues = "https://github.com/handy-computer/transcribe.cpp/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/transcribe_cpp"]
+
+[tool.uv]
+# Dev/CI environments load a locally built library (TRANSCRIBE_LIBRARY or the
+# build-tree fallback) — they must not pull the native provider from an index
+# (it isn't published until release, and a prebuilt artifact would shadow the
+# library under test). The provably-false marker removes the dependency for uv
+# project operations only; pip installs of built distributions keep the pin.
+override-dependencies = ["transcribe-cpp-native; python_version < '0'"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -60,10 +60,21 @@ def init_version(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def native_pin_version(text: str) -> str | None:
+    # The hard dependency on the default provider is the pre-1.0 base-version
+    # contract at resolver level: transcribe-cpp-native==X.Y.Z.* — X.Y.Z must
+    # be the same base as everything else. (The provider package itself can't
+    # drift: its version is parsed from the header at build time.)
+    m = re.search(r'"transcribe-cpp-native\s*==\s*([0-9.]+?)\.\*"', text)
+    return m.group(1) if m else None
+
+
 def main() -> int:
+    pyproject_text = PYPROJECT.read_text()
     sources = {
         "include/transcribe.h": header_version(HEADER.read_text()),
-        "pyproject.toml": pyproject_version(PYPROJECT.read_text()),
+        "pyproject.toml": pyproject_version(pyproject_text),
+        "pyproject.toml (native pin)": native_pin_version(pyproject_text),
         "__init__.__version__": init_version(INIT.read_text()),
     }
 

@@ -120,8 +120,11 @@ jobs:
     #   1. loader REMOVED (no libvulkan)  -> import + CPU devices work,
     #      vulkan answers unavailable; the module-load failure is quiet.
     #   2. mesa lavapipe installed        -> the SAME artifacts discover a
-    #      software Vulkan device.
+    #      software Vulkan device, and (with HF_TOKEN for the canary model)
+    #      actually transcribe on it.
     runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -186,9 +189,36 @@ jobs:
           print("ok: the same provider directory discovers a Vulkan device")
           EOF
           uv run --project bindings/python python /tmp/check_vulkan.py
+      - name: "Tier 2b: real transcription on the Vulkan device (needs HF_TOKEN)"
+        if: env.HF_TOKEN != ''
+        run: |
+          uv run --no-project --with huggingface_hub \
+            hf download handy-computer/whisper-tiny-gguf \
+            whisper-tiny-Q5_K_M.gguf --local-dir canary
+          export TRANSCRIBE_LIBRARY="$PWD/provider/libtranscribe.so"
+          export GGML_VK_VISIBLE_DEVICES=0
+          cat > /tmp/check_vk_transcribe.py <<'EOF'
+          import array, wave
+          import transcribe_cpp as t
+          assert t.backend_available("vulkan")
+          with wave.open("samples/jfk.wav", "rb") as w:
+              pcm16 = array.array("h")
+              pcm16.frombytes(w.readframes(w.getnframes()))
+          pcm = array.array("f", (s / 32768.0 for s in pcm16))
+          with t.Model("canary/whisper-tiny-Q5_K_M.gguf", backend="vulkan") as m:
+              print("model backend:", m.backend)
+              with m.session() as s:
+                  text = s.run(pcm, language="en").text
+          print("text:", text.strip())
+          assert "country" in text.lower(), text
+          print("ok: transcribed end-to-end on the Vulkan (lavapipe) device")
+          EOF
+          uv run --project bindings/python python /tmp/check_vk_transcribe.py
 
   python-shared:
     runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -209,13 +239,31 @@ jobs:
         run: cmake --build build-shared -j
       - name: api_smoke (exported-symbol canary) + extension umbrella
         run: ctest --test-dir build-shared --output-on-failure
-      - name: Python no-model tests
+      # The canary model upgrades this lane from "imports and ABI" to a real
+      # end-to-end transcription. Guarded on HF_TOKEN (the model repo is
+      # private for now; forks have no token) — without it the model tests
+      # skip cleanly, exactly as before.
+      - name: Download canary models (needs HF_TOKEN)
+        if: env.HF_TOKEN != ''
+        run: |
+          uv run --no-project --with huggingface_hub \
+            hf download handy-computer/whisper-tiny-gguf \
+            whisper-tiny-Q5_K_M.gguf --local-dir canary
+          uv run --no-project --with huggingface_hub \
+            hf download handy-computer/moonshine-streaming-tiny-gguf \
+            moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+      - name: Python tests (real transcription when the canary is present)
         run: |
           # libtranscribe.so is dlopen'd by ctypes; help it resolve its sibling
           # ggml shared libs in the build tree.
           export LD_LIBRARY_PATH="$(find "$PWD/build-shared" -name '*.so' \
             -printf '%h\n' | sort -u | tr '\n' ':')$LD_LIBRARY_PATH"
           # The loader auto-discovers build-shared/src/libtranscribe.so from the
-          # repo root; model tests skip (no GGUF in CI).
+          # repo root; the TRANSCRIBE_SMOKE_* vars (set above when HF_TOKEN
+          # exists) un-skip the offline AND streaming model tests. The prompted
+          # (nemotron) streaming test still skips here — its regression is
+          # pinned in CI by the sanitized C-level test instead.
           uv run --project bindings/python --extra test \
             pytest bindings/python/tests -q -rs

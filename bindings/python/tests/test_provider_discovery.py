@@ -163,6 +163,87 @@ def test_contract_accepts_post_release_provider():
     p.validate_contract()  # no raise
 
 
-def test_no_provider_installed_in_test_env():
-    # Sanity: this binding ran from the dev tree, not a provider package.
-    assert t.native_provider() is None
+def test_provider_state_is_consistent():
+    # Two legitimate environments run this suite: the dev tree (no provider
+    # installed / TRANSCRIBE_LIBRARY override -> native_provider() is None) and
+    # a wheel-test env where the transcribe-cpp-native package supplied the
+    # library. Pin that the reported state matches where the library came from.
+    provider = t.native_provider()
+    if provider is None:
+        assert "transcribe_cpp_native" not in t.library_path()
+    else:
+        assert provider == "transcribe-cpp-native"
+        assert "transcribe_cpp_native" in t.library_path()
+
+
+# --- end to end, through the real entry-point machinery --------------------
+#
+# The unit tests above drive selection/contract with synthetic _Provider
+# objects. These build an actual installed-distribution shape on disk — a
+# module plus a .dist-info advertising the transcribe_cpp.native group — and
+# run the full path: importlib.metadata discovery → ep.load() → descriptor →
+# selection → contract → ctypes dlopen of the real library this suite loaded.
+
+
+def _install_fake_provider(
+    site_dir, module_name, *, header_hash=GOOD_HASH, version=API_BASE
+):
+    lib = t.library_path()
+    dist = module_name.replace("_", "-")
+    (site_dir / f"{module_name}.py").write_text(
+        "def descriptor():\n"
+        "    return {\n"
+        f"        'name': {dist!r},\n"
+        f"        'library_path': {lib!r},\n"
+        f"        'version': {version!r},\n"
+        f"        'header_hash': {header_hash!r},\n"
+        "        'backends': ['cpu'],\n"
+        "    }\n"
+    )
+    di = site_dir / f"{module_name}-0.0.1.dist-info"
+    di.mkdir()
+    (di / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: {dist}\nVersion: 0.0.1\n"
+    )
+    (di / "entry_points.txt").write_text(
+        f"[transcribe_cpp.native]\n{module_name} = {module_name}:descriptor\n"
+    )
+    return dist
+
+
+@pytest.fixture
+def library_globals_restored():
+    """load_library mutates module globals; put them back for later tests."""
+    provider, art = _library._selected_provider, _library._artifact_dir
+    yield
+    _library._selected_provider = provider
+    _library._artifact_dir = art
+
+
+def test_entry_point_end_to_end_loads(tmp_path, monkeypatch, library_globals_restored):
+    dist = _install_fake_provider(tmp_path, "fake_native_provider_ok")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delenv("TRANSCRIBE_LIBRARY", raising=False)
+
+    # Explicit request: deterministic even if a real provider package is also
+    # installed in this environment (auto-selection policy is unit-tested).
+    cdll, path = _library.load_library(provider=dist)
+    assert str(path) == t.library_path()
+    assert _library.selected_provider() == dist
+    assert _library.artifact_dir() == path.parent
+    # The dlopen is real: the loaded handle exposes the C API.
+    assert cdll.transcribe_version is not None
+
+
+def test_entry_point_end_to_end_rejects_abi_mismatch(
+    tmp_path, monkeypatch, library_globals_restored
+):
+    dist = _install_fake_provider(
+        tmp_path, "fake_native_provider_badhash", header_hash="deadbeefdeadbeef"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delenv("TRANSCRIBE_LIBRARY", raising=False)
+
+    # The contract check must refuse before any dlopen happens.
+    with pytest.raises(TranscribeError, match="public ABI"):
+        _library.load_library(provider=dist)

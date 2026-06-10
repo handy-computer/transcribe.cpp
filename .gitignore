@@ -3,6 +3,11 @@
 /build-*/
 /cmake-build-*/
 
+# Python distribution output (provider wheels/sdists at the repo root;
+# bindings/python/dist for the pure API package)
+/dist/
+/bindings/python/dist/
+
 # Scratch space for benchmarks, staging, etc.
 /tmp/
 

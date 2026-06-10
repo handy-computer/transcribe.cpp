@@ -1,0 +1,99 @@
+# transcribe-cpp-native: the default native provider package for the
+# transcribe-cpp Python bindings (see docs/python-bindings-distribution-plan.md).
+#
+# This pyproject lives at the repo root on purpose: the sdist must contain the
+# full C++ tree (src/, include/, vendored ggml/) so `pip install` can compile
+# from source on platforms without a prebuilt wheel, and an sdist cannot reach
+# files outside its project directory. The pure-Python API package
+# (transcribe-cpp) lives at bindings/python and depends on this one.
+#
+# One distribution name, platform-differentiated wheels:
+#   manylinux / win  -> conservative CPU + Vulkan ggml backend modules
+#   macOS arm64      -> Metal (embedded shaders) + CPU
+#   sdist            -> builds from source; machine-tuned CPU by default
+#
+# The wheel is py3-none-<platform>: the package contains zero compiled Python
+# (the binding is ctypes), only the native artifact directory.
+
+[build-system]
+requires = ["scikit-build-core>=0.11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "transcribe-cpp-native"
+dynamic = ["version"]
+description = "Prebuilt native library for transcribe-cpp (speech-to-text, ggml)"
+readme = "bindings/python-native/README.md"
+requires-python = ">=3.9"
+license = "MIT"
+# Wheels vendor native code, so third-party license texts ship in the wheel
+# (settled decision: license inclusion is part of provider packaging tests).
+license-files = ["LICENSE", "ggml/LICENSE"]
+authors = [{ name = "The transcribe.cpp authors" }]
+keywords = ["transcription", "speech-to-text", "asr", "ggml", "native"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/handy-computer/transcribe.cpp"
+Repository = "https://github.com/handy-computer/transcribe.cpp"
+Issues = "https://github.com/handy-computer/transcribe.cpp/issues"
+
+# The provider contract: transcribe_cpp discovers native artifacts through this
+# entry-point group and validates version + public-header hash before dlopen
+# (bindings/python/src/transcribe_cpp/_library.py).
+[project.entry-points."transcribe_cpp.native"]
+default = "transcribe_cpp_native:descriptor"
+
+[tool.scikit-build]
+# The version is parsed from the TRANSCRIBE_VERSION_* macros in the public
+# header — the same single source CMake and transcribe_version() use — so the
+# provider package version cannot drift from the native library it bundles.
+metadata.version.provider = "scikit_build_core.metadata.regex"
+metadata.version.input = "include/transcribe.h"
+metadata.version.regex = '(?sx) TRANSCRIBE_VERSION_MAJOR \s+ (?P<major>\d+) .*? TRANSCRIBE_VERSION_MINOR \s+ (?P<minor>\d+) .*? TRANSCRIBE_VERSION_PATCH \s+ (?P<patch>\d+)'
+metadata.version.result = "{major}.{minor}.{patch}"
+
+cmake.version = ">=3.21"
+ninja.version = ">=1.11"
+
+# ctypes binding: no compiled Python, one wheel per platform spans all CPythons.
+wheel.py-api = "py3"
+# CMake's install prefix maps inside the import package, so the artifact
+# directory lands at transcribe_cpp_native/_native/.
+wheel.install-dir = "transcribe_cpp_native"
+wheel.packages = ["bindings/python-native/transcribe_cpp_native"]
+
+# Package ONLY the wheel component (cmake/python-wheel-install.cmake): the
+# vendored ggml's own install rules (headers, cmake config, pkg-config) use the
+# default component and must stay out of the wheel.
+install.components = ["wheel"]
+
+# Keep the sdist to the sources a from-scratch build needs. Converted models,
+# dumps, perf/WER reports, and local build trees are multi-GB and never belong
+# in a distribution.
+sdist.exclude = [
+  "models/",
+  "dumps/",
+  "reports/",
+  "tmp/",
+  "build*/",
+  "dist*/",
+  ".github/",
+  ".claude/",
+  "bindings/python/dist/",
+  "**/__pycache__/",
+  "**/.venv/",
+]
+
+[tool.uv]
+# Keep `uv run <script>` at the repo root from syncing (= compiling) this
+# package: repo scripts run via PEP-723 inline metadata, and uv must never
+# trigger a surprise native build. Wheel/sdist builds go through the build
+# backend directly (python -m build, cibuildwheel, pip), which ignores this.
+package = false

@@ -90,15 +90,23 @@ def audio_pcm(audio_path: Path) -> "array.array":
 
 @pytest.fixture(scope="session")
 def streaming_model_path() -> Path:
-    if not STREAMING_MODEL.is_file():
-        pytest.skip(f"streaming model not present: {STREAMING_MODEL}")
-    return STREAMING_MODEL
+    override = os.environ.get("TRANSCRIBE_SMOKE_STREAMING_MODEL")
+    path = Path(override) if override else STREAMING_MODEL
+    if not path.is_file():
+        pytest.skip(
+            f"streaming model not present: {path} "
+            "(set TRANSCRIBE_SMOKE_STREAMING_MODEL)"
+        )
+    return path
 
 
 @pytest.fixture(scope="session")
 def prompted_streaming_model_path() -> Path:
-    if not PROMPTED_STREAMING_MODEL.is_file():
+    override = os.environ.get("TRANSCRIBE_SMOKE_PROMPTED_MODEL")
+    path = Path(override) if override else PROMPTED_STREAMING_MODEL
+    if not path.is_file():
         pytest.skip(
-            f"prompted streaming model not present: {PROMPTED_STREAMING_MODEL}"
+            f"prompted streaming model not present: {path} "
+            "(set TRANSCRIBE_SMOKE_PROMPTED_MODEL)"
         )
-    return PROMPTED_STREAMING_MODEL
+    return path

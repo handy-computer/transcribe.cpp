@@ -66,6 +66,34 @@ set(CMAKE_CXX_VISIBILITY_PRESET     hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 # -----------------------------------------------------------------------------
+# Python wheel build (scikit-build-core sets SKBUILD)
+# -----------------------------------------------------------------------------
+#
+# The repo-root pyproject.toml builds the transcribe-cpp-native provider
+# package through scikit-build-core. Force the library shape that package
+# ships (shared libtranscribe, no tests/examples/tools) and default to the
+# official wheel-hygiene posture: no OpenMP and no non-Apple system BLAS, so
+# nothing is vendored that collides with PyTorch/NumPy/MKL in-process, and
+# Metal shaders embedded so the artifact has no sidecar files. The hygiene
+# defaults (not the shape) can be overridden with -D for local source builds
+# that want them. CMP0077 is NEW here, so option() below respects these.
+if(SKBUILD)
+    set(TRANSCRIBE_BUILD_SHARED   ON)
+    set(TRANSCRIBE_BUILD_TESTS    OFF)
+    set(TRANSCRIBE_BUILD_EXAMPLES OFF)
+    set(TRANSCRIBE_BUILD_TOOLS    OFF)
+    if(NOT DEFINED CACHE{TRANSCRIBE_USE_OPENMP})
+        set(TRANSCRIBE_USE_OPENMP OFF)
+    endif()
+    if(NOT DEFINED CACHE{TRANSCRIBE_USE_SYSTEM_BLAS})
+        set(TRANSCRIBE_USE_SYSTEM_BLAS OFF)
+    endif()
+    if(NOT DEFINED CACHE{GGML_METAL_EMBED_LIBRARY})
+        set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+    endif()
+endif()
+
+# -----------------------------------------------------------------------------
 # Apple Silicon detection (drives Metal default)
 # -----------------------------------------------------------------------------
 
@@ -261,4 +289,10 @@ endif()
 
 if(TRANSCRIBE_BUILD_TOOLS)
     add_subdirectory(tools)
+endif()
+
+# Python provider-wheel packaging (after subdirs: needs the target list and
+# ggml's GGML_AVAILABLE_BACKENDS).
+if(SKBUILD)
+    include(cmake/python-wheel-install.cmake)
 endif()

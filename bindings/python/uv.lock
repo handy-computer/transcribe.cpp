@@ -5,6 +5,9 @@ resolution-markers = [
     "python_full_version < '3.10'",
 ]
 
+[manifest]
+overrides = [{ name = "transcribe-cpp-native", marker = "python_full_version < '0'" }]
+
 [[package]]
 name = "colorama"
 version = "0.4.6"
@@ -185,7 +188,10 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pytest", marker = "extra == 'test'", specifier = ">=7" }]
+requires-dist = [
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=7" },
+    { name = "transcribe-cpp-native", specifier = "==0.0.1.*" },
+]
 
 [[package]]
 name = "typing-extensions"
