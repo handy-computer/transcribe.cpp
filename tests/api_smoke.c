@@ -147,6 +147,59 @@ static void test_abi_metadata(void) {
     CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_CAPABILITIES) == caps.struct_size);
 }
 
+static void test_backend_devices(void) {
+    /* A build has at least one compute device once backends are available:
+     * compiled-in builds register at startup; dynamic-backend builds
+     * register via transcribe_init_backends. This smoke runs in both
+     * configurations. */
+    const int n_before = transcribe_backend_device_count();
+    CHECK(n_before >= 0);
+
+    /* init_backends argument contract. */
+    CHECK(transcribe_init_backends(NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_init_backends("")   == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_init_backends("/nonexistent-transcribe-artifact-dir") ==
+          TRANSCRIBE_ERR_FILE_NOT_FOUND);
+
+    /* An existing directory with no modules: OK when backends are already
+     * registered (static build), ERR_BACKEND when a dynamic build ends up
+     * with zero devices. Idempotent: a repeat call reports the same and
+     * never re-registers (device count stable). */
+    const int st1 = transcribe_init_backends(".");
+    CHECK(st1 == TRANSCRIBE_OK || st1 == TRANSCRIBE_ERR_BACKEND);
+    const int n_after = transcribe_backend_device_count();
+    const int st2 = transcribe_init_backends(".");
+    CHECK(st2 == st1);
+    CHECK(transcribe_backend_device_count() == n_after);
+
+    if (n_after > 0) {
+        struct transcribe_backend_device dev;
+        transcribe_backend_device_init(&dev);
+        CHECK(dev.struct_size == sizeof(dev));
+        CHECK(transcribe_get_backend_device(0, &dev) == TRANSCRIBE_OK);
+        CHECK(dev.name != NULL && dev.name[0] != '\0');
+        CHECK(dev.description != NULL);
+        CHECK(dev.kind != NULL && dev.kind[0] != '\0');
+
+        CHECK(transcribe_backend_available(TRANSCRIBE_BACKEND_AUTO));
+        CHECK(transcribe_backend_available(TRANSCRIBE_BACKEND_CPU));
+    }
+
+    /* Out-of-range probes answer cleanly: error status or false, never UB. */
+    struct transcribe_backend_device dev2;
+    transcribe_backend_device_init(&dev2);
+    CHECK(transcribe_get_backend_device(-1, &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_get_backend_device(1 << 20, &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_get_backend_device(0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(!transcribe_backend_available((transcribe_backend_request) 999));
+
+    /* ABI accessors must know the new struct. */
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_BACKEND_DEVICE) ==
+          sizeof(struct transcribe_backend_device));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_BACKEND_DEVICE) ==
+          _Alignof(struct transcribe_backend_device));
+}
+
 static void test_log_level_values(void) {
     /* These numeric values must mirror GGML_LOG_LEVEL_* exactly. If this
      * test ever fails, the public contract documented in transcribe.h
@@ -757,6 +810,7 @@ int main(void) {
     test_status_string();
     test_version();
     test_abi_metadata();
+    test_backend_devices();
     test_log_level_values();
     test_log_set_null();
     test_init_macros();

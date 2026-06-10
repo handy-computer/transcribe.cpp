@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <vector>
@@ -107,20 +108,42 @@ ggml_backend_t init_cpu_backend(const char * error_tag) {
     return cpu_be;
 }
 
+bool valid_backend_request(int raw) {
+    switch (raw) {
+        case TRANSCRIBE_BACKEND_AUTO:
+        case TRANSCRIBE_BACKEND_CPU:
+        case TRANSCRIBE_BACKEND_METAL:
+        case TRANSCRIBE_BACKEND_VULKAN:
+        case TRANSCRIBE_BACKEND_CPU_ACCEL:
+        case TRANSCRIBE_BACKEND_CUDA:
+            return true;
+    }
+    return false;
+}
+
 } // namespace
 
 transcribe_status init_backends(transcribe_backend_request requested,
                                 const char *               error_tag,
                                 BackendPlan &              out)
 {
+    // Read the request as raw bytes before any enum-typed load: a C caller
+    // can pass any int here, and loading an out-of-range value through the
+    // enum lvalue is UB in C++ (UBSan traps). The raw value is validated by
+    // the switch; only valid values are stored back as the enum.
+    int requested_raw = TRANSCRIBE_BACKEND_AUTO;
+    std::memcpy(&requested_raw, &requested, sizeof(requested_raw));
+
     out = BackendPlan{};
-    out.requested = requested;
+    out.requested = static_cast<transcribe_backend_request>(
+        valid_backend_request(requested_raw) ? requested_raw
+                                             : TRANSCRIBE_BACKEND_AUTO);
 
     // Explicit switch over the enum so an unknown / garbage value
     // from a C caller never silently collapses into AUTO. Unknown
     // values are a programming error on the caller's side, not a
     // fallback we want to tolerate.
-    switch (requested) {
+    switch (requested_raw) {
     case TRANSCRIBE_BACKEND_CPU:
     case TRANSCRIBE_BACKEND_CPU_ACCEL: {
         // CPU primary. The CPU_ACCEL variant additionally layers the
@@ -229,7 +252,7 @@ transcribe_status init_backends(transcribe_backend_request requested,
     // to AUTO — that hides bugs.
     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                  "%s: invalid transcribe_backend_request value %d",
-                 error_tag, static_cast<int>(requested));
+                 error_tag, requested_raw);
     return TRANSCRIBE_ERR_INVALID_ARG;
 }
 

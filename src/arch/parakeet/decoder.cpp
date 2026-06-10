@@ -20,9 +20,13 @@
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
 
+// ggml-backend.h only — NOT ggml-cpu.h: backend-specific entry points such
+// as ggml_backend_cpu_init live inside the loadable CPU module under
+// GGML_BACKEND_DL, so the library must reach the CPU backend through the
+// registry (ggml_backend_init_by_type / get_proc_address), never by direct
+// link-time reference.
 #include "ggml.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml-alloc.h"
 
 #include <thread>
@@ -167,7 +171,7 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w,
     // A CPU backend used ONLY to allocate the resident weight buffer — never
     // graph_compute'd (each decode call owns its own compute backend), so it
     // carries no per-step state and is safe to keep on the shared model.
-    j.w_backend = ggml_backend_cpu_init();
+    j.w_backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     if (j.w_backend == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: ggml CPU backend init failed");
         return fail();
@@ -256,9 +260,20 @@ bool build_joint_graph(JointGraph & g, const HostJoint & j, int n_threads) {
         return false;
     };
 
-    g.backend = ggml_backend_cpu_init();
+    g.backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     if (g.backend == nullptr) return fail();
-    ggml_backend_cpu_set_n_threads(g.backend, std::max(1, n_threads));
+    // n_threads via proc address: the typed setter is a CPU-module symbol
+    // under GGML_BACKEND_DL. Absent setter (exotic CPU device) keeps the
+    // backend's default thread count — correct, just less tuned.
+    if (ggml_backend_dev_t dev = ggml_backend_get_device(g.backend)) {
+        auto set_n_threads = (ggml_backend_set_n_threads_t)
+            ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev),
+                "ggml_backend_set_n_threads");
+        if (set_n_threads != nullptr) {
+            set_n_threads(g.backend, std::max(1, n_threads));
+        }
+    }
 
     ggml_init_params ip {};
     ip.mem_size   = ggml_tensor_overhead() * 8 + ggml_graph_overhead();

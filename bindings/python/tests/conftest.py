@@ -35,6 +35,13 @@ DEFAULT_AUDIO = SAMPLES / "jfk.wav"
 STREAMING_MODEL = (
     REPO / "models/moonshine-streaming-tiny/moonshine-streaming-tiny-Q8_0.gguf"
 )
+# A streaming model with a language-prompt dictionary: its C++ implementation
+# re-reads run_params.language on every feed, which is what the params
+# copy-out regression tests exercise.
+PROMPTED_STREAMING_MODEL = (
+    REPO
+    / "models/nemotron-3.5-asr-streaming-0.6b/nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf"
+)
 
 
 def load_wav(path: Path) -> "array.array":
@@ -86,3 +93,12 @@ def streaming_model_path() -> Path:
     if not STREAMING_MODEL.is_file():
         pytest.skip(f"streaming model not present: {STREAMING_MODEL}")
     return STREAMING_MODEL
+
+
+@pytest.fixture(scope="session")
+def prompted_streaming_model_path() -> Path:
+    if not PROMPTED_STREAMING_MODEL.is_file():
+        pytest.skip(
+            f"prompted streaming model not present: {PROMPTED_STREAMING_MODEL}"
+        )
+    return PROMPTED_STREAMING_MODEL

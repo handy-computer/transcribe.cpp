@@ -88,6 +88,100 @@ jobs:
       - name: Test (full white-box suite)
         run: ctest --test-dir build --output-on-failure
 
+  cpp-tests-sanitized:
+    # ASan+UBSan over the white-box suite. This is the lane that certifies
+    # the C lifetime/ABI contracts the FFI bindings rely on — including the
+    # params copy-out regression (stream_dispatch_unit), which reproduces a
+    # ctypes-shaped caller freeing its params right after stream_begin.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv (fixtures are generated via uv)
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+      - name: Configure (static, sanitized)
+        run: |
+          cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DTRANSCRIBE_SANITIZE=ON
+      - name: Build
+        run: cmake --build build-asan -j
+      - name: Test (white-box suite under ASan+UBSan)
+        run: ctest --test-dir build-asan --output-on-failure
+
+  provider-dl-vulkan:
+    # Builds the default Linux provider shape — CPU + Vulkan as dynamic
+    # backend modules (GGML_BACKEND_DL) — assembles it into a flat
+    # wheel-like directory with $ORIGIN rpaths, deletes the build tree so
+    # nothing can resolve outside the directory, and proves the Vulkan
+    # degradation contract on the real runner:
+    #   1. loader REMOVED (no libvulkan)  -> import + CPU devices work,
+    #      vulkan answers unavailable; the module-load failure is quiet.
+    #   2. mesa lavapipe installed        -> the SAME artifacts discover a
+    #      software Vulkan device.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install build deps (Vulkan SDK pieces + patchelf)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build zlib1g-dev \
+            libvulkan-dev glslc patchelf
+      - name: Configure (DL provider, CPU + Vulkan modules, wheel posture)
+        run: |
+          cmake -B build-dl -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DTRANSCRIBE_BUILD_SHARED=ON \
+            -DTRANSCRIBE_GGML_BACKEND_DL=ON \
+            -DTRANSCRIBE_VULKAN=ON \
+            -DTRANSCRIBE_USE_OPENMP=OFF \
+            -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF
+      - name: Build
+        run: cmake --build build-dl -j
+      - name: Assemble flat provider directory ($ORIGIN rpaths, build tree deleted)
+        run: |
+          mkdir -p provider
+          cp -L build-dl/src/libtranscribe.so provider/
+          cp -L build-dl/ggml/src/libggml.so.* build-dl/ggml/src/libggml-base.so.* provider/ 2>/dev/null || \
+            cp -L build-dl/ggml/src/libggml.so build-dl/ggml/src/libggml-base.so provider/
+          cp build-dl/bin/libggml-*.so provider/
+          for f in provider/*.so*; do patchelf --set-rpath '$ORIGIN' "$f"; done
+          ls -la provider/
+          rm -rf build-dl  # isolation: nothing may resolve outside provider/
+      - name: "Tier 1: no Vulkan loader — CPU works, vulkan cleanly unavailable"
+        run: |
+          sudo apt-get remove -y libvulkan-dev libvulkan1 || \
+            sudo rm -f /usr/lib/x86_64-linux-gnu/libvulkan.so.1*
+          export TRANSCRIBE_LIBRARY="$PWD/provider/libtranscribe.so"
+          cat > /tmp/check_no_vulkan.py <<'EOF'
+          import transcribe_cpp as t
+          devs = t.backends()
+          print("devices (no loader):", [(d.name, d.kind) for d in devs])
+          assert any(d.kind == "cpu" for d in devs), devs
+          assert t.backend_available("cpu")
+          assert not t.backend_available("vulkan"), devs
+          print("ok: import + CPU fine without a Vulkan loader; vulkan answers False")
+          EOF
+          uv run --project bindings/python python /tmp/check_no_vulkan.py
+      - name: "Tier 2: lavapipe installed — same artifacts discover Vulkan"
+        run: |
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+          export TRANSCRIBE_LIBRARY="$PWD/provider/libtranscribe.so"
+          cat > /tmp/check_vulkan.py <<'EOF'
+          import transcribe_cpp as t
+          devs = t.backends()
+          print("devices (lavapipe):", [(d.name, d.kind) for d in devs])
+          assert t.backend_available("vulkan"), devs
+          assert any(d.kind == "vulkan" for d in devs), devs
+          print("ok: the same provider directory discovers a Vulkan device")
+          EOF
+          uv run --project bindings/python python /tmp/check_vulkan.py
+
   python-shared:
     runs-on: ubuntu-latest
     steps:

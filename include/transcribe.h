@@ -365,6 +365,7 @@ typedef enum {
     TRANSCRIBE_ABI_STREAM_TEXT       = 10,
     TRANSCRIBE_ABI_SESSION_LIMITS    = 11,
     TRANSCRIBE_ABI_EXT               = 12,
+    TRANSCRIBE_ABI_BACKEND_DEVICE    = 13,
 } transcribe_abi_struct;
 
 /* sizeof / alignof of the selected public struct, or 0 for an unknown id.
@@ -661,6 +662,95 @@ typedef enum {
     TRANSCRIBE_BACKEND_CUDA      = 5,
 } transcribe_backend_request;
 
+/* ----------------------------------------------------------------------- */
+/* Backend modules and device discovery                                    */
+/* ----------------------------------------------------------------------- */
+/*
+ * In dynamic-backend builds (GGML_BACKEND_DL, selected by the
+ * TRANSCRIBE_GGML_BACKEND_DL build option), compute backends (CPU, Vulkan,
+ * CUDA, ...) are separate loadable modules shipped next to the library in a
+ * provider artifact directory, not compiled into it. A host (a Python
+ * wheel, a Rust crate, an app bundle) loads them ONCE, before the first
+ * model load, by pointing the library at that directory. In static builds
+ * the compiled-in backends are already registered, and this call is a
+ * harmless no-op for a directory containing no modules.
+ *
+ * The search is strictly package-local: only artifact_dir is scanned —
+ * never the executable directory, the working directory, or any system
+ * path. (ggml additionally honors the GGML_BACKEND_PATH environment
+ * variable as an explicit user override naming one out-of-tree backend
+ * module; an unset environment means a fully package-local load.)
+ *
+ * A module whose system dependencies are missing — e.g. the Vulkan module
+ * on a machine with no Vulkan loader, or with a loader but no driver —
+ * fails to load quietly and is skipped; the remaining backends keep
+ * working. That degradation is the designed behavior: ship Vulkan by
+ * default, fall back to CPU on machines that cannot run it. Use the device
+ * accessors below to see what actually registered, and
+ * transcribe_backend_available() to probe one kind.
+ *
+ * Idempotent per directory (repeat calls with an already-loaded directory
+ * return TRANSCRIBE_OK without re-loading) and thread-safe.
+ *
+ * Returns:
+ *   TRANSCRIBE_ERR_INVALID_ARG     artifact_dir is NULL or empty.
+ *   TRANSCRIBE_ERR_FILE_NOT_FOUND  artifact_dir is not an existing directory.
+ *   TRANSCRIBE_ERR_BACKEND         after loading, the process has zero
+ *                                  registered compute devices (a dynamic
+ *                                  build pointed at a directory with no
+ *                                  usable modules: nothing could run).
+ *   TRANSCRIBE_OK                  otherwise.
+ */
+TRANSCRIBE_API transcribe_status transcribe_init_backends(
+    const char * artifact_dir);
+
+/*
+ * Number of compute devices currently registered with the runtime
+ * (compiled-in backends plus any modules loaded by
+ * transcribe_init_backends). A device is something a model can be placed
+ * on: the CPU, an Apple GPU via Metal, a Vulkan GPU, ...
+ */
+TRANSCRIBE_API int transcribe_backend_device_count(void);
+
+/*
+ * One registered compute device.
+ *
+ * name / description / kind are borrowed pointers into runtime-owned
+ * storage: valid for the life of the process, never freed by the caller.
+ *
+ * kind is the library's classification, one of: "cpu", "accel" (a
+ * host-memory accelerator such as BLAS/AMX), "metal", "vulkan", "cuda",
+ * "sycl", "gpu" (an unrecognized GPU), or "unknown".
+ */
+struct transcribe_backend_device {
+    uint64_t     struct_size;  /* sizeof(*this); set by _init() */
+    const char * name;         /* ggml device name, e.g. "Metal" */
+    const char * description;  /* human-readable, e.g. "Apple M4 Max" */
+    const char * kind;         /* classified kind string; see above */
+};
+
+TRANSCRIBE_API void transcribe_backend_device_init(
+    struct transcribe_backend_device * p);
+
+/*
+ * Fill *out (initialized via transcribe_backend_device_init) with device
+ * `index` in [0, transcribe_backend_device_count()).
+ */
+TRANSCRIBE_API transcribe_status transcribe_get_backend_device(
+    int                                index,
+    struct transcribe_backend_device * out);
+
+/*
+ * Whether a backend request can be satisfied by some registered device:
+ * AUTO whenever any device exists; CPU and CPU_ACCEL when a CPU device
+ * exists; METAL / VULKAN / CUDA when a device of that kind exists. Unknown
+ * or invalid request values answer false (never an error). This is the
+ * probe a binding uses to turn `backend="vulkan"` on a machine without
+ * Vulkan into a clear exception instead of a failed model load.
+ */
+TRANSCRIBE_API bool transcribe_backend_available(
+    transcribe_backend_request kind);
+
 /*
  * Initialization of caller-owned params structs.
  *
@@ -782,6 +872,15 @@ TRANSCRIBE_API void transcribe_session_params_init(
  *                  NULL to autodetect (only if the model supports it).
  *
  * target_language: target language for translation tasks, or NULL.
+ *
+ * String-pointer lifetime (language / target_language): caller-owned, and
+ * the library copies what it needs before the API call returns. This holds
+ * for transcribe_run / transcribe_run_batch (synchronous) AND for
+ * transcribe_stream_begin: the dispatcher copies these strings into
+ * session-owned storage at begin, so the caller may free its params —
+ * including the strings — the moment begin returns, even though the stream
+ * keeps running. Bindings rely on this: ctypes/FFI-managed string buffers
+ * die when the begin wrapper returns.
  *
  * keep_special_tags: keep special vocabulary tags (e.g. <|...|>) in the
  *                     returned text fields. Default (false) strips them
@@ -1803,6 +1902,13 @@ TRANSCRIBE_API transcribe_status transcribe_stream_get_text(
  *      the status in transcribe_stream_last_status. The result snapshot
  *      in this case is whatever the hook wrote before failing —
  *      typically empty.
+ *
+ * Params lifetime: everything the caller passes is copied out before this
+ * function returns. run_params strings (language / target_language) are
+ * copied into session-owned storage, and family extensions follow their
+ * documented copy-out contract — so the caller may free both params
+ * structs and every pointer inside them the moment begin returns, while
+ * the stream stays ACTIVE. Nothing handed to begin needs to outlive it.
  */
 TRANSCRIBE_API transcribe_status transcribe_stream_begin(
     struct transcribe_session *              session,

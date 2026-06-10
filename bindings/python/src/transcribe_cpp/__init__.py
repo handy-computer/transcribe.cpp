@@ -23,11 +23,12 @@ from __future__ import annotations
 import ctypes
 import os
 import threading
+import weakref
 from dataclasses import dataclass
 from typing import Literal, Sequence, Union
 
 from . import _abi, _generated
-from ._library import _base_version, load_library, selected_provider
+from ._library import _base_version, artifact_dir, load_library, selected_provider
 from .errors import (
     AbiError,
     BackendError,
@@ -97,6 +98,9 @@ __all__ = [
     "native_commit",
     "library_path",
     "native_provider",
+    "BackendDevice",
+    "backends",
+    "backend_available",
     "set_log_callback",
 ]
 
@@ -119,6 +123,22 @@ if _base_version(_native_version) != _base_version(__version__):
         f"(MAJOR.MINOR.PATCH) version. Rebuild the native library at the "
         "matching version or install a matching native provider."
     )
+
+# Load ggml backend modules from the artifact directory (package-local; a
+# no-op for static/compiled-in builds). In a dynamic-backend build this is
+# what registers CPU/Vulkan/... devices, and a Vulkan module on a machine
+# without Vulkan simply fails to load while CPU keeps working. Raises only
+# when the process ends up with ZERO compute devices.
+_artifact = artifact_dir()
+if _artifact is not None:
+    _status = _lib.transcribe_init_backends(os.fspath(_artifact).encode("utf-8"))
+    if _status != 0:
+        raise BackendError(
+            f"no usable compute backend: transcribe_init_backends({_artifact}) "
+            f"reported {_lib.transcribe_status_string(_status).decode('utf-8', 'replace')}. "
+            "In a dynamic-backend build the ggml backend modules must sit next "
+            "to the native library."
+        )
 
 _byref = ctypes.byref
 
@@ -214,6 +234,41 @@ def native_provider() -> "Union[str, None]":
     """Name of the installed provider package the native library was loaded
     from, or None for a dev-tree / ``TRANSCRIBE_LIBRARY`` load."""
     return selected_provider()
+
+
+@dataclass(frozen=True)
+class BackendDevice:
+    """One registered compute device (owned copies of the C strings)."""
+
+    name: str
+    description: str
+    kind: str  # "cpu" | "accel" | "metal" | "vulkan" | "cuda" | "sycl" | "gpu" | "unknown"
+
+
+def backends() -> "list":
+    """The compute devices registered with the native runtime — what the
+    process can actually run on, after backend-module loading and graceful
+    degradation (e.g. a Vulkan module skipped on a machine without Vulkan)."""
+    devices = []
+    for i in range(_lib.transcribe_backend_device_count()):
+        dev = _generated.transcribe_backend_device()
+        _lib.transcribe_backend_device_init(_byref(dev))
+        _check(_lib.transcribe_get_backend_device(i, _byref(dev)),
+               f"reading backend device {i}")
+        devices.append(BackendDevice(
+            name=_decode(dev.name),
+            description=_decode(dev.description),
+            kind=_decode(dev.kind),
+        ))
+    return devices
+
+
+def backend_available(backend: Backend) -> bool:
+    """Whether ``Model(..., backend=...)`` can be satisfied on this machine —
+    the probe that turns ``backend="vulkan"`` without Vulkan into a clear
+    answer before any model load."""
+    return bool(_lib.transcribe_backend_available(
+        _enum(_BACKENDS, backend, "backend")))
 
 
 _log_handler = None
@@ -637,6 +692,11 @@ class Model:
 
     def __init__(self, path: "Union[str, os.PathLike]", *,
                  backend: Backend = "auto", gpu_device: int = 0):
+        # Live sessions, tracked weakly: close() must free them before the
+        # model, because transcribe_model_free is only valid once every
+        # derived session is gone (use-after-free otherwise). Created before
+        # the load call so the failure path of __del__ finds it.
+        self._sessions = weakref.WeakSet()
         params = _ModelLoadParams()
         _lib.transcribe_model_load_params_init(_byref(params))
         params.backend = _enum(_BACKENDS, backend, "backend")
@@ -708,7 +768,12 @@ class Model:
         return Session(self, n_threads=n_threads, kv_type=kv_type, n_ctx=n_ctx)
 
     def close(self) -> None:
+        """Free the model. Any session still open on it is closed first —
+        the C contract forbids freeing a model before its sessions, so this
+        keeps explicit close()/context-manager exit safe in any order."""
         if getattr(self, "_handle", None) is not None:
+            for session in list(getattr(self, "_sessions", ()) or ()):
+                session.close()
             _lib.transcribe_model_free(self._handle)
             self._handle = None
 
@@ -753,6 +818,10 @@ class Session:
         _event = self._cancel
         self._abort_trampoline = _ABORT_CFUNC(lambda _ud: _event.is_set())
         _lib.transcribe_set_abort_callback(self._handle, self._abort_trampoline, None)
+
+        # Registered last, once the session is fully constructed: Model.close()
+        # closes any session still tracked here before freeing the model.
+        model._sessions.add(self)
 
     @property
     def _h(self) -> ctypes.c_void_p:
@@ -863,7 +932,12 @@ class Session:
             _lib.transcribe_stream_begin(self._h, _byref(run_params), _byref(sp)),
             "transcribe_stream_begin",
         )
-        return Stream(self)
+        # The C contract says everything passed to begin may be freed once it
+        # returns (strings are copied into session-owned storage). The Stream
+        # still pins the params structs until reset() as defense in depth —
+        # it costs nothing and keeps the binding safe even against an older
+        # or out-of-tree native library that predates that contract.
+        return Stream(self, _keepalive=(run_params, sp, ext))
 
     def _materialize(self, utt: "Union[int, None]" = None) -> Result:
         """Copy out one result. utt is None for the single-result accessors, or
@@ -965,8 +1039,12 @@ class Stream:
     ``text()``, and call ``finalize()`` when the audio ends. The session is
     returned to idle on context-manager exit (or ``reset()``)."""
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, *, _keepalive=None):
         self._session = session  # keep the session (and its model) alive
+        # Pins the ctypes params structs (and any family ext) passed to
+        # transcribe_stream_begin until reset(). The native library copies
+        # what it needs at begin; this is belt-and-braces for the FFI layer.
+        self._keepalive = _keepalive
         self._active = True
 
     @property
@@ -1018,6 +1096,7 @@ class Stream:
         if self._active:
             _lib.transcribe_stream_reset(self._session._h)
             self._active = False
+            self._keepalive = None
 
     def __enter__(self) -> "Stream":
         return self

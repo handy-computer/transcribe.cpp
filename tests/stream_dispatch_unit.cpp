@@ -1378,6 +1378,104 @@ void test_two_sessions_independent_streams() {
     g_abort_flag = false;
 }
 
+// --- params copy-out contract ----------------------------------------------
+//
+// Families may capture `*run_params` at stream_begin and re-read its string
+// fields on every feed (parakeet resolves the language prompt per chunk).
+// The public contract says the caller may free everything it passed the
+// moment begin returns, so the dispatcher must hand the family a params view
+// whose strings live in session-owned storage. This test is the FFI-shaped
+// repro: params + language string on the heap, scribbled and freed right
+// after begin, then a feed that reads the family's retained copy. Without
+// the dispatcher copy the retained pointer aliases the caller's freed buffer
+// (ASan: heap-use-after-free; plain build: the scribbled bytes); with it the
+// feed must see the original string.
+
+transcribe_run_params g_retained_rp;        // the family-side shallow copy
+std::string           g_language_seen_at_feed;
+
+transcribe_status retain_stream_begin(
+    transcribe_session *              session,
+    const transcribe_run_params *     run_params,
+    const transcribe_stream_params *  stream_params)
+{
+    (void)session;
+    (void)stream_params;
+    g_retained_rp = *run_params;  // exactly what parakeet/moonshine do
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status retain_stream_feed(
+    transcribe_session *       session,
+    const float *              pcm,
+    int                        n_samples,
+    transcribe_stream_update * update)
+{
+    (void)session;
+    (void)pcm;
+    (void)n_samples;
+    (void)update;
+    g_language_seen_at_feed =
+        g_retained_rp.language != nullptr ? g_retained_rp.language : "<null>";
+    return TRANSCRIBE_OK;
+}
+
+void test_begin_copies_param_strings_out() {
+    const transcribe::Arch arch = {
+        "fake-retaining-stream",
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,  // run_batch
+        nullptr,                  // stream_validate
+        retain_stream_begin,
+        retain_stream_feed,
+        fake_stream_finalize,
+        nullptr,
+        fake_accepts_no_ext,
+    };
+
+    transcribe_model model;
+    model.arch = &arch;
+    model.caps.supports_streaming = true;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+
+    transcribe_session session;
+    session.model = &model;
+
+    // FFI-shaped caller: the params struct and its language string live on
+    // the heap and are destroyed the moment begin returns (a ctypes binding
+    // garbage-collects them exactly like this).
+    auto * rp = static_cast<transcribe_run_params *>(
+        std::malloc(sizeof(transcribe_run_params)));
+    transcribe_run_params_init(rp);
+    char * lang = static_cast<char *>(std::malloc(16));
+    std::snprintf(lang, 16, "en-US");
+    rp->language = lang;
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    g_language_seen_at_feed.clear();
+    CHECK(transcribe_stream_begin(&session, rp, &sp) == TRANSCRIBE_OK);
+
+    // Caller destroys its storage: scribble (still owned, so well-defined),
+    // then free.
+    std::memset(lang, 'X', 15);
+    std::memset(rp, 0x5A, sizeof(*rp));
+    std::free(lang);
+    std::free(rp);
+
+    transcribe_stream_update up; transcribe_stream_update_init(&up);
+    const float pcm[160] = {};
+    CHECK(transcribe_stream_feed(&session, pcm, 160, &up) == TRANSCRIBE_OK);
+    CHECK(g_language_seen_at_feed == "en-US");
+    // The run-slot family ext pointer must not survive into the retained
+    // copy either: it is consumed during begin per its copy-out contract,
+    // and a stale pointer would dangle just like the strings.
+    CHECK(g_retained_rp.family == nullptr);
+
+    transcribe_stream_reset(&session);
+}
+
 } // namespace
 
 int main() {
@@ -1418,6 +1516,7 @@ int main() {
     test_feed_failure_transitions_to_failed();
     test_finalize_failure_transitions_to_failed();
     test_feed_abort_sets_was_aborted();
+    test_begin_copies_param_strings_out();
     test_two_sessions_independent_streams();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

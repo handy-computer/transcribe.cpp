@@ -53,11 +53,21 @@ _BACKEND_RANK = {"cuda": 3, "metal": 3, "vulkan": 2, "cpu_accel": 1, "cpu": 1}
 #: None means the library came from the dev-tree / explicit-path fallback.
 _selected_provider: Optional[str] = None
 
+#: Directory holding the native library and (in dynamic-backend builds) its
+#: ggml backend modules. The import-time bootstrap passes this to
+#: transcribe_init_backends so module loading stays package-local.
+_artifact_dir: Optional[Path] = None
+
 
 def selected_provider() -> Optional[str]:
     """Name of the provider package the loaded library came from, or None for a
     dev-tree / ``TRANSCRIBE_LIBRARY`` load."""
     return _selected_provider
+
+
+def artifact_dir() -> Optional[Path]:
+    """Directory the native library (and any backend modules) live in."""
+    return _artifact_dir
 
 
 def _library_filename() -> str:
@@ -285,8 +295,9 @@ def load_library(provider: Optional[str] = None) -> tuple:
     *provider* (or ``TRANSCRIBE_NATIVE_PROVIDER``) forces a specific installed
     provider; otherwise the best accelerated one is chosen, falling back to CPU.
     """
-    global _selected_provider
+    global _selected_provider, _artifact_dir
     _selected_provider = None
+    _artifact_dir = None
 
     # 1. Explicit path override — bypasses provider discovery entirely.
     override = os.environ.get("TRANSCRIBE_LIBRARY")
@@ -296,6 +307,7 @@ def load_library(provider: Optional[str] = None) -> tuple:
             raise TranscribeError(
                 message=f"TRANSCRIBE_LIBRARY points at a missing file: {path}"
             )
+        _artifact_dir = path.parent
         return _cdll(path), path
 
     # 2. Installed provider packages.
@@ -314,6 +326,9 @@ def load_library(provider: Optional[str] = None) -> tuple:
             )
         cdll = _cdll(path)
         _selected_provider = chosen.name
+        _artifact_dir = (
+            Path(chosen._artifact_dir) if chosen._artifact_dir else path.parent
+        )
         return cdll, path
 
     # 3. Bundled / dev-tree fallback.
@@ -321,6 +336,7 @@ def load_library(provider: Optional[str] = None) -> tuple:
     for path in _fallback_candidate_paths():
         tried.append(str(path))
         if path.is_file():
+            _artifact_dir = path.parent
             return _cdll(path), path
 
     raise TranscribeError(

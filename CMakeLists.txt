@@ -104,6 +104,15 @@ option(TRANSCRIBE_BUILD_SHARED    "Build libtranscribe + ggml as shared librarie
 option(TRANSCRIBE_USE_OPENMP      "Use OpenMP (ggml + Parakeet host-decoder TU)"     ON)
 option(TRANSCRIBE_USE_SYSTEM_BLAS "Link non-Apple system BLAS for the host decoder"  ON)
 
+# Dynamic ggml backends: each backend (CPU, Vulkan, CUDA, ...) becomes a
+# separate loadable module living NEXT TO libtranscribe instead of being
+# compiled in. This is the provider-directory artifact shape the Python
+# wheels ship on Linux/Windows: the Vulkan module is present by default and
+# simply fails to load (skipped; CPU keeps working) on machines without a
+# Vulkan loader/driver. The host loads the module directory once via
+# transcribe_init_backends(). Requires TRANSCRIBE_BUILD_SHARED=ON.
+option(TRANSCRIBE_GGML_BACKEND_DL "Build ggml backends as loadable modules" OFF)
+
 # Real-model gated tests. OFF by default because the tests need a
 # converted Parakeet GGUF on disk (~2.4 GB) and CI can't ship one.
 # When ON, the test reads TRANSCRIBE_REAL_PARAKEET_GGUF from the
@@ -215,6 +224,18 @@ set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 # by default (set above), so a shared lib exports only the TRANSCRIBE_API
 # surface.
 set(BUILD_SHARED_LIBS ${TRANSCRIBE_BUILD_SHARED} CACHE BOOL "" FORCE)
+
+# Dynamic backend modules (see the option's comment above). ggml requires
+# shared libs for GGML_BACKEND_DL, so gate it on TRANSCRIBE_BUILD_SHARED
+# here for a clear configure-time error.
+if(TRANSCRIBE_GGML_BACKEND_DL)
+    if(NOT TRANSCRIBE_BUILD_SHARED)
+        message(FATAL_ERROR
+            "TRANSCRIBE_GGML_BACKEND_DL requires TRANSCRIBE_BUILD_SHARED=ON "
+            "(backend modules are shared libraries loaded at runtime)")
+    endif()
+    set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+endif()
 
 # ggml's CMake declares its own warning flags; let it.
 add_subdirectory(ggml)

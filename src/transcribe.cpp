@@ -25,9 +25,12 @@
 
 #include "transcribe-abi.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-log.h"
 #include "transcribe-session.h"
 #include "transcribe-loader.h"
+
+#include "ggml-backend.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
 
@@ -45,8 +48,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <ios>
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -105,6 +111,26 @@ extern "C" const char * transcribe_version_commit(void) {
 }
 
 // ---------------------------------------------------------------------------
+// Raw enum reads at the public ABI boundary
+// ---------------------------------------------------------------------------
+//
+// C callers can store ANY int in an enum-typed ABI field or pass any int as
+// an enum-typed argument — in C that is well-defined. In C++ (this TU),
+// loading an out-of-range value through an enum-typed lvalue is undefined
+// behavior, and UBSan traps it. So every public entry point reads
+// caller-supplied enum values as raw bytes first, validates the raw int, and
+// only then (if ever) converts to the enum type. All public enums are
+// int-sized; the static_assert below pins one representative.
+
+static inline int enum_field_raw(const void * field) {
+    int raw;
+    std::memcpy(&raw, field, sizeof(raw));
+    return raw;
+}
+static_assert(sizeof(transcribe_backend_request) == sizeof(int),
+              "public enums must be int-sized for raw boundary reads");
+
+// ---------------------------------------------------------------------------
 // ABI metadata
 // ---------------------------------------------------------------------------
 //
@@ -113,7 +139,7 @@ extern "C" const char * transcribe_version_commit(void) {
 // <transcribe.h>. Keep this switch in sync with the transcribe_abi_struct enum.
 
 extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
-    switch (which) {
+    switch (enum_field_raw(&which)) {
         case TRANSCRIBE_ABI_MODEL_LOAD_PARAMS: return sizeof(struct transcribe_model_load_params);
         case TRANSCRIBE_ABI_SESSION_PARAMS:    return sizeof(struct transcribe_session_params);
         case TRANSCRIBE_ABI_RUN_PARAMS:        return sizeof(struct transcribe_run_params);
@@ -127,12 +153,13 @@ extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
         case TRANSCRIBE_ABI_STREAM_TEXT:       return sizeof(struct transcribe_stream_text);
         case TRANSCRIBE_ABI_SESSION_LIMITS:    return sizeof(struct transcribe_session_limits);
         case TRANSCRIBE_ABI_EXT:               return sizeof(struct transcribe_ext);
+        case TRANSCRIBE_ABI_BACKEND_DEVICE:    return sizeof(struct transcribe_backend_device);
     }
     return 0;  // unknown id: "cannot verify", never a real size
 }
 
 extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
-    switch (which) {
+    switch (enum_field_raw(&which)) {
         case TRANSCRIBE_ABI_MODEL_LOAD_PARAMS: return alignof(struct transcribe_model_load_params);
         case TRANSCRIBE_ABI_SESSION_PARAMS:    return alignof(struct transcribe_session_params);
         case TRANSCRIBE_ABI_RUN_PARAMS:        return alignof(struct transcribe_run_params);
@@ -146,6 +173,7 @@ extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
         case TRANSCRIBE_ABI_STREAM_TEXT:       return alignof(struct transcribe_stream_text);
         case TRANSCRIBE_ABI_SESSION_LIMITS:    return alignof(struct transcribe_session_limits);
         case TRANSCRIBE_ABI_EXT:               return alignof(struct transcribe_ext);
+        case TRANSCRIBE_ABI_BACKEND_DEVICE:    return alignof(struct transcribe_backend_device);
     }
     return 0;
 }
@@ -185,19 +213,38 @@ transcribe_status validate_run_params_common(
     const transcribe_session * session,
     const transcribe_run_params *  params)
 {
-    switch (params->task) {
+    // Raw-validate every enum field before its first enum-typed load (see
+    // enum_field_raw). Once a field passes here, downstream typed reads —
+    // including the per-family handlers' — are defined.
+    switch (enum_field_raw(&params->task)) {
         case TRANSCRIBE_TASK_TRANSCRIBE:
         case TRANSCRIBE_TASK_TRANSLATE:
             break;
         default:
             return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    switch (params->timestamps) {
+    switch (enum_field_raw(&params->timestamps)) {
         case TRANSCRIBE_TIMESTAMPS_NONE:
         case TRANSCRIBE_TIMESTAMPS_AUTO:
         case TRANSCRIBE_TIMESTAMPS_SEGMENT:
         case TRANSCRIBE_TIMESTAMPS_WORD:
         case TRANSCRIBE_TIMESTAMPS_TOKEN:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    switch (enum_field_raw(&params->pnc)) {
+        case TRANSCRIBE_PNC_MODE_DEFAULT:
+        case TRANSCRIBE_PNC_MODE_OFF:
+        case TRANSCRIBE_PNC_MODE_ON:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    switch (enum_field_raw(&params->itn)) {
+        case TRANSCRIBE_ITN_MODE_DEFAULT:
+        case TRANSCRIBE_ITN_MODE_OFF:
+        case TRANSCRIBE_ITN_MODE_ON:
             break;
         default:
             return TRANSCRIBE_ERR_INVALID_ARG;
@@ -410,6 +457,12 @@ extern "C" void transcribe_segment_init(struct transcribe_segment * p) {
     p->struct_size = sizeof(*p);
 }
 
+extern "C" void transcribe_backend_device_init(struct transcribe_backend_device * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
 extern "C" void transcribe_word_init(struct transcribe_word * p) {
     if (p == nullptr) { return; }
     std::memset(p, 0, sizeof(*p));
@@ -476,7 +529,10 @@ extern "C" bool transcribe_model_supports(
     const struct transcribe_model * model,
     transcribe_feature              feature)
 {
-    return transcribe::has_feature(model, feature);
+    // Raw read before any enum-typed load (see enum_field_raw): an unknown
+    // feature id from a C caller answers false, per the documented probe
+    // contract, instead of being UB.
+    return transcribe::has_feature(model, enum_field_raw(&feature));
 }
 
 namespace {
@@ -521,6 +577,8 @@ constexpr size_t k_min_token_size =
     TRANSCRIBE_FIELD_END(transcribe_token, text);
 constexpr size_t k_min_timings_size =
     TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
+constexpr size_t k_min_backend_device_size =
+    TRANSCRIBE_FIELD_END(transcribe_backend_device, kind);
 // k_min_whisper_chunk_trace_size lives in arch/whisper/public.cpp with
 // the chunk-trace accessor that uses it.
 
@@ -538,12 +596,122 @@ static bool has_field(uint64_t struct_size, size_t field_end) {
     return struct_size >= static_cast<uint64_t>(field_end);
 }
 
-static bool valid_stream_commit_policy(transcribe_stream_commit_policy policy) {
+// Takes the RAW integer, not the enum: a C caller can store any int in the
+// struct's enum-typed field, and in C++ loading an out-of-range value through
+// the enum lvalue is UB (UBSan trips on it). Callers memcpy the bytes into an
+// int and validate before the first enum-typed load.
+static bool valid_stream_commit_policy(int policy) {
     switch (policy) {
         case TRANSCRIBE_STREAM_COMMIT_AUTO:
         case TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE:
         case TRANSCRIBE_STREAM_COMMIT_STABLE_PREFIX:
             return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Backend modules and device discovery
+// ---------------------------------------------------------------------------
+//
+// transcribe_init_backends loads ggml backend modules from ONE caller-named
+// directory (a Python wheel's package dir, an app bundle, ...). It never
+// widens the search: ggml_backend_load_all_from_path with a non-null path
+// scans only that path. ggml tolerates every per-module failure (missing
+// system deps such as the Vulkan loader -> dlopen fails -> module skipped),
+// which is exactly the ship-Vulkan-by-default degradation contract.
+
+extern "C" transcribe_status transcribe_init_backends(const char * artifact_dir) {
+    if (artifact_dir == nullptr || artifact_dir[0] == '\0') {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    {
+        struct stat st {};
+        if (::stat(artifact_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "transcribe_init_backends: %s is not an existing directory",
+                artifact_dir);
+            return TRANSCRIBE_ERR_FILE_NOT_FOUND;
+        }
+    }
+
+    // Idempotency: loading the same directory twice would re-dlopen and
+    // re-register every module (duplicate devices). Keyed on the canonical
+    // path so two spellings of one directory count as one load.
+    static std::mutex            s_mutex;
+    static std::set<std::string> s_loaded_dirs;
+    std::lock_guard<std::mutex> lock(s_mutex);
+
+    std::error_code ec;
+    std::filesystem::path canonical =
+        std::filesystem::weakly_canonical(artifact_dir, ec);
+    const std::string key = ec ? std::string(artifact_dir)
+                               : canonical.string();
+    if (s_loaded_dirs.find(key) == s_loaded_dirs.end()) {
+        ggml_backend_load_all_from_path(artifact_dir);
+        s_loaded_dirs.insert(key);
+    }
+
+    if (ggml_backend_dev_count() == 0) {
+        // Dynamic-backend build pointed at a directory with no usable
+        // modules: the process has nothing to compute on. Loud and early
+        // beats a confusing model-load failure later.
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "transcribe_init_backends: no compute devices registered after "
+            "loading %s (no usable ggml backend modules found there, and no "
+            "backends are compiled in)", artifact_dir);
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    return TRANSCRIBE_OK;
+}
+
+extern "C" int transcribe_backend_device_count(void) {
+    return static_cast<int>(ggml_backend_dev_count());
+}
+
+extern "C" transcribe_status transcribe_get_backend_device(
+    int                                index,
+    struct transcribe_backend_device * out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_backend_device_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (index < 0 || index >= static_cast<int>(ggml_backend_dev_count())) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    ggml_backend_dev_t dev = ggml_backend_dev_get(static_cast<size_t>(index));
+    out->name        = ggml_backend_dev_name(dev);
+    out->description = ggml_backend_dev_description(dev);
+    out->kind        = transcribe::kind_name(transcribe::classify_device(dev));
+    return TRANSCRIBE_OK;
+}
+
+extern "C" bool transcribe_backend_available(transcribe_backend_request kind) {
+    // Raw read before any enum-typed load (see enum_field_raw); unknown
+    // values answer false per the documented probe contract.
+    const int raw = enum_field_raw(&kind);
+    const size_t n = ggml_backend_dev_count();
+    if (raw == TRANSCRIBE_BACKEND_AUTO) {
+        return n > 0;
+    }
+    transcribe::BackendKind want;
+    switch (raw) {
+        case TRANSCRIBE_BACKEND_CPU:
+        case TRANSCRIBE_BACKEND_CPU_ACCEL: want = transcribe::BackendKind::Cpu;    break;
+        case TRANSCRIBE_BACKEND_METAL:     want = transcribe::BackendKind::Metal;  break;
+        case TRANSCRIBE_BACKEND_VULKAN:    want = transcribe::BackendKind::Vulkan; break;
+        case TRANSCRIBE_BACKEND_CUDA:      want = transcribe::BackendKind::Cuda;   break;
+        default:                           return false;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        if (transcribe::classify_device(ggml_backend_dev_get(i)) == want) {
+            return true;
+        }
     }
     return false;
 }
@@ -989,6 +1157,25 @@ extern "C" transcribe_status transcribe_model_load_file(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
+    // Raw-validate the backend request before the families' first
+    // enum-typed load of it (see enum_field_raw). init_backends re-checks
+    // as defense in depth; this boundary check is what makes every
+    // downstream `params->backend` read defined.
+    switch (enum_field_raw(&params->backend)) {
+        case TRANSCRIBE_BACKEND_AUTO:
+        case TRANSCRIBE_BACKEND_CPU:
+        case TRANSCRIBE_BACKEND_METAL:
+        case TRANSCRIBE_BACKEND_VULKAN:
+        case TRANSCRIBE_BACKEND_CPU_ACCEL:
+        case TRANSCRIBE_BACKEND_CUDA:
+            break;
+        default:
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "transcribe_model_load_file: invalid backend request %d",
+                enum_field_raw(&params->backend));
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
     // Stage 0: format sniff. Two formats are supported today:
     //   GGUF magic 0x46554747 ("GGUF") — the canonical path.
     //   ggml magic 0x67676d6c           — legacy whisper.cpp `.bin`.
@@ -1106,6 +1293,17 @@ extern "C" transcribe_status transcribe_session_init(
     // re-check the same condition.
     if (params->n_threads < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    // Raw-validate kv_type before the families' first enum-typed load of it
+    // (see enum_field_raw): an unknown value from a C caller is a clean
+    // error here, never UB downstream.
+    switch (enum_field_raw(&params->kv_type)) {
+        case TRANSCRIBE_KV_TYPE_AUTO:
+        case TRANSCRIBE_KV_TYPE_F32:
+        case TRANSCRIBE_KV_TYPE_F16:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
     }
     // n_ctx is a trailing field (appended after kv_type), so only read it
     // when the caller's struct_size actually covers it; an older caller's
@@ -1279,17 +1477,24 @@ extern "C" transcribe_status transcribe_stream_begin(
     {
         return st;
     }
-    transcribe_stream_commit_policy commit_policy =
-        TRANSCRIBE_STREAM_COMMIT_AUTO;
+    // Read the caller's commit_policy as raw bytes and validate BEFORE the
+    // first load through the enum-typed lvalue: C callers can legally store
+    // any int there, and an out-of-range enum load is UB in C++.
+    int commit_policy_raw = TRANSCRIBE_STREAM_COMMIT_AUTO;
     uint32_t stable_prefix_agreement_n = 0;
     if (has_field(stream_params->struct_size,
                   k_stream_params_commit_policy_size))
     {
-        commit_policy = stream_params->commit_policy;
+        static_assert(sizeof(stream_params->commit_policy) == sizeof(int),
+                      "commit_policy must be int-sized for the raw read");
+        std::memcpy(&commit_policy_raw, &stream_params->commit_policy,
+                    sizeof(commit_policy_raw));
     }
-    if (!valid_stream_commit_policy(commit_policy)) {
+    if (!valid_stream_commit_policy(commit_policy_raw)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    const transcribe_stream_commit_policy commit_policy =
+        static_cast<transcribe_stream_commit_policy>(commit_policy_raw);
     if (has_field(stream_params->struct_size,
                   k_stream_params_agreement_n_size))
     {
@@ -1378,8 +1583,31 @@ extern "C" transcribe_status transcribe_stream_begin(
     session->stream_commit_policy = commit_policy;
     session->stream_stable_prefix_agreement_n = stable_prefix_agreement_n;
 
+    // Hand the family hook a params view whose pointers the LIBRARY owns.
+    // Families may capture `*run_params` for the stream's lifetime
+    // (parakeet re-reads .language on every feed), and the public contract
+    // lets the caller free every params pointer once begin returns — so the
+    // strings are copied into session storage here and the view repointed
+    // at it. `family` (the run-slot extension) is nulled in the view: no
+    // family reads it on the stream path today, and per the ext copy-out
+    // contract a retained pointer to it would dangle; a future family that
+    // wants a run-slot ext at stream begin must plumb it deliberately.
+    session->stream_language_owned =
+        run_params->language != nullptr ? run_params->language : "";
+    session->stream_target_language_owned =
+        run_params->target_language != nullptr ? run_params->target_language
+                                                : "";
+    struct transcribe_run_params run_params_owned = *run_params;
+    run_params_owned.language =
+        run_params->language != nullptr
+            ? session->stream_language_owned.c_str() : nullptr;
+    run_params_owned.target_language =
+        run_params->target_language != nullptr
+            ? session->stream_target_language_owned.c_str() : nullptr;
+    run_params_owned.family = nullptr;
+
     const transcribe_status st = session->model->arch->stream_begin(
-        session, run_params, stream_params);
+        session, &run_params_owned, stream_params);
     if (st != TRANSCRIBE_OK) {
         // Family hook rejected the begin (config it does not understand,
         // memory allocation failure, etc.). Roll lifecycle back to

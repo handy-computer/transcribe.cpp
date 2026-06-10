@@ -36,6 +36,55 @@ def test_streaming_real(streaming_model_path, audio_pcm):
     assert "country" in committed.lower(), committed
 
 
+def test_streaming_with_language_hint(prompted_streaming_model_path, audio_pcm):
+    """Regression: params copy-out contract for streaming.
+
+    Parakeet's prompted streaming re-resolves run_params.language on EVERY
+    feed. The caller's params storage (here: ctypes structs local to
+    Session.stream()) dies when stream() returns, so the library must have
+    copied the string into session-owned storage at begin — a retained
+    caller pointer is a use-after-free on the first feed. The ASan lane is
+    the real detector; the gc + junk scribbling below makes stale reads
+    likelier to also misbehave in a normal build."""
+    import gc
+
+    with t.Model(prompted_streaming_model_path) as model:
+        caps = model.capabilities
+        assert caps.supports_streaming
+        assert caps.languages, "prompted model should advertise languages"
+        lang = "en" if "en" in caps.languages else caps.languages[0]
+        with model.session() as session:
+            stream = session.stream(language=lang)
+            # The params structs built inside stream() are now dead. Collect
+            # and scribble over the freed allocations before the first feed.
+            gc.collect()
+            junk = [b"\x5a" * 256 for _ in range(4096)]
+            with stream:
+                for i in range(0, len(audio_pcm), 16000):
+                    stream.feed(audio_pcm[i : i + 16000])
+                update = stream.finalize()
+                committed = stream.text().committed
+            del junk
+    assert update.is_final
+    assert "country" in committed.lower(), committed
+
+
+def test_streaming_language_hint_second_family(streaming_model_path, audio_pcm):
+    """Same contract on moonshine-streaming: it retains a shallow copy of
+    run_params for its decode path. No live pointer read today, but the
+    retained copy must stay safe to carry — this pins it under ASan."""
+    with t.Model(streaming_model_path) as model:
+        caps = model.capabilities
+        if not caps.languages or "en" not in caps.languages:
+            pytest.skip("model does not advertise an 'en' language hint")
+        with model.session() as session, session.stream(language="en") as stream:
+            for i in range(0, len(audio_pcm), 16000):
+                stream.feed(audio_pcm[i : i + 16000])
+            stream.finalize()
+            committed = stream.text().committed
+    assert "country" in committed.lower(), committed
+
+
 def test_cancellation_aborts_in_flight_feed(streaming_model_path, audio_pcm):
     with t.Model(streaming_model_path) as model, model.session() as session:
         with session.stream() as stream:

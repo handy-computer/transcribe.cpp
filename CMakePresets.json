@@ -42,12 +42,29 @@
       "name": "wheel-macos-metal",
       "inherits": "wheel-base",
       "displayName": "macOS arm64 Metal wheel",
-      "description": "Metal ships by default on Apple Silicon, with the shader library embedded so there are no sidecar .metal files to vendor or locate at runtime.",
+      "description": "Metal ships by default on Apple Silicon, with the shader library embedded so there are no sidecar .metal files to vendor or locate at runtime. Single-artifact (no dynamic backend modules): one platform, one GPU API.",
       "cacheVariables": {
         "TRANSCRIBE_METAL": "ON",
         "GGML_METAL": "ON",
         "GGML_METAL_EMBED_LIBRARY": "ON"
       }
+    },
+    {
+      "name": "wheel-linux-cpu-vulkan",
+      "inherits": "wheel-linux-cpu",
+      "displayName": "Linux x86_64 default wheel: CPU + Vulkan backend modules",
+      "description": "The default Linux provider. GGML_BACKEND_DL builds every backend as a loadable module next to libtranscribe; the wheel ships the conservative CPU module (SIMD tiers off, inherited from wheel-linux-cpu) plus the Vulkan module. On machines without a Vulkan loader/driver the Vulkan module fails to load quietly and CPU keeps working — verified degradation, see docs/python-bindings-distribution-plan.md. Build image needs the Vulkan SDK (glslc).",
+      "cacheVariables": {
+        "TRANSCRIBE_GGML_BACKEND_DL": "ON",
+        "TRANSCRIBE_VULKAN": "ON",
+        "GGML_VULKAN": "ON"
+      }
+    },
+    {
+      "name": "wheel-windows-cpu-vulkan",
+      "inherits": "wheel-linux-cpu-vulkan",
+      "displayName": "Windows x86_64 default wheel: CPU + Vulkan backend modules",
+      "description": "Same provider shape as wheel-linux-cpu-vulkan on Windows: conservative CPU module + Vulkan module, loaded package-locally (the Python loader calls os.add_dll_directory before CDLL). Build image needs the Vulkan SDK (glslc)."
     }
   ]
 }

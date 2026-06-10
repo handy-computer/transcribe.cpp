@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "287ebebdeb529e76"
+PUBLIC_HEADER_HASH = "0007af60bfcecf7e"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -48,6 +48,7 @@ TRANSCRIBE_ABI_STREAM_UPDATE = 9
 TRANSCRIBE_ABI_STREAM_TEXT = 10
 TRANSCRIBE_ABI_SESSION_LIMITS = 11
 TRANSCRIBE_ABI_EXT = 12
+TRANSCRIBE_ABI_BACKEND_DEVICE = 13
 TRANSCRIBE_LOG_LEVEL_NONE = 0
 TRANSCRIBE_LOG_LEVEL_INFO = 1
 TRANSCRIBE_LOG_LEVEL_WARN = 2
@@ -107,6 +108,8 @@ TRANSCRIBE_VERSION_PATCH = 1
 # === structs ===
 class transcribe_ext(_c.Structure):
     pass
+class transcribe_backend_device(_c.Structure):
+    pass
 class transcribe_model_load_params(_c.Structure):
     pass
 class transcribe_session_params(_c.Structure):
@@ -145,6 +148,7 @@ class transcribe_whisper_chunk_trace(_c.Structure):
     pass
 
 transcribe_ext._fields_ = [("size", _c.c_uint64), ("kind", _c.c_uint32)]
+transcribe_backend_device._fields_ = [("struct_size", _c.c_uint64), ("name", _c.c_char_p), ("description", _c.c_char_p), ("kind", _c.c_char_p)]
 transcribe_model_load_params._fields_ = [("struct_size", _c.c_uint64), ("backend", _c.c_int), ("gpu_device", _c.c_int)]
 transcribe_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int), ("kv_type", _c.c_int), ("n_ctx", _c.c_int32)]
 transcribe_run_params._fields_ = [("struct_size", _c.c_uint64), ("task", _c.c_int), ("timestamps", _c.c_int), ("pnc", _c.c_int), ("itn", _c.c_int), ("language", _c.c_char_p), ("target_language", _c.c_char_p), ("keep_special_tags", _c.c_bool), ("family", _c.POINTER(transcribe_ext)), ("spec_k_drafts", _c.c_int32)]
@@ -168,6 +172,7 @@ transcribe_whisper_chunk_trace._fields_ = [("struct_size", _c.c_uint64), ("t0_ms
 # transcribe_abi_struct id per struct (for the native size/align check).
 ABI_STRUCT_IDS = {
     'transcribe_ext': 12,
+    'transcribe_backend_device': 13,
     'transcribe_model_load_params': 0,
     'transcribe_session_params': 1,
     'transcribe_run_params': 2,
@@ -185,6 +190,7 @@ ABI_STRUCT_IDS = {
 # C-compiler layout captured at generation (for offset self-check).
 STRUCT_LAYOUT = {
     'transcribe_ext': {'size': 16, 'align': 8, 'offsets': {'size': 0, 'kind': 8}},
+    'transcribe_backend_device': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24}},
     'transcribe_model_load_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'backend': 8, 'gpu_device': 12}},
     'transcribe_session_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8, 'kv_type': 12, 'n_ctx': 16}},
     'transcribe_run_params': {'size': 64, 'align': 8, 'offsets': {'struct_size': 0, 'task': 8, 'timestamps': 12, 'pnc': 16, 'itn': 20, 'language': 24, 'target_language': 32, 'keep_special_tags': 40, 'family': 48, 'spec_k_drafts': 56}},
@@ -212,6 +218,12 @@ def configure(lib):
     lib.transcribe_abi_struct_align.argtypes = [_c.c_int]
     lib.transcribe_abi_struct_size.restype = _c.c_size_t
     lib.transcribe_abi_struct_size.argtypes = [_c.c_int]
+    lib.transcribe_backend_available.restype = _c.c_bool
+    lib.transcribe_backend_available.argtypes = [_c.c_int]
+    lib.transcribe_backend_device_count.restype = _c.c_int
+    lib.transcribe_backend_device_count.argtypes = []
+    lib.transcribe_backend_device_init.restype = None
+    lib.transcribe_backend_device_init.argtypes = [_c.POINTER(transcribe_backend_device)]
     lib.transcribe_batch_detected_language.restype = _c.c_char_p
     lib.transcribe_batch_detected_language.argtypes = [_c.c_void_p, _c.c_int]
     lib.transcribe_batch_full_text.restype = _c.c_char_p
@@ -246,6 +258,8 @@ def configure(lib):
     lib.transcribe_ext_check.argtypes = [_c.POINTER(transcribe_ext), _c.c_uint32, _c.c_uint64]
     lib.transcribe_full_text.restype = _c.c_char_p
     lib.transcribe_full_text.argtypes = [_c.c_void_p]
+    lib.transcribe_get_backend_device.restype = _c.c_int
+    lib.transcribe_get_backend_device.argtypes = [_c.c_int, _c.POINTER(transcribe_backend_device)]
     lib.transcribe_get_model.restype = _c.c_void_p
     lib.transcribe_get_model.argtypes = [_c.c_void_p]
     lib.transcribe_get_segment.restype = _c.c_int
@@ -260,6 +274,8 @@ def configure(lib):
     lib.transcribe_get_whisper_chunk_trace.argtypes = [_c.c_void_p, _c.c_int, _c.POINTER(transcribe_whisper_chunk_trace)]
     lib.transcribe_get_word.restype = _c.c_int
     lib.transcribe_get_word.argtypes = [_c.c_void_p, _c.c_int, _c.POINTER(transcribe_word)]
+    lib.transcribe_init_backends.restype = _c.c_int
+    lib.transcribe_init_backends.argtypes = [_c.c_char_p]
     lib.transcribe_log_set.restype = None
     lib.transcribe_log_set.argtypes = [_c.CFUNCTYPE(None, _c.c_int, _c.c_char_p, _c.c_void_p), _c.c_void_p]
     lib.transcribe_model_accepts_ext_kind.restype = _c.c_bool
