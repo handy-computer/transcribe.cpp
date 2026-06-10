@@ -1,0 +1,233 @@
+name: python-wheels
+
+# Builds, repairs, and proves the distributable Python artifacts (plan M5):
+#   - wheel-linux:   manylinux_2_28 x86_64, CPU + Vulkan backend modules
+#                    (Vulkan toolchain built from pinned Khronos tags inside
+#                    the container; cached across runs)
+#   - wheel-macos:   macosx arm64, Metal with embedded shaders
+#   - wheel-windows: win_amd64, CPU + Vulkan backend modules (LunarG SDK)
+#   - sdist:         the from-source fallback, proven by actually compiling
+#                    and transcribing from the tarball
+#   - api-wheel:     the pure-Python transcribe-cpp package
+#   - co-import:     numpy/torch coexistence with a real transcription, both
+#                    import orders, on all three platforms
+#
+# Every native wheel is tested AFTER repair (auditwheel/delocate/delvewheel)
+# in a fresh venv — cibuildwheel's test phase guarantees the tested artifact
+# is the one that ships. Real-model tests need the private canary GGUFs and
+# run when the HF_TOKEN secret exists; forks degrade to no-model tests.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bindings/**"
+      - "include/**"
+      - "src/**"
+      - "ggml/**"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "pyproject.toml"
+      - "scripts/ci/**"
+      - ".github/workflows/python-wheels.yml"
+  pull_request:
+    paths:
+      - "bindings/**"
+      - "include/**"
+      - "src/**"
+      - "ggml/**"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "pyproject.toml"
+      - "scripts/ci/**"
+      - ".github/workflows/python-wheels.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CIBW_PIN: "cibuildwheel>=4,<5"
+
+jobs:
+  wheel-linux:
+    runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # Container path of the toolchain cache volume (see CIBW_CONTAINER_ENGINE).
+      VK_TOOLCHAIN_CACHE: /vk-toolchain-cache
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Cache the source-built Vulkan toolchain
+        uses: actions/cache@v4
+        with:
+          path: vk-toolchain-cache
+          key: vk-toolchain-${{ hashFiles('scripts/ci/manylinux-vulkan-toolchain.sh') }}
+      - name: Build, repair, and test the wheel (cibuildwheel)
+        env:
+          CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/vk-toolchain-cache:/vk-toolchain-cache"
+        run: |
+          mkdir -p vk-toolchain-cache
+          uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-native-linux-x86_64
+          path: wheelhouse/*.whl
+
+  wheel-macos:
+    runs-on: macos-14
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build, repair, and test the wheel (cibuildwheel)
+        run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-native-macos-arm64
+          path: wheelhouse/*.whl
+
+  wheel-windows:
+    runs-on: windows-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
+      VULKAN_VERSION: "1.4.350.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+          Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.local\bin"
+      - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }}
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+      - name: Install zlib (vcpkg, static — libtranscribe requires it)
+        # Static (-static-md: static lib, dynamic CRT) so no zlib1.dll exists
+        # at runtime and delvewheel has nothing to vendor for it. The
+        # toolchain file reaches scikit-build-core via CMAKE_ARGS.
+        run: |
+          vcpkg install zlib:x64-windows-static-md
+          Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
+      - name: Build, repair, and test the wheel (cibuildwheel)
+        run: uvx --from "$env:CIBW_PIN" cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-native-windows-amd64
+          path: wheelhouse/*.whl
+
+  sdist:
+    # The universal fallback must actually work: build the sdist, audit what
+    # went into it, then compile-and-transcribe from the tarball alone.
+    runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build sdist
+        run: uv build --sdist
+      - name: Audit sdist contents
+        run: |
+          python3 - <<'EOF'
+          import glob, tarfile
+          [path] = glob.glob("dist/*.tar.gz")
+          with tarfile.open(path) as tf:
+              names = tf.getnames()
+              total = sum(m.size for m in tf.getmembers())
+          print(f"{path}: {len(names)} files, {total/1e6:.1f} MB uncompressed")
+          banned = [n for n in names if n.endswith((".gguf", ".safetensors", ".bin"))
+                    or "/models/" in n or "/dumps/" in n or "/reports/" in n]
+          assert not banned, f"sdist contains artifacts that must never ship: {banned[:10]}"
+          assert total < 40e6, f"sdist unexpectedly large: {total/1e6:.1f} MB (28 MB expected)"
+          for required in ("CMakeLists.txt", "include/transcribe.h",
+                           "ggml/CMakeLists.txt", "cmake/python-wheel-install.cmake",
+                           "bindings/python-native/_contract.py.in"):
+              assert any(n.endswith(required) for n in names), f"missing {required}"
+          print("sdist audit ok")
+          EOF
+      - name: Compile + transcribe from the sdist (no repo sources)
+        run: |
+          sudo apt-get update && sudo apt-get install -y zlib1g-dev
+          uv venv sdist-venv --python 3.12
+          # The tarball is the only native source here: pip drives the full
+          # scikit-build-core compile (cmake/ninja arrive as build deps).
+          ./sdist-venv/bin/pip install dist/*.tar.gz
+          ./sdist-venv/bin/pip install pytest numpy huggingface_hub
+          ./sdist-venv/bin/python scripts/ci/wheel_smoke.py "$PWD"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
+
+  api-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build transcribe-cpp (pure wheel + sdist)
+        run: |
+          cd bindings/python
+          rm -rf dist && uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-api
+          path: bindings/python/dist/*
+
+  co-import:
+    # numpy/torch coexistence (the reason the wheels vendor no OpenMP/BLAS),
+    # proven by real transcriptions in both import orders. Also a de-facto
+    # clean-install test: pip resolves transcribe-cpp + its native pin purely
+    # from the built artifacts.
+    needs: [wheel-linux, wheel-macos, wheel-windows, api-wheel]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            torch-args: "--index-url https://download.pytorch.org/whl/cpu"
+          - os: macos-14
+            torch-args: ""
+          - os: windows-latest
+            torch-args: ""
+    runs-on: ${{ matrix.os }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: wheelhouse
+      - name: Install the built artifacts (resolver picks the platform wheel)
+        run: |
+          pip install --no-index --find-links wheelhouse transcribe-cpp
+          pip install numpy huggingface_hub
+      - name: numpy co-import smoke
+        run: python scripts/ci/co_import_smoke.py numpy .
+      - name: torch co-import smoke
+        run: |
+          pip install torch ${{ matrix.torch-args }}
+          python scripts/ci/co_import_smoke.py torch .

@@ -74,9 +74,11 @@ wheel.packages = ["bindings/python-native/transcribe_cpp_native"]
 # default component and must stay out of the wheel.
 install.components = ["wheel"]
 
-# Keep the sdist to the sources a from-scratch build needs. Converted models,
-# dumps, perf/WER reports, and local build trees are multi-GB and never belong
-# in a distribution.
+# Keep the sdist to the sources a from-scratch build needs (gitignored trees
+# are excluded automatically; these prune git-tracked-but-irrelevant weight).
+# Converted models, dumps, perf/WER reports, and local build/wheel trees are
+# multi-GB and never belong in a distribution; of the committed sample audio
+# only jfk.wav ships (the smoke/test default — the rest is porting material).
 sdist.exclude = [
   "models/",
   "dumps/",
@@ -84,12 +86,91 @@ sdist.exclude = [
   "tmp/",
   "build*/",
   "dist*/",
+  "wheelhouse*/",
+  "samples/",
   ".github/",
   ".claude/",
   "bindings/python/dist/",
   "**/__pycache__/",
   "**/.venv/",
 ]
+sdist.include = ["samples/jfk.wav"]
+
+# --- official wheel lanes ---------------------------------------------------
+# Selected via the TRANSCRIBE_WHEEL_LANE env var (set by [tool.cibuildwheel]
+# below). These mirror the wheel-* CMake presets in CMakePresets.json, which
+# remain the way to hand-build the same posture outside Python packaging —
+# keep both in sync. The wheel-hygiene base (shared lib, OpenMP/system-BLAS
+# off, Metal embedded) is forced by the SKBUILD block in CMakeLists.txt.
+
+# Default Linux/Windows wheel: conservative CPU + Vulkan as dynamic ggml
+# backend modules. GGML_NATIVE=OFF does NOT disable the x86 SIMD tiers (they
+# default on), so every tier is off explicitly: the baseline must run on any
+# x86-64 machine without SIGILL. Fat CPU variants are the post-merge track.
+[[tool.scikit-build.overrides]]
+if.env.TRANSCRIBE_WHEEL_LANE = "cpu-vulkan"
+cmake.args = [
+  "-DTRANSCRIBE_GGML_BACKEND_DL=ON",
+  "-DTRANSCRIBE_VULKAN=ON",
+  "-DGGML_NATIVE=OFF",
+  "-DGGML_SSE42=OFF",
+  "-DGGML_AVX=OFF",
+  "-DGGML_AVX_VNNI=OFF",
+  "-DGGML_AVX2=OFF",
+  "-DGGML_BMI2=OFF",
+  "-DGGML_FMA=OFF",
+  "-DGGML_F16C=OFF",
+  "-DGGML_AVX512=OFF",
+  "-DGGML_AVX512_VBMI=OFF",
+  "-DGGML_AVX512_VNNI=OFF",
+  "-DGGML_AVX512_BF16=OFF",
+]
+
+# Default macOS arm64 wheel: Metal (shaders embedded via the SKBUILD block;
+# single artifact, no dynamic backend modules — one platform, one GPU API).
+[[tool.scikit-build.overrides]]
+if.env.TRANSCRIBE_WHEEL_LANE = "metal"
+cmake.args = ["-DTRANSCRIBE_METAL=ON", "-DGGML_NATIVE=OFF"]
+
+# --- cibuildwheel ------------------------------------------------------------
+# One wheel per platform: the package is py3-none-<plat> (ctypes, no compiled
+# Python), so build with a single CPython and skip the rest. Tests always run
+# against the REPAIRED wheel in a fresh venv — that is the artifact that
+# ships. HF_TOKEN (when present) lets the smoke pull the private canary GGUFs
+# for a real transcription.
+[tool.cibuildwheel]
+build = "cp312-*"
+skip = "*-musllinux*"
+test-requires = ["pytest>=7", "numpy", "huggingface_hub"]
+test-command = "python {project}/scripts/ci/wheel_smoke.py {project}"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+# manylinux_2_28, not manylinux2014: the documented carve-out fired — the
+# Vulkan toolchain cannot exist on glibc 2.17 (and the 2014 images are EOL).
+# Torch et al. ship 2_28, so this is the ecosystem floor in practice.
+manylinux-x86_64-image = "manylinux_2_28"
+environment = { TRANSCRIBE_WHEEL_LANE = "cpu-vulkan" }
+environment-pass = ["HF_TOKEN", "VK_TOOLCHAIN_CACHE", "CI"]
+before-all = "bash {project}/scripts/ci/manylinux-vulkan-toolchain.sh"
+# libvulkan stays EXCLUDED from the wheel: the module resolves the system
+# loader at runtime and degrades quietly to CPU when there is none — the
+# tier-1/tier-2 contract proven in the provider-dl-vulkan CI lane. Everything
+# else (libggml*, the string-dlopened backend modules) is already inside the
+# wheel, so auditwheel only grafts whitelisted-policy externals.
+repair-wheel-command = "auditwheel repair --exclude libvulkan.so.1 -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+environment = { TRANSCRIBE_WHEEL_LANE = "metal", MACOSX_DEPLOYMENT_TARGET = "11.0" }
+# default repair (delocate) — externals are system-only, verified by test.
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+environment = { TRANSCRIBE_WHEEL_LANE = "cpu-vulkan" }
+before-build = "pip install delvewheel"
+# Same loader posture as Linux: vulkan-1.dll is the system's, never vendored.
+repair-wheel-command = "delvewheel repair --exclude vulkan-1.dll -w {dest_dir} {wheel}"
 
 [tool.uv]
 # Keep `uv run <script>` at the repo root from syncing (= compiling) this

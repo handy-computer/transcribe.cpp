@@ -109,8 +109,14 @@ Recorded so they are not relitigated; rationale condensed.
   OpenMP/BLAS runtimes that collide with PyTorch/NumPy/MKL in the same
   process; `KMP_DUPLICATE_LIB_OK` is not a packaging strategy. Opt-in
   OpenMP/BLAS providers only after co-import tests prove coexistence.
-- **Linux baseline `manylinux2014`** (matches llama-cpp-python's posture).
-  Revisit `manylinux_2_28` only if CUDA/Vulkan toolchains force it.
+- **Linux baseline `manylinux_2_28`** (amended 2026-06-10; was manylinux2014).
+  The documented carve-out fired: no Vulkan toolchain can exist on glibc 2.17
+  (LunarG's prebuilt glslc needs glibc 2.34 — measured; even source-built
+  toolchains want newer CMake/compilers), and the manylinux2014 images are
+  EOL. `manylinux_2_28` is the de-facto ecosystem floor (PyTorch ships it).
+  The Vulkan toolchain (Headers/Loader/glslc) is built from pinned Khronos
+  git tags inside the container — LunarG prunes old SDK downloads, so pinned
+  LunarG URLs rot (observed: 1.4.313.2 Linux tarball already gone).
 - **Metal ships by default on macOS arm64**, with
   `-DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON` (no sidecar shader files).
 - **Native artifacts are named build tuples** (`linux-x86_64-cpu`,
@@ -397,12 +403,51 @@ fast-follow set.
       auditwheel/delvewheel/delocate — string-dlopened modules must be
       explicitly included — and **test the repaired artifacts**, not the
       build outputs.
-- [ ] sdist that compiles from source — the scikit-build-core backend and
-      root pyproject (with size excludes) exist per the skeleton above;
-      remaining: build the sdist, audit its contents/size, and prove
-      `pip install <sdist>` compiles and transcribes on a clean machine.
+      **Written 2026-06-10, CI validation pending:**
+      `.github/workflows/python-wheels.yml` + `[tool.cibuildwheel]` /
+      `TRANSCRIBE_WHEEL_LANE` overrides in the root pyproject (lanes mirror
+      the wheel-* presets; cross-referenced). cibuildwheel's test phase runs
+      `scripts/ci/wheel_smoke.py` against the *repaired* wheel in a fresh
+      venv: installs the API package (resolver-level pin check), pulls the
+      canary GGUFs when HF_TOKEN exists, asserts provider identity +
+      per-platform backend posture (Metal present on macOS; Vulkan quietly
+      unavailable on GPU-less CI), runs the full pytest suite. Linux builds
+      in manylinux_2_28 with the Vulkan toolchain source-built from pinned
+      tags (`scripts/ci/manylinux-vulkan-toolchain.sh`, cached via a mounted
+      volume); repair keeps the system loader out (`auditwheel --exclude
+      libvulkan.so.1`, delvewheel `--exclude vulkan-1.dll`) per the verified
+      degradation design. **Local macOS evidence:** the metal lane built via
+      the override with `MACOSX_DEPLOYMENT_TARGET=11.0` →
+      `py3-none-macosx_11_0_arm64`; `delocate-listdeps` shows system-only
+      externals; delocate repair normalized install names and vendored
+      nothing; the *repaired* wheel transcribed on Metal in a clean venv with
+      zero env vars. (cibuildwheel itself refuses local non-CI runs without
+      a python.org CPython — orchestration is proven on CI.) **Known risk:**
+      the Windows lane is the first MSVC build of this codebase ever; zlib
+      comes via vcpkg static (`find_package(ZLIB REQUIRED)`), and C++
+      portability fixes may surface. Windows real-GPU validation stays
+      deferred per M4.
+- [x] sdist that compiles from source (scikit-build-core; local proof
+      2026-06-10, CI job `sdist` re-proves on Linux every run). `uv build
+      --sdist` → 6.1 MB compressed / 28 MB uncompressed, 2493 files; audit
+      asserts no GGUF/model/dump/report artifacts and only `samples/jfk.wav`
+      ships (gitignored trees are auto-excluded — verified `samples/wer`
+      600 MB stayed out; tracked sample WAVs are pruned by `sdist.exclude` +
+      `sdist.include` carve-back). Fresh venv `pip install <tarball>`
+      compiled from source (cmake/ninja arrive as build deps), registered
+      the provider entry point, discovered Metal+CPU, and passed the full
+      95-test suite with real models via `scripts/ci/wheel_smoke.py`.
 - [ ] Co-import smokes in wheel CI: `numpy` then `torch`, each followed by a
       real transcription.
+      **Wired 2026-06-10** (`co-import` job in python-wheels.yml +
+      `scripts/ci/co_import_smoke.py`): both import orders per framework
+      (framework-first, and library-first with a transcription before AND
+      after the framework import — late-loaded runtime clashes), all three
+      platforms, installing from the built artifacts via
+      `pip install --no-index --find-links wheelhouse transcribe-cpp` (which
+      doubles as the resolver proof for the hard pin). **Local evidence:**
+      the numpy smoke passed both orders against the repaired macOS wheel
+      with real transcriptions. CI validation (incl. torch) pending.
 - [ ] Clean-machine installs (no repo checkout, no env vars): fresh
       manylinux container, clean macOS account/machine, clean Windows
       machine — install the wheel, transcribe.
