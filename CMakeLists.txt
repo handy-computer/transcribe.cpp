@@ -1,5 +1,50 @@
 cmake_minimum_required(VERSION 3.16)
-project(transcribe LANGUAGES C CXX)
+
+# -----------------------------------------------------------------------------
+# Version (single source of truth: include/transcribe.h)
+# -----------------------------------------------------------------------------
+#
+# The TRANSCRIBE_VERSION_MAJOR/MINOR/PATCH macros in the public header are the
+# one place the library version is defined. Parse them here, before project(),
+# so the CMake project version, the shared-library VERSION/SOVERSION, and the
+# value transcribe_version() reports all derive from the same source and cannot
+# drift. To bump the library version, edit include/transcribe.h.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/include/transcribe.h" _transcribe_header)
+string(REGEX MATCH "define +TRANSCRIBE_VERSION_MAJOR +([0-9]+)" _ "${_transcribe_header}")
+set(TRANSCRIBE_VERSION_MAJOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "define +TRANSCRIBE_VERSION_MINOR +([0-9]+)" _ "${_transcribe_header}")
+set(TRANSCRIBE_VERSION_MINOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "define +TRANSCRIBE_VERSION_PATCH +([0-9]+)" _ "${_transcribe_header}")
+set(TRANSCRIBE_VERSION_PATCH "${CMAKE_MATCH_1}")
+if(NOT TRANSCRIBE_VERSION_MAJOR MATCHES "^[0-9]+$" OR
+   NOT TRANSCRIBE_VERSION_MINOR MATCHES "^[0-9]+$" OR
+   NOT TRANSCRIBE_VERSION_PATCH MATCHES "^[0-9]+$")
+    message(FATAL_ERROR
+        "Failed to parse TRANSCRIBE_VERSION_{MAJOR,MINOR,PATCH} from "
+        "include/transcribe.h")
+endif()
+
+project(transcribe
+    VERSION ${TRANSCRIBE_VERSION_MAJOR}.${TRANSCRIBE_VERSION_MINOR}.${TRANSCRIBE_VERSION_PATCH}
+    LANGUAGES C CXX)
+
+# Short git commit for transcribe_version_commit(), captured at configure time.
+# Best-effort: source tarballs and non-git trees fall back to "unknown". This is
+# a configure-time snapshot (same posture as ggml's GGML_COMMIT); reconfigure to
+# refresh it.
+set(TRANSCRIBE_BUILD_COMMIT "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short HEAD
+        OUTPUT_VARIABLE _transcribe_git_sha
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(_transcribe_git_sha)
+        set(TRANSCRIBE_BUILD_COMMIT "${_transcribe_git_sha}")
+    endif()
+endif()
+message(STATUS "transcribe version: ${PROJECT_VERSION} (commit ${TRANSCRIBE_BUILD_COMMIT})")
 
 # -----------------------------------------------------------------------------
 # Standards
@@ -41,6 +86,23 @@ option(TRANSCRIBE_VULKAN         "Enable Vulkan backend"    OFF)  # post-v1
 option(TRANSCRIBE_CUDA           "Enable CUDA backend"      OFF)  # opt-in; Linux + nvcc
 option(TRANSCRIBE_SANITIZE       "Enable ASan + UBSan"      OFF)
 option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
+
+# Library link mode and wheel-hygiene switches (see
+# docs/python-bindings-distribution-plan.md).
+#
+# TRANSCRIBE_BUILD_SHARED OFF (default) builds a static libtranscribe + static
+# ggml, so `cmake -B build` yields a self-contained transcribe-cli with no
+# libtranscribe/libggml to chase at runtime — the posture every porting, test,
+# and bench workflow relies on. The Python wheel/provider build sets it ON to
+# produce a shared libtranscribe the FFI layer can dlopen.
+#
+# TRANSCRIBE_USE_OPENMP / TRANSCRIBE_USE_SYSTEM_BLAS default ON to keep the
+# developer build fast (ggml OpenMP, Accelerate/system BLAS host decoder).
+# Official provider wheels pass them OFF so no libgomp/libiomp or OpenBLAS/MKL
+# runtime is vendored into the wheel where it can collide with PyTorch/NumPy.
+option(TRANSCRIBE_BUILD_SHARED    "Build libtranscribe + ggml as shared libraries"  OFF)
+option(TRANSCRIBE_USE_OPENMP      "Use OpenMP (ggml + Parakeet host-decoder TU)"     ON)
+option(TRANSCRIBE_USE_SYSTEM_BLAS "Link non-Apple system BLAS for the host decoder"  ON)
 
 # Real-model gated tests. OFF by default because the tests need a
 # converted Parakeet GGUF on disk (~2.4 GB) and CI can't ship one.
@@ -131,15 +193,28 @@ set(GGML_VULKAN   ${TRANSCRIBE_VULKAN} CACHE BOOL "" FORCE)
 set(GGML_CUDA     ${TRANSCRIBE_CUDA}   CACHE BOOL "" FORCE)
 set(GGML_BLAS OFF CACHE BOOL "" FORCE)
 
+# OpenMP: ggml defaults GGML_OPENMP ON and probes for it gracefully, so leave
+# ggml's own default in place when we want OpenMP. Only force it OFF (matching
+# the GGML_OPENMP=OFF posture official wheels use) when OpenMP is switched off,
+# so one TRANSCRIBE_USE_OPENMP knob covers ggml and our host-decoder TU.
+if(NOT TRANSCRIBE_USE_OPENMP)
+    set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+endif()
+
 # We don't want ggml's tests / examples leaking into our build tree. They
 # default to OFF when ggml is added as a subdirectory (GGML_STANDALONE OFF),
 # but pin them anyway so the contract is explicit.
 set(GGML_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GGML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
-# Build ggml as a static library so the resulting transcribe binary can be
-# distributed without chasing libggml.dylib at runtime.
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+# Library link mode. Default OFF (static) keeps the self-contained CLI/test/
+# bench build with no libtranscribe/libggml to chase at runtime; the Python
+# wheel/provider build sets TRANSCRIBE_BUILD_SHARED=ON for a shared
+# libtranscribe (+ libggml) the FFI layer can dlopen. Both ggml and
+# libtranscribe follow this single switch. Symbol visibility is already hidden
+# by default (set above), so a shared lib exports only the TRANSCRIBE_API
+# surface.
+set(BUILD_SHARED_LIBS ${TRANSCRIBE_BUILD_SHARED} CACHE BOOL "" FORCE)
 
 # ggml's CMake declares its own warning flags; let it.
 add_subdirectory(ggml)

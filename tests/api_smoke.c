@@ -98,6 +98,55 @@ static void test_status_string(void) {
     CHECK(neg[0] != '\0');
 }
 
+static void test_version(void) {
+    /* transcribe_version() returns a non-empty static string that equals the
+     * stringized MAJOR.MINOR.PATCH macros the caller compiled against. This is
+     * the exact-match contract the Python provider version gate relies on. */
+    const char * v = transcribe_version();
+    CHECK(v != NULL);
+    CHECK(v[0] != '\0');
+    CHECK(strcmp(v, TRANSCRIBE_VERSION) == 0);
+
+    /* The numeric form stays consistent with the components. */
+    CHECK(TRANSCRIBE_VERSION_NUMBER ==
+          TRANSCRIBE_VERSION_MAJOR * 10000 +
+          TRANSCRIBE_VERSION_MINOR * 100 +
+          TRANSCRIBE_VERSION_PATCH);
+
+    /* Commit is never NULL: "unknown" in a non-git build, a short SHA
+     * otherwise. */
+    const char * commit = transcribe_version_commit();
+    CHECK(commit != NULL);
+    CHECK(commit[0] != '\0');
+}
+
+static void test_abi_metadata(void) {
+    /* The native ABI accessors a binding uses to verify its struct layout.
+     * Known ids report this build's sizeof/alignof; an unknown id reports 0
+     * (the documented "cannot verify" sentinel, never a real size). */
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_RUN_PARAMS) ==
+          sizeof(struct transcribe_run_params));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_RUN_PARAMS) ==
+          _Alignof(struct transcribe_run_params));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_CAPABILITIES) ==
+          sizeof(struct transcribe_capabilities));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_SEGMENT) ==
+          sizeof(struct transcribe_segment));
+    CHECK(transcribe_abi_struct_size((transcribe_abi_struct) 9999) == 0);
+    CHECK(transcribe_abi_struct_align((transcribe_abi_struct) 9999) == 0);
+
+    /* The reported size must equal the struct_size the init function stamps:
+     * that is the exact value a binding compares its own sizeof against, so the
+     * two surfaces (ABI accessor and init stamping) must agree. */
+    struct transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_RUN_PARAMS) == rp.struct_size);
+
+    struct transcribe_capabilities caps;
+    transcribe_capabilities_init(&caps);
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_CAPABILITIES) == caps.struct_size);
+}
+
 static void test_log_level_values(void) {
     /* These numeric values must mirror GGML_LOG_LEVEL_* exactly. If this
      * test ever fails, the public contract documented in transcribe.h
@@ -706,6 +755,8 @@ static void test_session_limits_abi(void) {
 
 int main(void) {
     test_status_string();
+    test_version();
+    test_abi_metadata();
     test_log_level_values();
     test_log_set_null();
     test_init_macros();

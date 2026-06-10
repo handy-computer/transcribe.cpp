@@ -4,10 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "transcribe-cpp"
-version = "0.0.0"
-description = "Python bindings for transcribe.cpp (pre-release name reservation placeholder)"
+version = "0.0.1"
+description = "Python bindings for transcribe.cpp"
 readme = "README.md"
-requires-python = ">=3.8"
+# 3.8 is EOL (2024-10); 3.9 is the floor. The binding is ctypes-only, so there
+# is no per-version compiled extension — one pure-Python package spans the range.
+requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "The transcribe.cpp authors" }]
@@ -17,9 +19,18 @@ classifiers = [
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Multimedia :: Sound/Audio :: Speech",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+
+[project.optional-dependencies]
+# Test-only deps. Run with: uv run --extra test pytest (from bindings/python).
+test = ["pytest>=7"]
 
 [project.urls]
 Homepage = "https://github.com/handy-computer/transcribe.cpp"
@@ -28,3 +39,8 @@ Issues = "https://github.com/handy-computer/transcribe.cpp/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/transcribe_cpp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 77 is the historical CTest "skipped" code; pytest uses skip markers instead.
+addopts = "-ra"

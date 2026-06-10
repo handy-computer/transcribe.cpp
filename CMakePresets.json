@@ -1,0 +1,53 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "wheel-base",
+      "hidden": true,
+      "displayName": "Official wheel posture (shared, no vendored OpenMP/BLAS)",
+      "description": "Shared libtranscribe for the Python provider wheels. OpenMP and non-Apple system BLAS are off so wheel-repair tools (auditwheel/delocate/delvewheel) never vendor an OpenMP/BLAS runtime that would collide with PyTorch/NumPy/MKL in the same process. GGML_NATIVE off so the binary is not tuned to the build machine.",
+      "binaryDir": "${sourceDir}/build-wheel",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "TRANSCRIBE_BUILD_SHARED": "ON",
+        "TRANSCRIBE_USE_OPENMP": "OFF",
+        "TRANSCRIBE_USE_SYSTEM_BLAS": "OFF",
+        "TRANSCRIBE_BUILD_TESTS": "OFF",
+        "TRANSCRIBE_BUILD_EXAMPLES": "OFF",
+        "GGML_NATIVE": "OFF"
+      }
+    },
+    {
+      "name": "wheel-linux-cpu",
+      "inherits": "wheel-base",
+      "displayName": "Linux x86_64 conservative CPU wheel",
+      "description": "The permanent compatibility floor. GGML_NATIVE=OFF does NOT disable the x86 SIMD tiers (they default on), so every tier is turned off explicitly: the resulting binary runs on a baseline x86-64 machine without SIGILL. Performance is the job of the fat-CPU (Strategy B) track, not this wheel.",
+      "cacheVariables": {
+        "GGML_SSE42": "OFF",
+        "GGML_AVX": "OFF",
+        "GGML_AVX_VNNI": "OFF",
+        "GGML_AVX2": "OFF",
+        "GGML_BMI2": "OFF",
+        "GGML_FMA": "OFF",
+        "GGML_F16C": "OFF",
+        "GGML_AVX512": "OFF",
+        "GGML_AVX512_VBMI": "OFF",
+        "GGML_AVX512_VNNI": "OFF",
+        "GGML_AVX512_BF16": "OFF"
+      }
+    },
+    {
+      "name": "wheel-macos-metal",
+      "inherits": "wheel-base",
+      "displayName": "macOS arm64 Metal wheel",
+      "description": "Metal ships by default on Apple Silicon, with the shader library embedded so there are no sidecar .metal files to vendor or locate at runtime.",
+      "cacheVariables": {
+        "TRANSCRIBE_METAL": "ON",
+        "GGML_METAL": "ON",
+        "GGML_METAL_EMBED_LIBRARY": "ON"
+      }
+    }
+  ]
+}

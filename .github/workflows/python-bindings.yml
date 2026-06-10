@@ -1,0 +1,122 @@
+name: python-bindings
+
+# Locks in what the Python bindings already guarantee (see
+# docs/python-bindings-distribution-plan.md, Milestone 1):
+#   - lint:          generated-FFI drift gate + version-sync across the three
+#                    sources of truth (header / pyproject / __init__).
+#   - cpp-tests:     the full C++ white-box suite against a static build.
+#   - python-shared: a shared libtranscribe, the pure-C api_smoke as an
+#                    exported-symbol canary, and the Python no-model tests
+#                    (import, ABI layout, version gate, status/enum agreement).
+#
+# Real-model tests are intentionally not run here: they need multi-GB GGUFs CI
+# cannot ship. They live behind env vars and skip cleanly. A tiny redistributable
+# canary GGUF (plan M1) will later let one real transcription run in CI.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bindings/python/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "ggml/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/python-bindings.yml"
+  pull_request:
+    paths:
+      - "bindings/python/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "ggml/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/python-bindings.yml"
+  workflow_dispatch:
+
+# The generated FFI layer is pinned to one libclang so the drift gate's embedded
+# `libclang: <version>` line is reproducible across runs.
+env:
+  LIBCLANG_PIN: "libclang==18.1.1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install clang (libclang resource-dir headers)
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Generated-FFI drift gate
+        run: |
+          uv run --no-project --with "$LIBCLANG_PIN" \
+            bindings/python/_generate/generate.py --check
+      - name: Version sync (header / pyproject / __init__)
+        run: uv run --no-project bindings/python/_generate/check_version_sync.py
+
+  cpp-tests:
+    name: cpp-tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv (fixtures are generated via uv)
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+      - name: Configure (static white-box build)
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j
+      - name: Test (full white-box suite)
+        run: ctest --test-dir build --output-on-failure
+
+  python-shared:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+      # Shared build in the official-wheel posture (no OpenMP / system BLAS), so
+      # the canary exercises the same configuration the provider wheels ship.
+      - name: Configure (shared, wheel posture)
+        run: |
+          cmake -B build-shared -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DTRANSCRIBE_BUILD_SHARED=ON \
+            -DTRANSCRIBE_USE_OPENMP=OFF \
+            -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF
+      - name: Build
+        run: cmake --build build-shared -j
+      - name: api_smoke (exported-symbol canary) + extension umbrella
+        run: ctest --test-dir build-shared --output-on-failure
+      - name: Python no-model tests
+        run: |
+          # libtranscribe.so is dlopen'd by ctypes; help it resolve its sibling
+          # ggml shared libs in the build tree.
+          export LD_LIBRARY_PATH="$(find "$PWD/build-shared" -name '*.so' \
+            -printf '%h\n' | sort -u | tr '\n' ':')$LD_LIBRARY_PATH"
+          # The loader auto-discovers build-shared/src/libtranscribe.so from the
+          # repo root; model tests skip (no GGUF in CI).
+          uv run --project bindings/python --extra test \
+            pytest bindings/python/tests -q -rs

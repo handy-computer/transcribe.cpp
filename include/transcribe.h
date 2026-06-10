@@ -132,6 +132,34 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* ----------------------------------------------------------------------- */
+/* Version                                                                 */
+/* ----------------------------------------------------------------------- */
+/*
+ * Single source of truth for the native library version. The top-level
+ * CMakeLists.txt parses these three macros to set the CMake project version and
+ * the shared-library VERSION/SOVERSION, and transcribe_version() (declared
+ * below) returns the same MAJOR.MINOR.PATCH string. Bump the library version
+ * here. Pre-1.0 the on-disk ABI MAY break between minor releases (see "ABI
+ * stability" above); the Python binding pins its package version to this value
+ * exactly and refuses to load a native provider that does not match.
+ */
+#define TRANSCRIBE_VERSION_MAJOR 0
+#define TRANSCRIBE_VERSION_MINOR 0
+#define TRANSCRIBE_VERSION_PATCH 1
+
+#define TRANSCRIBE_VERSION_STRINGIZE_(x) #x
+#define TRANSCRIBE_VERSION_STRINGIZE(x)  TRANSCRIBE_VERSION_STRINGIZE_(x)
+#define TRANSCRIBE_VERSION                                    \
+    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_MAJOR) "." \
+    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_MINOR) "." \
+    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_PATCH)
+
+/* Monotonic integer form (MAJOR*10000 + MINOR*100 + PATCH) for compile-time
+ * comparisons, e.g. `#if TRANSCRIBE_VERSION_NUMBER >= 200`. */
+#define TRANSCRIBE_VERSION_NUMBER \
+    (TRANSCRIBE_VERSION_MAJOR * 10000 + TRANSCRIBE_VERSION_MINOR * 100 + TRANSCRIBE_VERSION_PATCH)
+
 #ifndef TRANSCRIBE_API
 #  if defined(_WIN32) && !defined(__GNUC__)
 #    ifdef TRANSCRIBE_BUILD
@@ -287,6 +315,63 @@ typedef enum {
  * site, so existing C and C++ callers continue to compile unchanged.
  */
 TRANSCRIBE_API const char * transcribe_status_string(int status);
+
+/* ----------------------------------------------------------------------- */
+/* Version                                                                 */
+/* ----------------------------------------------------------------------- */
+/*
+ * Runtime version of the loaded native library. The numeric components are
+ * also available at compile time as TRANSCRIBE_VERSION_MAJOR/MINOR/PATCH (and
+ * the composed string as TRANSCRIBE_VERSION) near the top of this header.
+ *
+ * Both return borrowed pointers into static storage: never free them, and
+ * treat them as valid for the life of the process.
+ */
+/* "MAJOR.MINOR.PATCH", e.g. "0.1.0". Equals the TRANSCRIBE_VERSION macro the
+ * caller compiled against; a mismatch means the header and the linked library
+ * disagree. */
+TRANSCRIBE_API const char * transcribe_version(void);
+/* Short git commit the library was built from, or "unknown" when the build
+ * tree carried no git metadata (e.g. an unpacked source tarball). */
+TRANSCRIBE_API const char * transcribe_version_commit(void);
+
+/* ----------------------------------------------------------------------- */
+/* ABI metadata                                                            */
+/* ----------------------------------------------------------------------- */
+/*
+ * The native library's sizeof/alignof for the public structs that cross the
+ * ABI. A binding (Python ctypes, Rust, Swift, ...) declares its own view of
+ * each struct, then verifies that view against these values before it
+ * constructs any real instance. This is the safe alternative the "Params"
+ * section calls for: query the size up front instead of calling a *_init()
+ * function on a buffer that might be smaller than the library expects.
+ *
+ * `which` selects a struct by transcribe_abi_struct. An unknown id (e.g. a
+ * newer binding asking an older library about a struct it predates) returns 0,
+ * which the binding MUST treat as "cannot verify," never as "size 0." The enum
+ * is append-only; do not renumber existing values.
+ */
+typedef enum {
+    TRANSCRIBE_ABI_MODEL_LOAD_PARAMS = 0,
+    TRANSCRIBE_ABI_SESSION_PARAMS    = 1,
+    TRANSCRIBE_ABI_RUN_PARAMS        = 2,
+    TRANSCRIBE_ABI_STREAM_PARAMS     = 3,
+    TRANSCRIBE_ABI_CAPABILITIES      = 4,
+    TRANSCRIBE_ABI_TIMINGS           = 5,
+    TRANSCRIBE_ABI_SEGMENT           = 6,
+    TRANSCRIBE_ABI_WORD              = 7,
+    TRANSCRIBE_ABI_TOKEN             = 8,
+    TRANSCRIBE_ABI_STREAM_UPDATE     = 9,
+    TRANSCRIBE_ABI_STREAM_TEXT       = 10,
+    TRANSCRIBE_ABI_SESSION_LIMITS    = 11,
+    TRANSCRIBE_ABI_EXT               = 12,
+} transcribe_abi_struct;
+
+/* sizeof / alignof of the selected public struct, or 0 for an unknown id.
+ * For every struct that carries a struct_size field, the size returned here
+ * equals the value its transcribe_*_init() stamps into struct_size. */
+TRANSCRIBE_API size_t transcribe_abi_struct_size(transcribe_abi_struct which);
+TRANSCRIBE_API size_t transcribe_abi_struct_align(transcribe_abi_struct which);
 
 /* ----------------------------------------------------------------------- */
 /* Logging                                                                 */

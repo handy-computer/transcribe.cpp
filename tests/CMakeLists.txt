@@ -61,6 +61,26 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_extension_umbrella.cmake)
 
 # -----------------------------------------------------------------------------
+# Shared-library build: only the public-ABI smoke is meaningful
+# -----------------------------------------------------------------------------
+#
+# Every test below this point is a C++ white-box test: it links `transcribe`
+# AND reaches into src/ internal headers, calling non-TRANSCRIBE_API symbols.
+# Those symbols are hidden in a shared libtranscribe (visibility=hidden), so the
+# white-box suite cannot link against it. A shared build (TRANSCRIBE_BUILD_SHARED
+# =ON) is the packaging/binding configuration; build static (the default) to run
+# the full suite. The pure-C api_smoke above stays — against a shared lib it
+# doubles as an exported-surface canary: it proves every public symbol resolves
+# from a clean C consumer with no internal-header reach.
+if(BUILD_SHARED_LIBS)
+    message(STATUS
+        "transcribe: shared-library build — registering only the public-ABI "
+        "smoke; the C++ white-box test suite requires a static build "
+        "(-DTRANSCRIBE_BUILD_SHARED=OFF).")
+    return()
+endif()
+
+# -----------------------------------------------------------------------------
 # Backend classification unit test
 # -----------------------------------------------------------------------------
 #
