@@ -610,6 +610,8 @@ static bool valid_stream_commit_policy(int policy) {
     return false;
 }
 
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Backend modules and device discovery
 // ---------------------------------------------------------------------------
@@ -620,6 +622,11 @@ static bool valid_stream_commit_policy(int policy) {
 // scans only that path. ggml tolerates every per-module failure (missing
 // system deps such as the Vulkan loader -> dlopen fails -> module skipped),
 // which is exactly the ship-Vulkan-by-default degradation contract.
+//
+// NOTE: these definitions must sit at FILE scope, outside the anonymous
+// namespace above. clang exports extern "C" functions defined inside an
+// unnamed namespace; gcc gives them internal linkage, which strips them
+// from the shared library on Linux (undefined references at link).
 
 extern "C" transcribe_status transcribe_init_backends(const char * artifact_dir) {
     if (artifact_dir == nullptr || artifact_dir[0] == '\0') {
@@ -715,6 +722,8 @@ extern "C" bool transcribe_backend_available(transcribe_backend_request kind) {
     }
     return false;
 }
+
+namespace {
 
 enum class StreamStablePrefixImpl {
     GenericTextAgreement,

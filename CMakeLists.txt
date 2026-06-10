@@ -235,6 +235,10 @@ if(TRANSCRIBE_GGML_BACKEND_DL)
             "(backend modules are shared libraries loaded at runtime)")
     endif()
     set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+    # ggml hard-errors on GGML_NATIVE + GGML_BACKEND_DL (x86): native tuning
+    # is incompatible with feature-scored modules. A module build is a
+    # distribution build, so never tune it to the build host.
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 endif()
 
 # ggml's CMake declares its own warning flags; let it.
