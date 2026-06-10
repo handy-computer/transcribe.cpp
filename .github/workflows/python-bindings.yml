@@ -172,6 +172,11 @@ jobs:
         run: |
           sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
           export TRANSCRIBE_LIBRARY="$PWD/provider/libtranscribe.so"
+          # lavapipe reports VK_PHYSICAL_DEVICE_TYPE_CPU, and ggml-vulkan's
+          # default selection takes only discrete/integrated GPUs. The env
+          # override bypasses the type filter so the software device counts —
+          # CI-only; real GPUs need no override.
+          export GGML_VK_VISIBLE_DEVICES=0
           cat > /tmp/check_vulkan.py <<'EOF'
           import transcribe_cpp as t
           devs = t.backends()
