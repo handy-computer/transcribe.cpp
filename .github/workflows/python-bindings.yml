@@ -189,12 +189,19 @@ jobs:
           print("ok: the same provider directory discovers a Vulkan device")
           EOF
           uv run --project bindings/python python /tmp/check_vulkan.py
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
       - name: "Tier 2b: real transcription on the Vulkan device (needs HF_TOKEN)"
         if: env.HF_TOKEN != ''
         run: |
-          uv run --no-project --with huggingface_hub \
-            hf download handy-computer/whisper-tiny-gguf \
-            whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uv run --no-project --with huggingface_hub \
+              hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
           export TRANSCRIBE_LIBRARY="$PWD/provider/libtranscribe.so"
           export GGML_VK_VISIBLE_DEVICES=0
           cat > /tmp/check_vk_transcribe.py <<'EOF'
@@ -243,15 +250,23 @@ jobs:
       # end-to-end transcription. Guarded on HF_TOKEN (the model repo is
       # private for now; forks have no token) — without it the model tests
       # skip cleanly, exactly as before.
-      - name: Download canary models (needs HF_TOKEN)
+      - name: Canary model cache (avoid HF rate limits — 429s were real)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Download canary models (cache miss only; needs HF_TOKEN)
         if: env.HF_TOKEN != ''
         run: |
-          uv run --no-project --with huggingface_hub \
-            hf download handy-computer/whisper-tiny-gguf \
-            whisper-tiny-Q5_K_M.gguf --local-dir canary
-          uv run --no-project --with huggingface_hub \
-            hf download handy-computer/moonshine-streaming-tiny-gguf \
-            moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uv run --no-project --with huggingface_hub \
+              hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+            uv run --no-project --with huggingface_hub \
+              hf download handy-computer/moonshine-streaming-tiny-gguf \
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
           echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
           echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Python tests (real transcription when the canary is present)

@@ -87,6 +87,7 @@ sdist.exclude = [
   "build*/",
   "dist*/",
   "wheelhouse*/",
+  "canary/",
   "samples/",
   ".github/",
   ".claude/",
@@ -151,7 +152,15 @@ archs = ["x86_64"]
 # Torch et al. ship 2_28, so this is the ecosystem floor in practice.
 manylinux-x86_64-image = "manylinux_2_28"
 environment = { TRANSCRIBE_WHEEL_LANE = "cpu-vulkan" }
-environment-pass = ["HF_TOKEN", "VK_TOOLCHAIN_CACHE", "CI"]
+environment-pass = [
+  "HF_TOKEN",
+  "VK_TOOLCHAIN_CACHE",
+  "CI",
+  # Canary GGUFs are fetched on the HOST (cached; HF rate limits) and read
+  # inside the container via the /project bind mount.
+  "TRANSCRIBE_SMOKE_MODEL",
+  "TRANSCRIBE_SMOKE_STREAMING_MODEL",
+]
 before-all = "bash {project}/scripts/ci/manylinux-vulkan-toolchain.sh"
 # libvulkan stays EXCLUDED from the wheel: the module resolves the system
 # loader at runtime and degrades quietly to CPU when there is none — the

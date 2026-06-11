@@ -220,4 +220,10 @@ set_target_properties(transcribe PROPERTIES
 find_package(ZLIB REQUIRED)
 target_link_libraries(transcribe PRIVATE ZLIB::ZLIB)
 
+if(MSVC)
+    # MSVC hides M_PI and friends behind _USE_MATH_DEFINES (used by the mel
+    # frontends and Whisper's bin loader).
+    target_compile_definitions(transcribe PRIVATE _USE_MATH_DEFINES)
+endif()
+
 transcribe_apply_warnings(transcribe)

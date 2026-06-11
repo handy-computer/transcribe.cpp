@@ -10,6 +10,9 @@
 /bindings/python/dist/
 /wheelhouse*/
 
+# Canary GGUFs fetched by CI / local smoke runs
+/canary/
+
 # Scratch space for benchmarks, staging, etc.
 /tmp/
 

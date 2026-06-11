@@ -38,6 +38,12 @@
 
 #include <sys/stat.h>
 
+// MSVC's <sys/stat.h> has the _S_IFDIR mode bits but not the POSIX
+// S_ISDIR() macro.
+#if defined(_WIN32) && !defined(S_ISDIR)
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <cerrno>

@@ -68,6 +68,25 @@ jobs:
         with:
           path: vk-toolchain-cache
           key: vk-toolchain-${{ hashFiles('scripts/ci/manylinux-vulkan-toolchain.sh') }}
+      - name: Canary model cache (avoid HF rate limits — 429s were real)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary models (cache miss only; container sees /project)
+        if: env.HF_TOKEN != ''
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          # cibuildwheel bind-mounts the project at /project inside the
+          # manylinux container; these paths resolve there.
+          echo "TRANSCRIBE_SMOKE_MODEL=/project/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=/project/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Build, repair, and test the wheel (cibuildwheel)
         env:
           CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/vk-toolchain-cache:/vk-toolchain-cache"
@@ -99,6 +118,23 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary models (cache miss only)
+        if: env.HF_TOKEN != ''
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Build, repair, and test the wheel (cibuildwheel)
         run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
       - uses: actions/upload-artifact@v4
@@ -125,6 +161,23 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary models (cache miss only)
+        if: env.HF_TOKEN != ''
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Build, repair, and test the wheel on real Metal (cibuildwheel)
         run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse-hw
 
@@ -146,6 +199,26 @@ jobs:
           & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary models (cache miss only)
+        if: env.HF_TOKEN != ''
+        shell: bash
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          # GITHUB_WORKSPACE keeps the Windows-style path Python can open
+          # (bash's $PWD here would be an MSYS path).
+          echo "TRANSCRIBE_SMOKE_MODEL=$GITHUB_WORKSPACE/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$GITHUB_WORKSPACE/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Install zlib (vcpkg, static — libtranscribe requires it)
         # Static (-static-md: static lib, dynamic CRT) so no zlib1.dll exists
         # at runtime and delvewheel has nothing to vendor for it. The
@@ -175,6 +248,23 @@ jobs:
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary models (cache miss only)
+        if: env.HF_TOKEN != ''
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Build sdist
         run: uv build --sdist
       - name: Audit sdist contents
@@ -260,6 +350,20 @@ jobs:
         run: |
           pip install --no-index --find-links wheelhouse transcribe-cpp
           pip install numpy huggingface_hub
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary model (cache miss only)
+        if: env.HF_TOKEN != ''
+        shell: bash
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          echo "TRANSCRIBE_SMOKE_MODEL=$GITHUB_WORKSPACE/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
       - name: numpy co-import smoke
         run: python scripts/ci/co_import_smoke.py numpy .
       - name: torch co-import smoke
