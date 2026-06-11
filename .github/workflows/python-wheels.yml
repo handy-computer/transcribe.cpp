@@ -324,6 +324,117 @@ jobs:
         with:
           name: dist-api
           path: bindings/python/dist/*
+      # Test audio for the checkout-free clean-install job.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-assets
+          path: samples/jfk.wav
+
+  clean-install:
+    # Punch-list "clean machine": a bare python:3.12-slim container — no
+    # compilers, no repo checkout, no env vars. Installs ONLY the built
+    # wheels (resolver pulls the native provider through the hard pin) and
+    # transcribes. This is also the shipped-artifact proof of the
+    # Vulkan-by-default degradation contract:
+    #   tier A (bare container, no Vulkan loader): the bundled module stays
+    #     quietly unloaded — CPU transcribes, vulkan answers unavailable,
+    #     backend="vulkan" raises a clean error.
+    #   tier B (apt install loader + lavapipe): the SAME installed wheel
+    #     discovers a Vulkan device and transcribes on it.
+    needs: [wheel-linux, api-wheel]
+    runs-on: ubuntu-latest
+    container: python:3.12-slim
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-native-linux-x86_64
+          path: wheelhouse
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-api
+          path: wheelhouse
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-assets
+          path: assets
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary model (cache miss only)
+        if: env.HF_TOKEN != ''
+        run: |
+          pip install -q huggingface_hub
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+      - name: Install from the built wheels only (no index)
+        run: pip install --no-index --find-links wheelhouse transcribe-cpp
+      - name: "Tier A: bare machine — CPU transcribes, Vulkan quietly absent"
+        run: |
+          python - <<'EOF'
+          import array, os, wave
+          import transcribe_cpp as t
+          from transcribe_cpp import errors
+
+          devs = [(d.name, d.kind) for d in t.backends()]
+          print("devices (bare):", devs)
+          assert t.native_provider() == "transcribe-cpp-native"
+          assert t.backend_available("cpu")
+          assert not t.backend_available("vulkan"), devs
+
+          if not os.path.exists("canary/whisper-tiny-Q5_K_M.gguf"):
+              print("!! no canary (fork without HF_TOKEN) — install-only check")
+              raise SystemExit(0)
+
+          # An explicit vulkan request on a machine without a loader must be
+          # a clean Python exception, not a crash.
+          try:
+              t.Model("canary/whisper-tiny-Q5_K_M.gguf", backend="vulkan")
+          except errors.TranscribeError as e:
+              print("vulkan request correctly rejected:", e)
+          else:
+              raise AssertionError("backend='vulkan' must fail without a loader")
+
+          with wave.open("assets/jfk.wav", "rb") as w:
+              pcm16 = array.array("h"); pcm16.frombytes(w.readframes(w.getnframes()))
+          pcm = array.array("f", (s / 32768.0 for s in pcm16))
+          with t.Model("canary/whisper-tiny-Q5_K_M.gguf") as m, m.session() as s:
+              text = s.run(pcm).text
+          print("text (cpu):", text.strip())
+          assert "country" in text.lower(), text
+          print("ok: clean machine, one pip install, transcribed on CPU")
+          EOF
+      - name: "Tier B: install a Vulkan loader + lavapipe — same wheel uses it"
+        if: env.HF_TOKEN != ''
+        run: |
+          apt-get update -q && apt-get install -y -q libvulkan1 mesa-vulkan-drivers
+          # lavapipe is a CPU-type Vulkan device; ggml's default filter only
+          # admits real GPUs (CI-only override, real GPUs need none).
+          export GGML_VK_VISIBLE_DEVICES=0
+          python - <<'EOF'
+          import array, wave
+          import transcribe_cpp as t
+
+          devs = [(d.name, d.kind) for d in t.backends()]
+          print("devices (lavapipe):", devs)
+          assert t.backend_available("vulkan"), devs
+
+          with wave.open("assets/jfk.wav", "rb") as w:
+              pcm16 = array.array("h"); pcm16.frombytes(w.readframes(w.getnframes()))
+          pcm = array.array("f", (s / 32768.0 for s in pcm16))
+          with t.Model("canary/whisper-tiny-Q5_K_M.gguf", backend="vulkan") as m:
+              print("model backend:", m.backend)
+              with m.session() as s:
+                  text = s.run(pcm).text
+          print("text (vulkan):", text.strip())
+          assert "country" in text.lower(), text
+          print("ok: the same installed wheel transcribed on the Vulkan device")
+          EOF
 
   co-import:
     # numpy/torch coexistence (the reason the wheels vendor no OpenMP/BLAS),
