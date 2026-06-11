@@ -220,9 +220,10 @@ set_target_properties(transcribe PROPERTIES
 find_package(ZLIB REQUIRED)
 target_link_libraries(transcribe PRIVATE ZLIB::ZLIB)
 
-if(MSVC)
-    # MSVC hides M_PI and friends behind _USE_MATH_DEFINES (used by the mel
-    # frontends and Whisper's bin loader).
+if(WIN32)
+    # Windows toolchains hide M_PI and friends behind _USE_MATH_DEFINES
+    # (used by the mel frontends and Whisper's bin loader). MSVC and MinGW
+    # both honor it — MinGW's strict-C++17 mode hides M_PI the same way.
     target_compile_definitions(transcribe PRIVATE _USE_MATH_DEFINES)
 endif()
 

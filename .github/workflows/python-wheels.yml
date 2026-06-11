@@ -157,6 +157,14 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
+      # vcvars for the whole job: the Ninja generator (CMAKE_GENERATOR in
+      # pyproject [tool.cibuildwheel.windows]) needs cl.exe on PATH — without
+      # it CMake silently picks the runner image's MinGW gcc (observed:
+      # gcc-flavored M_PI errors). The VS generator didn't need this but is
+      # ~3x slower on this lane.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
       - name: Install uv
         run: |
           powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"

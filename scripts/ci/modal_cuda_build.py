@@ -32,10 +32,21 @@ import modal
 app = modal.App("transcribe-cpp-cu12")
 
 VOLUME = modal.Volume.from_name("transcribe-cu12-wheelhouse", create_if_missing=True)
+#: Compiler cache across runs: most pushes touch neither ggml nor the CUDA
+#: backend, so warm rebuilds skip nearly all nvcc work.
+CCACHE_VOLUME = modal.Volume.from_name("transcribe-cu12-sccache", create_if_missing=True)
 
 #: CUDA toolkit pinned per-minor; the nvidia-*-cu12 runtime-wheel floors in
 #: bindings/python-native-cu12/pyproject.toml must cover this minor.
 CUDA_TOOLKIT = "cuda-toolkit-12-9"
+
+#: sccache: static musl binary (runs on any glibc, unlike EPEL8's ccache 3.x
+#: which predates CUDA support). Handles nvcc.
+SCCACHE_VERSION = "v0.10.0"
+SCCACHE_URL = (
+    "https://github.com/mozilla/sccache/releases/download/"
+    f"{SCCACHE_VERSION}/sccache-{SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+)
 
 # manylinux_2_28 with the CUDA toolkit baked in as an image layer: this is
 # the expensive part (multi-GB dnf install) and it happens once, not per run.
@@ -50,6 +61,8 @@ build_image = (
         f"dnf install -y {CUDA_TOOLKIT}",
         "dnf clean all",
         "/opt/python/cp312-cp312/bin/pip install --no-cache-dir build",
+        f"curl -Ls {SCCACHE_URL} | tar xz --strip-components=1 -C /usr/local/bin"
+        " --wildcards '*/sccache' && chmod +x /usr/local/bin/sccache",
     )
     # The repo checkout, attached at runtime (content-addressed: cheap when
     # unchanged). Heavy local dirs never leave the machine.
@@ -79,7 +92,7 @@ def run(cmd, **kwargs) -> None:
     cpu=16.0,
     memory=32768,
     timeout=3600,
-    volumes={"/wheels": VOLUME},
+    volumes={"/wheels": VOLUME, "/sccache": CCACHE_VOLUME},
     secrets=[hf_secret],
 )
 def build_and_check() -> str:
@@ -89,6 +102,12 @@ def build_and_check() -> str:
     env = os.environ
     env["PATH"] = "/usr/local/cuda/bin:" + env["PATH"]
     env["CUDACXX"] = "/usr/local/cuda/bin/nvcc"
+    # Compiler cache (volume-backed): warm runs skip unchanged TUs entirely.
+    env["CMAKE_C_COMPILER_LAUNCHER"] = "sccache"
+    env["CMAKE_CXX_COMPILER_LAUNCHER"] = "sccache"
+    env["CMAKE_CUDA_COMPILER_LAUNCHER"] = "sccache"
+    env["SCCACHE_DIR"] = "/sccache"
+    env["SCCACHE_CACHE_SIZE"] = "5G"
 
     pybin = "/opt/python/cp312-cp312/bin"
 
@@ -118,7 +137,9 @@ def build_and_check() -> str:
     run([f"{pybin}/pip", "wheel", "--no-deps", "-q",
          "/src/bindings/python", "-w", "/wheels"])
 
+    run(["sccache", "--show-stats"])
     VOLUME.commit()
+    CCACHE_VOLUME.commit()
     return os.path.basename(repaired)
 
 
