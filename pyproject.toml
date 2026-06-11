@@ -108,15 +108,24 @@ sdist.include = ["/samples/jfk.wav"]
 # keep both in sync. The wheel-hygiene base (shared lib, OpenMP/system-BLAS
 # off, Metal embedded) is forced by the SKBUILD block in CMakeLists.txt.
 
-# Default Linux/Windows wheel: conservative CPU + Vulkan as dynamic ggml
-# backend modules. GGML_NATIVE=OFF does NOT disable the x86 SIMD tiers (they
-# default on), so every tier is off explicitly: the baseline must run on any
-# x86-64 machine without SIGILL. Fat CPU variants are the post-merge track.
+# Default Linux/Windows wheel: fat CPU + Vulkan as dynamic ggml backend
+# modules (M6.5). GGML_CPU_ALL_VARIANTS=ON emits one ggml-cpu-<tier> module
+# per x86 ISA tier (x64 baseline, sse42, sandybridge, haswell, skylakex,
+# icelake, alderlake, ...) with runtime feature scoring — the exact shape
+# llama.cpp release binaries ship; it requires GGML_BACKEND_DL (set above).
+# The x64 baseline variant is the SIGILL-safe floor for any x86-64 machine,
+# so the conservative single-build is no longer needed. The per-tier
+# GGML_AVX*/GGML_AVX512* flags below are inert while ALL_VARIANTS is on (ggml
+# gates them behind `if(NOT GGML_CPU_ALL_VARIANTS)`); they remain as the
+# explicit floor if a build ever disables ALL_VARIANTS, mirroring
+# CMakePresets.json wheel-linux-cpu. cmake/python-wheel-install.cmake
+# collapses every cpu-<tier> kind back to "cpu" in the provider descriptor.
 [[tool.scikit-build.overrides]]
 if.env.TRANSCRIBE_WHEEL_LANE = "cpu-vulkan"
 cmake.args = [
   "-DTRANSCRIBE_GGML_BACKEND_DL=ON",
   "-DTRANSCRIBE_VULKAN=ON",
+  "-DGGML_CPU_ALL_VARIANTS=ON",
   "-DGGML_NATIVE=OFF",
   "-DGGML_SSE42=OFF",
   "-DGGML_AVX=OFF",
