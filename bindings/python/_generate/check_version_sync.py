@@ -60,13 +60,18 @@ def init_version(text: str) -> str | None:
     return m.group(1) if m else None
 
 
-def native_pin_version(text: str) -> str | None:
-    # The hard dependency on the default provider is the pre-1.0 base-version
-    # contract at resolver level: transcribe-cpp-native==X.Y.Z.* — X.Y.Z must
-    # be the same base as everything else. (The provider package itself can't
-    # drift: its version is parsed from the header at build time.)
-    m = re.search(r'"transcribe-cpp-native\s*==\s*([0-9.]+?)\.\*"', text)
-    return m.group(1) if m else None
+def native_pin_versions(text: str) -> "dict[str, str | None]":
+    # Every native-provider pin (the hard dependency AND accelerator extras)
+    # is the pre-1.0 base-version contract at resolver level:
+    # transcribe-cpp-native[-suffix]==X.Y.Z.* — X.Y.Z must be the same base
+    # as everything else. (The provider packages themselves can't drift:
+    # their versions are parsed from the header at build time.)
+    pins = re.findall(
+        r'"(transcribe-cpp-native(?:-[a-z0-9]+)*)\s*==\s*([0-9.]+?)\.\*"', text
+    )
+    if not pins:
+        return {"pyproject.toml (native pin)": None}
+    return {f"pyproject.toml ({name} pin)": version for name, version in pins}
 
 
 def main() -> int:
@@ -74,9 +79,9 @@ def main() -> int:
     sources = {
         "include/transcribe.h": header_version(HEADER.read_text()),
         "pyproject.toml": pyproject_version(pyproject_text),
-        "pyproject.toml (native pin)": native_pin_version(pyproject_text),
         "__init__.__version__": init_version(INIT.read_text()),
     }
+    sources.update(native_pin_versions(pyproject_text))
 
     missing = [name for name, v in sources.items() if v is None]
     if missing:

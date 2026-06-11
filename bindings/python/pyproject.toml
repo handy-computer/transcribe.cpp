@@ -37,6 +37,10 @@ classifiers = [
 dependencies = ["transcribe-cpp-native==0.0.1.*"]
 
 [project.optional-dependencies]
+# Opt-in accelerator providers — ADDITIVE: they install alongside the default
+# provider and the best one wins at runtime. Same base-version pin contract
+# as the hard dependency (gated by check_version_sync.py).
+cu12 = ["transcribe-cpp-native-cu12==0.0.1.*"]
 # Test-only deps. Run with: uv run --extra test pytest (from bindings/python).
 test = ["pytest>=7"]
 
@@ -54,7 +58,10 @@ packages = ["src/transcribe_cpp"]
 # (it isn't published until release, and a prebuilt artifact would shadow the
 # library under test). The provably-false marker removes the dependency for uv
 # project operations only; pip installs of built distributions keep the pin.
-override-dependencies = ["transcribe-cpp-native; python_version < '0'"]
+override-dependencies = [
+  "transcribe-cpp-native; python_version < '0'",
+  "transcribe-cpp-native-cu12; python_version < '0'",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

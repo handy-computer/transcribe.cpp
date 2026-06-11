@@ -184,7 +184,11 @@ environment = { TRANSCRIBE_WHEEL_LANE = "metal", MACOSX_DEPLOYMENT_TARGET = "11.
 
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]
-environment = { TRANSCRIBE_WHEEL_LANE = "cpu-vulkan" }
+# Ninja, not the Visual Studio generator (scikit-build-core's Windows
+# default): substantially faster MSVC builds — this lane compiles ggml plus
+# hundreds of Vulkan shader variants. scikit-build-core activates the MSVC
+# environment automatically for Ninja.
+environment = { TRANSCRIBE_WHEEL_LANE = "cpu-vulkan", CMAKE_GENERATOR = "Ninja" }
 before-build = "pip install delvewheel"
 # Same loader posture as Linux: vulkan-1.dll is the system's, never vendored.
 repair-wheel-command = "delvewheel repair --exclude vulkan-1.dll -w {dest_dir} {wheel}"

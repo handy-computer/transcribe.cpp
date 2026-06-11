@@ -36,7 +36,15 @@ def main() -> int:
 
     # 1. The API package. The native provider wheel is already installed, so
     #    the == pin resolves locally without an index round-trip for it.
-    run(sys.executable, "-m", "pip", "install", str(project / "bindings" / "python"))
+    #    TRANSCRIBE_SMOKE_PIP_NO_DEPS=1 skips dependency resolution for envs
+    #    where the DEFAULT provider is deliberately absent (the cu12-only
+    #    packaging check: its pin can't resolve until release artifacts
+    #    exist on an index; the dual-provider interplay is TestPyPI-
+    #    rehearsal territory).
+    pip_args = ["-m", "pip", "install"]
+    if os.environ.get("TRANSCRIBE_SMOKE_PIP_NO_DEPS"):
+        pip_args.append("--no-deps")
+    run(sys.executable, *pip_args, str(project / "bindings" / "python"))
 
     # 2. Canary models (private HF repos; needs HF_TOKEN). Pre-set
     #    TRANSCRIBE_SMOKE_* env (e.g. local runs against on-disk models) wins.
@@ -52,23 +60,29 @@ def main() -> int:
         )
 
     # 3. Provider identity + backend posture of the repaired artifact.
+    #    TRANSCRIBE_SMOKE_PROVIDER names the provider under test (default:
+    #    the default provider; the cu12 lane sets its own name).
     import transcribe_cpp as t
 
+    expected_provider = os.environ.get(
+        "TRANSCRIBE_SMOKE_PROVIDER", "transcribe-cpp-native"
+    )
     print("provider:    ", t.native_provider())
     print("library:     ", t.library_path())
     print("devices:     ", [(d.name, d.kind) for d in t.backends()])
-    assert t.native_provider() == "transcribe-cpp-native", t.native_provider()
+    assert t.native_provider() == expected_provider, t.native_provider()
     assert "transcribe_cpp_native" in t.library_path(), t.library_path()
     assert t.backend_available("cpu")
     if sys.platform == "darwin":
         assert t.backend_available("metal"), "Metal must be available on arm64 CI"
     elif os.environ.get("CI"):
-        # Linux containers / Windows runners have no GPU and no Vulkan driver:
-        # the bundled Vulkan module must degrade quietly to CPU (whether the
-        # loader is present-but-deviceless or absent entirely).
-        assert not t.backend_available("vulkan"), (
-            "vulkan unexpectedly available on a GPU-less CI runner"
-        )
+        # Linux containers / Windows runners have no GPU (no Vulkan driver,
+        # no NVIDIA driver): the bundled accelerator modules must degrade
+        # quietly to CPU (loader/driver present-but-deviceless or absent).
+        for accel in ("vulkan", "cuda"):
+            assert not t.backend_available(accel), (
+                f"{accel} unexpectedly available on a GPU-less CI runner"
+            )
 
     # 4. Metal compute probe (darwin). Runner GPUs are not all trustworthy:
     #    GitHub-hosted macOS runners expose an "Apple Paravirtual device"

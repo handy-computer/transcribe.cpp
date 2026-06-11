@@ -15,6 +15,11 @@ returning a descriptor (a mapping or an object) with the contract fields:
     version       native library version it was built for (base must match ours)
     header_hash   the _generated.PUBLIC_HEADER_HASH it was built against
     backends      supported backend kinds, e.g. ["cpu"] / ["metal", "cpu"]
+    prepare       optional zero-argument callable invoked after this provider
+                  is SELECTED and validated, before any dlopen — e.g. the cu12
+                  provider preloads the NVIDIA runtime-wheel libraries
+                  (site-packages/nvidia/*/lib) that the platform loader would
+                  never find on its own
 
 Selecting a provider picks which native artifact loads into the process; the
 per-model ``backend=`` request is a *separate* axis resolved inside it. Selection
@@ -115,6 +120,22 @@ class _Provider:
         self.backends = tuple(_descriptor_field(descriptor, "backends") or ())
         self._library_path = _descriptor_field(descriptor, "library_path")
         self._artifact_dir = _descriptor_field(descriptor, "artifact_dir")
+        self._prepare = _descriptor_field(descriptor, "prepare")
+
+    def prepare(self) -> None:
+        """Run the provider's post-selection hook (no-op when absent). Errors
+        here are the provider's fault — surface them with its name."""
+        if not callable(self._prepare):
+            return
+        try:
+            self._prepare()
+        except Exception as exc:
+            raise TranscribeError(
+                message=(
+                    f"native provider {self.name!r} failed in its prepare() "
+                    f"hook: {exc}"
+                )
+            ) from exc
 
     @property
     def rank(self) -> int:
@@ -324,6 +345,9 @@ def load_library(provider: Optional[str] = None) -> tuple:
                     f"library: {path}"
                 )
             )
+        # Only the selected provider prepares (e.g. preloading NVIDIA runtime
+        # libs) — discovery alone must stay side-effect free.
+        chosen.prepare()
         cdll = _cdll(path)
         _selected_provider = chosen.name
         _artifact_dir = (

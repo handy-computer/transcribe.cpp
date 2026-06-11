@@ -6,7 +6,10 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "transcribe-cpp-native", marker = "python_full_version < '0'" }]
+overrides = [
+    { name = "transcribe-cpp-native", marker = "python_full_version < '0'" },
+    { name = "transcribe-cpp-native-cu12", marker = "python_full_version < '0'" },
+]
 
 [[package]]
 name = "colorama"
@@ -191,6 +194,7 @@ test = [
 requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7" },
     { name = "transcribe-cpp-native", specifier = "==0.0.1.*" },
+    { name = "transcribe-cpp-native-cu12", marker = "extra == 'cu12'", specifier = "==0.0.1.*" },
 ]
 
 [[package]]

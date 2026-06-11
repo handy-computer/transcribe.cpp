@@ -1,0 +1,95 @@
+# transcribe-cpp-native-cu12: the opt-in CUDA 12 provider for transcribe-cpp.
+#
+# Same backend-module mechanism as the default provider (see the repo-root
+# pyproject.toml and docs/python-bindings-distribution-plan.md): the artifact
+# directory bundles libtranscribe + ggml + a conservative CPU module + the
+# ggml-cuda module. The CUDA *toolkit* is never vendored: cudart/cublas come
+# from the NVIDIA runtime wheels declared below (preloaded explicitly by this
+# package's `prepare` hook — the platform loader doesn't search
+# site-packages/nvidia/*/lib), and libcuda.so.1 is the system driver. Without
+# a driver the cuda module quietly fails to load and CPU keeps working — the
+# same degradation contract as Vulkan in the default wheel.
+#
+# WHEELS ONLY, Linux x86_64 first. No sdist: this directory cannot carry the
+# C++ tree (cmake.source-dir reaches ../.. in a checkout); from-source CUDA
+# builds go through the transcribe-cpp-native sdist with
+# CMAKE_ARGS="-DTRANSCRIBE_CUDA=ON -DTRANSCRIBE_GGML_BACKEND_DL=ON".
+# Built on Modal (scripts/ci/modal_cuda_build.py), not cibuildwheel: the
+# manylinux+CUDA image is a cached Modal layer and the GPU runtime smoke
+# runs in the same flow.
+
+[build-system]
+requires = ["scikit-build-core>=0.11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "transcribe-cpp-native-cu12"
+dynamic = ["version"]
+description = "CUDA 12 native provider for transcribe-cpp (speech-to-text, ggml)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+# Copies of the repo + ggml licenses (PEP 639 paths cannot escape the
+# project directory; texts are static).
+license-files = ["LICENSE", "LICENSE-ggml"]
+authors = [{ name = "The transcribe.cpp authors" }]
+keywords = ["transcription", "speech-to-text", "asr", "ggml", "cuda"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# The NVIDIA runtime wheels the ggml-cuda module links against. The provider's
+# prepare hook loads these into the process before any backend module loads.
+dependencies = [
+  "nvidia-cuda-runtime-cu12>=12.1",
+  "nvidia-cublas-cu12>=12.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/handy-computer/transcribe.cpp"
+Repository = "https://github.com/handy-computer/transcribe.cpp"
+Issues = "https://github.com/handy-computer/transcribe.cpp/issues"
+
+[project.entry-points."transcribe_cpp.native"]
+cu12 = "transcribe_cpp_native_cu12:descriptor"
+
+[tool.scikit-build]
+# Version from the same single source as everything else.
+metadata.version.provider = "scikit_build_core.metadata.regex"
+metadata.version.input = "../../include/transcribe.h"
+metadata.version.regex = '(?sx) TRANSCRIBE_VERSION_MAJOR \s+ (?P<major>\d+) .*? TRANSCRIBE_VERSION_MINOR \s+ (?P<minor>\d+) .*? TRANSCRIBE_VERSION_PATCH \s+ (?P<patch>\d+)'
+metadata.version.result = "{major}.{minor}.{patch}"
+
+# The C++ project lives at the repo root; this package builds from a checkout.
+cmake.source-dir = "../.."
+cmake.version = ">=3.21"
+ninja.version = ">=1.11"
+
+wheel.py-api = "py3"
+wheel.install-dir = "transcribe_cpp_native_cu12"
+wheel.packages = ["transcribe_cpp_native_cu12"]
+install.components = ["wheel"]
+
+# The full lane posture lives here (no env-selected lanes — this package IS
+# the cuda lane): dynamic backend modules, conservative CPU baseline, CUDA
+# fatbins for T4/A100/A10-3090/4090-L4/H100.
+cmake.args = [
+  "-DTRANSCRIBE_GGML_BACKEND_DL=ON",
+  "-DTRANSCRIBE_CUDA=ON",
+  "-DGGML_NATIVE=OFF",
+  "-DGGML_SSE42=OFF",
+  "-DGGML_AVX=OFF",
+  "-DGGML_AVX_VNNI=OFF",
+  "-DGGML_AVX2=OFF",
+  "-DGGML_BMI2=OFF",
+  "-DGGML_FMA=OFF",
+  "-DGGML_F16C=OFF",
+  "-DGGML_AVX512=OFF",
+  "-DGGML_AVX512_VBMI=OFF",
+  "-DGGML_AVX512_VNNI=OFF",
+  "-DGGML_AVX512_BF16=OFF",
+  "-DCMAKE_CUDA_ARCHITECTURES=75;80;86;89;90",
+]

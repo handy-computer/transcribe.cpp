@@ -7,6 +7,8 @@ artifact loads and rejects an ABI/version-mismatched provider before dlopen.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import transcribe_cpp as t
@@ -53,7 +55,11 @@ def test_descriptor_from_mapping_and_object():
 def test_library_path_from_artifact_dir():
     p = make("transcribe-cpp-native-cpu", ["cpu"],
              library_path=None, artifact_dir="/opt/art")
-    assert str(p.library_path()).startswith("/opt/art")
+    # Path comparison, not string prefix: Windows renders this with
+    # backslashes (str(WindowsPath('/opt/art/...')) == '\\opt\\art\\...').
+    path = p.library_path()
+    assert path.parent == Path("/opt/art")
+    assert path.name in ("libtranscribe.so", "libtranscribe.dylib", "transcribe.dll")
 
 
 def test_library_path_requires_a_source():
@@ -128,6 +134,37 @@ def test_select_request_for_broken_raises():
         _library._select_provider([broken], "transcribe-cpp-native-cpu")
 
 
+# --- prepare hook ------------------------------------------------------------
+
+
+def test_prepare_hook_runs_when_present():
+    calls = []
+    p = _library._Provider(
+        "cu12",
+        {"name": "transcribe-cpp-native-cu12", "backends": ["cuda", "cpu"],
+         "library_path": "/x/libtranscribe.so", "prepare": lambda: calls.append(1)},
+    )
+    p.prepare()
+    assert calls == [1]
+
+
+def test_prepare_hook_absent_is_noop():
+    make("transcribe-cpp-native-cpu", ["cpu"]).prepare()  # no raise
+
+
+def test_prepare_hook_failure_names_the_provider():
+    def boom():
+        raise RuntimeError("nvidia wheels missing")
+
+    p = _library._Provider(
+        "cu12",
+        {"name": "transcribe-cpp-native-cu12", "backends": ["cuda"],
+         "library_path": "/x/libtranscribe.so", "prepare": boom},
+    )
+    with pytest.raises(TranscribeError, match="transcribe-cpp-native-cu12.*prepare"):
+        p.prepare()
+
+
 # --- contract validation ---------------------------------------------------
 
 
@@ -166,13 +203,14 @@ def test_contract_accepts_post_release_provider():
 def test_provider_state_is_consistent():
     # Two legitimate environments run this suite: the dev tree (no provider
     # installed / TRANSCRIBE_LIBRARY override -> native_provider() is None) and
-    # a wheel-test env where the transcribe-cpp-native package supplied the
-    # library. Pin that the reported state matches where the library came from.
+    # a wheel-test env where a transcribe-cpp-native* package (default or an
+    # accelerator variant like -cu12) supplied the library. Pin that the
+    # reported state matches where the library came from.
     provider = t.native_provider()
     if provider is None:
         assert "transcribe_cpp_native" not in t.library_path()
     else:
-        assert provider == "transcribe-cpp-native"
+        assert provider.startswith("transcribe-cpp-native"), provider
         assert "transcribe_cpp_native" in t.library_path()
 
 
@@ -190,7 +228,11 @@ def _install_fake_provider(
 ):
     lib = t.library_path()
     dist = module_name.replace("_", "-")
+    marker = site_dir / f"{module_name}.prepared"
     (site_dir / f"{module_name}.py").write_text(
+        "def _prepare():\n"
+        f"    open({str(marker)!r}, 'w').close()\n"
+        "\n"
         "def descriptor():\n"
         "    return {\n"
         f"        'name': {dist!r},\n"
@@ -198,6 +240,7 @@ def _install_fake_provider(
         f"        'version': {version!r},\n"
         f"        'header_hash': {header_hash!r},\n"
         "        'backends': ['cpu'],\n"
+        "        'prepare': _prepare,\n"
         "    }\n"
     )
     di = site_dir / f"{module_name}-0.0.1.dist-info"
@@ -233,6 +276,8 @@ def test_entry_point_end_to_end_loads(tmp_path, monkeypatch, library_globals_res
     assert _library.artifact_dir() == path.parent
     # The dlopen is real: the loaded handle exposes the C API.
     assert cdll.transcribe_version is not None
+    # The selected provider's prepare() hook ran before the dlopen.
+    assert (tmp_path / "fake_native_provider_ok.prepared").is_file()
 
 
 def test_entry_point_end_to_end_rejects_abi_mismatch(

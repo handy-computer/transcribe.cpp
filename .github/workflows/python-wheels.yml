@@ -4,7 +4,9 @@ name: python-wheels
 #   - wheel-linux:   manylinux_2_28 x86_64, CPU + Vulkan backend modules
 #                    (Vulkan toolchain built from pinned Khronos tags inside
 #                    the container; cached across runs)
-#   - wheel-macos:   macosx arm64, Metal with embedded shaders
+#   - wheel-macos:   macosx arm64, Metal with embedded shaders — built AND
+#                    Metal-compute-tested on a bare-metal self-hosted M4 mini
+#                    (VM runners' paravirtual GPUs can't do Metal compute)
 #   - wheel-windows: win_amd64, CPU + Vulkan backend modules (LunarG SDK)
 #   - sdist:         the from-source fallback, proven by actually compiling
 #                    and transcribing from the tarball
@@ -99,58 +101,17 @@ jobs:
           path: wheelhouse/*.whl
 
   wheel-macos:
-    # Blacksmith M4 runner (faster than github-hosted; Apple-clang pin in
-    # pyproject [tool.cibuildwheel.macos] — the image puts mainline LLVM
-    # clang first in PATH). Metal COMPUTE is steered to CPU here: the probe
-    # proved (2026-06-11) that Apple's Virtualization.framework paravirtual
-    # GPU decodes garbage on Blacksmith's M4 VMs exactly like on GitHub's
-    # runners — no VM-based macOS CI can prove Metal compute. Metal
-    # availability/packaging is still hard-asserted; real Metal compute is
-    # proven on physical hardware (M4 mini self-hosted lane / local M4 Max,
-    # see the distribution plan).
-    runs-on: blacksmith-6vcpu-macos-15
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TRANSCRIBE_SMOKE_BACKEND: cpu
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Canary model cache (avoid HF rate limits)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
-        with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary models (cache miss only)
-        if: env.HF_TOKEN != ''
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
-          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
-              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
-          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
-          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
-      - name: Build, repair, and test the wheel (cibuildwheel)
-        run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist-native-macos-arm64
-          path: wheelhouse/*.whl
-
-  wheel-macos-hw:
-    # Bare-metal M4 Mac mini (self-hosted): the ONLY lane that proves Metal
-    # COMPUTE. Probe verdict 2026-06-11: Apple Virtualization.framework's
-    # paravirtual GPU decodes garbage on both GitHub-hosted and Blacksmith
-    # macOS VMs, so VM lanes run CPU-steered and this lane keeps the Metal
-    # probe active (wheel_smoke.py transcribes on the GPU and fails loud).
-    # No artifact upload — wheel-macos (Blacksmith) ships the artifact; this
-    # lane is the hardware truth. Note: cibuildwheel installs a python.org
-    # CPython framework on the runner on first use (normal CI behavior).
+    # Bare-metal M4 Mac mini (self-hosted, runner "m4-mini"): builds the
+    # SHIPPING macOS wheel and proves Metal COMPUTE on it in one lane — the
+    # artifact that ships is the artifact tested on a real GPU. VM-based
+    # macOS CI cannot do this: the probe proved (2026-06-11) that Apple's
+    # Virtualization.framework paravirtual GPU decodes garbage on both
+    # GitHub-hosted and Blacksmith M4 VMs (the former Blacksmith lane was
+    # retired 2026-06-11; flip runs-on back to a hosted label if the mini's
+    # availability ever becomes a problem). Notes: cibuildwheel needs a
+    # python.org CPython framework on the runner (installed once, manually —
+    # the runner service cannot sudo); the Apple-clang CC/CXX pin in
+    # pyproject [tool.cibuildwheel.macos] is harmless here.
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45  # a sleeping/offline mini must not hang the run
     env:
@@ -179,7 +140,11 @@ jobs:
           echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
           echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Build, repair, and test the wheel on real Metal (cibuildwheel)
-        run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse-hw
+        run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-native-macos-arm64
+          path: wheelhouse/*.whl
 
   wheel-windows:
     runs-on: windows-latest
@@ -329,6 +294,43 @@ jobs:
         with:
           name: smoke-assets
           path: samples/jfk.wav
+
+  cuda-wheel-modal:
+    # The cu12 provider is built and smoked on Modal, not on CI runners: the
+    # manylinux_2_28 + CUDA-toolkit environment is a cached Modal image
+    # layer, the 16-core build bills by the second, and the flow ends with a
+    # REAL T4 runtime smoke (scripts/ci/modal_cuda_build.py). This job is
+    # just the 2-vCPU driver. Gated on the Modal token secrets — absent on
+    # forks, steps no-op cleanly.
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build, repair, packaging-smoke, and T4 runtime smoke (Modal)
+        if: env.MODAL_TOKEN_ID != ''
+        run: |
+          pip install -q modal
+          modal run scripts/ci/modal_cuda_build.py
+      - name: Fetch the repaired wheel from the Modal volume
+        if: env.MODAL_TOKEN_ID != ''
+        run: |
+          mkdir -p wheelhouse-cu12
+          modal volume get transcribe-cu12-wheelhouse '**' wheelhouse-cu12/ --force
+          ls -la wheelhouse-cu12/
+      # Named OUTSIDE the dist-* pattern on purpose: co-import merges dist-*
+      # and must not pick up the cu12 provider (it would outrank the default
+      # provider and change what that job tests).
+      - uses: actions/upload-artifact@v4
+        if: env.MODAL_TOKEN_ID != ''
+        with:
+          name: cuda-dist-linux-x86_64
+          path: wheelhouse-cu12/*.whl
 
   clean-install:
     # Punch-list "clean machine": a bare python:3.12-slim container — no
