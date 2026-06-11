@@ -54,7 +54,9 @@ env:
 
 jobs:
   wheel-linux:
-    runs-on: ubuntu-latest
+    # 2vcpu everywhere: Blacksmith bills per vcpu-minute and compiles scale
+    # ~linearly, so bigger runners cost the same and only buy wall-clock.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       # Container path of the toolchain cache volume (see CIBW_CONTAINER_ENGINE).
@@ -98,6 +100,62 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dist-native-linux-x86_64
+          path: wheelhouse/*.whl
+
+  wheel-linux-arm64:
+    # Same provider shape as wheel-linux on linux-aarch64 (Graviton/Ampere
+    # servers, Raspberry Pi 5, SBCs — a real on-device-transcription market).
+    # Native ARM runner (no QEMU): the manylinux_2_28 aarch64 container
+    # compiles ggml with GGML_CPU_ALL_VARIANTS (ggml has a dedicated Linux-ARM
+    # tier list: armv8.0..armv9.2 with runtime feature scoring; the x86
+    # SIMD-off flags in the shared cpu-vulkan lane are inert options here) +
+    # the Vulkan module, and the full test phase runs natively. The Vulkan
+    # toolchain is source-built inside the container by the same before-all
+    # script, cached separately from x86_64.
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      VK_TOOLCHAIN_CACHE: /vk-toolchain-cache
+      # pyproject [tool.cibuildwheel.linux] pins archs=["x86_64"]; override.
+      CIBW_ARCHS_LINUX: aarch64
+      CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Cache the source-built Vulkan toolchain (aarch64)
+        uses: actions/cache@v4
+        with:
+          path: vk-toolchain-cache
+          key: vk-toolchain-aarch64-${{ hashFiles('scripts/ci/manylinux-vulkan-toolchain.sh') }}
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary models (cache miss only; container sees /project)
+        if: env.HF_TOKEN != ''
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          echo "TRANSCRIBE_SMOKE_MODEL=/project/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=/project/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+      - name: Build, repair, and test the wheel (cibuildwheel)
+        env:
+          CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/vk-toolchain-cache:/vk-toolchain-cache"
+        run: |
+          mkdir -p vk-toolchain-cache
+          uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-native-linux-aarch64
           path: wheelhouse/*.whl
 
   wheel-macos:
@@ -147,17 +205,20 @@ jobs:
           path: wheelhouse/*.whl
 
   wheel-macos-x86:
-    # Intel macOS (GitHub macos-13 = x86_64): the CPU-ONLY x86 wheel. No Metal
-    # — Intel-Mac GPUs are out of scope (no fleet hardware to validate Metal
-    # compute, and the hosted runner is the same paravirtual-GPU VM whose Metal
-    # compute is broken); Metal / tuned CPU on Intel is served by the sdist.
+    # Intel macOS: the CPU-ONLY x86_64 wheel, CROSS-COMPILED on the M4 mini
+    # (no Intel hardware in the fleet or on Blacksmith; GitHub's macos-13 was
+    # the only hosted option and is billing-gated). cibuildwheel handles the
+    # cross: CIBW_ARCHS_MACOS=x86_64 on an arm64 host builds with
+    # -arch x86_64 and runs the test phase under Rosetta 2 via the python.org
+    # universal2 CPython already installed on the mini for wheel-macos.
+    # No Metal — Intel-Mac GPUs are out of scope (no hardware to validate
+    # Metal compute); Metal / tuned CPU on Intel is served by the sdist.
     # The smoke is CPU-steered (TRANSCRIBE_SMOKE_BACKEND=cpu): wheel_smoke.py
-    # asserts the artifact exposes only CPU (no metal/vulkan/cuda) and runs the
-    # full suite on CPU. The arm64/Metal lane is `wheel-macos`. cibuildwheel
-    # provides its own CPython here, so unlike the self-hosted mini there is no
-    # manual runtime setup. Overrides the pyproject macos defaults (arm64/metal)
-    # via CIBW_ARCHS_MACOS / CIBW_ENVIRONMENT_MACOS.
-    runs-on: macos-13
+    # sees platform.machine()=="x86_64" under Rosetta and asserts the artifact
+    # exposes only CPU (no metal/vulkan/cuda), then runs the full suite on
+    # CPU. The arm64/Metal lane is `wheel-macos`. Overrides the pyproject
+    # macos defaults (arm64/metal) via CIBW_ARCHS_MACOS / CIBW_ENVIRONMENT_MACOS.
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -199,7 +260,14 @@ jobs:
           path: wheelhouse/*.whl
 
   wheel-windows:
-    runs-on: windows-latest
+    # Blacksmith Windows Server 2025 (public beta) — same image family as
+    # GitHub's windows-2025, so vcvars/vcpkg/the Vulkan SDK installer behave
+    # identically. This lane is the overall long pole (MSVC over ggml + the
+    # fat-CPU tier matrix + Vulkan shaders) — expect a long wall-clock on
+    # 2vcpu; cost is the same as a bigger runner (per-vcpu-minute billing).
+    # If the beta misbehaves, the fallback is `windows-latest` (needs
+    # GitHub-hosted billing).
+    runs-on: blacksmith-2vcpu-windows-2025
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
@@ -267,7 +335,7 @@ jobs:
   sdist:
     # The universal fallback must actually work: build the sdist, audit what
     # went into it, then compile-and-transcribe from the tarball alone.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -334,7 +402,7 @@ jobs:
           path: dist/*.tar.gz
 
   api-wheel:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -362,7 +430,7 @@ jobs:
     # REAL T4 runtime smoke (scripts/ci/modal_cuda_build.py). This job is
     # just the 2-vCPU driver. Gated on the Modal token secrets — absent on
     # forks, steps no-op cleanly.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -407,7 +475,7 @@ jobs:
     #   tier B (apt install loader + lavapipe): the SAME installed wheel
     #     discovers a Vulkan device and transcribes on it.
     needs: [wheel-linux, api-wheel]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     container: python:3.12-slim
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -512,8 +580,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: ubuntu-latest
-            runner: ubuntu-latest
+          - label: linux
+            runner: blacksmith-2vcpu-ubuntu-2404
             torch-args: "--index-url https://download.pytorch.org/whl/cpu"
           # macOS arm64 runs on the bare-metal M4 mini, not a GitHub VM: the
           # transcription here exercises the REAL shipping Metal path alongside
@@ -523,8 +591,8 @@ jobs:
           - label: macos-arm64
             runner: [self-hosted, macOS, ARM64]
             torch-args: ""
-          - label: windows-latest
-            runner: windows-latest
+          - label: windows
+            runner: blacksmith-2vcpu-windows-2025
             torch-args: ""
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45  # bound the run if the self-hosted mini is offline

@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -68,8 +68,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: ubuntu-latest
-            runner: ubuntu-latest
+          - label: linux
+            runner: blacksmith-2vcpu-ubuntu-2404
           # macOS arm64 on the bare-metal M4 mini, not a GitHub VM (keep all
           # macOS arm64 CI on owned hardware; the white-box suite builds with
           # Metal on, and real hardware is the trustworthy place to run it).
@@ -101,7 +101,7 @@ jobs:
     # the C lifetime/ABI contracts the FFI bindings rely on — including the
     # params copy-out regression (stream_dispatch_unit), which reproduces a
     # ctypes-shaped caller freeing its params right after stream_begin.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - name: Install uv (fixtures are generated via uv)
@@ -130,7 +130,7 @@ jobs:
     #   2. mesa lavapipe installed        -> the SAME artifacts discover a
     #      software Vulkan device, and (with HF_TOKEN for the canary model)
     #      actually transcribe on it.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -231,7 +231,7 @@ jobs:
           uv run --project bindings/python python /tmp/check_vk_transcribe.py
 
   python-shared:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
