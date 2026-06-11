@@ -187,6 +187,9 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
       VULKAN_VERSION: "1.4.350.0"
+      # The hf CLI prints ✓ marks; Windows' default cp1252 console codec
+      # chokes on them (charmap codec error). Force UTF-8 for all Python.
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -276,9 +279,14 @@ jobs:
               names = tf.getnames()
               total = sum(m.size for m in tf.getmembers())
           print(f"{path}: {len(names)} files, {total/1e6:.1f} MB uncompressed")
+          # Weights by extension anywhere; heavy repo dirs at the ROOT only
+          # (docs/models/*.md is documentation and belongs in the sdist).
+          ROOT_BANNED = {"models", "dumps", "reports", "canary", "wheelhouse"}
           banned = [n for n in names if n.endswith((".gguf", ".safetensors", ".bin"))
-                    or "/models/" in n or "/dumps/" in n or "/reports/" in n]
+                    or (len(n.split("/")) > 1 and n.split("/")[1] in ROOT_BANNED)]
           assert not banned, f"sdist contains artifacts that must never ship: {banned[:10]}"
+          assert any(n.endswith("src/arch/canary/model.cpp") for n in names), \
+              "sdist excludes over-matched (root-anchoring regression)"
           assert total < 40e6, f"sdist unexpectedly large: {total/1e6:.1f} MB (28 MB expected)"
           for required in ("CMakeLists.txt", "include/transcribe.h",
                            "ggml/CMakeLists.txt", "cmake/python-wheel-install.cmake",

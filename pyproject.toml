@@ -79,23 +79,27 @@ install.components = ["wheel"]
 # Converted models, dumps, perf/WER reports, and local build/wheel trees are
 # multi-GB and never belong in a distribution; of the committed sample audio
 # only jfk.wav ships (the smoke/test default — the rest is porting material).
+# Patterns are gitwildmatch: single-segment patterns MUST be root-anchored
+# with a leading slash, or they match at any depth — unanchored "canary/"
+# silently dropped src/arch/canary/ (the Canary model family) from the sdist
+# and broke the from-source build. CI's audit step asserts the contents.
 sdist.exclude = [
-  "models/",
-  "dumps/",
-  "reports/",
-  "tmp/",
-  "build*/",
-  "dist*/",
-  "wheelhouse*/",
-  "canary/",
-  "samples/",
-  ".github/",
-  ".claude/",
-  "bindings/python/dist/",
+  "/models/",
+  "/dumps/",
+  "/reports/",
+  "/tmp/",
+  "/build*/",
+  "/dist*/",
+  "/wheelhouse*/",
+  "/canary/",
+  "/samples/",
+  "/.github/",
+  "/.claude/",
+  "/bindings/python/dist/",
   "**/__pycache__/",
   "**/.venv/",
 ]
-sdist.include = ["samples/jfk.wav"]
+sdist.include = ["/samples/jfk.wav"]
 
 # --- official wheel lanes ---------------------------------------------------
 # Selected via the TRANSCRIBE_WHEEL_LANE env var (set by [tool.cibuildwheel]
