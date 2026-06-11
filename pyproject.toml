@@ -162,7 +162,11 @@ repair-wheel-command = "auditwheel repair --exclude libvulkan.so.1 -w {dest_dir}
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
-environment = { TRANSCRIBE_WHEEL_LANE = "metal", MACOSX_DEPLOYMENT_TARGET = "11.0" }
+# CC/CXX pinned to Apple's shims: runner images (e.g. Blacksmith macos-15)
+# can have mainline LLVM clang first in PATH, and open-source clang errors on
+# Apple-SDK CF_ENUM extensions (-Welaborated-enum-base) that Apple clang
+# accepts. /usr/bin/clang resolves through xcrun to the active Xcode.
+environment = { TRANSCRIBE_WHEEL_LANE = "metal", MACOSX_DEPLOYMENT_TARGET = "11.0", CC = "/usr/bin/clang", CXX = "/usr/bin/clang++" }
 # default repair (delocate) — externals are system-only, verified by test.
 
 [tool.cibuildwheel.windows]
