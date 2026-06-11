@@ -80,7 +80,13 @@ jobs:
           path: wheelhouse/*.whl
 
   wheel-macos:
-    runs-on: macos-14
+    # Blacksmith M4 runner, not github-hosted: GitHub's macOS runners expose
+    # a paravirtualized Metal device with broken GPU compute (see the
+    # distribution plan, CI round 1). wheel_smoke.py probes real Metal
+    # compute on this lane; if this runner class ever proves untrustworthy
+    # too, set TRANSCRIBE_SMOKE_BACKEND: cpu here and the model tests steer
+    # to CPU instead.
+    runs-on: blacksmith-6vcpu-macos-15
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -120,7 +126,10 @@ jobs:
         # toolchain file reaches scikit-build-core via CMAKE_ARGS.
         run: |
           vcpkg install zlib:x64-windows-static-md
-          Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
+          # Forward slashes: CMAKE_ARGS values pass through scikit-build-core's
+          # CMakeInit.txt cache file, where backslashes are eaten as escapes.
+          $tc = "$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -replace '\\','/'
+          Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$tc -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
       - name: Build, repair, and test the wheel (cibuildwheel)
         run: uvx --from "$env:CIBW_PIN" cibuildwheel --output-dir wheelhouse
       - uses: actions/upload-artifact@v4
@@ -164,7 +173,7 @@ jobs:
       - name: Compile + transcribe from the sdist (no repo sources)
         run: |
           sudo apt-get update && sudo apt-get install -y zlib1g-dev
-          uv venv sdist-venv --python 3.12
+          uv venv --seed sdist-venv --python 3.12
           # The tarball is the only native source here: pip drives the full
           # scikit-build-core compile (cmake/ninja arrive as build deps).
           ./sdist-venv/bin/pip install dist/*.tar.gz

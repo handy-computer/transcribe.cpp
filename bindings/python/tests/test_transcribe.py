@@ -11,6 +11,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 import transcribe_cpp as t
 
 
@@ -64,3 +66,31 @@ def test_logging_routes_through_public_sink(model_path, audio_pcm):
         assert received, "log callback received nothing from the public sink"
     finally:
         t.set_log_callback(None)
+
+
+# --- TRANSCRIBE_BACKEND default override ------------------------------------
+
+
+def test_backend_env_invalid_value_rejected(monkeypatch):
+    # No model needed: the env value is validated before any file access, and
+    # the error must name the env var so a typo is diagnosable.
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "warp9")
+    with pytest.raises(t.InvalidArgument, match="TRANSCRIBE_BACKEND"):
+        t.Model("nonexistent.gguf")
+
+
+def test_backend_env_overrides_auto(model_path, audio_pcm, monkeypatch):
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "cpu")
+    with t.Model(model_path) as model:
+        assert "cpu" in model.backend.lower(), model.backend
+        with model.session() as session:
+            text = session.run(audio_pcm).text
+    assert "country" in text.lower(), text
+
+
+def test_backend_explicit_arg_beats_env(model_path, monkeypatch):
+    # A deliberately unsatisfiable env value: if the explicit argument didn't
+    # win, the load would fail (or land on a non-CPU device).
+    monkeypatch.setenv("TRANSCRIBE_BACKEND", "warp9")
+    with t.Model(model_path, backend="cpu") as model:
+        assert "cpu" in model.backend.lower(), model.backend

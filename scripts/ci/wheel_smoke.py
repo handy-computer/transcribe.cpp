@@ -70,11 +70,42 @@ def main() -> int:
             "vulkan unexpectedly available on a GPU-less CI runner"
         )
 
-    # 4. Full suite against the installed pair (model tests run when the
+    # 4. Metal compute probe (darwin). Runner GPUs are not all trustworthy:
+    #    GitHub-hosted macOS runners expose an "Apple Paravirtual device"
+    #    whose Metal compute is broken (whisper decodes to garbage with
+    #    runaway repetition; llama.cpp's CI disables Metal there too). On a
+    #    lane whose runner has a known-broken GPU, set
+    #    TRANSCRIBE_SMOKE_BACKEND=cpu: the probe is skipped and the model
+    #    tests run CPU-steered. Anywhere else this transcribes on the GPU
+    #    and fails loud if the device lies.
+    smoke_backend = os.environ.get("TRANSCRIBE_SMOKE_BACKEND")
+    model = os.environ.get("TRANSCRIBE_SMOKE_MODEL")
+    if sys.platform == "darwin" and model and not smoke_backend:
+        import array
+        import wave
+
+        with wave.open(str(project / "samples" / "jfk.wav"), "rb") as w:
+            pcm16 = array.array("h")
+            pcm16.frombytes(w.readframes(w.getnframes()))
+        pcm = array.array("f", (s / 32768.0 for s in pcm16))
+        with t.Model(model, backend="metal") as m, m.session() as s:
+            text = s.run(pcm).text
+        print("metal probe:  ", text.strip())
+        assert "country" in text.lower(), (
+            f"Metal compute produced garbage on this runner: {text[:120]!r}. "
+            "If this runner's GPU is known-broken (e.g. GitHub's Apple "
+            "Paravirtual device), set TRANSCRIBE_SMOKE_BACKEND=cpu for the lane."
+        )
+
+    # 5. Full suite against the installed pair (model tests run when the
     #    canary env above is set; otherwise they skip and say so via -rs).
+    env = os.environ.copy()
+    if smoke_backend:
+        env["TRANSCRIBE_BACKEND"] = smoke_backend
     return subprocess.call(
         [sys.executable, "-m", "pytest",
-         str(project / "bindings" / "python" / "tests"), "-q", "-rs"]
+         str(project / "bindings" / "python" / "tests"), "-q", "-rs"],
+        env=env,
     )
 
 

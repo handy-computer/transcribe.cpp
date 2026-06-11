@@ -688,7 +688,14 @@ class VoxtralRealtimeStreamOptions(FamilyExtension):
 
 
 class Model:
-    """A loaded model. Thread-safe to share across sessions; must outlive them."""
+    """A loaded model. Thread-safe to share across sessions; must outlive them.
+
+    ``backend="auto"`` (the default) picks the best available device. The
+    ``TRANSCRIBE_BACKEND`` environment variable overrides that *default* —
+    the escape hatch for machines whose best-ranked device misbehaves (e.g.
+    CI's paravirtualized Metal, a broken GPU driver) without touching code.
+    An explicit ``backend=`` argument always wins over the environment.
+    """
 
     def __init__(self, path: "Union[str, os.PathLike]", *,
                  backend: Backend = "auto", gpu_device: int = 0):
@@ -697,9 +704,13 @@ class Model:
         # derived session is gone (use-after-free otherwise). Created before
         # the load call so the failure path of __del__ finds it.
         self._sessions = weakref.WeakSet()
+        backend_source = "backend"
+        if backend == "auto" and os.environ.get("TRANSCRIBE_BACKEND"):
+            backend = os.environ["TRANSCRIBE_BACKEND"]  # type: ignore[assignment]
+            backend_source = "backend (from TRANSCRIBE_BACKEND)"
         params = _ModelLoadParams()
         _lib.transcribe_model_load_params_init(_byref(params))
-        params.backend = _enum(_BACKENDS, backend, "backend")
+        params.backend = _enum(_BACKENDS, backend, backend_source)
         params.gpu_device = gpu_device
 
         handle = ctypes.c_void_p()

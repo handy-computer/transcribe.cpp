@@ -21,6 +21,12 @@ with transcribe_cpp.Model("model.gguf") as model:
 does not decode containers or resample — convert first, e.g.
 `ffmpeg -i in.wav -ar 16000 -ac 1 out.wav`.
 
+`Model(backend=...)` picks the compute device (`"auto"` → best available).
+Setting the `TRANSCRIBE_BACKEND` environment variable overrides the `"auto"`
+default without code changes — the escape hatch for machines whose best-ranked
+device misbehaves (broken GPU driver, virtualized Metal). An explicit
+`backend=` argument always wins.
+
 ## Running from a working tree
 
 The binding loads the native library at import and verifies its ABI layout and
