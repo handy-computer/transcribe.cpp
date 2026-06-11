@@ -329,7 +329,10 @@ jobs:
         if: env.MODAL_TOKEN_ID != ''
         run: |
           mkdir -p wheelhouse-cu12
-          modal volume get transcribe-cu12-wheelhouse '**' wheelhouse-cu12/ --force
+          # Root-path download is recursive (glob patterns are deprecated in
+          # the modal CLI); assets/ comes along but the artifact glob below
+          # only picks the wheels.
+          modal volume get transcribe-cu12-wheelhouse / wheelhouse-cu12/ --force
           ls -la wheelhouse-cu12/
       # Named OUTSIDE the dist-* pattern on purpose: co-import merges dist-*
       # and must not pick up the cu12 provider (it would outrank the default
