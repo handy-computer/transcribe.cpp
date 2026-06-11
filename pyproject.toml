@@ -146,6 +146,34 @@ cmake.args = [
 if.env.TRANSCRIBE_WHEEL_LANE = "metal"
 cmake.args = ["-DTRANSCRIBE_METAL=ON", "-DGGML_NATIVE=OFF"]
 
+# x86_64 macOS wheel: CPU only, no Metal. Intel-Mac GPUs are out of scope
+# (no fleet hardware to validate Metal compute, and ggml Metal on Intel/AMD
+# GPUs is far less proven than on Apple Silicon — see
+# docs/python-bindings-distribution-plan.md); Metal or tuned CPU on Intel is
+# served by the from-source sdist. Single artifact. TRANSCRIBE_METAL already
+# defaults OFF off Apple Silicon, but it is pinned OFF here for intent. Every
+# x86 SIMD tier is off (GGML_NATIVE=OFF does NOT disable them) so the one
+# artifact runs on any Intel Mac without SIGILL across the supported range;
+# fat-CPU variants are a possible perf follow-up (would need GGML_BACKEND_DL
+# on macOS, which this single-artifact lane intentionally avoids).
+[[tool.scikit-build.overrides]]
+if.env.TRANSCRIBE_WHEEL_LANE = "cpu"
+cmake.args = [
+  "-DTRANSCRIBE_METAL=OFF",
+  "-DGGML_NATIVE=OFF",
+  "-DGGML_SSE42=OFF",
+  "-DGGML_AVX=OFF",
+  "-DGGML_AVX_VNNI=OFF",
+  "-DGGML_AVX2=OFF",
+  "-DGGML_BMI2=OFF",
+  "-DGGML_FMA=OFF",
+  "-DGGML_F16C=OFF",
+  "-DGGML_AVX512=OFF",
+  "-DGGML_AVX512_VBMI=OFF",
+  "-DGGML_AVX512_VNNI=OFF",
+  "-DGGML_AVX512_BF16=OFF",
+]
+
 # --- cibuildwheel ------------------------------------------------------------
 # One wheel per platform: the package is py3-none-<plat> (ctypes, no compiled
 # Python), so build with a single CPython and skip the rest. Tests always run
@@ -183,6 +211,10 @@ before-all = "bash {project}/scripts/ci/manylinux-vulkan-toolchain.sh"
 repair-wheel-command = "auditwheel repair --exclude libvulkan.so.1 -w {dest_dir} {wheel}"
 
 [tool.cibuildwheel.macos]
+# Defaults here are the arm64/Metal lane. The x86_64 CPU-only lane is built by
+# a separate CI job (wheel-macos-x86 on a macos-13 Intel runner) that overrides
+# CIBW_ARCHS_MACOS=x86_64 and CIBW_ENVIRONMENT_MACOS (TRANSCRIBE_WHEEL_LANE=cpu
+# + TRANSCRIBE_SMOKE_BACKEND=cpu) — see .github/workflows/python-wheels.yml.
 archs = ["arm64"]
 # CC/CXX pinned to Apple's shims: runner images (e.g. Blacksmith macos-15)
 # can have mainline LLVM clang first in PATH, and open-source clang errors on

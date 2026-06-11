@@ -146,6 +146,58 @@ jobs:
           name: dist-native-macos-arm64
           path: wheelhouse/*.whl
 
+  wheel-macos-x86:
+    # Intel macOS (GitHub macos-13 = x86_64): the CPU-ONLY x86 wheel. No Metal
+    # — Intel-Mac GPUs are out of scope (no fleet hardware to validate Metal
+    # compute, and the hosted runner is the same paravirtual-GPU VM whose Metal
+    # compute is broken); Metal / tuned CPU on Intel is served by the sdist.
+    # The smoke is CPU-steered (TRANSCRIBE_SMOKE_BACKEND=cpu): wheel_smoke.py
+    # asserts the artifact exposes only CPU (no metal/vulkan/cuda) and runs the
+    # full suite on CPU. The arm64/Metal lane is `wheel-macos`. cibuildwheel
+    # provides its own CPython here, so unlike the self-hosted mini there is no
+    # manual runtime setup. Overrides the pyproject macos defaults (arm64/metal)
+    # via CIBW_ARCHS_MACOS / CIBW_ENVIRONMENT_MACOS.
+    runs-on: macos-13
+    timeout-minutes: 45
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      CIBW_ARCHS_MACOS: x86_64
+      CIBW_ENVIRONMENT_MACOS: >-
+        TRANSCRIBE_WHEEL_LANE=cpu
+        TRANSCRIBE_SMOKE_BACKEND=cpu
+        MACOSX_DEPLOYMENT_TARGET=11.0
+        CC=/usr/bin/clang
+        CXX=/usr/bin/clang++
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary models (cache miss only)
+        if: env.HF_TOKEN != ''
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+      - name: Build, repair, and test the CPU-only wheel (cibuildwheel)
+        run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-native-macos-x86_64
+          path: wheelhouse/*.whl
+
   wheel-windows:
     runs-on: windows-latest
     env:
@@ -454,18 +506,28 @@ jobs:
     # proven by real transcriptions in both import orders. Also a de-facto
     # clean-install test: pip resolves transcribe-cpp + its native pin purely
     # from the built artifacts.
+    name: co-import (${{ matrix.label }})
     needs: [wheel-linux, wheel-macos, wheel-windows, api-wheel]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - label: ubuntu-latest
+            runner: ubuntu-latest
             torch-args: "--index-url https://download.pytorch.org/whl/cpu"
-          - os: macos-14
+          # macOS arm64 runs on the bare-metal M4 mini, not a GitHub VM: the
+          # transcription here exercises the REAL shipping Metal path alongside
+          # numpy/torch, and avoids the broken "Apple Paravirtual device" Metal
+          # that GitHub-hosted macos runners expose (it decodes garbage — the
+          # exact reason wheel-macos is on the mini too).
+          - label: macos-arm64
+            runner: [self-hosted, macOS, ARM64]
             torch-args: ""
-          - os: windows-latest
+          - label: windows-latest
+            runner: windows-latest
             torch-args: ""
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45  # bound the run if the self-hosted mini is offline
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:

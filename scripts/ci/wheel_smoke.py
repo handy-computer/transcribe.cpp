@@ -74,7 +74,19 @@ def main() -> int:
     assert "transcribe_cpp_native" in t.library_path(), t.library_path()
     assert t.backend_available("cpu")
     if sys.platform == "darwin":
-        assert t.backend_available("metal"), "Metal must be available on arm64 CI"
+        import platform as _platform
+
+        if _platform.machine() == "arm64":
+            # Apple Silicon ships Metal embedded in the wheel.
+            assert t.backend_available("metal"), "Metal must be available on arm64 CI"
+        else:
+            # Intel macOS ships a CPU-only wheel (no Metal — Intel-Mac GPUs are
+            # out of scope; Metal / tuned CPU is reachable via the sdist). The
+            # bundled artifact must therefore expose only CPU.
+            for accel in ("metal", "vulkan", "cuda"):
+                assert not t.backend_available(accel), (
+                    f"{accel} unexpectedly available in the CPU-only x86 macOS wheel"
+                )
     elif os.environ.get("CI"):
         # Linux containers / Windows runners have no GPU (no Vulkan driver,
         # no NVIDIA driver): the bundled accelerator modules must degrade

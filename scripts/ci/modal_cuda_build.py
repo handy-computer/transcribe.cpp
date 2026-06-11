@@ -32,9 +32,28 @@ import modal
 app = modal.App("transcribe-cpp-cu12")
 
 VOLUME = modal.Volume.from_name("transcribe-cu12-wheelhouse", create_if_missing=True)
-#: Compiler cache across runs: most pushes touch neither ggml nor the CUDA
-#: backend, so warm rebuilds skip nearly all nvcc work.
+#: Persistent CMake/ninja build tree + a persistent source mirror, both on
+#: this volume. The point is to rebuild a TU IFF its own inputs changed —
+#: above all ggml-cuda, which depends only on ggml/ (245 .cu/.cuh + ~21
+#: headers) and nvcc flags, never on our src/arch, yet costs the bulk of the
+#: ~32-min build. ninja already tracks that dependency graph precisely; the
+#: only thing defeating it on Modal is that add_local_dir resets every source
+#: mtime to upload time, so ninja sees everything as new and rebuilds the lot
+#: (and sccache can't save the ~130 non-cacheable nvcc TUs). The fix: rsync
+#: /src -> SRC_MIRROR with --checksum and NO -t, so changed files land with a
+#: fresh mtime and unchanged files keep their old one. ninja then recompiles
+#: exactly what changed — ggml-cuda only when ggml actually changed. The
+#: build-dir is keyed on the toolchain (below), not the source, so it persists
+#: across source edits. See docs/python-bindings-distribution-plan.md.
+BUILD_VOLUME = modal.Volume.from_name("transcribe-cu12-build", create_if_missing=True)
+#: sccache stays as the second-line backstop for the TUs that DO recompile.
 CCACHE_VOLUME = modal.Volume.from_name("transcribe-cu12-sccache", create_if_missing=True)
+
+#: Persistent source mirror on BUILD_VOLUME (rsync target) and the build tree.
+SRC_MIRROR = "/build-cache/src"
+#: Bump to force a clean rebuild (e.g. after a host-compiler/base-image change
+#: that ninja cannot see). nvcc's version is folded into the key automatically.
+BUILD_CACHE_EPOCH = 1
 
 #: CUDA toolkit pinned per-minor; the nvidia-*-cu12 runtime-wheel floors in
 #: bindings/python-native-cu12/pyproject.toml must cover this minor.
@@ -58,7 +77,7 @@ build_image = (
         "dnf install -y dnf-plugins-core",
         "dnf config-manager --add-repo "
         "https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo",
-        f"dnf install -y {CUDA_TOOLKIT}",
+        f"dnf install -y {CUDA_TOOLKIT} rsync",
         "dnf clean all",
         "/opt/python/cp312-cp312/bin/pip install --no-cache-dir build",
         f"curl -Ls {SCCACHE_URL} | tar xz --strip-components=1 -C /usr/local/bin"
@@ -92,29 +111,53 @@ def run(cmd, **kwargs) -> None:
     cpu=16.0,
     memory=32768,
     timeout=3600,
-    volumes={"/wheels": VOLUME, "/sccache": CCACHE_VOLUME},
+    volumes={"/wheels": VOLUME, "/sccache": CCACHE_VOLUME,
+             "/build-cache": BUILD_VOLUME},
     secrets=[hf_secret],
 )
 def build_and_check() -> str:
     import glob
+    import hashlib
     import pathlib
 
     env = os.environ
     env["PATH"] = "/usr/local/cuda/bin:" + env["PATH"]
     env["CUDACXX"] = "/usr/local/cuda/bin/nvcc"
-    # Compiler cache (volume-backed): warm runs skip unchanged TUs entirely.
+    # Compiler cache (volume-backed): the backstop when ninja DOES recompile.
     env["CMAKE_C_COMPILER_LAUNCHER"] = "sccache"
     env["CMAKE_CXX_COMPILER_LAUNCHER"] = "sccache"
     env["CMAKE_CUDA_COMPILER_LAUNCHER"] = "sccache"
     env["SCCACHE_DIR"] = "/sccache"
     env["SCCACHE_CACHE_SIZE"] = "5G"
 
+    # Mirror /src (reset mtimes) into a persistent tree with content-correct
+    # mtimes so ninja can do a real incremental rebuild. --checksum compares by
+    # content; the deliberate absence of -t/-a means rsync stamps only the
+    # files it actually transfers (changed/new -> fresh mtime, ninja rebuilds)
+    # and leaves unchanged files' old mtime intact (ninja skips). --delete
+    # tracks removals. cmake then sees a stable source dir; ninja recompiles
+    # exactly the changed TUs — ggml-cuda only when ggml itself changed.
+    run(["rsync", "-rl", "--checksum", "--delete", "/src/", f"{SRC_MIRROR}/"])
+
+    # Build tree keyed on the toolchain (nvcc version + a manual epoch), NOT
+    # the source: a source edit reuses the tree (incremental); a CUDA bump or
+    # an epoch bump rotates it (clean). The host compiler is pinned by the
+    # base image — bump BUILD_CACHE_EPOCH if it ever moves under us.
+    nvcc_v = subprocess.check_output(["nvcc", "--version"], text=True)
+    tool_key = hashlib.sha256(nvcc_v.encode()).hexdigest()[:10]
+    skbuild_dir = f"/build-cache/build-{tool_key}-e{BUILD_CACHE_EPOCH}"
+    env["SKBUILD_BUILD_DIR"] = skbuild_dir
+    print(f"[build] SKBUILD_BUILD_DIR={skbuild_dir} (source mirror {SRC_MIRROR})",
+          flush=True)
+
     pybin = "/opt/python/cp312-cp312/bin"
 
-    # 1. Build the raw wheel (scikit-build-core drives CMake; the full lane
-    #    posture lives in the package's pyproject cmake.args).
+    # 1. Build the raw wheel from the persistent mirror (scikit-build-core
+    #    drives CMake; the full lane posture lives in the package's pyproject
+    #    cmake.args). Building from SRC_MIRROR (not /src) is what gives ninja
+    #    the content-correct mtimes set by the rsync above.
     run([f"{pybin}/python", "-m", "build", "--wheel",
-         "/src/bindings/python-native-cu12", "--outdir", "/tmp/raw"])
+         f"{SRC_MIRROR}/bindings/python-native-cu12", "--outdir", "/tmp/raw"])
     [raw] = glob.glob("/tmp/raw/*.whl")
 
     # 2. Repair. The CUDA runtime is never vendored: libcuda.so.1 is the
@@ -140,6 +183,7 @@ def build_and_check() -> str:
     run(["sccache", "--show-stats"])
     VOLUME.commit()
     CCACHE_VOLUME.commit()
+    BUILD_VOLUME.commit()  # persist the ninja tree for the next warm run
     return os.path.basename(repaired)
 
 

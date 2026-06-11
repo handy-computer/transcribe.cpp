@@ -63,12 +63,20 @@ jobs:
         run: uv run --no-project bindings/python/_generate/check_version_sync.py
 
   cpp-tests:
-    name: cpp-tests (${{ matrix.os }})
+    name: cpp-tests (${{ matrix.label }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
-    runs-on: ${{ matrix.os }}
+        include:
+          - label: ubuntu-latest
+            runner: ubuntu-latest
+          # macOS arm64 on the bare-metal M4 mini, not a GitHub VM (keep all
+          # macOS arm64 CI on owned hardware; the white-box suite builds with
+          # Metal on, and real hardware is the trustworthy place to run it).
+          - label: macos-arm64
+            runner: [self-hosted, macOS, ARM64]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30  # bound the run if the self-hosted mini is offline
     steps:
       - uses: actions/checkout@v4
       - name: Install uv (fixtures are generated via uv)
