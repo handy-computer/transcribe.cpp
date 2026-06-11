@@ -476,7 +476,14 @@ jobs:
     #     discovers a Vulkan device and transcribes on it.
     needs: [wheel-linux, api-wheel]
     runs-on: blacksmith-2vcpu-ubuntu-2404
-    container: python:3.12-slim
+    container:
+      image: python:3.12-slim
+      # Blacksmith finding (2026-06-11): tier B's lavapipe device enumerated
+      # fine in this container on GitHub-hosted docker, and works DIRECTLY on
+      # the Blacksmith VM (provider-dl-vulkan tier 2 is green there), but came
+      # up empty inside Blacksmith's docker. llvmpipe JITs code and uses shm —
+      # the two host-docker knobs that plausibly differ; set both explicitly.
+      options: --security-opt seccomp=unconfined --shm-size=2g
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -545,7 +552,11 @@ jobs:
       - name: "Tier B: install a Vulkan loader + lavapipe — same wheel uses it"
         if: env.HF_TOKEN != ''
         run: |
-          apt-get update -q && apt-get install -y -q libvulkan1 mesa-vulkan-drivers
+          apt-get update -q && apt-get install -y -q libvulkan1 mesa-vulkan-drivers vulkan-tools
+          # Diagnostic first: prove the LOADER sees lavapipe before asking
+          # ggml to. If this shows no devices, the runner/docker host is the
+          # problem (seccomp/shm), not the wheel.
+          vulkaninfo --summary || echo "::warning::vulkaninfo failed — loader-level problem on this runner"
           # lavapipe is a CPU-type Vulkan device; ggml's default filter only
           # admits real GPUs (CI-only override, real GPUs need none).
           export GGML_VK_VISIBLE_DEVICES=0
@@ -600,9 +611,22 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      # setup-python's macOS downloads are built for GitHub's hosted images
+      # (non-relocatable, hardcoded /Users/runner prefix) and cannot install
+      # on a self-hosted runner under a different user (observed:
+      # "mkdir: /Users/runner: Permission denied"). On the mini, use the
+      # python.org universal2 CPython already installed for wheel-macos,
+      # isolated in a fresh venv so pip installs never touch the system copy.
       - uses: actions/setup-python@v5
+        if: matrix.label != 'macos-arm64'
         with:
           python-version: "3.12"
+      - name: Python venv from the mini's python.org CPython
+        if: matrix.label == 'macos-arm64'
+        run: |
+          /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 \
+            -m venv "$RUNNER_TEMP/ci-venv"
+          echo "$RUNNER_TEMP/ci-venv/bin" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v4
         with:
           pattern: dist-*
