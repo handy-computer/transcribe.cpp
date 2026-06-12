@@ -78,3 +78,6 @@ WER_TESTING.md
 
 # IDE / language-server artifacts
 .cache/
+
+# Local working notes (plans, drafts) — never committed
+/notes/

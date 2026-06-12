@@ -49,10 +49,17 @@ jobs:
       # needs the MSVC environment (same reasoning as wheel-windows).
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Install CUDA toolkit 12.9 (network installer, lean subset)
-        uses: Jimver/cuda-toolkit@v0.2.27
+        # Caching disabled on purpose: the first run (v0.2.27, caches on)
+        # died in 2.4s with a swallowed error surfaced as a cache-path
+        # failure — Blacksmith intercepts the Actions cache service and the
+        # action's @actions/cache path didn't survive it. The lane is
+        # tag/dispatch-rare; a fresh network install per run is fine.
+        uses: Jimver/cuda-toolkit@v0.2.35
         with:
           cuda: "12.9.0"
           method: network
+          use-github-cache: false
+          use-local-cache: false
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
       - name: Install uv
         run: |
