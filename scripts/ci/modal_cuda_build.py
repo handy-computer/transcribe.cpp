@@ -53,7 +53,10 @@ CCACHE_VOLUME = modal.Volume.from_name("transcribe-cu12-sccache", create_if_miss
 SRC_MIRROR = "/build-cache/src"
 #: Bump to force a clean rebuild (e.g. after a host-compiler/base-image change
 #: that ninja cannot see). nvcc's version is folded into the key automatically.
-BUILD_CACHE_EPOCH = 1
+#: e2: rotate away a tree whose vulkan-shaders-gen ExternalProject had baked a
+#: dead isolated-build-env ninja path into its inner CMake cache (the
+#: pre---no-isolation era; see the build step's comment).
+BUILD_CACHE_EPOCH = 2
 
 #: CUDA toolkit pinned per-minor; the nvidia-*-cu12 runtime-wheel floors in
 #: bindings/python-native-cu12/pyproject.toml must cover this minor.
@@ -83,7 +86,15 @@ build_image = (
         "https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo",
         f"dnf install -y {CUDA_TOOLKIT} rsync",
         "dnf clean all",
-        "/opt/python/cp312-cp312/bin/pip install --no-cache-dir build",
+        # build + the cu12 package's build backend + ninja live in the IMAGE
+        # (stable paths) because the wheel builds with --no-isolation: pip's
+        # isolated envs sit at /tmp/build-env-<random> and their ninja path
+        # gets baked into the vulkan-shaders-gen ExternalProject's inner
+        # CMake cache inside the PERSISTENT build tree — the next run then
+        # invokes a ninja that no longer exists. cmake comes from the
+        # manylinux image (stable pipx install) already.
+        "/opt/python/cp312-cp312/bin/pip install --no-cache-dir "
+        "build scikit-build-core ninja",
         f"curl -Ls {SCCACHE_URL} | tar xz --strip-components=1 -C /usr/local/bin"
         " --wildcards '*/sccache' && chmod +x /usr/local/bin/sccache",
     )
@@ -166,7 +177,12 @@ def build_and_check() -> str:
     #    drives CMake; the full lane posture lives in the package's pyproject
     #    cmake.args). Building from SRC_MIRROR (not /src) is what gives ninja
     #    the content-correct mtimes set by the rsync above.
-    run([f"{pybin}/python", "-m", "build", "--wheel",
+    #    --no-isolation is LOAD-BEARING for the persistent tree: pip's
+    #    isolated envs live at /tmp/build-env-<random>, and the
+    #    vulkan-shaders-gen ExternalProject bakes its build tool's absolute
+    #    path into an inner CMake cache that outlives the env. The image
+    #    provides build/scikit-build-core/ninja at stable paths instead.
+    run([f"{pybin}/python", "-m", "build", "--wheel", "--no-isolation",
          f"{SRC_MIRROR}/bindings/python-native-cu12", "--outdir", "/tmp/raw"])
     [raw] = glob.glob("/tmp/raw/*.whl")
 
