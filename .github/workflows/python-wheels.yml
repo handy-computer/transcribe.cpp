@@ -524,7 +524,7 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8  # for fetch-canary's uvx
+      - uses: astral-sh/setup-uv@v8.2.0  # for fetch-canary's uvx
       # setup-python's macOS downloads are built for GitHub's hosted images
       # (non-relocatable, hardcoded /Users/runner prefix) and cannot install
       # on a self-hosted runner under a different user (observed:

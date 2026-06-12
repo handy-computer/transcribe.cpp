@@ -90,7 +90,7 @@ jobs:
     timeout-minutes: 30  # bound the run if the self-hosted mini is offline
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8  # fixtures are generated via uv
+      - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
@@ -126,7 +126,7 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8  # fixtures are generated via uv
+      - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
       - name: ccache (compile cache across runs)
