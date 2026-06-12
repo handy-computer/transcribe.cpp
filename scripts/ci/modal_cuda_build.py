@@ -95,8 +95,14 @@ build_image = (
         # manylinux image (stable pipx install) already.
         "/opt/python/cp312-cp312/bin/pip install --no-cache-dir "
         "build scikit-build-core ninja",
-        f"curl -Ls {SCCACHE_URL} | tar xz --strip-components=1 -C /usr/local/bin"
-        " --wildcards '*/sccache' && chmod +x /usr/local/bin/sccache",
+        # Download to a file with retries, THEN extract: piping curl into tar
+        # turns any transient truncation into an unretriable gzip error (a
+        # GitHub release download cut mid-stream failed this layer once);
+        # -f keeps HTTP error pages from masquerading as tarballs.
+        f"curl -fsSL --retry 5 --retry-delay 2 -o /tmp/sccache.tgz {SCCACHE_URL}"
+        " && tar xzf /tmp/sccache.tgz --strip-components=1 -C /usr/local/bin"
+        " --wildcards '*/sccache'"
+        " && chmod +x /usr/local/bin/sccache && rm /tmp/sccache.tgz",
     )
     .add_local_file(
         "scripts/ci/manylinux-vulkan-toolchain.sh",
