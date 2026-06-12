@@ -46,7 +46,10 @@ concurrency:
 
 jobs:
   lint:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # Idle-friendly job on the Hetzner box (free); falls back to nothing —
+    # an offline box fails bounded via the timeout.
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -54,7 +57,11 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install clang (libclang resource-dir headers)
-        run: sudo apt-get update && sudo apt-get install -y clang
+        # Idempotent for the persistent self-hosted box: install once, no-op
+        # after (and no sudo needed when clang is already present).
+        run: |
+          command -v clang >/dev/null || \
+            { sudo apt-get update && sudo apt-get install -y clang; }
       - name: Generated-FFI drift gate
         run: |
           uv run --no-project --with "$LIBCLANG_PIN" \

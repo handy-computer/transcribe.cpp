@@ -73,6 +73,44 @@ def main() -> int:
     assert t.native_provider() == expected_provider, t.native_provider()
     assert "transcribe_cpp_native" in t.library_path(), t.library_path()
     assert t.backend_available("cpu")
+
+    # 3b. DECLARED artifact capabilities (the descriptor's build-time stamp),
+    #     not runtime availability. Every availability probe below answers
+    #     "False" identically for "no device on this runner" and "backend not
+    #     compiled into the wheel" — so a wheel built with the wrong lane
+    #     posture sails through green. Observed 2026-06-11: an unanchored
+    #     scikit-build override regex ("cpu" matching "cpu-vulkan") shipped
+    #     Vulkan-less linux/windows/arm64 wheels through an all-green matrix;
+    #     only clean-install tier B (a real lavapipe transcription) caught it.
+    #     TRANSCRIBE_WHEEL_LANE is present in cibuildwheel's build AND test
+    #     phases; sdist/dev installs have no lane and skip the equality check.
+    from importlib.metadata import entry_points
+
+    declared = None
+    for ep in entry_points(group="transcribe_cpp.native"):
+        desc = ep.load()
+        get = desc.get if isinstance(desc, dict) else lambda k: getattr(desc, k, None)
+        if get("name") == expected_provider:
+            declared = set(get("backends") or ())
+            break
+    assert declared is not None, f"{expected_provider} not discoverable via entry points"
+    print("declared:    ", sorted(declared))
+    lane = os.environ.get("TRANSCRIBE_WHEEL_LANE")
+    expected_caps = None
+    if expected_provider == "transcribe-cpp-native-cu12":
+        expected_caps = {"cuda", "cpu"}
+    elif lane:
+        expected_caps = {
+            "cpu-vulkan": {"vulkan", "cpu"},
+            "metal": {"metal", "cpu"},
+            "cpu": {"cpu"},
+        }.get(lane)
+    if expected_caps is not None:
+        assert declared == expected_caps, (
+            f"wheel declares backends {sorted(declared)} but lane "
+            f"{lane or expected_provider!r} requires {sorted(expected_caps)} — "
+            "the wheel was built with the wrong lane posture"
+        )
     if sys.platform == "darwin":
         import platform as _platform
 

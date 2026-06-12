@@ -121,7 +121,7 @@ sdist.include = ["/samples/jfk.wav"]
 # CMakePresets.json wheel-linux-cpu. cmake/python-wheel-install.cmake
 # collapses every cpu-<tier> kind back to "cpu" in the provider descriptor.
 [[tool.scikit-build.overrides]]
-if.env.TRANSCRIBE_WHEEL_LANE = "cpu-vulkan"
+if.env.TRANSCRIBE_WHEEL_LANE = "^cpu-vulkan$"
 cmake.args = [
   "-DTRANSCRIBE_GGML_BACKEND_DL=ON",
   "-DTRANSCRIBE_VULKAN=ON",
@@ -143,7 +143,7 @@ cmake.args = [
 # Default macOS arm64 wheel: Metal (shaders embedded via the SKBUILD block;
 # single artifact, no dynamic backend modules — one platform, one GPU API).
 [[tool.scikit-build.overrides]]
-if.env.TRANSCRIBE_WHEEL_LANE = "metal"
+if.env.TRANSCRIBE_WHEEL_LANE = "^metal$"
 cmake.args = ["-DTRANSCRIBE_METAL=ON", "-DGGML_NATIVE=OFF"]
 
 # x86_64 macOS wheel: CPU only, no Metal. Intel-Mac GPUs are out of scope
@@ -157,7 +157,7 @@ cmake.args = ["-DTRANSCRIBE_METAL=ON", "-DGGML_NATIVE=OFF"]
 # fat-CPU variants are a possible perf follow-up (would need GGML_BACKEND_DL
 # on macOS, which this single-artifact lane intentionally avoids).
 [[tool.scikit-build.overrides]]
-if.env.TRANSCRIBE_WHEEL_LANE = "cpu"
+if.env.TRANSCRIBE_WHEEL_LANE = "^cpu$"
 cmake.args = [
   "-DTRANSCRIBE_METAL=OFF",
   "-DGGML_NATIVE=OFF",

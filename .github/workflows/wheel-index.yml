@@ -31,7 +31,8 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}

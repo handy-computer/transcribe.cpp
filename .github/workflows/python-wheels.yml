@@ -174,6 +174,8 @@ jobs:
     timeout-minutes: 45  # a sleeping/offline mini must not hang the run
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # Host-side copy of the lane for wheel_smoke's declared-backends assert.
+      TRANSCRIBE_WHEEL_LANE: metal
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -222,6 +224,8 @@ jobs:
     timeout-minutes: 45
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # Host-side copy of the lane for wheel_smoke's declared-backends assert.
+      TRANSCRIBE_WHEEL_LANE: cpu
       CIBW_ARCHS_MACOS: x86_64
       CIBW_ENVIRONMENT_MACOS: >-
         TRANSCRIBE_WHEEL_LANE=cpu
@@ -270,6 +274,9 @@ jobs:
     runs-on: blacksmith-2vcpu-windows-2025
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      # Host-side copy of the lane for wheel_smoke's declared-backends assert
+      # (the test phase runs on the host here, not in a container).
+      TRANSCRIBE_WHEEL_LANE: cpu-vulkan
       # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
       VULKAN_VERSION: "1.4.350.0"
       # The hf CLI prints ✓ marks; Windows' default cp1252 console codec
@@ -402,7 +409,8 @@ jobs:
           path: dist/*.tar.gz
 
   api-wheel:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -428,23 +436,28 @@ jobs:
     # manylinux_2_28 + CUDA-toolkit environment is a cached Modal image
     # layer, the 16-core build bills by the second, and the flow ends with a
     # REAL T4 runtime smoke (scripts/ci/modal_cuda_build.py). This job is
-    # just the 2-vCPU driver. Gated on the Modal token secrets — absent on
-    # forks, steps no-op cleanly.
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # just the driver — almost all of its wall-clock is idle waiting on
+    # Modal, which is exactly why it lives on the (free, mostly idle)
+    # Hetzner box instead of a billed runner. uv supplies Python (its
+    # standalone builds are fully relocatable — actions/setup-python's
+    # hosted-image tarballs are not reliable on self-hosted runners).
+    # Gated on the Modal token secrets — absent on forks, steps no-op
+    # cleanly.
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 75
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Build, repair, packaging-smoke, and T4 runtime smoke (Modal)
         if: env.MODAL_TOKEN_ID != ''
-        run: |
-          pip install -q modal
-          modal run scripts/ci/modal_cuda_build.py
+        run: uvx --from modal modal run scripts/ci/modal_cuda_build.py
       - name: Fetch the repaired wheel from the Modal volume
         if: env.MODAL_TOKEN_ID != ''
         run: |
@@ -452,7 +465,7 @@ jobs:
           # Root-path download is recursive (glob patterns are deprecated in
           # the modal CLI); assets/ comes along but the artifact glob below
           # only picks the wheels.
-          modal volume get transcribe-cu12-wheelhouse / wheelhouse-cu12/ --force
+          uvx --from modal modal volume get transcribe-cu12-wheelhouse / wheelhouse-cu12/ --force
           ls -la wheelhouse-cu12/
       # Named OUTSIDE the dist-* pattern on purpose: co-import merges dist-*
       # and must not pick up the cu12 provider (it would outrank the default
@@ -476,14 +489,12 @@ jobs:
     #     discovers a Vulkan device and transcribes on it.
     needs: [wheel-linux, api-wheel]
     runs-on: blacksmith-2vcpu-ubuntu-2404
-    container:
-      image: python:3.12-slim
-      # Blacksmith finding (2026-06-11): tier B's lavapipe device enumerated
-      # fine in this container on GitHub-hosted docker, and works DIRECTLY on
-      # the Blacksmith VM (provider-dl-vulkan tier 2 is green there), but came
-      # up empty inside Blacksmith's docker. llvmpipe JITs code and uses shm —
-      # the two host-docker knobs that plausibly differ; set both explicitly.
-      options: --security-opt seccomp=unconfined --shm-size=2g
+    # (2026-06-12) tier B failures here were NOT a docker/runner problem: the
+    # wheel itself had been built with the wrong lane posture (unanchored
+    # scikit-build override regex — "cpu" matched "cpu-vulkan") and simply
+    # contained no Vulkan module. vulkaninfo inside this container proved the
+    # loader + lavapipe fine on Blacksmith docker with default options.
+    container: python:3.12-slim
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -579,6 +590,83 @@ jobs:
           assert "country" in text.lower(), text
           print("ok: the same installed wheel transcribed on the Vulkan device")
           EOF
+
+  vulkan-hw:
+    # Real-GPU Vulkan truth lane — the Linux mirror of wheel-macos on the
+    # mini: installs the SHIPPED linux x86_64 wheel on the self-hosted T14
+    # (AMD Renoir iGPU, RADV — runner "linux-t14-4750u", labels include
+    # "vulkan" so generic [self-hosted, Linux, X64] jobs can never land here
+    # by accident) and proves what no hosted runner can:
+    #   1. the Vulkan device is discovered through the DEFAULT selection path
+    #      (no GGML_VK_VISIBLE_DEVICES — integrated GPUs pass ggml's filter,
+    #      first proven manually on this same machine 2026-06-10);
+    #   2. a real transcription runs ON the GPU with backend="vulkan";
+    #   3. the fat-CPU runtime scoring picks the right tier for Zen2
+    #      (AVX2, no AVX-512 ⇒ ggml-cpu-haswell) — the M6.5 hardware
+    #      assertion. lavapipe degradation stays on the hosted lanes
+    #      (provider-dl-vulkan, clean-install); this lane is the hardware
+    #      truth for the artifact that ships.
+    needs: [wheel-linux, api-wheel]
+    runs-on: [self-hosted, Linux, X64, vulkan]
+    timeout-minutes: 20  # bound the run if the T14 is offline
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: wheelhouse
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary model (cache miss only)
+        if: env.HF_TOKEN != ''
+        run: |
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+      - name: Install the built wheels (venv; resolver pulls the native pin)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/vk-venv"
+          "$RUNNER_TEMP/vk-venv/bin/pip" install -q --no-index \
+            --find-links wheelhouse transcribe-cpp
+      - name: "Real Vulkan: default-path discovery + GPU transcription + CPU tier"
+        if: env.HF_TOKEN != ''
+        run: |
+          "$RUNNER_TEMP/vk-venv/bin/python" - <<'EOF' 2>&1 | tee probe.log
+          import array, wave
+          import transcribe_cpp as t
+
+          devs = [(d.name, d.kind) for d in t.backends()]
+          print("devices:", devs)
+          # DEFAULT selection path — no GGML_VK_VISIBLE_DEVICES override.
+          assert any(k == "vulkan" for _, k in devs), devs
+          assert t.backend_available("vulkan")
+
+          with wave.open("samples/jfk.wav", "rb") as w:
+              pcm16 = array.array("h")
+              pcm16.frombytes(w.readframes(w.getnframes()))
+          pcm = array.array("f", (s / 32768.0 for s in pcm16))
+          with t.Model("canary/whisper-tiny-Q5_K_M.gguf", backend="vulkan") as m:
+              with m.session() as s:
+                  text = s.run(pcm).text
+          print("text (vulkan):", text.strip())
+          assert "country" in text.lower(), text
+          print("ok: real-GPU Vulkan transcription on RADV")
+          EOF
+          # M6.5 tier assertion: Zen2 = AVX2 without AVX-512, so runtime
+          # feature scoring must select the haswell CPU module.
+          grep -q "load_backend: loaded CPU backend from .*ggml-cpu-haswell" probe.log \
+            || { echo "::error::expected the haswell CPU tier on Zen2"; exit 1; }
 
   co-import:
     # numpy/torch coexistence (the reason the wheels vendor no OpenMP/BLAS),
