@@ -99,13 +99,20 @@ jobs:
         run: |
           brew install ninja
           command -v ccache >/dev/null || brew install ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native here (the dev posture under test);
+        # ccache hashes the literal flag, not the ISA it resolves to, so a
+        # cache compiled on a richer CPU SIGILLs on a weaker one. Key the
+        # cache by the CPU's feature flags instead.
+        if: runner.os == 'Linux'
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
       - name: ccache (compile cache across runs)
         if: runner.os == 'Linux'  # the mini is persistent; its local cache suffices
         uses: actions/cache@v5
         with:
           path: ~/.cache/ccache
-          key: ccache-cpp-tests-${{ matrix.label }}-${{ github.sha }}
-          restore-keys: ccache-cpp-tests-${{ matrix.label }}-
+          key: ccache-cpp-tests-${{ matrix.label }}-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-cpp-tests-${{ matrix.label }}-${{ env.CPU_SIG }}-
       - name: Configure (static white-box build)
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -129,12 +136,18 @@ jobs:
       - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native here (the dev posture under test);
+        # ccache hashes the literal flag, not the ISA it resolves to, so a
+        # cache compiled on a richer CPU SIGILLs on a weaker one. Key the
+        # cache by the CPU's feature flags instead.
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
       - name: ccache (compile cache across runs)
         uses: actions/cache@v5
         with:
           path: ~/.cache/ccache
-          key: ccache-asan-${{ github.sha }}
-          restore-keys: ccache-asan-
+          key: ccache-asan-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-asan-${{ env.CPU_SIG }}-
       - name: Configure (static, sanitized)
         run: |
           cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -171,12 +184,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build zlib1g-dev \
             libvulkan-dev glslc patchelf ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native here (the dev posture under test);
+        # ccache hashes the literal flag, not the ISA it resolves to, so a
+        # cache compiled on a richer CPU SIGILLs on a weaker one. Key the
+        # cache by the CPU's feature flags instead.
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
       - name: ccache (compile cache across runs)
         uses: actions/cache@v5
         with:
           path: ~/.cache/ccache
-          key: ccache-dl-vulkan-${{ github.sha }}
-          restore-keys: ccache-dl-vulkan-
+          key: ccache-dl-vulkan-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-dl-vulkan-${{ env.CPU_SIG }}-
       - name: Configure (DL provider, CPU + Vulkan modules, wheel posture)
         run: |
           cmake -B build-dl -G Ninja -DCMAKE_BUILD_TYPE=Release \
@@ -238,12 +257,18 @@ jobs:
       - uses: astral-sh/setup-uv@v8.2.0
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native here (the dev posture under test);
+        # ccache hashes the literal flag, not the ISA it resolves to, so a
+        # cache compiled on a richer CPU SIGILLs on a weaker one. Key the
+        # cache by the CPU's feature flags instead.
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
       - name: ccache (compile cache across runs)
         uses: actions/cache@v5
         with:
           path: ~/.cache/ccache
-          key: ccache-shared-${{ github.sha }}
-          restore-keys: ccache-shared-
+          key: ccache-shared-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-shared-${{ env.CPU_SIG }}-
       # Shared build in the official-wheel posture (no OpenMP / system BLAS), so
       # the canary exercises the same configuration the provider wheels ship.
       - name: Configure (shared, wheel posture)
