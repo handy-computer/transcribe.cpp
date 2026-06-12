@@ -292,3 +292,50 @@ def test_entry_point_end_to_end_rejects_abi_mismatch(
     # The contract check must refuse before any dlopen happens.
     with pytest.raises(TranscribeError, match="public ABI"):
         _library.load_library(provider=dist)
+
+
+# --- review-audit additions (2026-06) ---------------------------------------
+
+
+def test_broken_provider_does_not_hide_healthy_on_auto_select():
+    # The property the discovery code promises ("a broken provider must not
+    # hide the others"): with no explicit request, auto-selection skips the
+    # broken entry and picks the best healthy one.
+    broken = _library._BrokenProvider("transcribe-cpp-native-zzz",
+                                      RuntimeError("import exploded"))
+    healthy = make("transcribe-cpp-native-cpu", ["cpu"])
+    chosen = _library._select_provider([broken, healthy], None)
+    assert chosen is healthy
+
+
+def test_env_var_selects_provider(monkeypatch, tmp_path, library_globals_restored):
+    # TRANSCRIBE_NATIVE_PROVIDER must force the named provider even when a
+    # higher-ranked one is installed. Hermetic: load_library is exercised up
+    # to the contract check by pointing the chosen provider at a missing
+    # library file and asserting the error names IT, not the metal one.
+    cpu = make("transcribe-cpp-native-cpu", ["cpu"],
+               library_path=str(tmp_path / "missing-cpu.so"))
+    metal = make("transcribe-cpp-native-metal", ["metal", "cpu"],
+                 library_path=str(tmp_path / "missing-metal.so"))
+    monkeypatch.setattr(_library, "_discover_providers", lambda: [cpu, metal])
+    monkeypatch.delenv("TRANSCRIBE_LIBRARY", raising=False)
+    monkeypatch.setenv("TRANSCRIBE_NATIVE_PROVIDER", "cpu")
+    with pytest.raises(TranscribeError, match="transcribe-cpp-native-cpu"):
+        _library.load_library()
+
+
+def test_transcribe_library_env_missing_file(monkeypatch, tmp_path, library_globals_restored):
+    monkeypatch.setenv("TRANSCRIBE_LIBRARY", str(tmp_path / "nope.dylib"))
+    with pytest.raises(TranscribeError, match="missing file"):
+        _library.load_library()
+
+
+def test_not_installed_hint_suggests_real_commands():
+    # The "not installed" error must never suggest a pip extra that does not
+    # exist (only [cu12] does).
+    with pytest.raises(TranscribeError) as ei:
+        _library._select_provider([], "vulkan")
+    assert "transcribe-cpp[vulkan]" not in str(ei.value)
+    with pytest.raises(TranscribeError) as ei:
+        _library._select_provider([], "cu12")
+    assert 'transcribe-cpp[cu12]' in str(ei.value)

@@ -115,8 +115,7 @@ option(TRANSCRIBE_CUDA           "Enable CUDA backend"      OFF)  # opt-in; Linu
 option(TRANSCRIBE_SANITIZE       "Enable ASan + UBSan"      OFF)
 option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 
-# Library link mode and wheel-hygiene switches (see
-# docs/python-bindings-distribution-plan.md).
+# Library link mode and wheel-hygiene switches.
 #
 # TRANSCRIBE_BUILD_SHARED OFF (default) builds a static libtranscribe + static
 # ggml, so `cmake -B build` yields a self-contained transcribe-cli with no
@@ -140,6 +139,26 @@ option(TRANSCRIBE_USE_SYSTEM_BLAS "Link non-Apple system BLAS for the host decod
 # Vulkan loader/driver. The host loads the module directory once via
 # transcribe_init_backends(). Requires TRANSCRIBE_BUILD_SHARED=ON.
 option(TRANSCRIBE_GGML_BACKEND_DL "Build ggml backends as loadable modules" OFF)
+
+# Conservative x86 floor: default GGML_NATIVE plus EVERY x86 SIMD tier to
+# OFF so the one binary runs on baseline x86-64 without SIGILL. This is the
+# single switch behind every official-wheel CPU posture (the per-flag lists
+# used to be mirrored across the root pyproject lanes, the cu12 pyproject,
+# and CMakePresets.json — one option, one place to drift).
+#
+# It is a DEFAULT, not a clamp (same posture as the SKBUILD hygiene knobs
+# above): an explicit -DGGML_AVX2=ON etc. on the command line still wins, so
+# a user can take the conservative floor and selectively re-enable tiers for
+# their machine. With the option OFF (the default) the raw GGML_* flags are
+# untouched and fully tunable, exactly as without this option.
+#
+# Interaction with GGML_CPU_ALL_VARIANTS=ON (the fat-CPU wheel lanes): ggml
+# gates the per-flag options behind `if(NOT GGML_CPU_ALL_VARIANTS)`, so
+# these are inert there and serve as the explicit floor if ALL_VARIANTS is
+# ever disabled. Inert (harmless) on non-x86 targets: ggml's Linux-ARM tier
+# list has its own flags.
+option(TRANSCRIBE_X86_CONSERVATIVE
+    "Default GGML_NATIVE and every x86 SIMD tier to OFF (SIGILL-safe baseline; explicit -DGGML_* still wins)" OFF)
 
 # Real-model gated tests. OFF by default because the tests need a
 # converted Parakeet GGUF on disk (~2.4 GB) and CI can't ship one.
@@ -229,6 +248,23 @@ set(GGML_METAL    ${TRANSCRIBE_METAL}  CACHE BOOL "" FORCE)
 set(GGML_VULKAN   ${TRANSCRIBE_VULKAN} CACHE BOOL "" FORCE)
 set(GGML_CUDA     ${TRANSCRIBE_CUDA}   CACHE BOOL "" FORCE)
 set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+
+# Conservative x86 floor (see the option's comment above): one switch fans
+# out to GGML_NATIVE plus the full x86 SIMD tier list. Placed BEFORE
+# add_subdirectory(ggml) so ggml's own option() defaults never win — but
+# NOT forced: a flag the user already put in the cache (-DGGML_AVX2=ON) is
+# left alone, so the floor stays selectively tunable per machine.
+if(TRANSCRIBE_X86_CONSERVATIVE)
+    foreach(_simd_flag
+            GGML_NATIVE
+            GGML_SSE42 GGML_AVX GGML_AVX_VNNI GGML_AVX2 GGML_BMI2
+            GGML_FMA GGML_F16C
+            GGML_AVX512 GGML_AVX512_VBMI GGML_AVX512_VNNI GGML_AVX512_BF16)
+        if(NOT DEFINED CACHE{${_simd_flag}})
+            set(${_simd_flag} OFF CACHE BOOL "")
+        endif()
+    endforeach()
+endif()
 
 # OpenMP: ggml defaults GGML_OPENMP ON and probes for it gracefully, so leave
 # ggml's own default in place when we want OpenMP. Only force it OFF (matching

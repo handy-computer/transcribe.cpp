@@ -31,6 +31,7 @@ from . import _abi, _generated
 from ._library import _base_version, artifact_dir, load_library, selected_provider
 from .errors import (
     AbiError,
+    Aborted,
     BackendError,
     InputTooLong,
     InvalidArgument,
@@ -41,6 +42,7 @@ from .errors import (
     OutputTruncated,
     TranscribeError,
     UnsupportedRequest,
+    exception_for_status,
     raise_for_status,
 )
 
@@ -67,6 +69,7 @@ __all__ = [
     "Word",
     "Token",
     "Capabilities",
+    "SessionLimits",
     "Timings",
     "Stream",
     "StreamUpdate",
@@ -92,6 +95,7 @@ __all__ = [
     "BackendError",
     "UnsupportedRequest",
     "AbiError",
+    "Aborted",
     "InputTooLong",
     "OutputTruncated",
     "native_version",
@@ -230,7 +234,7 @@ def library_path() -> str:
     return str(_lib_path)
 
 
-def native_provider() -> "Union[str, None]":
+def native_provider() -> str | None:
     """Name of the installed provider package the native library was loaded
     from, or None for a dev-tree / ``TRANSCRIBE_LIBRARY`` load."""
     return selected_provider()
@@ -245,7 +249,7 @@ class BackendDevice:
     kind: str  # "cpu" | "accel" | "metal" | "vulkan" | "cuda" | "sycl" | "gpu" | "unknown"
 
 
-def backends() -> "list":
+def backends() -> list[BackendDevice]:
     """The compute devices registered with the native runtime — what the
     process can actually run on, after backend-module loading and graceful
     degradation (e.g. a Vulkan module skipped on a machine without Vulkan)."""
@@ -345,6 +349,16 @@ def _pcm_to_carray(pcm: PCMLike):
     with mv:
         if not mv.contiguous:
             raise InvalidArgument("PCM buffer must be C-contiguous")
+        if mv.ndim != 1:
+            # A (frames, channels) stereo array is the classic mistake here.
+            # Accepting it and reading shape[0] samples would transcribe
+            # silent garbage; reject loudly instead.
+            raise InvalidArgument(
+                f"PCM buffer must be 1-D (got shape {mv.shape}); downmix "
+                "multichannel audio to mono and flatten, e.g. "
+                "audio.mean(axis=1).astype('float32') for a (frames, "
+                "channels) numpy array"
+            )
         if mv.format == "f":
             floats = mv
         elif mv.itemsize == 1:  # raw bytes: interpret as little-endian float32
@@ -411,13 +425,27 @@ class Timings:
 @dataclass(frozen=True)
 class Capabilities:
     native_sample_rate: int
-    languages: tuple
+    languages: tuple[str, ...]
     max_timestamp_kind: str
     supports_language_detect: bool
     supports_translate: bool
     supports_streaming: bool
     supports_spec_decode: bool
     max_audio_ms: int
+
+
+@dataclass(frozen=True)
+class SessionLimits:
+    """Effective per-session limits (model bound narrowed by session params).
+
+    ``effective_max_audio_ms`` is the input ceiling THIS session enforces —
+    unlike ``Capabilities.max_audio_ms`` it reflects a lowered ``n_ctx``.
+    0 means unbounded, matching the capabilities convention. Check it to
+    size input before a run instead of discovering ``InputTooLong``."""
+
+    effective_n_ctx: int
+    effective_max_audio_ms: int
+    max_kv_bytes: int
 
 
 @dataclass(frozen=True)
@@ -429,9 +457,9 @@ class Result:
     text: str
     language: str
     timestamp_kind: str
-    segments: tuple
-    words: tuple
-    tokens: tuple
+    segments: tuple[Segment, ...]
+    words: tuple[Word, ...]
+    tokens: tuple[Token, ...]
     timings: Timings
 
 
@@ -510,7 +538,13 @@ def _stream_update_from(u) -> StreamUpdate:
     )
 
 
-def _build_run_params(task, language, target_language, timestamps, keep_special_tags):
+def _build_run_params(task, language, target_language, timestamps,
+                      keep_special_tags, spec_k_drafts):
+    if not isinstance(spec_k_drafts, int) or spec_k_drafts < -1:
+        raise InvalidArgument(
+            f"spec_k_drafts must be -1 (family default), 0 (disabled), or a "
+            f"positive draft length; got {spec_k_drafts!r}"
+        )
     params = _RunParams()
     _lib.transcribe_run_params_init(_byref(params))
     params.task = _enum(_TASKS, task, "task")
@@ -518,6 +552,7 @@ def _build_run_params(task, language, target_language, timestamps, keep_special_
     params.language = language.encode("utf-8") if language else None
     params.target_language = target_language.encode("utf-8") if target_language else None
     params.keep_special_tags = keep_special_tags
+    params.spec_k_drafts = spec_k_drafts
     return params
 
 
@@ -563,16 +598,16 @@ class WhisperRunOptions(FamilyExtension):
     _struct = _generated.transcribe_whisper_run_ext
     _init = "transcribe_whisper_run_ext_init"
 
-    def __init__(self, *, initial_prompt: "Union[str, None]" = None,
-                 condition_on_prev_tokens: "Union[bool, None]" = None,
-                 temperature: "Union[float, None]" = None,
-                 temperature_inc: "Union[float, None]" = None,
-                 compression_ratio_thold: "Union[float, None]" = None,
-                 logprob_thold: "Union[float, None]" = None,
-                 no_speech_thold: "Union[float, None]" = None,
-                 max_prev_context_tokens: "Union[int, None]" = None,
-                 seed: "Union[int, None]" = None,
-                 max_initial_timestamp: "Union[float, None]" = None):
+    def __init__(self, *, initial_prompt: str | None = None,
+                 condition_on_prev_tokens: bool | None = None,
+                 temperature: float | None = None,
+                 temperature_inc: float | None = None,
+                 compression_ratio_thold: float | None = None,
+                 logprob_thold: float | None = None,
+                 no_speech_thold: float | None = None,
+                 max_prev_context_tokens: int | None = None,
+                 seed: int | None = None,
+                 max_initial_timestamp: float | None = None):
         self.initial_prompt = initial_prompt
         self.condition_on_prev_tokens = condition_on_prev_tokens
         self.temperature = temperature
@@ -615,7 +650,7 @@ class MoonshineStreamingOptions(FamilyExtension):
     _struct = _generated.transcribe_moonshine_streaming_stream_ext
     _init = "transcribe_moonshine_streaming_stream_ext_init"
 
-    def __init__(self, *, min_decode_interval_ms: "Union[int, None]" = None):
+    def __init__(self, *, min_decode_interval_ms: int | None = None):
         self.min_decode_interval_ms = min_decode_interval_ms
 
     def _apply(self, ext) -> None:
@@ -631,7 +666,7 @@ class ParakeetStreamOptions(FamilyExtension):
     _struct = _generated.transcribe_parakeet_stream_ext
     _init = "transcribe_parakeet_stream_ext_init"
 
-    def __init__(self, *, att_context_right: "Union[int, None]" = None):
+    def __init__(self, *, att_context_right: int | None = None):
         self.att_context_right = att_context_right
 
     def _apply(self, ext) -> None:
@@ -648,9 +683,9 @@ class ParakeetBufferedStreamOptions(FamilyExtension):
     _struct = _generated.transcribe_parakeet_buffered_stream_ext
     _init = "transcribe_parakeet_buffered_stream_ext_init"
 
-    def __init__(self, *, left_ms: "Union[int, None]" = None,
-                 chunk_ms: "Union[int, None]" = None,
-                 right_ms: "Union[int, None]" = None):
+    def __init__(self, *, left_ms: int | None = None,
+                 chunk_ms: int | None = None,
+                 right_ms: int | None = None):
         self.left_ms = left_ms
         self.chunk_ms = chunk_ms
         self.right_ms = right_ms
@@ -672,8 +707,8 @@ class VoxtralRealtimeStreamOptions(FamilyExtension):
     _struct = _generated.transcribe_voxtral_realtime_stream_ext
     _init = "transcribe_voxtral_realtime_stream_ext_init"
 
-    def __init__(self, *, num_delay_tokens: "Union[int, None]" = None,
-                 min_decode_interval_ms: "Union[int, None]" = None):
+    def __init__(self, *, num_delay_tokens: int | None = None,
+                 min_decode_interval_ms: int | None = None):
         self.num_delay_tokens = num_delay_tokens
         self.min_decode_interval_ms = min_decode_interval_ms
 
@@ -688,7 +723,13 @@ class VoxtralRealtimeStreamOptions(FamilyExtension):
 
 
 class Model:
-    """A loaded model. Thread-safe to share across sessions; must outlive them.
+    """A loaded model. Sharing it across threads for queries and session
+    creation is safe; it must outlive its sessions.
+
+    Known 0.x limitation: at most one run/stream may be IN FLIGHT across all
+    sessions of a model at a time — sessions share the model's compute
+    backend, so overlapping runs race. Run sessions serially (a pool behind
+    a lock is fine), or load one Model per worker for true parallelism.
 
     ``backend="auto"`` (the default) picks the best available device. The
     ``TRANSCRIBE_BACKEND`` environment variable overrides that *default* —
@@ -697,7 +738,7 @@ class Model:
     An explicit ``backend=`` argument always wins over the environment.
     """
 
-    def __init__(self, path: "Union[str, os.PathLike]", *,
+    def __init__(self, path: str | os.PathLike, *,
                  backend: Backend = "auto", gpu_device: int = 0):
         # Live sessions, tracked weakly: close() must free them before the
         # model, because transcribe_model_free is only valid once every
@@ -802,8 +843,11 @@ class Model:
 
 
 class Session:
-    """A single transcription context bound to one Model. Not thread-safe; use
-    one per thread (sharing the Model is fine)."""
+    """A single transcription context bound to one Model. Not thread-safe.
+
+    Sessions of one model must also not RUN concurrently with each other in
+    0.x (they share the model's compute backend — see the Model docstring);
+    interleave or serialize their runs, or use one Model per worker."""
 
     def __init__(self, model: Model, *, n_threads: int = 0, kv_type: KVType = "auto",
                  n_ctx: int = 0):
@@ -857,38 +901,66 @@ class Session:
         return family._build()
 
     def run(self, pcm: PCMLike, *, task: Task = "transcribe",
-            language: "Union[str, None]" = None,
-            target_language: "Union[str, None]" = None,
+            language: str | None = None,
+            target_language: str | None = None,
             timestamps: Timestamps = "none",
             keep_special_tags: bool = False,
-            family: "Union[FamilyExtension, None]" = None) -> Result:
+            spec_k_drafts: int = -1,
+            family: FamilyExtension | None = None) -> Result:
         """Transcribe 16 kHz mono float32 PCM and return a materialized Result.
 
         ``family`` is an optional family-specific extension (e.g.
-        WhisperRunOptions) carrying per-run knobs for models that accept it."""
+        WhisperRunOptions) carrying per-run knobs for models that accept it.
+        ``spec_k_drafts`` tunes speculative decoding on models whose
+        capabilities advertise ``supports_spec_decode`` (-1 = family default,
+        0 = disabled, >0 = draft length; silently ignored elsewhere).
+
+        On ``Aborted`` (via :meth:`cancel`) and ``OutputTruncated`` the
+        partial transcript is preserved and attached to the exception as
+        ``partial_result``."""
         self._cancel.clear()
         array, n_samples = _pcm_to_carray(pcm)
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags)
+                                   keep_special_tags, spec_k_drafts)
         ext = self._resolve_family(family, "run") if family is not None else None
         if ext is not None:
             params.family = ctypes.cast(
                 _byref(ext), ctypes.POINTER(_generated.transcribe_ext))
-        _check(_lib.transcribe_run(self._h, array, n_samples, _byref(params)),
-               "transcribe_run")
+        try:
+            _check(_lib.transcribe_run(self._h, array, n_samples, _byref(params)),
+                   "transcribe_run")
+        except (Aborted, OutputTruncated) as exc:
+            # The C API preserves the partial transcript on the session for
+            # exactly these two statuses; surface it rather than discard it.
+            exc.partial_result = self._materialize()
+            raise
         return self._materialize()
 
-    def run_batch(self, pcms: "Sequence[PCMLike]", *, task: Task = "transcribe",
-                  language: "Union[str, None]" = None,
-                  target_language: "Union[str, None]" = None,
+    def run_batch(self, pcms: Sequence[PCMLike], *, task: Task = "transcribe",
+                  language: str | None = None,
+                  target_language: str | None = None,
                   timestamps: Timestamps = "none",
-                  keep_special_tags: bool = False) -> "list":
+                  keep_special_tags: bool = False,
+                  spec_k_drafts: int = -1,
+                  family: FamilyExtension | None = None,
+                  return_exceptions: bool = False) -> list[Result | TranscribeError]:
         """Transcribe several utterances in one dispatch — one Result each.
 
         Families with a batched compute path process every utterance in a single
         device dispatch (≈2x throughput on an underused GPU); others fall back to
-        running them in turn, so every model accepts this. Raises if any single
-        utterance failed (its index is in the message)."""
+        running them in turn, so every model accepts this.
+
+        Failure is PER-UTTERANCE (the C API reports one status per clip; a
+        :meth:`cancel` surfaces at the batch level but the native side pads
+        the per-utterance result set, so it is folded into the same view).
+        Default: raise the first failing utterance's exception, with
+        ``utterance_index`` set, ``partial_result`` attached where the
+        native layer preserved a partial transcript for that slot (None
+        otherwise), and ``batch_results`` carrying the full per-utterance
+        view (``Result`` or ``TranscribeError`` each) so completed work is
+        never discarded. With ``return_exceptions=True`` no exception is
+        raised for utterance failures and that mixed list is returned
+        directly (the ``asyncio.gather`` convention)."""
         self._cancel.clear()
         pcms = list(pcms)
         if not pcms:
@@ -904,23 +976,60 @@ class Session:
             counts[k] = n
 
         params = _build_run_params(task, language, target_language, timestamps,
-                                   keep_special_tags)
-        _check(
-            _lib.transcribe_run_batch(self._h, ptrs, counts, len(pcms), _byref(params)),
-            "transcribe_run_batch",
-        )
+                                   keep_special_tags, spec_k_drafts)
+        ext = self._resolve_family(family, "run") if family is not None else None
+        if ext is not None:
+            params.family = ctypes.cast(
+                _byref(ext), ctypes.POINTER(_generated.transcribe_ext))
+        batch_abort = None
+        try:
+            _check(
+                _lib.transcribe_run_batch(self._h, ptrs, counts, len(pcms), _byref(params)),
+                "transcribe_run_batch",
+            )
+        except Aborted as exc:
+            # Cancellation surfaces at the BATCH level, but the native side
+            # pads the per-utterance result set so clips completed before the
+            # abort survive. Fall through to the per-utterance loop, which
+            # restores utterance context instead of discarding that work.
+            batch_abort = exc
 
-        results = []
+        out: list = []
+        first_exc = None
         for i in range(_lib.transcribe_batch_n_results(self._h)):
-            _check(_lib.transcribe_batch_status(self._h, i), f"utterance {i} in batch")
-            results.append(self._materialize(i))
-        return results
+            status = _lib.transcribe_batch_status(self._h, i)
+            if status == 0:
+                out.append(self._materialize(i))
+                continue
+            exc = exception_for_status(status, _status_string(status),
+                                       f"utterance {i} in batch")
+            exc.utterance_index = i
+            if isinstance(exc, (Aborted, OutputTruncated)):
+                # Attach the partial transcript only when the native layer
+                # actually snapshotted one for this slot — some batch paths
+                # record failed slots as empty, and None is more honest than
+                # a confidently empty Result.
+                partial = self._materialize(i)
+                if partial.text or partial.tokens or partial.segments:
+                    exc.partial_result = partial
+            out.append(exc)
+            if first_exc is None:
+                first_exc = exc
+        if first_exc is None and batch_abort is not None:
+            # Anomalous: an abort with no per-utterance trace. Re-raise loud
+            # (even under return_exceptions) rather than swallow a cancel.
+            batch_abort.batch_results = out
+            raise batch_abort
+        if first_exc is not None and not return_exceptions:
+            first_exc.batch_results = out
+            raise first_exc
+        return out
 
-    def stream(self, *, task: Task = "transcribe", language: "Union[str, None]" = None,
-               target_language: "Union[str, None]" = None, timestamps: Timestamps = "none",
+    def stream(self, *, task: Task = "transcribe", language: str | None = None,
+               target_language: str | None = None, timestamps: Timestamps = "none",
                keep_special_tags: bool = False, commit_policy: CommitPolicy = "auto",
                stable_prefix_agreement_n: int = 0,
-               family: "Union[FamilyExtension, None]" = None) -> "Stream":
+               family: FamilyExtension | None = None) -> Stream:
         """Begin streaming on this session and return a Stream to feed audio to.
 
         Requires a model whose capabilities advertise ``supports_streaming``;
@@ -929,8 +1038,10 @@ class Session:
         session is single-threaded and runs at most one stream at a time. Use
         the Stream as a context manager so it is reset when you are done."""
         self._cancel.clear()
+        # spec_k_drafts is an offline-decode knob; streaming always uses the
+        # family default (-1).
         run_params = _build_run_params(task, language, target_language, timestamps,
-                                       keep_special_tags)
+                                       keep_special_tags, -1)
         sp = _StreamParams()
         _lib.transcribe_stream_params_init(_byref(sp))
         sp.commit_policy = _enum(_COMMIT_POLICIES, commit_policy, "commit_policy")
@@ -950,7 +1061,7 @@ class Session:
         # or out-of-tree native library that predates that contract.
         return Stream(self, _keepalive=(run_params, sp, ext))
 
-    def _materialize(self, utt: "Union[int, None]" = None) -> Result:
+    def _materialize(self, utt: int | None = None) -> Result:
         """Copy out one result. utt is None for the single-result accessors, or
         an utterance index for the batch accessors (index 0 aliases the single
         result after a plain run, so both paths share this code)."""
@@ -1013,11 +1124,27 @@ class Session:
             timings=_timings_from(tm),
         )
 
+    @property
+    def limits(self) -> SessionLimits:
+        """Effective limits for THIS session (model bound narrowed by
+        ``n_ctx``). Check ``effective_max_audio_ms`` to size input up front
+        instead of discovering ``InputTooLong`` on failure."""
+        lm = _generated.transcribe_session_limits()
+        _lib.transcribe_session_limits_init(_byref(lm))
+        _check(_lib.transcribe_session_get_limits(self._h, _byref(lm)),
+               "reading session limits")
+        return SessionLimits(
+            effective_n_ctx=lm.effective_n_ctx,
+            effective_max_audio_ms=lm.effective_max_audio_ms,
+            max_kv_bytes=lm.max_kv_bytes,
+        )
+
     def cancel(self) -> None:
         """Request cancellation of an in-flight run/stream from another thread.
-        The active call aborts at the next chunk/decode boundary and raises;
-        ``was_aborted`` then reports True. The flag is cleared at the start of
-        the next run/stream."""
+        The active call aborts at the next chunk/decode boundary and raises
+        ``Aborted`` (with ``partial_result`` attached); ``was_aborted`` then
+        reports True. The flag is cleared at the start of the next
+        run/stream."""
         self._cancel.set()
 
     @property
@@ -1117,7 +1244,7 @@ class Stream:
 
 
 def transcribe(
-    model: "Union[Model, str, os.PathLike]",
+    model: Model | str | os.PathLike,
     pcm: PCMLike,
     *,
     backend: Backend = "auto",
@@ -1126,10 +1253,12 @@ def transcribe(
     kv_type: KVType = "auto",
     n_ctx: int = 0,
     task: Task = "transcribe",
-    language: "Union[str, None]" = None,
-    target_language: "Union[str, None]" = None,
+    language: str | None = None,
+    target_language: str | None = None,
     timestamps: Timestamps = "none",
     keep_special_tags: bool = False,
+    spec_k_drafts: int = -1,
+    family: FamilyExtension | None = None,
 ) -> Result:
     """Transcribe *pcm* in one call and return a materialized Result.
 
@@ -1138,10 +1267,12 @@ def transcribe(
     many clips keep a Model and call ``model.session().run(...)`` yourself; this
     helper is for the one-shot case. ``backend`` / ``gpu_device`` apply only when
     *model* is a path — they are ignored when an already-loaded Model is passed.
+    ``family`` / ``spec_k_drafts`` pass through to :meth:`Session.run`.
     """
     session_opts = dict(n_threads=n_threads, kv_type=kv_type, n_ctx=n_ctx)
     run_opts = dict(task=task, language=language, target_language=target_language,
-                    timestamps=timestamps, keep_special_tags=keep_special_tags)
+                    timestamps=timestamps, keep_special_tags=keep_special_tags,
+                    spec_k_drafts=spec_k_drafts, family=family)
 
     if isinstance(model, Model):
         with model.session(**session_opts) as session:

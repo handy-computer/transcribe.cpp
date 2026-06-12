@@ -30,6 +30,7 @@
 #include "transcribe-session.h"
 #include "transcribe-loader.h"
 
+#include "ggml.h"          // ggml_log_set: route ggml diagnostics into our sink
 #include "ggml-backend.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
@@ -313,45 +314,123 @@ transcribe_status validate_run_params_common(
 // install is unsupported in 0.x and is the caller's problem; the only
 // guarantee the implementation provides in that case is the absence of
 // data races, not correct semantics.
+//
+// Three sink states, all classified from a single acquire load of
+// g_log_cb:
+//   nullptr           never configured  -> stderr default for surfaced
+//                                          messages (emit_or_stderr)
+//   sentinel          explicitly disabled via transcribe_log_set(NULL)
+//                                       -> drop everything
+//   anything else     caller's callback -> route everything
+// The sentinel exists so "caller asked for silence" is distinguishable
+// from "caller never called us" without a second atomic whose pairing
+// could tear under the (unsupported) reconfiguration case.
 
 namespace {
+
+// Stored in g_log_cb in place of NULL when the host explicitly disables
+// logging. Never invoked; only compared against.
+void transcribe_log_cb_disabled(transcribe_log_level, const char *, void *) {}
+
 std::atomic<transcribe_log_callback> g_log_cb       { nullptr };
 std::atomic<void *>                  g_log_userdata { nullptr };
+
+// Map a ggml log level onto the transcribe enum. The numeric values do
+// NOT coincide (vendored ggml: DEBUG=1 INFO=2 WARN=3 ERROR=4;
+// transcribe.h: INFO=1 WARN=2 ERROR=3 DEBUG=4), so the pass-through
+// layer owns an explicit mapping — exactly the responsibility the
+// transcribe_log_level contract assigns to it. Unknown future levels
+// degrade to INFO rather than being dropped.
+transcribe_log_level transcribe_log_level_from_ggml(int level) {
+    switch (level) {
+        case GGML_LOG_LEVEL_NONE:  return TRANSCRIBE_LOG_LEVEL_NONE;
+        case GGML_LOG_LEVEL_DEBUG: return TRANSCRIBE_LOG_LEVEL_DEBUG;
+        case GGML_LOG_LEVEL_INFO:  return TRANSCRIBE_LOG_LEVEL_INFO;
+        case GGML_LOG_LEVEL_WARN:  return TRANSCRIBE_LOG_LEVEL_WARN;
+        case GGML_LOG_LEVEL_ERROR: return TRANSCRIBE_LOG_LEVEL_ERROR;
+        case GGML_LOG_LEVEL_CONT:  return TRANSCRIBE_LOG_LEVEL_CONT;
+        default:                   return TRANSCRIBE_LOG_LEVEL_INFO;
+    }
+}
+
+void transcribe_ggml_log_bridge(enum ggml_log_level level, const char * text, void *);
+
 } // namespace
 
 extern "C" void transcribe_log_set(transcribe_log_callback cb, void * userdata) {
     g_log_userdata.store(userdata, std::memory_order_relaxed);
-    g_log_cb.store(cb, std::memory_order_release);
+    g_log_cb.store(cb != nullptr ? cb : &transcribe_log_cb_disabled,
+                   std::memory_order_release);
+    // Route ggml's own diagnostics — above all the per-module dlopen
+    // failures from dynamic backend loading, the signal a host needs to
+    // see why an accelerator degraded to CPU — through the same sink.
+    // Installed on configuration (not at library init) so a host that
+    // never calls transcribe_log_set keeps ggml's stderr default
+    // untouched. ggml_log_set itself is a plain global store; under the
+    // supported install-once-at-startup model that is race-free.
+    ggml_log_set(&transcribe_ggml_log_bridge, nullptr);
 }
 
 // Internal emission helper. Not part of the public ABI, not declared in
 // any header. Used by transcribe_print_timings and the advisory-warn
 // path; future logging from the loader / frontend / decode can call
-// through here as well.
+// through here as well. Drops the message in both the never-configured
+// and explicitly-disabled states.
 static void transcribe_log_emit(
     transcribe_log_level level,
     const char *         msg)
 {
     const auto cb = g_log_cb.load(std::memory_order_acquire);
-    if (cb == nullptr) {
+    if (cb == nullptr || cb == &transcribe_log_cb_disabled) {
         return;
     }
     void * userdata = g_log_userdata.load(std::memory_order_relaxed);
     cb(level, msg, userdata);
 }
 
-// Stderr-fallback wrapper for messages we want surfaced even when the
-// caller hasn't installed a log sink. Mirrors transcribe_print_timings'
-// fallback so dev / CLI builds don't silently drop the diagnostic.
+// Wrapper for messages we want surfaced even when the caller never
+// configured a log sink: never-configured falls back to stderr so dev /
+// CLI builds don't silently drop diagnostics, while an explicit
+// transcribe_log_set(NULL, ...) silences them per the public contract.
+// The single load (instead of emit-then-recheck) also closes the benign
+// race where a concurrently installed callback could double-emit.
 static void transcribe_log_emit_or_stderr(
     transcribe_log_level level,
     const char *         msg)
 {
-    transcribe_log_emit(level, msg);
-    if (g_log_cb.load(std::memory_order_acquire) == nullptr) {
+    const auto cb = g_log_cb.load(std::memory_order_acquire);
+    if (cb == nullptr) {                              // never configured
         std::fprintf(stderr, "%s\n", msg);
+        return;
     }
+    if (cb == &transcribe_log_cb_disabled) {          // explicit silence
+        return;
+    }
+    cb(level, msg, g_log_userdata.load(std::memory_order_relaxed));
 }
+
+namespace {
+
+// ggml -> transcribe sink bridge, installed by transcribe_log_set.
+// transcribe messages carry no trailing newline (the stderr fallback
+// appends one), while ggml messages usually embed theirs — strip exactly
+// one so a host callback sees a uniform convention. GGML_LOG_LEVEL_CONT
+// fragments pass through as-is with level CONT; joining them is the
+// host's choice (a fragment is still information).
+void transcribe_ggml_log_bridge(enum ggml_log_level level, const char * text, void *) {
+    if (text == nullptr) {
+        return;
+    }
+    char buf[1024];
+    std::snprintf(buf, sizeof(buf), "%s", text);
+    const size_t n = std::strlen(buf);
+    if (n > 0 && buf[n - 1] == '\n') {
+        buf[n - 1] = '\0';
+    }
+    transcribe_log_emit_or_stderr(transcribe_log_level_from_ggml(level), buf);
+}
+
+} // namespace
 
 // Internal printf-style logger declared in transcribe-log.h. Renders into
 // a bounded stack buffer and forwards to the stderr-fallback emitter, so
@@ -663,6 +742,33 @@ extern "C" transcribe_status transcribe_init_backends(const char * artifact_dir)
     if (s_loaded_dirs.find(key) == s_loaded_dirs.end()) {
         ggml_backend_load_all_from_path(artifact_dir);
         s_loaded_dirs.insert(key);
+
+        // Post-scan device summary, through the installed sink only. Release
+        // ggml compiles its per-module load-failure diagnostics out
+        // (silent=true under NDEBUG), so this one line is the reliable
+        // signal a host's log callback gets for "which backends made it" —
+        // the input to debugging an accelerator that degraded to CPU. Sent
+        // via the callback-only emitter on purpose: a host without a sink
+        // keeps today's stderr behavior, no new import-time noise.
+        char devices[256];
+        size_t off = 0;
+        const size_t n_dev = ggml_backend_dev_count();
+        for (size_t i = 0; i < n_dev; ++i) {
+            const int wrote = std::snprintf(
+                devices + off, sizeof(devices) - off, "%s%s",
+                i == 0 ? "" : ", ",
+                ggml_backend_dev_name(ggml_backend_dev_get(i)));
+            if (wrote < 0 || static_cast<size_t>(wrote) >= sizeof(devices) - off) {
+                break;  // truncated; the prefix is summary enough
+            }
+            off += static_cast<size_t>(wrote);
+        }
+        char msg[512];
+        std::snprintf(msg, sizeof(msg),
+                      "transcribe_init_backends: %zu compute device(s) "
+                      "registered after scanning %s: %s",
+                      n_dev, artifact_dir, off > 0 ? devices : "(none)");
+        transcribe_log_emit(TRANSCRIBE_LOG_LEVEL_INFO, msg);
     }
 
     if (ggml_backend_dev_count() == 0) {
@@ -1612,7 +1718,18 @@ extern "C" transcribe_status transcribe_stream_begin(
     session->stream_target_language_owned =
         run_params->target_language != nullptr ? run_params->target_language
                                                 : "";
-    struct transcribe_run_params run_params_owned = *run_params;
+    // PREFIX copy, not struct assignment: the size gate above admits any
+    // struct_size >= k_min_run_params_size, so a conforming caller's
+    // allocation may be SHORTER than sizeof (fields past `family`, e.g.
+    // spec_k_drafts, absent). Init first so bytes past the caller's
+    // prefix hold their documented defaults, then copy only what the
+    // caller owns. The caller's struct_size is preserved by the copy, so
+    // downstream has_field() gating still sees the caller's true layout.
+    struct transcribe_run_params run_params_owned;
+    transcribe_run_params_init(&run_params_owned);
+    std::memcpy(&run_params_owned, run_params,
+                static_cast<size_t>(std::min<uint64_t>(
+                    run_params->struct_size, sizeof(run_params_owned))));
     run_params_owned.language =
         run_params->language != nullptr
             ? session->stream_language_owned.c_str() : nullptr;
@@ -2484,14 +2601,10 @@ transcribe_print_timings(const struct transcribe_session * session)
                   "timings: load=%.2f ms  mel=%.2f ms  "
                   "encode=%.2f ms  decode=%.2f ms",
                   t.load_ms, t.mel_ms, t.encode_ms, t.decode_ms);
-    transcribe_log_emit(TRANSCRIBE_LOG_LEVEL_INFO, buf);
-
-    // Fallback: if no callback is registered, the log_emit above is a
-    // no-op. Print to stderr so the timings are observable in the
-    // common dev case (transcribe-cli without an installed sink).
-    if (g_log_cb.load(std::memory_order_acquire) == nullptr) {
-        std::fprintf(stderr, "%s\n", buf);
-    }
+    // Surfaced even in the common dev case (transcribe-cli without an
+    // installed sink) via the stderr fallback; an explicit
+    // transcribe_log_set(NULL, ...) silences it like everything else.
+    transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_INFO, buf);
 }
 
 extern "C" void

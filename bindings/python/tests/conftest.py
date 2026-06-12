@@ -47,9 +47,11 @@ PROMPTED_STREAMING_MODEL = (
 def load_wav(path: Path) -> "array.array":
     """Read a 16 kHz mono 16-bit WAV into a float32 ``array`` in [-1, 1)."""
     with wave.open(str(path), "rb") as w:
-        assert w.getsampwidth() == 2 and w.getframerate() == 16000, (
-            f"{path} must be 16 kHz 16-bit mono"
-        )
+        assert (
+            w.getsampwidth() == 2
+            and w.getframerate() == 16000
+            and w.getnchannels() == 1
+        ), f"{path} must be 16 kHz 16-bit mono"
         pcm16 = array.array("h")
         pcm16.frombytes(w.readframes(w.getnframes()))
     if sys.byteorder == "big":

@@ -3,10 +3,13 @@
 Two worlds load the library, and this module is the single choke point for both:
 
 **Distribution (wheels).** The pure-Python API package carries no native code.
-A *provider* package (``transcribe-cpp-native-cpu``, ``-metal``, ``-cu12``, …)
-ships the artifact and advertises it through a Python *entry point* in group
-``transcribe_cpp.native``. The entry point resolves to a zero-argument callable
-returning a descriptor (a mapping or an object) with the contract fields:
+A *provider* package ships the artifact and advertises it through a Python
+*entry point* in group ``transcribe_cpp.native``. Two providers exist today:
+``transcribe-cpp-native`` (the default — platform wheels bundling CPU+Metal on
+macOS arm64, CPU+Vulkan on Linux/Windows) and ``transcribe-cpp-native-cu12``
+(opt-in CUDA 12, installed via the ``transcribe-cpp[cu12]`` extra). The entry
+point resolves to a zero-argument callable returning a descriptor (a mapping
+or an object) with the contract fields:
 
     name          provider distribution name (e.g. "transcribe-cpp-native-cpu")
     library_path  absolute path to the shared library to dlopen
@@ -247,11 +250,20 @@ def _select_provider(providers: list, request: Optional[str]) -> Optional["_Prov
                     )
                 return p
         installed = ", ".join(sorted(p.name for p in providers)) or "(none)"
+        # Suggest a command that actually exists: cu12 is the only extra;
+        # every other backend kind ships inside the default provider.
+        if request.strip().lower() in ("cu12", "cuda", "transcribe-cpp-native-cu12"):
+            hint = 'Install it with: pip install "transcribe-cpp[cu12]".'
+        else:
+            hint = (
+                "The default provider (pip install transcribe-cpp) bundles "
+                "cpu plus the platform accelerator (metal on macOS arm64, "
+                "vulkan on Linux/Windows)."
+            )
         raise TranscribeError(
             message=(
                 f"requested native provider {request!r} is not installed. "
-                f"Installed providers: {installed}. Install it, e.g. "
-                f'pip install "transcribe-cpp[{request}]".'
+                f"Installed providers: {installed}. {hint}"
             )
         )
 
@@ -365,8 +377,8 @@ def load_library(provider: Optional[str] = None) -> tuple:
 
     raise TranscribeError(
         message=(
-            "could not locate the native transcribe library. Install a native "
-            'provider (e.g. pip install "transcribe-cpp[cpu]"), set '
+            "could not locate the native transcribe library. Install the "
+            "native provider (pip install transcribe-cpp pulls it in), set "
             "TRANSCRIBE_LIBRARY to a built library, or build a shared library "
             "(cmake -DTRANSCRIBE_BUILD_SHARED=ON). Searched:\n  "
             + "\n  ".join(tried)

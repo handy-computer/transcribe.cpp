@@ -109,3 +109,42 @@ def test_numpy_non_contiguous_rejected():
     np = pytest.importorskip("numpy")
     with pytest.raises(InvalidArgument, match="contiguous"):
         _pcm_to_carray(np.zeros((4, 160), dtype=np.float32)[:, 0])
+
+
+# --- dimensionality (the silent-stereo-truncation regression) ---------------
+#
+# A C-contiguous (frames, channels) float32 array used to pass validation and
+# transcribe shape[0] SAMPLES — two samples of garbage for a (2, N) stereo
+# buffer. Multi-dimensional input is now rejected outright; the caller owns
+# the downmix/flatten decision.
+
+
+def test_2d_contiguous_float32_rejected():
+    flat = array.array("f", range(6))
+    mv = memoryview(flat.tobytes()).cast("f", (2, 3))
+    assert mv.contiguous and mv.ndim == 2  # exactly the trap shape
+    with pytest.raises(InvalidArgument, match="1-D"):
+        _pcm_to_carray(mv)
+
+
+def test_3d_contiguous_float32_rejected():
+    flat = array.array("f", range(8))
+    mv = memoryview(flat.tobytes()).cast("f", (2, 2, 2))
+    with pytest.raises(InvalidArgument, match="1-D"):
+        _pcm_to_carray(mv)
+
+
+def test_2d_byte_buffer_rejected():
+    # The raw-bytes path must apply the same rule: a 2-D uint8 view is not
+    # "a byte stream of float32" no matter how it is shaped.
+    mv = memoryview(bytes(8)).cast("B", (2, 4))
+    with pytest.raises(InvalidArgument, match="1-D"):
+        _pcm_to_carray(mv)
+
+
+def test_numpy_stereo_rejected():
+    np = pytest.importorskip("numpy")
+    stereo = np.zeros((160, 2), dtype=np.float32)  # (frames, channels)
+    assert stereo.flags.c_contiguous
+    with pytest.raises(InvalidArgument, match="downmix"):
+        _pcm_to_carray(stereo)

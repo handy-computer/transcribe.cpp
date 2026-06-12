@@ -23,19 +23,9 @@
       "name": "wheel-linux-cpu",
       "inherits": "wheel-base",
       "displayName": "Linux x86_64 conservative CPU wheel",
-      "description": "The permanent compatibility floor. GGML_NATIVE=OFF does NOT disable the x86 SIMD tiers (they default on), so every tier is turned off explicitly: the resulting binary runs on a baseline x86-64 machine without SIGILL. Performance is the job of the fat-CPU (Strategy B) track, not this wheel.",
+      "description": "The permanent compatibility floor. TRANSCRIBE_X86_CONSERVATIVE fans out to GGML_NATIVE=OFF plus every x86 SIMD tier OFF (one switch, defined in CMakeLists.txt — GGML_NATIVE=OFF alone does NOT disable the tiers): the resulting binary runs on a baseline x86-64 machine without SIGILL. Performance is the job of the fat-CPU (Strategy B) track, not this wheel.",
       "cacheVariables": {
-        "GGML_SSE42": "OFF",
-        "GGML_AVX": "OFF",
-        "GGML_AVX_VNNI": "OFF",
-        "GGML_AVX2": "OFF",
-        "GGML_BMI2": "OFF",
-        "GGML_FMA": "OFF",
-        "GGML_F16C": "OFF",
-        "GGML_AVX512": "OFF",
-        "GGML_AVX512_VBMI": "OFF",
-        "GGML_AVX512_VNNI": "OFF",
-        "GGML_AVX512_BF16": "OFF"
+        "TRANSCRIBE_X86_CONSERVATIVE": "ON"
       }
     },
     {
@@ -53,7 +43,7 @@
       "name": "wheel-linux-cpu-vulkan",
       "inherits": "wheel-linux-cpu",
       "displayName": "Linux x86_64 default wheel: fat CPU + Vulkan backend modules",
-      "description": "The default Linux provider (M6.5). GGML_BACKEND_DL builds every backend as a loadable module next to libtranscribe; GGML_CPU_ALL_VARIANTS emits one ggml-cpu-<tier> module per x86 ISA tier (runtime feature scoring, llama.cpp-release shape) — the x64 baseline tier is the SIGILL-safe floor, so the per-tier SIMD-off flags inherited from wheel-linux-cpu are inert here (ggml gates them behind NOT GGML_CPU_ALL_VARIANTS) and kept only as the floor if ALL_VARIANTS is disabled. The Vulkan module ships too. On machines without a Vulkan loader/driver the Vulkan module fails to load quietly and CPU keeps working — verified degradation, see docs/python-bindings-distribution-plan.md. Build image needs the Vulkan SDK (glslc).",
+      "description": "The default Linux provider (M6.5). GGML_BACKEND_DL builds every backend as a loadable module next to libtranscribe; GGML_CPU_ALL_VARIANTS emits one ggml-cpu-<tier> module per x86 ISA tier (runtime feature scoring, llama.cpp-release shape) — the x64 baseline tier is the SIGILL-safe floor, so the per-tier SIMD-off flags inherited from wheel-linux-cpu are inert here (ggml gates them behind NOT GGML_CPU_ALL_VARIANTS) and kept only as the floor if ALL_VARIANTS is disabled. The Vulkan module ships too. On machines without a Vulkan loader/driver the Vulkan module fails to load quietly and CPU keeps working — degradation verified by the provider-dl-vulkan and clean-install CI lanes. Build image needs the Vulkan SDK (glslc).",
       "cacheVariables": {
         "TRANSCRIBE_GGML_BACKEND_DL": "ON",
         "TRANSCRIBE_VULKAN": "ON",

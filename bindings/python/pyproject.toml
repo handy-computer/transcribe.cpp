@@ -42,7 +42,9 @@ dependencies = ["transcribe-cpp-native==0.0.1.*"]
 # as the hard dependency (gated by check_version_sync.py).
 cu12 = ["transcribe-cpp-native-cu12==0.0.1.*"]
 # Test-only deps. Run with: uv run --extra test pytest (from bindings/python).
-test = ["pytest>=7"]
+# numpy is here so the numpy PCM-input tests run in every lane instead of
+# silently skipping wherever numpy happens to be absent.
+test = ["pytest>=7", "numpy"]
 
 [project.urls]
 Homepage = "https://github.com/handy-computer/transcribe.cpp"

@@ -44,7 +44,7 @@ VOLUME = modal.Volume.from_name("transcribe-cu12-wheelhouse", create_if_missing=
 #: fresh mtime and unchanged files keep their old one. ninja then recompiles
 #: exactly what changed — ggml-cuda only when ggml actually changed. The
 #: build-dir is keyed on the toolchain (below), not the source, so it persists
-#: across source edits. See docs/python-bindings-distribution-plan.md.
+#: across source edits.
 BUILD_VOLUME = modal.Volume.from_name("transcribe-cu12-build", create_if_missing=True)
 #: sccache stays as the second-line backstop for the TUs that DO recompile.
 CCACHE_VOLUME = modal.Volume.from_name("transcribe-cu12-sccache", create_if_missing=True)
@@ -69,6 +69,10 @@ SCCACHE_URL = (
 
 # manylinux_2_28 with the CUDA toolkit baked in as an image layer: this is
 # the expensive part (multi-GB dnf install) and it happens once, not per run.
+# The Vulkan toolchain (headers + loader + glslc, source-built — same script
+# as the cibuildwheel lanes) is its own layer so the cu12 wheel can bundle
+# the ggml-vulkan module alongside CUDA; Modal content-addresses the layer on
+# the script file, so it rebuilds only when the pinned tags change.
 build_image = (
     modal.Image.from_registry(
         "quay.io/pypa/manylinux_2_28_x86_64", add_python="3.12"
@@ -83,6 +87,12 @@ build_image = (
         f"curl -Ls {SCCACHE_URL} | tar xz --strip-components=1 -C /usr/local/bin"
         " --wildcards '*/sccache' && chmod +x /usr/local/bin/sccache",
     )
+    .add_local_file(
+        "scripts/ci/manylinux-vulkan-toolchain.sh",
+        "/opt/manylinux-vulkan-toolchain.sh",
+        copy=True,
+    )
+    .run_commands("bash /opt/manylinux-vulkan-toolchain.sh")
     # The repo checkout, attached at runtime (content-addressed: cheap when
     # unchanged). Heavy local dirs never leave the machine.
     .add_local_dir(
@@ -163,6 +173,9 @@ def build_and_check() -> str:
     # 2. Repair. The CUDA runtime is never vendored: libcuda.so.1 is the
     #    system driver and cudart/cublas come from the nvidia-*-cu12 wheels
     #    the package depends on (preloaded by its prepare() hook).
+    #    libvulkan.so.1 stays out for the same reason as the default wheel:
+    #    the ggml-vulkan module resolves the SYSTEM loader at runtime and
+    #    degrades quietly to CUDA/CPU when there is none.
     for old in pathlib.Path("/wheels").glob("*.whl"):
         old.unlink()
     run(["auditwheel", "repair", raw,
@@ -170,6 +183,7 @@ def build_and_check() -> str:
          "--exclude", "libcudart.so*",
          "--exclude", "libcublas.so*",
          "--exclude", "libcublasLt.so*",
+         "--exclude", "libvulkan.so.1",
          "-w", "/wheels"])
     [repaired] = glob.glob("/wheels/*.whl")
     size_mb = os.path.getsize(repaired) / 1e6

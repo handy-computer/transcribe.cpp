@@ -5,8 +5,19 @@
  *
  * Threading:
  * - transcribe_model_* functions are thread-safe.
- * - A loaded model may be shared across any number of threads and used to
- *   create multiple contexts in parallel.
+ * - A loaded model may be shared across any number of threads: querying it
+ *   (capabilities, metadata, feature probes) and creating sessions from it
+ *   are safe concurrently.
+ * - KNOWN 0.x LIMITATION — concurrent COMPUTE is not yet supported: at most
+ *   one transcribe_run / transcribe_run_batch / active stream may be in
+ *   flight across ALL sessions of a given model at a time. Sessions share
+ *   the model's backend instances and some per-family model state, so
+ *   overlapping runs race (observed: corrupted decodes on CPU, command-
+ *   buffer failures on Metal). Callers that want parallel transcription
+ *   today should load one model per worker; a per-session backend
+ *   architecture lifting this restriction is planned. Serialized use of
+ *   many sessions on one model (e.g. a session pool behind a mutex) is
+ *   fully supported.
  * - A model must outlive every session created from it.
  * - transcribe_model_free() is only valid after all derived contexts have
  *   been freed and no thread is still using the model.
@@ -379,10 +390,13 @@ TRANSCRIBE_API size_t transcribe_abi_struct_align(transcribe_abi_struct which);
 /* ----------------------------------------------------------------------- */
 
 /*
- * Numeric values mirror GGML_LOG_LEVEL_* exactly so internal pass-through
- * from ggml is a free reinterpret. If ggml ever renumbers, this enum is
- * the source of truth for callers and the internal pass-through layer is
- * responsible for honoring that contract.
+ * This enum is the source of truth for callers. ggml's log levels do NOT
+ * share these numeric values (its DEBUG/INFO/WARN/ERROR ordering differs),
+ * so the internal pass-through layer maps ggml levels onto this enum
+ * before any message reaches the installed callback; callers only ever
+ * see these values. CONT marks a fragment continuing the previous message
+ * (ggml emits these for progress output); hosts that want one line per
+ * message may join CONT fragments onto the preceding text.
  */
 typedef enum {
     TRANSCRIBE_LOG_LEVEL_NONE  = 0,
@@ -398,7 +412,26 @@ typedef void (*transcribe_log_callback)(
     const char *         msg,
     void *               userdata);
 
-/* Global log sink. Pass NULL cb to disable logging. */
+/*
+ * Global log sink. Three states:
+ *
+ *   never called          library messages that warrant surfacing go to
+ *                         stderr (the dev/CLI default); ggml's internal
+ *                         logging keeps its own stderr default.
+ *   cb != NULL            every library message AND ggml's internal
+ *                         diagnostics (mapped onto transcribe_log_level)
+ *                         route to the callback. Caveat: ggml compiles
+ *                         its per-module load-failure chatter OUT of
+ *                         release builds, so the reliable "why am I not
+ *                         on the GPU?" signals are the one-line device
+ *                         summary transcribe_init_backends() emits
+ *                         through this sink after each fresh scan, and
+ *                         the transcribe_backend_* device accessors.
+ *   cb == NULL            logging explicitly disabled: library and ggml
+ *                         messages are dropped, nothing goes to stderr.
+ *
+ * Call once at process startup (see the threading contract above).
+ */
 TRANSCRIBE_API void transcribe_log_set(transcribe_log_callback cb, void * userdata);
 
 /* ----------------------------------------------------------------------- */
@@ -689,8 +722,16 @@ typedef enum {
  * accessors below to see what actually registered, and
  * transcribe_backend_available() to probe one kind.
  *
- * Idempotent per directory (repeat calls with an already-loaded directory
- * return TRANSCRIBE_OK without re-loading) and thread-safe.
+ * Idempotent per directory: repeat calls with an already-scanned directory
+ * return the SAME status as the first scan without re-loading — including
+ * the TRANSCRIBE_ERR_BACKEND case, which is therefore NOT retryable in
+ * this process (e.g. installing a driver after the first call requires a
+ * new process to pick up). Concurrent calls to this function are
+ * serialized against each other; "thread-safe" extends no further — the
+ * load mutates the global device registry, so it must complete before any
+ * thread calls the device accessors below or loads a model. That ordering
+ * is automatic under the supported usage (call once, before the first
+ * model load).
  *
  * Returns:
  *   TRANSCRIBE_ERR_INVALID_ARG     artifact_dir is NULL or empty.

@@ -1,8 +1,11 @@
 """transcribe-cpp-native-cu12: CUDA 12 native artifact for transcribe-cpp.
 
-No Python API. Bundles libtranscribe + ggml backend modules (CPU + CUDA) in
-``_native/`` and advertises them via the ``transcribe_cpp.native`` entry
-point. ``_contract.py`` is stamped at build time by CMake
+No Python API. Bundles libtranscribe + ggml backend modules (CPU + CUDA +
+Vulkan — the Vulkan module makes this artifact a strict superset of the
+default provider, so a ``[cu12]`` install on a non-NVIDIA box still gets
+GPU acceleration instead of silently landing on CPU) in ``_native/`` and
+advertises them via the ``transcribe_cpp.native`` entry point.
+``_contract.py`` is stamped at build time by CMake
 (cmake/python-wheel-install.cmake).
 
 The CUDA runtime is NOT vendored in the wheel: ``prepare()`` (invoked by the

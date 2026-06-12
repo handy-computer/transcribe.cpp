@@ -100,7 +100,10 @@ def main() -> int:
     lane = os.environ.get("TRANSCRIBE_WHEEL_LANE")
     expected_caps = None
     if expected_provider == "transcribe-cpp-native-cu12":
-        expected_caps = {"cuda", "cpu"}
+        # cu12 bundles Vulkan alongside CUDA on purpose (superset of the
+        # default provider, so [cu12] installs never lose Vulkan on
+        # non-NVIDIA machines) — see bindings/python-native-cu12/pyproject.
+        expected_caps = {"cuda", "vulkan", "cpu"}
     elif lane:
         expected_caps = {
             "cpu-vulkan": {"vulkan", "cpu"},

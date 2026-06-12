@@ -54,12 +54,13 @@ def test_base_version_strips_suffixes(version, base):
     assert t._base_version(version) == base
 
 
-# --- status-code <-> generated-enum agreement (M2) ------------------------
+# --- status-code coverage (M2) ---------------------------------------------
 #
-# errors.py mirrors the transcribe_status enum by hand (so a skew surfaces as a
-# clear Python error, not a wrong subclass). These tests pin that the hand-kept
-# numbers still equal the generated enum, in both directions, so a native status
-# code that the Python layer forgot to mirror or map cannot slip through.
+# errors.py imports its status constants FROM the generated layer (single
+# source — nothing hand-kept to drift). What still needs pinning is COVERAGE:
+# every status the native header defines must be aliased in errors.py and
+# (for errors) mapped to an exception class, so adding a code natively fails
+# CI until the Python layer handles it deliberately.
 
 _STATUS_NAMES = [n for n in dir(errors) if n == "OK" or n.startswith("ERR_")]
 
@@ -70,24 +71,14 @@ def test_status_constants_discovered():
     assert len(_STATUS_NAMES) >= 19
 
 
-@pytest.mark.parametrize("name", _STATUS_NAMES)
-def test_status_code_matches_generated(name):
-    generated_name = "TRANSCRIBE_" + name
-    assert hasattr(_generated, generated_name), (
-        f"{generated_name} missing from generated enum"
-    )
-    assert getattr(errors, name) == getattr(_generated, generated_name)
-
-
-def test_every_generated_status_is_mirrored_and_mapped():
-    # Reverse direction: every TRANSCRIBE_OK / TRANSCRIBE_ERR_* the native
-    # library exposes must have a Python constant AND (for errors) a mapped
-    # exception, so adding a code natively fails CI until Python catches up.
+def test_every_generated_status_is_aliased_and_mapped():
+    # Every TRANSCRIBE_OK / TRANSCRIBE_ERR_* the native library exposes must
+    # have an errors.py alias AND (for errors) a mapped exception.
     py_values = {getattr(errors, n) for n in _STATUS_NAMES}
     for gen_name in dir(_generated):
         if gen_name == "TRANSCRIBE_OK" or gen_name.startswith("TRANSCRIBE_ERR_"):
             value = getattr(_generated, gen_name)
-            assert value in py_values, f"{gen_name} not mirrored in errors.py"
+            assert value in py_values, f"{gen_name} not aliased in errors.py"
             if gen_name != "TRANSCRIBE_OK":
                 assert value in errors._STATUS_TO_EXC, (
                     f"{gen_name} has no mapped exception in errors._STATUS_TO_EXC"

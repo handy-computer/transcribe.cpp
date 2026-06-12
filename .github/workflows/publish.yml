@@ -39,6 +39,11 @@ jobs:
     uses: ./.github/workflows/python-wheels.yml
     secrets: inherit
   cuda-windows:
+    # Tags only: the heaviest build in the project (nvcc over ggml-cuda x 5
+    # arches under MSVC, ~3 h on 16vcpu), and the TestPyPI rehearsal neither
+    # publishes nor smokes its output (cu12 wheels exceed TestPyPI's file
+    # cap). Validate it on demand with its own workflow_dispatch.
+    if: startsWith(github.ref, 'refs/tags/')
     uses: ./.github/workflows/cuda-windows.yml
     secrets: inherit
 
@@ -82,7 +87,9 @@ jobs:
           path: dist-api
       - uses: actions/download-artifact@v8
         with:
-          name: smoke-assets  # samples/jfk.wav, uploaded by the sdist job
+          # samples/jfk.wav (+ the degradation script), uploaded by api-wheel;
+          # files keep their repo-relative paths inside the artifact.
+          name: smoke-assets
           path: smoke-assets
       - name: Install from TestPyPI (exact just-published version) and transcribe
         run: |
@@ -114,7 +121,7 @@ jobs:
           import array, wave
           import transcribe_cpp as t
 
-          with wave.open("smoke-assets/jfk.wav", "rb") as w:
+          with wave.open("smoke-assets/samples/jfk.wav", "rb") as w:
               pcm16 = array.array("h"); pcm16.frombytes(w.readframes(w.getnframes()))
           pcm = array.array("f", (s / 32768.0 for s in pcm16))
           with t.Model("canary/whisper-tiny-Q5_K_M.gguf") as m, m.session() as s:

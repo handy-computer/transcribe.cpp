@@ -1476,6 +1476,66 @@ void test_begin_copies_param_strings_out() {
     transcribe_stream_reset(&session);
 }
 
+void test_begin_accepts_min_prefix_run_params() {
+    // The size gate admits struct_size >= the prefix ending at `family` —
+    // a caller compiled against a pre-spec_k_drafts header allocates
+    // EXACTLY that many bytes. The dispatcher must never read past the
+    // caller's declared prefix when it builds its owned copy (a full
+    // struct assignment is a heap-buffer-overflow here; ASan catches it),
+    // and the absent tail field must come out as its documented default.
+    const transcribe::Arch arch = {
+        "fake-retaining-stream-minprefix",
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,  // run_batch
+        nullptr,  // stream_validate
+        retain_stream_begin,
+        retain_stream_feed,
+        fake_stream_finalize,
+        nullptr,
+        fake_accepts_no_ext,
+    };
+
+    transcribe_model model;
+    model.arch = &arch;
+    model.caps.supports_streaming = true;
+    model.caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
+
+    transcribe_session session;
+    session.model = &model;
+
+    const size_t min_size = offsetof(transcribe_run_params, family) +
+                            sizeof(((transcribe_run_params *) nullptr)->family);
+
+    // Stage full defaults on the stack, then heap-allocate ONLY the
+    // prefix and declare exactly that many bytes via struct_size.
+    transcribe_run_params staged; transcribe_run_params_init(&staged);
+    staged.struct_size = min_size;
+    staged.language = "en";  // exercise the string copy alongside
+    auto * rp = static_cast<transcribe_run_params *>(std::malloc(min_size));
+    std::memcpy(rp, &staged, min_size);
+
+    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+    g_retained_rp = transcribe_run_params{};
+    g_language_seen_at_feed.clear();
+    CHECK(transcribe_stream_begin(&session, rp, &sp) == TRANSCRIBE_OK);
+    std::free(rp);
+
+    // The library-owned view the family retained must carry the caller's
+    // true struct_size (so downstream has_field gating stays honest) and
+    // the init default for the field the caller's struct did not have.
+    CHECK(g_retained_rp.struct_size == min_size);
+    CHECK(g_retained_rp.spec_k_drafts == -1);
+
+    transcribe_stream_update up; transcribe_stream_update_init(&up);
+    const float pcm[160] = {};
+    CHECK(transcribe_stream_feed(&session, pcm, 160, &up) == TRANSCRIBE_OK);
+    CHECK(g_language_seen_at_feed == "en");
+
+    transcribe_stream_reset(&session);
+}
+
 } // namespace
 
 int main() {
@@ -1517,6 +1577,7 @@ int main() {
     test_finalize_failure_transitions_to_failed();
     test_feed_abort_sets_was_aborted();
     test_begin_copies_param_strings_out();
+    test_begin_accepts_min_prefix_run_params();
     test_two_sessions_independent_streams();
     return g_failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -1,5 +1,5 @@
 # transcribe-cpp-native: the default native provider package for the
-# transcribe-cpp Python bindings (see docs/python-bindings-distribution-plan.md).
+# transcribe-cpp Python bindings.
 #
 # This pyproject lives at the repo root on purpose: the sdist must contain the
 # full C++ tree (src/, include/, vendored ggml/) so `pip install` can compile
@@ -114,30 +114,22 @@ sdist.include = ["/samples/jfk.wav"]
 # icelake, alderlake, ...) with runtime feature scoring — the exact shape
 # llama.cpp release binaries ship; it requires GGML_BACKEND_DL (set above).
 # The x64 baseline variant is the SIGILL-safe floor for any x86-64 machine,
-# so the conservative single-build is no longer needed. The per-tier
-# GGML_AVX*/GGML_AVX512* flags below are inert while ALL_VARIANTS is on (ggml
-# gates them behind `if(NOT GGML_CPU_ALL_VARIANTS)`); they remain as the
-# explicit floor if a build ever disables ALL_VARIANTS, mirroring
-# CMakePresets.json wheel-linux-cpu. cmake/python-wheel-install.cmake
-# collapses every cpu-<tier> kind back to "cpu" in the provider descriptor.
+# so the conservative single-build is no longer needed.
+# TRANSCRIBE_X86_CONSERVATIVE fans out to GGML_NATIVE=OFF + every per-tier
+# GGML_AVX*/GGML_AVX512* flag (one switch, defined in CMakeLists.txt — the
+# per-flag lists used to be mirrored here, in the cu12 pyproject, and in
+# CMakePresets.json); those flags are inert while ALL_VARIANTS is on (ggml
+# gates them behind `if(NOT GGML_CPU_ALL_VARIANTS)`) and remain as the
+# explicit floor if a build ever disables ALL_VARIANTS.
+# cmake/python-wheel-install.cmake collapses every cpu-<tier> kind back to
+# "cpu" in the provider descriptor.
 [[tool.scikit-build.overrides]]
 if.env.TRANSCRIBE_WHEEL_LANE = "^cpu-vulkan$"
 cmake.args = [
   "-DTRANSCRIBE_GGML_BACKEND_DL=ON",
   "-DTRANSCRIBE_VULKAN=ON",
   "-DGGML_CPU_ALL_VARIANTS=ON",
-  "-DGGML_NATIVE=OFF",
-  "-DGGML_SSE42=OFF",
-  "-DGGML_AVX=OFF",
-  "-DGGML_AVX_VNNI=OFF",
-  "-DGGML_AVX2=OFF",
-  "-DGGML_BMI2=OFF",
-  "-DGGML_FMA=OFF",
-  "-DGGML_F16C=OFF",
-  "-DGGML_AVX512=OFF",
-  "-DGGML_AVX512_VBMI=OFF",
-  "-DGGML_AVX512_VNNI=OFF",
-  "-DGGML_AVX512_BF16=OFF",
+  "-DTRANSCRIBE_X86_CONSERVATIVE=ON",
 ]
 
 # Default macOS arm64 wheel: Metal (shaders embedded via the SKBUILD block;
@@ -148,30 +140,19 @@ cmake.args = ["-DTRANSCRIBE_METAL=ON", "-DGGML_NATIVE=OFF"]
 
 # x86_64 macOS wheel: CPU only, no Metal. Intel-Mac GPUs are out of scope
 # (no fleet hardware to validate Metal compute, and ggml Metal on Intel/AMD
-# GPUs is far less proven than on Apple Silicon — see
-# docs/python-bindings-distribution-plan.md); Metal or tuned CPU on Intel is
-# served by the from-source sdist. Single artifact. TRANSCRIBE_METAL already
-# defaults OFF off Apple Silicon, but it is pinned OFF here for intent. Every
-# x86 SIMD tier is off (GGML_NATIVE=OFF does NOT disable them) so the one
-# artifact runs on any Intel Mac without SIGILL across the supported range;
-# fat-CPU variants are a possible perf follow-up (would need GGML_BACKEND_DL
-# on macOS, which this single-artifact lane intentionally avoids).
+# GPUs is far less proven than on Apple Silicon); Metal or tuned CPU on
+# Intel is served by the from-source sdist. Single artifact. TRANSCRIBE_METAL already
+# defaults OFF off Apple Silicon, but it is pinned OFF here for intent.
+# TRANSCRIBE_X86_CONSERVATIVE turns off every x86 SIMD tier (GGML_NATIVE=OFF
+# alone does NOT) so the one artifact runs on any Intel Mac without SIGILL
+# across the supported range; fat-CPU variants are a possible perf follow-up
+# (would need GGML_BACKEND_DL on macOS, which this single-artifact lane
+# intentionally avoids).
 [[tool.scikit-build.overrides]]
 if.env.TRANSCRIBE_WHEEL_LANE = "^cpu$"
 cmake.args = [
   "-DTRANSCRIBE_METAL=OFF",
-  "-DGGML_NATIVE=OFF",
-  "-DGGML_SSE42=OFF",
-  "-DGGML_AVX=OFF",
-  "-DGGML_AVX_VNNI=OFF",
-  "-DGGML_AVX2=OFF",
-  "-DGGML_BMI2=OFF",
-  "-DGGML_FMA=OFF",
-  "-DGGML_F16C=OFF",
-  "-DGGML_AVX512=OFF",
-  "-DGGML_AVX512_VBMI=OFF",
-  "-DGGML_AVX512_VNNI=OFF",
-  "-DGGML_AVX512_BF16=OFF",
+  "-DTRANSCRIBE_X86_CONSERVATIVE=ON",
 ]
 
 # --- cibuildwheel ------------------------------------------------------------

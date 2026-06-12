@@ -208,6 +208,25 @@ add_test(NAME transcribe_stream_dispatch_unit
     COMMAND transcribe_stream_dispatch_unit)
 
 # -----------------------------------------------------------------------------
+# Log sink contract (three states + ggml bridge level mapping)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_log_unit
+    log_unit.cpp)
+
+# ggml for ggml_log_get / GGML_LOG_LEVEL_*: the test drives the bridge
+# transcribe_log_set installs, pinning the cross-enum level mapping.
+target_link_libraries(transcribe_log_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_log_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_log_unit)
+
+add_test(NAME transcribe_log_unit
+    COMMAND transcribe_log_unit)
+
+# -----------------------------------------------------------------------------
 # Synthetic GGUF fixtures (for the loader smoke test)
 # -----------------------------------------------------------------------------
 

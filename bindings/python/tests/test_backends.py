@@ -33,24 +33,21 @@ def test_cpu_always_available():
     assert any(d.kind == "cpu" for d in t.backends())
 
 
-def test_unavailable_backend_answers_false_not_error():
-    # The degradation probe: asking about every known kind must answer a
-    # bool, never raise — this is what turns backend="vulkan" on a machine
-    # without Vulkan into a clear Python-level answer.
-    for kind in ("cpu", "metal", "vulkan", "cuda", "cpu_accel"):
-        assert t.backend_available(kind) in (True, False)
-
-
 def test_unknown_backend_kind_raises():
     with pytest.raises(t.InvalidArgument, match="unknown backend"):
         t.backend_available("quantum")
 
 
 def test_available_kinds_match_device_list():
+    # The degradation probe: every requestable kind must answer consistently
+    # with the registered device list, never raise — this is what turns
+    # backend="vulkan" on a machine without Vulkan into a clear Python-level
+    # answer. (cpu_accel is satisfied by a CPU device per the C contract.)
     kinds = {d.kind for d in t.backends()}
     for request, device_kind in (("metal", "metal"), ("vulkan", "vulkan"),
-                                 ("cuda", "cuda")):
-        assert t.backend_available(request) == (device_kind in kinds)
+                                 ("cuda", "cuda"), ("cpu", "cpu"),
+                                 ("cpu_accel", "cpu")):
+        assert t.backend_available(request) == (device_kind in kinds), request
 
 
 def test_artifact_dir_is_library_dir():

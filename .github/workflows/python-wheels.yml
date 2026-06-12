@@ -1,11 +1,10 @@
 name: python-wheels
 
 # Builds, repairs, and proves the distributable Python artifacts (plan M5):
-#   - wheel-linux:        manylinux_2_28 x86_64, fat CPU + Vulkan backend
-#                         modules (Vulkan toolchain built from pinned Khronos
-#                         tags inside the container; cached across runs)
-#   - wheel-linux-arm64:  same shape on manylinux_2_28 aarch64 (native ARM
-#                         runner; ggml's Linux-ARM tier list)
+#   - wheel-linux:        manylinux_2_28 {x86_64, aarch64}, fat CPU + Vulkan
+#                         backend modules (Vulkan toolchain built from pinned
+#                         Khronos tags inside the container; cached across
+#                         runs; native ARM runner for aarch64 — no QEMU)
 #   - wheel-macos:        macosx arm64, Metal with embedded shaders — built
 #                         AND Metal-compute-tested on the bare-metal M4 mini
 #                         (VM runners' paravirtual GPUs can't do Metal compute)
@@ -25,6 +24,13 @@ name: python-wheels
 #   - co-import:          numpy/torch coexistence with a real transcription,
 #                         both import orders, on all three platforms
 #
+# CADENCE (user decision 2026-06-12): this matrix does NOT run per PR or per
+# push — wheels matter at release time. It runs on workflow_dispatch (manual
+# validation after packaging/CMake changes) and via workflow_call from
+# publish.yml, so every rehearsal and release builds + validates the FULL
+# matrix and publishes those exact artifacts. The every-PR correctness gate
+# is python-bindings.yml.
+#
 # Every native wheel is tested AFTER repair (auditwheel/delocate/delvewheel)
 # in a fresh venv — cibuildwheel's test phase guarantees the tested artifact
 # is the one that ships. Real-model tests need the private canary GGUFs and
@@ -34,29 +40,6 @@ on:
   # Called by publish.yml so a release builds + validates the FULL matrix in
   # the same run and publishes those exact artifacts.
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - "bindings/**"
-      - "include/**"
-      - "src/**"
-      - "ggml/**"
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "pyproject.toml"
-      - "scripts/ci/**"
-      - ".github/workflows/python-wheels.yml"
-  pull_request:
-    paths:
-      - "bindings/**"
-      - "include/**"
-      - "src/**"
-      - "ggml/**"
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "pyproject.toml"
-      - "scripts/ci/**"
-      - ".github/workflows/python-wheels.yml"
   workflow_dispatch:
 
 concurrency:
@@ -70,41 +53,46 @@ jobs:
   wheel-linux:
     # 2vcpu everywhere: Blacksmith bills per vcpu-minute and compiles scale
     # ~linearly, so bigger runners cost the same and only buy wall-clock.
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # One matrix job for both Linux arches — the lane posture is identical
+    # (cpu-vulkan; ggml has a dedicated Linux-ARM tier list for
+    # GGML_CPU_ALL_VARIANTS: armv8.0..armv9.2 with runtime feature scoring,
+    # and the x86 SIMD-off floor flags are inert options there). aarch64
+    # targets Graviton/Ampere servers, Raspberry Pi 5, SBCs — a real
+    # on-device-transcription market.
+    name: wheel-linux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: blacksmith-2vcpu-ubuntu-2404
+            cibw-archs: x86_64
+          - arch: aarch64
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
+            cibw-archs: aarch64
+    runs-on: ${{ matrix.runner }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       # Container path of the toolchain cache volume (see CIBW_CONTAINER_ENGINE).
       VK_TOOLCHAIN_CACHE: /vk-toolchain-cache
+      # pyproject [tool.cibuildwheel.linux] pins archs=["x86_64"]; override
+      # per matrix leg (a no-op for x86_64, the aarch64 enabler otherwise).
+      CIBW_ARCHS_LINUX: ${{ matrix.cibw-archs }}
+      CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
     steps:
       - uses: actions/checkout@v6
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: astral-sh/setup-uv@v8
       - name: Cache the source-built Vulkan toolchain
         uses: actions/cache@v5
         with:
           path: vk-toolchain-cache
-          key: vk-toolchain-${{ hashFiles('scripts/ci/manylinux-vulkan-toolchain.sh') }}
-      - name: Canary model cache (avoid HF rate limits — 429s were real)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v5
+          key: vk-toolchain-${{ matrix.arch }}-${{ hashFiles('scripts/ci/manylinux-vulkan-toolchain.sh') }}
+      # cibuildwheel bind-mounts the project at /project inside the manylinux
+      # container; the canary env paths must resolve there.
+      - uses: ./.github/actions/fetch-canary
         with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary models (cache miss only; container sees /project)
-        if: env.HF_TOKEN != ''
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
-          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
-              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
-          # cibuildwheel bind-mounts the project at /project inside the
-          # manylinux container; these paths resolve there.
-          echo "TRANSCRIBE_SMOKE_MODEL=/project/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
-          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=/project/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+          hf-token: ${{ secrets.HF_TOKEN }}
+          model-path-prefix: /project
       - name: Build, repair, and test the wheel (cibuildwheel)
         env:
           CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/vk-toolchain-cache:/vk-toolchain-cache"
@@ -113,63 +101,7 @@ jobs:
           uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
       - uses: actions/upload-artifact@v7
         with:
-          name: dist-native-linux-x86_64
-          path: wheelhouse/*.whl
-
-  wheel-linux-arm64:
-    # Same provider shape as wheel-linux on linux-aarch64 (Graviton/Ampere
-    # servers, Raspberry Pi 5, SBCs — a real on-device-transcription market).
-    # Native ARM runner (no QEMU): the manylinux_2_28 aarch64 container
-    # compiles ggml with GGML_CPU_ALL_VARIANTS (ggml has a dedicated Linux-ARM
-    # tier list: armv8.0..armv9.2 with runtime feature scoring; the x86
-    # SIMD-off flags in the shared cpu-vulkan lane are inert options here) +
-    # the Vulkan module, and the full test phase runs natively. The Vulkan
-    # toolchain is source-built inside the container by the same before-all
-    # script, cached separately from x86_64.
-    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      VK_TOOLCHAIN_CACHE: /vk-toolchain-cache
-      # pyproject [tool.cibuildwheel.linux] pins archs=["x86_64"]; override.
-      CIBW_ARCHS_LINUX: aarch64
-      CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Cache the source-built Vulkan toolchain (aarch64)
-        uses: actions/cache@v5
-        with:
-          path: vk-toolchain-cache
-          key: vk-toolchain-aarch64-${{ hashFiles('scripts/ci/manylinux-vulkan-toolchain.sh') }}
-      - name: Canary model cache (avoid HF rate limits)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v5
-        with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary models (cache miss only; container sees /project)
-        if: env.HF_TOKEN != ''
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
-          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
-              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
-          echo "TRANSCRIBE_SMOKE_MODEL=/project/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
-          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=/project/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
-      - name: Build, repair, and test the wheel (cibuildwheel)
-        env:
-          CIBW_CONTAINER_ENGINE: "docker; create_args: --volume ${{ github.workspace }}/vk-toolchain-cache:/vk-toolchain-cache"
-        run: |
-          mkdir -p vk-toolchain-cache
-          uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist-native-linux-aarch64
+          name: dist-native-linux-${{ matrix.arch }}
           path: wheelhouse/*.whl
 
   wheel-macos:
@@ -192,27 +124,10 @@ jobs:
       TRANSCRIBE_WHEEL_LANE: metal
     steps:
       - uses: actions/checkout@v6
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Canary model cache (avoid HF rate limits)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v5
+      - uses: astral-sh/setup-uv@v8
+      - uses: ./.github/actions/fetch-canary
         with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary models (cache miss only)
-        if: env.HF_TOKEN != ''
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
-          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
-              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
-          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
-          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+          hf-token: ${{ secrets.HF_TOKEN }}
       - name: Build, repair, and test the wheel on real Metal (cibuildwheel)
         run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
       - uses: actions/upload-artifact@v7
@@ -249,27 +164,10 @@ jobs:
         CXX=/usr/bin/clang++
     steps:
       - uses: actions/checkout@v6
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Canary model cache (avoid HF rate limits)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v5
+      - uses: astral-sh/setup-uv@v8
+      - uses: ./.github/actions/fetch-canary
         with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary models (cache miss only)
-        if: env.HF_TOKEN != ''
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
-          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
-              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
-          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
-          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+          hf-token: ${{ secrets.HF_TOKEN }}
       - name: Build, repair, and test the CPU-only wheel (cibuildwheel)
         run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
       - uses: actions/upload-artifact@v7
@@ -308,36 +206,16 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-      - name: Install uv
-        run: |
-          powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-          Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.local\bin"
+      - uses: astral-sh/setup-uv@v8
       - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }}
         run: |
           curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
           & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
-      - name: Canary model cache (avoid HF rate limits)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v5
+      - uses: ./.github/actions/fetch-canary
         with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary models (cache miss only)
-        if: env.HF_TOKEN != ''
-        shell: bash
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
-          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
-              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
-          # GITHUB_WORKSPACE keeps the Windows-style path Python can open
-          # (bash's $PWD here would be an MSYS path).
-          echo "TRANSCRIBE_SMOKE_MODEL=$GITHUB_WORKSPACE/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
-          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$GITHUB_WORKSPACE/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+          hf-token: ${{ secrets.HF_TOKEN }}
       - name: Install zlib (vcpkg, static — libtranscribe requires it)
         # Static (-static-md: static lib, dynamic CRT) so no zlib1.dll exists
         # at runtime and delvewheel has nothing to vendor for it. The
@@ -363,27 +241,10 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Canary model cache (avoid HF rate limits)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v5
+      - uses: astral-sh/setup-uv@v8
+      - uses: ./.github/actions/fetch-canary
         with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary models (cache miss only)
-        if: env.HF_TOKEN != ''
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
-          [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
-              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
-          echo "TRANSCRIBE_SMOKE_MODEL=$PWD/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
-          echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
+          hf-token: ${{ secrets.HF_TOKEN }}
       - name: Build sdist
         run: uv build --sdist
       - name: Audit sdist contents
@@ -429,10 +290,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: astral-sh/setup-uv@v8
       - name: Build transcribe-cpp (pure wheel + sdist)
         run: |
           cd bindings/python
@@ -441,24 +299,28 @@ jobs:
         with:
           name: dist-api
           path: bindings/python/dist/*
-      # Test audio for the checkout-free clean-install job.
+      # Assets for the checkout-free jobs (clean-install, smoke-testpypi):
+      # test audio + the shared degradation-check script. Paths inside the
+      # artifact keep their repo-relative layout (samples/..., scripts/ci/...).
       - uses: actions/upload-artifact@v7
         with:
           name: smoke-assets
-          path: samples/jfk.wav
+          path: |
+            samples/jfk.wav
+            scripts/ci/vulkan_degradation_check.py
 
   cuda-wheel-modal:
     # The cu12 provider is built and smoked on Modal, not on CI runners: the
-    # manylinux_2_28 + CUDA-toolkit environment is a cached Modal image
-    # layer, the 16-core build bills by the second, and the flow ends with a
-    # REAL T4 runtime smoke (scripts/ci/modal_cuda_build.py). This job is
-    # just the driver — almost all of its wall-clock is idle waiting on
-    # Modal, which is exactly why it lives on the (free, mostly idle)
-    # Hetzner box instead of a billed runner. uv supplies Python (its
-    # standalone builds are fully relocatable — actions/setup-python's
-    # hosted-image tarballs are not reliable on self-hosted runners).
-    # Gated on the Modal token secrets — absent on forks, steps no-op
-    # cleanly.
+    # manylinux_2_28 + CUDA-toolkit + Vulkan-toolchain environment is a
+    # cached Modal image layer, the 16-core build bills by the second, and
+    # the flow ends with a REAL T4 runtime smoke
+    # (scripts/ci/modal_cuda_build.py). This job is just the driver — almost
+    # all of its wall-clock is idle waiting on Modal, which is exactly why it
+    # lives on the (free, mostly idle) Hetzner box instead of a billed
+    # runner. uv supplies Python (its standalone builds are fully
+    # relocatable — actions/setup-python's hosted-image tarballs are not
+    # reliable on self-hosted runners). Gated on the Modal token secrets —
+    # absent on forks, steps no-op cleanly.
     runs-on: [self-hosted, Linux, X64, hetzner]
     timeout-minutes: 75
     env:
@@ -467,10 +329,7 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: astral-sh/setup-uv@v8
       - name: Build, repair, packaging-smoke, and T4 runtime smoke (Modal)
         if: env.MODAL_TOKEN_ID != ''
         run: uvx --from modal modal run scripts/ci/modal_cuda_build.py
@@ -497,7 +356,9 @@ jobs:
     # compilers, no repo checkout, no env vars. Installs ONLY the built
     # wheels (resolver pulls the native provider through the hard pin) and
     # transcribes. This is also the shipped-artifact proof of the
-    # Vulkan-by-default degradation contract:
+    # Vulkan-by-default degradation contract, driven by the shared
+    # scripts/ci/vulkan_degradation_check.py (from the smoke-assets
+    # artifact — this job has no checkout):
     #   tier A (bare container, no Vulkan loader): the bundled module stays
     #     quietly unloaded — CPU transcribes, vulkan answers unavailable,
     #     backend="vulkan" raises a clean error.
@@ -532,7 +393,7 @@ jobs:
         with:
           path: canary
           key: canary-models-v1
-      - name: Fetch canary model (cache miss only)
+      - name: Fetch canary model (cache miss only; pip — no uv in this container)
         if: env.HF_TOKEN != ''
         run: |
           pip install -q huggingface_hub
@@ -543,39 +404,15 @@ jobs:
         run: pip install --no-index --find-links wheelhouse transcribe-cpp
       - name: "Tier A: bare machine — CPU transcribes, Vulkan quietly absent"
         run: |
-          python - <<'EOF'
-          import array, os, wave
-          import transcribe_cpp as t
-          from transcribe_cpp import errors
-
-          devs = [(d.name, d.kind) for d in t.backends()]
-          print("devices (bare):", devs)
-          assert t.native_provider() == "transcribe-cpp-native"
-          assert t.backend_available("cpu")
-          assert not t.backend_available("vulkan"), devs
-
-          if not os.path.exists("canary/whisper-tiny-Q5_K_M.gguf"):
-              print("!! no canary (fork without HF_TOKEN) — install-only check")
-              raise SystemExit(0)
-
-          # An explicit vulkan request on a machine without a loader must be
-          # a clean Python exception, not a crash.
-          try:
-              t.Model("canary/whisper-tiny-Q5_K_M.gguf", backend="vulkan")
-          except errors.TranscribeError as e:
-              print("vulkan request correctly rejected:", e)
-          else:
-              raise AssertionError("backend='vulkan' must fail without a loader")
-
-          with wave.open("assets/jfk.wav", "rb") as w:
-              pcm16 = array.array("h"); pcm16.frombytes(w.readframes(w.getnframes()))
-          pcm = array.array("f", (s / 32768.0 for s in pcm16))
-          with t.Model("canary/whisper-tiny-Q5_K_M.gguf") as m, m.session() as s:
-              text = s.run(pcm).text
-          print("text (cpu):", text.strip())
-          assert "country" in text.lower(), text
-          print("ok: clean machine, one pip install, transcribed on CPU")
-          EOF
+          if [ -f canary/whisper-tiny-Q5_K_M.gguf ]; then
+            python assets/scripts/ci/vulkan_degradation_check.py \
+              --tier no-loader --expect-provider transcribe-cpp-native \
+              --model canary/whisper-tiny-Q5_K_M.gguf --audio assets/samples/jfk.wav
+          else
+            echo "!! no canary (fork without HF_TOKEN) — install-only check"
+            python assets/scripts/ci/vulkan_degradation_check.py \
+              --tier no-loader --expect-provider transcribe-cpp-native
+          fi
       - name: "Tier B: install a Vulkan loader + lavapipe — same wheel uses it"
         if: env.HF_TOKEN != ''
         run: |
@@ -587,25 +424,9 @@ jobs:
           # lavapipe is a CPU-type Vulkan device; ggml's default filter only
           # admits real GPUs (CI-only override, real GPUs need none).
           export GGML_VK_VISIBLE_DEVICES=0
-          python - <<'EOF'
-          import array, wave
-          import transcribe_cpp as t
-
-          devs = [(d.name, d.kind) for d in t.backends()]
-          print("devices (lavapipe):", devs)
-          assert t.backend_available("vulkan"), devs
-
-          with wave.open("assets/jfk.wav", "rb") as w:
-              pcm16 = array.array("h"); pcm16.frombytes(w.readframes(w.getnframes()))
-          pcm = array.array("f", (s / 32768.0 for s in pcm16))
-          with t.Model("canary/whisper-tiny-Q5_K_M.gguf", backend="vulkan") as m:
-              print("model backend:", m.backend)
-              with m.session() as s:
-                  text = s.run(pcm).text
-          print("text (vulkan):", text.strip())
-          assert "country" in text.lower(), text
-          print("ok: the same installed wheel transcribed on the Vulkan device")
-          EOF
+          python assets/scripts/ci/vulkan_degradation_check.py \
+            --tier loader --expect-provider transcribe-cpp-native \
+            --model canary/whisper-tiny-Q5_K_M.gguf --audio assets/samples/jfk.wav
 
   vulkan-hw:
     # Real-GPU Vulkan truth lane — the Linux mirror of wheel-macos on the
@@ -629,27 +450,15 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: astral-sh/setup-uv@v8
       - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
           path: wheelhouse
-      - name: Canary model cache (avoid HF rate limits)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v5
+      - uses: ./.github/actions/fetch-canary
         with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary model (cache miss only)
-        if: env.HF_TOKEN != ''
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          hf-token: ${{ secrets.HF_TOKEN }}
       - name: Install the built wheels (venv; resolver pulls the native pin)
         run: |
           python3 -m venv "$RUNNER_TEMP/vk-venv"
@@ -715,6 +524,7 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8  # for fetch-canary's uvx
       # setup-python's macOS downloads are built for GitHub's hosted images
       # (non-relocatable, hardcoded /Users/runner prefix) and cannot install
       # on a self-hosted runner under a different user (observed:
@@ -739,21 +549,10 @@ jobs:
       - name: Install the built artifacts (resolver picks the platform wheel)
         run: |
           pip install --no-index --find-links wheelhouse transcribe-cpp
-          pip install numpy huggingface_hub
-      - name: Canary model cache (avoid HF rate limits)
-        if: env.HF_TOKEN != ''
-        uses: actions/cache@v5
+          pip install numpy
+      - uses: ./.github/actions/fetch-canary
         with:
-          path: canary
-          key: canary-models-v1
-      - name: Fetch canary model (cache miss only)
-        if: env.HF_TOKEN != ''
-        shell: bash
-        run: |
-          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
-            hf download handy-computer/whisper-tiny-gguf \
-              whisper-tiny-Q5_K_M.gguf --local-dir canary
-          echo "TRANSCRIBE_SMOKE_MODEL=$GITHUB_WORKSPACE/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+          hf-token: ${{ secrets.HF_TOKEN }}
       - name: numpy co-import smoke
         run: python scripts/ci/co_import_smoke.py numpy .
       - name: torch co-import smoke
