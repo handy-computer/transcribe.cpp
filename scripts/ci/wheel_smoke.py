@@ -89,6 +89,8 @@ def main() -> int:
     declared = None
     for ep in entry_points(group="transcribe_cpp.native"):
         desc = ep.load()
+        if callable(desc):  # the contract: a zero-arg callable returning the descriptor
+            desc = desc()
         get = desc.get if isinstance(desc, dict) else lambda k: getattr(desc, k, None)
         if get("name") == expected_provider:
             declared = set(get("backends") or ())
