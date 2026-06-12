@@ -254,12 +254,12 @@ transcribe_status load(
     m->hparams.dec_eos_id = m->tok.eos_id();
 
     if (m->hparams.dec_eos_id < 0) {
-        std::fprintf(stderr, "granite_nar: tokenizer has no eos_token_id\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar: tokenizer has no eos_token_id");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (m->tok.n_tokens() != m->hparams.dec_vocab_size) {
-        std::fprintf(stderr,
-                     "granite_nar: tokenizer vocab (%d) != dec_vocab_size (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar: tokenizer vocab (%d) != dec_vocab_size (%d)",
                      m->tok.n_tokens(), m->hparams.dec_vocab_size);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -378,7 +378,7 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr, "granite_nar: alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar: alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -461,7 +461,7 @@ transcribe_status run(
     transcribe::debug::init();
 
     if (!cm->mel.has_value()) {
-        std::fprintf(stderr, "granite_nar run: model has no MelFrontend\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar run: model has no MelFrontend");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -472,8 +472,8 @@ transcribe_status run(
             *cm->mel, pcm, n_samples, cc->n_threads, cc->mel_buf, t_enc);
         mst != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr,
-                     "granite_nar run: mel/stack failed (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar run: mel/stack failed (%s)",
                      transcribe_status_string(mst));
         return mst;
     }
@@ -521,7 +521,7 @@ transcribe_status run(
             static_cast<int>(cm->plan.scheduler_list.size()),
             32768, false, true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr, "granite_nar run: sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar run: sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -569,8 +569,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "granite_nar run: encoder compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar run: encoder compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -703,8 +703,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, pb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "granite_nar run: projector compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar run: projector compute failed (%d)",
                      static_cast<int>(gs));
         ggml_free(proj_ctx);
         return TRANSCRIBE_ERR_GGUF;
@@ -812,8 +812,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, fb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "granite_nar run: decoder compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar run: decoder compute failed (%d)",
                      static_cast<int>(gs));
         ggml_free(dec_ctx);
         return TRANSCRIBE_ERR_GGUF;

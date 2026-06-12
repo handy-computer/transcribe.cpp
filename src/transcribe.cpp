@@ -25,15 +25,25 @@
 
 #include "transcribe-abi.h"
 #include "transcribe-arch.h"
+#include "transcribe-backend.h"
 #include "transcribe-log.h"
 #include "transcribe-session.h"
 #include "transcribe-loader.h"
+
+#include "ggml.h"          // ggml_log_set: route ggml diagnostics into our sink
+#include "ggml-backend.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
 
 #include "arch/whisper/bin_load.h"
 
 #include <sys/stat.h>
+
+// MSVC's <sys/stat.h> has the _S_IFDIR mode bits but not the POSIX
+// S_ISDIR() macro.
+#if defined(_WIN32) && !defined(S_ISDIR)
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -45,8 +55,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <ios>
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -81,6 +94,95 @@ extern "C" const char * transcribe_status_string(int status) {
         case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:     return "output truncated: decode hit the context/generation cap before end-of-stream";
         default:                                  return "unknown status";
     }
+}
+
+// ---------------------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------------------
+
+// TRANSCRIBE_COMMIT is stamped by the build: the top-level CMakeLists.txt
+// captures `git rev-parse --short HEAD` at configure time and passes it as a
+// compile definition. Fall back to "unknown" for builds without git metadata
+// (source tarballs, etc.) so the accessor never returns NULL. TRANSCRIBE_VERSION
+// comes from <transcribe.h>, the single source of truth for the version.
+#ifndef TRANSCRIBE_COMMIT
+#define TRANSCRIBE_COMMIT "unknown"
+#endif
+
+extern "C" const char * transcribe_version(void) {
+    return TRANSCRIBE_VERSION;
+}
+
+extern "C" const char * transcribe_version_commit(void) {
+    return TRANSCRIBE_COMMIT;
+}
+
+// ---------------------------------------------------------------------------
+// Raw enum reads at the public ABI boundary
+// ---------------------------------------------------------------------------
+//
+// C callers can store ANY int in an enum-typed ABI field or pass any int as
+// an enum-typed argument — in C that is well-defined. In C++ (this TU),
+// loading an out-of-range value through an enum-typed lvalue is undefined
+// behavior, and UBSan traps it. So every public entry point reads
+// caller-supplied enum values as raw bytes first, validates the raw int, and
+// only then (if ever) converts to the enum type. All public enums are
+// int-sized; the static_assert below pins one representative.
+
+static inline int enum_field_raw(const void * field) {
+    int raw;
+    std::memcpy(&raw, field, sizeof(raw));
+    return raw;
+}
+static_assert(sizeof(transcribe_backend_request) == sizeof(int),
+              "public enums must be int-sized for raw boundary reads");
+
+// ---------------------------------------------------------------------------
+// ABI metadata
+// ---------------------------------------------------------------------------
+//
+// sizeof/alignof for the public structs, so a binding can verify its own
+// layout against this build before constructing instances. See the contract in
+// <transcribe.h>. Keep this switch in sync with the transcribe_abi_struct enum.
+
+extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
+    switch (enum_field_raw(&which)) {
+        case TRANSCRIBE_ABI_MODEL_LOAD_PARAMS: return sizeof(struct transcribe_model_load_params);
+        case TRANSCRIBE_ABI_SESSION_PARAMS:    return sizeof(struct transcribe_session_params);
+        case TRANSCRIBE_ABI_RUN_PARAMS:        return sizeof(struct transcribe_run_params);
+        case TRANSCRIBE_ABI_STREAM_PARAMS:     return sizeof(struct transcribe_stream_params);
+        case TRANSCRIBE_ABI_CAPABILITIES:      return sizeof(struct transcribe_capabilities);
+        case TRANSCRIBE_ABI_TIMINGS:           return sizeof(struct transcribe_timings);
+        case TRANSCRIBE_ABI_SEGMENT:           return sizeof(struct transcribe_segment);
+        case TRANSCRIBE_ABI_WORD:              return sizeof(struct transcribe_word);
+        case TRANSCRIBE_ABI_TOKEN:             return sizeof(struct transcribe_token);
+        case TRANSCRIBE_ABI_STREAM_UPDATE:     return sizeof(struct transcribe_stream_update);
+        case TRANSCRIBE_ABI_STREAM_TEXT:       return sizeof(struct transcribe_stream_text);
+        case TRANSCRIBE_ABI_SESSION_LIMITS:    return sizeof(struct transcribe_session_limits);
+        case TRANSCRIBE_ABI_EXT:               return sizeof(struct transcribe_ext);
+        case TRANSCRIBE_ABI_BACKEND_DEVICE:    return sizeof(struct transcribe_backend_device);
+    }
+    return 0;  // unknown id: "cannot verify", never a real size
+}
+
+extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
+    switch (enum_field_raw(&which)) {
+        case TRANSCRIBE_ABI_MODEL_LOAD_PARAMS: return alignof(struct transcribe_model_load_params);
+        case TRANSCRIBE_ABI_SESSION_PARAMS:    return alignof(struct transcribe_session_params);
+        case TRANSCRIBE_ABI_RUN_PARAMS:        return alignof(struct transcribe_run_params);
+        case TRANSCRIBE_ABI_STREAM_PARAMS:     return alignof(struct transcribe_stream_params);
+        case TRANSCRIBE_ABI_CAPABILITIES:      return alignof(struct transcribe_capabilities);
+        case TRANSCRIBE_ABI_TIMINGS:           return alignof(struct transcribe_timings);
+        case TRANSCRIBE_ABI_SEGMENT:           return alignof(struct transcribe_segment);
+        case TRANSCRIBE_ABI_WORD:              return alignof(struct transcribe_word);
+        case TRANSCRIBE_ABI_TOKEN:             return alignof(struct transcribe_token);
+        case TRANSCRIBE_ABI_STREAM_UPDATE:     return alignof(struct transcribe_stream_update);
+        case TRANSCRIBE_ABI_STREAM_TEXT:       return alignof(struct transcribe_stream_text);
+        case TRANSCRIBE_ABI_SESSION_LIMITS:    return alignof(struct transcribe_session_limits);
+        case TRANSCRIBE_ABI_EXT:               return alignof(struct transcribe_ext);
+        case TRANSCRIBE_ABI_BACKEND_DEVICE:    return alignof(struct transcribe_backend_device);
+    }
+    return 0;
 }
 
 namespace {
@@ -118,19 +220,38 @@ transcribe_status validate_run_params_common(
     const transcribe_session * session,
     const transcribe_run_params *  params)
 {
-    switch (params->task) {
+    // Raw-validate every enum field before its first enum-typed load (see
+    // enum_field_raw). Once a field passes here, downstream typed reads —
+    // including the per-family handlers' — are defined.
+    switch (enum_field_raw(&params->task)) {
         case TRANSCRIBE_TASK_TRANSCRIBE:
         case TRANSCRIBE_TASK_TRANSLATE:
             break;
         default:
             return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    switch (params->timestamps) {
+    switch (enum_field_raw(&params->timestamps)) {
         case TRANSCRIBE_TIMESTAMPS_NONE:
         case TRANSCRIBE_TIMESTAMPS_AUTO:
         case TRANSCRIBE_TIMESTAMPS_SEGMENT:
         case TRANSCRIBE_TIMESTAMPS_WORD:
         case TRANSCRIBE_TIMESTAMPS_TOKEN:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    switch (enum_field_raw(&params->pnc)) {
+        case TRANSCRIBE_PNC_MODE_DEFAULT:
+        case TRANSCRIBE_PNC_MODE_OFF:
+        case TRANSCRIBE_PNC_MODE_ON:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    switch (enum_field_raw(&params->itn)) {
+        case TRANSCRIBE_ITN_MODE_DEFAULT:
+        case TRANSCRIBE_ITN_MODE_OFF:
+        case TRANSCRIBE_ITN_MODE_ON:
             break;
         default:
             return TRANSCRIBE_ERR_INVALID_ARG;
@@ -193,45 +314,123 @@ transcribe_status validate_run_params_common(
 // install is unsupported in 0.x and is the caller's problem; the only
 // guarantee the implementation provides in that case is the absence of
 // data races, not correct semantics.
+//
+// Three sink states, all classified from a single acquire load of
+// g_log_cb:
+//   nullptr           never configured  -> stderr default for surfaced
+//                                          messages (emit_or_stderr)
+//   sentinel          explicitly disabled via transcribe_log_set(NULL)
+//                                       -> drop everything
+//   anything else     caller's callback -> route everything
+// The sentinel exists so "caller asked for silence" is distinguishable
+// from "caller never called us" without a second atomic whose pairing
+// could tear under the (unsupported) reconfiguration case.
 
 namespace {
+
+// Stored in g_log_cb in place of NULL when the host explicitly disables
+// logging. Never invoked; only compared against.
+void transcribe_log_cb_disabled(transcribe_log_level, const char *, void *) {}
+
 std::atomic<transcribe_log_callback> g_log_cb       { nullptr };
 std::atomic<void *>                  g_log_userdata { nullptr };
+
+// Map a ggml log level onto the transcribe enum. The numeric values do
+// NOT coincide (vendored ggml: DEBUG=1 INFO=2 WARN=3 ERROR=4;
+// transcribe.h: INFO=1 WARN=2 ERROR=3 DEBUG=4), so the pass-through
+// layer owns an explicit mapping — exactly the responsibility the
+// transcribe_log_level contract assigns to it. Unknown future levels
+// degrade to INFO rather than being dropped.
+transcribe_log_level transcribe_log_level_from_ggml(int level) {
+    switch (level) {
+        case GGML_LOG_LEVEL_NONE:  return TRANSCRIBE_LOG_LEVEL_NONE;
+        case GGML_LOG_LEVEL_DEBUG: return TRANSCRIBE_LOG_LEVEL_DEBUG;
+        case GGML_LOG_LEVEL_INFO:  return TRANSCRIBE_LOG_LEVEL_INFO;
+        case GGML_LOG_LEVEL_WARN:  return TRANSCRIBE_LOG_LEVEL_WARN;
+        case GGML_LOG_LEVEL_ERROR: return TRANSCRIBE_LOG_LEVEL_ERROR;
+        case GGML_LOG_LEVEL_CONT:  return TRANSCRIBE_LOG_LEVEL_CONT;
+        default:                   return TRANSCRIBE_LOG_LEVEL_INFO;
+    }
+}
+
+void transcribe_ggml_log_bridge(enum ggml_log_level level, const char * text, void *);
+
 } // namespace
 
 extern "C" void transcribe_log_set(transcribe_log_callback cb, void * userdata) {
     g_log_userdata.store(userdata, std::memory_order_relaxed);
-    g_log_cb.store(cb, std::memory_order_release);
+    g_log_cb.store(cb != nullptr ? cb : &transcribe_log_cb_disabled,
+                   std::memory_order_release);
+    // Route ggml's own diagnostics — above all the per-module dlopen
+    // failures from dynamic backend loading, the signal a host needs to
+    // see why an accelerator degraded to CPU — through the same sink.
+    // Installed on configuration (not at library init) so a host that
+    // never calls transcribe_log_set keeps ggml's stderr default
+    // untouched. ggml_log_set itself is a plain global store; under the
+    // supported install-once-at-startup model that is race-free.
+    ggml_log_set(&transcribe_ggml_log_bridge, nullptr);
 }
 
 // Internal emission helper. Not part of the public ABI, not declared in
 // any header. Used by transcribe_print_timings and the advisory-warn
 // path; future logging from the loader / frontend / decode can call
-// through here as well.
+// through here as well. Drops the message in both the never-configured
+// and explicitly-disabled states.
 static void transcribe_log_emit(
     transcribe_log_level level,
     const char *         msg)
 {
     const auto cb = g_log_cb.load(std::memory_order_acquire);
-    if (cb == nullptr) {
+    if (cb == nullptr || cb == &transcribe_log_cb_disabled) {
         return;
     }
     void * userdata = g_log_userdata.load(std::memory_order_relaxed);
     cb(level, msg, userdata);
 }
 
-// Stderr-fallback wrapper for messages we want surfaced even when the
-// caller hasn't installed a log sink. Mirrors transcribe_print_timings'
-// fallback so dev / CLI builds don't silently drop the diagnostic.
+// Wrapper for messages we want surfaced even when the caller never
+// configured a log sink: never-configured falls back to stderr so dev /
+// CLI builds don't silently drop diagnostics, while an explicit
+// transcribe_log_set(NULL, ...) silences them per the public contract.
+// The single load (instead of emit-then-recheck) also closes the benign
+// race where a concurrently installed callback could double-emit.
 static void transcribe_log_emit_or_stderr(
     transcribe_log_level level,
     const char *         msg)
 {
-    transcribe_log_emit(level, msg);
-    if (g_log_cb.load(std::memory_order_acquire) == nullptr) {
+    const auto cb = g_log_cb.load(std::memory_order_acquire);
+    if (cb == nullptr) {                              // never configured
         std::fprintf(stderr, "%s\n", msg);
+        return;
     }
+    if (cb == &transcribe_log_cb_disabled) {          // explicit silence
+        return;
+    }
+    cb(level, msg, g_log_userdata.load(std::memory_order_relaxed));
 }
+
+namespace {
+
+// ggml -> transcribe sink bridge, installed by transcribe_log_set.
+// transcribe messages carry no trailing newline (the stderr fallback
+// appends one), while ggml messages usually embed theirs — strip exactly
+// one so a host callback sees a uniform convention. GGML_LOG_LEVEL_CONT
+// fragments pass through as-is with level CONT; joining them is the
+// host's choice (a fragment is still information).
+void transcribe_ggml_log_bridge(enum ggml_log_level level, const char * text, void *) {
+    if (text == nullptr) {
+        return;
+    }
+    char buf[1024];
+    std::snprintf(buf, sizeof(buf), "%s", text);
+    const size_t n = std::strlen(buf);
+    if (n > 0 && buf[n - 1] == '\n') {
+        buf[n - 1] = '\0';
+    }
+    transcribe_log_emit_or_stderr(transcribe_log_level_from_ggml(level), buf);
+}
+
+} // namespace
 
 // Internal printf-style logger declared in transcribe-log.h. Renders into
 // a bounded stack buffer and forwards to the stderr-fallback emitter, so
@@ -343,6 +542,12 @@ extern "C" void transcribe_segment_init(struct transcribe_segment * p) {
     p->struct_size = sizeof(*p);
 }
 
+extern "C" void transcribe_backend_device_init(struct transcribe_backend_device * p) {
+    if (p == nullptr) { return; }
+    std::memset(p, 0, sizeof(*p));
+    p->struct_size = sizeof(*p);
+}
+
 extern "C" void transcribe_word_init(struct transcribe_word * p) {
     if (p == nullptr) { return; }
     std::memset(p, 0, sizeof(*p));
@@ -409,7 +614,10 @@ extern "C" bool transcribe_model_supports(
     const struct transcribe_model * model,
     transcribe_feature              feature)
 {
-    return transcribe::has_feature(model, feature);
+    // Raw read before any enum-typed load (see enum_field_raw): an unknown
+    // feature id from a C caller answers false, per the documented probe
+    // contract, instead of being UB.
+    return transcribe::has_feature(model, enum_field_raw(&feature));
 }
 
 namespace {
@@ -454,6 +662,8 @@ constexpr size_t k_min_token_size =
     TRANSCRIBE_FIELD_END(transcribe_token, text);
 constexpr size_t k_min_timings_size =
     TRANSCRIBE_FIELD_END(transcribe_timings, decode_ms);
+constexpr size_t k_min_backend_device_size =
+    TRANSCRIBE_FIELD_END(transcribe_backend_device, kind);
 // k_min_whisper_chunk_trace_size lives in arch/whisper/public.cpp with
 // the chunk-trace accessor that uses it.
 
@@ -471,7 +681,11 @@ static bool has_field(uint64_t struct_size, size_t field_end) {
     return struct_size >= static_cast<uint64_t>(field_end);
 }
 
-static bool valid_stream_commit_policy(transcribe_stream_commit_policy policy) {
+// Takes the RAW integer, not the enum: a C caller can store any int in the
+// struct's enum-typed field, and in C++ loading an out-of-range value through
+// the enum lvalue is UB (UBSan trips on it). Callers memcpy the bytes into an
+// int and validate before the first enum-typed load.
+static bool valid_stream_commit_policy(int policy) {
     switch (policy) {
         case TRANSCRIBE_STREAM_COMMIT_AUTO:
         case TRANSCRIBE_STREAM_COMMIT_ON_FINALIZE:
@@ -480,6 +694,148 @@ static bool valid_stream_commit_policy(transcribe_stream_commit_policy policy) {
     }
     return false;
 }
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Backend modules and device discovery
+// ---------------------------------------------------------------------------
+//
+// transcribe_init_backends loads ggml backend modules from ONE caller-named
+// directory (a Python wheel's package dir, an app bundle, ...). It never
+// widens the search: ggml_backend_load_all_from_path with a non-null path
+// scans only that path. ggml tolerates every per-module failure (missing
+// system deps such as the Vulkan loader -> dlopen fails -> module skipped),
+// which is exactly the ship-Vulkan-by-default degradation contract.
+//
+// NOTE: these definitions must sit at FILE scope, outside the anonymous
+// namespace above. clang exports extern "C" functions defined inside an
+// unnamed namespace; gcc gives them internal linkage, which strips them
+// from the shared library on Linux (undefined references at link).
+
+extern "C" transcribe_status transcribe_init_backends(const char * artifact_dir) {
+    if (artifact_dir == nullptr || artifact_dir[0] == '\0') {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    {
+        struct stat st {};
+        if (::stat(artifact_dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "transcribe_init_backends: %s is not an existing directory",
+                artifact_dir);
+            return TRANSCRIBE_ERR_FILE_NOT_FOUND;
+        }
+    }
+
+    // Idempotency: loading the same directory twice would re-dlopen and
+    // re-register every module (duplicate devices). Keyed on the canonical
+    // path so two spellings of one directory count as one load.
+    static std::mutex            s_mutex;
+    static std::set<std::string> s_loaded_dirs;
+    std::lock_guard<std::mutex> lock(s_mutex);
+
+    std::error_code ec;
+    std::filesystem::path canonical =
+        std::filesystem::weakly_canonical(artifact_dir, ec);
+    const std::string key = ec ? std::string(artifact_dir)
+                               : canonical.string();
+    if (s_loaded_dirs.find(key) == s_loaded_dirs.end()) {
+        ggml_backend_load_all_from_path(artifact_dir);
+        s_loaded_dirs.insert(key);
+
+        // Post-scan device summary, through the installed sink only. Release
+        // ggml compiles its per-module load-failure diagnostics out
+        // (silent=true under NDEBUG), so this one line is the reliable
+        // signal a host's log callback gets for "which backends made it" —
+        // the input to debugging an accelerator that degraded to CPU. Sent
+        // via the callback-only emitter on purpose: a host without a sink
+        // keeps today's stderr behavior, no new import-time noise.
+        char devices[256];
+        size_t off = 0;
+        const size_t n_dev = ggml_backend_dev_count();
+        for (size_t i = 0; i < n_dev; ++i) {
+            const int wrote = std::snprintf(
+                devices + off, sizeof(devices) - off, "%s%s",
+                i == 0 ? "" : ", ",
+                ggml_backend_dev_name(ggml_backend_dev_get(i)));
+            if (wrote < 0 || static_cast<size_t>(wrote) >= sizeof(devices) - off) {
+                break;  // truncated; the prefix is summary enough
+            }
+            off += static_cast<size_t>(wrote);
+        }
+        char msg[512];
+        std::snprintf(msg, sizeof(msg),
+                      "transcribe_init_backends: %zu compute device(s) "
+                      "registered after scanning %s: %s",
+                      n_dev, artifact_dir, off > 0 ? devices : "(none)");
+        transcribe_log_emit(TRANSCRIBE_LOG_LEVEL_INFO, msg);
+    }
+
+    if (ggml_backend_dev_count() == 0) {
+        // Dynamic-backend build pointed at a directory with no usable
+        // modules: the process has nothing to compute on. Loud and early
+        // beats a confusing model-load failure later.
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "transcribe_init_backends: no compute devices registered after "
+            "loading %s (no usable ggml backend modules found there, and no "
+            "backends are compiled in)", artifact_dir);
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    return TRANSCRIBE_OK;
+}
+
+extern "C" int transcribe_backend_device_count(void) {
+    return static_cast<int>(ggml_backend_dev_count());
+}
+
+extern "C" transcribe_status transcribe_get_backend_device(
+    int                                index,
+    struct transcribe_backend_device * out)
+{
+    if (out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_backend_device_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    if (index < 0 || index >= static_cast<int>(ggml_backend_dev_count())) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    ggml_backend_dev_t dev = ggml_backend_dev_get(static_cast<size_t>(index));
+    out->name        = ggml_backend_dev_name(dev);
+    out->description = ggml_backend_dev_description(dev);
+    out->kind        = transcribe::kind_name(transcribe::classify_device(dev));
+    return TRANSCRIBE_OK;
+}
+
+extern "C" bool transcribe_backend_available(transcribe_backend_request kind) {
+    // Raw read before any enum-typed load (see enum_field_raw); unknown
+    // values answer false per the documented probe contract.
+    const int raw = enum_field_raw(&kind);
+    const size_t n = ggml_backend_dev_count();
+    if (raw == TRANSCRIBE_BACKEND_AUTO) {
+        return n > 0;
+    }
+    transcribe::BackendKind want;
+    switch (raw) {
+        case TRANSCRIBE_BACKEND_CPU:
+        case TRANSCRIBE_BACKEND_CPU_ACCEL: want = transcribe::BackendKind::Cpu;    break;
+        case TRANSCRIBE_BACKEND_METAL:     want = transcribe::BackendKind::Metal;  break;
+        case TRANSCRIBE_BACKEND_VULKAN:    want = transcribe::BackendKind::Vulkan; break;
+        case TRANSCRIBE_BACKEND_CUDA:      want = transcribe::BackendKind::Cuda;   break;
+        default:                           return false;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        if (transcribe::classify_device(ggml_backend_dev_get(i)) == want) {
+            return true;
+        }
+    }
+    return false;
+}
+
+namespace {
 
 enum class StreamStablePrefixImpl {
     GenericTextAgreement,
@@ -915,11 +1271,30 @@ extern "C" transcribe_status transcribe_model_load_file(
     // argument" alone doesn't tell the caller which field tripped. When
     // multi-device support lands this check relaxes to `< 0 || >= n_devices`.
     if (params->gpu_device != 0) {
-        std::fprintf(stderr,
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
             "transcribe_model_load_file: gpu_device must be 0 (auto) in 0.x "
             "(got %d); multi-device selection is reserved for a "
-            "future release\n", params->gpu_device);
+            "future release", params->gpu_device);
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    // Raw-validate the backend request before the families' first
+    // enum-typed load of it (see enum_field_raw). init_backends re-checks
+    // as defense in depth; this boundary check is what makes every
+    // downstream `params->backend` read defined.
+    switch (enum_field_raw(&params->backend)) {
+        case TRANSCRIBE_BACKEND_AUTO:
+        case TRANSCRIBE_BACKEND_CPU:
+        case TRANSCRIBE_BACKEND_METAL:
+        case TRANSCRIBE_BACKEND_VULKAN:
+        case TRANSCRIBE_BACKEND_CPU_ACCEL:
+        case TRANSCRIBE_BACKEND_CUDA:
+            break;
+        default:
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                "transcribe_model_load_file: invalid backend request %d",
+                enum_field_raw(&params->backend));
+            return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
     // Stage 0: format sniff. Two formats are supported today:
@@ -954,9 +1329,9 @@ extern "C" transcribe_status transcribe_model_load_file(
         }
         fin.read(reinterpret_cast<char *>(&magic), sizeof(magic));
         if (!fin || fin.gcount() != sizeof(magic)) {
-            std::fprintf(stderr,
+            transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "transcribe_model_load_file: short read on file "
-                         "magic for %s\n", path);
+                         "magic for %s", path);
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -1039,6 +1414,17 @@ extern "C" transcribe_status transcribe_session_init(
     // re-check the same condition.
     if (params->n_threads < 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    // Raw-validate kv_type before the families' first enum-typed load of it
+    // (see enum_field_raw): an unknown value from a C caller is a clean
+    // error here, never UB downstream.
+    switch (enum_field_raw(&params->kv_type)) {
+        case TRANSCRIBE_KV_TYPE_AUTO:
+        case TRANSCRIBE_KV_TYPE_F32:
+        case TRANSCRIBE_KV_TYPE_F16:
+            break;
+        default:
+            return TRANSCRIBE_ERR_INVALID_ARG;
     }
     // n_ctx is a trailing field (appended after kv_type), so only read it
     // when the caller's struct_size actually covers it; an older caller's
@@ -1212,17 +1598,24 @@ extern "C" transcribe_status transcribe_stream_begin(
     {
         return st;
     }
-    transcribe_stream_commit_policy commit_policy =
-        TRANSCRIBE_STREAM_COMMIT_AUTO;
+    // Read the caller's commit_policy as raw bytes and validate BEFORE the
+    // first load through the enum-typed lvalue: C callers can legally store
+    // any int there, and an out-of-range enum load is UB in C++.
+    int commit_policy_raw = TRANSCRIBE_STREAM_COMMIT_AUTO;
     uint32_t stable_prefix_agreement_n = 0;
     if (has_field(stream_params->struct_size,
                   k_stream_params_commit_policy_size))
     {
-        commit_policy = stream_params->commit_policy;
+        static_assert(sizeof(stream_params->commit_policy) == sizeof(int),
+                      "commit_policy must be int-sized for the raw read");
+        std::memcpy(&commit_policy_raw, &stream_params->commit_policy,
+                    sizeof(commit_policy_raw));
     }
-    if (!valid_stream_commit_policy(commit_policy)) {
+    if (!valid_stream_commit_policy(commit_policy_raw)) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
+    const transcribe_stream_commit_policy commit_policy =
+        static_cast<transcribe_stream_commit_policy>(commit_policy_raw);
     if (has_field(stream_params->struct_size,
                   k_stream_params_agreement_n_size))
     {
@@ -1311,8 +1704,42 @@ extern "C" transcribe_status transcribe_stream_begin(
     session->stream_commit_policy = commit_policy;
     session->stream_stable_prefix_agreement_n = stable_prefix_agreement_n;
 
+    // Hand the family hook a params view whose pointers the LIBRARY owns.
+    // Families may capture `*run_params` for the stream's lifetime
+    // (parakeet re-reads .language on every feed), and the public contract
+    // lets the caller free every params pointer once begin returns — so the
+    // strings are copied into session storage here and the view repointed
+    // at it. `family` (the run-slot extension) is nulled in the view: no
+    // family reads it on the stream path today, and per the ext copy-out
+    // contract a retained pointer to it would dangle; a future family that
+    // wants a run-slot ext at stream begin must plumb it deliberately.
+    session->stream_language_owned =
+        run_params->language != nullptr ? run_params->language : "";
+    session->stream_target_language_owned =
+        run_params->target_language != nullptr ? run_params->target_language
+                                                : "";
+    // PREFIX copy, not struct assignment: the size gate above admits any
+    // struct_size >= k_min_run_params_size, so a conforming caller's
+    // allocation may be SHORTER than sizeof (fields past `family`, e.g.
+    // spec_k_drafts, absent). Init first so bytes past the caller's
+    // prefix hold their documented defaults, then copy only what the
+    // caller owns. The caller's struct_size is preserved by the copy, so
+    // downstream has_field() gating still sees the caller's true layout.
+    struct transcribe_run_params run_params_owned;
+    transcribe_run_params_init(&run_params_owned);
+    std::memcpy(&run_params_owned, run_params,
+                static_cast<size_t>(std::min<uint64_t>(
+                    run_params->struct_size, sizeof(run_params_owned))));
+    run_params_owned.language =
+        run_params->language != nullptr
+            ? session->stream_language_owned.c_str() : nullptr;
+    run_params_owned.target_language =
+        run_params->target_language != nullptr
+            ? session->stream_target_language_owned.c_str() : nullptr;
+    run_params_owned.family = nullptr;
+
     const transcribe_status st = session->model->arch->stream_begin(
-        session, run_params, stream_params);
+        session, &run_params_owned, stream_params);
     if (st != TRANSCRIBE_OK) {
         // Family hook rejected the begin (config it does not understand,
         // memory allocation failure, etc.). Roll lifecycle back to
@@ -2174,14 +2601,10 @@ transcribe_print_timings(const struct transcribe_session * session)
                   "timings: load=%.2f ms  mel=%.2f ms  "
                   "encode=%.2f ms  decode=%.2f ms",
                   t.load_ms, t.mel_ms, t.encode_ms, t.decode_ms);
-    transcribe_log_emit(TRANSCRIBE_LOG_LEVEL_INFO, buf);
-
-    // Fallback: if no callback is registered, the log_emit above is a
-    // no-op. Print to stderr so the timings are observable in the
-    // common dev case (transcribe-cli without an installed sink).
-    if (g_log_cb.load(std::memory_order_acquire) == nullptr) {
-        std::fprintf(stderr, "%s\n", buf);
-    }
+    // Surfaced even in the common dev case (transcribe-cli without an
+    // installed sink) via the stderr fallback; an explicit
+    // transcribe_log_set(NULL, ...) silences it like everything else.
+    transcribe_log_emit_or_stderr(TRANSCRIBE_LOG_LEVEL_INFO, buf);
 }
 
 extern "C" void

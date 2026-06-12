@@ -26,6 +26,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -491,16 +492,16 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
     DecoderBuild db {};
 
     if (ctx == nullptr || seq_len <= 0 || T_enc <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper decoder: invalid arg "
-                     "(ctx=%p, seq_len=%d, T_enc=%d)\n",
+                     "(ctx=%p, seq_len=%d, T_enc=%d)",
                      static_cast<void *>(ctx), seq_len, T_enc);
         return db;
     }
     if (seq_len > hp.dec_max_target_positions) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper decoder: seq_len=%d exceeds "
-                     "max_target_positions=%d\n",
+                     "max_target_positions=%d",
                      seq_len, hp.dec_max_target_positions);
         return db;
     }
@@ -600,8 +601,8 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
     // ~20 ops with self+cross+ffn).
     db.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (db.graph == nullptr) {
-        std::fprintf(stderr,
-                     "whisper decoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper decoder: ggml_new_graph_custom failed");
         return db;
     }
     ggml_build_forward_expand(db.graph, db.out);
@@ -627,9 +628,9 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
     DecoderBuild db {};
 
     if (ctx == nullptr || encoder_out == nullptr || T_enc <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper cross_kv: invalid arg "
-                     "(ctx=%p, encoder_out=%p, T_enc=%d)\n",
+                     "(ctx=%p, encoder_out=%p, T_enc=%d)",
                      static_cast<void *>(ctx),
                      static_cast<void *>(encoder_out), T_enc);
         return db;
@@ -647,8 +648,8 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
 
     db.graph = ggml_new_graph_custom(ctx, 4096, false);
     if (db.graph == nullptr) {
-        std::fprintf(stderr,
-                     "whisper cross_kv: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper cross_kv: ggml_new_graph_custom failed");
         return db;
     }
 
@@ -711,16 +712,16 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     DecoderBuild db {};
 
     if (ctx == nullptr || n_tokens <= 0 || T_enc <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper decoder_kv: invalid arg "
-                     "(ctx=%p, n_tokens=%d, T_enc=%d)\n",
+                     "(ctx=%p, n_tokens=%d, T_enc=%d)",
                      static_cast<void *>(ctx), n_tokens, T_enc);
         return db;
     }
     const int n_kv_active = n_past + n_tokens;
     if (n_kv_active > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "whisper decoder_kv: n_kv=%d exceeds n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper decoder_kv: n_kv=%d exceeds n_ctx=%d",
                      n_kv_active, kv_cache.n_ctx);
         return db;
     }
@@ -827,8 +828,8 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     // ggml_build_forward_expand to wire the cache writes into it.
     db.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (db.graph == nullptr) {
-        std::fprintf(stderr,
-                     "whisper decoder_kv: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper decoder_kv: ggml_new_graph_custom failed");
         return db;
     }
 
@@ -928,14 +929,14 @@ StepBuild build_step_graph(ggml_context *         ctx,
     sb.max_n_kv = max_n_kv;
 
     if (ctx == nullptr || max_n_kv <= 0 || T_enc <= 0) {
-        std::fprintf(stderr,
-                     "whisper step: invalid arg (max_n_kv=%d, T_enc=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper step: invalid arg (max_n_kv=%d, T_enc=%d)",
                      max_n_kv, T_enc);
         return sb;
     }
     if (max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "whisper step: max_n_kv=%d exceeds kv_cache.n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper step: max_n_kv=%d exceeds kv_cache.n_ctx=%d",
                      max_n_kv, kv_cache.n_ctx);
         return sb;
     }
@@ -972,7 +973,7 @@ StepBuild build_step_graph(ggml_context *         ctx,
 
     sb.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (sb.graph == nullptr) {
-        std::fprintf(stderr, "whisper step: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper step: ggml_new_graph_custom failed");
         return sb;
     }
 
@@ -1203,7 +1204,7 @@ StepBuildBatched build_step_graph_batched(ggml_context *         ctx,
     sb.n_batch  = n_batch;
     if (ctx == nullptr || max_n_kv <= 0 || T_enc_max <= 0 || n_batch <= 0) return sb;
     if (!use_flash) {
-        std::fprintf(stderr, "whisper step(batched): requires flash path\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper step(batched): requires flash path");
         return sb;
     }
 

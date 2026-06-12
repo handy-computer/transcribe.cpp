@@ -10,6 +10,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -73,7 +74,7 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
             case KvResult::Ok:     hp.streaming_pad_token_id = static_cast<int32_t>(spt); break;
             case KvResult::Absent: break;
             case KvResult::BadType:
-                std::fprintf(stderr, "voxtral_realtime: streaming_pad_token_id wrong type\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: streaming_pad_token_id wrong type");
                 return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -100,51 +101,51 @@ transcribe_status read_hparams(const gguf_context * gguf, HParams & hp) {
     if (hp.enc_n_layers <= 0 || hp.enc_d_model <= 0 || hp.enc_n_heads <= 0 ||
         hp.enc_head_dim <= 0 || hp.enc_ffn_dim <= 0 || hp.enc_num_mel_bins <= 0 ||
         hp.enc_sliding_window <= 0) {
-        std::fprintf(stderr, "voxtral_realtime: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_n_heads != hp.enc_n_kv_heads) {
-        std::fprintf(stderr, "voxtral_realtime: encoder expects full MHA (n_heads==n_kv_heads)\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: encoder expects full MHA (n_heads==n_kv_heads)");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.proj_in != hp.enc_d_model * hp.proj_downsample) {
-        std::fprintf(stderr, "voxtral_realtime: projector input_dim (%d) != enc_d_model*downsample (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: projector input_dim (%d) != enc_d_model*downsample (%d)",
                      hp.proj_in, hp.enc_d_model * hp.proj_downsample);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_layers <= 0 || hp.dec_hidden <= 0 || hp.dec_n_heads <= 0 ||
         hp.dec_n_kv_heads <= 0 || hp.dec_head_dim <= 0 || hp.dec_intermediate <= 0) {
-        std::fprintf(stderr, "voxtral_realtime: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_heads % hp.dec_n_kv_heads != 0) {
-        std::fprintf(stderr, "voxtral_realtime: n_heads (%d) not divisible by n_kv_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: n_heads (%d) not divisible by n_kv_heads (%d)",
                      hp.dec_n_heads, hp.dec_n_kv_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (!hp.dec_tie_word_embeddings) {
-        std::fprintf(stderr, "voxtral_realtime: decoder expects tied lm_head\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: decoder expects tied lm_head");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_hidden_act != "silu" && hp.dec_hidden_act != "swish") {
-        std::fprintf(stderr, "voxtral_realtime: unsupported decoder hidden_act \"%s\"\n", hp.dec_hidden_act.c_str());
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: unsupported decoder hidden_act \"%s\"", hp.dec_hidden_act.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_hidden_act != "silu" && hp.enc_hidden_act != "swish") {
-        std::fprintf(stderr, "voxtral_realtime: unsupported encoder hidden_act \"%s\"\n", hp.enc_hidden_act.c_str());
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: unsupported encoder hidden_act \"%s\"", hp.enc_hidden_act.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.proj_hidden_act != "gelu") {
-        std::fprintf(stderr, "voxtral_realtime: unsupported projector hidden_act \"%s\"\n", hp.proj_hidden_act.c_str());
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: unsupported projector hidden_act \"%s\"", hp.proj_hidden_act.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.time_embed_dim != hp.dec_hidden) {
-        std::fprintf(stderr, "voxtral_realtime: time_embed_dim (%d) != dec_hidden (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: time_embed_dim (%d) != dec_hidden (%d)",
                      hp.time_embed_dim, hp.dec_hidden);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        std::fprintf(stderr, "voxtral_realtime: unsupported frontend type \"%s\"\n", hp.fe_type.c_str());
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: unsupported frontend type \"%s\"", hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_OK;
@@ -220,7 +221,7 @@ transcribe_status build_weights(ggml_context *  ctx_meta,
         GET_LIN(b.ffn_down_w,  lname("enc.blocks.%d.ffn.down.weight",  i), enc_ff,  d_model);
         GET_F32(b.ffn_down_b,  lname("enc.blocks.%d.ffn.down.bias",    i), d_model);
         if (b.ffn_gate_w->type != b.ffn_up_w->type) {
-            std::fprintf(stderr, "voxtral_realtime: enc ffn gate/up dtype mismatch at layer %d\n", i);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: enc ffn gate/up dtype mismatch at layer %d", i);
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -258,7 +259,7 @@ transcribe_status build_weights(ggml_context *  ctx_meta,
         GET_LIN(b.ada_linear_1_w, lname("dec.blocks.%d.ada.linear_1.weight", i), dec_h, ada_h);
         GET_LIN(b.ada_linear_2_w, lname("dec.blocks.%d.ada.linear_2.weight", i), ada_h, dec_h);
         if (b.ffn_gate_w->type != b.ffn_up_w->type) {
-            std::fprintf(stderr, "voxtral_realtime: dec ffn gate/up dtype mismatch at layer %d\n", i);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime: dec ffn gate/up dtype mismatch at layer %d", i);
             return TRANSCRIBE_ERR_GGUF;
         }
     }

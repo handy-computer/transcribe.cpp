@@ -73,7 +73,7 @@ bool kv_cache_init(CanaryKvCache & cache,
                    ggml_type       kv_type)
 {
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr, "canary kv_cache: unsupported kv_type=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary kv_cache: unsupported kv_type=%d",
                      static_cast<int>(kv_type));
         return false;
     }
@@ -87,7 +87,7 @@ bool kv_cache_init(CanaryKvCache & cache,
 
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "canary kv_cache: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary kv_cache: ggml_init failed");
         return false;
     }
 
@@ -106,7 +106,7 @@ bool kv_cache_init(CanaryKvCache & cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "canary kv_cache: buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary kv_cache: buffer alloc failed");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -123,9 +123,9 @@ bool kv_cache_init(CanaryKvCache & cache,
     const size_t total_bytes =
         ggml_nbytes(cache.self_k) + ggml_nbytes(cache.self_v) +
         ggml_nbytes(cache.cross_k) + ggml_nbytes(cache.cross_v);
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
                  "canary kv_cache: allocated %.1f MB (%s) "
-                 "(self: %d session x %d layers, cross: %d T_enc x %d layers)\n",
+                 "(self: %d session x %d layers, cross: %d T_enc x %d layers)",
                  static_cast<double>(total_bytes) / (1024.0 * 1024.0),
                  ggml_type_name(kv_type),
                  n_ctx, n_layer, T_enc, n_layer);
@@ -149,7 +149,7 @@ bool kv_cache_init_batched(CanaryKvCache & cache,
         return true;
     }
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr, "canary kv_cache(batched): unsupported kv_type\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary kv_cache(batched): unsupported kv_type");
         return false;
     }
     const size_t ctx_size = 4 * ggml_tensor_overhead() + 256;
@@ -462,8 +462,8 @@ transcribe_status load(
     {
         const int tok_vocab = m->tok.n_tokens();
         if (tok_vocab > 0 && tok_vocab != m->hparams.dec_vocab_size) {
-            std::fprintf(stderr,
-                         "canary: tokenizer vocab (%d) != stt.canary.decoder.vocab_size (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "canary: tokenizer vocab (%d) != stt.canary.decoder.vocab_size (%d)",
                          tok_vocab, m->hparams.dec_vocab_size);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -476,9 +476,9 @@ transcribe_status load(
         m->hparams.eos_token_id = m->hparams.endoftext_id;
     }
     if (m->hparams.eos_token_id < 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "canary: GGUF tokenizer has no eos_token_id and no "
-                     "stt.canary.special.endoftext_id — regenerate GGUF\n");
+                     "stt.canary.special.endoftext_id — regenerate GGUF");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -561,7 +561,7 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr, "canary: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -773,7 +773,7 @@ transcribe_status run(
 
     // ----- Mel front-end -------------------------------------------
     if (!cm->mel.has_value()) {
-        std::fprintf(stderr, "canary run: model has no MelFrontend\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: model has no MelFrontend");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     const int64_t t_mel_start = ggml_time_us();
@@ -784,7 +784,7 @@ transcribe_status run(
             cc->mel_buf, mel_n_mels, mel_n_frames);
         mst != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr, "canary run: MelFrontend::compute failed (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: MelFrontend::compute failed (%s)",
                      transcribe_status_string(mst));
         return mst;
     }
@@ -854,7 +854,7 @@ transcribe_status run(
             static_cast<int>(cm->plan.scheduler_list.size()),
             16384, false, true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr, "canary run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -922,7 +922,7 @@ transcribe_status run(
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr, "canary run: encoder compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: encoder compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -958,8 +958,8 @@ transcribe_status run(
     const int d_dec = static_cast<int>(eb.out->ne[0]);
     const int T_enc = static_cast<int>(eb.out->ne[1]);
     if (d_dec <= 0 || T_enc <= 0) {
-        std::fprintf(stderr,
-                     "canary run: encoder output has degenerate shape [%d, %d]\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary run: encoder output has degenerate shape [%d, %d]",
                      d_dec, T_enc);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -981,16 +981,16 @@ transcribe_status run(
     const int src_id = find_language_id(cm->hparams, lang);
     const int tgt_id = find_language_id(cm->hparams, tgt_lang);
     if (src_id < 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "canary run: source language '%s' has no token id "
-                     "(model supports %zu langs)\n",
+                     "(model supports %zu langs)",
                      lang, cm->hparams.languages.size());
         return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
     }
     if (tgt_id < 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "canary run: target language '%s' has no token id "
-                     "(model supports %zu langs)\n",
+                     "(model supports %zu langs)",
                      tgt_lang, cm->hparams.languages.size());
         return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
     }
@@ -1019,8 +1019,8 @@ transcribe_status run(
                                          task, pnc);
     }
     if (prompt_ids.empty()) {
-        std::fprintf(stderr,
-                     "canary run: failed to build prompt for format='%s'\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary run: failed to build prompt for format='%s'",
                      cm->hparams.prompt_format.c_str());
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1101,7 +1101,7 @@ transcribe_status run(
         DecoderBuild cross_db = build_cross_kv_graph(
             cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache, T_enc);
         if (cross_db.graph == nullptr) {
-            std::fprintf(stderr, "canary run: build_cross_kv_graph failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: build_cross_kv_graph failed");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -1120,7 +1120,7 @@ transcribe_status run(
                 ggml_backend_sched_graph_compute(cc->sched, cross_db.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr, "canary run: cross_kv compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: cross_kv compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -1146,7 +1146,7 @@ transcribe_status run(
             /*skip_log_softmax=*/prompt_skip_softmax,
             cc->decoder_use_flash);
         if (db.out == nullptr || db.graph == nullptr) {
-            std::fprintf(stderr, "canary run: build_decoder_graph_kv (prompt) failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: build_decoder_graph_kv (prompt) failed");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -1186,7 +1186,7 @@ transcribe_status run(
                 ggml_backend_sched_graph_compute(cc->sched, db.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr, "canary run: decoder prompt compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: decoder prompt compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -1338,7 +1338,7 @@ transcribe_status run(
                 cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
                 max_n_kv, T_enc, cc->decoder_use_flash);
             if (sb.graph == nullptr || sb.argmax_out == nullptr) {
-                std::fprintf(stderr, "canary run: build_step_graph failed\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: build_step_graph failed");
                 commit_result();
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -1891,9 +1891,9 @@ transcribe_status run_batch(
     }
 
     if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "canary run_batch: n=%d T_enc_max=%d kv_cap=%d prompt=%d\n"
-            "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
+            "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)",
             n, T_enc_max, max_n_kv, prompt_len,
             mel_us / 1000.0, enc_us / 1000.0, n, dec_us / 1000.0);
     }

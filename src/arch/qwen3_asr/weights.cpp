@@ -14,6 +14,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -99,8 +100,8 @@ transcribe_status read_qwen3_asr_hparams(const gguf_context * gguf,
                 case KvResult::Ok:      dst = static_cast<int32_t>(tmp); return TRANSCRIBE_OK;
                 case KvResult::Absent:                                    return TRANSCRIBE_OK;
                 case KvResult::BadType:
-                    std::fprintf(stderr,
-                                 "qwen3_asr: \"%s\" has wrong type\n", key);
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                 "qwen3_asr: \"%s\" has wrong type", key);
                     return TRANSCRIBE_ERR_GGUF;
             }
             return TRANSCRIBE_ERR_GGUF;  // unreachable
@@ -115,41 +116,41 @@ transcribe_status read_qwen3_asr_hparams(const gguf_context * gguf,
         hp.enc_ffn_dim <= 0 || hp.enc_downsample_hidden <= 0 ||
         hp.enc_output_dim <= 0 || hp.enc_num_mel_bins <= 0)
     {
-        std::fprintf(stderr, "qwen3_asr: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
-                     "qwen3_asr: encoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr: encoder d_model (%d) not divisible by n_heads (%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_layers <= 0 || hp.dec_hidden <= 0 || hp.dec_n_heads <= 0 ||
         hp.dec_n_kv_heads <= 0 || hp.dec_head_dim <= 0 || hp.dec_intermediate <= 0)
     {
-        std::fprintf(stderr, "qwen3_asr: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_heads % hp.dec_n_kv_heads != 0) {
-        std::fprintf(stderr,
-                     "qwen3_asr: n_heads (%d) not divisible by n_kv_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "qwen3_asr: n_heads (%d) not divisible by n_kv_heads (%d)",
                      hp.dec_n_heads, hp.dec_n_kv_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_hidden_act != "silu" && hp.dec_hidden_act != "swish") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr: unsupported decoder hidden_act \"%s\" "
-                     "(only silu/swish)\n", hp.dec_hidden_act.c_str());
+                     "(only silu/swish)", hp.dec_hidden_act.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_activation != "gelu") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr: unsupported encoder activation \"%s\" "
-                     "(only gelu)\n", hp.enc_activation.c_str());
+                     "(only gelu)", hp.enc_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        std::fprintf(stderr, "qwen3_asr: unsupported frontend type \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "qwen3_asr: unsupported frontend type \"%s\"",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -158,9 +159,9 @@ transcribe_status read_qwen3_asr_hparams(const gguf_context * gguf,
     // untied lm_head tensor that this port does not ship or consume;
     // fail at load rather than silently run an undefined graph.
     if (!hp.dec_tie_word_embeddings) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr: decoder.tie_word_embeddings=false is not "
-                     "supported in this port (graph assumes tied lm_head)\n");
+                     "supported in this port (graph assumes tied lm_head)");
         return TRANSCRIBE_ERR_GGUF;
     }
     // Single-modality audio-LLM: the LM at inference processes one
@@ -176,9 +177,9 @@ transcribe_status read_qwen3_asr_hparams(const gguf_context * gguf,
                                     hp.dec_rope_mrope_section_w;
         const int32_t half = hp.dec_head_dim / 2;
         if (section_sum != half) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "qwen3_asr: mrope_section t+h+w (%d) != head_dim/2 (%d); "
-                         "single-modality RoPE reduction no longer valid\n",
+                         "single-modality RoPE reduction no longer valid",
                          section_sum, half);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -188,10 +189,10 @@ transcribe_status read_qwen3_asr_hparams(const gguf_context * gguf,
         // if a future checkpoint used the concatenated layout, so fail
         // at load rather than silently produce wrong logits.
         if (!hp.dec_rope_mrope_interleaved) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "qwen3_asr: dec_rope_mrope_interleaved=false is not "
                          "supported; the decoder graph assumes the interleaved "
-                         "MRoPE layout\n");
+                         "MRoPE layout");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -201,9 +202,9 @@ transcribe_status read_qwen3_asr_hparams(const gguf_context * gguf,
     // surface at graph-build time anyway; catching it at load gives
     // a clearer error and avoids paying encoder cost on every run().
     if (hp.enc_output_dim != hp.dec_hidden) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr: enc_output_dim (%d) != dec_hidden (%d); "
-                     "audio injection requires matching dims\n",
+                     "audio injection requires matching dims",
                      hp.enc_output_dim, hp.dec_hidden);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -320,20 +321,20 @@ transcribe_status build_qwen3_asr_weights(ggml_context *          ctx_meta,
     {
         ggml_tensor * tw = ggml_get_tensor(ctx_meta, "dec.token_embd.weight");
         if (tw == nullptr) {
-            std::fprintf(stderr,
-                         "qwen3_asr: missing tensor \"dec.token_embd.weight\"\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "qwen3_asr: missing tensor \"dec.token_embd.weight\"");
             return TRANSCRIBE_ERR_GGUF;
         }
         if (tw->ne[0] != hp.dec_hidden) {
-            std::fprintf(stderr,
-                         "qwen3_asr: dec.token_embd.weight ne[0]=%lld, expected %lld\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "qwen3_asr: dec.token_embd.weight ne[0]=%lld, expected %lld",
                          static_cast<long long>(tw->ne[0]),
                          static_cast<long long>(hp.dec_hidden));
             return TRANSCRIBE_ERR_GGUF;
         }
         if (tw->ne[1] != hp.dec_vocab_size) {
-            std::fprintf(stderr,
-                         "qwen3_asr: dec.token_embd.weight ne[1]=%lld, expected %lld\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "qwen3_asr: dec.token_embd.weight ne[1]=%lld, expected %lld",
                          static_cast<long long>(tw->ne[1]),
                          static_cast<long long>(hp.dec_vocab_size));
             return TRANSCRIBE_ERR_GGUF;
@@ -366,9 +367,9 @@ transcribe_status build_qwen3_asr_weights(ggml_context *          ctx_meta,
         GET_LIN(b.ffn_down_w,  lname("dec.blocks.%d.ffn.down.weight", i), dec_im, dec_h);
 
         if (b.ffn_gate_w->type != b.ffn_up_w->type) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "qwen3_asr: ffn gate/up dtype mismatch at layer %d "
-                         "(%d vs %d)\n", i,
+                         "(%d vs %d)", i,
                          static_cast<int>(b.ffn_gate_w->type),
                          static_cast<int>(b.ffn_up_w->type));
             return TRANSCRIBE_ERR_GGUF;

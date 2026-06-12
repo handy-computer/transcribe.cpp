@@ -20,6 +20,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -125,18 +126,18 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_mel_frames <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere encoder: invalid arg "
-                     "(ctx=%p, n_mel_frames=%d)\n",
+                     "(ctx=%p, n_mel_frames=%d)",
                      static_cast<void *>(ctx), n_mel_frames);
         return eb;
     }
 
     if (hp.enc_subsampling_factor != 8 || hp.fe_num_mels != 128) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere encoder: unsupported geometry "
                      "subsampling_factor=%d num_mels=%d "
-                     "(only 8/128 implemented)\n",
+                     "(only 8/128 implemented)",
                      hp.enc_subsampling_factor, hp.fe_num_mels);
         return eb;
     }
@@ -233,8 +234,8 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     // large graph; 16384 leaves headroom.
     eb.graph = ggml_new_graph_custom(ctx, 16384, false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "cohere encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

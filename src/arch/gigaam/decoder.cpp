@@ -16,6 +16,7 @@
 
 #include "gigaam.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 #include "weights.h"
 
 #include "ggml.h"
@@ -64,8 +65,8 @@ void readback_f32(const ggml_tensor * t, std::vector<float> & out) {
 
     const auto * tt = ggml_get_type_traits(t->type);
     if (tt == nullptr || tt->to_float == nullptr) {
-        std::fprintf(stderr,
-                     "gigaam decoder: tensor \"%s\" type %s has no to_float\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "gigaam decoder: tensor \"%s\" type %s has no to_float",
                      t->name, ggml_type_name(t->type));
         out.clear();
         return;
@@ -369,9 +370,9 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & host,
     if (static_cast<int>(host.ctc_w.size()) != n_classes * d_model ||
         static_cast<int>(host.ctc_b.size()) != n_classes)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "gigaam decoder (ctc): host head shape mismatch "
-                     "(ctc_w=%zu expected=%d, ctc_b=%zu expected=%d)\n",
+                     "(ctc_w=%zu expected=%d, ctc_b=%zu expected=%d)",
                      host.ctc_w.size(), n_classes * d_model,
                      host.ctc_b.size(), n_classes);
         return TRANSCRIBE_ERR_INVALID_ARG;

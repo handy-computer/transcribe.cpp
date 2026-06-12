@@ -278,6 +278,19 @@ struct transcribe_session {
         TRANSCRIBE_STREAM_COMMIT_AUTO;
     uint32_t                     stream_stable_prefix_agreement_n = 0;
 
+    // Session-owned copies of the caller's run-params strings, refreshed on
+    // every transcribe_stream_begin. The dispatcher hands the family hooks a
+    // params view whose language/target_language point HERE, so a family
+    // that captures `*run_params` (parakeet re-reads .language on every
+    // feed; moonshine_streaming carries the copy through its decode path)
+    // holds pointers into library-owned storage. The public contract lets
+    // the caller free every params pointer the moment begin returns —
+    // retaining a caller pointer is a use-after-free. Stable for the
+    // stream's lifetime: only the next begin mutates these, and it also
+    // refreshes every retained copy.
+    std::string                  stream_language_owned;
+    std::string                  stream_target_language_owned;
+
     // UI-facing streaming text state. `full_text` above remains the raw
     // model hypothesis. `stream_committed_text` is the append-only public
     // display/input prefix; `stream_tentative_text` is the current raw

@@ -53,6 +53,7 @@
 #include "weights.h"
 
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -219,9 +220,9 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     const float   ln_eps         = hp.prj_layer_norm_eps;     // 1e-12
 
     if (prj_hidden % n_heads != 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "granite projector: prj_hidden (%d) not divisible by "
-                     "n_heads (%d)\n", prj_hidden, n_heads);
+                     "n_heads (%d)", prj_hidden, n_heads);
         return pb;
     }
     const int head_dim = prj_hidden / n_heads;  // 64
@@ -334,7 +335,7 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     // 4096 nodes is plenty of headroom.
     pb.graph = ggml_new_graph_custom(ctx, /*size=*/4096, /*grads=*/false);
     if (pb.graph == nullptr) {
-        std::fprintf(stderr, "granite projector: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite projector: ggml_new_graph_custom failed");
         return pb;
     }
     ggml_build_forward_expand(pb.graph, pb.out);

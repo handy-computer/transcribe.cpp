@@ -18,6 +18,7 @@
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-meta.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -97,7 +98,7 @@ bool enc_out_init(WhisperEncOut & enc_out,
 
     enc_out.ctx = ggml_init(params);
     if (enc_out.ctx == nullptr) {
-        std::fprintf(stderr, "whisper enc_out: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper enc_out: ggml_init failed");
         return false;
     }
 
@@ -107,7 +108,7 @@ bool enc_out_init(WhisperEncOut & enc_out,
 
     enc_out.buffer = ggml_backend_alloc_ctx_tensors(enc_out.ctx, backend);
     if (enc_out.buffer == nullptr) {
-        std::fprintf(stderr, "whisper enc_out: buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper enc_out: buffer alloc failed");
         ggml_free(enc_out.ctx);
         enc_out.ctx    = nullptr;
         enc_out.tensor = nullptr;
@@ -138,9 +139,9 @@ bool kv_cache_init(WhisperKvCache & cache,
                    ggml_type        kv_type)
 {
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper kv_cache: unsupported kv_type=%d "
-                     "(only F16/F32)\n", static_cast<int>(kv_type));
+                     "(only F16/F32)", static_cast<int>(kv_type));
         return false;
     }
 
@@ -152,7 +153,7 @@ bool kv_cache_init(WhisperKvCache & cache,
 
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "whisper kv_cache: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper kv_cache: ggml_init failed");
         return false;
     }
 
@@ -179,7 +180,7 @@ bool kv_cache_init(WhisperKvCache & cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "whisper kv_cache: buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper kv_cache: buffer alloc failed");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -213,8 +214,8 @@ bool kv_cache_init_batched(WhisperKvCache & cache,
                              n_layer, kv_type);
     }
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr,
-                     "whisper kv_cache(batched): unsupported kv_type=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper kv_cache(batched): unsupported kv_type=%d",
                      static_cast<int>(kv_type));
         return false;
     }
@@ -229,7 +230,7 @@ bool kv_cache_init_batched(WhisperKvCache & cache,
 
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "whisper kv_cache(batched): ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper kv_cache(batched): ggml_init failed");
         return false;
     }
 
@@ -253,7 +254,7 @@ bool kv_cache_init_batched(WhisperKvCache & cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "whisper kv_cache(batched): buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper kv_cache(batched): buffer alloc failed");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -344,35 +345,35 @@ void print_whisper_perf(const WhisperPerf & p) {
         stage_total(p.step_compute) + stage_total(p.step_tensor_get) +
         stage_total(p.step_cpu);
 
-    std::fprintf(stderr,
-        "[whisper-perf] chunks=%d  encs=%d  crosses=%d  prompts=%d  steps=%d\n",
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
+        "[whisper-perf] chunks=%d  encs=%d  crosses=%d  prompts=%d  steps=%d",
         p.chunks, p.enc_compute.count, p.cross_compute.count,
         p.prompt_compute.count, p.step_compute.count);
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
         "[whisper-perf] enc    total=%7.2f ms  build=%7.2f  alloc=%7.2f  "
-        "compute=%7.2f  tget=%7.2f\n",
+        "compute=%7.2f  tget=%7.2f",
         ms(enc_total), ms(p.enc_build.total_us), ms(p.enc_alloc.total_us),
         ms(p.enc_compute.total_us), ms(p.enc_tensor_get.total_us));
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
         "[whisper-perf] cross  total=%7.2f ms  build=%7.2f  alloc=%7.2f  "
-        "compute=%7.2f\n",
+        "compute=%7.2f",
         ms(cross_total), ms(p.cross_build.total_us),
         ms(p.cross_alloc.total_us), ms(p.cross_compute.total_us));
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
         "[whisper-perf] prompt total=%7.2f ms  build=%7.2f  alloc=%7.2f  "
-        "compute=%7.2f  tget=%7.2f  cpu=%7.2f\n",
+        "compute=%7.2f  tget=%7.2f  cpu=%7.2f",
         ms(prompt_total), ms(p.prompt_build.total_us),
         ms(p.prompt_alloc.total_us), ms(p.prompt_compute.total_us),
         ms(p.prompt_tensor_get.total_us), ms(p.prompt_cpu.total_us));
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
         "[whisper-perf] step   total=%7.2f ms  build=%7.2f  alloc=%7.2f  "
-        "compute=%7.2f  tget=%7.2f  cpu=%7.2f\n",
+        "compute=%7.2f  tget=%7.2f  cpu=%7.2f",
         ms(step_total), ms(p.step_build.total_us),
         ms(p.step_alloc.total_us), ms(p.step_compute.total_us),
         ms(p.step_tensor_get.total_us), ms(p.step_cpu.total_us));
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
         "[whisper-perf] step avg us  build=%6.1f  alloc=%6.1f  "
-        "compute=%6.1f  tget=%6.1f  cpu=%6.1f\n",
+        "compute=%6.1f  tget=%6.1f  cpu=%6.1f",
         avg_us(p.step_build), avg_us(p.step_alloc),
         avg_us(p.step_compute), avg_us(p.step_tensor_get),
         avg_us(p.step_cpu));
@@ -391,23 +392,23 @@ void print_whisper_perf(const WhisperPerf & p) {
         }
     }
     if (show_cpu_breakdown) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "[whisper-perf] prompt cpu  suppress=%7.2f  ts=%7.2f  "
-            "sample=%7.2f  logprob=%7.2f  (ms)\n",
+            "sample=%7.2f  logprob=%7.2f  (ms)",
             ms(p.prompt_cpu_suppress.total_us),
             ms(p.prompt_cpu_timestamp.total_us),
             ms(p.prompt_cpu_sample.total_us),
             ms(p.prompt_cpu_logprob.total_us));
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "[whisper-perf] step   cpu  suppress=%7.2f  ts=%7.2f  "
-            "sample=%7.2f  logprob=%7.2f  (ms)\n",
+            "sample=%7.2f  logprob=%7.2f  (ms)",
             ms(p.step_cpu_suppress.total_us),
             ms(p.step_cpu_timestamp.total_us),
             ms(p.step_cpu_sample.total_us),
             ms(p.step_cpu_logprob.total_us));
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "[whisper-perf] step avg us  suppress=%6.1f  ts=%6.1f  "
-            "sample=%6.1f  logprob=%6.1f\n",
+            "sample=%6.1f  logprob=%6.1f",
             avg_us(p.step_cpu_suppress), avg_us(p.step_cpu_timestamp),
             avg_us(p.step_cpu_sample),   avg_us(p.step_cpu_logprob));
     }
@@ -543,8 +544,8 @@ transcribe_status whisper_load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "whisper: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -612,9 +613,9 @@ transcribe_status whisper_load(
             const std::string piece = std::string("<|") + code + "|>";
             const int id = m->tok.find(piece);
             if (id < 0) {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "whisper: language '%s' has no '%s' token "
-                             "in tokenizer vocab\n",
+                             "in tokenizer vocab",
                              code, piece.c_str());
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -696,8 +697,8 @@ transcribe_status run_whisper_encoder_on_window(
     // ggml_reset between calls instead of free + reinit.
     const int64_t t_enc_build_start = ggml_time_us();
     if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
-        std::fprintf(stderr,
-                     "whisper run: ensure_compute_ctx (encoder) failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper run: ensure_compute_ctx (encoder) failed");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -725,8 +726,8 @@ transcribe_status run_whisper_encoder_on_window(
             if (!enc_out_init(cc->enc_out, cm->plan.primary,
                               d_enc_g, T_enc_g))
             {
-                std::fprintf(stderr,
-                             "whisper run: enc_out_init failed\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "whisper run: enc_out_init failed");
                 return TRANSCRIBE_ERR_GGUF;
             }
         }
@@ -748,16 +749,16 @@ transcribe_status run_whisper_encoder_on_window(
             static_cast<int>(cm->plan.scheduler_list.size()),
             16384, false, true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr,
-                         "whisper run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "whisper run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper run: ggml_backend_sched_alloc_graph failed "
-                     "(encoder)\n");
+                     "(encoder)");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -774,8 +775,8 @@ transcribe_status run_whisper_encoder_on_window(
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "whisper run: encoder graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper run: encoder graph compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -1038,8 +1039,8 @@ transcribe_status load_mel_from_ref(const char *         ref_dir,
 
     std::ifstream f(path, std::ios::binary);
     if (!f) {
-        std::fprintf(stderr,
-                     "whisper run: cannot open mel ref '%s'\n", path.c_str());
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "whisper run: cannot open mel ref '%s'", path.c_str());
         return TRANSCRIBE_ERR_FILE_NOT_FOUND;
     }
 
@@ -1051,9 +1052,9 @@ transcribe_status load_mel_from_ref(const char *         ref_dir,
     f.read(reinterpret_cast<char *>(out.data()),
            static_cast<std::streamsize>(n_bytes));
     if (static_cast<size_t>(f.gcount()) != n_bytes) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper run: short read on mel ref '%s' "
-                     "(got %lld bytes, want %zu)\n",
+                     "(got %lld bytes, want %zu)",
                      path.c_str(), static_cast<long long>(f.gcount()), n_bytes);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -1374,9 +1375,9 @@ transcribe_status whisper_run(
         total_mel_frames = n_mel_frames_per_chunk;
     } else {
         if (!cm->mel.has_value()) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: model has no MelFrontend "
-                         "(load skipped?)\n");
+                         "(load skipped?)");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -1398,21 +1399,21 @@ transcribe_status whisper_run(
                 pcm_in, pcm_in_n, mel_mn, mel_n_mels, mel_n_frames);
             mst != TRANSCRIBE_OK)
         {
-            std::fprintf(stderr,
-                         "whisper run: MelFrontend::compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "whisper run: MelFrontend::compute failed (%d)",
                          static_cast<int>(mst));
             return mst;
         }
         if (mel_n_mels != n_mels) {
-            std::fprintf(stderr,
-                         "whisper run: mel n_mels %d != expected %d\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "whisper run: mel n_mels %d != expected %d",
                          mel_n_mels, n_mels);
             return TRANSCRIBE_ERR_GGUF;
         }
         if (is_short_form && mel_n_frames != n_mel_frames_per_chunk) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: short-form mel has %d frames, "
-                         "expected %d\n",
+                         "expected %d",
                          mel_n_frames, n_mel_frames_per_chunk);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -1470,9 +1471,9 @@ transcribe_status whisper_run(
             return TRANSCRIBE_ERR_GGUF;
         }
     } else if (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper run: this model does not support translate "
-                     "(non-multilingual variant)\n");
+                     "(non-multilingual variant)");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -1488,9 +1489,9 @@ transcribe_status whisper_run(
         const std::string lang_code = params->language;
         if (!is_multilingual) {
             if (lang_code != "en") {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "whisper run: language '%s' is not supported by "
-                             "this non-multilingual model (only 'en')\n",
+                             "this non-multilingual model (only 'en')",
                              lang_code.c_str());
                 return TRANSCRIBE_ERR_INVALID_ARG;
             }
@@ -1503,9 +1504,9 @@ transcribe_status whisper_run(
                 }
             }
             if (lang_token < 0) {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "whisper run: language '%s' not in model's language "
-                             "table — cannot build decoder prompt\n",
+                             "table — cannot build decoder prompt",
                              lang_code.c_str());
                 return TRANSCRIBE_ERR_INVALID_ARG;
             }
@@ -1651,9 +1652,9 @@ transcribe_status whisper_run(
     if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS &&
         !wp->condition_on_prev_tokens)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper run: prompt_condition=ALL_SEGMENTS requires "
-                     "condition_on_prev_tokens=true (HF parity)\n");
+                     "condition_on_prev_tokens=true (HF parity)");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -1670,9 +1671,9 @@ transcribe_status whisper_run(
     if (prev_sot_id < 0 &&
         (prompt_requested || wp->condition_on_prev_tokens))
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "whisper run: model has no <|startofprev|> token; "
-                     "initial_prompt / condition_on_prev_tokens unavailable\n");
+                     "initial_prompt / condition_on_prev_tokens unavailable");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -1701,10 +1702,10 @@ transcribe_status whisper_run(
         // a malformed prefix. (Header documents this contract;
         // runtime check makes it observable.)
         if (prev_sot_id >= 0 && wp->prompt_tokens[0] == prev_sot_id) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: prompt_tokens must not include "
                          "<|startofprev|> (id %d) at index 0; the library "
-                         "prepends it. See transcribe_whisper_run_ext docs.\n",
+                         "prepends it. See transcribe_whisper_run_ext docs.",
                          prev_sot_id);
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
@@ -1742,9 +1743,9 @@ transcribe_status whisper_run(
                         std::string piece = text.substr(i, close - i);
                         const int id = cm->tok.find(piece);
                         if (id >= eos_id) {
-                            std::fprintf(stderr,
+                            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                          "whisper run: initial_prompt contains "
-                                         "disallowed special token \"%s\" (id %d)\n",
+                                         "disallowed special token \"%s\" (id %d)",
                                          piece.c_str(), id);
                             return TRANSCRIBE_ERR_INVALID_ARG;
                         }
@@ -1756,16 +1757,16 @@ transcribe_status whisper_run(
             }
 
             if (cm->tok.encode(text, prompt_text_ids) != TRANSCRIBE_OK) {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "whisper run: tokenizer.encode failed on "
-                             "initial_prompt\n");
+                             "initial_prompt");
                 return TRANSCRIBE_ERR_GGUF;
             }
             for (int32_t id : prompt_text_ids) {
                 if (id >= eos_id) {
-                    std::fprintf(stderr,
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                                  "whisper run: initial_prompt contains "
-                                 "disallowed special token id %d\n", id);
+                                 "disallowed special token id %d", id);
                     return TRANSCRIBE_ERR_INVALID_ARG;
                 }
             }
@@ -1918,9 +1919,9 @@ transcribe_status whisper_run(
             }
         }
         if (is_multilingual && lang_token < 0) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: could not resolve a decoder language "
-                         "token\n");
+                         "token");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -2005,9 +2006,9 @@ transcribe_status whisper_run(
         // pathological caller passing prompt_tokens > 444 would land
         // here.
         if (seq_len + 1 > static_cast<int>(n_ctx_decoder)) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: prefix length %d exceeds decoder "
-                         "context %lld\n",
+                         "context %lld",
                          seq_len, static_cast<long long>(n_ctx_decoder));
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
@@ -2165,7 +2166,7 @@ transcribe_status whisper_run(
                                static_cast<int>(n_ctx_decoder), T_enc_local,
                                cm->hparams.dec_d_model, n_layers, kv_type_g))
             {
-                std::fprintf(stderr, "whisper run: KV cache init failed\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run: KV cache init failed");
                 return TRANSCRIBE_ERR_BACKEND;
             }
         }
@@ -2180,8 +2181,8 @@ transcribe_status whisper_run(
         {
             const int64_t t_cross_build_start = ggml_time_us();
             if (!new_compute_ctx(8 * 1024 * 1024)) {
-                std::fprintf(stderr,
-                             "whisper run: ggml_init for cross_kv failed\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "whisper run: ggml_init for cross_kv failed");
                 return TRANSCRIBE_ERR_GGUF;
             }
             DecoderBuild cross_db = build_cross_kv_graph(
@@ -2195,8 +2196,8 @@ transcribe_status whisper_run(
             const int64_t t_cross_alloc_start = ggml_time_us();
             ggml_backend_sched_reset(cc->sched);
             if (!ggml_backend_sched_alloc_graph(cc->sched, cross_db.graph)) {
-                std::fprintf(stderr,
-                             "whisper run: alloc_graph failed (cross_kv)\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "whisper run: alloc_graph failed (cross_kv)");
                 return TRANSCRIBE_ERR_GGUF;
             }
             // No tensor_set: cross-KV reads cc->enc_out.tensor via
@@ -2209,8 +2210,8 @@ transcribe_status whisper_run(
                     cc->sched, cross_db.graph);
                 gs != GGML_STATUS_SUCCESS)
             {
-                std::fprintf(stderr,
-                             "whisper run: cross_kv compute failed (%d)\n",
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "whisper run: cross_kv compute failed (%d)",
                              static_cast<int>(gs));
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -2266,8 +2267,8 @@ transcribe_status whisper_run(
                 const int64_t t_prompt_alloc_start = ggml_time_us();
                 ggml_backend_sched_reset(cc->sched);
                 if (!ggml_backend_sched_alloc_graph(cc->sched, db.graph)) {
-                    std::fprintf(stderr,
-                                 "whisper run: alloc_graph failed (prompt)\n");
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                 "whisper run: alloc_graph failed (prompt)");
                     return TRANSCRIBE_ERR_GGUF;
                 }
 
@@ -2497,14 +2498,14 @@ transcribe_status whisper_run(
                     cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
                     max_n_kv, T_enc_local, cc->decoder_use_flash);
                 if (sb.graph == nullptr || sb.logits_out == nullptr) {
-                    std::fprintf(stderr,
-                                 "whisper run: build_step_graph failed\n");
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                 "whisper run: build_step_graph failed");
                     return TRANSCRIBE_ERR_GGUF;
                 }
                 ggml_backend_sched_reset(cc->sched);
                 if (!ggml_backend_sched_alloc_graph(cc->sched, sb.graph)) {
-                    std::fprintf(stderr,
-                                 "whisper run: sched_alloc_graph failed (step)\n");
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                 "whisper run: sched_alloc_graph failed (step)");
                     return TRANSCRIBE_ERR_GGUF;
                 }
 
@@ -2542,8 +2543,8 @@ transcribe_status whisper_run(
 
                 if (n_past + 1 > static_cast<int>(n_ctx_decoder)) break;
                 if (use_step_graph && n_past + 1 > max_n_kv) {
-                    std::fprintf(stderr,
-                                 "whisper run: hit max_n_kv=%d at n_past=%d\n",
+                    log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+                                 "whisper run: hit max_n_kv=%d at n_past=%d",
                                  max_n_kv, n_past);
                     break;
                 }
@@ -3302,7 +3303,7 @@ transcribe_status whisper_run_batch(
     if (cc->kv_cache.buffer == nullptr) {
         if (!kv_cache_init_batched(cc->kv_cache, cm->plan.primary, max_n_kv,
                                    T_enc_max, d_model, n_layer, B, kv_type_g))
-        { std::fprintf(stderr, "whisper run_batch: kv_cache_init_batched failed\n");
+        { log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper run_batch: kv_cache_init_batched failed");
           return TRANSCRIBE_ERR_BACKEND; }
     } else {
         ggml_backend_buffer_clear(cc->kv_cache.buffer, 0);
@@ -3610,10 +3611,10 @@ transcribe_status whisper_run_batch(
 
     if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
         int n_serial = 0; for (int b = 0; b < n; ++b) n_serial += needs_serial[b] ? 1 : 0;
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "whisper run_batch: n=%d batched=%d serial=%d tiers=%d want_ts=%d "
             "T_enc_max=%d kv_window=%d (cap %d) prompt=%d\n"
-            "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
+            "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)",
             n, n_batch_active, n_serial, static_cast<int>(temperatures.size()),
             want_ts ? 1 : 0, T_enc_max, kv_window, max_n_kv, prompt_len,
             mel_us / 1000.0, enc_us / 1000.0, n_batch_active, dec_us / 1000.0);

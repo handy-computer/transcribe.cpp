@@ -5,8 +5,19 @@
  *
  * Threading:
  * - transcribe_model_* functions are thread-safe.
- * - A loaded model may be shared across any number of threads and used to
- *   create multiple contexts in parallel.
+ * - A loaded model may be shared across any number of threads: querying it
+ *   (capabilities, metadata, feature probes) and creating sessions from it
+ *   are safe concurrently.
+ * - KNOWN 0.x LIMITATION — concurrent COMPUTE is not yet supported: at most
+ *   one transcribe_run / transcribe_run_batch / active stream may be in
+ *   flight across ALL sessions of a given model at a time. Sessions share
+ *   the model's backend instances and some per-family model state, so
+ *   overlapping runs race (observed: corrupted decodes on CPU, command-
+ *   buffer failures on Metal). Callers that want parallel transcription
+ *   today should load one model per worker; a per-session backend
+ *   architecture lifting this restriction is planned. Serialized use of
+ *   many sessions on one model (e.g. a session pool behind a mutex) is
+ *   fully supported.
  * - A model must outlive every session created from it.
  * - transcribe_model_free() is only valid after all derived contexts have
  *   been freed and no thread is still using the model.
@@ -131,6 +142,34 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+/* ----------------------------------------------------------------------- */
+/* Version                                                                 */
+/* ----------------------------------------------------------------------- */
+/*
+ * Single source of truth for the native library version. The top-level
+ * CMakeLists.txt parses these three macros to set the CMake project version and
+ * the shared-library VERSION/SOVERSION, and transcribe_version() (declared
+ * below) returns the same MAJOR.MINOR.PATCH string. Bump the library version
+ * here. Pre-1.0 the on-disk ABI MAY break between minor releases (see "ABI
+ * stability" above); the Python binding pins its package version to this value
+ * exactly and refuses to load a native provider that does not match.
+ */
+#define TRANSCRIBE_VERSION_MAJOR 0
+#define TRANSCRIBE_VERSION_MINOR 0
+#define TRANSCRIBE_VERSION_PATCH 1
+
+#define TRANSCRIBE_VERSION_STRINGIZE_(x) #x
+#define TRANSCRIBE_VERSION_STRINGIZE(x)  TRANSCRIBE_VERSION_STRINGIZE_(x)
+#define TRANSCRIBE_VERSION                                    \
+    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_MAJOR) "." \
+    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_MINOR) "." \
+    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_PATCH)
+
+/* Monotonic integer form (MAJOR*10000 + MINOR*100 + PATCH) for compile-time
+ * comparisons, e.g. `#if TRANSCRIBE_VERSION_NUMBER >= 200`. */
+#define TRANSCRIBE_VERSION_NUMBER \
+    (TRANSCRIBE_VERSION_MAJOR * 10000 + TRANSCRIBE_VERSION_MINOR * 100 + TRANSCRIBE_VERSION_PATCH)
 
 #ifndef TRANSCRIBE_API
 #  if defined(_WIN32) && !defined(__GNUC__)
@@ -289,14 +328,75 @@ typedef enum {
 TRANSCRIBE_API const char * transcribe_status_string(int status);
 
 /* ----------------------------------------------------------------------- */
+/* Version                                                                 */
+/* ----------------------------------------------------------------------- */
+/*
+ * Runtime version of the loaded native library. The numeric components are
+ * also available at compile time as TRANSCRIBE_VERSION_MAJOR/MINOR/PATCH (and
+ * the composed string as TRANSCRIBE_VERSION) near the top of this header.
+ *
+ * Both return borrowed pointers into static storage: never free them, and
+ * treat them as valid for the life of the process.
+ */
+/* "MAJOR.MINOR.PATCH", e.g. "0.1.0". Equals the TRANSCRIBE_VERSION macro the
+ * caller compiled against; a mismatch means the header and the linked library
+ * disagree. */
+TRANSCRIBE_API const char * transcribe_version(void);
+/* Short git commit the library was built from, or "unknown" when the build
+ * tree carried no git metadata (e.g. an unpacked source tarball). */
+TRANSCRIBE_API const char * transcribe_version_commit(void);
+
+/* ----------------------------------------------------------------------- */
+/* ABI metadata                                                            */
+/* ----------------------------------------------------------------------- */
+/*
+ * The native library's sizeof/alignof for the public structs that cross the
+ * ABI. A binding (Python ctypes, Rust, Swift, ...) declares its own view of
+ * each struct, then verifies that view against these values before it
+ * constructs any real instance. This is the safe alternative the "Params"
+ * section calls for: query the size up front instead of calling a *_init()
+ * function on a buffer that might be smaller than the library expects.
+ *
+ * `which` selects a struct by transcribe_abi_struct. An unknown id (e.g. a
+ * newer binding asking an older library about a struct it predates) returns 0,
+ * which the binding MUST treat as "cannot verify," never as "size 0." The enum
+ * is append-only; do not renumber existing values.
+ */
+typedef enum {
+    TRANSCRIBE_ABI_MODEL_LOAD_PARAMS = 0,
+    TRANSCRIBE_ABI_SESSION_PARAMS    = 1,
+    TRANSCRIBE_ABI_RUN_PARAMS        = 2,
+    TRANSCRIBE_ABI_STREAM_PARAMS     = 3,
+    TRANSCRIBE_ABI_CAPABILITIES      = 4,
+    TRANSCRIBE_ABI_TIMINGS           = 5,
+    TRANSCRIBE_ABI_SEGMENT           = 6,
+    TRANSCRIBE_ABI_WORD              = 7,
+    TRANSCRIBE_ABI_TOKEN             = 8,
+    TRANSCRIBE_ABI_STREAM_UPDATE     = 9,
+    TRANSCRIBE_ABI_STREAM_TEXT       = 10,
+    TRANSCRIBE_ABI_SESSION_LIMITS    = 11,
+    TRANSCRIBE_ABI_EXT               = 12,
+    TRANSCRIBE_ABI_BACKEND_DEVICE    = 13,
+} transcribe_abi_struct;
+
+/* sizeof / alignof of the selected public struct, or 0 for an unknown id.
+ * For every struct that carries a struct_size field, the size returned here
+ * equals the value its transcribe_*_init() stamps into struct_size. */
+TRANSCRIBE_API size_t transcribe_abi_struct_size(transcribe_abi_struct which);
+TRANSCRIBE_API size_t transcribe_abi_struct_align(transcribe_abi_struct which);
+
+/* ----------------------------------------------------------------------- */
 /* Logging                                                                 */
 /* ----------------------------------------------------------------------- */
 
 /*
- * Numeric values mirror GGML_LOG_LEVEL_* exactly so internal pass-through
- * from ggml is a free reinterpret. If ggml ever renumbers, this enum is
- * the source of truth for callers and the internal pass-through layer is
- * responsible for honoring that contract.
+ * This enum is the source of truth for callers. ggml's log levels do NOT
+ * share these numeric values (its DEBUG/INFO/WARN/ERROR ordering differs),
+ * so the internal pass-through layer maps ggml levels onto this enum
+ * before any message reaches the installed callback; callers only ever
+ * see these values. CONT marks a fragment continuing the previous message
+ * (ggml emits these for progress output); hosts that want one line per
+ * message may join CONT fragments onto the preceding text.
  */
 typedef enum {
     TRANSCRIBE_LOG_LEVEL_NONE  = 0,
@@ -312,7 +412,26 @@ typedef void (*transcribe_log_callback)(
     const char *         msg,
     void *               userdata);
 
-/* Global log sink. Pass NULL cb to disable logging. */
+/*
+ * Global log sink. Three states:
+ *
+ *   never called          library messages that warrant surfacing go to
+ *                         stderr (the dev/CLI default); ggml's internal
+ *                         logging keeps its own stderr default.
+ *   cb != NULL            every library message AND ggml's internal
+ *                         diagnostics (mapped onto transcribe_log_level)
+ *                         route to the callback. Caveat: ggml compiles
+ *                         its per-module load-failure chatter OUT of
+ *                         release builds, so the reliable "why am I not
+ *                         on the GPU?" signals are the one-line device
+ *                         summary transcribe_init_backends() emits
+ *                         through this sink after each fresh scan, and
+ *                         the transcribe_backend_* device accessors.
+ *   cb == NULL            logging explicitly disabled: library and ggml
+ *                         messages are dropped, nothing goes to stderr.
+ *
+ * Call once at process startup (see the threading contract above).
+ */
 TRANSCRIBE_API void transcribe_log_set(transcribe_log_callback cb, void * userdata);
 
 /* ----------------------------------------------------------------------- */
@@ -576,6 +695,103 @@ typedef enum {
     TRANSCRIBE_BACKEND_CUDA      = 5,
 } transcribe_backend_request;
 
+/* ----------------------------------------------------------------------- */
+/* Backend modules and device discovery                                    */
+/* ----------------------------------------------------------------------- */
+/*
+ * In dynamic-backend builds (GGML_BACKEND_DL, selected by the
+ * TRANSCRIBE_GGML_BACKEND_DL build option), compute backends (CPU, Vulkan,
+ * CUDA, ...) are separate loadable modules shipped next to the library in a
+ * provider artifact directory, not compiled into it. A host (a Python
+ * wheel, a Rust crate, an app bundle) loads them ONCE, before the first
+ * model load, by pointing the library at that directory. In static builds
+ * the compiled-in backends are already registered, and this call is a
+ * harmless no-op for a directory containing no modules.
+ *
+ * The search is strictly package-local: only artifact_dir is scanned —
+ * never the executable directory, the working directory, or any system
+ * path. (ggml additionally honors the GGML_BACKEND_PATH environment
+ * variable as an explicit user override naming one out-of-tree backend
+ * module; an unset environment means a fully package-local load.)
+ *
+ * A module whose system dependencies are missing — e.g. the Vulkan module
+ * on a machine with no Vulkan loader, or with a loader but no driver —
+ * fails to load quietly and is skipped; the remaining backends keep
+ * working. That degradation is the designed behavior: ship Vulkan by
+ * default, fall back to CPU on machines that cannot run it. Use the device
+ * accessors below to see what actually registered, and
+ * transcribe_backend_available() to probe one kind.
+ *
+ * Idempotent per directory: repeat calls with an already-scanned directory
+ * return the SAME status as the first scan without re-loading — including
+ * the TRANSCRIBE_ERR_BACKEND case, which is therefore NOT retryable in
+ * this process (e.g. installing a driver after the first call requires a
+ * new process to pick up). Concurrent calls to this function are
+ * serialized against each other; "thread-safe" extends no further — the
+ * load mutates the global device registry, so it must complete before any
+ * thread calls the device accessors below or loads a model. That ordering
+ * is automatic under the supported usage (call once, before the first
+ * model load).
+ *
+ * Returns:
+ *   TRANSCRIBE_ERR_INVALID_ARG     artifact_dir is NULL or empty.
+ *   TRANSCRIBE_ERR_FILE_NOT_FOUND  artifact_dir is not an existing directory.
+ *   TRANSCRIBE_ERR_BACKEND         after loading, the process has zero
+ *                                  registered compute devices (a dynamic
+ *                                  build pointed at a directory with no
+ *                                  usable modules: nothing could run).
+ *   TRANSCRIBE_OK                  otherwise.
+ */
+TRANSCRIBE_API transcribe_status transcribe_init_backends(
+    const char * artifact_dir);
+
+/*
+ * Number of compute devices currently registered with the runtime
+ * (compiled-in backends plus any modules loaded by
+ * transcribe_init_backends). A device is something a model can be placed
+ * on: the CPU, an Apple GPU via Metal, a Vulkan GPU, ...
+ */
+TRANSCRIBE_API int transcribe_backend_device_count(void);
+
+/*
+ * One registered compute device.
+ *
+ * name / description / kind are borrowed pointers into runtime-owned
+ * storage: valid for the life of the process, never freed by the caller.
+ *
+ * kind is the library's classification, one of: "cpu", "accel" (a
+ * host-memory accelerator such as BLAS/AMX), "metal", "vulkan", "cuda",
+ * "sycl", "gpu" (an unrecognized GPU), or "unknown".
+ */
+struct transcribe_backend_device {
+    uint64_t     struct_size;  /* sizeof(*this); set by _init() */
+    const char * name;         /* ggml device name, e.g. "Metal" */
+    const char * description;  /* human-readable, e.g. "Apple M4 Max" */
+    const char * kind;         /* classified kind string; see above */
+};
+
+TRANSCRIBE_API void transcribe_backend_device_init(
+    struct transcribe_backend_device * p);
+
+/*
+ * Fill *out (initialized via transcribe_backend_device_init) with device
+ * `index` in [0, transcribe_backend_device_count()).
+ */
+TRANSCRIBE_API transcribe_status transcribe_get_backend_device(
+    int                                index,
+    struct transcribe_backend_device * out);
+
+/*
+ * Whether a backend request can be satisfied by some registered device:
+ * AUTO whenever any device exists; CPU and CPU_ACCEL when a CPU device
+ * exists; METAL / VULKAN / CUDA when a device of that kind exists. Unknown
+ * or invalid request values answer false (never an error). This is the
+ * probe a binding uses to turn `backend="vulkan"` on a machine without
+ * Vulkan into a clear exception instead of a failed model load.
+ */
+TRANSCRIBE_API bool transcribe_backend_available(
+    transcribe_backend_request kind);
+
 /*
  * Initialization of caller-owned params structs.
  *
@@ -697,6 +913,15 @@ TRANSCRIBE_API void transcribe_session_params_init(
  *                  NULL to autodetect (only if the model supports it).
  *
  * target_language: target language for translation tasks, or NULL.
+ *
+ * String-pointer lifetime (language / target_language): caller-owned, and
+ * the library copies what it needs before the API call returns. This holds
+ * for transcribe_run / transcribe_run_batch (synchronous) AND for
+ * transcribe_stream_begin: the dispatcher copies these strings into
+ * session-owned storage at begin, so the caller may free its params —
+ * including the strings — the moment begin returns, even though the stream
+ * keeps running. Bindings rely on this: ctypes/FFI-managed string buffers
+ * die when the begin wrapper returns.
  *
  * keep_special_tags: keep special vocabulary tags (e.g. <|...|>) in the
  *                     returned text fields. Default (false) strips them
@@ -1718,6 +1943,13 @@ TRANSCRIBE_API transcribe_status transcribe_stream_get_text(
  *      the status in transcribe_stream_last_status. The result snapshot
  *      in this case is whatever the hook wrote before failing —
  *      typically empty.
+ *
+ * Params lifetime: everything the caller passes is copied out before this
+ * function returns. run_params strings (language / target_language) are
+ * copied into session-owned storage, and family extensions follow their
+ * documented copy-out contract — so the caller may free both params
+ * structs and every pointer inside them the moment begin returns, while
+ * the stream stays ACTIVE. Nothing handed to begin needs to outlive it.
  */
 TRANSCRIBE_API transcribe_status transcribe_stream_begin(
     struct transcribe_session *              session,

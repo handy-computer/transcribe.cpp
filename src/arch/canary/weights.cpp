@@ -16,6 +16,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -77,10 +78,10 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
         const auto r = read_token_id_required(gguf, key, out);
         if (r == KvResult::Ok)      return TRANSCRIBE_OK;
         if (r == KvResult::Absent) {
-            std::fprintf(stderr, "%s: required special-token KV missing: %s\n", kFamilyTag, key);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: required special-token KV missing: %s", kFamilyTag, key);
             return TRANSCRIBE_ERR_GGUF;
         }
-        std::fprintf(stderr, "%s: special-token KV %s has wrong type\n", kFamilyTag, key);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: special-token KV %s has wrong type", kFamilyTag, key);
         return TRANSCRIBE_ERR_GGUF;
     };
 
@@ -92,7 +93,7 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
     auto opt_special = [&](const char * key, int32_t & out) -> transcribe_status {
         const auto r = read_token_id_required(gguf, key, out);
         if (r == KvResult::Ok || r == KvResult::Absent) return TRANSCRIBE_OK;
-        std::fprintf(stderr, "%s: optional special-token KV %s has wrong type\n", kFamilyTag, key);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: optional special-token KV %s has wrong type", kFamilyTag, key);
         return TRANSCRIBE_ERR_GGUF;
     };
 
@@ -153,7 +154,7 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
                 hp.languages.push_back(code);
                 hp.language_ids.push_back(v);
             } else if (kr == KvResult::BadType) {
-                std::fprintf(stderr, "%s: %s wrong type\n", kFamilyTag, key.c_str());
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: %s wrong type", kFamilyTag, key.c_str());
                 return TRANSCRIBE_ERR_GGUF;
             }
         }
@@ -179,70 +180,70 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
         hp.enc_d_ff <= 0 || hp.enc_conv_kernel <= 0 ||
         hp.enc_subsampling_factor <= 0 || hp.enc_subsampling_channels <= 0)
     {
-        std::fprintf(stderr, "canary: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
-                     "canary: encoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary: encoder d_model (%d) not divisible by n_heads (%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_layers <= 0 || hp.dec_d_model <= 0 || hp.dec_n_heads <= 0 ||
         hp.dec_d_ff <= 0 || hp.dec_max_position <= 0 || hp.dec_vocab_size <= 0)
     {
-        std::fprintf(stderr, "canary: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_d_model % hp.dec_n_heads != 0) {
-        std::fprintf(stderr,
-                     "canary: decoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary: decoder d_model (%d) not divisible by n_heads (%d)",
                      hp.dec_d_model, hp.dec_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_activation != "relu" && hp.dec_activation != "silu" &&
         hp.dec_activation != "swish")
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "canary: unsupported decoder activation \"%s\" "
-                     "(only relu, silu, swish are implemented)\n",
+                     "(only relu, silu, swish are implemented)",
                      hp.dec_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        std::fprintf(stderr,
-                     "canary: unsupported frontend type \"%s\" (only \"mel\")\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary: unsupported frontend type \"%s\" (only \"mel\")",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_window != "hann") {
-        std::fprintf(stderr,
-                     "canary: unsupported frontend window \"%s\" (only \"hann\")\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary: unsupported frontend window \"%s\" (only \"hann\")",
                      hp.fe_window.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_normalize != "per_feature") {
-        std::fprintf(stderr,
-                     "canary: unsupported frontend normalize \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary: unsupported frontend normalize \"%s\"",
                      hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if ((hp.fe_n_fft & (hp.fe_n_fft - 1)) != 0) {
-        std::fprintf(stderr,
-                     "canary: frontend n_fft (%d) must be a power of 2\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary: frontend n_fft (%d) must be a power of 2",
                      hp.fe_n_fft);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_pad_mode != "reflect" && hp.fe_pad_mode != "constant") {
-        std::fprintf(stderr,
-                     "canary: unsupported frontend pad_mode \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary: unsupported frontend pad_mode \"%s\"",
                      hp.fe_pad_mode.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.prompt_format != "canary" && hp.prompt_format != "canary2") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "canary: unsupported prompt_format \"%s\" "
-                     "(only \"canary\" and \"canary2\")\n",
+                     "(only \"canary\" and \"canary2\")",
                      hp.prompt_format.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -397,12 +398,12 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
     {
         ggml_tensor * tw = ggml_get_tensor(ctx_meta, "dec.embed.token.weight");
         if (tw == nullptr) {
-            std::fprintf(stderr, "canary: missing tensor \"dec.embed.token.weight\"\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary: missing tensor \"dec.embed.token.weight\"");
             return TRANSCRIBE_ERR_GGUF;
         }
         if (tw->ne[0] != d_dec || tw->ne[1] != vocab) {
-            std::fprintf(stderr,
-                         "canary: dec.embed.token.weight shape [%lld,%lld] expected [%lld,%lld]\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "canary: dec.embed.token.weight shape [%lld,%lld] expected [%lld,%lld]",
                          (long long)tw->ne[0], (long long)tw->ne[1],
                          (long long)d_dec, (long long)vocab);
             return TRANSCRIBE_ERR_GGUF;

@@ -5,6 +5,7 @@
 #include "weights.h"
 
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -145,8 +146,8 @@ AdaptorBuild build_adaptor_graph(ggml_context *             ctx,
 {
     AdaptorBuild ab {};
     if (ctx == nullptr || T_in <= 0) {
-        std::fprintf(stderr,
-                     "funasr_nano adaptor: invalid arg (T_in=%d)\n", T_in);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano adaptor: invalid arg (T_in=%d)", T_in);
         return ab;
     }
 
@@ -189,8 +190,8 @@ AdaptorBuild build_adaptor_graph(ggml_context *             ctx,
 
     ab.graph = ggml_new_graph_custom(ctx, /*size=*/2048, /*grads=*/false);
     if (ab.graph == nullptr) {
-        std::fprintf(stderr,
-                     "funasr_nano adaptor: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano adaptor: ggml_new_graph_custom failed");
         return ab;
     }
     ggml_build_forward_expand(ab.graph, ab.out);

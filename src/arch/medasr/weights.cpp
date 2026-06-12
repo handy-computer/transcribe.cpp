@@ -11,6 +11,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -58,22 +59,22 @@ transcribe_status read_medasr_hparams(const gguf_context * gguf,
     if (auto st = read_required_u32_kv   (gguf, "stt.medasr.encoder.sub_n_layers",       kFamilyTag, hp.enc_sub_n_layers); st != TRANSCRIBE_OK) return st;
 
     if (hp.enc_n_heads <= 0 || hp.enc_hidden % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "medasr: invariant hidden %% n_heads != 0 "
-                     "(hidden=%d, n_heads=%d)\n",
+                     "(hidden=%d, n_heads=%d)",
                      hp.enc_hidden, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_sub_n_layers != 2 || hp.enc_sub_stride != 2) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "medasr: unsupported subsampling shape (n_layers=%d, "
-                     "stride=%d) — only 2 stride-2 convs implemented\n",
+                     "stride=%d) — only 2 stride-2 convs implemented",
                      hp.enc_sub_n_layers, hp.enc_sub_stride);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_rope_type != "default") {
-        std::fprintf(stderr,
-                     "medasr: unsupported rope_type=%s (expected default)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "medasr: unsupported rope_type=%s (expected default)",
                      hp.enc_rope_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -276,9 +277,9 @@ transcribe_status fuse_batch_norm(const gguf_context *  /*gguf_data*/,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     if (static_cast<int>(g_raw_bn.size()) != hp.enc_n_layers) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "medasr fuse_batch_norm: raw BN catalog size %zu != "
-                     "n_layers %d\n",
+                     "n_layers %d",
                      g_raw_bn.size(), hp.enc_n_layers);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -303,9 +304,9 @@ transcribe_status fuse_batch_norm(const gguf_context *  /*gguf_data*/,
         const RawBnTensors & raw = g_raw_bn[static_cast<size_t>(i)];
         if (raw.w == nullptr || raw.b == nullptr ||
             raw.mean == nullptr || raw.var == nullptr) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "medasr fuse_batch_norm: missing raw BN tensor at "
-                         "layer %d\n", i);
+                         "layer %d", i);
             return TRANSCRIBE_ERR_GGUF;
         }
         ggml_backend_tensor_get(raw.w,    bn_w.data(),    0, d * sizeof(float));

@@ -9,6 +9,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -90,101 +91,101 @@ transcribe_status read_funasr_nano_hparams(const gguf_context *  gguf,
         hp.enc_n_heads <= 0  || hp.enc_d_ff <= 0    ||
         hp.enc_kernel <= 0   || hp.enc_kernel % 2 == 0)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "funasr_nano: encoder hparams invalid (n_blocks=%d "
                      "tp_blocks=%d d_model=%d d_input=%d n_heads=%d d_ff=%d "
-                     "kernel=%d — kernel must be positive and odd)\n",
+                     "kernel=%d — kernel must be positive and odd)",
                      hp.enc_n_blocks, hp.enc_tp_blocks, hp.enc_d_model,
                      hp.enc_d_input, hp.enc_n_heads, hp.enc_d_ff, hp.enc_kernel);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
-                     "funasr_nano: encoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: encoder d_model (%d) not divisible by n_heads (%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_input != hp.fe_num_mels * hp.fe_lfr_m) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "funasr_nano: encoder d_input (%d) must equal num_mels (%d) "
-                     "× lfr_m (%d) = %d\n",
+                     "× lfr_m (%d) = %d",
                      hp.enc_d_input, hp.fe_num_mels, hp.fe_lfr_m,
                      hp.fe_num_mels * hp.fe_lfr_m);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_attn_type != "sanm") {
-        std::fprintf(stderr,
-                     "funasr_nano: unsupported encoder attention type \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: unsupported encoder attention type \"%s\"",
                      hp.enc_attn_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.adaptor_n_heads <= 0 || hp.adaptor_d_head <= 0 ||
         hp.adaptor_llm_dim != hp.adaptor_n_heads * hp.adaptor_d_head)
     {
-        std::fprintf(stderr,
-                     "funasr_nano: adaptor llm_dim (%d) != n_heads (%d) * d_head (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: adaptor llm_dim (%d) != n_heads (%d) * d_head (%d)",
                      hp.adaptor_llm_dim, hp.adaptor_n_heads, hp.adaptor_d_head);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.adaptor_activation != "relu") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "funasr_nano: unsupported adaptor activation \"%s\" "
-                     "(only \"relu\" is implemented)\n",
+                     "(only \"relu\" is implemented)",
                      hp.adaptor_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_layers <= 0 || hp.dec_hidden <= 0 || hp.dec_n_heads <= 0 ||
         hp.dec_n_kv_heads <= 0 || hp.dec_head_dim <= 0 || hp.dec_intermediate <= 0)
     {
-        std::fprintf(stderr, "funasr_nano: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "funasr_nano: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_heads % hp.dec_n_kv_heads != 0) {
-        std::fprintf(stderr,
-                     "funasr_nano: dec n_heads (%d) not divisible by n_kv_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: dec n_heads (%d) not divisible by n_kv_heads (%d)",
                      hp.dec_n_heads, hp.dec_n_kv_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_activation != "silu" && hp.dec_activation != "swish") {
-        std::fprintf(stderr,
-                     "funasr_nano: unsupported decoder activation \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: unsupported decoder activation \"%s\"",
                      hp.dec_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (!hp.dec_tie_word_embeddings) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "funasr_nano: decoder.tie_word_embeddings=false is not supported "
-                     "(graph reuses dec.token_embd.weight as the lm_head)\n");
+                     "(graph reuses dec.token_embd.weight as the lm_head)");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.adaptor_llm_dim != hp.dec_hidden) {
-        std::fprintf(stderr,
-                     "funasr_nano: adaptor.llm_dim (%d) != decoder.hidden_size (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: adaptor.llm_dim (%d) != decoder.hidden_size (%d)",
                      hp.adaptor_llm_dim, hp.dec_hidden);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "kaldi_fbank_lfr") {
-        std::fprintf(stderr,
-                     "funasr_nano: unsupported frontend type \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: unsupported frontend type \"%s\"",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_window != "hamming") {
-        std::fprintf(stderr,
-                     "funasr_nano: unsupported frontend window \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: unsupported frontend window \"%s\"",
                      hp.fe_window.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_normalize != "none") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "funasr_nano: unsupported frontend normalize \"%s\" "
-                     "(only \"none\" is implemented; CMVN was dropped at convert)\n",
+                     "(only \"none\" is implemented; CMVN was dropped at convert)",
                      hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_fbank_style != "kaldi_htk") {
-        std::fprintf(stderr,
-                     "funasr_nano: unsupported fbank_style \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "funasr_nano: unsupported fbank_style \"%s\"",
                      hp.fe_fbank_style.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -358,20 +359,20 @@ transcribe_status build_funasr_nano_weights(ggml_context *             ctx_meta,
     {
         ggml_tensor * tw = ggml_get_tensor(ctx_meta, "dec.token_embd.weight");
         if (tw == nullptr) {
-            std::fprintf(stderr,
-                         "funasr_nano: missing tensor \"dec.token_embd.weight\"\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "funasr_nano: missing tensor \"dec.token_embd.weight\"");
             return TRANSCRIBE_ERR_GGUF;
         }
         if (tw->ne[0] != hp.dec_hidden) {
-            std::fprintf(stderr,
-                         "funasr_nano: dec.token_embd.weight ne[0]=%lld, expected %lld\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "funasr_nano: dec.token_embd.weight ne[0]=%lld, expected %lld",
                          static_cast<long long>(tw->ne[0]),
                          static_cast<long long>(hp.dec_hidden));
             return TRANSCRIBE_ERR_GGUF;
         }
         if (tw->ne[1] != hp.dec_vocab_size) {
-            std::fprintf(stderr,
-                         "funasr_nano: dec.token_embd.weight ne[1]=%lld, expected %lld\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "funasr_nano: dec.token_embd.weight ne[1]=%lld, expected %lld",
                          static_cast<long long>(tw->ne[1]),
                          static_cast<long long>(hp.dec_vocab_size));
             return TRANSCRIBE_ERR_GGUF;
@@ -404,8 +405,8 @@ transcribe_status build_funasr_nano_weights(ggml_context *             ctx_meta,
         GET_LIN(b.ffn_down_w,  lname("dec.layers.%d.ffn.down.weight",  i), dec_im, dec_h);
 
         if (b.ffn_gate_w->type != b.ffn_up_w->type) {
-            std::fprintf(stderr,
-                         "funasr_nano: ffn gate/up dtype mismatch at layer %d\n", i);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "funasr_nano: ffn gate/up dtype mismatch at layer %d", i);
             return TRANSCRIBE_ERR_GGUF;
         }
     }

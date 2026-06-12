@@ -19,6 +19,7 @@
 
 #include "causal_lm/causal_lm.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -372,7 +373,7 @@ ggml_tensor * block_prefill_batched(
     const size_t  v_elem = ggml_element_size(kv_cache.self_v);
 
     if (!use_flash) {
-        std::fprintf(stderr, "granite block_prefill_batched: requires flash\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite block_prefill_batched: requires flash");
         return nullptr;
     }
 
@@ -462,7 +463,7 @@ ggml_tensor * block_step_batched(
     const size_t  v_elem = ggml_element_size(kv_cache.self_v);
 
     if (!use_flash) {
-        std::fprintf(stderr, "granite block_step_batched: requires flash\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite block_step_batched: requires flash");
         return nullptr;
     }
 
@@ -544,26 +545,26 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     pb.suffix_len     = suffix_len;
 
     if (ctx == nullptr || T_prompt <= 0 || n_audio_tokens <= 0) {
-        std::fprintf(stderr,
-                     "granite decoder: invalid arg (T_prompt=%d, n_audio=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite decoder: invalid arg (T_prompt=%d, n_audio=%d)",
                      T_prompt, n_audio_tokens);
         return pb;
     }
     if (prefix_len < 0 || suffix_len < 0 ||
         prefix_len + n_audio_tokens + suffix_len != T_prompt)
     {
-        std::fprintf(stderr,
-                     "granite decoder: prefix(%d)+n_audio(%d)+suffix(%d) != T_prompt(%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite decoder: prefix(%d)+n_audio(%d)+suffix(%d) != T_prompt(%d)",
                      prefix_len, n_audio_tokens, suffix_len, T_prompt);
         return pb;
     }
     if (kv_cache.self_k == nullptr || kv_cache.self_v == nullptr) {
-        std::fprintf(stderr, "granite decoder: kv_cache not initialized\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite decoder: kv_cache not initialized");
         return pb;
     }
     if (T_prompt > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "granite decoder: T_prompt=%d exceeds kv_cache.n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite decoder: T_prompt=%d exceeds kv_cache.n_ctx=%d",
                      T_prompt, kv_cache.n_ctx);
         return pb;
     }
@@ -598,8 +599,8 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr,
-                     "granite decoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite decoder: ggml_new_graph_custom failed");
         return pb;
     }
     pb.graph = gf;
@@ -734,17 +735,17 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     sb.max_n_kv = max_n_kv;
 
     if (ctx == nullptr || max_n_kv <= 0) {
-        std::fprintf(stderr,
-                     "granite step: invalid arg (max_n_kv=%d)\n", max_n_kv);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite step: invalid arg (max_n_kv=%d)", max_n_kv);
         return sb;
     }
     if (kv_cache.self_k == nullptr) {
-        std::fprintf(stderr, "granite step: kv_cache not initialized\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite step: kv_cache not initialized");
         return sb;
     }
     if (max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr,
-                     "granite step: max_n_kv=%d exceeds kv_cache.n_ctx=%d\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite step: max_n_kv=%d exceeds kv_cache.n_ctx=%d",
                      max_n_kv, kv_cache.n_ctx);
         return sb;
     }
@@ -776,8 +777,8 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr,
-                     "granite step: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite step: ggml_new_graph_custom failed");
         return sb;
     }
     sb.graph = gf;
@@ -845,7 +846,7 @@ PrefillBuildBatched build_prefill_graph_batched(
         n_batch <= 0 || !use_flash ||
         kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
         T_prompt_max > kv_cache.n_ctx) {
-        std::fprintf(stderr, "granite prefill(batched): invalid arg\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite prefill(batched): invalid arg");
         return pb;
     }
 
@@ -932,7 +933,7 @@ StepBuildBatched build_step_graph_batched(
     if (ctx == nullptr || max_n_kv <= 0 || n_batch <= 0 || !use_flash ||
         kv_cache.self_k == nullptr || kv_cache.n_batch != n_batch ||
         max_n_kv > kv_cache.n_ctx) {
-        std::fprintf(stderr, "granite step(batched): invalid arg\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite step(batched): invalid arg");
         return sb;
     }
 

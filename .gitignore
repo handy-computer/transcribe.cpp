@@ -3,6 +3,16 @@
 /build-*/
 /cmake-build-*/
 
+# Python distribution output (provider wheels/sdists at the repo root;
+# bindings/python/dist for the pure API package; wheelhouse* from local
+# cibuildwheel / wheel-repair runs)
+/dist/
+/bindings/python/dist/
+/wheelhouse*/
+
+# Canary GGUFs fetched by CI / local smoke runs
+/canary/
+
 # Scratch space for benchmarks, staging, etc.
 /tmp/
 
@@ -68,3 +78,6 @@ WER_TESTING.md
 
 # IDE / language-server artifacts
 .cache/
+
+# Local working notes (plans, drafts) — never committed
+/notes/

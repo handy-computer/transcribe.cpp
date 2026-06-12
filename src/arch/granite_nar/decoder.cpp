@@ -9,6 +9,7 @@
 
 #include "granite_nar.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -164,8 +165,8 @@ ForwardBuild build_forward_graph(ggml_context *            ctx,
     fb.T_total        = n_audio_tokens + n_text;
 
     if (ctx == nullptr || n_audio_tokens <= 0 || n_text <= 0) {
-        std::fprintf(stderr,
-                     "granite_nar decoder: invalid (n_audio=%d, n_text=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar decoder: invalid (n_audio=%d, n_text=%d)",
                      n_audio_tokens, n_text);
         return fb;
     }
@@ -191,7 +192,7 @@ ForwardBuild build_forward_graph(ggml_context *            ctx,
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/16384, /*grads=*/false);
     if (gf == nullptr) {
-        std::fprintf(stderr, "granite_nar decoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar decoder: ggml_new_graph_custom failed");
         return fb;
     }
     fb.graph = gf;

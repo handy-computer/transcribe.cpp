@@ -1,0 +1,37 @@
+{
+  "name": "transcribe-cpp",
+  "version": "0.0.0",
+  "description": "TypeScript/Node.js bindings for transcribe.cpp (pre-release name reservation placeholder)",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md", "LICENSE"],
+  "license": "MIT",
+  "author": "The transcribe.cpp authors",
+  "homepage": "https://github.com/handy-computer/transcribe.cpp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/handy-computer/transcribe.cpp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/handy-computer/transcribe.cpp/issues"
+  },
+  "keywords": ["transcription", "speech-to-text", "asr", "stt", "ggml", "whisper", "parakeet"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "bun run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,305 @@
+name: python-bindings
+
+# The EVERY-PR correctness gate:
+#   - lint:          generated-FFI drift gate + version-sync across the three
+#                    sources of truth (header / pyproject / __init__).
+#   - cpp-tests:     the full C++ white-box suite against a static build.
+#   - python-shared: a shared libtranscribe, the pure-C api_smoke as an
+#                    exported-symbol canary, and the Python test suite (model
+#                    tests un-skip when the canary GGUFs are fetchable).
+#   - provider-dl-vulkan: the Vulkan degradation contract on a hand-assembled
+#                    provider directory (the wheel-shaped artifact).
+#
+# The full WHEEL matrix (python-wheels.yml) deliberately does NOT run per PR:
+# it runs on workflow_dispatch and on every publish (rehearsal or release).
+# This workflow is what must stay green on every change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bindings/python/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "ggml/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/python-bindings.yml"
+      - ".github/actions/**"
+      - "scripts/ci/vulkan_degradation_check.py"
+  pull_request:
+    paths:
+      - "bindings/python/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "ggml/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/python-bindings.yml"
+      - ".github/actions/**"
+      - "scripts/ci/vulkan_degradation_check.py"
+  workflow_dispatch:
+
+# The generated FFI layer is pinned to one libclang so the drift gate's embedded
+# `libclang: <version>` line is reproducible across runs.
+env:
+  LIBCLANG_PIN: "libclang==18.1.1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    # Idle-friendly job on the Hetzner box (free); falls back to nothing —
+    # an offline box fails bounded via the timeout. BEFORE the repo goes
+    # public: move PR-triggered self-hosted jobs to hosted runners or gate
+    # them on non-PR events (fork PRs + self-hosted = code exec on the box).
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Install clang (libclang resource-dir headers)
+        # Idempotent for the persistent self-hosted box: install once, no-op
+        # after (and no sudo needed when clang is already present).
+        run: |
+          command -v clang >/dev/null || \
+            { sudo apt-get update && sudo apt-get install -y clang; }
+      - name: Generated-FFI drift gate
+        run: |
+          uv run --no-project --with "$LIBCLANG_PIN" \
+            bindings/python/_generate/generate.py --check
+      - name: Version sync (header / pyproject / __init__)
+        run: uv run --no-project bindings/python/_generate/check_version_sync.py
+
+  cpp-tests:
+    name: cpp-tests (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            runner: blacksmith-2vcpu-ubuntu-2404
+          # macOS arm64 on the bare-metal M4 mini, not a GitHub VM (keep all
+          # macOS arm64 CI on owned hardware; the white-box suite builds with
+          # Metal on, and real hardware is the trustworthy place to run it).
+          - label: macos-arm64
+            runner: [self-hosted, macOS, ARM64]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30  # bound the run if the self-hosted mini is offline
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja
+          command -v ccache >/dev/null || brew install ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native here (the dev posture under test);
+        # ccache hashes the literal flag, not the ISA it resolves to, so a
+        # cache compiled on a richer CPU SIGILLs on a weaker one. Key the
+        # cache by the CPU's feature flags instead.
+        if: runner.os == 'Linux'
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
+      - name: ccache (compile cache across runs)
+        if: runner.os == 'Linux'  # the mini is persistent; its local cache suffices
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-cpp-tests-${{ matrix.label }}-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-cpp-tests-${{ matrix.label }}-${{ env.CPU_SIG }}-
+      - name: Configure (static white-box build)
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build build -j
+      - name: Test (full white-box suite)
+        run: ctest --test-dir build --output-on-failure
+      - name: ccache stats
+        run: ccache -s | head -8
+
+  cpp-tests-sanitized:
+    # ASan+UBSan over the white-box suite. This is the lane that certifies
+    # the C lifetime/ABI contracts the FFI bindings rely on — including the
+    # params copy-out regression (stream_dispatch_unit), which reproduces a
+    # ctypes-shaped caller freeing its params right after stream_begin.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native here (the dev posture under test);
+        # ccache hashes the literal flag, not the ISA it resolves to, so a
+        # cache compiled on a richer CPU SIGILLs on a weaker one. Key the
+        # cache by the CPU's feature flags instead.
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
+      - name: ccache (compile cache across runs)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-asan-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-asan-${{ env.CPU_SIG }}-
+      - name: Configure (static, sanitized)
+        run: |
+          cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DTRANSCRIBE_SANITIZE=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build build-asan -j
+      - name: Test (white-box suite under ASan+UBSan)
+        run: ctest --test-dir build-asan --output-on-failure
+      - name: ccache stats
+        run: ccache -s | head -8
+
+  provider-dl-vulkan:
+    # Builds the default Linux provider shape — CPU + Vulkan as dynamic
+    # backend modules (GGML_BACKEND_DL) — assembles it into a flat
+    # wheel-like directory with $ORIGIN rpaths, deletes the build tree so
+    # nothing can resolve outside the directory, and proves the Vulkan
+    # degradation contract on the real runner via
+    # scripts/ci/vulkan_degradation_check.py:
+    #   1. loader REMOVED (no libvulkan)  -> import + CPU devices work,
+    #      vulkan answers unavailable; the module-load failure is quiet.
+    #   2. mesa lavapipe installed        -> the SAME artifacts discover a
+    #      software Vulkan device, and (with HF_TOKEN for the canary model)
+    #      actually transcribe on it.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Install build deps (Vulkan SDK pieces + patchelf)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build zlib1g-dev \
+            libvulkan-dev glslc patchelf ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native here (the dev posture under test);
+        # ccache hashes the literal flag, not the ISA it resolves to, so a
+        # cache compiled on a richer CPU SIGILLs on a weaker one. Key the
+        # cache by the CPU's feature flags instead.
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
+      - name: ccache (compile cache across runs)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-dl-vulkan-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-dl-vulkan-${{ env.CPU_SIG }}-
+      - name: Configure (DL provider, CPU + Vulkan modules, wheel posture)
+        run: |
+          cmake -B build-dl -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DTRANSCRIBE_BUILD_SHARED=ON \
+            -DTRANSCRIBE_GGML_BACKEND_DL=ON \
+            -DTRANSCRIBE_VULKAN=ON \
+            -DTRANSCRIBE_USE_OPENMP=OFF \
+            -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build build-dl -j
+      - name: Assemble flat provider directory ($ORIGIN rpaths, build tree deleted)
+        run: |
+          mkdir -p provider
+          cp -L build-dl/src/libtranscribe.so provider/
+          cp -L build-dl/ggml/src/libggml.so.* build-dl/ggml/src/libggml-base.so.* provider/ 2>/dev/null || \
+            cp -L build-dl/ggml/src/libggml.so build-dl/ggml/src/libggml-base.so provider/
+          cp build-dl/bin/libggml-*.so provider/
+          for f in provider/*.so*; do patchelf --set-rpath '$ORIGIN' "$f"; done
+          ls -la provider/
+          rm -rf build-dl  # isolation: nothing may resolve outside provider/
+      - name: "Tier 1: no Vulkan loader — CPU works, vulkan cleanly unavailable"
+        run: |
+          sudo apt-get remove -y libvulkan-dev libvulkan1 || \
+            sudo rm -f /usr/lib/x86_64-linux-gnu/libvulkan.so.1*
+          export TRANSCRIBE_LIBRARY="$PWD/provider/libtranscribe.so"
+          uv run --project bindings/python python \
+            scripts/ci/vulkan_degradation_check.py --tier no-loader
+      - name: "Tier 2: lavapipe installed — same artifacts discover Vulkan"
+        run: |
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+          export TRANSCRIBE_LIBRARY="$PWD/provider/libtranscribe.so"
+          # lavapipe reports VK_PHYSICAL_DEVICE_TYPE_CPU, and ggml-vulkan's
+          # default selection takes only discrete/integrated GPUs. The env
+          # override bypasses the type filter so the software device counts —
+          # CI-only; real GPUs need no override.
+          export GGML_VK_VISIBLE_DEVICES=0
+          uv run --project bindings/python python \
+            scripts/ci/vulkan_degradation_check.py --tier loader
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: "Tier 2b: real transcription on the Vulkan device (needs HF_TOKEN)"
+        if: env.HF_TOKEN != ''
+        run: |
+          export TRANSCRIBE_LIBRARY="$PWD/provider/libtranscribe.so"
+          export GGML_VK_VISIBLE_DEVICES=0
+          uv run --project bindings/python python \
+            scripts/ci/vulkan_degradation_check.py --tier loader \
+            --model canary/whisper-tiny-Q5_K_M.gguf --audio samples/jfk.wav
+
+  python-shared:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native here (the dev posture under test);
+        # ccache hashes the literal flag, not the ISA it resolves to, so a
+        # cache compiled on a richer CPU SIGILLs on a weaker one. Key the
+        # cache by the CPU's feature flags instead.
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
+      - name: ccache (compile cache across runs)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-shared-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-shared-${{ env.CPU_SIG }}-
+      # Shared build in the official-wheel posture (no OpenMP / system BLAS), so
+      # the canary exercises the same configuration the provider wheels ship.
+      - name: Configure (shared, wheel posture)
+        run: |
+          cmake -B build-shared -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DTRANSCRIBE_BUILD_SHARED=ON \
+            -DTRANSCRIBE_USE_OPENMP=OFF \
+            -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build
+        run: cmake --build build-shared -j
+      - name: api_smoke (exported-symbol canary) + extension umbrella
+        run: ctest --test-dir build-shared --output-on-failure
+      # The canary model upgrades this lane from "imports and ABI" to a real
+      # end-to-end transcription. Guarded on HF_TOKEN (the model repo is
+      # private for now; forks have no token) — without it the model tests
+      # skip cleanly, exactly as before.
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: Python tests (real transcription when the canary is present)
+        run: |
+          # libtranscribe.so is dlopen'd by ctypes; help it resolve its sibling
+          # ggml shared libs in the build tree.
+          export LD_LIBRARY_PATH="$(find "$PWD/build-shared" -name '*.so' \
+            -printf '%h\n' | sort -u | tr '\n' ':')$LD_LIBRARY_PATH"
+          # The loader auto-discovers build-shared/src/libtranscribe.so from the
+          # repo root; the TRANSCRIBE_SMOKE_* vars (exported by fetch-canary
+          # when HF_TOKEN exists) un-skip the offline AND streaming model
+          # tests. The prompted (nemotron) streaming test still skips here —
+          # its regression is pinned in CI by the sanitized C-level test.
+          uv run --project bindings/python --extra test \
+            pytest bindings/python/tests -q -rs

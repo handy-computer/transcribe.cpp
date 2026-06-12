@@ -1,0 +1,125 @@
+name: cuda-windows
+
+# Builds + packaging-smokes the transcribe-cpp-native-cu12 wheel for
+# win_amd64 (plan: Windows CUDA is COMMITTED release scope, user decision
+# 2026-06-11). Same design as the Linux cu12 wheel built on Modal:
+#   - the CUDA runtime is NEVER vendored: cudart/cublas come from the
+#     nvidia-*-cu12 runtime wheels (win_amd64 wheels exist — the PyTorch
+#     layout), preloaded by the package's prepare() hook, which knows the
+#     Windows DLL names (cudart64_12.dll, cublasLt64_12.dll,
+#     cublas64_12.dll under nvidia/<pkg>/bin/); nvcuda.dll is the driver.
+#   - the ggml-vulkan module is bundled alongside CUDA (superset-of-default
+#     rationale in bindings/python-native-cu12/pyproject.toml: a [cu12]
+#     install on an AMD/Intel-GPU Windows box must not silently lose Vulkan
+#     acceleration), built against the LunarG SDK like wheel-windows.
+#   - delvewheel repair EXCLUDES the CUDA DLLs + the driver + vulkan-1.dll,
+#     mirroring auditwheel's excludes on Linux.
+#   - GPU-less smoke: cu12 provider selected, declared backends
+#     {cuda, vulkan, cpu}, the cuda/vulkan modules quietly absent without a
+#     driver, CPU transcribes, full pytest suite. There is no Windows NVIDIA
+#     hardware in the fleet, so the RUNTIME evidence is carried by the Linux
+#     T4 smoke (same module mechanism, same prepare() contract) — documented
+#     gap.
+#
+# Trimmed cadence (user decision): NOT per PR push. Releases (tags) and
+# manual dispatch only — nvcc over ggml-cuda × 5 arches is the heaviest
+# build in the project.
+#
+# CUDA 12.9 to match the Linux cu12 provider (scripts/ci/modal_cuda_build.py
+# pins cuda-toolkit-12-9; the nvidia runtime-wheel floors in the cu12
+# pyproject cover this minor).
+
+on:
+  # Called by publish.yml on release tags (which owns the tag trigger now —
+  # this workflow no longer listens to tags itself, so a release builds
+  # everything in ONE run and publishes those exact artifacts).
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  PYTHONUTF8: "1"  # hf CLI prints ✓; Windows cp1252 console chokes
+
+jobs:
+  cuda-wheel-windows:
+    # 16vcpu, deliberately breaking the 2vcpu rule: per-vcpu-minute billing
+    # makes the cost the same, and on 2vcpu this build (245 .cu × 5 arches
+    # under MSVC+nvcc) would risk the job time cap. It runs on releases and
+    # dispatch only, so the burn is rare and bounded.
+    runs-on: blacksmith-16vcpu-windows-2025
+    timeout-minutes: 180
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      CMAKE_GENERATOR: Ninja
+      # LunarG prunes old SDK downloads — when bumping, verify the URL exists.
+      # Keep in lockstep with wheel-windows (python-wheels.yml).
+      VULKAN_VERSION: "1.4.350.0"
+    steps:
+      - uses: actions/checkout@v6
+      # vcvars for the whole job: nvcc needs cl.exe, and the Ninja generator
+      # needs the MSVC environment (same reasoning as wheel-windows).
+      # (still node20 upstream — no node24 release yet; runners force node24 from
+      # 2026-06-16, which is fine for this env-setup action)
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install Vulkan SDK ${{ env.VULKAN_VERSION }} (glslc for the ggml-vulkan module)
+        run: |
+          curl.exe -o "$env:RUNNER_TEMP\vulkan_sdk.exe" -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkan_sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan_sdk.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
+      - name: Install CUDA toolkit 12.9 (network installer, lean subset)
+        # Caching disabled on purpose: the first run (v0.2.27, caches on)
+        # died in 2.4s with a swallowed error surfaced as a cache-path
+        # failure — Blacksmith intercepts the Actions cache service and the
+        # action's @actions/cache path didn't survive it. The lane is
+        # tag/dispatch-rare; a fresh network install per run is fine.
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: "12.9.0"
+          method: network
+          use-github-cache: false
+          use-local-cache: false
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Install zlib (vcpkg, static — libtranscribe requires it)
+        # Identical to wheel-windows: static-md so no zlib1.dll exists for
+        # delvewheel to vendor; forward slashes because CMAKE_ARGS passes
+        # through scikit-build-core's CMakeInit.txt where backslashes are
+        # eaten as escapes.
+        run: |
+          vcpkg install zlib:x64-windows-static-md
+          $tc = "$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -replace '\\','/'
+          Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$tc -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: Build the raw cu12 wheel (scikit-build-core; lane posture in
+              bindings/python-native-cu12/pyproject.toml)
+        run: uv build --wheel bindings/python-native-cu12 --out-dir dist-cu12-raw
+      - name: Repair (delvewheel; CUDA runtime + driver + Vulkan loader stay OUT)
+        run: |
+          uvx delvewheel repair `
+            --exclude cudart64_12.dll `
+            --exclude cublas64_12.dll `
+            --exclude cublasLt64_12.dll `
+            --exclude nvcuda.dll `
+            --exclude vulkan-1.dll `
+            -w wheelhouse-cu12 (Get-Item dist-cu12-raw/*.whl).FullName
+          Get-ChildItem wheelhouse-cu12
+      - name: GPU-less packaging smoke (mirrors Modal's packaging_check)
+        run: |
+          uv venv --seed --python 3.12 smoke-venv
+          smoke-venv/Scripts/pip install -q --find-links wheelhouse-cu12 `
+            transcribe-cpp-native-cu12 "pytest>=7" numpy huggingface_hub
+          $env:TRANSCRIBE_SMOKE_PROVIDER = "transcribe-cpp-native-cu12"
+          # The default provider is deliberately absent (its pin can't
+          # resolve pre-release); wheel_smoke installs the API package
+          # dep-free. Declared-backends gate asserts {cuda, vulkan, cpu}.
+          $env:TRANSCRIBE_SMOKE_PIP_NO_DEPS = "1"
+          $env:CI = "1"
+          smoke-venv/Scripts/python scripts/ci/wheel_smoke.py .
+      # Named OUTSIDE the dist-* pattern, like cuda-dist-linux-x86_64: the
+      # co-import job merges dist-* and must never pick up a cu12 provider.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cuda-dist-windows-x86_64
+          path: wheelhouse-cu12/*.whl

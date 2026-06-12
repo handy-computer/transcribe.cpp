@@ -9,6 +9,7 @@
 #include "transcribe-load-common.h"
 
 #include "transcribe-backend.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -17,6 +18,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <vector>
@@ -61,7 +63,7 @@ ggml_backend_t try_init_kind(BackendKind   wanted,
         if (be == nullptr) continue;
 
         const BackendKind kind = classify_device(dev);
-        std::fprintf(stderr, "%s: using %s backend: %s\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using %s backend: %s",
                      error_tag,
                      kind_name(kind),
                      ggml_backend_dev_name(dev));
@@ -88,7 +90,7 @@ void append_accel_backends(std::vector<ggml_backend_t> & out,
         ggml_backend_t be = ggml_backend_dev_init(dev, nullptr);
         if (be == nullptr) continue;
 
-        std::fprintf(stderr, "%s: using accel backend: %s\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using accel backend: %s",
                      error_tag, ggml_backend_dev_name(dev));
         out.push_back(be);
     }
@@ -100,10 +102,23 @@ ggml_backend_t init_cpu_backend(const char * error_tag) {
     ggml_backend_t cpu_be =
         ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     if (cpu_be == nullptr) {
-        std::fprintf(stderr,
-                     "%s: failed to initialize CPU backend\n", error_tag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: failed to initialize CPU backend", error_tag);
     }
     return cpu_be;
+}
+
+bool valid_backend_request(int raw) {
+    switch (raw) {
+        case TRANSCRIBE_BACKEND_AUTO:
+        case TRANSCRIBE_BACKEND_CPU:
+        case TRANSCRIBE_BACKEND_METAL:
+        case TRANSCRIBE_BACKEND_VULKAN:
+        case TRANSCRIBE_BACKEND_CPU_ACCEL:
+        case TRANSCRIBE_BACKEND_CUDA:
+            return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -112,14 +127,23 @@ transcribe_status init_backends(transcribe_backend_request requested,
                                 const char *               error_tag,
                                 BackendPlan &              out)
 {
+    // Read the request as raw bytes before any enum-typed load: a C caller
+    // can pass any int here, and loading an out-of-range value through the
+    // enum lvalue is UB in C++ (UBSan traps). The raw value is validated by
+    // the switch; only valid values are stored back as the enum.
+    int requested_raw = TRANSCRIBE_BACKEND_AUTO;
+    std::memcpy(&requested_raw, &requested, sizeof(requested_raw));
+
     out = BackendPlan{};
-    out.requested = requested;
+    out.requested = static_cast<transcribe_backend_request>(
+        valid_backend_request(requested_raw) ? requested_raw
+                                             : TRANSCRIBE_BACKEND_AUTO);
 
     // Explicit switch over the enum so an unknown / garbage value
     // from a C caller never silently collapses into AUTO. Unknown
     // values are a programming error on the caller's side, not a
     // fallback we want to tolerate.
-    switch (requested) {
+    switch (requested_raw) {
     case TRANSCRIBE_BACKEND_CPU:
     case TRANSCRIBE_BACKEND_CPU_ACCEL: {
         // CPU primary. The CPU_ACCEL variant additionally layers the
@@ -137,7 +161,7 @@ transcribe_status init_backends(transcribe_backend_request requested,
         const bool with_accel = (requested == TRANSCRIBE_BACKEND_CPU_ACCEL);
         ggml_backend_t cpu_be = init_cpu_backend(error_tag);
         if (cpu_be == nullptr) return TRANSCRIBE_ERR_BACKEND;
-        std::fprintf(stderr, "%s: using cpu backend (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "%s: using cpu backend (%s)",
                      error_tag, with_accel ? "with accel" : "strict");
         out.primary      = cpu_be;
         out.primary_kind = BackendKind::Cpu;
@@ -164,8 +188,8 @@ transcribe_status init_backends(transcribe_backend_request requested,
         BackendKind got_kind = BackendKind::Unknown;
         ggml_backend_t gpu_be = try_init_kind(wanted, error_tag, got_kind);
         if (gpu_be == nullptr) {
-            std::fprintf(stderr,
-                         "%s: %s backend requested but not available\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: %s backend requested but not available",
                          error_tag, kind_name(wanted));
             return TRANSCRIBE_ERR_BACKEND;
         }
@@ -226,9 +250,9 @@ transcribe_status init_backends(transcribe_backend_request requested,
     // Unknown enumerator: reject loudly so callers catch ABI drift
     // during development. Do not let "everything else" silently map
     // to AUTO — that hides bugs.
-    std::fprintf(stderr,
-                 "%s: invalid transcribe_backend_request value %d\n",
-                 error_tag, static_cast<int>(requested));
+    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                 "%s: invalid transcribe_backend_request value %d",
+                 error_tag, requested_raw);
     return TRANSCRIBE_ERR_INVALID_ARG;
 }
 
@@ -243,8 +267,8 @@ transcribe_status stream_tensor_data(const std::string &   path,
     // #ifdef'ing fseeko vs _fseeki64.
     std::ifstream fin(path, std::ios::binary);
     if (!fin) {
-        std::fprintf(stderr,
-                     "%s: failed to reopen %s for tensor data\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: failed to reopen %s for tensor data",
                      error_tag, path.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -258,8 +282,8 @@ transcribe_status stream_tensor_data(const std::string &   path,
     {
         const int64_t idx = gguf_find_tensor(gguf_data, t->name);
         if (idx < 0) {
-            std::fprintf(stderr,
-                         "%s: tensor \"%s\" not in gguf data\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: tensor \"%s\" not in gguf data",
                          error_tag, t->name);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -271,8 +295,8 @@ transcribe_status stream_tensor_data(const std::string &   path,
             static_cast<std::streamoff>(toffset);
         fin.seekg(abs_offset);
         if (!fin) {
-            std::fprintf(stderr,
-                         "%s: seek failed for tensor \"%s\"\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: seek failed for tensor \"%s\"",
                          error_tag, t->name);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -283,8 +307,8 @@ transcribe_status stream_tensor_data(const std::string &   path,
         fin.read(reinterpret_cast<char *>(staging.data()),
                  static_cast<std::streamsize>(nbytes));
         if (!fin) {
-            std::fprintf(stderr,
-                         "%s: short read for tensor \"%s\" (%zu bytes)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: short read for tensor \"%s\" (%zu bytes)",
                          error_tag, t->name, nbytes);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -341,8 +365,8 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
     ggml_backend_buffer_t buffer =
         ggml_backend_alloc_ctx_tensors(ctx, plan.primary);
     if (buffer == nullptr) {
-        std::fprintf(stderr,
-            "%s: conv_pw f32 promotion buffer alloc failed\n", error_tag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "%s: conv_pw f32 promotion buffer alloc failed", error_tag);
         ggml_free(ctx);
         return TRANSCRIBE_ERR_BACKEND;
     }
@@ -351,8 +375,8 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
     // Dequantize each F16 tensor into its F32 replacement.
     const auto * f16_traits = ggml_get_type_traits(GGML_TYPE_F16);
     if (f16_traits == nullptr || f16_traits->to_float == nullptr) {
-        std::fprintf(stderr,
-            "%s: no f16 to_float trait — skipping conv pw promotion\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
+            "%s: no f16 to_float trait — skipping conv pw promotion",
             error_tag);
         // Partial success: the ctx + buffer are already allocated but
         // unused. Free them so the caller's outparams stay nullptr,
@@ -386,9 +410,9 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
     *out_ctx    = ctx;
     *out_buffer = buffer;
 
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
         "%s: promoted %zu conv pointwise weights from F16 → F32 "
-        "for CPU backend\n", error_tag, slots.size());
+        "for CPU backend", error_tag, slots.size());
     return TRANSCRIBE_OK;
 }
 
@@ -411,8 +435,8 @@ ReadF32Result read_f32_tensor_checked(
     // Validate type is F32.
     const enum ggml_type ttype = gguf_get_tensor_type(gguf_ctx, idx);
     if (ttype != GGML_TYPE_F32) {
-        std::fprintf(stderr,
-                     "%s: tensor \"%s\" has type %d, expected F32 (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: tensor \"%s\" has type %d, expected F32 (%d)",
                      error_tag, tensor_name,
                      static_cast<int>(ttype),
                      static_cast<int>(GGML_TYPE_F32));
@@ -424,9 +448,9 @@ ReadF32Result read_f32_tensor_checked(
 
     // Validate alignment: byte count must be a multiple of sizeof(float).
     if (nbytes == 0 || (nbytes % sizeof(float)) != 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s: tensor \"%s\" has %zu bytes "
-                     "(not a multiple of %zu)\n",
+                     "(not a multiple of %zu)",
                      error_tag, tensor_name, nbytes, sizeof(float));
         return ReadF32Result::BadSize;
     }
@@ -435,8 +459,8 @@ ReadF32Result read_f32_tensor_checked(
 
     // Validate expected element count when the caller knows the shape.
     if (expected_elems > 0 && n_elems != expected_elems) {
-        std::fprintf(stderr,
-                     "%s: tensor \"%s\" has %zu elements, expected %zu\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: tensor \"%s\" has %zu elements, expected %zu",
                      error_tag, tensor_name, n_elems, expected_elems);
         return ReadF32Result::BadSize;
     }
@@ -451,8 +475,8 @@ ReadF32Result read_f32_tensor_checked(
 
     std::ifstream fin(gguf_path, std::ios::binary);
     if (!fin) {
-        std::fprintf(stderr,
-                     "%s: failed to open %s for tensor \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: failed to open %s for tensor \"%s\"",
                      error_tag, gguf_path.c_str(), tensor_name);
         return ReadF32Result::ReadErr;
     }
@@ -462,8 +486,8 @@ ReadF32Result read_f32_tensor_checked(
         static_cast<std::streamoff>(t_off);
     fin.seekg(abs_offset);
     if (!fin) {
-        std::fprintf(stderr,
-                     "%s: seek failed for tensor \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: seek failed for tensor \"%s\"",
                      error_tag, tensor_name);
         return ReadF32Result::ReadErr;
     }
@@ -473,9 +497,9 @@ ReadF32Result read_f32_tensor_checked(
              static_cast<std::streamsize>(nbytes));
 
     if (!fin || static_cast<size_t>(fin.gcount()) != nbytes) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s: short read for tensor \"%s\" "
-                     "(got %zu of %zu bytes)\n",
+                     "(got %zu of %zu bytes)",
                      error_tag, tensor_name,
                      static_cast<size_t>(fin.gcount()), nbytes);
         out.clear();

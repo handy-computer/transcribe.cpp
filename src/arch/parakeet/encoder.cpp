@@ -46,6 +46,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -300,9 +301,9 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_mel_frames <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet encoder: invalid arg "
-                     "(ctx=%p, n_mel_frames=%d)\n",
+                     "(ctx=%p, n_mel_frames=%d)",
                      static_cast<void *>(ctx), n_mel_frames);
         return eb;
     }
@@ -314,16 +315,16 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     // factor != 8, build_pre_encode would need a structural rework, so
     // we fail loudly here.
     if (hp.enc_subsampling_factor != 8) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet encoder: unsupported subsampling_factor=%d "
-                     "(only 8 implemented)\n",
+                     "(only 8 implemented)",
                      hp.enc_subsampling_factor);
         return eb;
     }
     if (hp.fe_num_mels <= 0 || (hp.fe_num_mels % hp.enc_subsampling_factor) != 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet encoder: n_mels=%d not divisible by "
-                     "subsampling_factor=%d\n",
+                     "subsampling_factor=%d",
                      hp.fe_num_mels, hp.enc_subsampling_factor);
         return eb;
     }
@@ -337,8 +338,8 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
                                    n_mel_frames, hp.fe_num_mels, 1, n_batch);
     if (eb.mel_in == nullptr) {
-        std::fprintf(stderr,
-                     "parakeet encoder: failed to allocate mel_in tensor\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet encoder: failed to allocate mel_in tensor");
         return eb;
     }
     ggml_set_name(eb.mel_in, "mel.in");
@@ -660,9 +661,9 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         ggml_tensor * one_hot = ggml_new_tensor_4d(
             ctx, GGML_TYPE_F32, P, T_enc_val, B, 1);
         if (one_hot == nullptr) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet encoder: failed to allocate "
-                         "prompt.one_hot.in tensor\n");
+                         "prompt.one_hot.in tensor");
             return eb;
         }
         ggml_set_name(one_hot, "prompt.one_hot.in");
@@ -701,8 +702,8 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     // 2200. Use 8192 to leave headroom.
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "parakeet encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "parakeet encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -766,26 +767,26 @@ EncoderBuild build_encoder_graph_streaming(
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_mel_chunk_frames <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet streaming encoder: invalid arg "
-                     "(ctx=%p, n_mel_chunk_frames=%d)\n",
+                     "(ctx=%p, n_mel_chunk_frames=%d)",
                      static_cast<void *>(ctx), n_mel_chunk_frames);
         return eb;
     }
 
     if (hp.enc_subsampling_factor != 8) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet streaming encoder: unsupported "
-                     "subsampling_factor=%d (only 8 implemented)\n",
+                     "subsampling_factor=%d (only 8 implemented)",
                      hp.enc_subsampling_factor);
         return eb;
     }
     if (hp.enc_att_context_style !=
             ParakeetHParams::AttContextStyle::ChunkedLimited)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet streaming encoder: requires "
-                     "att_context_style=ChunkedLimited\n");
+                     "att_context_style=ChunkedLimited");
         return eb;
     }
 
@@ -793,10 +794,10 @@ EncoderBuild build_encoder_graph_streaming(
     if (static_cast<int>(cache_io.channel_in.size()) != n_layers ||
         static_cast<int>(cache_io.time_in.size())    != n_layers)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet streaming encoder: cache_io.in vectors "
                      "must be sized to n_layers=%d (got channel=%zu, "
-                     "time=%zu)\n",
+                     "time=%zu)",
                      n_layers, cache_io.channel_in.size(),
                      cache_io.time_in.size());
         return eb;
@@ -826,9 +827,9 @@ EncoderBuild build_encoder_graph_streaming(
     if (drop_extra_pre_encoded > 0) {
         const int64_t T_pre = x->ne[1];
         if (drop_extra_pre_encoded >= T_pre) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet streaming encoder: drop_extra=%d >= "
-                         "T_pre_enc=%lld\n",
+                         "T_pre_enc=%lld",
                          drop_extra_pre_encoded, (long long)T_pre);
             return eb;
         }
@@ -943,9 +944,9 @@ EncoderBuild build_encoder_graph_streaming(
         ggml_tensor * one_hot = ggml_new_tensor_4d(
             ctx, GGML_TYPE_F32, P, T_q, 1, 1);
         if (one_hot == nullptr) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet streaming encoder: failed to allocate "
-                         "prompt.one_hot.in tensor\n");
+                         "prompt.one_hot.in tensor");
             return eb;
         }
         ggml_set_name(one_hot, "prompt.one_hot.in");

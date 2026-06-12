@@ -157,9 +157,14 @@ namespace transcribe {
 
 // Internal feature-bit helpers. Per-family load() / capability KV
 // reader calls set_feature; the central probe (transcribe_model_supports)
-// reads via has_feature. Both treat out-of-range enums as no-ops / false
+// reads via has_feature. Both treat out-of-range values as no-ops / false
 // so the bitset stays bounded and unused bits remain zero.
-inline void set_feature(transcribe_model * m, transcribe_feature f, bool on) {
+//
+// The feature parameter is int, NOT transcribe_feature, on purpose: the
+// public entry point receives whatever int a C caller passed, and loading
+// an out-of-range value through the enum type is UB in C++. Enum constants
+// convert implicitly, so internal callers are unaffected.
+inline void set_feature(transcribe_model * m, int f, bool on) {
     if (m == nullptr) return;
     const unsigned bit = static_cast<unsigned>(f);
     if (bit >= 64) return;
@@ -171,7 +176,7 @@ inline void set_feature(transcribe_model * m, transcribe_feature f, bool on) {
     }
 }
 
-inline bool has_feature(const transcribe_model * m, transcribe_feature f) {
+inline bool has_feature(const transcribe_model * m, int f) {
     if (m == nullptr) return false;
     const unsigned bit = static_cast<unsigned>(f);
     if (bit >= 64) return false;

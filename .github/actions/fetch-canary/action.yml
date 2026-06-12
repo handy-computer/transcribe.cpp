@@ -1,0 +1,50 @@
+name: fetch-canary
+description: >
+  Cache + fetch the private canary GGUFs and export TRANSCRIBE_SMOKE_MODEL /
+  TRANSCRIBE_SMOKE_STREAMING_MODEL. Skips cleanly when hf-token is empty
+  (forks have no secret): the model tests then skip, exactly as before this
+  action existed. Always fetches BOTH canaries (~95 MB total) under one cache
+  key — a per-consumer subset would let one job save the shared key with only
+  its subset in it, and every other consumer would re-download forever
+  (exact-key hits are never re-saved). Requires a checkout (composite actions
+  resolve from the repo) and uv on PATH (uvx fetches via huggingface_hub).
+
+inputs:
+  hf-token:
+    description: HF token (pass secrets.HF_TOKEN; empty means skip cleanly)
+    required: false
+    default: ""
+  model-path-prefix:
+    description: >
+      Prefix for the exported env paths. Default is the workspace; pass
+      /project for cibuildwheel's Linux containers (the project bind mount).
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Canary model cache (avoid HF rate limits — 429s were real)
+      if: inputs.hf-token != ''
+      uses: actions/cache@v5
+      with:
+        path: canary
+        key: canary-models-v1
+    - name: Fetch canary models (cache miss only)
+      if: inputs.hf-token != ''
+      shell: bash
+      env:
+        HF_TOKEN: ${{ inputs.hf-token }}
+      run: |
+        [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+          uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf \
+            whisper-tiny-Q5_K_M.gguf --local-dir canary
+        [ -f canary/moonshine-streaming-tiny-Q8_0.gguf ] || \
+          uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf \
+            moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+        # GITHUB_WORKSPACE (not bash's $PWD) so Windows exports a path
+        # Python can open rather than an MSYS one.
+        prefix='${{ inputs.model-path-prefix }}'
+        if [ -z "$prefix" ]; then prefix="$GITHUB_WORKSPACE"; fi
+        echo "TRANSCRIBE_SMOKE_MODEL=$prefix/canary/whisper-tiny-Q5_K_M.gguf" >> "$GITHUB_ENV"
+        echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$prefix/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"

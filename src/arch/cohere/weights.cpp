@@ -11,6 +11,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -84,84 +85,84 @@ transcribe_status read_cohere_hparams(const gguf_context * gguf,
         hp.enc_d_ff <= 0 || hp.enc_conv_kernel <= 0 ||
         hp.enc_subsampling_factor <= 0 || hp.enc_subsampling_channels <= 0)
     {
-        std::fprintf(stderr, "cohere: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
-                     "cohere: encoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere: encoder d_model (%d) not divisible by n_heads (%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_layers <= 0 || hp.dec_hidden <= 0 || hp.dec_n_heads <= 0 ||
         hp.dec_inner <= 0 || hp.dec_max_seq <= 0)
     {
-        std::fprintf(stderr, "cohere: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_hidden % hp.dec_n_heads != 0) {
-        std::fprintf(stderr,
-                     "cohere: decoder hidden (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere: decoder hidden (%d) not divisible by n_heads (%d)",
                      hp.dec_hidden, hp.dec_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_activation != "relu" && hp.dec_activation != "silu" &&
         hp.dec_activation != "swish")
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere: unsupported decoder activation \"%s\" "
-                     "(only relu, silu, swish are implemented)\n",
+                     "(only relu, silu, swish are implemented)",
                      hp.dec_activation.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_num_mels <= 0 || hp.fe_sample_rate <= 0 ||
         hp.fe_n_fft <= 0 || hp.fe_win_length <= 0 || hp.fe_hop_length <= 0)
     {
-        std::fprintf(stderr, "cohere: frontend dimensions must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere: frontend dimensions must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_win_length > hp.fe_n_fft) {
-        std::fprintf(stderr,
-                     "cohere: frontend win_length (%d) > n_fft (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere: frontend win_length (%d) > n_fft (%d)",
                      hp.fe_win_length, hp.fe_n_fft);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_f_min < 0.0f || hp.fe_f_max <= hp.fe_f_min) {
-        std::fprintf(stderr,
-                     "cohere: frontend mel band invalid: f_min=%f f_max=%f\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere: frontend mel band invalid: f_min=%f f_max=%f",
                      hp.fe_f_min, hp.fe_f_max);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        std::fprintf(stderr,
-                     "cohere: unsupported frontend type \"%s\" (only \"mel\")\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere: unsupported frontend type \"%s\" (only \"mel\")",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_window != "hann") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere: unsupported frontend window \"%s\" "
-                     "(only \"hann\" is implemented)\n",
+                     "(only \"hann\" is implemented)",
                      hp.fe_window.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_normalize != "per_feature") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere: unsupported frontend normalize \"%s\" "
-                     "(only \"per_feature\" is implemented)\n",
+                     "(only \"per_feature\" is implemented)",
                      hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if ((hp.fe_n_fft & (hp.fe_n_fft - 1)) != 0) {
-        std::fprintf(stderr,
-                     "cohere: frontend n_fft (%d) must be a power of 2\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere: frontend n_fft (%d) must be a power of 2",
                      hp.fe_n_fft);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_pad_mode != "reflect" && hp.fe_pad_mode != "constant") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere: unsupported frontend pad_mode \"%s\" "
-                     "(only \"reflect\" and \"constant\" are implemented)\n",
+                     "(only \"reflect\" and \"constant\" are implemented)",
                      hp.fe_pad_mode.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -320,13 +321,13 @@ transcribe_status build_cohere_weights(ggml_context *         ctx_meta,
     {
         ggml_tensor * tw = ggml_get_tensor(ctx_meta, "dec.embed.token.weight");
         if (tw == nullptr) {
-            std::fprintf(stderr, "cohere: missing tensor \"dec.embed.token.weight\"\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere: missing tensor \"dec.embed.token.weight\"");
             return TRANSCRIBE_ERR_GGUF;
         }
         // The embedding table: ne[0]=dec_hidden, ne[1]=vocab_size.
         if (tw->ne[0] != dec_h) {
-            std::fprintf(stderr,
-                         "cohere: dec.embed.token.weight ne[0]=%lld, expected %lld\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "cohere: dec.embed.token.weight ne[0]=%lld, expected %lld",
                          static_cast<long long>(tw->ne[0]),
                          static_cast<long long>(dec_h));
             return TRANSCRIBE_ERR_GGUF;

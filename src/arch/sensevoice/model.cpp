@@ -164,8 +164,8 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "sensevoice: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "sensevoice: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -458,9 +458,9 @@ transcribe_status run(
     cc->t_mel_us = ggml_time_us() - t_mel_start;
 
     if (T_lfr <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice run: input too short for kaldi fbank "
-                     "(n_samples=%d → T_lfr=0)\n", n_samples);
+                     "(n_samples=%d → T_lfr=0)", n_samples);
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
@@ -551,7 +551,7 @@ transcribe_status run(
     // Sinusoidal PE: depth = current width = d_input (NOT d_model).
     transcribe::sanm::build_sinusoidal_pe(cc->pe_buf, hp.enc_d_input, T_full);
     if (eb.pe_in == nullptr) {
-        std::fprintf(stderr, "sensevoice run: pe.in not found in graph\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "sensevoice run: pe.in not found in graph");
         return TRANSCRIBE_ERR_GGUF;
     }
     ggml_backend_tensor_set(eb.pe_in, cc->pe_buf.data(),
@@ -569,8 +569,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "sensevoice run: graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "sensevoice run: graph compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -802,8 +802,8 @@ static transcribe_status run_batch_encode(
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "sensevoice run_batch: graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "sensevoice run_batch: graph compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }

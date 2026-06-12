@@ -41,6 +41,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -464,9 +465,9 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
 {
     EncoderBuild eb {};
     if (ctx == nullptr || n_mel_frames <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "medasr encoder: invalid arg "
-                     "(ctx=%p, n_mel_frames=%d)\n",
+                     "(ctx=%p, n_mel_frames=%d)",
                      static_cast<void *>(ctx), n_mel_frames);
         return eb;
     }
@@ -632,8 +633,8 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     // CTC head ~ 1000 nodes; 8192 leaves ample headroom.
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "medasr encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "medasr encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);

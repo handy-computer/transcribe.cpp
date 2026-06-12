@@ -125,11 +125,18 @@ add_library(transcribe
 # (rows summed in the same order). The primary out_w path is the ggml graph
 # in joint_step; this row-parallelism covers the host fallback and the
 # remaining host-side matmuls.
-find_package(OpenMP QUIET)
-if(OpenMP_CXX_FOUND)
-    set_source_files_properties(arch/parakeet/decoder.cpp PROPERTIES
-        COMPILE_OPTIONS "${OpenMP_CXX_FLAGS}")
-    target_link_libraries(transcribe PRIVATE OpenMP::OpenMP_CXX)
+#
+# Gated on TRANSCRIBE_USE_OPENMP so official provider wheels (which pass it OFF,
+# alongside GGML_OPENMP=OFF) do not link an OpenMP runtime into this TU. When
+# off, the `#pragma omp` is an ignored no-op and linear() runs serially — the
+# same path taken when OpenMP simply is not found.
+if(TRANSCRIBE_USE_OPENMP)
+    find_package(OpenMP QUIET)
+    if(OpenMP_CXX_FOUND)
+        set_source_files_properties(arch/parakeet/decoder.cpp PROPERTIES
+            COMPILE_OPTIONS "${OpenMP_CXX_FLAGS}")
+        target_link_libraries(transcribe PRIVATE OpenMP::OpenMP_CXX)
+    endif()
 endif()
 
 target_include_directories(transcribe
@@ -145,6 +152,10 @@ target_include_directories(transcribe
 target_compile_definitions(transcribe
     PRIVATE
         TRANSCRIBE_BUILD
+        # Git commit stamped at configure time; surfaced by
+        # transcribe_version_commit(). Falls back to "unknown" in the source
+        # (see transcribe.cpp) when the build tree has no git metadata.
+        TRANSCRIBE_COMMIT="${TRANSCRIBE_BUILD_COMMIT}"
 )
 
 # ggml is the runtime substrate. Linked PRIVATE because the public header
@@ -158,10 +169,15 @@ target_link_libraries(transcribe
 # link Accelerate directly; elsewhere we probe for OpenBLAS / MKL /
 # BLIS via find_package(BLAS). When no BLAS is found the decoder falls
 # back to a scalar loop (~14x slower but functionally correct).
+# Apple Accelerate is a system framework (always present, nothing to vendor),
+# so it stays on unconditionally even for wheels. The non-Apple system-BLAS
+# probe is gated on TRANSCRIBE_USE_SYSTEM_BLAS: official provider wheels pass it
+# OFF so wheel-repair tools never vendor OpenBLAS/MKL/BLIS where it would fight
+# another BLAS/OpenMP runtime in the host process.
 if(APPLE)
     target_link_libraries(transcribe PRIVATE "-framework Accelerate")
     target_compile_definitions(transcribe PRIVATE TRANSCRIBE_HAS_BLAS=1)
-else()
+elseif(TRANSCRIBE_USE_SYSTEM_BLAS)
     # BLA_VENDOR can be set by the user to prefer a specific BLAS
     # (e.g. -DBLA_VENDOR=OpenBLAS). find_package probes the system.
     find_package(BLAS QUIET)
@@ -182,11 +198,19 @@ else()
     else()
         message(STATUS "transcribe: no BLAS found — decoder uses scalar fallback")
     endif()
+else()
+    message(STATUS "transcribe: TRANSCRIBE_USE_SYSTEM_BLAS=OFF — decoder uses scalar fallback (official-wheel posture; no system BLAS vendored)")
 endif()
 
 set_target_properties(transcribe PROPERTIES
     OUTPUT_NAME transcribe
     POSITION_INDEPENDENT_CODE ON
+    # Versions the shared lib (libtranscribe.0.1.0.dylib + libtranscribe.0.dylib
+    # symlink). Ignored for the static archive. SOVERSION is the major only;
+    # pre-1.0 the real compatibility backstop is the binding's exact
+    # version/header-hash check, not the SONAME.
+    VERSION   ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
 # zlib for Whisper's temperature-fallback compression_ratio metric
@@ -195,5 +219,12 @@ set_target_properties(transcribe PROPERTIES
 # token-id loops). System zlib is ubiquitous; compile fails if absent.
 find_package(ZLIB REQUIRED)
 target_link_libraries(transcribe PRIVATE ZLIB::ZLIB)
+
+if(WIN32)
+    # Windows toolchains hide M_PI and friends behind _USE_MATH_DEFINES
+    # (used by the mel frontends and Whisper's bin loader). MSVC and MinGW
+    # both honor it — MinGW's strict-C++17 mode hides M_PI the same way.
+    target_compile_definitions(transcribe PRIVATE _USE_MATH_DEFINES)
+endif()
 
 transcribe_apply_warnings(transcribe)

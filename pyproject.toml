@@ -1,0 +1,223 @@
+# transcribe-cpp-native: the default native provider package for the
+# transcribe-cpp Python bindings.
+#
+# This pyproject lives at the repo root on purpose: the sdist must contain the
+# full C++ tree (src/, include/, vendored ggml/) so `pip install` can compile
+# from source on platforms without a prebuilt wheel, and an sdist cannot reach
+# files outside its project directory. The pure-Python API package
+# (transcribe-cpp) lives at bindings/python and depends on this one.
+#
+# One distribution name, platform-differentiated wheels:
+#   manylinux / win  -> conservative CPU + Vulkan ggml backend modules
+#   macOS arm64      -> Metal (embedded shaders) + CPU
+#   sdist            -> builds from source; machine-tuned CPU by default
+#
+# The wheel is py3-none-<platform>: the package contains zero compiled Python
+# (the binding is ctypes), only the native artifact directory.
+
+[build-system]
+requires = ["scikit-build-core>=0.11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "transcribe-cpp-native"
+dynamic = ["version"]
+description = "Prebuilt native library for transcribe-cpp (speech-to-text, ggml)"
+readme = "bindings/python-native/README.md"
+requires-python = ">=3.9"
+license = "MIT"
+# Wheels vendor native code, so third-party license texts ship in the wheel
+# (settled decision: license inclusion is part of provider packaging tests).
+license-files = ["LICENSE", "ggml/LICENSE"]
+authors = [{ name = "The transcribe.cpp authors" }]
+keywords = ["transcription", "speech-to-text", "asr", "ggml", "native"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/handy-computer/transcribe.cpp"
+Repository = "https://github.com/handy-computer/transcribe.cpp"
+Issues = "https://github.com/handy-computer/transcribe.cpp/issues"
+
+# The provider contract: transcribe_cpp discovers native artifacts through this
+# entry-point group and validates version + public-header hash before dlopen
+# (bindings/python/src/transcribe_cpp/_library.py).
+[project.entry-points."transcribe_cpp.native"]
+default = "transcribe_cpp_native:descriptor"
+
+[tool.scikit-build]
+# The version is parsed from the TRANSCRIBE_VERSION_* macros in the public
+# header — the same single source CMake and transcribe_version() use — so the
+# provider package version cannot drift from the native library it bundles.
+metadata.version.provider = "scikit_build_core.metadata.regex"
+metadata.version.input = "include/transcribe.h"
+metadata.version.regex = '(?sx) TRANSCRIBE_VERSION_MAJOR \s+ (?P<major>\d+) .*? TRANSCRIBE_VERSION_MINOR \s+ (?P<minor>\d+) .*? TRANSCRIBE_VERSION_PATCH \s+ (?P<patch>\d+)'
+metadata.version.result = "{major}.{minor}.{patch}"
+
+cmake.version = ">=3.21"
+ninja.version = ">=1.11"
+
+# ctypes binding: no compiled Python, one wheel per platform spans all CPythons.
+wheel.py-api = "py3"
+# CMake's install prefix maps inside the import package, so the artifact
+# directory lands at transcribe_cpp_native/_native/.
+wheel.install-dir = "transcribe_cpp_native"
+wheel.packages = ["bindings/python-native/transcribe_cpp_native"]
+
+# Package ONLY the wheel component (cmake/python-wheel-install.cmake): the
+# vendored ggml's own install rules (headers, cmake config, pkg-config) use the
+# default component and must stay out of the wheel.
+install.components = ["wheel"]
+
+# Keep the sdist to the sources a from-scratch build needs (gitignored trees
+# are excluded automatically; these prune git-tracked-but-irrelevant weight).
+# Converted models, dumps, perf/WER reports, and local build/wheel trees are
+# multi-GB and never belong in a distribution; of the committed sample audio
+# only jfk.wav ships (the smoke/test default — the rest is porting material).
+# Patterns are gitwildmatch: single-segment patterns MUST be root-anchored
+# with a leading slash, or they match at any depth — unanchored "canary/"
+# silently dropped src/arch/canary/ (the Canary model family) from the sdist
+# and broke the from-source build. CI's audit step asserts the contents.
+sdist.exclude = [
+  "/models/",
+  "/dumps/",
+  "/reports/",
+  "/tmp/",
+  "/build*/",
+  "/dist*/",
+  "/wheelhouse*/",
+  "/canary/",
+  "/samples/",
+  "/.github/",
+  "/.claude/",
+  "/bindings/python/dist/",
+  "**/__pycache__/",
+  "**/.venv/",
+]
+sdist.include = ["/samples/jfk.wav"]
+
+# --- official wheel lanes ---------------------------------------------------
+# Selected via the TRANSCRIBE_WHEEL_LANE env var (set by [tool.cibuildwheel]
+# below). These mirror the wheel-* CMake presets in CMakePresets.json, which
+# remain the way to hand-build the same posture outside Python packaging —
+# keep both in sync. The wheel-hygiene base (shared lib, OpenMP/system-BLAS
+# off, Metal embedded) is forced by the SKBUILD block in CMakeLists.txt.
+
+# Default Linux/Windows wheel: fat CPU + Vulkan as dynamic ggml backend
+# modules (M6.5). GGML_CPU_ALL_VARIANTS=ON emits one ggml-cpu-<tier> module
+# per x86 ISA tier (x64 baseline, sse42, sandybridge, haswell, skylakex,
+# icelake, alderlake, ...) with runtime feature scoring — the exact shape
+# llama.cpp release binaries ship; it requires GGML_BACKEND_DL (set above).
+# The x64 baseline variant is the SIGILL-safe floor for any x86-64 machine,
+# so the conservative single-build is no longer needed.
+# TRANSCRIBE_X86_CONSERVATIVE fans out to GGML_NATIVE=OFF + every per-tier
+# GGML_AVX*/GGML_AVX512* flag (one switch, defined in CMakeLists.txt — the
+# per-flag lists used to be mirrored here, in the cu12 pyproject, and in
+# CMakePresets.json); those flags are inert while ALL_VARIANTS is on (ggml
+# gates them behind `if(NOT GGML_CPU_ALL_VARIANTS)`) and remain as the
+# explicit floor if a build ever disables ALL_VARIANTS.
+# cmake/python-wheel-install.cmake collapses every cpu-<tier> kind back to
+# "cpu" in the provider descriptor.
+[[tool.scikit-build.overrides]]
+if.env.TRANSCRIBE_WHEEL_LANE = "^cpu-vulkan$"
+cmake.args = [
+  "-DTRANSCRIBE_GGML_BACKEND_DL=ON",
+  "-DTRANSCRIBE_VULKAN=ON",
+  "-DGGML_CPU_ALL_VARIANTS=ON",
+  "-DTRANSCRIBE_X86_CONSERVATIVE=ON",
+]
+
+# Default macOS arm64 wheel: Metal (shaders embedded via the SKBUILD block;
+# single artifact, no dynamic backend modules — one platform, one GPU API).
+[[tool.scikit-build.overrides]]
+if.env.TRANSCRIBE_WHEEL_LANE = "^metal$"
+cmake.args = ["-DTRANSCRIBE_METAL=ON", "-DGGML_NATIVE=OFF"]
+
+# x86_64 macOS wheel: CPU only, no Metal. Intel-Mac GPUs are out of scope
+# (no fleet hardware to validate Metal compute, and ggml Metal on Intel/AMD
+# GPUs is far less proven than on Apple Silicon); Metal or tuned CPU on
+# Intel is served by the from-source sdist. Single artifact. TRANSCRIBE_METAL already
+# defaults OFF off Apple Silicon, but it is pinned OFF here for intent.
+# TRANSCRIBE_X86_CONSERVATIVE turns off every x86 SIMD tier (GGML_NATIVE=OFF
+# alone does NOT) so the one artifact runs on any Intel Mac without SIGILL
+# across the supported range; fat-CPU variants are a possible perf follow-up
+# (would need GGML_BACKEND_DL on macOS, which this single-artifact lane
+# intentionally avoids).
+[[tool.scikit-build.overrides]]
+if.env.TRANSCRIBE_WHEEL_LANE = "^cpu$"
+cmake.args = [
+  "-DTRANSCRIBE_METAL=OFF",
+  "-DTRANSCRIBE_X86_CONSERVATIVE=ON",
+]
+
+# --- cibuildwheel ------------------------------------------------------------
+# One wheel per platform: the package is py3-none-<plat> (ctypes, no compiled
+# Python), so build with a single CPython and skip the rest. Tests always run
+# against the REPAIRED wheel in a fresh venv — that is the artifact that
+# ships. HF_TOKEN (when present) lets the smoke pull the private canary GGUFs
+# for a real transcription.
+[tool.cibuildwheel]
+build = "cp312-*"
+skip = "*-musllinux*"
+test-requires = ["pytest>=7", "numpy", "huggingface_hub"]
+test-command = "python {project}/scripts/ci/wheel_smoke.py {project}"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+# manylinux_2_28, not manylinux2014: the documented carve-out fired — the
+# Vulkan toolchain cannot exist on glibc 2.17 (and the 2014 images are EOL).
+# Torch et al. ship 2_28, so this is the ecosystem floor in practice.
+manylinux-x86_64-image = "manylinux_2_28"
+environment = { TRANSCRIBE_WHEEL_LANE = "cpu-vulkan" }
+environment-pass = [
+  "HF_TOKEN",
+  "VK_TOOLCHAIN_CACHE",
+  "CI",
+  # Canary GGUFs are fetched on the HOST (cached; HF rate limits) and read
+  # inside the container via the /project bind mount.
+  "TRANSCRIBE_SMOKE_MODEL",
+  "TRANSCRIBE_SMOKE_STREAMING_MODEL",
+]
+before-all = "bash {project}/scripts/ci/manylinux-vulkan-toolchain.sh"
+# libvulkan stays EXCLUDED from the wheel: the module resolves the system
+# loader at runtime and degrades quietly to CPU when there is none — the
+# tier-1/tier-2 contract proven in the provider-dl-vulkan CI lane. Everything
+# else (libggml*, the string-dlopened backend modules) is already inside the
+# wheel, so auditwheel only grafts whitelisted-policy externals.
+repair-wheel-command = "auditwheel repair --exclude libvulkan.so.1 -w {dest_dir} {wheel}"
+
+[tool.cibuildwheel.macos]
+# Defaults here are the arm64/Metal lane. The x86_64 CPU-only lane is built by
+# a separate CI job (wheel-macos-x86 on a macos-13 Intel runner) that overrides
+# CIBW_ARCHS_MACOS=x86_64 and CIBW_ENVIRONMENT_MACOS (TRANSCRIBE_WHEEL_LANE=cpu
+# + TRANSCRIBE_SMOKE_BACKEND=cpu) — see .github/workflows/python-wheels.yml.
+archs = ["arm64"]
+# CC/CXX pinned to Apple's shims: runner images (e.g. Blacksmith macos-15)
+# can have mainline LLVM clang first in PATH, and open-source clang errors on
+# Apple-SDK CF_ENUM extensions (-Welaborated-enum-base) that Apple clang
+# accepts. /usr/bin/clang resolves through xcrun to the active Xcode.
+environment = { TRANSCRIBE_WHEEL_LANE = "metal", MACOSX_DEPLOYMENT_TARGET = "11.0", CC = "/usr/bin/clang", CXX = "/usr/bin/clang++" }
+# default repair (delocate) — externals are system-only, verified by test.
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+# Ninja, not the Visual Studio generator (scikit-build-core's Windows
+# default): substantially faster MSVC builds — this lane compiles ggml plus
+# hundreds of Vulkan shader variants. scikit-build-core activates the MSVC
+# environment automatically for Ninja.
+environment = { TRANSCRIBE_WHEEL_LANE = "cpu-vulkan", CMAKE_GENERATOR = "Ninja" }
+before-build = "pip install delvewheel"
+# Same loader posture as Linux: vulkan-1.dll is the system's, never vendored.
+repair-wheel-command = "delvewheel repair --exclude vulkan-1.dll -w {dest_dir} {wheel}"
+
+[tool.uv]
+# Keep `uv run <script>` at the repo root from syncing (= compiling) this
+# package: repo scripts run via PEP-723 inline metadata, and uv must never
+# trigger a surprise native build. Wheel/sdist builds go through the build
+# backend directly (python -m build, cibuildwheel, pip), which ignores this.
+package = false

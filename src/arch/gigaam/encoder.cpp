@@ -21,6 +21,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -322,9 +323,9 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
 {
     EncoderBuild eb {};
     if (ctx == nullptr || n_mel_frames <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "gigaam encoder: invalid arg "
-                     "(ctx=%p, n_mel_frames=%d)\n",
+                     "(ctx=%p, n_mel_frames=%d)",
                      static_cast<void *>(ctx), n_mel_frames);
         return eb;
     }
@@ -336,8 +337,8 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     eb.mel_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
                                    n_mel_frames, hp.fe_num_mels, n_batch);
     if (eb.mel_in == nullptr) {
-        std::fprintf(stderr,
-                     "gigaam encoder: failed to allocate mel_in tensor\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "gigaam encoder: failed to allocate mel_in tensor");
         return eb;
     }
     ggml_set_name(eb.mel_in, "mel.in");

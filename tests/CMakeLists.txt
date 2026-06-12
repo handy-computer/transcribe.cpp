@@ -61,6 +61,26 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/check_extension_umbrella.cmake)
 
 # -----------------------------------------------------------------------------
+# Shared-library build: only the public-ABI smoke is meaningful
+# -----------------------------------------------------------------------------
+#
+# Every test below this point is a C++ white-box test: it links `transcribe`
+# AND reaches into src/ internal headers, calling non-TRANSCRIBE_API symbols.
+# Those symbols are hidden in a shared libtranscribe (visibility=hidden), so the
+# white-box suite cannot link against it. A shared build (TRANSCRIBE_BUILD_SHARED
+# =ON) is the packaging/binding configuration; build static (the default) to run
+# the full suite. The pure-C api_smoke above stays — against a shared lib it
+# doubles as an exported-surface canary: it proves every public symbol resolves
+# from a clean C consumer with no internal-header reach.
+if(BUILD_SHARED_LIBS)
+    message(STATUS
+        "transcribe: shared-library build — registering only the public-ABI "
+        "smoke; the C++ white-box test suite requires a static build "
+        "(-DTRANSCRIBE_BUILD_SHARED=OFF).")
+    return()
+endif()
+
+# -----------------------------------------------------------------------------
 # Backend classification unit test
 # -----------------------------------------------------------------------------
 #
@@ -186,6 +206,25 @@ transcribe_apply_warnings(transcribe_stream_dispatch_unit)
 
 add_test(NAME transcribe_stream_dispatch_unit
     COMMAND transcribe_stream_dispatch_unit)
+
+# -----------------------------------------------------------------------------
+# Log sink contract (three states + ggml bridge level mapping)
+# -----------------------------------------------------------------------------
+
+add_executable(transcribe_log_unit
+    log_unit.cpp)
+
+# ggml for ggml_log_get / GGML_LOG_LEVEL_*: the test drives the bridge
+# transcribe_log_set installs, pinning the cross-enum level mapping.
+target_link_libraries(transcribe_log_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_log_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_log_unit)
+
+add_test(NAME transcribe_log_unit
+    COMMAND transcribe_log_unit)
 
 # -----------------------------------------------------------------------------
 # Synthetic GGUF fixtures (for the loader smoke test)

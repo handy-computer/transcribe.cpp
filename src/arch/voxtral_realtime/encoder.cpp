@@ -22,6 +22,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -249,7 +250,7 @@ EncoderBuild build_encoder_graph(ggml_context * ctx,
     EncoderBuild eb {};
 
     if (ctx == nullptr || n_mel_frames <= 4) {
-        std::fprintf(stderr, "voxtral_realtime encoder: invalid n_mel_frames=%d\n", n_mel_frames);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime encoder: invalid n_mel_frames=%d", n_mel_frames);
         return eb;
     }
 
@@ -262,7 +263,7 @@ EncoderBuild build_encoder_graph(ggml_context * ctx,
     const int T_enc    = (n_mel_frames - 2) / 2 + 1;
     const int n_audio  = T_enc / hp.proj_downsample;
     if (n_audio <= 0) {
-        std::fprintf(stderr, "voxtral_realtime encoder: T_enc=%d too small\n", T_enc);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime encoder: T_enc=%d too small", T_enc);
         return eb;
     }
     eb.T_enc = T_enc;
@@ -344,7 +345,7 @@ EncoderBuild build_encoder_graph(ggml_context * ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr, "voxtral_realtime encoder: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -364,9 +365,9 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context * ctx,
     EncoderBuildBatched eb {};
 
     if (ctx == nullptr || n_mel_frames <= 4 || n_batch <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "voxtral_realtime encoder(batched): invalid arg "
-                     "(n_mel_frames=%d, n_batch=%d)\n",
+                     "(n_mel_frames=%d, n_batch=%d)",
                      n_mel_frames, n_batch);
         return eb;
     }
@@ -379,7 +380,7 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context * ctx,
     const int n_audio  = T_enc / hp.proj_downsample;
     const int B        = n_batch;
     if (n_audio <= 0) {
-        std::fprintf(stderr, "voxtral_realtime encoder(batched): T_enc=%d too small\n", T_enc);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime encoder(batched): T_enc=%d too small", T_enc);
         return eb;
     }
     eb.T_enc   = T_enc;
@@ -450,7 +451,7 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context * ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr, "voxtral_realtime encoder(batched): ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime encoder(batched): ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -464,7 +465,7 @@ EmbedderBuild build_embedder_graph(ggml_context * ctx,
                                    int             n_mel_frames) {
     EmbedderBuild eb {};
     if (ctx == nullptr || n_mel_frames <= 4) {
-        std::fprintf(stderr, "voxtral_realtime embedder: invalid n_mel_frames=%d\n", n_mel_frames);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime embedder: invalid n_mel_frames=%d", n_mel_frames);
         return eb;
     }
     const int n_mels = hp.enc_num_mel_bins;
@@ -487,7 +488,7 @@ EmbedderBuild build_embedder_graph(ggml_context * ctx,
     ggml_set_output(eb.out);
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/2048, /*grads=*/false);
-    if (eb.graph == nullptr) { std::fprintf(stderr, "voxtral_realtime embedder: graph alloc failed\n"); return eb; }
+    if (eb.graph == nullptr) { log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime embedder: graph alloc failed"); return eb; }
     ggml_build_forward_expand(eb.graph, eb.out);
     return eb;
 }
@@ -498,7 +499,7 @@ EmbedderChunkBuild build_embedder_chunk_graph(ggml_context * ctx,
                                               int             n_new_mel) {
     EmbedderChunkBuild eb {};
     if (ctx == nullptr || n_new_mel < 2 || (n_new_mel % 2) != 0) {
-        std::fprintf(stderr, "voxtral_realtime embedder chunk: invalid n_new_mel=%d\n", n_new_mel);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime embedder chunk: invalid n_new_mel=%d", n_new_mel);
         return eb;
     }
     const int n_mels  = hp.enc_num_mel_bins;
@@ -540,7 +541,7 @@ EmbedderChunkBuild build_embedder_chunk_graph(ggml_context * ctx,
 
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/2048, /*grads=*/false);
     if (eb.graph == nullptr) {
-        std::fprintf(stderr, "voxtral_realtime embedder chunk: graph alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime embedder chunk: graph alloc failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -562,8 +563,8 @@ EncoderChunkBuild build_encoder_chunk_graph(ggml_context *                  ctx,
     if (ctx == nullptr || n_new <= 0 || (n_new % down) != 0 || write_slot < 0 ||
         read_start < 0 || read_len <= 0 || read_start + read_len > enc_kv.n_ctx ||
         write_slot + n_new > enc_kv.n_ctx || enc_kv.self_k == nullptr) {
-        std::fprintf(stderr, "voxtral_realtime enc-chunk: invalid arg (n_new=%d write_slot=%d "
-                     "read_start=%d read_len=%d n_ctx=%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime enc-chunk: invalid arg (n_new=%d write_slot=%d "
+                     "read_start=%d read_len=%d n_ctx=%d)",
                      n_new, write_slot, read_start, read_len, enc_kv.n_ctx);
         return cb;
     }
@@ -584,7 +585,7 @@ EncoderChunkBuild build_encoder_chunk_graph(ggml_context *                  ctx,
     ggml_set_input(cb.mask_in);
 
     ggml_cgraph * gf = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
-    if (gf == nullptr) { std::fprintf(stderr, "voxtral_realtime enc-chunk: graph alloc failed\n"); return cb; }
+    if (gf == nullptr) { log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime enc-chunk: graph alloc failed"); return cb; }
     cb.graph = gf;
 
     ggml_tensor * x = cb.embed_in;  // [d_model, n_new]

@@ -74,9 +74,9 @@ bool kv_cache_init(CohereKvCache & cache,
                    ggml_type       kv_type)
 {
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere kv_cache: unsupported kv_type=%d "
-                     "(only F16/F32)\n", static_cast<int>(kv_type));
+                     "(only F16/F32)", static_cast<int>(kv_type));
         return false;
     }
 
@@ -90,7 +90,7 @@ bool kv_cache_init(CohereKvCache & cache,
 
     cache.ctx = ggml_init(params);
     if (cache.ctx == nullptr) {
-        std::fprintf(stderr, "cohere kv_cache: ggml_init failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere kv_cache: ggml_init failed");
         return false;
     }
 
@@ -109,7 +109,7 @@ bool kv_cache_init(CohereKvCache & cache,
 
     cache.buffer = ggml_backend_alloc_ctx_tensors(cache.ctx, backend);
     if (cache.buffer == nullptr) {
-        std::fprintf(stderr, "cohere kv_cache: buffer alloc failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere kv_cache: buffer alloc failed");
         ggml_free(cache.ctx);
         cache.ctx = nullptr;
         return false;
@@ -127,9 +127,9 @@ bool kv_cache_init(CohereKvCache & cache,
     const size_t total_bytes =
         ggml_nbytes(cache.self_k) + ggml_nbytes(cache.self_v) +
         ggml_nbytes(cache.cross_k) + ggml_nbytes(cache.cross_v);
-    std::fprintf(stderr,
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
                  "cohere kv_cache: allocated %.1f MB (%s) "
-                 "(self: %d session x %d layers, cross: %d T_enc x %d layers)\n",
+                 "(self: %d session x %d layers, cross: %d T_enc x %d layers)",
                  static_cast<double>(total_bytes) / (1024.0 * 1024.0),
                  ggml_type_name(kv_type),
                  n_ctx, n_layer, T_enc, n_layer);
@@ -153,7 +153,7 @@ bool kv_cache_init_batched(CohereKvCache & cache,
         return true;
     }
     if (kv_type != GGML_TYPE_F16 && kv_type != GGML_TYPE_F32) {
-        std::fprintf(stderr, "cohere kv_cache(batched): unsupported kv_type\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere kv_cache(batched): unsupported kv_type");
         return false;
     }
 
@@ -381,9 +381,9 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
     const int64_t head_dim = n_heads > 0 ? d_model / n_heads : 0;
 
     if (head_dim * n_heads != d_model) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
             "cohere: d_model (%lld) != head_dim*n_heads; "
-            "skipping encoder Q-bias fusion\n", (long long)d_model);
+            "skipping encoder Q-bias fusion", (long long)d_model);
         return TRANSCRIBE_OK;
     }
 
@@ -424,8 +424,8 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
     }
 
     if (fused > 0) {
-        std::fprintf(stderr,
-            "cohere: fused Q bias into pos_u/pos_v for %zu encoder blocks\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+            "cohere: fused Q bias into pos_u/pos_v for %zu encoder blocks",
             fused);
     }
     return TRANSCRIBE_OK;
@@ -590,9 +590,9 @@ transcribe_status load(
     // missing EOS is a GGUF-builder bug that should surface during
     // conversion, not hide behind a runtime fallback in production.
     if (m->hparams.eos_token_id < 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere: GGUF tokenizer has no eos_token_id -- "
-                     "regenerate with an up-to-date converter\n");
+                     "regenerate with an up-to-date converter");
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -687,8 +687,8 @@ transcribe_status load(
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
         gguf_free(gguf_data);
-        std::fprintf(stderr,
-                     "cohere: ggml_backend_alloc_ctx_tensors failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere: ggml_backend_alloc_ctx_tensors failed");
         return TRANSCRIBE_ERR_GGUF;
     }
     m->backend_buffer = weights_buffer;
@@ -805,8 +805,8 @@ transcribe_status run(
 
     // ----- Mel front-end -------------------------------------------
     if (!cm->mel.has_value()) {
-        std::fprintf(stderr,
-                     "cohere run: model has no MelFrontend (load skipped?)\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere run: model has no MelFrontend (load skipped?)");
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     const int64_t t_mel_start = ggml_time_us();
@@ -817,8 +817,8 @@ transcribe_status run(
             cc->mel_buf, mel_n_mels, mel_n_frames);
         mst != TRANSCRIBE_OK)
     {
-        std::fprintf(stderr,
-                     "cohere run: MelFrontend::compute failed (%s)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere run: MelFrontend::compute failed (%s)",
                      transcribe_status_string(mst));
         return mst;
     }
@@ -890,8 +890,8 @@ transcribe_status run(
             static_cast<int>(cm->plan.scheduler_list.size()),
             16384, false, true);
         if (cc->sched == nullptr) {
-            std::fprintf(stderr,
-                         "cohere run: ggml_backend_sched_new failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "cohere run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -968,8 +968,8 @@ transcribe_status run(
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
         gs != GGML_STATUS_SUCCESS)
     {
-        std::fprintf(stderr,
-                     "cohere run: encoder graph compute failed (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "cohere run: encoder graph compute failed (%d)",
                      static_cast<int>(gs));
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -1006,9 +1006,9 @@ transcribe_status run(
     const int d_enc = static_cast<int>(eb.out->ne[0]);
     const int T_enc = static_cast<int>(eb.out->ne[1]);
     if (d_enc <= 0 || T_enc <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere run: encoder output has degenerate shape "
-                     "[%d, %d]\n", d_enc, T_enc);
+                     "[%d, %d]", d_enc, T_enc);
         return TRANSCRIBE_ERR_GGUF;
     }
     cc->enc_host.resize(static_cast<size_t>(d_enc) *
@@ -1063,8 +1063,8 @@ transcribe_status run(
     for (const auto & piece : prompt_pieces) {
         const int id = cm->tok.find(piece);
         if (id < 0) {
-            std::fprintf(stderr,
-                         "cohere run: unknown prompt token '%s'\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "cohere run: unknown prompt token '%s'",
                          piece.c_str());
             return TRANSCRIBE_ERR_INVALID_ARG;
         }
@@ -1160,8 +1160,8 @@ transcribe_status run(
             cc->compute_ctx, cm->weights, cm->hparams,
             cc->kv_cache, T_enc);
         if (cross_db.graph == nullptr) {
-            std::fprintf(stderr,
-                         "cohere run: build_cross_kv_graph failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "cohere run: build_cross_kv_graph failed");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -1181,8 +1181,8 @@ transcribe_status run(
                 ggml_backend_sched_graph_compute(cc->sched, cross_db.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "cohere run: cross_kv compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "cohere run: cross_kv compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -1208,8 +1208,8 @@ transcribe_status run(
             /*skip_log_softmax=*/prompt_skip_softmax,
             cc->decoder_use_flash);
         if (db.out == nullptr || db.graph == nullptr) {
-            std::fprintf(stderr,
-                         "cohere run: build_decoder_graph_kv (prompt) failed\n");
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "cohere run: build_decoder_graph_kv (prompt) failed");
             return TRANSCRIBE_ERR_GGUF;
         }
 
@@ -1250,8 +1250,8 @@ transcribe_status run(
                 ggml_backend_sched_graph_compute(cc->sched, db.graph);
             gs != GGML_STATUS_SUCCESS)
         {
-            std::fprintf(stderr,
-                         "cohere run: decoder prompt compute failed (%d)\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "cohere run: decoder prompt compute failed (%d)",
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -1397,8 +1397,8 @@ transcribe_status run(
                 cc->compute_ctx, cm->weights, cm->hparams, cc->kv_cache,
                 max_n_kv, T_enc, cc->decoder_use_flash);
             if (sb.graph == nullptr || sb.argmax_out == nullptr) {
-                std::fprintf(stderr,
-                             "cohere run: build_step_graph failed\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "cohere run: build_step_graph failed");
                 commit_result();
                 return TRANSCRIBE_ERR_GGUF;
             }
@@ -1456,8 +1456,8 @@ transcribe_status run(
                         ggml_backend_sched_graph_compute(cc->sched, sb.graph);
                     gs != GGML_STATUS_SUCCESS)
                 {
-                    std::fprintf(stderr,
-                                 "cohere run: step compute failed (%d, n_past=%d)\n",
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                                 "cohere run: step compute failed (%d, n_past=%d)",
                                  static_cast<int>(gs), n_past);
                     commit_result();
                     return TRANSCRIBE_ERR_GGUF;
@@ -2001,9 +2001,9 @@ transcribe_status run_batch(
     }
 
     if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "cohere run_batch: n=%d T_enc_max=%d kv_cap=%d prompt=%d\n"
-            "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)\n",
+            "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)",
             n, T_enc_max, max_n_kv, prompt_len,
             mel_us / 1000.0, enc_us / 1000.0, n, dec_us / 1000.0);
     }

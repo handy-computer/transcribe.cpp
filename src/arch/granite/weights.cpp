@@ -9,6 +9,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -56,8 +57,8 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
             case KvResult::Ok:      hp.enc_cat_hidden_layers = std::move(tmp); break;
             case KvResult::Absent:  hp.enc_cat_hidden_layers.clear();          break;
             case KvResult::BadType:
-                std::fprintf(stderr,
-                             "granite: stt.granite.encoder.cat_hidden_layers has wrong type\n");
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "granite: stt.granite.encoder.cat_hidden_layers has wrong type");
                 return TRANSCRIBE_ERR_GGUF;
         }
     }
@@ -124,19 +125,19 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         hp.enc_conv_expansion <= 0 || hp.enc_max_pos_emb <= 0 ||
         hp.enc_context_size <= 0)
     {
-        std::fprintf(stderr, "granite: encoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: encoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_n_heads * hp.enc_head_dim != hp.enc_hidden) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "granite: encoder n_heads * head_dim (%d * %d) "
-                     "!= hidden (%d)\n",
+                     "!= hidden (%d)",
                      hp.enc_n_heads, hp.enc_head_dim, hp.enc_hidden);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_context_size > hp.enc_max_pos_emb) {
-        std::fprintf(stderr,
-                     "granite: context_size (%d) > max_pos_emb (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite: context_size (%d) > max_pos_emb (%d)",
                      hp.enc_context_size, hp.enc_max_pos_emb);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -146,9 +147,9 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         const int32_t expected_kv_dim = hp.enc_hidden *
             (static_cast<int32_t>(hp.enc_cat_hidden_layers.size()) + 1);
         if (expected_kv_dim != hp.prj_encoder_hidden_size) {
-            std::fprintf(stderr,
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "granite: prj.encoder_hidden_size (%d) does not match "
-                         "hidden*(1+|cat_hidden_layers|) = %d * (1 + %d) = %d\n",
+                         "hidden*(1+|cat_hidden_layers|) = %d * (1 + %d) = %d",
                          hp.prj_encoder_hidden_size, hp.enc_hidden,
                          static_cast<int>(hp.enc_cat_hidden_layers.size()),
                          expected_kv_dim);
@@ -156,9 +157,9 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         }
         for (int32_t idx : hp.enc_cat_hidden_layers) {
             if (idx < 0 || idx >= hp.enc_n_layers) {
-                std::fprintf(stderr,
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "granite: cat_hidden_layers entry %d out of range "
-                             "[0, %d)\n", idx, hp.enc_n_layers);
+                             "[0, %d)", idx, hp.enc_n_layers);
                 return TRANSCRIBE_ERR_GGUF;
             }
         }
@@ -167,49 +168,49 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         hp.prj_intermediate <= 0 || hp.prj_n_heads <= 0 ||
         hp.prj_encoder_hidden_size <= 0)
     {
-        std::fprintf(stderr, "granite: projector hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: projector hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.prj_hidden % hp.prj_n_heads != 0) {
-        std::fprintf(stderr,
-                     "granite: projector hidden (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite: projector hidden (%d) not divisible by n_heads (%d)",
                      hp.prj_hidden, hp.prj_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.prj_hidden_act != "gelu") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "granite: unsupported projector hidden_act \"%s\" "
-                     "(only gelu)\n", hp.prj_hidden_act.c_str());
+                     "(only gelu)", hp.prj_hidden_act.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.prj_pos_embed_type != "absolute") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "granite: unsupported projector position_embedding_type "
-                     "\"%s\" (only absolute)\n", hp.prj_pos_embed_type.c_str());
+                     "\"%s\" (only absolute)", hp.prj_pos_embed_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_layers <= 0 || hp.dec_hidden <= 0 || hp.dec_n_heads <= 0 ||
         hp.dec_n_kv_heads <= 0 || hp.dec_head_dim <= 0 || hp.dec_intermediate <= 0)
     {
-        std::fprintf(stderr, "granite: decoder hparams must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: decoder hparams must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_heads % hp.dec_n_kv_heads != 0) {
-        std::fprintf(stderr,
-                     "granite: dec n_heads (%d) not divisible by n_kv_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite: dec n_heads (%d) not divisible by n_kv_heads (%d)",
                      hp.dec_n_heads, hp.dec_n_kv_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_heads * hp.dec_head_dim != hp.dec_hidden) {
-        std::fprintf(stderr,
-                     "granite: dec n_heads * head_dim (%d * %d) != hidden (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite: dec n_heads * head_dim (%d * %d) != hidden (%d)",
                      hp.dec_n_heads, hp.dec_head_dim, hp.dec_hidden);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_hidden_act != "silu" && hp.dec_hidden_act != "swish") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "granite: unsupported decoder hidden_act \"%s\" "
-                     "(only silu/swish)\n", hp.dec_hidden_act.c_str());
+                     "(only silu/swish)", hp.dec_hidden_act.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_embedding_multiplier <= 0.0f ||
@@ -217,15 +218,15 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         hp.dec_attention_multiplier <= 0.0f ||
         hp.dec_residual_multiplier  <= 0.0f)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "granite: decoder multipliers must be > 0 "
-                     "(emb=%g, logits=%g, attn=%g, residual=%g)\n",
+                     "(emb=%g, logits=%g, attn=%g, residual=%g)",
                      hp.dec_embedding_multiplier, hp.dec_logits_scaling,
                      hp.dec_attention_multiplier, hp.dec_residual_multiplier);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        std::fprintf(stderr, "granite: unsupported frontend type \"%s\"\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite: unsupported frontend type \"%s\"",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -234,15 +235,15 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         // normalization (log10 → max-8 floor → /4 + 1). The C++ MelFrontend
         // produces a bit-identical result under "per_utterance" mode.
         // Other modes would mean the converter changed; fail loudly.
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "granite: unsupported frontend normalize \"%s\" "
-                     "(only \"per_utterance\")\n", hp.fe_normalize.c_str());
+                     "(only \"per_utterance\")", hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_mel_norm != "htk") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "granite: unsupported frontend mel_norm \"%s\" "
-                     "(only \"htk\")\n", hp.fe_mel_norm.c_str());
+                     "(only \"htk\")", hp.fe_mel_norm.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     // Audio injection precondition: projector lifts to LM hidden, so
@@ -478,8 +479,8 @@ transcribe_status build_granite_weights(ggml_context *         ctx_meta,
         GET_LIN(b.ffn_down_w,  lname("dec.blocks.%d.ffn.down.weight",  i), dec_im, dec_h);
 
         if (b.ffn_gate_w->type != b.ffn_up_w->type) {
-            std::fprintf(stderr,
-                         "granite: ffn gate/up dtype mismatch at dec layer %d\n", i);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "granite: ffn gate/up dtype mismatch at dec layer %d", i);
             return TRANSCRIBE_ERR_GGUF;
         }
     }

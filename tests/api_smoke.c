@@ -98,6 +98,108 @@ static void test_status_string(void) {
     CHECK(neg[0] != '\0');
 }
 
+static void test_version(void) {
+    /* transcribe_version() returns a non-empty static string that equals the
+     * stringized MAJOR.MINOR.PATCH macros the caller compiled against. This is
+     * the exact-match contract the Python provider version gate relies on. */
+    const char * v = transcribe_version();
+    CHECK(v != NULL);
+    CHECK(v[0] != '\0');
+    CHECK(strcmp(v, TRANSCRIBE_VERSION) == 0);
+
+    /* The numeric form stays consistent with the components. */
+    CHECK(TRANSCRIBE_VERSION_NUMBER ==
+          TRANSCRIBE_VERSION_MAJOR * 10000 +
+          TRANSCRIBE_VERSION_MINOR * 100 +
+          TRANSCRIBE_VERSION_PATCH);
+
+    /* Commit is never NULL: "unknown" in a non-git build, a short SHA
+     * otherwise. */
+    const char * commit = transcribe_version_commit();
+    CHECK(commit != NULL);
+    CHECK(commit[0] != '\0');
+}
+
+static void test_abi_metadata(void) {
+    /* The native ABI accessors a binding uses to verify its struct layout.
+     * Known ids report this build's sizeof/alignof; an unknown id reports 0
+     * (the documented "cannot verify" sentinel, never a real size). */
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_RUN_PARAMS) ==
+          sizeof(struct transcribe_run_params));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_RUN_PARAMS) ==
+          _Alignof(struct transcribe_run_params));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_CAPABILITIES) ==
+          sizeof(struct transcribe_capabilities));
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_SEGMENT) ==
+          sizeof(struct transcribe_segment));
+    CHECK(transcribe_abi_struct_size((transcribe_abi_struct) 9999) == 0);
+    CHECK(transcribe_abi_struct_align((transcribe_abi_struct) 9999) == 0);
+
+    /* The reported size must equal the struct_size the init function stamps:
+     * that is the exact value a binding compares its own sizeof against, so the
+     * two surfaces (ABI accessor and init stamping) must agree. */
+    struct transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_RUN_PARAMS) == rp.struct_size);
+
+    struct transcribe_capabilities caps;
+    transcribe_capabilities_init(&caps);
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_CAPABILITIES) == caps.struct_size);
+}
+
+static void test_backend_devices(void) {
+    /* A build has at least one compute device once backends are available:
+     * compiled-in builds register at startup; dynamic-backend builds
+     * register via transcribe_init_backends. This smoke runs in both
+     * configurations. */
+    const int n_before = transcribe_backend_device_count();
+    CHECK(n_before >= 0);
+
+    /* init_backends argument contract. */
+    CHECK(transcribe_init_backends(NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_init_backends("")   == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_init_backends("/nonexistent-transcribe-artifact-dir") ==
+          TRANSCRIBE_ERR_FILE_NOT_FOUND);
+
+    /* An existing directory with no modules: OK when backends are already
+     * registered (static build), ERR_BACKEND when a dynamic build ends up
+     * with zero devices. Idempotent: a repeat call reports the same and
+     * never re-registers (device count stable). */
+    const int st1 = transcribe_init_backends(".");
+    CHECK(st1 == TRANSCRIBE_OK || st1 == TRANSCRIBE_ERR_BACKEND);
+    const int n_after = transcribe_backend_device_count();
+    const int st2 = transcribe_init_backends(".");
+    CHECK(st2 == st1);
+    CHECK(transcribe_backend_device_count() == n_after);
+
+    if (n_after > 0) {
+        struct transcribe_backend_device dev;
+        transcribe_backend_device_init(&dev);
+        CHECK(dev.struct_size == sizeof(dev));
+        CHECK(transcribe_get_backend_device(0, &dev) == TRANSCRIBE_OK);
+        CHECK(dev.name != NULL && dev.name[0] != '\0');
+        CHECK(dev.description != NULL);
+        CHECK(dev.kind != NULL && dev.kind[0] != '\0');
+
+        CHECK(transcribe_backend_available(TRANSCRIBE_BACKEND_AUTO));
+        CHECK(transcribe_backend_available(TRANSCRIBE_BACKEND_CPU));
+    }
+
+    /* Out-of-range probes answer cleanly: error status or false, never UB. */
+    struct transcribe_backend_device dev2;
+    transcribe_backend_device_init(&dev2);
+    CHECK(transcribe_get_backend_device(-1, &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_get_backend_device(1 << 20, &dev2) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(transcribe_get_backend_device(0, NULL) == TRANSCRIBE_ERR_INVALID_ARG);
+    CHECK(!transcribe_backend_available((transcribe_backend_request) 999));
+
+    /* ABI accessors must know the new struct. */
+    CHECK(transcribe_abi_struct_size(TRANSCRIBE_ABI_BACKEND_DEVICE) ==
+          sizeof(struct transcribe_backend_device));
+    CHECK(transcribe_abi_struct_align(TRANSCRIBE_ABI_BACKEND_DEVICE) ==
+          _Alignof(struct transcribe_backend_device));
+}
+
 static void test_log_level_values(void) {
     /* These numeric values must mirror GGML_LOG_LEVEL_* exactly. If this
      * test ever fails, the public contract documented in transcribe.h
@@ -706,6 +808,9 @@ static void test_session_limits_abi(void) {
 
 int main(void) {
     test_status_string();
+    test_version();
+    test_abi_metadata();
+    test_backend_devices();
     test_log_level_values();
     test_log_set_null();
     test_init_macros();

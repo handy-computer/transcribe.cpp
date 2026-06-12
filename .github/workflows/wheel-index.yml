@@ -1,0 +1,51 @@
+name: wheel-index
+
+# PEP 503 "simple repository" index on GitHub Pages for wheels that can't ship
+# on PyPI: the cu12 CUDA provider (~197 MB, over PyPI's 100 MB cap) and future
+# Windows-CUDA / cu13 / ROCm providers. GitHub hosts the wheels (as release
+# assets); this workflow generates the few KB of HTML that links to them and
+# publishes it to Pages. Consumed as:
+#   pip install "transcribe-cpp[cu12]" \
+#     --extra-index-url https://<owner>.github.io/<repo>/whl/cu12
+#
+# ONE-TIME PREREQ: repo Settings -> Pages -> Source = "GitHub Actions".
+#
+# Timing: the index links to whatever .whl assets exist on releases at run
+# time, so it must run AFTER the release plumbing attaches the cu12/windows
+# wheels. That workflow should re-dispatch this (or rely on `release: edited`)
+# once its uploads finish; `workflow_dispatch` is always available to refresh.
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialize Pages deploys; never cancel an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Generate the PEP 503 index from release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run --no-project scripts/ci/build_wheel_index.py --out index/whl
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: index
+      - id: deploy
+        uses: actions/deploy-pages@v5

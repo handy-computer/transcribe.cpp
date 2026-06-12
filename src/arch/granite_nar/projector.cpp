@@ -11,6 +11,7 @@
 #include "weights.h"
 
 #include "transcribe-debug.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 
@@ -102,8 +103,8 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
     const float   ln_eps      = hp.prj_layernorm_eps;
 
     if (prj_hidden % n_heads != 0) {
-        std::fprintf(stderr,
-                     "granite_nar projector: prj_hidden (%d) %% n_heads (%d) != 0\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar projector: prj_hidden (%d) %% n_heads (%d) != 0",
                      prj_hidden, n_heads);
         return pb;
     }
@@ -245,8 +246,8 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
 
     pb.graph = ggml_new_graph_custom(ctx, /*size=*/4096, /*grads=*/false);
     if (pb.graph == nullptr) {
-        std::fprintf(stderr,
-                     "granite_nar projector: ggml_new_graph_custom failed\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "granite_nar projector: ggml_new_graph_custom failed");
         return pb;
     }
     ggml_build_forward_expand(pb.graph, pb.out);

@@ -12,6 +12,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -83,17 +84,17 @@ transcribe_status read_sensevoice_hparams(const gguf_context *  gguf,
         hp.enc_n_heads <= 0  || hp.enc_d_ff <= 0    ||
         hp.enc_kernel <= 0   || hp.enc_kernel % 2 == 0)
     {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice: encoder hparams invalid (n_blocks=%d "
                      "tp_blocks=%d d_model=%d d_input=%d n_heads=%d d_ff=%d "
-                     "kernel=%d — kernel must be positive and odd)\n",
+                     "kernel=%d — kernel must be positive and odd)",
                      hp.enc_n_blocks, hp.enc_tp_blocks, hp.enc_d_model,
                      hp.enc_d_input, hp.enc_n_heads, hp.enc_d_ff, hp.enc_kernel);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_model % hp.enc_n_heads != 0) {
-        std::fprintf(stderr,
-                     "sensevoice: encoder d_model (%d) not divisible by n_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "sensevoice: encoder d_model (%d) not divisible by n_heads (%d)",
                      hp.enc_d_model, hp.enc_n_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -102,50 +103,50 @@ transcribe_status read_sensevoice_hparams(const gguf_context *  gguf,
         hp.fe_hop_length <= 0 || hp.fe_lfr_m <= 0     ||
         hp.fe_lfr_n <= 0)
     {
-        std::fprintf(stderr,
-                     "sensevoice: frontend dimensions must be positive\n");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "sensevoice: frontend dimensions must be positive");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_d_input != hp.fe_num_mels * hp.fe_lfr_m) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice: encoder d_input (%d) must equal num_mels (%d) "
-                     "× lfr_m (%d) = %d\n",
+                     "× lfr_m (%d) = %d",
                      hp.enc_d_input, hp.fe_num_mels, hp.fe_lfr_m,
                      hp.fe_num_mels * hp.fe_lfr_m);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_attn_type != "sanm") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice: unsupported attention type \"%s\" "
-                     "(only \"sanm\" is implemented)\n",
+                     "(only \"sanm\" is implemented)",
                      hp.enc_attn_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "kaldi_fbank_lfr") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice: unsupported frontend type \"%s\" "
-                     "(only \"kaldi_fbank_lfr\" is implemented)\n",
+                     "(only \"kaldi_fbank_lfr\" is implemented)",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_window != "hamming") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice: unsupported frontend window \"%s\" "
-                     "(only \"hamming\" is implemented)\n",
+                     "(only \"hamming\" is implemented)",
                      hp.fe_window.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_normalize != "per_feature") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice: unsupported frontend normalize \"%s\" "
-                     "(only \"per_feature\" is implemented)\n",
+                     "(only \"per_feature\" is implemented)",
                      hp.fe_normalize.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_fbank_style != "kaldi_htk") {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice: unsupported fbank_style \"%s\" "
-                     "(only \"kaldi_htk\" is implemented)\n",
+                     "(only \"kaldi_htk\" is implemented)",
                      hp.fe_fbank_style.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
@@ -263,9 +264,9 @@ transcribe_status build_sensevoice_weights(ggml_context *            ctx_meta,
     const int64_t vocab   = hp.vocab_size;
 
     if (vocab <= 0) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "sensevoice: build_sensevoice_weights called before "
-                     "tokenizer load (vocab_size=%d)\n", hp.vocab_size);
+                     "tokenizer load (vocab_size=%d)", hp.vocab_size);
         return TRANSCRIBE_ERR_GGUF;
     }
 

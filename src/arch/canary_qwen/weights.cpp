@@ -11,6 +11,7 @@
 
 #include "transcribe-meta.h"
 #include "transcribe-weights-util.h"
+#include "transcribe-log.h"
 
 #include "ggml.h"
 #include "gguf.h"
@@ -67,8 +68,8 @@ transcribe_status read_canary_qwen_hparams(gguf_context *      gguf,
         if (r == KvResult::Ok) {
             hp.audio_locator_id = v;
         } else {
-            std::fprintf(stderr,
-                         "%s: missing or invalid stt.canary_qwen.perception.audio_locator_id\n",
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: missing or invalid stt.canary_qwen.perception.audio_locator_id",
                          kFamilyTag);
             return TRANSCRIBE_ERR_GGUF;
         }
@@ -127,29 +128,29 @@ transcribe_status read_canary_qwen_hparams(gguf_context *      gguf,
 
     // Cross-field validation.
     if (hp.dec_n_heads % hp.dec_n_kv_heads != 0) {
-        std::fprintf(stderr, "%s: dec.n_heads (%d) must be divisible by dec.n_kv_heads (%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: dec.n_heads (%d) must be divisible by dec.n_kv_heads (%d)",
                      kFamilyTag, hp.dec_n_heads, hp.dec_n_kv_heads);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.dec_n_heads * hp.dec_head_dim != hp.dec_hidden) {
-        std::fprintf(stderr, "%s: dec.n_heads(%d) * dec.head_dim(%d) != dec.hidden(%d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: dec.n_heads(%d) * dec.head_dim(%d) != dec.hidden(%d)",
                      kFamilyTag, hp.dec_n_heads, hp.dec_head_dim, hp.dec_hidden);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.perception_output_dim != hp.dec_hidden) {
-        std::fprintf(stderr,
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s: perception.output_dim(%d) must equal dec.hidden(%d) "
-                     "for direct concat into LM embedding stream\n",
+                     "for direct concat into LM embedding stream",
                      kFamilyTag, hp.perception_output_dim, hp.dec_hidden);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.audio_locator_id < 0) {
-        std::fprintf(stderr, "%s: audio_locator_id must be >= 0\n", kFamilyTag);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: audio_locator_id must be >= 0", kFamilyTag);
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.enc_subsampling_factor != 8 || hp.fe_num_mels != 128) {
-        std::fprintf(stderr,
-                     "%s: only subsampling_factor=8 num_mels=128 supported (got %d, %d)\n",
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: only subsampling_factor=8 num_mels=128 supported (got %d, %d)",
                      kFamilyTag, hp.enc_subsampling_factor, hp.fe_num_mels);
         return TRANSCRIBE_ERR_GGUF;
     }
