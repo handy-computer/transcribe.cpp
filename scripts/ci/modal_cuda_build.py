@@ -56,7 +56,11 @@ SRC_MIRROR = "/build-cache/src"
 #: e2: rotate away a tree whose vulkan-shaders-gen ExternalProject had baked a
 #: dead isolated-build-env ninja path into its inner CMake cache (the
 #: pre---no-isolation era; see the build step's comment).
-BUILD_CACHE_EPOCH = 2
+#: e3: the first e2 runs configured the ExternalProject with NO ninja on PATH
+#: (the --no-isolation switch removed the isolated env's scripts dir without
+#: putting the image pybin on PATH) and background-committed an inner cache
+#: holding CMAKE_MAKE_PROGRAM-NOTFOUND. Rotate it.
+BUILD_CACHE_EPOCH = 3
 
 #: CUDA toolkit pinned per-minor; the nvidia-*-cu12 runtime-wheel floors in
 #: bindings/python-native-cu12/pyproject.toml must cover this minor.
@@ -147,8 +151,16 @@ def build_and_check() -> str:
     import hashlib
     import pathlib
 
+    pybin = "/opt/python/cp312-cp312/bin"
+
     env = os.environ
-    env["PATH"] = "/usr/local/cuda/bin:" + env["PATH"]
+    # pybin must be ON PATH, not just invoked by absolute path: scikit-build-
+    # core hands CMAKE_MAKE_PROGRAM to the top-level configure only, so the
+    # vulkan-shaders-gen ExternalProject's inner CMake configure has to find
+    # `ninja` (and a compiler) by PATH search. Under build isolation the
+    # isolated env's scripts dir provided that; with --no-isolation the
+    # image's stable pybin has to.
+    env["PATH"] = f"{pybin}:/usr/local/cuda/bin:" + env["PATH"]
     env["CUDACXX"] = "/usr/local/cuda/bin/nvcc"
     # Compiler cache (volume-backed): the backstop when ninja DOES recompile.
     env["CMAKE_C_COMPILER_LAUNCHER"] = "sccache"
@@ -176,8 +188,6 @@ def build_and_check() -> str:
     env["SKBUILD_BUILD_DIR"] = skbuild_dir
     print(f"[build] SKBUILD_BUILD_DIR={skbuild_dir} (source mirror {SRC_MIRROR})",
           flush=True)
-
-    pybin = "/opt/python/cp312-cp312/bin"
 
     # 1. Build the raw wheel from the persistent mirror (scikit-build-core
     #    drives CMake; the full lane posture lives in the package's pyproject
