@@ -31,6 +31,9 @@ name: python-wheels
 # run when the HF_TOKEN secret exists; forks degrade to no-model tests.
 
 on:
+  # Called by publish.yml so a release builds + validates the FULL matrix in
+  # the same run and publishes those exact artifacts.
+  workflow_call:
   push:
     branches: [main]
     paths:

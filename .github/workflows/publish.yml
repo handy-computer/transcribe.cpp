@@ -1,0 +1,187 @@
+name: publish
+
+# Release pipeline (plan M5 tail). Auth is PyPI Trusted Publishing (OIDC) —
+# no tokens anywhere; the publishers are registered against THIS filename
+# (publish.yml) and the `testpypi` / `pypi` environments.
+#
+#   REHEARSAL (workflow_dispatch): builds + validates the FULL matrix by
+#     calling python-wheels.yml and cuda-windows.yml, publishes the
+#     PyPI-bound set (api wheel, native wheels, sdist — the dist-*
+#     artifacts) to TestPyPI, then proves a clean-machine install FROM
+#     TestPyPI with a real transcription. cu12 wheels are NOT rehearsed on
+#     TestPyPI (197 MB > its 100 MB file cap); their home is GitHub release
+#     assets + the /whl/cu12 index, exercised on real tags.
+#     NOTE: (Test)PyPI filenames are write-once — a failed rehearsal
+#     iteration means bumping the patch version in include/transcribe.h
+#     (the single version source) and re-dispatching.
+#
+#   RELEASE (push tag v0.0.X): same full build, then with the `pypi`
+#     environment (add a required-reviewer rule once the repo is public):
+#     dist-* → PyPI, cu12 wheels → GitHub release assets for the tag, and
+#     the wheel-index workflow is dispatched so /whl/cu12 picks them up.
+#     cu12 → PyPI additionally when the repo variable CU12_ON_PYPI is
+#     "true" (set it once the PyPI file-size request is granted).
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+
+# Never two publishes at once; never cancel one mid-upload.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  # Full build + validation matrix; the artifacts published below are the
+  # exact files these workflows tested post-repair.
+  wheels:
+    uses: ./.github/workflows/python-wheels.yml
+    secrets: inherit
+  cuda-windows:
+    uses: ./.github/workflows/cuda-windows.yml
+    secrets: inherit
+
+  publish-testpypi:
+    # Rehearsal target (dispatch only — real tags go to PyPI).
+    # Blacksmith, not the Hetzner box: gh-action-pypi-publish is a Docker
+    # container action and needs docker on the runner.
+    if: github.event_name == 'workflow_dispatch'
+    needs: [wheels]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 30
+    environment: testpypi
+    permissions:
+      id-token: write  # OIDC for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - run: ls -la dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+
+  smoke-testpypi:
+    # The point of the rehearsal: a clean machine installs from TestPyPI
+    # alone (resolver pulls the native provider through the hard pin) and
+    # transcribes. Mirrors clean-install, but the index is the real thing.
+    needs: [publish-testpypi]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    container: python:3.12-slim
+    timeout-minutes: 30
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-api
+          path: dist-api
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-assets  # samples/jfk.wav, uploaded by the sdist job
+          path: smoke-assets
+      - name: Install from TestPyPI (exact just-published version) and transcribe
+        run: |
+          set -e
+          ver=$(ls dist-api/transcribe_cpp-*.whl | sed -E 's/.*transcribe_cpp-([0-9][^-]*)-.*/\1/')
+          echo "published version: $ver"
+          # TestPyPI can lag a few seconds behind a fresh upload; retry.
+          for i in $(seq 1 10); do
+            pip install -q \
+              --index-url https://test.pypi.org/simple/ \
+              --extra-index-url https://pypi.org/simple/ \
+              "transcribe-cpp==$ver" && break
+            echo "index not ready yet ($i); retrying in 30s" && sleep 30
+          done
+          python - <<'EOF'
+          import transcribe_cpp as t
+          print("provider:", t.native_provider())
+          print("devices:", [(d.name, d.kind) for d in t.backends()])
+          assert t.backend_available("cpu")
+          EOF
+          if [ -z "$HF_TOKEN" ]; then
+            echo "no HF_TOKEN (fork?) — install-only check passed, skipping the model smoke"
+            exit 0
+          fi
+          pip install -q huggingface_hub
+          hf download handy-computer/whisper-tiny-gguf \
+            whisper-tiny-Q5_K_M.gguf --local-dir canary
+          python - <<'EOF'
+          import array, wave
+          import transcribe_cpp as t
+
+          with wave.open("smoke-assets/jfk.wav", "rb") as w:
+              pcm16 = array.array("h"); pcm16.frombytes(w.readframes(w.getnframes()))
+          pcm = array.array("f", (s / 32768.0 for s in pcm16))
+          with t.Model("canary/whisper-tiny-Q5_K_M.gguf") as m, m.session() as s:
+              text = s.run(pcm).text
+          print("text:", text.strip())
+          assert "country" in text.lower(), text
+          print("ok: clean machine installed from TestPyPI and transcribed")
+          EOF
+
+  publish-pypi:
+    # The real thing. Gate: only version tags reach this, and the `pypi`
+    # environment carries the approval rule once the repo is public.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [wheels, cuda-windows]
+    # Blacksmith for the same docker-container-action reason as testpypi.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 30
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Add cu12 wheels (only once the PyPI size request is granted)
+        if: vars.CU12_ON_PYPI == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cuda-dist-*
+          merge-multiple: true
+          path: dist
+      - run: ls -la dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  release-assets:
+    # cu12's primary distribution home: wheels as GitHub release assets,
+    # served to pip through the PEP 503 index on Pages (wheel-index.yml).
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [wheels, cuda-windows]
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 30
+    permissions:
+      contents: write  # create the release + upload assets
+      actions: write   # dispatch wheel-index
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cuda-dist-*
+          merge-multiple: true
+          path: cu12
+      - name: Create the release for the tag and attach the cu12 wheels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" --notes "transcribe.cpp $tag" --verify-tag
+          gh release upload "$tag" cu12/*.whl --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Refresh the PEP 503 index (requires Pages enabled on the repo)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run wheel-index.yml --repo "$GITHUB_REPOSITORY" || \
+            echo "::warning::wheel-index dispatch failed — is the workflow on the default branch and Pages enabled?"
