@@ -54,7 +54,7 @@ jobs:
     permissions:
       id-token: write  # OIDC for trusted publishing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
@@ -76,11 +76,11 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist-api
           path: dist-api
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: smoke-assets  # samples/jfk.wav, uploaded by the sdist job
           path: smoke-assets
@@ -136,14 +136,14 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
           path: dist
       - name: Add cu12 wheels (only once the PyPI size request is granted)
         if: vars.CU12_ON_PYPI == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cuda-dist-*
           merge-multiple: true
@@ -164,7 +164,7 @@ jobs:
       contents: write  # create the release + upload assets
       actions: write   # dispatch wheel-index
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: cuda-dist-*
           merge-multiple: true

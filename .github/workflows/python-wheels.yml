@@ -76,19 +76,19 @@ jobs:
       # Container path of the toolchain cache volume (see CIBW_CONTAINER_ENGINE).
       VK_TOOLCHAIN_CACHE: /vk-toolchain-cache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Cache the source-built Vulkan toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vk-toolchain-cache
           key: vk-toolchain-${{ hashFiles('scripts/ci/manylinux-vulkan-toolchain.sh') }}
       - name: Canary model cache (avoid HF rate limits — 429s were real)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -111,7 +111,7 @@ jobs:
         run: |
           mkdir -p vk-toolchain-cache
           uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-native-linux-x86_64
           path: wheelhouse/*.whl
@@ -134,19 +134,19 @@ jobs:
       CIBW_ARCHS_LINUX: aarch64
       CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Cache the source-built Vulkan toolchain (aarch64)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: vk-toolchain-cache
           key: vk-toolchain-aarch64-${{ hashFiles('scripts/ci/manylinux-vulkan-toolchain.sh') }}
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -167,7 +167,7 @@ jobs:
         run: |
           mkdir -p vk-toolchain-cache
           uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-native-linux-aarch64
           path: wheelhouse/*.whl
@@ -191,14 +191,14 @@ jobs:
       # Host-side copy of the lane for wheel_smoke's declared-backends assert.
       TRANSCRIBE_WHEEL_LANE: metal
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -215,7 +215,7 @@ jobs:
           echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Build, repair, and test the wheel on real Metal (cibuildwheel)
         run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-native-macos-arm64
           path: wheelhouse/*.whl
@@ -248,14 +248,14 @@ jobs:
         CC=/usr/bin/clang
         CXX=/usr/bin/clang++
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -272,7 +272,7 @@ jobs:
           echo "TRANSCRIBE_SMOKE_STREAMING_MODEL=$PWD/canary/moonshine-streaming-tiny-Q8_0.gguf" >> "$GITHUB_ENV"
       - name: Build, repair, and test the CPU-only wheel (cibuildwheel)
         run: uvx --from "$CIBW_PIN" cibuildwheel --output-dir wheelhouse
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-native-macos-x86_64
           path: wheelhouse/*.whl
@@ -297,12 +297,14 @@ jobs:
       # chokes on them (charmap codec error). Force UTF-8 for all Python.
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # vcvars for the whole job: the Ninja generator (CMAKE_GENERATOR in
       # pyproject [tool.cibuildwheel.windows]) needs cl.exe on PATH — without
       # it CMake silently picks the runner image's MinGW gcc (observed:
       # gcc-flavored M_PI errors). The VS generator didn't need this but is
       # ~3x slower on this lane.
+      # (still node20 upstream — no node24 release yet; runners force node24 from
+      # 2026-06-16, which is fine for this env-setup action)
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -318,7 +320,7 @@ jobs:
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -348,7 +350,7 @@ jobs:
           Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$tc -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
       - name: Build, repair, and test the wheel (cibuildwheel)
         run: uvx --from "$env:CIBW_PIN" cibuildwheel --output-dir wheelhouse
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-native-windows-amd64
           path: wheelhouse/*.whl
@@ -360,14 +362,14 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -417,7 +419,7 @@ jobs:
           ./sdist-venv/bin/pip install dist/*.tar.gz
           ./sdist-venv/bin/pip install pytest numpy huggingface_hub
           ./sdist-venv/bin/python scripts/ci/wheel_smoke.py "$PWD"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: dist/*.tar.gz
@@ -426,7 +428,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, hetzner]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -435,12 +437,12 @@ jobs:
         run: |
           cd bindings/python
           rm -rf dist && uv build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-api
           path: bindings/python/dist/*
       # Test audio for the checkout-free clean-install job.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: smoke-assets
           path: samples/jfk.wav
@@ -464,7 +466,7 @@ jobs:
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -484,7 +486,7 @@ jobs:
       # Named OUTSIDE the dist-* pattern on purpose: co-import merges dist-*
       # and must not pick up the cu12 provider (it would outrank the default
       # provider and change what that job tests).
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: env.MODAL_TOKEN_ID != ''
         with:
           name: cuda-dist-linux-x86_64
@@ -512,21 +514,21 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist-native-linux-x86_64
           path: wheelhouse
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist-api
           path: wheelhouse
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: smoke-assets
           path: assets
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -626,19 +628,19 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
           path: wheelhouse
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -712,14 +714,14 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # setup-python's macOS downloads are built for GitHub's hosted images
       # (non-relocatable, hardcoded /Users/runner prefix) and cannot install
       # on a self-hosted runner under a different user (observed:
       # "mkdir: /Users/runner: Permission denied"). On the mini, use the
       # python.org universal2 CPython already installed for wheel-macos,
       # isolated in a fresh venv so pip installs never touch the system copy.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         if: matrix.label != 'macos-arm64'
         with:
           python-version: "3.12"
@@ -729,7 +731,7 @@ jobs:
           /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 \
             -m venv "$RUNNER_TEMP/ci-venv"
           echo "$RUNNER_TEMP/ci-venv/bin" >> "$GITHUB_PATH"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
@@ -740,7 +742,7 @@ jobs:
           pip install numpy huggingface_hub
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1

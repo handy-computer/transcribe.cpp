@@ -46,9 +46,11 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       CMAKE_GENERATOR: Ninja
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # vcvars for the whole job: nvcc needs cl.exe, and the Ninja generator
       # needs the MSVC environment (same reasoning as wheel-windows).
+      # (still node20 upstream — no node24 release yet; runners force node24 from
+      # 2026-06-16, which is fine for this env-setup action)
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Install CUDA toolkit 12.9 (network installer, lean subset)
         # Caching disabled on purpose: the first run (v0.2.27, caches on)
@@ -78,7 +80,7 @@ jobs:
           Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$tc -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
       - name: Canary model cache (avoid HF rate limits)
         if: env.HF_TOKEN != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: canary
           key: canary-models-v1
@@ -121,7 +123,7 @@ jobs:
           smoke-venv/Scripts/python scripts/ci/wheel_smoke.py .
       # Named OUTSIDE the dist-* pattern, like cuda-dist-linux-x86_64: the
       # co-import job merges dist-* and must never pick up a cu12 provider.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cuda-dist-windows-x86_64
           path: wheelhouse-cu12/*.whl
