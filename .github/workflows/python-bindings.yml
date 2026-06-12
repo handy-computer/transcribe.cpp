@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.2.0
       - name: Install clang (libclang resource-dir headers)
         # Idempotent for the persistent self-hosted box: install once, no-op
         # after (and no sudo needed when clang is already present).
@@ -165,7 +165,7 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.2.0
       - name: Install build deps (Vulkan SDK pieces + patchelf)
         run: |
           sudo apt-get update
@@ -235,7 +235,7 @@ jobs:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.2.0
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
       - name: ccache (compile cache across runs)
