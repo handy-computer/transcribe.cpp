@@ -15,21 +15,40 @@ quietly fails to load and CPU keeps working.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-#: Versioned sonames the ggml-cuda module links, in dependency order
+#: Runtime libraries the ggml-cuda module links, in dependency order
 #: (cublasLt before cublas), relative to the nvidia namespace package.
-_NVIDIA_LIBS = (
-    "cuda_runtime/lib/libcudart.so.12",
-    "cublas/lib/libcublasLt.so.12",
-    "cublas/lib/libcublas.so.12",
-)
+#: Linux wheels ship versioned sonames under <pkg>/lib/; Windows wheels ship
+#: DLLs under <pkg>/bin/ (the layout PyTorch relies on).
+if sys.platform == "win32":
+    _NVIDIA_LIBS = (
+        "cuda_runtime/bin/cudart64_12.dll",
+        "cublas/bin/cublasLt64_12.dll",
+        "cublas/bin/cublas64_12.dll",
+    )
+else:
+    _NVIDIA_LIBS = (
+        "cuda_runtime/lib/libcudart.so.12",
+        "cublas/lib/libcublasLt.so.12",
+        "cublas/lib/libcublas.so.12",
+    )
 
 
 def prepare() -> None:
-    """Load the NVIDIA runtime libraries into the process (RTLD_GLOBAL) so
-    the ggml-cuda module's DT_NEEDED entries resolve from the loaded set."""
+    """Load the NVIDIA runtime libraries into the process so the ggml-cuda
+    module's imports resolve from the loaded set.
+
+    Linux: dlopen with RTLD_GLOBAL — the module's DT_NEEDED sonames resolve
+    against the global symbol set. Windows: LoadLibrary by absolute path —
+    the loader satisfies ggml-cuda.dll's import table from the already-loaded
+    module list (matched by name), so the preload is the load-bearing step;
+    os.add_dll_directory on the wheels' bin/ dirs is belt-and-suspenders for
+    any LOAD_LIBRARY_SEARCH_USER_DIRS resolution.
+    """
     import ctypes
+    import os
 
     try:
         import nvidia
@@ -40,13 +59,19 @@ def prepare() -> None:
     for root in map(Path, nvidia.__path__):
         for rel in _NVIDIA_LIBS:
             lib = root / rel
-            if lib.is_file():
+            if not lib.is_file():
+                continue
+            if sys.platform == "win32":
                 try:
-                    ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
+                    os.add_dll_directory(str(lib.parent))
                 except OSError:
-                    # Same posture as a missing driver: degrade, don't break
-                    # the process for the CPU path.
                     pass
+            try:
+                ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                # Same posture as a missing driver: degrade, don't break
+                # the process for the CPU path.
+                pass
 
 
 def descriptor() -> dict:

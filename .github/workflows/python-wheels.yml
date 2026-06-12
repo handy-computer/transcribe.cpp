@@ -1,18 +1,29 @@
 name: python-wheels
 
 # Builds, repairs, and proves the distributable Python artifacts (plan M5):
-#   - wheel-linux:   manylinux_2_28 x86_64, CPU + Vulkan backend modules
-#                    (Vulkan toolchain built from pinned Khronos tags inside
-#                    the container; cached across runs)
-#   - wheel-macos:   macosx arm64, Metal with embedded shaders — built AND
-#                    Metal-compute-tested on a bare-metal self-hosted M4 mini
-#                    (VM runners' paravirtual GPUs can't do Metal compute)
-#   - wheel-windows: win_amd64, CPU + Vulkan backend modules (LunarG SDK)
-#   - sdist:         the from-source fallback, proven by actually compiling
-#                    and transcribing from the tarball
-#   - api-wheel:     the pure-Python transcribe-cpp package
-#   - co-import:     numpy/torch coexistence with a real transcription, both
-#                    import orders, on all three platforms
+#   - wheel-linux:        manylinux_2_28 x86_64, fat CPU + Vulkan backend
+#                         modules (Vulkan toolchain built from pinned Khronos
+#                         tags inside the container; cached across runs)
+#   - wheel-linux-arm64:  same shape on manylinux_2_28 aarch64 (native ARM
+#                         runner; ggml's Linux-ARM tier list)
+#   - wheel-macos:        macosx arm64, Metal with embedded shaders — built
+#                         AND Metal-compute-tested on the bare-metal M4 mini
+#                         (VM runners' paravirtual GPUs can't do Metal compute)
+#   - wheel-macos-x86:    macosx x86_64, CPU only — cross-compiled on the
+#                         mini, tested under Rosetta 2
+#   - wheel-windows:      win_amd64, fat CPU + Vulkan backend modules
+#                         (LunarG SDK; Blacksmith Windows beta)
+#   - sdist:              the from-source fallback, proven by actually
+#                         compiling and transcribing from the tarball
+#   - api-wheel:          the pure-Python transcribe-cpp package
+#   - cuda-wheel-modal:   the cu12 provider built + T4-smoked on Modal
+#   - clean-install:      bare container, wheels only; Vulkan degradation
+#                         tiers incl. a REAL lavapipe transcription (the
+#                         capability-positive gate)
+#   - vulkan-hw:          shipped linux wheel on the T14 (RADV Renoir):
+#                         real-GPU Vulkan + the fat-CPU tier assertion
+#   - co-import:          numpy/torch coexistence with a real transcription,
+#                         both import orders, on all three platforms
 #
 # Every native wheel is tested AFTER repair (auditwheel/delocate/delvewheel)
 # in a fresh venv — cibuildwheel's test phase guarantees the tested artifact

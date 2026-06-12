@@ -1,0 +1,118 @@
+name: cuda-windows
+
+# Builds + packaging-smokes the transcribe-cpp-native-cu12 wheel for
+# win_amd64 (plan: Windows CUDA is COMMITTED release scope, user decision
+# 2026-06-11). Same design as the Linux cu12 wheel built on Modal:
+#   - the CUDA runtime is NEVER vendored: cudart/cublas come from the
+#     nvidia-*-cu12 runtime wheels (win_amd64 wheels exist — the PyTorch
+#     layout), preloaded by the package's prepare() hook, which knows the
+#     Windows DLL names (cudart64_12.dll, cublasLt64_12.dll,
+#     cublas64_12.dll under nvidia/<pkg>/bin/); nvcuda.dll is the driver.
+#   - delvewheel repair EXCLUDES those DLLs + the driver, mirroring
+#     auditwheel's excludes on Linux.
+#   - GPU-less smoke: cu12 provider selected, declared backends {cuda, cpu},
+#     the cuda module quietly absent without a driver, CPU transcribes, full
+#     pytest suite. There is no Windows NVIDIA hardware in the fleet, so the
+#     RUNTIME evidence is carried by the Linux T4 smoke (same module
+#     mechanism, same prepare() contract) — documented gap.
+#
+# Trimmed cadence (user decision): NOT per PR push. Releases (tags) and
+# manual dispatch only — nvcc over ggml-cuda × 5 arches is the heaviest
+# build in the project.
+#
+# CUDA 12.9 to match the Linux cu12 provider (scripts/ci/modal_cuda_build.py
+# pins cuda-toolkit-12-9; the nvidia runtime-wheel floors in the cu12
+# pyproject cover this minor).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  PYTHONUTF8: "1"  # hf CLI prints ✓; Windows cp1252 console chokes
+
+jobs:
+  cuda-wheel-windows:
+    # 16vcpu, deliberately breaking the 2vcpu rule: per-vcpu-minute billing
+    # makes the cost the same, and on 2vcpu this build (245 .cu × 5 arches
+    # under MSVC+nvcc) would risk the job time cap. It runs on releases and
+    # dispatch only, so the burn is rare and bounded.
+    runs-on: blacksmith-16vcpu-windows-2025
+    timeout-minutes: 180
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v4
+      # vcvars for the whole job: nvcc needs cl.exe, and the Ninja generator
+      # needs the MSVC environment (same reasoning as wheel-windows).
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install CUDA toolkit 12.9 (network installer, lean subset)
+        uses: Jimver/cuda-toolkit@v0.2.27
+        with:
+          cuda: "12.9.0"
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
+      - name: Install uv
+        run: |
+          irm https://astral.sh/uv/install.ps1 | iex
+          Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.local\bin"
+      - name: Install zlib (vcpkg, static — libtranscribe requires it)
+        # Identical to wheel-windows: static-md so no zlib1.dll exists for
+        # delvewheel to vendor; forward slashes because CMAKE_ARGS passes
+        # through scikit-build-core's CMakeInit.txt where backslashes are
+        # eaten as escapes.
+        run: |
+          vcpkg install zlib:x64-windows-static-md
+          $tc = "$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -replace '\\','/'
+          Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$tc -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v4
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary models (cache miss only)
+        if: env.HF_TOKEN != ''
+        run: |
+          if (-not (Test-Path canary/whisper-tiny-Q5_K_M.gguf)) {
+            uvx --from huggingface_hub hf download handy-computer/whisper-tiny-gguf `
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+          }
+          if (-not (Test-Path canary/moonshine-streaming-tiny-Q8_0.gguf)) {
+            uvx --from huggingface_hub hf download handy-computer/moonshine-streaming-tiny-gguf `
+              moonshine-streaming-tiny-Q8_0.gguf --local-dir canary
+          }
+          Add-Content $env:GITHUB_ENV "TRANSCRIBE_SMOKE_MODEL=$env:GITHUB_WORKSPACE\canary\whisper-tiny-Q5_K_M.gguf"
+          Add-Content $env:GITHUB_ENV "TRANSCRIBE_SMOKE_STREAMING_MODEL=$env:GITHUB_WORKSPACE\canary\moonshine-streaming-tiny-Q8_0.gguf"
+      - name: Build the raw cu12 wheel (scikit-build-core; lane posture in
+              bindings/python-native-cu12/pyproject.toml)
+        run: uv build --wheel bindings/python-native-cu12 --out-dir dist-cu12-raw
+      - name: Repair (delvewheel; CUDA runtime + driver stay OUT of the wheel)
+        run: |
+          uvx delvewheel repair `
+            --exclude cudart64_12.dll `
+            --exclude cublas64_12.dll `
+            --exclude cublasLt64_12.dll `
+            --exclude nvcuda.dll `
+            -w wheelhouse-cu12 (Get-Item dist-cu12-raw/*.whl).FullName
+          Get-ChildItem wheelhouse-cu12
+      - name: GPU-less packaging smoke (mirrors Modal's packaging_check)
+        run: |
+          uv venv --seed --python 3.12 smoke-venv
+          smoke-venv/Scripts/pip install -q --find-links wheelhouse-cu12 `
+            transcribe-cpp-native-cu12 "pytest>=7" numpy huggingface_hub
+          $env:TRANSCRIBE_SMOKE_PROVIDER = "transcribe-cpp-native-cu12"
+          # The default provider is deliberately absent (its pin can't
+          # resolve pre-release); wheel_smoke installs the API package
+          # dep-free. Declared-backends gate asserts {cuda, cpu}.
+          $env:TRANSCRIBE_SMOKE_PIP_NO_DEPS = "1"
+          $env:CI = "1"
+          smoke-venv/Scripts/python scripts/ci/wheel_smoke.py .
+      # Named OUTSIDE the dist-* pattern, like cuda-dist-linux-x86_64: the
+      # co-import job merges dist-* and must never pick up a cu12 provider.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cuda-dist-windows-x86_64
+          path: wheelhouse-cu12/*.whl
