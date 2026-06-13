@@ -1,0 +1,104 @@
+name: diag-b
+
+# One-off diagnostic for known-issues.md "B": the Windows/MSVC integer
+# divide-by-zero (STATUS_INTEGER_DIVIDE_BY_ZERO, 0xC0000094) that faults ANY
+# whisper run on Windows (not just a cancelled one). Builds the C++ whisper
+# e2e test in the SAME codegen as the failing cargo build — CMAKE_BUILD_TYPE=
+# Release (the -sys build.rs pins cfg.profile("Release")) — plus /Z7 embedded
+# CodeView and a linker /DEBUG so the exe carries a PDB, then runs a PLAIN
+# transcription (no cancel) two ways:
+#   1. in-process: TRANSCRIBE_DIAG_FAULT_TRACE=1 installs a vectored exception
+#      handler that symbolizes the faulting IP + stack via DbgHelp. Needs no
+#      external debugger on the runner.
+#   2. under cdb if the Windows SDK debugger is present (belt-and-suspenders).
+#
+# Push-triggered (workflow_dispatch won't fire from a non-default branch) and
+# path-scoped so it only runs when the diagnostic itself changes.
+#
+# DELETE this workflow, the dbghelp link, and the TRANSCRIBE_DIAG_FAULT_TRACE
+# block in tests/whisper_e2e_smoke.cpp once "B" is fixed.
+
+on:
+  push:
+    branches: [rust-bindings]
+    paths:
+      - ".github/workflows/diag-b.yml"
+      - "tests/whisper_e2e_smoke.cpp"
+      - "tests/CMakeLists.txt"
+      - "src/arch/whisper/**"
+      - "src/transcribe-mel.cpp"
+      - "include/transcribe.h"
+
+concurrency:
+  group: diag-b-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diag:
+    name: diag-b (windows)
+    runs-on: blacksmith-2vcpu-windows-2025
+    timeout-minutes: 40
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install build deps
+        shell: pwsh
+        run: |
+          choco install ninja --no-progress -y
+          vcpkg install zlib:x64-windows-static-md
+          $zlibPrefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md" -replace '\\','/'
+          Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$zlibPrefix"
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: Configure + build the e2e test (Release codegen + /Z7 symbols)
+        shell: bash
+        run: |
+          # Release == the failing cargo build's native codegen. /Z7 embeds
+          # CodeView in each .obj (Ninja-safe, no /Zi PDB contention); /DEBUG
+          # makes the linker emit a merged exe PDB so file:line resolves for
+          # both transcribe and ggml frames. advapi32 for ggml-cpu's registry
+          # CPU probe (the static consumer must pull it; F is fixed so the
+          # header no longer forces dllimport).
+          cmake -B build-diag -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS=/Z7 -DCMAKE_CXX_FLAGS=/Z7 \
+            -DCMAKE_EXE_LINKER_FLAGS="/DEBUG advapi32.lib" \
+            -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON \
+            -DTRANSCRIBE_USE_OPENMP=OFF
+          cmake --build build-diag --target transcribe_whisper_e2e_smoke -j
+      - name: Reproduce + symbolize in-process (vectored handler)
+        shell: pwsh
+        run: |
+          $env:TRANSCRIBE_WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
+          $env:TRANSCRIBE_DIAG_FAULT_TRACE = "1"
+          $exe = (Get-ChildItem -Recurse -Filter transcribe_whisper_e2e_smoke.exe build-diag | Select-Object -First 1).FullName
+          Write-Host "exe: $exe"
+          Write-Host "model: $env:TRANSCRIBE_WHISPER_MODEL"
+          Write-Host "===== in-process fault trace ====="
+          & $exe
+          Write-Host "exit code: $LASTEXITCODE (94 == fault captured by the handler)"
+          exit 0
+      - name: Reproduce under cdb (if the SDK debugger is present)
+        shell: pwsh
+        run: |
+          $env:TRANSCRIBE_WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
+          Remove-Item Env:\TRANSCRIBE_DIAG_FAULT_TRACE -ErrorAction SilentlyContinue
+          $exe = (Get-ChildItem -Recurse -Filter transcribe_whisper_e2e_smoke.exe build-diag | Select-Object -First 1).FullName
+          $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
+          if (!(Test-Path $cdb)) {
+            $cdb = (Get-ChildItem -Recurse -Filter cdb.exe "C:\Program Files (x86)\Windows Kits" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          if (-not $cdb) { Write-Host "::warning::cdb not found; in-process trace above is authoritative"; exit 0 }
+          Write-Host "cdb: $cdb"
+          # On the int-divide first-chance: enable source lines, print a numbered
+          # stack with locals + the faulting instruction, then quit.
+          $cmd = '.lines -e; sxe -c ".echo ==FAULT==; r; .echo ==STACK==; kn 50; .echo ==FRAME0==; .frame /r 0; dv /t /v; .echo ==DISASM==; u @rip L4; .echo ==DONE==; q" 0xc0000094; g; q'
+          & $cdb -g -G -c $cmd $exe
+          exit 0

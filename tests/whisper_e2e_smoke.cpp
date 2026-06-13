@@ -22,6 +22,11 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#  include <windows.h>
+#  include <dbghelp.h>
+#endif
+
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
 #  define TRANSCRIBE_TEST_SAMPLES_DIR "samples"
 #endif
@@ -56,9 +61,78 @@ bool file_exists(const std::string & path) {
     return ::stat(path.c_str(), &st) == 0;
 }
 
+#if defined(_WIN32)
+// Diagnostic (known-issues.md "B"): on a Windows/MSVC integer divide-by-zero
+// (STATUS_INTEGER_DIVIDE_BY_ZERO, 0xC0000094) the run faults with no useful
+// trace in CI. This vectored exception handler symbolizes the faulting IP and
+// the whole stack via DbgHelp — self-contained, so no external debugger (cdb)
+// needs to be present on the runner; it only needs the Release+/Z7 PDB. Gated
+// by TRANSCRIBE_DIAG_FAULT_TRACE so normal/native-ci runs are untouched. Remove
+// this block (and the dbghelp link + diag-b.yml) once "B" is fixed.
+void diag_resolve(HANDLE proc, DWORD64 addr, const char * tag) {
+    char symbuf[sizeof(SYMBOL_INFO) + 512] = {};
+    auto * sym        = reinterpret_cast<SYMBOL_INFO *>(symbuf);
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen   = 511;
+    DWORD64 sdisp     = 0;
+    const bool have_sym = SymFromAddr(proc, addr, &sdisp, sym) != FALSE;
+
+    IMAGEHLP_LINE64 line {};
+    line.SizeOfStruct = sizeof(line);
+    DWORD ldisp       = 0;
+    const bool have_line = SymGetLineFromAddr64(proc, addr, &ldisp, &line) != FALSE;
+
+    std::fprintf(stderr, "  %-12s 0x%016llx  %s+0x%llx", tag,
+                 static_cast<unsigned long long>(addr),
+                 have_sym ? sym->Name : "<no-symbol>",
+                 static_cast<unsigned long long>(sdisp));
+    if (have_line) {
+        std::fprintf(stderr, "   (%s:%lu)", line.FileName, line.LineNumber);
+    }
+    std::fprintf(stderr, "\n");
+}
+
+LONG WINAPI diag_fault_trace(EXCEPTION_POINTERS * ep) {
+    const DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_INT_OVERFLOW) {
+        return EXCEPTION_CONTINUE_SEARCH;  // not ours — let normal handling run
+    }
+    HANDLE proc = GetCurrentProcess();
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(proc, nullptr, TRUE);
+
+    std::fprintf(stderr, "\n==== FAULT 0x%08lx (%s) ====\n",
+                 static_cast<unsigned long>(code),
+                 code == EXCEPTION_INT_DIVIDE_BY_ZERO ? "INT_DIVIDE_BY_ZERO"
+                                                      : "INT_OVERFLOW");
+    diag_resolve(proc,
+                 reinterpret_cast<DWORD64>(ep->ExceptionRecord->ExceptionAddress),
+                 "FAULTING-IP");
+    std::fprintf(stderr, "---- backtrace (top frames first) ----\n");
+    void *       frames[64];
+    const USHORT n = CaptureStackBackTrace(0, 64, frames, nullptr);
+    for (USHORT i = 0; i < n; ++i) {
+        char idx[16];
+        std::snprintf(idx, sizeof(idx), "#%-2u", i);
+        diag_resolve(proc, reinterpret_cast<DWORD64>(frames[i]), idx);
+    }
+    std::fflush(stderr);
+    TerminateProcess(proc, 94);
+    return EXCEPTION_CONTINUE_EXECUTION;  // unreached (process is gone)
+}
+#endif  // _WIN32
+
 } // namespace
 
 int main() {
+#if defined(_WIN32)
+    // Diagnostic (known-issues.md "B"): install the int-÷0 backtrace handler
+    // before anything runs. No-op unless TRANSCRIBE_DIAG_FAULT_TRACE is set.
+    if (const char * d = std::getenv("TRANSCRIBE_DIAG_FAULT_TRACE");
+        d != nullptr && d[0] != '\0' && std::strcmp(d, "0") != 0) {
+        AddVectoredExceptionHandler(/*first=*/1u, diag_fault_trace);
+    }
+#endif
     const char * env = std::getenv("TRANSCRIBE_WHISPER_MODEL");
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
