@@ -25,6 +25,7 @@
 #if defined(_WIN32)
 #  include <windows.h>
 #  include <dbghelp.h>
+#  include <tlhelp32.h>
 #endif
 
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
@@ -120,6 +121,71 @@ LONG WINAPI diag_fault_trace(EXCEPTION_POINTERS * ep) {
     TerminateProcess(proc, 94);
     return EXCEPTION_CONTINUE_EXECUTION;  // unreached (process is gone)
 }
+
+// Diagnostic (known-issues.md "B" follow-up): with the ÷0 load fault fixed,
+// Windows transcription hangs (Linux runs the same threading fine). Dump where
+// every thread is stuck. A watchdog thread (TRANSCRIBE_DIAG_WATCHDOG_SEC=N)
+// sleeps N s, then suspends + StackWalks every other thread and symbolizes it.
+void diag_walk_thread(HANDLE proc, HANDLE thread, DWORD tid) {
+    if (SuspendThread(thread) == static_cast<DWORD>(-1)) return;
+    CONTEXT ctx;
+    ZeroMemory(&ctx, sizeof(ctx));
+    ctx.ContextFlags = CONTEXT_FULL;
+    if (!GetThreadContext(thread, &ctx)) { ResumeThread(thread); return; }
+    std::fprintf(stderr, "---- thread %lu ----\n", tid);
+    STACKFRAME64 sf;
+    ZeroMemory(&sf, sizeof(sf));
+    sf.AddrPC.Offset    = ctx.Rip; sf.AddrPC.Mode    = AddrModeFlat;
+    sf.AddrFrame.Offset = ctx.Rbp; sf.AddrFrame.Mode = AddrModeFlat;
+    sf.AddrStack.Offset = ctx.Rsp; sf.AddrStack.Mode = AddrModeFlat;
+    for (int i = 0; i < 40; ++i) {
+        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, proc, thread, &sf, &ctx,
+                         nullptr, SymFunctionTableAccess64, SymGetModuleBase64,
+                         nullptr)) {
+            break;
+        }
+        if (sf.AddrPC.Offset == 0) break;
+        char idx[16];
+        std::snprintf(idx, sizeof(idx), "#%-2d", i);
+        diag_resolve(proc, sf.AddrPC.Offset, idx);
+    }
+    ResumeThread(thread);
+}
+
+DWORD WINAPI diag_watchdog(LPVOID arg) {
+    const DWORD secs = static_cast<DWORD>(reinterpret_cast<uintptr_t>(arg));
+    Sleep(secs * 1000);
+    HANDLE proc = GetCurrentProcess();
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(proc, nullptr, TRUE);
+    const DWORD self = GetCurrentThreadId();
+    const DWORD pid  = GetCurrentProcessId();
+    std::fprintf(stderr,
+                 "\n==== WATCHDOG fired after %lu s — dumping all thread stacks "
+                 "====\n", secs);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        THREADENTRY32 te;
+        te.dwSize = sizeof(te);
+        if (Thread32First(snap, &te)) {
+            do {
+                if (te.th32OwnerProcessID != pid) continue;
+                if (te.th32ThreadID == self) continue;
+                HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                                           THREAD_QUERY_INFORMATION,
+                                       FALSE, te.th32ThreadID);
+                if (th != nullptr) {
+                    diag_walk_thread(proc, th, te.th32ThreadID);
+                    CloseHandle(th);
+                }
+            } while (Thread32Next(snap, &te));
+        }
+        CloseHandle(snap);
+    }
+    std::fflush(stderr);
+    TerminateProcess(proc, 95);
+    return 0;
+}
 #endif  // _WIN32
 
 } // namespace
@@ -131,6 +197,16 @@ int main() {
     if (const char * d = std::getenv("TRANSCRIBE_DIAG_FAULT_TRACE");
         d != nullptr && d[0] != '\0' && std::strcmp(d, "0") != 0) {
         AddVectoredExceptionHandler(/*first=*/1u, diag_fault_trace);
+    }
+    // Watchdog: dump all thread stacks after N seconds (hang diagnosis).
+    if (const char * w = std::getenv("TRANSCRIBE_DIAG_WATCHDOG_SEC");
+        w != nullptr && w[0] != '\0') {
+        const unsigned long secs = std::strtoul(w, nullptr, 10);
+        if (secs > 0) {
+            CreateThread(nullptr, 0, diag_watchdog,
+                         reinterpret_cast<LPVOID>(static_cast<uintptr_t>(secs)),
+                         0, nullptr);
+        }
     }
 #endif
     const char * env = std::getenv("TRANSCRIBE_WHISPER_MODEL");

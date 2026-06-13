@@ -79,32 +79,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build build-diag --target transcribe_whisper_e2e_smoke -j
           if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
-      - name: Reproduce + symbolize in-process (vectored handler)
+      - name: Run with watchdog (÷0 trace + hang thread-dump; cdb absent on runner)
         shell: pwsh
         run: |
           $env:TRANSCRIBE_WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
+          # Fault trace catches any int-÷0 (now fixed); the watchdog dumps every
+          # thread's stack after 60 s so the post-fix Windows hang is localized.
           $env:TRANSCRIBE_DIAG_FAULT_TRACE = "1"
+          $env:TRANSCRIBE_DIAG_WATCHDOG_SEC = "60"
           $exe = (Get-ChildItem -Recurse -Filter transcribe_whisper_e2e_smoke.exe build-diag | Select-Object -First 1).FullName
           Write-Host "exe: $exe"
           Write-Host "model: $env:TRANSCRIBE_WHISPER_MODEL"
-          Write-Host "===== in-process fault trace ====="
+          Write-Host "===== run (60s watchdog) ====="
           & $exe
-          Write-Host "exit code: $LASTEXITCODE (94 == fault captured by the handler)"
-          exit 0
-      - name: Reproduce under cdb (if the SDK debugger is present)
-        shell: pwsh
-        run: |
-          $env:TRANSCRIBE_WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
-          Remove-Item Env:\TRANSCRIBE_DIAG_FAULT_TRACE -ErrorAction SilentlyContinue
-          $exe = (Get-ChildItem -Recurse -Filter transcribe_whisper_e2e_smoke.exe build-diag | Select-Object -First 1).FullName
-          $cdb = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
-          if (!(Test-Path $cdb)) {
-            $cdb = (Get-ChildItem -Recurse -Filter cdb.exe "C:\Program Files (x86)\Windows Kits" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-          }
-          if (-not $cdb) { Write-Host "::warning::cdb not found; in-process trace above is authoritative"; exit 0 }
-          Write-Host "cdb: $cdb"
-          # On the int-divide first-chance: enable source lines, print a numbered
-          # stack with locals + the faulting instruction, then quit.
-          $cmd = '.lines -e; sxe -c ".echo ==FAULT==; r; .echo ==STACK==; kn 50; .echo ==FRAME0==; .frame /r 0; dv /t /v; .echo ==DISASM==; u @rip L4; .echo ==DONE==; q" 0xc0000094; g; q'
-          & $cdb -g -G -c $cmd $exe
+          Write-Host "exit code: $LASTEXITCODE (0 completed | 94 int-÷0 | 95 watchdog hang-dump)"
           exit 0
