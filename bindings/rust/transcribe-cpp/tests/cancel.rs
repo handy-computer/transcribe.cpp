@@ -33,9 +33,13 @@ fn cross_thread_cancel_of_in_flight_run() {
         eprintln!("skip: model does not support cancellation");
         return;
     }
-    // Tile the clip so the run is long enough to be mid-flight when we cancel.
+    // Tile the clip just enough to be mid-flight when we cancel, while staying
+    // SHORT-FORM (< 30s): this exercises the binding's cancellation contract
+    // without entering whisper's long-form abort path, which has a native
+    // integer divide-by-zero on x86 (docs/known-issues.md "B"). jfk is ~11s, so
+    // 2x ~= 22s — still a single whisper window.
     let long: Vec<f32> = std::iter::repeat(pcm.iter().copied())
-        .take(12)
+        .take(2)
         .flatten()
         .collect();
 
