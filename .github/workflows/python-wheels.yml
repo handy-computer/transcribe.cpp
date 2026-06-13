@@ -19,6 +19,15 @@ name: python-wheels
 #   - clean-install:      bare container, wheels only; Vulkan degradation
 #                         tiers incl. a REAL lavapipe transcription (the
 #                         capability-positive gate)
+#   - bundle-smoke:       the extracted native bundle (see below) loaded
+#                         OUTSIDE any wheel via TRANSCRIBE_LIBRARY — the
+#                         posture npm/prebuilt-Rust consumers have
+#
+# Every native wheel lane also EXTRACTS its repaired wheel's _native/ dir
+# (+ contract.json + licenses) into a transcribe-native-<tuple>.tar.gz
+# artifact (native-<tuple>): the canonical native bundle non-Python
+# ecosystems repackage instead of rebuilding. publish.yml attaches these to
+# the GitHub release on tags.
 #   - vulkan-hw:          shipped linux wheel on the T14 (RADV Renoir):
 #                         real-GPU Vulkan + the fat-CPU tier assertion
 #   - co-import:          numpy/torch coexistence with a real transcription,
@@ -103,6 +112,18 @@ jobs:
         with:
           name: dist-native-linux-${{ matrix.arch }}
           path: wheelhouse/*.whl
+      # The canonical native bundle for non-Python ecosystems (npm platform
+      # packages, prebuilt-Rust, ...): the REPAIRED wheel's _native/ dir +
+      # contract.json + licenses, re-containered byte-for-byte. One build
+      # per tuple, every ecosystem ships the same bytes.
+      - name: Extract the native bundle
+        run: |
+          python3 scripts/ci/extract_native_bundle.py --wheel-dir wheelhouse \
+            --tuple linux-${{ matrix.arch }}-cpu-vulkan --out bundles
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-linux-${{ matrix.arch }}-cpu-vulkan
+          path: bundles/*.tar.gz
 
   wheel-macos:
     # Bare-metal M4 Mac mini (self-hosted, runner "m4-mini"): builds the
@@ -134,6 +155,14 @@ jobs:
         with:
           name: dist-native-macos-arm64
           path: wheelhouse/*.whl
+      - name: Extract the native bundle
+        run: |
+          python3 scripts/ci/extract_native_bundle.py --wheel-dir wheelhouse \
+            --tuple macos-arm64-metal --out bundles
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-macos-arm64-metal
+          path: bundles/*.tar.gz
 
   wheel-macos-x86:
     # Intel macOS: the CPU-ONLY x86_64 wheel, CROSS-COMPILED on the M4 mini
@@ -174,6 +203,14 @@ jobs:
         with:
           name: dist-native-macos-x86_64
           path: wheelhouse/*.whl
+      - name: Extract the native bundle
+        run: |
+          python3 scripts/ci/extract_native_bundle.py --wheel-dir wheelhouse \
+            --tuple macos-x86_64-cpu --out bundles
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-macos-x86_64-cpu
+          path: bundles/*.tar.gz
 
   wheel-windows:
     # Blacksmith Windows Server 2025 (public beta) — same image family as
@@ -232,6 +269,14 @@ jobs:
         with:
           name: dist-native-windows-amd64
           path: wheelhouse/*.whl
+      - name: Extract the native bundle
+        run: |
+          python scripts/ci/extract_native_bundle.py --wheel-dir wheelhouse `
+            --tuple windows-x86_64-cpu-vulkan --out bundles
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-windows-x86_64-cpu-vulkan
+          path: bundles/*.tar.gz
 
   sdist:
     # The universal fallback must actually work: build the sdist, audit what
@@ -345,6 +390,10 @@ jobs:
       # Named OUTSIDE the dist-* pattern on purpose: co-import merges dist-*
       # and must not pick up the cu12 provider (it would outrank the default
       # provider and change what that job tests).
+      # NOTE: no native-bundle extraction here (or in cuda-windows.yml) —
+      # the mechanism would work identically (the cu12 wheel has the same
+      # _native/ + contract.json shape), but no ecosystem consumes a CUDA
+      # bundle yet. Add the extract step the day one does.
       - uses: actions/upload-artifact@v7
         if: env.MODAL_TOKEN_ID != ''
         with:
@@ -427,6 +476,73 @@ jobs:
           python assets/scripts/ci/vulkan_degradation_check.py \
             --tier loader --expect-provider transcribe-cpp-native \
             --model canary/whisper-tiny-Q5_K_M.gguf --audio assets/samples/jfk.wav
+
+  bundle-smoke:
+    # The extracted native BUNDLE works outside any wheel — the exact
+    # posture npm platform packages / prebuilt-Rust consume. One tuple
+    # suffices (the other tuples' bytes are already validated inside their
+    # wheels; the bundle step only re-containers them): bare container, no
+    # provider package installed, the API package dlopens the bundle's
+    # libtranscribe via TRANSCRIBE_LIBRARY, backend modules load from the
+    # bundle dir, CPU transcribes, vulkan quietly unavailable. contract.json
+    # is asserted against the lane posture — the capability-positive gate
+    # that catches a wrong-posture bundle (the 2026-06-12 bug class).
+    needs: [wheel-linux, api-wheel]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    container: python:3.12-slim
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-linux-x86_64-cpu-vulkan
+          path: bundles
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-api
+          path: dist-api
+      - uses: actions/download-artifact@v8
+        with:
+          name: smoke-assets
+          path: assets
+      - name: Canary model cache (avoid HF rate limits)
+        if: env.HF_TOKEN != ''
+        uses: actions/cache@v5
+        with:
+          path: canary
+          key: canary-models-v1
+      - name: Fetch canary model (cache miss only; pip — no uv in this container)
+        if: env.HF_TOKEN != ''
+        run: |
+          pip install -q huggingface_hub
+          [ -f canary/whisper-tiny-Q5_K_M.gguf ] || \
+            hf download handy-computer/whisper-tiny-gguf \
+              whisper-tiny-Q5_K_M.gguf --local-dir canary
+      - name: Unpack the bundle + assert the contract posture
+        run: |
+          tar xzf bundles/transcribe-native-linux-x86_64-cpu-vulkan.tar.gz
+          python - <<'EOF'
+          import json
+          c = json.load(open(
+              "transcribe-native-linux-x86_64-cpu-vulkan/contract.json"))
+          print("contract:", c)
+          assert c["lane"] == "cpu-vulkan", c
+          assert set(c["backends"]) == {"vulkan", "cpu"}, c
+          EOF
+      - name: API package only (no provider) + the bundle via TRANSCRIBE_LIBRARY
+        run: |
+          # --no-deps: the resolver pin would pull the provider wheel; the
+          # point here is that the BUNDLE is the only native artifact.
+          pip install --no-deps --no-index --find-links dist-api transcribe-cpp
+          export TRANSCRIBE_LIBRARY="$PWD/transcribe-native-linux-x86_64-cpu-vulkan/libtranscribe.so"
+          if [ -f canary/whisper-tiny-Q5_K_M.gguf ]; then
+            python assets/scripts/ci/vulkan_degradation_check.py \
+              --tier no-loader \
+              --model canary/whisper-tiny-Q5_K_M.gguf --audio assets/samples/jfk.wav
+          else
+            echo "!! no canary (fork without HF_TOKEN) — load-only check"
+            python assets/scripts/ci/vulkan_degradation_check.py --tier no-loader
+          fi
 
   vulkan-hw:
     # Real-GPU Vulkan truth lane — the Linux mirror of wheel-macos on the

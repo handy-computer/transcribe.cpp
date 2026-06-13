@@ -176,6 +176,15 @@ jobs:
           pattern: cuda-dist-*
           merge-multiple: true
           path: cu12
+      # The canonical native bundles (extracted from the repaired wheels by
+      # python-wheels.yml). On the release they become the distribution home
+      # for non-PyPI ecosystems: npm platform packages and prebuilt-Rust
+      # fetch these exact bytes by tag instead of rebuilding.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: native-bundles
       - name: Create the release for the tag and attach the cu12 wheels
         env:
           GH_TOKEN: ${{ github.token }}
@@ -186,6 +195,21 @@ jobs:
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
               --title "$tag" --notes "transcribe.cpp $tag" --verify-tag
           gh release upload "$tag" cu12/*.whl --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Attach the native bundles (versioned names)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="${GITHUB_REF#refs/tags/}"
+          ver="${tag#v}"
+          mkdir -p upload
+          for f in native-bundles/transcribe-native-*.tar.gz; do
+            base="$(basename "$f" .tar.gz)"
+            tuple="${base#transcribe-native-}"
+            cp "$f" "upload/transcribe-native-${ver}-${tuple}.tar.gz"
+          done
+          ls -la upload/
+          gh release upload "$tag" upload/*.tar.gz --repo "$GITHUB_REPOSITORY" --clobber
       - name: Refresh the PEP 503 index (requires Pages enabled on the repo)
         env:
           GH_TOKEN: ${{ github.token }}
