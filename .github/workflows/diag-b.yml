@@ -70,12 +70,16 @@ jobs:
           # both transcribe and ggml frames. advapi32 for ggml-cpu's registry
           # CPU probe (the static consumer must pull it; F is fixed so the
           # header no longer forces dllimport).
+          # HYPOTHESIS TEST: OpenMP ON -> ggml uses `#pragma omp barrier` instead
+          # of its custom spin-barrier (which deadlocks under MSVC). MSVC
+          # auto-links vcomp, so the GNU/Clang -fopenmp propagation issue that
+          # forced OpenMP off (f35e899) does not apply here.
           cmake -B build-diag -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
             "-DCMAKE_C_FLAGS=/Z7" "-DCMAKE_CXX_FLAGS=/Z7" `
             "-DCMAKE_EXE_LINKER_FLAGS=/DEBUG advapi32.lib" `
             -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON `
-            -DTRANSCRIBE_USE_OPENMP=OFF
+            -DTRANSCRIBE_USE_OPENMP=ON
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build build-diag --target transcribe_whisper_e2e_smoke -j
           if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
