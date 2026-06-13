@@ -8,7 +8,21 @@ speech-to-text library built on ggml.
 > sessions, `run`/`run_batch`, owned results, error mapping, backend discovery,
 > the version/ABI gate, streaming, the five family extensions, cancellation,
 > tokenize, and log routing — is implemented and tested against the canary
-> models. CI-executed examples and the publish flow (M6/M7) are still to come.
+> models, with the five canonical examples CI-executed on every push.
+
+## Install
+
+```sh
+cargo add transcribe-cpp
+```
+
+The native library is compiled from source by the `transcribe-cpp-sys` crate, so
+a first build needs a C++ toolchain, **CMake**, and **zlib** (system zlib on
+Linux/macOS; on Windows, `vcpkg install zlib:x64-windows-static-md` and point
+`CMAKE_PREFIX_PATH` at it). No prebuilt download and no environment variables on
+the happy path.
+
+## Quickstart
 
 ```rust
 use transcribe_cpp::{Model, RunOptions};
@@ -20,7 +34,9 @@ println!("{}", result.text);
 # Ok::<(), transcribe_cpp::Error>(())
 ```
 
-The raw FFI layer is the
+The five canonical examples (`cargo run --example transcribe-file`, `streaming`,
+`batch`, `backend-select`, `error-handling`) are the same set, under the same
+names, in every first-class binding. The raw FFI layer is the
 [`transcribe-cpp-sys`](https://crates.io/crates/transcribe-cpp-sys) crate; this
 crate is the safe wrapper on top of it.
 

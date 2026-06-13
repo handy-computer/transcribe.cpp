@@ -16,6 +16,15 @@ installed `transcribe-link.json` manifest — no hardcoded per-platform link
 lists. The committed bindgen output means **libclang is not needed** to build
 this crate.
 
+## Build prerequisites
+
+A C++ toolchain, **CMake**, and **zlib**. zlib is system-provided on Linux
+(`zlib1g-dev`) and macOS; on Windows install it with
+`vcpkg install zlib:x64-windows-static-md` (static lib against the dynamic CRT,
+matching Rust's default `/MD` on `x86_64-pc-windows-msvc`) and point
+`CMAKE_PREFIX_PATH` at the vcpkg install tree. The static link is the default;
+the `dylib` feature links a shared library instead.
+
 ## Features
 
 - `metal` (default on Apple), `vulkan`, `cuda`, `openmp` — each forwards to the
