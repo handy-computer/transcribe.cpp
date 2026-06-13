@@ -12,11 +12,12 @@ the tree during the Rust-bindings Windows bringup (2026-06-13).
 (uncancelled) runs transcribe fine on Windows, and cancellation works on
 linux/macos).
 
-**Symptom.** Cancelling an in-flight whisper run (from another thread, mid-run)
+**Symptom.** A whisper run with a **cancel token / abort callback installed**
 crashes with an integer divide-by-zero — `STATUS_INTEGER_DIVIDE_BY_ZERO`
-(`0xC0000094`) — on **Windows/MSVC**. Reproduces for both short-form (~22 s) and
-long-form (~132 s) audio, so it is in the general abort/partial path, not the
-long-form chunk loop.
+(`0xC0000094`) — on **Windows/MSVC**. It is the *callback being installed* that
+triggers it, not the cancel firing: the uncancelled run (token set, never fired)
+crashes too. Reproduces for short- and long-form audio. Normal runs with **no**
+token transcribe fine on Windows; cancellation works on linux/macos.
 
 **Why it's Windows-specific.** It is a genuine integer `÷0` (or the equivalent
 `INT_MIN / -1`) in whisper's abort/partial path, surfaced only by a particular
