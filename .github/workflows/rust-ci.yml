@@ -1,0 +1,124 @@
+name: rust-ci
+
+# Every-PR gates for the Rust bindings (transcribe-cpp-sys + transcribe-cpp).
+# Thin per-binding workflow on the shared rails laid by bindings-shared-infra:
+# the binding-agnostic C contracts are certified in native-ci.yml; this file
+# adds only what the Rust layer introduces.
+#
+#   - rust-gates:  bindgen drift check (pinned to include/transcribe.abihash),
+#                  version-sync, the cargo-package content/size audit, and
+#                  rustfmt. No native build — fast, runs everywhere.
+#   - rust-build:  the real source build (build.rs drives the vendored CMake
+#                  tree, links from lib/transcribe-link.json) in the STATIC
+#                  default posture on linux + macos, then the -sys smoke tests
+#                  (transcribe_version / abi-struct-size through the FFI) and
+#                  clippy. Dynamic (dylib) posture joins at M5.
+#
+# Path filters follow native-ci.yml's shape: the binding's own tree plus the
+# native paths it compiles from (binding behavior depends on the C side, so
+# do not narrow). Branch protection is OFF (project decision, 2026-06-13) — no
+# required-check maintenance comes with this workflow.
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - "bindings/rust/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - "src/**"
+      - "include/**"
+      - "ggml/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "scripts/ci/rust_package_audit.py"
+      - "bindings/python/_generate/check_version_sync.py"
+      - ".github/workflows/rust-ci.yml"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-gates:
+    # Cheap, native-build-free gates. The drift check needs libclang (bindgen);
+    # users never do, because the generated FFI is committed.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0  # for the python gate scripts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install libclang (bindgen drift check)
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev clang
+      - name: FFI drift gate (bindgen vs committed, pinned to transcribe.abihash)
+        run: cargo xtask bindgen --check
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: Version sync (header <-> every active manifest)
+        run: uv run --no-project python bindings/python/_generate/check_version_sync.py
+      - name: Crate package audit (contents + 10 MB size cap)
+        run: uv run --no-project python scripts/ci/rust_package_audit.py
+
+  rust-build:
+    name: rust-build (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            runner: blacksmith-2vcpu-ubuntu-2404
+          # macOS arm64 on the bare-metal M4 mini (all macOS arm64 CI on owned
+          # hardware; the source build turns Metal on, and real hardware is the
+          # trustworthy place to exercise it). Same posture as native-ci.
+          - label: macos-arm64
+            runner: [self-hosted, macOS, ARM64]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      # CMake reads these from the environment at first configure, so the
+      # cmake-crate build in build.rs picks up ccache without any -D plumbing.
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja
+          command -v ccache >/dev/null || brew install ccache
+      - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
+        # ggml builds with -march=native in this source posture; ccache hashes
+        # the literal flag, not the resolved ISA, so key the cache by the CPU's
+        # feature flags (matches native-ci.yml).
+        if: runner.os == 'Linux'
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
+      - name: ccache (compile cache for the native source build)
+        if: runner.os == 'Linux'  # the mini is persistent; its local cache suffices
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-rust-build-${{ matrix.label }}-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-rust-build-${{ matrix.label }}-${{ env.CPU_SIG }}-
+      - name: Build (static default posture; build.rs drives CMake)
+        run: cargo build --workspace --verbose
+      - name: "-sys smoke (transcribe_version / abi size through the FFI)"
+        run: cargo test --package transcribe-cpp-sys
+      - name: Clippy (deny warnings)
+        if: runner.os == 'Linux'
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: ccache stats
+        if: runner.os == 'Linux'
+        run: ccache -s | head -8

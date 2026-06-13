@@ -3,6 +3,9 @@
 /build-*/
 /cmake-build-*/
 
+# Rust workspace build output (Cargo.lock IS committed — workspace has a binary)
+/target/
+
 # Python distribution output (provider wheels/sdists at the repo root;
 # bindings/python/dist for the pure API package; wheelhouse* from local
 # cibuildwheel / wheel-repair runs)

@@ -1,0 +1,4 @@
+# Workspace-wide cargo configuration for the Rust bindings.
+[alias]
+# `cargo xtask bindgen [--check]` — regenerate / drift-check the committed FFI.
+xtask = "run --package xtask --"

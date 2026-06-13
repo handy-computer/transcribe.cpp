@@ -1,0 +1,34 @@
+[package]
+name = "transcribe-cpp"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.74"
+description = "Rust bindings for transcribe.cpp, a C/C++ speech-to-text library built on ggml"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/handy-computer/transcribe.cpp"
+homepage = "https://github.com/handy-computer/transcribe.cpp"
+keywords = ["transcription", "speech", "asr", "stt", "ggml"]
+categories = ["multimedia::audio", "api-bindings"]
+
+[lib]
+name = "transcribe_cpp"
+path = "src/lib.rs"
+
+[features]
+# These mirror transcribe-cpp-sys: enabling a backend here just forwards the
+# feature to the -sys crate, which forwards it to the CMake build.
+default = ["metal"]
+metal = ["transcribe-cpp-sys/metal"]
+vulkan = ["transcribe-cpp-sys/vulkan"]
+cuda = ["transcribe-cpp-sys/cuda"]
+openmp = ["transcribe-cpp-sys/openmp"]
+dylib = ["transcribe-cpp-sys/dylib"]
+
+[dependencies]
+transcribe-cpp-sys = { version = "0.0.1", path = "../../.." }
+thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+hound = "3"
