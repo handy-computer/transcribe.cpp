@@ -31,6 +31,20 @@ HEADER = REPO / "include" / "transcribe.h"
 PYPROJECT = REPO / "bindings" / "python" / "pyproject.toml"
 INIT = REPO / "bindings" / "python" / "src" / "transcribe_cpp" / "__init__.py"
 
+# Binding package manifests (requirements doc §2: every manifest is derived
+# from or gated against the header). Gated by the `active` flag: a 0.0.0
+# name-reservation placeholder is NOT version-locked — flip its entry to True
+# in the PR that lands the real binding. Inactive manifests are still parsed
+# (file must exist and carry a readable version) so the mechanism itself
+# stays exercised. Package.swift has no entry: SwiftPM versions via git tags,
+# so its gate is the tag itself (release-workflow concern, not this script).
+BINDING_MANIFESTS = [
+    # (relative path, extractor name, active)
+    ("bindings/rust/Cargo.toml", "cargo", False),
+    ("bindings/rust/sys/Cargo.toml", "cargo", False),
+    ("bindings/typescript/package.json", "npm", False),
+]
+
 
 def base_version(version: str) -> str:
     """The leading dotted-numeric release segment (suffix stripped)."""
@@ -60,6 +74,21 @@ def init_version(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def cargo_version(text: str) -> str | None:
+    # First `version = "..."` in the file: [package] leads a Cargo.toml by
+    # convention, and dependency tables spell it `name = { version = ... }`.
+    m = re.search(r'(?m)^version\s*=\s*"([^"]+)"', text)
+    return m.group(1) if m else None
+
+
+def npm_version(text: str) -> str | None:
+    m = re.search(r'"version"\s*:\s*"([^"]+)"', text)
+    return m.group(1) if m else None
+
+
+_BINDING_EXTRACTORS = {"cargo": cargo_version, "npm": npm_version}
+
+
 def native_pin_versions(text: str) -> "dict[str, str | None]":
     # Every native-provider pin (the hard dependency AND accelerator extras)
     # is the pre-1.0 base-version contract at resolver level:
@@ -82,6 +111,25 @@ def main() -> int:
         "__init__.__version__": init_version(INIT.read_text()),
     }
     sources.update(native_pin_versions(pyproject_text))
+
+    # Binding manifests: active ones join the equality set; inactive ones
+    # must merely exist and parse (placeholder versions are reported, not
+    # compared).
+    inactive: dict[str, str] = {}
+    for rel, kind, active in BINDING_MANIFESTS:
+        path = REPO / rel
+        version = (
+            _BINDING_EXTRACTORS[kind](path.read_text()) if path.exists() else None
+        )
+        if active:
+            sources[rel] = version
+        elif version is None:
+            sources[rel] = None  # missing/unparseable is an error either way
+        else:
+            inactive[rel] = version
+    if inactive:
+        detail = ", ".join(f"{name}={v}" for name, v in inactive.items())
+        print(f"inactive binding manifests (parsed, not compared): {detail}")
 
     missing = [name for name, v in sources.items() if v is None]
     if missing:
