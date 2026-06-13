@@ -27,6 +27,7 @@ on:
       - "tests/CMakeLists.txt"
       - "src/arch/whisper/**"
       - "src/transcribe-mel.cpp"
+      - "src/transcribe.cpp"
       - "include/transcribe.h"
 
 concurrency:

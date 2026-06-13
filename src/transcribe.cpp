@@ -713,7 +713,23 @@ static bool valid_stream_commit_policy(int policy) {
 // unnamed namespace; gcc gives them internal linkage, which strips them
 // from the shared library on Linux (undefined references at link).
 
+// ggml's MSVC timer (ggml_time_us/ms in ggml.c) divides QueryPerformanceCounter
+// by a global frequency that ggml_time_init() fills in from
+// QueryPerformanceFrequency. ggml_init() calls it on first use, but every
+// family times its own load (`ggml_time_us()` at the top of <family>_load)
+// BEFORE any ggml context exists — so on Windows/MSVC the divisor is still 0
+// and model load faults with STATUS_INTEGER_DIVIDE_BY_ZERO (0xC0000094). POSIX
+// ggml_time_* read clock_gettime directly (no divisor) so the missing init is
+// silently harmless there; arm64 masks integer ÷0 as 0. ggml.h documents
+// ggml_time_init() as "call this once at the beginning of the program" — do
+// exactly that at the first public entry point. (known-issues.md "B")
+static void ensure_ggml_time_init() {
+    static std::once_flag once;
+    std::call_once(once, [] { ggml_time_init(); });
+}
+
 extern "C" transcribe_status transcribe_init_backends(const char * artifact_dir) {
+    ensure_ggml_time_init();
     if (artifact_dir == nullptr || artifact_dir[0] == '\0') {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1240,6 +1256,9 @@ extern "C" transcribe_status transcribe_model_load_file(
     const struct transcribe_model_load_params * params,
     struct transcribe_model **             out_model)
 {
+    // Set up ggml's timer before any family's load-timing ggml_time_us() runs
+    // (Windows/MSVC ÷0 otherwise — see ensure_ggml_time_init, known-issues "B").
+    ensure_ggml_time_init();
     if (out_model == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
