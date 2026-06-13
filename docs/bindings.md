@@ -13,6 +13,34 @@ family headers include `transcribe.h`, do not depend on each other, and are
 flattened normally by C preprocessors, bindgen, CFFI API-mode builds, cgo
 preambles, and Swift/ObjC module maps.
 
+## ABI digest, contracts, and the link manifest
+
+Three binding-neutral artifacts exist so no binding depends on another
+binding's generated files:
+
+- **`include/transcribe.abihash`** — the public-ABI digest (sha256/16 over
+  the normalized FFI surface: structs, enums, macros, layout, prototypes).
+  Emitted by `bindings/python/_generate/generate.py` (the hash oracle) and
+  drift-gated in CI alongside `_generated.py`. Every first-class binding
+  pins this value: when the header's ABI changes, the hash moves and the
+  binding's CI goes red until its FFI layer is regenerated or consciously
+  reviewed. Comment-only header edits do not move it.
+- **`contract.json`** — stamped into every native artifact directory
+  (`_native/` in provider wheels; the root of extracted
+  `transcribe-native-<tuple>` bundles): `version`, `header_hash`,
+  `backends`, `lane`. A binding validates `version` (pre-1.0: exact base
+  match) and `header_hash` (must equal the hash its FFI layer was generated
+  against) BEFORE dlopen. This is the same contract the Python provider
+  enforces via `_contract.py`.
+- **`lib/transcribe-link.json`** — installed by `cmake --install` (the
+  `TRANSCRIBE_INSTALL` rules): the machine-readable link interface for
+  non-CMake consumers building from source (the Rust `-sys` crate's
+  `build.rs`). Archive order, system libs, frameworks, flags, and — for
+  `GGML_BACKEND_DL` installs — `module_dir`, the directory to hand to
+  `transcribe_init_backends()`. Proven per push by the link-smoke CI lane,
+  which compiles a toy C consumer from nothing but this manifest in both
+  static and shared postures.
+
 ## Result text pointers: copy at the FFI boundary
 
 Every accessor that returns a `const char *` (`transcribe_full_text`,

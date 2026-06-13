@@ -160,6 +160,21 @@ option(TRANSCRIBE_GGML_BACKEND_DL "Build ggml backends as loadable modules" OFF)
 option(TRANSCRIBE_X86_CONSERVATIVE
     "Default GGML_NATIVE and every x86 SIMD tier to OFF (SIGILL-safe baseline; explicit -DGGML_* still wins)" OFF)
 
+# Install rules for non-Python consumers: headers + the ABI digest +
+# libtranscribe + the transcribe-link.json link manifest (ggml's own install
+# rules supply the ggml libs/headers). This is what the Rust -sys crate's
+# build.rs consumes (`cmake --install` into a staging prefix, then link per
+# the manifest) — see cmake/transcribe-install.cmake. Default ON for
+# top-level builds; OFF as a subproject, and never active under SKBUILD
+# (the wheel ships its own component-filtered install rules instead).
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT SKBUILD)
+    set(_transcribe_install_default ON)
+else()
+    set(_transcribe_install_default OFF)
+endif()
+option(TRANSCRIBE_INSTALL
+    "Install headers, libtranscribe, and the link manifest" ${_transcribe_install_default})
+
 # Real-model gated tests. OFF by default because the tests need a
 # converted Parakeet GGUF on disk (~2.4 GB) and CI can't ship one.
 # When ON, the test reads TRANSCRIBE_REAL_PARAKEET_GGUF from the
@@ -331,4 +346,9 @@ endif()
 # ggml's GGML_AVAILABLE_BACKENDS).
 if(SKBUILD)
     include(cmake/python-wheel-install.cmake)
+endif()
+
+# Consumer install rules (same placement constraint as above).
+if(TRANSCRIBE_INSTALL AND NOT SKBUILD)
+    include(cmake/transcribe-install.cmake)
 endif()
