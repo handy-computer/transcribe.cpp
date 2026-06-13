@@ -32,6 +32,13 @@ REPO = Path(__file__).resolve().parents[3]
 INCLUDE = REPO / "include"
 HEADER = INCLUDE / "transcribe" / "extensions.h"
 OUTPUT = REPO / "bindings" / "python" / "src" / "transcribe_cpp" / "_generated.py"
+# The binding-neutral home of the ABI digest (PUBLIC_HEADER_HASH). This
+# generator is the oracle that computes it, but the checked-in file lives with
+# the headers it digests so every consumer — CMake's provider-contract stamp,
+# the Rust/TS/Swift drift gates — reads it WITHOUT depending on the Python
+# binding's _generated.py. Same drift discipline as _generated.py: --check
+# fails when either file is stale.
+ABIHASH = INCLUDE / "transcribe.abihash"
 
 # Fixed-width / size typedefs map to fixed-width ctypes so the generated layout
 # is correct on every target (never c_long, whose width differs LP64 vs LLP64).
@@ -222,7 +229,7 @@ def order_by_value_deps(structs: dict, order: list[str]) -> list[str]:
     return out
 
 
-def render(s: Surface, libclang_version: str) -> str:
+def render(s: Surface, libclang_version: str) -> tuple[str, str]:
     # The structural payload (everything below the imports) is built first so a
     # stable digest can be hashed over it and emitted as PUBLIC_HEADER_HASH. That
     # digest is the coarse cross-language ABI tag a native provider echoes back
@@ -316,7 +323,7 @@ def render(s: Surface, libclang_version: str) -> str:
     w(f'PUBLIC_HEADER_HASH = "{digest}"')
     w("")
     out.extend(body)
-    return "\n".join(out)
+    return "\n".join(out), digest
 
 
 def main() -> int:
@@ -342,19 +349,29 @@ def main() -> int:
             print(f"clang error: {d.spelling} at {d.location}", file=sys.stderr)
         return 2
 
-    text = render(collect(tu), libclang_version)
+    text, digest = render(collect(tu), libclang_version)
+    hash_text = digest + "\n"
 
     if args.check:
+        stale = []
         current = OUTPUT.read_text() if OUTPUT.exists() else ""
         if current != text:
-            print(f"{OUTPUT} is out of date — regenerate with "
-                  "_generate/generate.py", file=sys.stderr)
+            stale.append(str(OUTPUT))
+        current_hash = ABIHASH.read_text() if ABIHASH.exists() else ""
+        if current_hash != hash_text:
+            stale.append(str(ABIHASH))
+        if stale:
+            for path in stale:
+                print(f"{path} is out of date — regenerate with "
+                      "_generate/generate.py", file=sys.stderr)
             return 1
-        print(f"{OUTPUT.name} is up to date")
+        print(f"{OUTPUT.name} and {ABIHASH.name} are up to date")
         return 0
 
     OUTPUT.write_text(text)
+    ABIHASH.write_text(hash_text)
     print(f"wrote {OUTPUT}")
+    print(f"wrote {ABIHASH} ({digest})")
     return 0
 
 
