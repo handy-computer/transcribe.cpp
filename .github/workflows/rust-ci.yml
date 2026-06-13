@@ -10,9 +10,25 @@ name: rust-ci
 #                  rustfmt. No native build — fast, runs everywhere.
 #   - rust-build:  the real source build (build.rs drives the vendored CMake
 #                  tree, links from lib/transcribe-link.json) in the STATIC
-#                  default posture on linux + macos, then the -sys smoke tests
-#                  (transcribe_version / abi-struct-size through the FFI) and
-#                  clippy. Dynamic (dylib) posture joins at M5.
+#                  default posture on linux + macos + windows, then the -sys
+#                  smoke tests (transcribe_version / abi-struct-size through the
+#                  FFI), the safe-crate conformance suite, and clippy. Dynamic
+#                  (dylib) posture joins at M5.
+#
+# Two test tiers (requirements §4): the no-model tests (version/ABI/error
+# mapping/device discovery, in tests/no_model.rs) always run, including on
+# forks. The model-gated tests (real transcription, streaming, cancel, family
+# extensions) un-skip only when the canary GGUFs are fetched — the same
+# fetch-canary composite action and HF_TOKEN gate the Python lane uses — and
+# `return` early (a clean skip) otherwise. One `cargo test` invocation runs
+# both tiers; the model tier self-skips when the canary env is absent.
+#
+# Windows joins here: the first cargo-driven MSVC build of this tree (static
+# posture). cl.exe comes from msvc-dev-cmd, zlib from vcpkg as a static lib
+# against the dynamic CRT (`x64-windows-static-md`, matching Rust's default /MD
+# on x86_64-pc-windows-msvc), resolved by find_package(ZLIB) via
+# CMAKE_PREFIX_PATH. The static Windows link manifest's zlib translation lives
+# in cmake/transcribe-install.cmake.
 #
 # Path filters follow native-ci.yml's shape: the binding's own tree plus the
 # native paths it compiles from (binding behavior depends on the C side, so
@@ -70,27 +86,63 @@ jobs:
     name: rust-build (${{ matrix.label }})
     strategy:
       fail-fast: false
+      # Posture matrix: {static, dylib} × {linux, macos, windows}. `features` is
+      # forwarded verbatim to the build/test cargo commands ("" = the static
+      # default; "--features dylib" = a shared libtranscribe). The dylib leg is
+      # the end-to-end proof of the shared-link posture: its tests load
+      # libtranscribe at runtime via the rpath the safe crate's build.rs emits
+      # on Unix, and on Windows (which has no rpath) via the -sys build.rs
+      # staging transcribe.dll + the ggml DLLs next to each cargo artifact.
       matrix:
         include:
-          - label: linux
+          - label: linux-static
             runner: blacksmith-2vcpu-ubuntu-2404
+            features: ""
+          - label: linux-dylib
+            runner: blacksmith-2vcpu-ubuntu-2404
+            features: "--features dylib"
           # macOS arm64 on the bare-metal M4 mini (all macOS arm64 CI on owned
           # hardware; the source build turns Metal on, and real hardware is the
           # trustworthy place to exercise it). Same posture as native-ci.
-          - label: macos-arm64
+          - label: macos-arm64-static
             runner: [self-hosted, macOS, ARM64]
+            features: ""
+          - label: macos-arm64-dylib
+            runner: [self-hosted, macOS, ARM64]
+            features: "--features dylib"
+          # Windows / MSVC (Blacksmith windows-2025, same image family as the
+          # wheel lane). First cargo-driven MSVC build of this tree; no ccache
+          # here (MSVC + ccache is fiddly), so every run is a cold ggml build —
+          # hence the wider timeout. sccache is a later optimization. Both
+          # postures: static is self-contained; dylib links transcribe.dll (the
+          # -sys build.rs stages the DLLs next to the test/example binaries).
+          - label: windows-static
+            runner: blacksmith-2vcpu-windows-2025
+            features: ""
+          - label: windows-dylib
+            runner: blacksmith-2vcpu-windows-2025
+            features: "--features dylib"
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
-      # CMake reads these from the environment at first configure, so the
-      # cmake-crate build in build.rs picks up ccache without any -D plumbing.
-      CMAKE_C_COMPILER_LAUNCHER: ccache
-      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      # Gates the model-test tier: present on this repo's branches, absent on
+      # forks (where fetch-canary skips and the model tests skip cleanly).
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: astral-sh/setup-uv@v8.2.0  # fetch-canary fetches via uvx
+      - name: Enable ccache compiler launcher (non-Windows)
+        # CMake reads these at first configure, so build.rs's cmake-crate build
+        # picks up ccache with no -D plumbing. NOT set on Windows: ccache isn't
+        # installed there and an unresolvable launcher fails configure.
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
@@ -99,6 +151,30 @@ jobs:
         run: |
           brew install ninja
           command -v ccache >/dev/null || brew install ccache
+      - name: Set up MSVC (cl.exe on PATH for the Ninja generator)
+        # The cmake-crate build uses the Ninja generator (CMAKE_GENERATOR below);
+        # Ninja needs cl.exe ambient. Without vcvars, CMake silently falls back
+        # to the image's MinGW gcc (gcc-flavored M_PI errors) — same trap the
+        # wheel lane documents.
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install build deps (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ninja --no-progress -y
+          # Static zlib against the DYNAMIC CRT (-static-md): matches Rust's
+          # default /MD on x86_64-pc-windows-msvc. A /MT (x64-windows-static)
+          # zlib would clash with the CRT rustc links. find_package(ZLIB)
+          # resolves it from CMAKE_PREFIX_PATH — no vcpkg toolchain file needed.
+          vcpkg install zlib:x64-windows-static-md
+          # Forward slashes: backslashes get eaten as escapes downstream.
+          $zlibPrefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md" -replace '\\','/'
+          Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$zlibPrefix"
+          # cmake-crate honors CMAKE_GENERATOR from the environment.
+          Add-Content $env:GITHUB_ENV "CMAKE_GENERATOR=Ninja"
       - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
         # ggml builds with -march=native in this source posture; ccache hashes
         # the literal flag, not the resolved ISA, so key the cache by the CPU's
@@ -112,12 +188,38 @@ jobs:
           path: ~/.cache/ccache
           key: ccache-rust-build-${{ matrix.label }}-${{ env.CPU_SIG }}-${{ github.sha }}
           restore-keys: ccache-rust-build-${{ matrix.label }}-${{ env.CPU_SIG }}-
-      - name: Build (static default posture; build.rs drives CMake)
-        run: cargo build --workspace --verbose
+      # Package-scoped (not --workspace): a single posture's native build, and
+      # it sidesteps `--features dylib` choking on the xtask member, which has
+      # no such feature. xtask is compiled/run in rust-gates (the bindgen check).
+      - name: Build (${{ matrix.features == '' && 'static' || 'dylib' }} posture; build.rs drives CMake)
+        run: cargo build -p transcribe-cpp ${{ matrix.features }} --verbose
       - name: "-sys smoke (transcribe_version / abi size through the FFI)"
-        run: cargo test --package transcribe-cpp-sys
+        run: cargo test -p transcribe-cpp-sys ${{ matrix.features }}
+      # The canary GGUFs upgrade the safe-crate suite from no-model gates to real
+      # transcription/streaming/cancel/extension coverage. Guarded on HF_TOKEN
+      # (forks have none): without it the model tests skip cleanly, leaving the
+      # always-on no-model tier. jfk.wav ships in-repo, so only the two model
+      # paths need exporting (fetch-canary handles that).
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: Safe-crate conformance (no-model tier always; model tier when canary present)
+        run: cargo test -p transcribe-cpp ${{ matrix.features }}
+      # The 5 canonical examples (requirements §6), run headless under the same
+      # canary skip rules as the model tests: each resolves its model/audio from
+      # the TRANSCRIBE_SMOKE_* env fetch-canary exports (or skips cleanly + exits
+      # 0). shell:bash so the loop is identical on the windows runner (Git Bash).
+      - name: Examples (CI-executed; §6 Rosetta set)
+        shell: bash
+        run: |
+          for ex in transcribe-file streaming batch backend-select error-handling; do
+            echo "=== example: $ex ==="
+            cargo run -p transcribe-cpp --example "$ex" ${{ matrix.features }}
+          done
       - name: Clippy (deny warnings)
-        if: runner.os == 'Linux'
+        # Once is enough; the linux-static leg covers it (clippy on the dylib
+        # leg would force a second full native build for no extra lint signal).
+        if: matrix.label == 'linux-static'
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: ccache stats
         if: runner.os == 'Linux'

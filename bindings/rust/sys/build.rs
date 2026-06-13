@@ -136,9 +136,21 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
         println!("cargo:rustc-link-arg={flag}");
     }
     // Shared posture: the installed libs carry $ORIGIN/@loader_path rpaths, but
-    // the consumer binary still needs to find lib_dir itself.
-    if shared {
+    // the consumer binary still needs to find lib_dir itself. Unix uses an
+    // rpath; Windows has no rpath (the DLL resolves via PATH / the exe dir), so
+    // nothing is emitted there. NOTE: rustc-link-arg does NOT propagate to
+    // downstream crates, so this rpath only reaches THIS crate's own artifacts
+    // (the -sys smoke tests). The safe crate re-emits it for its tests/examples
+    // — see bindings/rust/transcribe-cpp/build.rs.
+    let is_windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    if shared && !is_windows {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+    }
+    // Windows has no rpath: a shared-posture binary resolves transcribe.dll +
+    // the ggml DLLs from its OWN directory. Stage the installed DLLs next to
+    // every artifact cargo produces so tests/examples/bins run in place.
+    if shared && is_windows {
+        stage_windows_dlls(prefix);
     }
 
     // Metadata for the safe crate's build script (available as
@@ -155,4 +167,55 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
             println!("cargo:module_dir={}", prefix.join(md).display());
         }
     }
+}
+
+/// Copy the installed runtime DLLs (`<prefix>/bin/*.dll` — transcribe.dll plus
+/// the ggml DLLs) next to every artifact cargo will build, so a shared-posture
+/// consumer's tests/examples/bins find them with no rpath (Windows has none)
+/// and no PATH fiddling. Windows + `dylib` only; a no-op anywhere else.
+///
+/// Windows resolves a process's DLLs from the EXE's own directory first, and
+/// cargo emits tests into `deps/`, examples into `examples/`, and bins into the
+/// profile root — so all three get the DLLs. This runs from the -sys build
+/// script (it owns the native build), which is always in the dep graph, so it
+/// covers the safe crate's artifacts too. Best-effort: copy failures warn
+/// rather than fail the build.
+fn stage_windows_dlls(prefix: &Path) {
+    let bin_dir = prefix.join("bin");
+    let dlls: Vec<PathBuf> = match std::fs::read_dir(&bin_dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("dll"))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    if dlls.is_empty() {
+        println!(
+            "cargo:warning=transcribe-cpp-sys: no DLLs under {} to stage for the dylib posture",
+            bin_dir.display()
+        );
+        return;
+    }
+    // OUT_DIR = <target>/<profile>/build/<crate>-<hash>/out; the profile root is
+    // four ancestors up. tests -> deps/, examples -> examples/, bins -> root.
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    let Some(profile_dir) = out_dir.ancestors().nth(3) else {
+        return;
+    };
+    for sub in ["", "deps", "examples"] {
+        let dest = if sub.is_empty() {
+            profile_dir.to_path_buf()
+        } else {
+            profile_dir.join(sub)
+        };
+        let _ = std::fs::create_dir_all(&dest);
+        for dll in &dlls {
+            if let Some(name) = dll.file_name() {
+                let _ = std::fs::copy(dll, dest.join(name));
+            }
+        }
+    }
+    // Re-stage when the built DLLs change.
+    println!("cargo:rerun-if-changed={}", bin_dir.display());
 }
