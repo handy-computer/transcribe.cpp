@@ -158,6 +158,16 @@ target_compile_definitions(transcribe
         TRANSCRIBE_COMMIT="${TRANSCRIBE_BUILD_COMMIT}"
 )
 
+# Static posture: tell transcribe.h to drop the Windows __declspec(dllimport/
+# export) decoration. PUBLIC so it reaches both this archive's own TUs and any
+# CMake consumer linking `transcribe` (C++ tests/examples) — without it a static
+# MSVC consumer that includes transcribe.h links against __imp_* thunks the
+# archive never provides (LNK2019). Bindgen/Python FFIs carry no __declspec and
+# are unaffected. No-op off Windows/MSVC (the header guard is _WIN32-only).
+if(NOT TRANSCRIBE_BUILD_SHARED)
+    target_compile_definitions(transcribe PUBLIC TRANSCRIBE_STATIC)
+endif()
+
 # ggml is the runtime substrate. Linked PRIVATE because the public header
 # stays ggml-free (callers never include <ggml.h>).
 target_link_libraries(transcribe

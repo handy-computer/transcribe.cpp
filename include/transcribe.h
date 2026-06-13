@@ -173,7 +173,14 @@
 
 #ifndef TRANSCRIBE_API
 #  if defined(_WIN32) && !defined(__GNUC__)
-#    ifdef TRANSCRIBE_BUILD
+#    if defined(TRANSCRIBE_STATIC)
+       /* Static archive (lib build or static consumer): no dllimport/export.
+        * A consumer linking the static transcribe.lib must NOT see dllimport
+        * or the linker chases __imp_* thunks the archive never provides
+        * (LNK2019). The static `transcribe` CMake target propagates this
+        * PUBLIC; non-CMake static consumers define it themselves. */
+#      define TRANSCRIBE_API
+#    elif defined(TRANSCRIBE_BUILD)
 #      define TRANSCRIBE_API __declspec(dllexport)
 #    else
 #      define TRANSCRIBE_API __declspec(dllimport)
