@@ -50,12 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Cancellation: cancel an in-flight run from another thread. On a long
     //    enough clip the run aborts with a partial transcript; a fast machine
     //    may finish the run before the timer — both outcomes are handled.
-    //    Skipped on Windows: a whisper run with a cancel token installed hits a
-    //    native ÷0 there (docs/known-issues.md "B"). Cancellation works on
-    //    linux/macos; the streaming example covers Windows otherwise.
-    if cfg!(target_os = "windows") {
-        println!("cancellation demo skipped on Windows (known-issues B)");
-    } else {
+    {
         let mut session = model.session()?;
         let token = CancelToken::new();
         session.set_cancel_token(&token);
