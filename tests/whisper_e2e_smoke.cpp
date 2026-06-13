@@ -22,12 +22,6 @@
 #include <thread>
 #include <vector>
 
-#if defined(_WIN32)
-#  include <windows.h>
-#  include <dbghelp.h>
-#  include <tlhelp32.h>
-#endif
-
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
 #  define TRANSCRIBE_TEST_SAMPLES_DIR "samples"
 #endif
@@ -62,153 +56,9 @@ bool file_exists(const std::string & path) {
     return ::stat(path.c_str(), &st) == 0;
 }
 
-#if defined(_WIN32)
-// Diagnostic (known-issues.md "B"): on a Windows/MSVC integer divide-by-zero
-// (STATUS_INTEGER_DIVIDE_BY_ZERO, 0xC0000094) the run faults with no useful
-// trace in CI. This vectored exception handler symbolizes the faulting IP and
-// the whole stack via DbgHelp — self-contained, so no external debugger (cdb)
-// needs to be present on the runner; it only needs the Release+/Z7 PDB. Gated
-// by TRANSCRIBE_DIAG_FAULT_TRACE so normal/native-ci runs are untouched. Remove
-// this block (and the dbghelp link + diag-b.yml) once "B" is fixed.
-void diag_resolve(HANDLE proc, DWORD64 addr, const char * tag) {
-    char symbuf[sizeof(SYMBOL_INFO) + 512] = {};
-    auto * sym        = reinterpret_cast<SYMBOL_INFO *>(symbuf);
-    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
-    sym->MaxNameLen   = 511;
-    DWORD64 sdisp     = 0;
-    const bool have_sym = SymFromAddr(proc, addr, &sdisp, sym) != FALSE;
-
-    IMAGEHLP_LINE64 line {};
-    line.SizeOfStruct = sizeof(line);
-    DWORD ldisp       = 0;
-    const bool have_line = SymGetLineFromAddr64(proc, addr, &ldisp, &line) != FALSE;
-
-    std::fprintf(stderr, "  %-12s 0x%016llx  %s+0x%llx", tag,
-                 static_cast<unsigned long long>(addr),
-                 have_sym ? sym->Name : "<no-symbol>",
-                 static_cast<unsigned long long>(sdisp));
-    if (have_line) {
-        std::fprintf(stderr, "   (%s:%lu)", line.FileName, line.LineNumber);
-    }
-    std::fprintf(stderr, "\n");
-}
-
-LONG WINAPI diag_fault_trace(EXCEPTION_POINTERS * ep) {
-    const DWORD code = ep->ExceptionRecord->ExceptionCode;
-    if (code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_INT_OVERFLOW) {
-        return EXCEPTION_CONTINUE_SEARCH;  // not ours — let normal handling run
-    }
-    HANDLE proc = GetCurrentProcess();
-    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
-    SymInitialize(proc, nullptr, TRUE);
-
-    std::fprintf(stderr, "\n==== FAULT 0x%08lx (%s) ====\n",
-                 static_cast<unsigned long>(code),
-                 code == EXCEPTION_INT_DIVIDE_BY_ZERO ? "INT_DIVIDE_BY_ZERO"
-                                                      : "INT_OVERFLOW");
-    diag_resolve(proc,
-                 reinterpret_cast<DWORD64>(ep->ExceptionRecord->ExceptionAddress),
-                 "FAULTING-IP");
-    std::fprintf(stderr, "---- backtrace (top frames first) ----\n");
-    void *       frames[64];
-    const USHORT n = CaptureStackBackTrace(0, 64, frames, nullptr);
-    for (USHORT i = 0; i < n; ++i) {
-        char idx[16];
-        std::snprintf(idx, sizeof(idx), "#%-2u", i);
-        diag_resolve(proc, reinterpret_cast<DWORD64>(frames[i]), idx);
-    }
-    std::fflush(stderr);
-    TerminateProcess(proc, 94);
-    return EXCEPTION_CONTINUE_EXECUTION;  // unreached (process is gone)
-}
-
-// Diagnostic (known-issues.md "B" follow-up): with the ÷0 load fault fixed,
-// Windows transcription hangs (Linux runs the same threading fine). Dump where
-// every thread is stuck. A watchdog thread (TRANSCRIBE_DIAG_WATCHDOG_SEC=N)
-// sleeps N s, then suspends + StackWalks every other thread and symbolizes it.
-void diag_walk_thread(HANDLE proc, HANDLE thread, DWORD tid) {
-    if (SuspendThread(thread) == static_cast<DWORD>(-1)) return;
-    CONTEXT ctx;
-    ZeroMemory(&ctx, sizeof(ctx));
-    ctx.ContextFlags = CONTEXT_FULL;
-    if (!GetThreadContext(thread, &ctx)) { ResumeThread(thread); return; }
-    std::fprintf(stderr, "---- thread %lu ----\n", tid);
-    STACKFRAME64 sf;
-    ZeroMemory(&sf, sizeof(sf));
-    sf.AddrPC.Offset    = ctx.Rip; sf.AddrPC.Mode    = AddrModeFlat;
-    sf.AddrFrame.Offset = ctx.Rbp; sf.AddrFrame.Mode = AddrModeFlat;
-    sf.AddrStack.Offset = ctx.Rsp; sf.AddrStack.Mode = AddrModeFlat;
-    for (int i = 0; i < 40; ++i) {
-        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, proc, thread, &sf, &ctx,
-                         nullptr, SymFunctionTableAccess64, SymGetModuleBase64,
-                         nullptr)) {
-            break;
-        }
-        if (sf.AddrPC.Offset == 0) break;
-        char idx[16];
-        std::snprintf(idx, sizeof(idx), "#%-2d", i);
-        diag_resolve(proc, sf.AddrPC.Offset, idx);
-    }
-    ResumeThread(thread);
-}
-
-DWORD WINAPI diag_watchdog(LPVOID arg) {
-    const DWORD secs = static_cast<DWORD>(reinterpret_cast<uintptr_t>(arg));
-    Sleep(secs * 1000);
-    HANDLE proc = GetCurrentProcess();
-    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
-    SymInitialize(proc, nullptr, TRUE);
-    const DWORD self = GetCurrentThreadId();
-    const DWORD pid  = GetCurrentProcessId();
-    std::fprintf(stderr,
-                 "\n==== WATCHDOG fired after %lu s — dumping all thread stacks "
-                 "====\n", secs);
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-    if (snap != INVALID_HANDLE_VALUE) {
-        THREADENTRY32 te;
-        te.dwSize = sizeof(te);
-        if (Thread32First(snap, &te)) {
-            do {
-                if (te.th32OwnerProcessID != pid) continue;
-                if (te.th32ThreadID == self) continue;
-                HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
-                                           THREAD_QUERY_INFORMATION,
-                                       FALSE, te.th32ThreadID);
-                if (th != nullptr) {
-                    diag_walk_thread(proc, th, te.th32ThreadID);
-                    CloseHandle(th);
-                }
-            } while (Thread32Next(snap, &te));
-        }
-        CloseHandle(snap);
-    }
-    std::fflush(stderr);
-    TerminateProcess(proc, 95);
-    return 0;
-}
-#endif  // _WIN32
-
 } // namespace
 
 int main() {
-#if defined(_WIN32)
-    // Diagnostic (known-issues.md "B"): install the int-÷0 backtrace handler
-    // before anything runs. No-op unless TRANSCRIBE_DIAG_FAULT_TRACE is set.
-    if (const char * d = std::getenv("TRANSCRIBE_DIAG_FAULT_TRACE");
-        d != nullptr && d[0] != '\0' && std::strcmp(d, "0") != 0) {
-        AddVectoredExceptionHandler(/*first=*/1u, diag_fault_trace);
-    }
-    // Watchdog: dump all thread stacks after N seconds (hang diagnosis).
-    if (const char * w = std::getenv("TRANSCRIBE_DIAG_WATCHDOG_SEC");
-        w != nullptr && w[0] != '\0') {
-        const unsigned long secs = std::strtoul(w, nullptr, 10);
-        if (secs > 0) {
-            CreateThread(nullptr, 0, diag_watchdog,
-                         reinterpret_cast<LPVOID>(static_cast<uintptr_t>(secs)),
-                         0, nullptr);
-        }
-    }
-#endif
     const char * env = std::getenv("TRANSCRIBE_WHISPER_MODEL");
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
@@ -274,47 +124,6 @@ int main() {
         std::fprintf(stderr, "FAIL context init: %s\n", transcribe_status_string(st));
         transcribe_model_free(model);
         return EXIT_FAILURE;
-    }
-
-    // Opt-in diagnostic harness (TRANSCRIBE_DIAG_CANCEL): threaded wall-clock
-    // cancel of a LONG-FORM run, swept over cancel delays and repeated to shake
-    // timing. Reproduces the x86-only integer divide-by-zero in whisper's
-    // abort/partial path (it faults on x86, is masked on arm64). Driven under a
-    // debugger by .github/workflows/diag-cancel.yml to capture the faulting
-    // file:line. No-op unless the env var is set, so normal test runs are
-    // unaffected.
-    if (const char * d = std::getenv("TRANSCRIBE_DIAG_CANCEL"); d && *d && *d != '0') {
-        std::vector<float> long_pcm;
-        const int repeats = 6;  // 6x jfk ~= 66s -> long-form (2+ windows)
-        long_pcm.reserve(pcm.size() * repeats);
-        for (int i = 0; i < repeats; ++i)
-            long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
-
-        // Small sweep: the fault is reliable on a slow runner near a ~40ms
-        // cancel, and the debugger quits on the first crash. Keep it short so it
-        // finishes inside the job timeout when it does NOT reproduce.
-        static std::atomic<bool> g_cancel{false};
-        for (int rep = 0; rep < 6; ++rep) {
-            for (int sleep_ms = 20; sleep_ms <= 120; sleep_ms += 20) {
-                g_cancel.store(false);
-                transcribe_set_abort_callback(
-                    ctx, [](void *) -> bool { return g_cancel.load(); }, nullptr);
-                std::thread killer([sleep_ms] {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
-                    g_cancel.store(true);
-                });
-                transcribe_run_params rp; transcribe_run_params_init(&rp);
-                rp.language = "en";
-                (void) transcribe_run(ctx, long_pcm.data(),
-                                      static_cast<int>(long_pcm.size()), &rp);
-                killer.join();
-            }
-        }
-        transcribe_set_abort_callback(ctx, nullptr, nullptr);
-        std::fprintf(stderr, "[diag-cancel] completed without reproducing\n");
-        transcribe_session_free(ctx);
-        transcribe_model_free(model);
-        return EXIT_SUCCESS;
     }
 
     {

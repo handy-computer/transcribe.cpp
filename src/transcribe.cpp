@@ -722,7 +722,7 @@ static bool valid_stream_commit_policy(int policy) {
 // ggml_time_* read clock_gettime directly (no divisor) so the missing init is
 // silently harmless there; arm64 masks integer ÷0 as 0. ggml.h documents
 // ggml_time_init() as "call this once at the beginning of the program" — do
-// exactly that at the first public entry point. (known-issues.md "B")
+// exactly that at the first public entry point.
 static void ensure_ggml_time_init() {
     static std::once_flag once;
     std::call_once(once, [] { ggml_time_init(); });
@@ -1257,7 +1257,7 @@ extern "C" transcribe_status transcribe_model_load_file(
     struct transcribe_model **             out_model)
 {
     // Set up ggml's timer before any family's load-timing ggml_time_us() runs
-    // (Windows/MSVC ÷0 otherwise — see ensure_ggml_time_init, known-issues "B").
+    // (Windows/MSVC ÷0 otherwise — see ensure_ggml_time_init).
     ensure_ggml_time_init();
     if (out_model == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;

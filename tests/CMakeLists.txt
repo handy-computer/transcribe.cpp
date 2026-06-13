@@ -720,12 +720,6 @@ if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
     target_link_libraries(transcribe_whisper_e2e_smoke
         PRIVATE transcribe transcribe-common-example)
 
-    # DbgHelp backs the TRANSCRIBE_DIAG_FAULT_TRACE int-÷0 backtrace handler
-    # (known-issues.md "B"). Drop with that diagnostic.
-    if(WIN32)
-        target_link_libraries(transcribe_whisper_e2e_smoke PRIVATE dbghelp)
-    endif()
-
     target_compile_definitions(transcribe_whisper_e2e_smoke PRIVATE
         "TRANSCRIBE_TEST_SAMPLES_DIR=\"${CMAKE_SOURCE_DIR}/samples\"")
 
