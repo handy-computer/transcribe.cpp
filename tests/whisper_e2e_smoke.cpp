@@ -135,14 +135,17 @@ int main() {
     // unaffected.
     if (const char * d = std::getenv("TRANSCRIBE_DIAG_CANCEL"); d && *d && *d != '0') {
         std::vector<float> long_pcm;
-        const int repeats = 12;  // 12x jfk ~= 132s -> long-form path
+        const int repeats = 6;  // 6x jfk ~= 66s -> long-form (2+ windows)
         long_pcm.reserve(pcm.size() * repeats);
         for (int i = 0; i < repeats; ++i)
             long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
 
+        // Small sweep: the fault is reliable on a slow runner near a ~40ms
+        // cancel, and the debugger quits on the first crash. Keep it short so it
+        // finishes inside the job timeout when it does NOT reproduce.
         static std::atomic<bool> g_cancel{false};
-        for (int rep = 0; rep < 40; ++rep) {
-            for (int sleep_ms = 10; sleep_ms <= 400; sleep_ms += 10) {
+        for (int rep = 0; rep < 6; ++rep) {
+            for (int sleep_ms = 20; sleep_ms <= 120; sleep_ms += 20) {
                 g_cancel.store(false);
                 transcribe_set_abort_callback(
                     ctx, [](void *) -> bool { return g_cancel.load(); }, nullptr);
