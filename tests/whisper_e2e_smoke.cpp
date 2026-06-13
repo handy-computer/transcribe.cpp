@@ -13,10 +13,13 @@
 
 #include <sys/stat.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
@@ -121,6 +124,44 @@ int main() {
         std::fprintf(stderr, "FAIL context init: %s\n", transcribe_status_string(st));
         transcribe_model_free(model);
         return EXIT_FAILURE;
+    }
+
+    // Opt-in diagnostic harness (TRANSCRIBE_DIAG_CANCEL): threaded wall-clock
+    // cancel of a LONG-FORM run, swept over cancel delays and repeated to shake
+    // timing. Reproduces the x86-only integer divide-by-zero in whisper's
+    // abort/partial path (it faults on x86, is masked on arm64). Driven under a
+    // debugger by .github/workflows/diag-cancel.yml to capture the faulting
+    // file:line. No-op unless the env var is set, so normal test runs are
+    // unaffected.
+    if (const char * d = std::getenv("TRANSCRIBE_DIAG_CANCEL"); d && *d && *d != '0') {
+        std::vector<float> long_pcm;
+        const int repeats = 12;  // 12x jfk ~= 132s -> long-form path
+        long_pcm.reserve(pcm.size() * repeats);
+        for (int i = 0; i < repeats; ++i)
+            long_pcm.insert(long_pcm.end(), pcm.begin(), pcm.end());
+
+        static std::atomic<bool> g_cancel{false};
+        for (int rep = 0; rep < 40; ++rep) {
+            for (int sleep_ms = 10; sleep_ms <= 400; sleep_ms += 10) {
+                g_cancel.store(false);
+                transcribe_set_abort_callback(
+                    ctx, [](void *) -> bool { return g_cancel.load(); }, nullptr);
+                std::thread killer([sleep_ms] {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+                    g_cancel.store(true);
+                });
+                transcribe_run_params rp; transcribe_run_params_init(&rp);
+                rp.language = "en";
+                (void) transcribe_run(ctx, long_pcm.data(),
+                                      static_cast<int>(long_pcm.size()), &rp);
+                killer.join();
+            }
+        }
+        transcribe_set_abort_callback(ctx, nullptr, nullptr);
+        std::fprintf(stderr, "[diag-cancel] completed without reproducing\n");
+        transcribe_session_free(ctx);
+        transcribe_model_free(model);
+        return EXIT_SUCCESS;
     }
 
     {
