@@ -26,7 +26,12 @@ openmp = ["transcribe-cpp-sys/openmp"]
 dylib = ["transcribe-cpp-sys/dylib"]
 
 [dependencies]
-transcribe-cpp-sys = { version = "0.0.1", path = "../../.." }
+# default-features = false so the safe crate's own features are the ONLY control
+# surface: without it, sys's `default = ["metal"]` stays active even under
+# `transcribe-cpp --no-default-features`, silently re-enabling Metal. The backend
+# features below forward explicitly, so the default (`metal`) still reaches sys
+# via `metal = ["transcribe-cpp-sys/metal"]`.
+transcribe-cpp-sys = { version = "0.0.1", path = "../../..", default-features = false }
 thiserror = "2"
 log = "0.4"
 
