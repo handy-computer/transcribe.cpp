@@ -103,10 +103,16 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
     # one (transcribe -> ggml -> backends -> ggml-base).
     list(APPEND _libraries ggml ${_backend_targets} ggml-base)
 
-    # The archives are C++; the consumer may be C or Rust. MSVC links the CRT
-    # and the C++ runtime implicitly, so Windows needs none of these.
+    # The archives are C++; the consumer may be C or Rust.
     if(APPLE)
         list(APPEND _system_libs c++ m)
+    elseif(WIN32)
+        # MSVC links the CRT and the C++ runtime implicitly. ggml-cpu reads the
+        # registry for CPU feature detection (RegOpenKeyEx/RegCloseKey), so the
+        # static consumer must pull in advapi32 — ggml's own CMake never links
+        # it (it rides MSVC default-lib auto-linking the manifest reconstruction
+        # loses).
+        list(APPEND _system_libs advapi32)
     elseif(UNIX)
         list(APPEND _system_libs stdc++ m pthread dl)
     endif()

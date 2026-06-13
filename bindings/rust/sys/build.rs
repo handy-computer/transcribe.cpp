@@ -69,9 +69,16 @@ fn main() {
     if feature("CUDA") {
         cfg.define("TRANSCRIBE_CUDA", "ON");
     }
-    if feature("OPENMP") {
-        cfg.define("TRANSCRIBE_USE_OPENMP", "ON");
-    }
+    // Force OpenMP OFF unless explicitly opted in. TRANSCRIBE_USE_OPENMP
+    // defaults ON and auto-detects, but its `-fopenmp` shows up only as a
+    // manifest link_flag → a `cargo:rustc-link-arg` that does NOT propagate to
+    // downstream binaries, so a static consumer link fails with undefined
+    // GOMP_*/omp_* symbols. A self-contained static build is the default;
+    // `--features openmp` opts in (and then owns providing the OpenMP runtime).
+    cfg.define(
+        "TRANSCRIBE_USE_OPENMP",
+        if feature("OPENMP") { "ON" } else { "OFF" },
+    );
 
     // Builds + installs into OUT_DIR; the returned path IS the install prefix.
     let prefix = cfg.build();
