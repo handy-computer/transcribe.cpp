@@ -4,9 +4,7 @@ name: native-ci
 # these lanes certify the C/C++ contracts every binding (Python today;
 # Rust/TypeScript/Swift next) relies on, so they live apart from any one
 # binding's workflow. Moved here from python-bindings.yml (2026-06-13,
-# bindings-shared-infra); job names are unchanged, so existing
-# branch-protection required checks carry over — only the NEW checks
-# (link-smoke, posture-lint) need adding.
+# bindings-shared-infra) with job names unchanged.
 #
 #   - cpp-tests:          the full C++ white-box suite against a static
 #                         build, then `cmake --install` + an EXTERNAL toy C

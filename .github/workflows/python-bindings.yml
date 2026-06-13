@@ -11,8 +11,8 @@ name: python-bindings
 # The binding-agnostic native gates (cpp-tests, cpp-tests-sanitized,
 # provider-dl-vulkan, link-smoke, posture-lint) moved to native-ci.yml
 # (2026-06-13, bindings-shared-infra): they certify the C contracts EVERY
-# binding relies on, not just Python's. Job names were preserved, so
-# branch-protection required checks carried over unchanged.
+# binding relies on, not just Python's. Job names were preserved across
+# the move.
 #
 # The full WHEEL matrix (python-wheels.yml) deliberately does NOT run per PR:
 # it runs on workflow_dispatch and on every publish (rehearsal or release).
