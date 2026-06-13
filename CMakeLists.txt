@@ -286,22 +286,15 @@ endif()
 # the GGML_OPENMP=OFF posture official wheels use) when OpenMP is switched off,
 # so one TRANSCRIBE_USE_OPENMP knob covers ggml and our host-decoder TU.
 #
-# EXCEPTION (MSVC): ggml's non-OpenMP CPU threadpool barrier (ggml_barrier's
-# custom spin path) DEADLOCKS under MSVC codegen on Windows — every CPU run with
-# n_threads>1 hangs (validated: a whisper-tiny run wedges all worker threads in
-# the barrier spin; the OpenMP `#pragma omp barrier` path is the only working
-# CPU threading on MSVC). So keep ggml's OpenMP on for MSVC even when our knob is
-# off. This is GGML-internal only: TRANSCRIBE_USE_OPENMP stays off, so the link
-# manifest never emits a (GNU-only, MSVC-invalid) -fopenmp flag and the Parakeet
-# host-decoder TU is unaffected. MSVC auto-links vcomp via the /openmp pragma
-# baked into the ggml objects, so the final link pulls it with no manifest entry;
-# vcomp140.dll ships in the same VC++ runtime the binary already requires.
-if(NOT TRANSCRIBE_USE_OPENMP)
-    if(MSVC)
-        set(GGML_OPENMP ON CACHE BOOL "" FORCE)
-    else()
-        set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
-    endif()
+# ...UNLESS a consumer explicitly set GGML_OPENMP on the command line — then
+# honor it. The Rust binding does exactly that on Windows/MSVC (-DGGML_OPENMP=ON
+# from its build.rs): ggml's non-OpenMP CPU threadpool barrier (ggml_barrier's
+# custom spin path) DEADLOCKS under MSVC codegen, so the only working multi-
+# threaded CPU path there is OpenMP's `#pragma omp barrier`. The Python wheels
+# leave GGML_OPENMP unset, so they keep the OpenMP-free posture (numpy/torch
+# OpenMP-coexistence hygiene) and get the force-off below.
+if(NOT TRANSCRIBE_USE_OPENMP AND NOT DEFINED CACHE{GGML_OPENMP})
+    set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 endif()
 
 # We don't want ggml's tests / examples leaking into our build tree. They

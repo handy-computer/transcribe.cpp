@@ -79,6 +79,19 @@ fn main() {
         "TRANSCRIBE_USE_OPENMP",
         if feature("OPENMP") { "ON" } else { "OFF" },
     );
+    // ggml's non-OpenMP CPU threadpool barrier (ggml_barrier's custom spin path)
+    // DEADLOCKS under MSVC codegen on Windows: every multi-threaded CPU run wedges
+    // its workers in the barrier spin (it works on every other compiler). The
+    // OpenMP `#pragma omp barrier` path is the only working CPU threading there,
+    // so build ggml with OpenMP on Windows even though our TRANSCRIBE_USE_OPENMP
+    // knob stays off. GGML-internal only: TRANSCRIBE_USE_OPENMP=OFF keeps the link
+    // manifest free of the GNU-only `-fopenmp` flag and leaves the Parakeet
+    // host-decoder TU alone; MSVC auto-links vcomp via the /openmp pragma in the
+    // ggml objects (vcomp140.dll ships in the VC++ runtime the binary needs
+    // anyway). CMakeLists honors this explicit GGML_OPENMP and skips its force-off.
+    if target_os == "windows" {
+        cfg.define("GGML_OPENMP", "ON");
+    }
 
     // Builds + installs into OUT_DIR; the returned path IS the install prefix.
     let prefix = cfg.build();
