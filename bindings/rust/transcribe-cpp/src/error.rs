@@ -73,6 +73,14 @@ pub enum Error {
     /// A caller-supplied string contained an interior NUL byte.
     #[error("string contains an interior NUL byte: {0}")]
     Nul(#[from] std::ffi::NulError),
+    /// Another session of the same model already has a compute operation in
+    /// flight. The C library serializes compute per model (the 0.x limitation):
+    /// at most one run / batch / active stream across ALL of a model's sessions
+    /// at a time. Finish or drop the in-flight stream (one-shot runs/batches
+    /// just queue) before starting another, or give each concurrent worker its
+    /// own model. Raised purely on the Rust side, so [`Error::raw_status`] is 0.
+    #[error("model busy: {0}")]
+    Busy(String),
     /// A non-OK status with no more specific mapping.
     #[error("{0}")]
     Other(String),

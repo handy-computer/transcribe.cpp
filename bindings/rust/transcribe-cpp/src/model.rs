@@ -6,10 +6,13 @@
 //! been dropped — Rust ownership gives the C "model must outlive its sessions"
 //! contract (and close-ordering safety) for free, in any drop order.
 //!
-//! The `Arc` also carries the per-model run mutex that serializes the compute
-//! path: the C library allows at most one in-flight `run`/stream across all
-//! sessions of a model (the 0.x concurrency limitation), so the safe wrapper
-//! makes concurrent calls queue rather than race.
+//! The `Arc` also carries the per-model compute lock that enforces the C
+//! library's 0.x concurrency limitation: at most one `run` / `run_batch` /
+//! active stream may be in flight across ALL sessions of a model. One-shot
+//! runs/batches queue on the lock (serialized); an *active stream* spans many
+//! native calls (`begin`→`feed`*→`finalize`), so the lock also carries a flag
+//! marking a stream in flight — any run/batch/stream that would overlap it is
+//! refused with [`Error::Busy`](crate::Error) rather than allowed to race.
 
 use std::ffi::CString;
 use std::path::Path;
@@ -57,16 +60,19 @@ pub struct Capabilities {
     pub max_audio_ms: i64,
 }
 
-/// The native model handle plus the per-model run lock, shared via `Arc`.
+/// The native model handle plus the per-model compute lock, shared via `Arc`.
 pub(crate) struct ModelInner {
     pub(crate) ptr: *mut sys::transcribe_model,
-    /// Serializes the compute path across all sessions of this model.
-    pub(crate) run_lock: Mutex<()>,
+    /// Serializes the compute path across all sessions of this model. The bool
+    /// is `true` while a stream is in flight (begin..drop); a held lock plus a
+    /// `true` flag is how `run`/`run_batch`/`stream` detect and refuse an
+    /// overlapping compute. See the module docs.
+    pub(crate) compute_lock: Mutex<bool>,
 }
 
 // SAFETY: the native model is documented thread-safe for query + session
-// creation; the compute path is serialized by `run_lock`. The raw pointer is
-// only ever used behind `&ModelInner`, never mutated through aliasing.
+// creation; the compute path is serialized by `compute_lock`. The raw pointer
+// is only ever used behind `&ModelInner`, never mutated through aliasing.
 unsafe impl Send for ModelInner {}
 unsafe impl Sync for ModelInner {}
 
@@ -120,7 +126,7 @@ impl Model {
         Ok(Model {
             inner: Arc::new(ModelInner {
                 ptr: out,
-                run_lock: Mutex::new(()),
+                compute_lock: Mutex::new(false),
             }),
         })
     }
@@ -253,16 +259,21 @@ pub struct SessionLimits {
     pub max_kv_bytes: i64,
 }
 
+/// Convert a filesystem path to the bytes the C API's `const char *` expects.
+/// On Unix paths are arbitrary bytes, passed through verbatim; elsewhere the
+/// API takes UTF-8, so a non-UTF-8 path is rejected rather than lossily mangled
+/// (`to_string_lossy` would silently substitute U+FFFD). Shared with
+/// [`crate::backend::init_backends`].
 #[cfg(unix)]
-fn path_bytes(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn path_bytes(path: &Path) -> Result<Vec<u8>> {
     use std::os::unix::ffi::OsStrExt;
     Ok(path.as_os_str().as_bytes().to_vec())
 }
 
 #[cfg(not(unix))]
-fn path_bytes(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn path_bytes(path: &Path) -> Result<Vec<u8>> {
     // The C API takes a UTF-8 `const char *`; require a UTF-8-representable path.
     path.to_str().map(|s| s.as_bytes().to_vec()).ok_or_else(|| {
-        crate::error::Error::InvalidArgument(format!("non-UTF-8 model path: {}", path.display()))
+        crate::error::Error::InvalidArgument(format!("non-UTF-8 path: {}", path.display()))
     })
 }
