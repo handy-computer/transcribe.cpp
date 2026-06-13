@@ -281,18 +281,34 @@ if(TRANSCRIBE_X86_CONSERVATIVE)
     endforeach()
 endif()
 
-# OpenMP: ggml defaults GGML_OPENMP ON and probes for it gracefully, so leave
-# ggml's own default in place when we want OpenMP. Only force it OFF (matching
-# the GGML_OPENMP=OFF posture official wheels use) when OpenMP is switched off,
-# so one TRANSCRIBE_USE_OPENMP knob covers ggml and our host-decoder TU.
+# OpenMP — CENTRAL POLICY (read before changing the Windows/MSVC threading).
 #
-# ...UNLESS a consumer explicitly set GGML_OPENMP on the command line — then
-# honor it. The Rust binding does exactly that on Windows/MSVC (-DGGML_OPENMP=ON
-# from its build.rs): ggml's non-OpenMP CPU threadpool barrier (ggml_barrier's
-# custom spin path) DEADLOCKS under MSVC codegen, so the only working multi-
-# threaded CPU path there is OpenMP's `#pragma omp barrier`. The Python wheels
-# leave GGML_OPENMP unset, so they keep the OpenMP-free posture (numpy/torch
-# OpenMP-coexistence hygiene) and get the force-off below.
+# ggml defaults GGML_OPENMP ON and probes for it gracefully, so leave ggml's own
+# default in place when we want OpenMP. Only force it OFF (matching the
+# GGML_OPENMP=OFF posture official wheels use) when OpenMP is switched off, so
+# one TRANSCRIBE_USE_OPENMP knob covers ggml and our host-decoder TU.
+#
+# The catch: ggml's NON-OpenMP CPU threadpool barrier (ggml_barrier's custom
+# spin path) DEADLOCKS under MSVC codegen on Windows — any multi-threaded CPU
+# run wedges its workers in the barrier spin (it works on every other compiler).
+# OpenMP's `#pragma omp barrier` is the only working multi-threaded CPU path on
+# MSVC. But OpenMP is a per-CONSUMER tradeoff, not a global flag, so this is not
+# one switch — it is a deliberate, documented split:
+#
+#   - Rust binding (CPU is its default backend, standalone process): MUST have
+#     OpenMP on Windows. Its build.rs passes -DGGML_OPENMP=ON; the guard below
+#     honors that explicit value. MSVC auto-links vcomp via the /openmp pragma in
+#     the ggml objects (no -fopenmp flag, so the link manifest is untouched);
+#     vcomp140.dll ships in the VC++ runtime the binary already needs.
+#   - Python wheels (default to the Vulkan GPU backend; deliberately vendor NO
+#     OpenMP so ggml's runtime cannot collide with numpy/torch's own OpenMP/MKL
+#     in one process — see python-wheels.yml): leave GGML_OPENMP unset and get
+#     the force-off below. KNOWN LIMITATION as a consequence: multi-threaded CPU
+#     compute on Windows is unsupported for the wheels (they use Vulkan). Lifting
+#     it needs a non-OpenMP fix (e.g. single-threaded CPU on Windows, or patching
+#     ggml's barrier) rather than forcing OpenMP and the coexistence hazard back.
+#
+# So: honor an explicit -DGGML_OPENMP=... (the Rust opt-in); otherwise force OFF.
 if(NOT TRANSCRIBE_USE_OPENMP AND NOT DEFINED CACHE{GGML_OPENMP})
     set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 endif()

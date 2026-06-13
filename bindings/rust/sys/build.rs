@@ -79,16 +79,16 @@ fn main() {
         "TRANSCRIBE_USE_OPENMP",
         if feature("OPENMP") { "ON" } else { "OFF" },
     );
-    // ggml's non-OpenMP CPU threadpool barrier (ggml_barrier's custom spin path)
-    // DEADLOCKS under MSVC codegen on Windows: every multi-threaded CPU run wedges
-    // its workers in the barrier spin (it works on every other compiler). The
-    // OpenMP `#pragma omp barrier` path is the only working CPU threading there,
-    // so build ggml with OpenMP on Windows even though our TRANSCRIBE_USE_OPENMP
-    // knob stays off. GGML-internal only: TRANSCRIBE_USE_OPENMP=OFF keeps the link
-    // manifest free of the GNU-only `-fopenmp` flag and leaves the Parakeet
-    // host-decoder TU alone; MSVC auto-links vcomp via the /openmp pragma in the
-    // ggml objects (vcomp140.dll ships in the VC++ runtime the binary needs
-    // anyway). CMakeLists honors this explicit GGML_OPENMP and skips its force-off.
+    // ggml's non-OpenMP CPU threadpool barrier deadlocks under MSVC on Windows;
+    // OpenMP's `#pragma omp barrier` is the only working multi-threaded CPU path
+    // there. The Rust binding is CPU-default and standalone (no numpy/torch
+    // OpenMP-coexistence concern), so it opts ggml into OpenMP on Windows.
+    // GGML-internal only: TRANSCRIBE_USE_OPENMP stays off, so the link manifest
+    // emits no (GNU-only) -fopenmp and the Parakeet host-decoder TU is unchanged;
+    // MSVC auto-links vcomp via the ggml objects' /openmp pragma. CMakeLists
+    // honors this explicit GGML_OPENMP and skips its force-off. See the full
+    // per-consumer policy (incl. why the Python wheels stay OpenMP-free) in the
+    // "OpenMP — CENTRAL POLICY" block of the root CMakeLists.txt.
     if target_os == "windows" {
         cfg.define("GGML_OPENMP", "ON");
     }
