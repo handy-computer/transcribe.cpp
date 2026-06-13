@@ -36,7 +36,9 @@ pub struct Device {
 /// the same process.
 pub fn init_backends(dir: impl AsRef<Path>) -> Result<()> {
     let dir = dir.as_ref();
-    let c_dir = CString::new(dir.to_string_lossy().as_bytes())?;
+    // Pass the path bytes through faithfully (Unix) / reject non-UTF-8 (Windows),
+    // matching model loading — never lossily mangle a path with to_string_lossy.
+    let c_dir = CString::new(crate::model::path_bytes(dir)?)?;
     let status = unsafe { sys::transcribe_init_backends(c_dir.as_ptr()) };
     check(status, "init_backends")
 }

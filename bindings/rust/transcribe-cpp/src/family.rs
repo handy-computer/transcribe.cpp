@@ -15,6 +15,8 @@ use std::ffi::CString;
 
 use transcribe_cpp_sys as sys;
 
+use crate::error::Result;
+
 /// Whisper run-extension knobs (run slot): initial prompt, temperature
 /// fallback, and decode thresholds. `None` keeps the family default.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -98,15 +100,14 @@ impl RunExtRaw {
 }
 
 impl RunExtension {
-    pub(crate) fn materialize(&self) -> RunExtRaw {
+    pub(crate) fn materialize(&self) -> Result<RunExtRaw> {
         match self {
             RunExtension::Whisper(o) => {
                 let mut ext: sys::transcribe_whisper_run_ext = unsafe { std::mem::zeroed() };
                 unsafe { sys::transcribe_whisper_run_ext_init(&mut ext) };
-                let prompt = o
-                    .initial_prompt
-                    .as_deref()
-                    .and_then(|s| CString::new(s).ok());
+                // Propagate an interior NUL as Error::Nul (like language /
+                // target_language) instead of silently dropping the prompt.
+                let prompt = o.initial_prompt.as_deref().map(CString::new).transpose()?;
                 if let Some(c) = prompt.as_ref() {
                     ext.initial_prompt = c.as_ptr();
                 }
@@ -122,10 +123,10 @@ impl RunExtension {
                 set(&mut ext.max_prev_context_tokens, o.max_prev_context_tokens);
                 set(&mut ext.seed, o.seed);
                 set(&mut ext.max_initial_timestamp, o.max_initial_timestamp);
-                RunExtRaw::Whisper {
+                Ok(RunExtRaw::Whisper {
                     ext: Box::new(ext),
                     _prompt: prompt,
-                }
+                })
             }
         }
     }
