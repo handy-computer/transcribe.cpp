@@ -15,13 +15,11 @@
 # --- the library set --------------------------------------------------------
 # ggml maintains GGML_AVAILABLE_BACKENDS (internal cache) as backends register;
 # in GGML_BACKEND_DL builds these are MODULE libraries (the provider-directory
-# shape), otherwise ordinary shared libraries linked into libggml.
-set(_wheel_targets transcribe ggml ggml-base)
-foreach(_backend IN LISTS GGML_AVAILABLE_BACKENDS)
-    if(TARGET ${_backend})
-        list(APPEND _wheel_targets ${_backend})
-    endif()
-endforeach()
+# shape), otherwise ordinary shared libraries linked into libggml. The
+# backend-target/kind classification is shared with transcribe-install.cmake.
+include("${CMAKE_CURRENT_LIST_DIR}/transcribe-backend-kinds.cmake")
+transcribe_backend_kinds(_backend_kinds _backend_targets)
+set(_wheel_targets transcribe ggml ggml-base ${_backend_targets})
 list(REMOVE_DUPLICATES _wheel_targets)
 
 foreach(_tgt IN LISTS _wheel_targets)
@@ -50,42 +48,25 @@ endforeach()
 # --- the build-time contract stamp (_contract.py) ---------------------------
 # The binding hard-fails on a provider whose version or public-header hash
 # disagrees with it (_library.validate_contract). Version comes from the
-# header macros via PROJECT_VERSION; the header hash is the digest the FFI
-# generator emitted into the committed _generated.py (drift-gated in CI), so
-# wheel and binding are stamped from the same source.
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/src/transcribe_cpp/_generated.py"
-     _hash_line REGEX "^PUBLIC_HEADER_HASH = ")
-string(REGEX MATCH "\"([0-9a-f]+)\"" _ "${_hash_line}")
-set(_public_header_hash "${CMAKE_MATCH_1}")
+# header macros via PROJECT_VERSION; the header hash comes from the
+# binding-neutral include/transcribe.abihash — emitted by the FFI generator
+# (bindings/python/_generate/generate.py, the hash oracle) and drift-gated in
+# CI alongside _generated.py, so wheel and binding are stamped from the same
+# source without this file depending on a Python binding artifact.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/include/transcribe.abihash"
+     _public_header_hash LIMIT_COUNT 1)
+string(STRIP "${_public_header_hash}" _public_header_hash)
 if(NOT _public_header_hash MATCHES "^[0-9a-f]+$")
     message(FATAL_ERROR
-        "python-wheel-install: failed to parse PUBLIC_HEADER_HASH from "
-        "bindings/python/src/transcribe_cpp/_generated.py")
+        "python-wheel-install: failed to read the ABI digest from "
+        "include/transcribe.abihash (regenerate with "
+        "bindings/python/_generate/generate.py)")
 endif()
 
 # Backend kinds this artifact supports, for the descriptor's `backends` field
-# (and the binding's accelerated-first provider ranking). Derived from the
-# ggml backend target names; CPU ISA variants (ggml-cpu-haswell, ...) all
-# collapse to "cpu".
-set(_kinds "")
-foreach(_backend IN LISTS GGML_AVAILABLE_BACKENDS)
-    string(REGEX REPLACE "^ggml-" "" _kind "${_backend}")
-    string(REGEX REPLACE "^cpu-.*$" "cpu" _kind "${_kind}")
-    list(APPEND _kinds "${_kind}")
-endforeach()
-list(REMOVE_DUPLICATES _kinds)
-# Accelerated kinds first, cpu last — readability only; ranking is the
-# binding's job.
-set(_backend_kinds "")
-foreach(_kind IN ITEMS cuda metal vulkan)
-    if(_kind IN_LIST _kinds)
-        list(APPEND _backend_kinds "${_kind}")
-        list(REMOVE_ITEM _kinds "${_kind}")
-    endif()
-endforeach()
-list(REMOVE_ITEM _kinds cpu)
-list(APPEND _backend_kinds ${_kinds} cpu)
-
+# (and the binding's accelerated-first provider ranking). Classified by
+# transcribe_backend_kinds above: "ggml-" stripped, CPU ISA variants
+# (ggml-cpu-haswell, ...) collapsed to "cpu", accelerated kinds first.
 list(JOIN _backend_kinds "\", \"" _backends_joined)
 set(TRANSCRIBE_WHEEL_BACKENDS_PY "\"${_backends_joined}\"")
 set(TRANSCRIBE_PUBLIC_HEADER_HASH "${_public_header_hash}")
@@ -96,6 +77,29 @@ configure_file(
     @ONLY)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/python-wheel/_contract.py"
         DESTINATION . COMPONENT wheel)
+
+# --- the language-neutral contract twin (contract.json) ---------------------
+# Same stamping pass as _contract.py, but JSON and INSIDE _native/, so it
+# travels with the native bytes when CI extracts the directory into a
+# transcribe-native-<tuple> bundle (the canonical artifact non-Python
+# ecosystems consume). Any binding validates version + header_hash before
+# dlopen — the same contract the Python provider enforces. `lane` records
+# which official wheel lane built the artifact (null for sdist/dev builds).
+if(DEFINED ENV{TRANSCRIBE_WHEEL_LANE} AND NOT "$ENV{TRANSCRIBE_WHEEL_LANE}" STREQUAL "")
+    set(_contract_lane_json "\"$ENV{TRANSCRIBE_WHEEL_LANE}\"")
+else()
+    set(_contract_lane_json "null")
+endif()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/python-wheel/contract.json"
+"{
+  \"version\": \"${PROJECT_VERSION}\",
+  \"header_hash\": \"${_public_header_hash}\",
+  \"backends\": [\"${_backends_joined}\"],
+  \"lane\": ${_contract_lane_json}
+}
+")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/python-wheel/contract.json"
+        DESTINATION _native COMPONENT wheel)
 
 message(STATUS
     "python wheel: transcribe-cpp-native ${PROJECT_VERSION} "
