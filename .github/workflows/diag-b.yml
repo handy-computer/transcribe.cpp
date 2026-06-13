@@ -58,7 +58,10 @@ jobs:
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
       - name: Configure + build the e2e test (Release codegen + /Z7 symbols)
-        shell: bash
+        # pwsh, not bash: Git Bash's MSYS layer rewrites leading-slash args like
+        # /Z7 and /DEBUG into Windows paths (C:/Program Files/Git/Z7), which
+        # breaks the compiler/linker flags. PowerShell passes them verbatim.
+        shell: pwsh
         run: |
           # Release == the failing cargo build's native codegen. /Z7 embeds
           # CodeView in each .obj (Ninja-safe, no /Zi PDB contention); /DEBUG
@@ -66,13 +69,15 @@ jobs:
           # both transcribe and ggml frames. advapi32 for ggml-cpu's registry
           # CPU probe (the static consumer must pull it; F is fixed so the
           # header no longer forces dllimport).
-          cmake -B build-diag -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS=/Z7 -DCMAKE_CXX_FLAGS=/Z7 \
-            -DCMAKE_EXE_LINKER_FLAGS="/DEBUG advapi32.lib" \
-            -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON \
+          cmake -B build-diag -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_C_FLAGS=/Z7" "-DCMAKE_CXX_FLAGS=/Z7" `
+            "-DCMAKE_EXE_LINKER_FLAGS=/DEBUG advapi32.lib" `
+            -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON `
             -DTRANSCRIBE_USE_OPENMP=OFF
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build build-diag --target transcribe_whisper_e2e_smoke -j
+          if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
       - name: Reproduce + symbolize in-process (vectored handler)
         shell: pwsh
         run: |
