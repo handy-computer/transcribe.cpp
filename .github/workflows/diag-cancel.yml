@@ -13,6 +13,14 @@ name: diag-cancel
 
 on:
   workflow_dispatch:
+  # workflow_dispatch only fires for workflows on the default branch, and this
+  # diagnostic lives only on rust-bindings — so also run on push to the branch
+  # when the diag files change (this workflow is deleted after the fix).
+  push:
+    branches: [rust-bindings]
+    paths:
+      - ".github/workflows/diag-cancel.yml"
+      - "tests/whisper_e2e_smoke.cpp"
 
 jobs:
   diag:
