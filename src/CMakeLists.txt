@@ -220,6 +220,20 @@ set_target_properties(transcribe PROPERTIES
 find_package(ZLIB REQUIRED)
 target_link_libraries(transcribe PRIVATE ZLIB::ZLIB)
 
+# Export the resolved zlib archive for the install link manifest
+# (cmake/transcribe-install.cmake, top-level scope). On Windows the static
+# consumer must link zlib by file (vcpkg spells it zlib.lib, not z), but
+# ZLIB::ZLIB is a subdirectory-local imported target and ZLIB_LIBRARY is a
+# normal var in THIS scope — neither is visible there, so stash the path now.
+if(WIN32)
+    set(_transcribe_zlib "${ZLIB_LIBRARY_RELEASE}")
+    if(NOT _transcribe_zlib)
+        set(_transcribe_zlib "${ZLIB_LIBRARY}")
+    endif()
+    set(TRANSCRIBE_ZLIB_ARCHIVE "${_transcribe_zlib}"
+        CACHE INTERNAL "resolved zlib archive for the install link manifest")
+endif()
+
 if(WIN32)
     # Windows toolchains hide M_PI and friends behind _USE_MATH_DEFINES
     # (used by the mel frontends and Whisper's bin loader). MSVC and MinGW

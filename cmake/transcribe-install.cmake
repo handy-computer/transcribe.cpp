@@ -36,7 +36,13 @@ include("${CMAKE_CURRENT_LIST_DIR}/transcribe-backend-kinds.cmake")
 # the configuration-less location, then the raw ZLIB_LIBRARY cache var.
 function(_transcribe_zlib_archive out)
     set(_loc "")
-    if(TARGET ZLIB::ZLIB)
+    # src/CMakeLists.txt stashes this from the find_package(ZLIB) scope: the
+    # imported target and ZLIB_LIBRARY are NOT visible at this top-level scope
+    # (subdirectory-local target / normal var), so prefer the captured cache var.
+    if(TRANSCRIBE_ZLIB_ARCHIVE)
+        set(_loc "${TRANSCRIBE_ZLIB_ARCHIVE}")
+    endif()
+    if(NOT _loc AND TARGET ZLIB::ZLIB)
         get_target_property(_loc ZLIB::ZLIB IMPORTED_LOCATION_RELEASE)
         if(NOT _loc)
             get_target_property(_loc ZLIB::ZLIB IMPORTED_LOCATION)
