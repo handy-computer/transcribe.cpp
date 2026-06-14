@@ -149,6 +149,48 @@ fn concurrent_compute_on_one_model_is_refused() {
 }
 
 #[test]
+fn compute_lease_frees_at_finalize_and_reset() {
+    // The lease tracks "stream is ACTIVE", not "Stream handle exists": after
+    // finalize() or reset() the stream is no longer active, so another session
+    // may proceed WITHOUT waiting for the first Stream to drop.
+    let (Some(model_path), Some(pcm)) = (common::smoke_streaming_model(), common::smoke_audio())
+    else {
+        return;
+    };
+    let model = Model::load(&model_path).unwrap();
+    let mut s1 = model.session().unwrap();
+    let mut s2 = model.session().unwrap();
+    let chunk = &pcm[..pcm.len().min(1600)];
+
+    {
+        let mut stream1 = s1
+            .stream(&RunOptions::default(), &StreamOptions::default())
+            .unwrap();
+        stream1.feed(chunk).unwrap();
+        stream1.finalize().unwrap();
+        // stream1 is finalized but STILL IN SCOPE (not dropped); the lease must
+        // already be free for s2.
+        let stream2 = s2.stream(&RunOptions::default(), &StreamOptions::default());
+        assert!(
+            stream2.is_ok(),
+            "finalize() must release the lease before drop: {stream2:?}"
+        );
+    }
+    {
+        let mut stream1 = s1
+            .stream(&RunOptions::default(), &StreamOptions::default())
+            .unwrap();
+        stream1.feed(chunk).unwrap();
+        stream1.reset();
+        let stream2 = s2.stream(&RunOptions::default(), &StreamOptions::default());
+        assert!(
+            stream2.is_ok(),
+            "reset() must release the lease before drop: {stream2:?}"
+        );
+    }
+}
+
+#[test]
 fn stream_family_extension_accepted_or_rejected() {
     // moonshine-streaming accepts its own stream extension; a parakeet stream
     // extension on the same model is rejected at begin (InvalidArgument).

@@ -64,7 +64,8 @@ pub struct Capabilities {
 pub(crate) struct ModelInner {
     pub(crate) ptr: *mut sys::transcribe_model,
     /// Serializes the compute path across all sessions of this model. The bool
-    /// is `true` while a stream is in flight (begin..drop); a held lock plus a
+    /// is `true` while a stream is ACTIVE (from `begin` until the earliest of
+    /// `finalize` / `reset` / the `Stream` being dropped); a held lock plus a
     /// `true` flag is how `run`/`run_batch`/`stream` detect and refuse an
     /// overlapping compute. See the module docs.
     pub(crate) compute_lock: Mutex<bool>,

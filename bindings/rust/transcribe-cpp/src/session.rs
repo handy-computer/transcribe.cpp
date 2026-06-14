@@ -283,9 +283,12 @@ impl Session {
                 unsafe { sys::transcribe_stream_begin(self.ptr, &run_params, &stream_params) },
                 "stream begin",
             )?;
-            *guard = true; // released by Stream::drop
+            *guard = true; // released at finalize/reset, or by Stream::drop
         }
-        Ok(Stream { session: self })
+        Ok(Stream {
+            session: self,
+            holds_lease: true,
+        })
     }
 
     // --- result materialization (top-level / single accessors) ---------------
@@ -454,6 +457,11 @@ fn attach_partial(err: Error, partial: Box<Transcript>) -> Error {
 /// `Send` but not `Sync`, like the session it borrows.
 pub struct Stream<'a> {
     session: &'a mut Session,
+    // True while this stream holds the model's compute lease. Set at begin,
+    // cleared the moment the stream stops being active (finalize/reset) or on
+    // drop — whichever comes first. Tracked per-stream so drop never releases a
+    // lease a *different* session has since acquired.
+    holds_lease: bool,
 }
 
 impl std::fmt::Debug for Stream<'_> {
@@ -467,8 +475,10 @@ impl std::fmt::Debug for Stream<'_> {
 
 impl Drop for Stream<'_> {
     fn drop(&mut self) {
-        // Release the model's compute lease and abandon any unfinalized stream
-        // (reset is idempotent and safe from any state), both under the lock.
+        // Abandon any unfinalized stream (reset is idempotent and safe from any
+        // state) and release the lease IF this stream still holds it — under the
+        // lock. After finalize/reset the lease is already gone (and may now be
+        // another session's), so only clear it when holds_lease is still true.
         let mut guard = self
             .session
             .model
@@ -476,7 +486,9 @@ impl Drop for Stream<'_> {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         unsafe { sys::transcribe_stream_reset(self.session.ptr) };
-        *guard = false;
+        if self.holds_lease {
+            *guard = false;
+        }
     }
 }
 
@@ -507,32 +519,42 @@ impl Stream<'_> {
         let mut update: sys::transcribe_stream_update = unsafe { std::mem::zeroed() };
         unsafe { sys::transcribe_stream_update_init(&mut update) };
         let status = {
-            // The stream still holds the model's compute lease (released on
-            // drop); the lock here just serializes the native call.
-            let _guard = self
+            let mut guard = self
                 .session
                 .model
                 .compute_lock
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            unsafe { sys::transcribe_stream_finalize(self.session.ptr, &mut update) }
+            let st = unsafe { sys::transcribe_stream_finalize(self.session.ptr, &mut update) };
+            // Finalize ends the active stream (Finished, or Failed on error);
+            // either way it is no longer active, so free the model's compute
+            // lease now rather than holding other sessions off until drop.
+            if self.holds_lease {
+                *guard = false;
+            }
+            st
         };
+        self.holds_lease = false;
         check(status, "stream finalize")?;
         Ok(StreamUpdate::from_raw(&update))
     }
 
     /// Abandon the stream and return the session to idle (clears all snapshot
-    /// state). The model's compute lease is held until the `Stream` is dropped
-    /// (this object can still be fed), so to free the model for other sessions,
-    /// drop the `Stream` rather than just resetting it.
+    /// state). Releases the model's compute lease (the stream is no longer
+    /// active), so other sessions of the model can proceed without waiting for
+    /// this `Stream` to drop.
     pub fn reset(&mut self) {
-        let _guard = self
+        let mut guard = self
             .session
             .model
             .compute_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         unsafe { sys::transcribe_stream_reset(self.session.ptr) };
+        if self.holds_lease {
+            *guard = false;
+        }
+        self.holds_lease = false;
     }
 
     /// The current UI-facing text snapshot (owned copies).
