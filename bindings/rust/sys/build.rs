@@ -54,14 +54,22 @@ fn main() {
         .define("TRANSCRIBE_BUILD_TOOLS", "OFF")
         .define("TRANSCRIBE_BUILD_SHARED", if dylib { "ON" } else { "OFF" });
 
-    // Metal is the Apple default; the feature is a no-op on other targets
-    // (CMake already defaults TRANSCRIBE_METAL OFF there).
-    if feature("METAL") && is_apple {
-        cfg.define("TRANSCRIBE_METAL", "ON");
-        // Self-contained installed tree: embed the metallib instead of a
-        // sidecar default.metallib next to the lib (matches the shipped macOS
-        // wheel posture; what the shared-infra link-smoke uses).
-        cfg.define("GGML_METAL_EMBED_LIBRARY", "ON");
+    // Metal: on Apple, set TRANSCRIBE_METAL EXPLICITLY to track the `metal`
+    // feature. CMake defaults TRANSCRIBE_METAL ON on Apple Silicon, so without an
+    // explicit OFF a `--no-default-features` (metal off) build would still enable
+    // Metal — breaking Cargo.toml's "pure CPU build on macOS is
+    // default-features = false" contract. Off Apple the feature is a no-op (CMake
+    // already defaults it OFF).
+    if is_apple {
+        if feature("METAL") {
+            cfg.define("TRANSCRIBE_METAL", "ON");
+            // Self-contained installed tree: embed the metallib instead of a
+            // sidecar default.metallib next to the lib (matches the shipped macOS
+            // wheel posture; what the shared-infra link-smoke uses).
+            cfg.define("GGML_METAL_EMBED_LIBRARY", "ON");
+        } else {
+            cfg.define("TRANSCRIBE_METAL", "OFF");
+        }
     }
     if feature("VULKAN") {
         cfg.define("TRANSCRIBE_VULKAN", "ON");
