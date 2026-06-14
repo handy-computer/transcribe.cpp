@@ -68,7 +68,7 @@ jobs:
           $hangs = 0
           for ($i = 1; $i -le 12; $i++) {
             uv run --no-project --python 3.11 python .github/diag/py_cpu_repro.py --timeout 45 *> "iter_$i.log"
-            if ($LASTEXITCODE -ne 0) { $hangs++; Write-Host "  iter $i: HANG (exit $LASTEXITCODE)" }
+            if ($LASTEXITCODE -ne 0) { $hangs++; Write-Host "  iter ${i}: HANG (exit $LASTEXITCODE)" }
             else { Write-Host "  iter ${i}: pass" }
           }
           Write-Host "===== SHARED GGML_OPENMP=OFF result: $hangs / 12 hangs ====="
