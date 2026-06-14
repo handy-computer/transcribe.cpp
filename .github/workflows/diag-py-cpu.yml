@@ -1,23 +1,19 @@
 name: diag-py-cpu
 
-# One-off diagnostic: confirm whether the Python WHEEL POSTURE is exposed to the
-# MSVC ggml-cpu barrier deadlock. The official Windows wheels build the SHARED
-# libtranscribe with MSVC + TRANSCRIBE_USE_OPENMP=OFF (-> GGML_OPENMP=OFF, for
-# numpy/torch coexistence) and ship the CPU backend — exactly the posture the
-# Rust binding hit before the GGML_OPENMP-on-MSVC fix.
+# One-off diagnostic. First result was surprising: the SHARED (wheel-posture)
+# build with GGML_OPENMP=OFF did NOT deadlock, while the STATIC Rust build
+# reliably did. So the discriminator looks like static-vs-shared, not OpenMP.
+# This run pins that down:
+#   1. SHARED + GGML_OPENMP=OFF (wheel posture): run CPU whisper through the
+#      ctypes Python binding N times under a watchdog -> is it RELIABLY safe, or
+#      an intermittent race?
+#   2. STATIC + GGML_OPENMP=OFF (control, same runner): build the C++ whisper
+#      e2e and run it under an external timeout -> confirm it still HANGS here.
+# If shared passes N/N and static hangs, the deadlock is static-specific and the
+# Python wheels are NOT exposed.
 #
-# Builds the shared lib BOTH ways and runs a CPU whisper transcription through
-# the ctypes Python binding (TRANSCRIBE_LIBRARY dev-tree load) under a
-# faulthandler watchdog:
-#   A) GGML_OPENMP=OFF (the wheel posture)  -> expect HANG (watchdog dumps @90s)
-#   B) GGML_OPENMP=ON  (the Rust-side fix)  -> expect PASS
-#
-# NOTE: whisper does not apply session n_threads to its ggml graph (it uses the
-# ggml default of 4), so n_threads=1 would NOT avoid the hang for whisper — the
-# decisive axis is OpenMP off/on, which is what this tests.
-#
-# push-triggered, path-scoped. DELETE once the Python wheel CPU-on-Windows
-# posture is decided.
+# push-triggered, path-scoped. DELETE once the wheel CPU-on-Windows posture is
+# decided.
 
 on:
   push:
@@ -34,7 +30,7 @@ jobs:
   diag:
     name: diag-py-cpu (windows)
     runs-on: blacksmith-2vcpu-windows-2025
-    timeout-minutes: 50
+    timeout-minutes: 55
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -54,42 +50,48 @@ jobs:
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
-      - name: A) wheel posture (SHARED, GGML_OPENMP=OFF) — expect HANG
+      - name: 1) SHARED + GGML_OPENMP=OFF (wheel posture) — loop x12, count hangs
         shell: pwsh
         run: |
-          cmake -B build-off -G Ninja -DCMAKE_BUILD_TYPE=Release `
+          cmake -B build-sh -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_USE_OPENMP=OFF `
             -DTRANSCRIBE_INSTALL=ON -DTRANSCRIBE_BUILD_TESTS=OFF `
-            -DTRANSCRIBE_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX="$PWD/install-off"
-          if ($LASTEXITCODE -ne 0) { throw "configure (off) failed" }
-          cmake --build build-off --target install
-          if ($LASTEXITCODE -ne 0) { throw "build (off) failed" }
-          Write-Host "=== GGML_OPENMP cache (expect OFF) ==="
-          Select-String -Path build-off/CMakeCache.txt -Pattern 'GGML_OPENMP:'
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX="$PWD/install-sh"
+          if ($LASTEXITCODE -ne 0) { throw "configure (shared) failed" }
+          cmake --build build-sh --target install
+          if ($LASTEXITCODE -ne 0) { throw "build (shared) failed" }
+          Select-String -Path build-sh/CMakeCache.txt -Pattern 'GGML_OPENMP:'
           $env:PYTHONPATH = "$PWD/bindings/python/src"
-          $env:TRANSCRIBE_LIBRARY = "$PWD/install-off/bin/transcribe.dll"
+          $env:TRANSCRIBE_LIBRARY = "$PWD/install-sh/bin/transcribe.dll"
           $env:WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
           $env:JFK_WAV = "$PWD/samples/jfk.wav"
-          Write-Host "=== run CPU whisper (expect HANG -> watchdog dump @90s) ==="
-          uv run --no-project --python 3.11 python .github/diag/py_cpu_repro.py --timeout 90
-          Write-Host "posture A exit code: $LASTEXITCODE  (1 == watchdog killed a hang; 0 == it passed)"
+          $hangs = 0
+          for ($i = 1; $i -le 12; $i++) {
+            uv run --no-project --python 3.11 python .github/diag/py_cpu_repro.py --timeout 45 *> "iter_$i.log"
+            if ($LASTEXITCODE -ne 0) { $hangs++; Write-Host "  iter $i: HANG (exit $LASTEXITCODE)" }
+            else { Write-Host "  iter ${i}: pass" }
+          }
+          Write-Host "===== SHARED GGML_OPENMP=OFF result: $hangs / 12 hangs ====="
+          if ($hangs -gt 0) { Get-Content (Get-ChildItem iter_*.log | Select-Object -Last 1) | Select-Object -Last 30 }
           exit 0
-      - name: B) the fix (SHARED, GGML_OPENMP=ON) — expect PASS
+      - name: 2) STATIC + GGML_OPENMP=OFF (control) — C++ e2e under a 90s timeout
         shell: pwsh
         run: |
-          cmake -B build-on -G Ninja -DCMAKE_BUILD_TYPE=Release `
-            -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_USE_OPENMP=OFF -DGGML_OPENMP=ON `
-            -DTRANSCRIBE_INSTALL=ON -DTRANSCRIBE_BUILD_TESTS=OFF `
-            -DTRANSCRIBE_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX="$PWD/install-on"
-          if ($LASTEXITCODE -ne 0) { throw "configure (on) failed" }
-          cmake --build build-on --target install
-          if ($LASTEXITCODE -ne 0) { throw "build (on) failed" }
-          Write-Host "=== GGML_OPENMP cache (expect ON) ==="
-          Select-String -Path build-on/CMakeCache.txt -Pattern 'GGML_OPENMP:'
-          $env:PYTHONPATH = "$PWD/bindings/python/src"
-          $env:TRANSCRIBE_LIBRARY = "$PWD/install-on/bin/transcribe.dll"
-          $env:WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
-          $env:JFK_WAV = "$PWD/samples/jfk.wav"
-          Write-Host "=== run CPU whisper (expect PASS) ==="
-          uv run --no-project --python 3.11 python .github/diag/py_cpu_repro.py --timeout 120
-          if ($LASTEXITCODE -ne 0) { throw "posture B (GGML_OPENMP=ON) should transcribe but did not (exit $LASTEXITCODE)" }
+          cmake -B build-st -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DTRANSCRIBE_USE_OPENMP=OFF -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON `
+            -DTRANSCRIBE_BUILD_TESTS=ON "-DCMAKE_EXE_LINKER_FLAGS=advapi32.lib"
+          if ($LASTEXITCODE -ne 0) { throw "configure (static) failed" }
+          cmake --build build-st --target transcribe_whisper_e2e_smoke
+          if ($LASTEXITCODE -ne 0) { throw "build (static e2e) failed" }
+          Select-String -Path build-st/CMakeCache.txt -Pattern 'GGML_OPENMP:'
+          $exe = (Get-ChildItem -Recurse -Filter transcribe_whisper_e2e_smoke.exe build-st | Select-Object -First 1).FullName
+          $env:TRANSCRIBE_WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
+          Write-Host "=== running static e2e (90s external timeout) ==="
+          $p = Start-Process -FilePath $exe -PassThru -NoNewWindow
+          if (-not $p.WaitForExit(90000)) {
+            Write-Host "===== STATIC GGML_OPENMP=OFF result: HANG (no exit in 90s) ====="
+            $p.Kill()
+          } else {
+            Write-Host "===== STATIC GGML_OPENMP=OFF result: exited $($p.ExitCode) (no hang) ====="
+          }
+          exit 0
