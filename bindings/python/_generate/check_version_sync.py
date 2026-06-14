@@ -42,7 +42,8 @@ BINDING_MANIFESTS = [
     # (relative path, extractor name, active)
     # The Rust crates are real (0.0.1), so they're version-locked. The sys
     # crate's manifest is the repo-root Cargo.toml (it carries the whole C++
-    # tree); the safe wrapper is the sibling member at bindings/rust/safe/.
+    # tree); the safe wrapper is the sibling member at
+    # bindings/rust/transcribe-cpp/.
     ("Cargo.toml", "cargo", True),
     ("bindings/rust/transcribe-cpp/Cargo.toml", "cargo", True),
     ("bindings/typescript/package.json", "npm", False),
