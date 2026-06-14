@@ -1,0 +1,95 @@
+name: diag-py-cpu
+
+# One-off diagnostic: confirm whether the Python WHEEL POSTURE is exposed to the
+# MSVC ggml-cpu barrier deadlock. The official Windows wheels build the SHARED
+# libtranscribe with MSVC + TRANSCRIBE_USE_OPENMP=OFF (-> GGML_OPENMP=OFF, for
+# numpy/torch coexistence) and ship the CPU backend — exactly the posture the
+# Rust binding hit before the GGML_OPENMP-on-MSVC fix.
+#
+# Builds the shared lib BOTH ways and runs a CPU whisper transcription through
+# the ctypes Python binding (TRANSCRIBE_LIBRARY dev-tree load) under a
+# faulthandler watchdog:
+#   A) GGML_OPENMP=OFF (the wheel posture)  -> expect HANG (watchdog dumps @90s)
+#   B) GGML_OPENMP=ON  (the Rust-side fix)  -> expect PASS
+#
+# NOTE: whisper does not apply session n_threads to its ggml graph (it uses the
+# ggml default of 4), so n_threads=1 would NOT avoid the hang for whisper — the
+# decisive axis is OpenMP off/on, which is what this tests.
+#
+# push-triggered, path-scoped. DELETE once the Python wheel CPU-on-Windows
+# posture is decided.
+
+on:
+  push:
+    branches: [rust-bindings]
+    paths:
+      - ".github/workflows/diag-py-cpu.yml"
+      - ".github/diag/py_cpu_repro.py"
+
+concurrency:
+  group: diag-py-cpu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diag:
+    name: diag-py-cpu (windows)
+    runs-on: blacksmith-2vcpu-windows-2025
+    timeout-minutes: 50
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install build deps
+        shell: pwsh
+        run: |
+          choco install ninja --no-progress -y
+          vcpkg install zlib:x64-windows-static-md
+          $zlibPrefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md" -replace '\\','/'
+          Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$zlibPrefix"
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: A) wheel posture (SHARED, GGML_OPENMP=OFF) — expect HANG
+        shell: pwsh
+        run: |
+          cmake -B build-off -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_USE_OPENMP=OFF `
+            -DTRANSCRIBE_INSTALL=ON -DTRANSCRIBE_BUILD_TESTS=OFF `
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX="$PWD/install-off"
+          if ($LASTEXITCODE -ne 0) { throw "configure (off) failed" }
+          cmake --build build-off --target install
+          if ($LASTEXITCODE -ne 0) { throw "build (off) failed" }
+          Write-Host "=== GGML_OPENMP cache (expect OFF) ==="
+          Select-String -Path build-off/CMakeCache.txt -Pattern 'GGML_OPENMP:'
+          $env:PYTHONPATH = "$PWD/bindings/python/src"
+          $env:TRANSCRIBE_LIBRARY = "$PWD/install-off/bin/transcribe.dll"
+          $env:WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
+          $env:JFK_WAV = "$PWD/samples/jfk.wav"
+          Write-Host "=== run CPU whisper (expect HANG -> watchdog dump @90s) ==="
+          uv run --no-project --python 3.11 python .github/diag/py_cpu_repro.py --timeout 90
+          Write-Host "posture A exit code: $LASTEXITCODE  (1 == watchdog killed a hang; 0 == it passed)"
+          exit 0
+      - name: B) the fix (SHARED, GGML_OPENMP=ON) — expect PASS
+        shell: pwsh
+        run: |
+          cmake -B build-on -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_USE_OPENMP=OFF -DGGML_OPENMP=ON `
+            -DTRANSCRIBE_INSTALL=ON -DTRANSCRIBE_BUILD_TESTS=OFF `
+            -DTRANSCRIBE_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX="$PWD/install-on"
+          if ($LASTEXITCODE -ne 0) { throw "configure (on) failed" }
+          cmake --build build-on --target install
+          if ($LASTEXITCODE -ne 0) { throw "build (on) failed" }
+          Write-Host "=== GGML_OPENMP cache (expect ON) ==="
+          Select-String -Path build-on/CMakeCache.txt -Pattern 'GGML_OPENMP:'
+          $env:PYTHONPATH = "$PWD/bindings/python/src"
+          $env:TRANSCRIBE_LIBRARY = "$PWD/install-on/bin/transcribe.dll"
+          $env:WHISPER_MODEL = $env:TRANSCRIBE_SMOKE_MODEL
+          $env:JFK_WAV = "$PWD/samples/jfk.wav"
+          Write-Host "=== run CPU whisper (expect PASS) ==="
+          uv run --no-project --python 3.11 python .github/diag/py_cpu_repro.py --timeout 120
+          if ($LASTEXITCODE -ne 0) { throw "posture B (GGML_OPENMP=ON) should transcribe but did not (exit $LASTEXITCODE)" }
