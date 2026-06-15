@@ -121,7 +121,7 @@ impl Model {
 
         let mut out: *mut sys::transcribe_model = std::ptr::null_mut();
         let status = unsafe { sys::transcribe_model_load_file(c_path.as_ptr(), &params, &mut out) };
-        check(status, &format!("load {}", path.display()))?;
+        check_model_load(status, &format!("load {}", path.display()))?;
         debug_assert!(!out.is_null());
 
         Ok(Model {
@@ -226,6 +226,26 @@ impl Model {
             return Ok(buf);
         }
     }
+}
+
+fn check_model_load(status: sys::transcribe_status, context: &str) -> Result<()> {
+    #[cfg(feature = "dynamic-backends")]
+    {
+        if status == sys::transcribe_status::TRANSCRIBE_ERR_BACKEND
+            && crate::backend::device_count() == 0
+        {
+            let code = status.0 as i32;
+            let base = crate::error::status_string(code);
+            return Err(crate::error::Error::Backend(format!(
+                "{context}: {base} (status {code}); dynamic-backends builds \
+                 require backend modules to be loaded before model load. Call \
+                 transcribe_cpp::init_backends_default() when modules are \
+                 bundled next to libtranscribe, or init_backends(dir) for a \
+                 custom provider directory."
+            )));
+        }
+    }
+    check(status, context)
 }
 
 /// Options for creating a session.

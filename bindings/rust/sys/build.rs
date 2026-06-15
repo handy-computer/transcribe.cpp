@@ -267,11 +267,6 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
             .display()
     );
     println!("cargo:lib_dir={}", lib_dir.display());
-    if json["backend_dl"].as_bool().unwrap_or(false) {
-        if let Some(md) = json["module_dir"].as_str() {
-            println!("cargo:module_dir={}", prefix.join(md).display());
-        }
-    }
 }
 
 /// Copy the installed runtime DLLs (`<prefix>/bin/*.dll` — transcribe.dll plus

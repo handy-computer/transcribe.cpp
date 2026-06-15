@@ -158,6 +158,13 @@ target_compile_definitions(transcribe
         TRANSCRIBE_COMMIT="${TRANSCRIBE_BUILD_COMMIT}"
 )
 
+if(TRANSCRIBE_GGML_BACKEND_DL)
+    target_compile_definitions(transcribe PRIVATE TRANSCRIBE_GGML_BACKEND_DL)
+    if(CMAKE_DL_LIBS)
+        target_link_libraries(transcribe PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+endif()
+
 # Static posture: tell transcribe.h to drop the Windows __declspec(dllimport/
 # export) decoration. PUBLIC so it reaches both this archive's own TUs and any
 # CMake consumer linking `transcribe` (C++ tests/examples) — without it a static

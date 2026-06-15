@@ -753,6 +753,20 @@ TRANSCRIBE_API transcribe_status transcribe_init_backends(
     const char * artifact_dir);
 
 /*
+ * Package-local default for dynamic-backend builds.
+ *
+ * In a dynamic-backend build, resolves the directory containing the loaded
+ * libtranscribe itself and delegates to transcribe_init_backends(dir). This
+ * keeps the search package-local: it does NOT scan the executable directory,
+ * current working directory, or system paths. Ship backend modules next to
+ * libtranscribe for this helper to find them.
+ *
+ * In non-dynamic builds the compute backends are compiled in, so this is a
+ * no-op returning TRANSCRIBE_OK.
+ */
+TRANSCRIBE_API transcribe_status transcribe_init_backends_default(void);
+
+/*
  * Number of compute devices currently registered with the runtime
  * (compiled-in backends plus any modules loaded by
  * transcribe_init_backends). A device is something a model can be placed

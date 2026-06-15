@@ -60,6 +60,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+include(GNUInstallDirs)
+
 # Hidden symbol visibility by default per PLAN.md.
 set(CMAKE_C_VISIBILITY_PRESET       hidden)
 set(CMAKE_CXX_VISIBILITY_PRESET     hidden)
@@ -338,6 +340,20 @@ if(TRANSCRIBE_GGML_BACKEND_DL)
             "(backend modules are shared libraries loaded at runtime)")
     endif()
     set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+    # The package-local default loader resolves the directory that contains
+    # libtranscribe itself. Install backend modules there too, unless a caller
+    # explicitly chose a different provider layout and will pass it to
+    # transcribe_init_backends(dir).
+    #
+    # Test emptiness, not DEFINED: ggml declares GGML_BACKEND_DIR as an empty
+    # cache var of its own, so on any reconfigure it is already DEFINED (as "")
+    # and a `NOT DEFINED CACHE{...}` guard would skip our override, leaving the
+    # modules in ggml's default bin/ where the lib-dir loader cannot find them.
+    # `NOT GGML_BACKEND_DIR` treats an empty/unset value as "ours to set" while
+    # still respecting a non-empty caller-provided path.
+    if(NOT GGML_BACKEND_DIR)
+        set(GGML_BACKEND_DIR "${CMAKE_INSTALL_LIBDIR}" CACHE PATH "" FORCE)
+    endif()
     # ggml hard-errors on GGML_NATIVE + GGML_BACKEND_DL (x86): native tuning
     # is incompatible with feature-scored modules. A module build is a
     # distribution build, so never tune it to the build host.

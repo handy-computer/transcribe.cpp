@@ -48,8 +48,12 @@ README). Backends are selected with cargo features — `metal` (default on Apple
 self-contained link is the default; `shared` links a shared library, and
 `dynamic-backends` ships the compute backends as runtime-loaded modules (the
 multi-ISA CPU / GPU provider posture; implies `shared`, loaded via
-`init_backends_default()`). Any other CMake flag can be passed through
-`TRANSCRIBE_CMAKE_ARGS` — see the `transcribe-cpp-sys` README.
+`init_backends_default()` when the modules sit next to `libtranscribe`). These
+are advanced packaging modes: a distributed binary must arrange for the runtime
+loader to find `libtranscribe`, and either co-locate backend modules with it or
+call `init_backends(dir)` with the bundled module directory before loading a
+model. Any other CMake flag can be passed through `TRANSCRIBE_CMAKE_ARGS` — see
+the `transcribe-cpp-sys` README.
 
 ## Threading
 

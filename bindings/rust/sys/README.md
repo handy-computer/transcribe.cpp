@@ -34,17 +34,20 @@ the `shared` feature links a shared library instead.
   static link.
 - `dynamic-backends` — additionally ship each compute backend (the per-ISA CPU
   tiers, Vulkan, CUDA, …) as a loadable module next to the library, selected at
-  runtime by `transcribe_init_backends()`. Implies `shared`.
+  runtime by `transcribe_init_backends_default()` when the modules sit next to
+  `libtranscribe`, or `transcribe_init_backends(dir)` for a custom provider
+  directory. Implies `shared`.
 
 ## Build-flag escape hatch
 
 The features above cover the common, tested configurations. Anything else CMake
 accepts can be forwarded via the `TRANSCRIBE_CMAKE_ARGS` (or `CMAKE_ARGS`) env
 var — e.g. `TRANSCRIBE_CMAKE_ARGS="-DGGML_VULKAN=ON" cargo build`. These are
-applied after the feature-derived defines (so a user `-D` wins) and are
-unsupported/untested by design: they exist so a Cargo feature is never a hard
-ceiling on what you can configure. The link line is still reconstructed from the
-generated manifest, so whatever you turn on links correctly.
+split on whitespace with simple double-quote handling, applied after the
+feature-derived defines (so a user `-D` wins), and unsupported/untested by
+design: they exist so a Cargo feature is never a hard ceiling on what you can
+configure. The link line is still reconstructed from the generated manifest, so
+whatever you turn on links correctly.
 
 ## ABI drift
 
