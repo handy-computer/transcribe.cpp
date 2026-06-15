@@ -65,10 +65,15 @@ metal = []
 vulkan = []
 cuda = []
 openmp = []
-# `dylib` links a shared libtranscribe (and enables the backend-module /
-# transcribe_init_backends posture). The default is a self-contained static
-# link. See M5 in notes/rust-bindings-plan.md.
-dylib = []
+# `shared` links a shared libtranscribe (.so/.dylib/.dll) loaded at runtime
+# instead of statically baking it into the consumer binary. The default is a
+# self-contained static link. (Renamed from `dylib`.)
+shared = []
+# `dynamic-backends` additionally ships each compute backend (the per-ISA CPU
+# tiers, Vulkan, CUDA, ...) as a loadable module next to the library, selected at
+# runtime by transcribe_init_backends(). Requires a shared library, so it implies
+# `shared`. See notes/rust-dynamic-backends-plan.md.
+dynamic-backends = ["shared"]
 
 [build-dependencies]
 cmake = "0.1"

@@ -8,20 +8,58 @@
 //! hardcoded here (the whisper-rs drift class this avoids).
 //!
 //! Cargo features map directly to CMake options:
-//!   `dylib`  -> TRANSCRIBE_BUILD_SHARED=ON (default: static)
-//!   `metal`  -> TRANSCRIBE_METAL=ON   (Apple targets only; no-op elsewhere)
-//!   `vulkan` -> TRANSCRIBE_VULKAN=ON
-//!   `cuda`   -> TRANSCRIBE_CUDA=ON
-//!   `openmp` -> TRANSCRIBE_USE_OPENMP=ON
+//!   `shared`           -> TRANSCRIBE_BUILD_SHARED=ON (default: static)
+//!   `dynamic-backends` -> the above + TRANSCRIBE_GGML_BACKEND_DL=ON (+ x86:
+//!                         GGML_CPU_ALL_VARIANTS=ON, TRANSCRIBE_X86_CONSERVATIVE=ON)
+//!   `metal`            -> TRANSCRIBE_METAL=ON   (Apple targets only; no-op elsewhere)
+//!   `vulkan`           -> TRANSCRIBE_VULKAN=ON
+//!   `cuda`             -> TRANSCRIBE_CUDA=ON
+//!   `openmp`           -> TRANSCRIBE_USE_OPENMP=ON
 //! Official-artifact hygiene flags (OpenMP/BLAS off) are deliberately NOT
 //! forced here: a source build is the consumer's build (same philosophy as
 //! the Python sdist).
+//!
+//! Escape hatch: anything else CMake accepts can be passed via the
+//! TRANSCRIBE_CMAKE_ARGS (or CMAKE_ARGS) env var — see the passthrough at the
+//! end of main(). This is the "no Cargo feature is a hard ceiling" guarantee.
 
 use std::env;
 use std::path::{Path, PathBuf};
 
 fn feature(name: &str) -> bool {
     env::var_os(format!("CARGO_FEATURE_{name}")).is_some()
+}
+
+/// Split a CMAKE_ARGS-style string into individual arguments, honoring simple
+/// double-quotes so a value containing spaces survives (e.g. `-DFOO="a b"`).
+/// Whitespace-separated otherwise; quotes are stripped from the emitted token.
+fn split_cmake_args(s: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut has_token = false;
+    for c in s.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                has_token = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if has_token {
+                    args.push(std::mem::take(&mut cur));
+                    has_token = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has_token = true;
+            }
+        }
+    }
+    if has_token {
+        args.push(cur);
+    }
+    args
 }
 
 fn main() {
@@ -42,9 +80,15 @@ fn main() {
         println!("cargo:rerun-if-changed={}", root.join(p).display());
     }
 
-    let dylib = feature("DYLIB");
+    // `dynamic-backends` (loadable backend modules) requires a shared library,
+    // so it implies `shared`. The Cargo manifest already encodes that implication
+    // (`dynamic-backends = ["shared"]`), but treat it as load-bearing here too.
+    let dynamic_backends = feature("DYNAMIC_BACKENDS");
+    let shared = feature("SHARED") || dynamic_backends;
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let is_apple = matches!(target_os.as_str(), "macos" | "ios");
+    let is_x86 = matches!(target_arch.as_str(), "x86" | "x86_64");
 
     let mut cfg = cmake::Config::new(&root);
     cfg.profile("Release") // a transcription library always wants an optimized native core
@@ -52,7 +96,23 @@ fn main() {
         .define("TRANSCRIBE_BUILD_TESTS", "OFF")
         .define("TRANSCRIBE_BUILD_EXAMPLES", "OFF")
         .define("TRANSCRIBE_BUILD_TOOLS", "OFF")
-        .define("TRANSCRIBE_BUILD_SHARED", if dylib { "ON" } else { "OFF" });
+        .define("TRANSCRIBE_BUILD_SHARED", if shared { "ON" } else { "OFF" });
+
+    // Dynamic backend modules: each compute backend becomes a loadable module
+    // next to libtranscribe, picked at runtime by transcribe_init_backends().
+    // The root CMakeLists validates BACKEND_DL => SHARED and force-sets
+    // GGML_NATIVE=OFF, so this just flips the knobs. On x86, fan the CPU backend
+    // out into one module per ISA tier (runtime feature scoring) over the
+    // SIGILL-safe x86 floor — the same posture the Linux/Windows cpu-vulkan
+    // wheel lane ships. ALL_VARIANTS is an x86 concept; on arm a DL build is a
+    // single portable CPU module.
+    if dynamic_backends {
+        cfg.define("TRANSCRIBE_GGML_BACKEND_DL", "ON");
+        if is_x86 {
+            cfg.define("GGML_CPU_ALL_VARIANTS", "ON");
+            cfg.define("TRANSCRIBE_X86_CONSERVATIVE", "ON");
+        }
+    }
 
     // Metal: on Apple, set TRANSCRIBE_METAL EXPLICITLY to track the `metal`
     // feature. CMake defaults TRANSCRIBE_METAL ON on Apple Silicon, so without an
@@ -99,6 +159,23 @@ fn main() {
     // "OpenMP — CENTRAL POLICY" block of the root CMakeLists.txt.
     if target_os == "windows" {
         cfg.define("GGML_OPENMP", "ON");
+    }
+
+    // Escape hatch: forward arbitrary configure args so the curated features are
+    // never a hard ceiling. Anything CMake accepts (-DGGML_*, a -DTRANSCRIBE_*
+    // the features don't cover, a toolchain define, ...) can be passed via
+    // TRANSCRIBE_CMAKE_ARGS / CMAKE_ARGS. Fed AFTER the feature-derived defines
+    // so a user -D wins on the first configure. Unsupported/untested by design —
+    // it exists so a consumer is never blocked. The link line is still
+    // reconstructed from the regenerated manifest, so whatever this turns on is
+    // linked correctly with no per-flag knowledge here.
+    for var in ["TRANSCRIBE_CMAKE_ARGS", "CMAKE_ARGS"] {
+        println!("cargo:rerun-if-env-changed={var}");
+        if let Ok(extra) = env::var(var) {
+            for arg in split_cmake_args(&extra) {
+                cfg.configure_arg(arg);
+            }
+        }
     }
 
     // Builds + installs into OUT_DIR; the returned path IS the install prefix.
@@ -200,7 +277,7 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
 /// Copy the installed runtime DLLs (`<prefix>/bin/*.dll` — transcribe.dll plus
 /// the ggml DLLs) next to every artifact cargo will build, so a shared-posture
 /// consumer's tests/examples/bins find them with no rpath (Windows has none)
-/// and no PATH fiddling. Windows + `dylib` only; a no-op anywhere else.
+/// and no PATH fiddling. Windows + `shared` only; a no-op anywhere else.
 ///
 /// Windows resolves a process's DLLs from the EXE's own directory first, and
 /// cargo emits tests into `deps/`, examples into `examples/`, and bins into the
@@ -220,7 +297,7 @@ fn stage_windows_dlls(prefix: &Path) {
     };
     if dlls.is_empty() {
         println!(
-            "cargo:warning=transcribe-cpp-sys: no DLLs under {} to stage for the dylib posture",
+            "cargo:warning=transcribe-cpp-sys: no DLLs under {} to stage for the shared posture",
             bin_dir.display()
         );
         return;

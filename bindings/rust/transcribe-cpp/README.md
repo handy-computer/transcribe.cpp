@@ -45,7 +45,11 @@ crate is the safe wrapper on top of it.
 The native library is built from source by `transcribe-cpp-sys` (see its
 README). Backends are selected with cargo features — `metal` (default on Apple),
 `vulkan`, `cuda`, `openmp` — forwarded to the underlying build. A static,
-self-contained link is the default; `dylib` links a shared library.
+self-contained link is the default; `shared` links a shared library, and
+`dynamic-backends` ships the compute backends as runtime-loaded modules (the
+multi-ISA CPU / GPU provider posture; implies `shared`, loaded via
+`init_backends_default()`). Any other CMake flag can be passed through
+`TRANSCRIBE_CMAKE_ARGS` — see the `transcribe-cpp-sys` README.
 
 ## Threading
 

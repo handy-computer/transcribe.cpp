@@ -23,7 +23,12 @@ metal = ["transcribe-cpp-sys/metal"]
 vulkan = ["transcribe-cpp-sys/vulkan"]
 cuda = ["transcribe-cpp-sys/cuda"]
 openmp = ["transcribe-cpp-sys/openmp"]
-dylib = ["transcribe-cpp-sys/dylib"]
+# `shared` links a shared libtranscribe; `dynamic-backends` additionally ships
+# each compute backend as a runtime-loaded module (and implies `shared`, both
+# here so CARGO_FEATURE_SHARED is set for this crate's build.rs rpath gate, and
+# via the -sys feature). See notes/rust-dynamic-backends-plan.md.
+shared = ["transcribe-cpp-sys/shared"]
+dynamic-backends = ["shared", "transcribe-cpp-sys/dynamic-backends"]
 
 [dependencies]
 # default-features = false so the safe crate's own features are the ONLY control

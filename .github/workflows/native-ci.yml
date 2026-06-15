@@ -16,7 +16,7 @@ name: native-ci
 #                         hand-assembled provider directory, plus the
 #                         link-smoke in the shared/DL posture (the toy
 #                         consumer drives transcribe_init_backends on the
-#                         installed module dir — the Rust dylib-mode shape).
+#                         installed module dir — the Rust dynamic-backends shape).
 #   - posture-lint:       the wheel-preset <-> pyproject-lane mirror gate
 #                         (scripts/ci/check_lane_mirror.py): anchored lane
 #                         regexes + settled-posture equality. The 2026-06-12
@@ -186,7 +186,7 @@ jobs:
     # Before the build tree is deleted, the shared/DL leg of the link smoke
     # runs against `cmake --install` output: the toy consumer links
     # libtranscribe alone and drives transcribe_init_backends() on the
-    # installed module directory — the exact shape a Rust dylib-feature
+    # installed module directory — the exact shape a Rust dynamic-backends
     # consumer has.
     runs-on: blacksmith-2vcpu-ubuntu-2404
     env:

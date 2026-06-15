@@ -10,9 +10,17 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use transcribe_cpp::{backend_available, devices, Backend, Model, ModelOptions};
+use transcribe_cpp::{
+    backend_available, devices, init_backends_default, Backend, Model, ModelOptions,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Register backend modules before anything else. A no-op in a compiled-in
+    // build; in a `dynamic-backends` build it loads the per-ISA CPU / GPU
+    // modules so the device list below reflects what actually registered. Must
+    // happen once, before the first model load.
+    init_backends_default()?;
+
     println!("registered compute devices:");
     for d in devices() {
         println!("  {} [{}] — {}", d.name, d.kind, d.description);

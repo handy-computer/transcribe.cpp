@@ -5,7 +5,7 @@ mod common;
 
 use transcribe_cpp::{
     abi_struct_size, backend_available, compiled_version, device_count, devices, header_hash,
-    version, AbiStruct, Backend, Error, Model,
+    init_backends_default, version, AbiStruct, Backend, Error, Model,
 };
 
 #[test]
@@ -39,7 +39,10 @@ fn abi_struct_sizes_are_live() {
 
 #[test]
 fn at_least_a_cpu_device() {
-    // A static build always has the CPU backend compiled in and registered.
+    // A compiled-in build has the CPU backend registered already; a
+    // dynamic-backends build registers it once the modules load. Establish it in
+    // every posture, then assert the floor.
+    init_backends_default().expect("init_backends_default");
     assert!(device_count() >= 1);
     assert!(backend_available(Backend::Cpu));
     let devices = devices();
@@ -48,6 +51,9 @@ fn at_least_a_cpu_device() {
 
 #[test]
 fn missing_file_is_not_found() {
+    // Register backends first so a dynamic-backends build reaches the file check
+    // (a zero-device load would otherwise fail on the backend, not the path).
+    init_backends_default().expect("init_backends_default");
     let err = Model::load("/no/such/model.gguf").unwrap_err();
     assert!(
         matches!(err, Error::ModelFileNotFound(_)),
@@ -58,6 +64,7 @@ fn missing_file_is_not_found() {
 
 #[test]
 fn junk_file_is_model_load_error() {
+    init_backends_default().expect("init_backends_default");
     let dir = std::env::temp_dir();
     let path = dir.join("transcribe-rs-junk.gguf");
     std::fs::write(&path, b"not a gguf file at all").unwrap();

@@ -9,11 +9,13 @@ name: rust-ci
 #                  version-sync, the cargo-package content/size audit, and
 #                  rustfmt. No native build — fast, runs everywhere.
 #   - rust-build:  the real source build (build.rs drives the vendored CMake
-#                  tree, links from lib/transcribe-link.json) in the STATIC
-#                  default posture on linux + macos + windows, then the -sys
-#                  smoke tests (transcribe_version / abi-struct-size through the
-#                  FFI), the safe-crate conformance suite, and clippy. Dynamic
-#                  (dylib) posture joins at M5.
+#                  tree, links from lib/transcribe-link.json) across the posture
+#                  matrix on linux + macos + windows, then the -sys smoke tests
+#                  (transcribe_version / abi-struct-size through the FFI), the
+#                  safe-crate conformance suite, and clippy. Postures: STATIC
+#                  (default), SHARED (shared libtranscribe), and DYNAMIC-BACKENDS
+#                  (linux: shared + loadable per-ISA backend modules, exercised
+#                  through transcribe_init_backends from Rust).
 #
 # Two test tiers (requirements §4): the no-model tests (version/ABI/error
 # mapping/device discovery, in tests/no_model.rs) always run, including on
@@ -86,42 +88,55 @@ jobs:
     name: rust-build (${{ matrix.label }})
     strategy:
       fail-fast: false
-      # Posture matrix: {static, dylib} × {linux, macos, windows}. `features` is
-      # forwarded verbatim to the build/test cargo commands ("" = the static
-      # default; "--features dylib" = a shared libtranscribe). The dylib leg is
-      # the end-to-end proof of the shared-link posture: its tests load
-      # libtranscribe at runtime via the rpath the safe crate's build.rs emits
-      # on Unix, and on Windows (which has no rpath) via the -sys build.rs
-      # staging transcribe.dll + the ggml DLLs next to each cargo artifact.
+      # Posture matrix: {static, shared} × {linux, macos, windows}, plus a
+      # linux dynamic-backends leg. `features` is forwarded verbatim to the
+      # build/test cargo commands ("" = the static default; "--features shared"
+      # = a shared libtranscribe; "--features dynamic-backends" = shared +
+      # loadable backend modules). The shared leg is the end-to-end proof of the
+      # shared-link posture: its tests load libtranscribe at runtime via the
+      # rpath the safe crate's build.rs emits on Unix, and on Windows (which has
+      # no rpath) via the -sys build.rs staging transcribe.dll + the ggml DLLs
+      # next to each cargo artifact. The dynamic-backends leg additionally proves
+      # the loadable-module path: the build configures GGML_BACKEND_DL +
+      # (x86) GGML_CPU_ALL_VARIANTS, and the tests/examples call
+      # init_backends_default() to load the per-ISA CPU module and transcribe.
       matrix:
         include:
           - label: linux-static
             runner: blacksmith-2vcpu-ubuntu-2404
             features: ""
-          - label: linux-dylib
+          - label: linux-shared
             runner: blacksmith-2vcpu-ubuntu-2404
-            features: "--features dylib"
+            features: "--features shared"
+          # Loadable per-ISA backend modules (the multi-ISA CPU provider posture)
+          # exercised through Rust: build.rs turns on BACKEND_DL + CPU_ALL_VARIANTS
+          # on x86, the modules install into the -sys prefix, and the safe crate's
+          # init_backends_default() loads them. CPU-only (no Vulkan SDK needed);
+          # the C-level Vulkan degradation three-tier stays in native-ci.
+          - label: linux-dynamic-backends
+            runner: blacksmith-2vcpu-ubuntu-2404
+            features: "--features dynamic-backends"
           # macOS arm64 on the bare-metal M4 mini (all macOS arm64 CI on owned
           # hardware; the source build turns Metal on, and real hardware is the
           # trustworthy place to exercise it). Same posture as native-ci.
           - label: macos-arm64-static
             runner: [self-hosted, macOS, ARM64]
             features: ""
-          - label: macos-arm64-dylib
+          - label: macos-arm64-shared
             runner: [self-hosted, macOS, ARM64]
-            features: "--features dylib"
+            features: "--features shared"
           # Windows / MSVC (Blacksmith windows-2025, same image family as the
           # wheel lane). First cargo-driven MSVC build of this tree; no ccache
           # here (MSVC + ccache is fiddly), so every run is a cold ggml build —
           # hence the wider timeout. sccache is a later optimization. Both
-          # postures: static is self-contained; dylib links transcribe.dll (the
+          # postures: static is self-contained; shared links transcribe.dll (the
           # -sys build.rs stages the DLLs next to the test/example binaries).
           - label: windows-static
             runner: blacksmith-2vcpu-windows-2025
             features: ""
-          - label: windows-dylib
+          - label: windows-shared
             runner: blacksmith-2vcpu-windows-2025
-            features: "--features dylib"
+            features: "--features shared"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -189,9 +204,9 @@ jobs:
           key: ccache-rust-build-${{ matrix.label }}-${{ env.CPU_SIG }}-${{ github.sha }}
           restore-keys: ccache-rust-build-${{ matrix.label }}-${{ env.CPU_SIG }}-
       # Package-scoped (not --workspace): a single posture's native build, and
-      # it sidesteps `--features dylib` choking on the xtask member, which has
-      # no such feature. xtask is compiled/run in rust-gates (the bindgen check).
-      - name: Build (${{ matrix.features == '' && 'static' || 'dylib' }} posture; build.rs drives CMake)
+      # it sidesteps the backend features choking on the xtask member, which has
+      # none. xtask is compiled/run in rust-gates (the bindgen check).
+      - name: Build (${{ matrix.label }} posture; build.rs drives CMake)
         run: cargo build -p transcribe-cpp ${{ matrix.features }} --verbose
       - name: "-sys smoke (transcribe_version / abi size through the FFI)"
         run: cargo test -p transcribe-cpp-sys ${{ matrix.features }}
@@ -217,7 +232,7 @@ jobs:
             cargo run -p transcribe-cpp --example "$ex" ${{ matrix.features }}
           done
       - name: Clippy (deny warnings)
-        # Once is enough; the linux-static leg covers it (clippy on the dylib
+        # Once is enough; the linux-static leg covers it (clippy on another
         # leg would force a second full native build for no extra lint signal).
         if: matrix.label == 'linux-static'
         run: cargo clippy --workspace --all-targets -- -D warnings

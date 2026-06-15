@@ -23,15 +23,28 @@ A C++ toolchain, **CMake**, and **zlib**. zlib is system-provided on Linux
 `vcpkg install zlib:x64-windows-static-md` (static lib against the dynamic CRT,
 matching Rust's default `/MD` on `x86_64-pc-windows-msvc`) and point
 `CMAKE_PREFIX_PATH` at the vcpkg install tree. The static link is the default;
-the `dylib` feature links a shared library instead.
+the `shared` feature links a shared library instead.
 
 ## Features
 
 - `metal` (default on Apple), `vulkan`, `cuda`, `openmp` — each forwards to the
   matching `TRANSCRIBE_*` CMake option.
-- `dylib` — link a shared `libtranscribe` (and the backend-module /
-  `transcribe_init_backends` posture). The default is a self-contained static
-  link.
+- `shared` — link a shared `libtranscribe` (`.so`/`.dylib`/`.dll`) loaded at
+  runtime instead of statically baking it in. The default is a self-contained
+  static link.
+- `dynamic-backends` — additionally ship each compute backend (the per-ISA CPU
+  tiers, Vulkan, CUDA, …) as a loadable module next to the library, selected at
+  runtime by `transcribe_init_backends()`. Implies `shared`.
+
+## Build-flag escape hatch
+
+The features above cover the common, tested configurations. Anything else CMake
+accepts can be forwarded via the `TRANSCRIBE_CMAKE_ARGS` (or `CMAKE_ARGS`) env
+var — e.g. `TRANSCRIBE_CMAKE_ARGS="-DGGML_VULKAN=ON" cargo build`. These are
+applied after the feature-derived defines (so a user `-D` wins) and are
+unsupported/untested by design: they exist so a Cargo feature is never a hard
+ceiling on what you can configure. The link line is still reconstructed from the
+generated manifest, so whatever you turn on links correctly.
 
 ## ABI drift
 

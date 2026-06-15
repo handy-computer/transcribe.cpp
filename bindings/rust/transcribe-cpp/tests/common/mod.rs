@@ -8,6 +8,19 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
+use std::sync::Once;
+
+/// Register backend modules before the first model load. Idempotent and a no-op
+/// in compiled-in (static / plain `shared`) builds; in a `dynamic-backends`
+/// build it loads the per-ISA CPU / GPU modules the native build installed —
+/// without it a model load in that posture finds zero devices. Folded into the
+/// fixture resolvers below so every model-gated test gets it for free.
+fn ensure_backends() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        transcribe_cpp::init_backends_default().expect("init_backends_default");
+    });
+}
 
 /// Repo root: walk up from this crate until we find the marker that only the
 /// repo root carries (immune to how deep the crate dir is nested).
@@ -21,6 +34,7 @@ pub fn repo_root() -> PathBuf {
 
 /// The smoke model path, or `None` when the GGUF is not present.
 pub fn smoke_model() -> Option<PathBuf> {
+    ensure_backends();
     let path = std::env::var_os("TRANSCRIBE_SMOKE_MODEL")
         .map(PathBuf::from)
         .unwrap_or_else(|| repo_root().join("models/whisper-tiny.en/whisper-tiny.en-Q5_K_M.gguf"));
@@ -37,6 +51,7 @@ pub fn smoke_audio() -> Option<Vec<f32>> {
 
 /// The streaming smoke model (moonshine-streaming-tiny), or `None` if absent.
 pub fn smoke_streaming_model() -> Option<PathBuf> {
+    ensure_backends();
     let path = std::env::var_os("TRANSCRIBE_SMOKE_STREAMING_MODEL")
         .map(PathBuf::from)
         .unwrap_or_else(|| {

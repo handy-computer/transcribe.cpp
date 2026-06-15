@@ -1,10 +1,12 @@
 //! Backend module loading and compute-device discovery.
 //!
-//! In a static build the compiled-in backends are already registered and
-//! [`init_backends`] is a harmless no-op. In a dynamic (`dylib` feature) build
-//! the compute backends are loadable modules; a host points the library at the
-//! provider directory ONCE, before the first model load. See the C header's
-//! backend-module section for the degradation contract.
+//! In a static (or plain `shared`) build the compiled-in backends are already
+//! registered and [`init_backends`] is a harmless no-op. In a `dynamic-backends`
+//! build the compute backends are loadable modules; a host points the library at
+//! the provider directory ONCE, before the first model load — use
+//! [`init_backends_default`] for the source-build case, or [`init_backends`] with
+//! an explicit directory for a shipped app. See the C header's backend-module
+//! section for the degradation contract.
 
 use std::ffi::CString;
 use std::path::Path;
@@ -41,6 +43,30 @@ pub fn init_backends(dir: impl AsRef<Path>) -> Result<()> {
     let c_dir = CString::new(crate::model::path_bytes(dir)?)?;
     let status = unsafe { sys::transcribe_init_backends(c_dir.as_ptr()) };
     check(status, "init_backends")
+}
+
+/// Load the backend modules the way the build expects, with no caller-supplied
+/// path.
+///
+/// - **Compiled-in builds** (the default static build, or a plain `shared`
+///   build): a no-op returning `Ok(())` — the backends are already registered.
+/// - **`dynamic-backends` builds**: loads modules from the directory the native
+///   build installed them into (forwarded at compile time as
+///   `TRANSCRIBE_MODULE_DIR`). This is valid for tests, examples, and binaries
+///   run in place against a source build.
+///
+/// A relocated or distributed binary should NOT rely on this: the compile-time
+/// directory is the build's install prefix, which may not exist on the target
+/// machine. Bundle the module directory next to your executable and call
+/// [`init_backends`] with that resolved path instead. Like [`init_backends`],
+/// this is idempotent and must run once before the first model load.
+pub fn init_backends_default() -> Result<()> {
+    match option_env!("TRANSCRIBE_MODULE_DIR") {
+        // dynamic-backends build: the native install recorded its module dir.
+        Some(dir) => init_backends(dir),
+        // Compiled-in backends: nothing to load.
+        None => Ok(()),
+    }
 }
 
 /// The number of compute devices currently registered.

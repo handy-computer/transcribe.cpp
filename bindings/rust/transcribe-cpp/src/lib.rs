@@ -57,7 +57,9 @@ mod streaming;
 mod types;
 mod version;
 
-pub use backend::{backend_available, device_count, devices, init_backends, Device};
+pub use backend::{
+    backend_available, device_count, devices, init_backends, init_backends_default, Device,
+};
 pub use cancel::CancelToken;
 pub use error::{Error, Result};
 pub use family::{

@@ -11,6 +11,14 @@
 
 use std::path::PathBuf;
 
+/// Register backend modules before the first model load (idempotent; a no-op in
+/// compiled-in builds, loads the per-ISA CPU / GPU modules in a `dynamic-backends`
+/// build). Folded into the model resolvers so every example works in every
+/// posture; `backend-select` also calls it explicitly to demonstrate the pattern.
+fn ensure_backends() {
+    transcribe_cpp::init_backends_default().expect("init_backends_default");
+}
+
 /// Repo root: walk up from this crate until the marker only the root carries.
 pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -22,6 +30,7 @@ pub fn repo_root() -> PathBuf {
 
 /// The offline model: `arg` | `$TRANSCRIBE_SMOKE_MODEL` | in-repo whisper canary.
 pub fn model_path(arg: Option<&str>) -> Option<PathBuf> {
+    ensure_backends();
     resolve(
         arg,
         "TRANSCRIBE_SMOKE_MODEL",
@@ -31,6 +40,7 @@ pub fn model_path(arg: Option<&str>) -> Option<PathBuf> {
 
 /// The streaming model: `arg` | `$TRANSCRIBE_SMOKE_STREAMING_MODEL` | canary.
 pub fn streaming_model_path(arg: Option<&str>) -> Option<PathBuf> {
+    ensure_backends();
     resolve(
         arg,
         "TRANSCRIBE_SMOKE_STREAMING_MODEL",
