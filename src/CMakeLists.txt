@@ -158,6 +158,23 @@ target_compile_definitions(transcribe
         TRANSCRIBE_COMMIT="${TRANSCRIBE_BUILD_COMMIT}"
 )
 
+if(TRANSCRIBE_GGML_BACKEND_DL)
+    target_compile_definitions(transcribe PRIVATE TRANSCRIBE_GGML_BACKEND_DL)
+    if(CMAKE_DL_LIBS)
+        target_link_libraries(transcribe PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+endif()
+
+# Static posture: tell transcribe.h to drop the Windows __declspec(dllimport/
+# export) decoration. PUBLIC so it reaches both this archive's own TUs and any
+# CMake consumer linking `transcribe` (C++ tests/examples) — without it a static
+# MSVC consumer that includes transcribe.h links against __imp_* thunks the
+# archive never provides (LNK2019). Bindgen/Python FFIs carry no __declspec and
+# are unaffected. No-op off Windows/MSVC (the header guard is _WIN32-only).
+if(NOT TRANSCRIBE_BUILD_SHARED)
+    target_compile_definitions(transcribe PUBLIC TRANSCRIBE_STATIC)
+endif()
+
 # ggml is the runtime substrate. Linked PRIVATE because the public header
 # stays ggml-free (callers never include <ggml.h>).
 target_link_libraries(transcribe
@@ -219,6 +236,20 @@ set_target_properties(transcribe PROPERTIES
 # token-id loops). System zlib is ubiquitous; compile fails if absent.
 find_package(ZLIB REQUIRED)
 target_link_libraries(transcribe PRIVATE ZLIB::ZLIB)
+
+# Export the resolved zlib archive for the install link manifest
+# (cmake/transcribe-install.cmake, top-level scope). On Windows the static
+# consumer must link zlib by file (vcpkg spells it zlib.lib, not z), but
+# ZLIB::ZLIB is a subdirectory-local imported target and ZLIB_LIBRARY is a
+# normal var in THIS scope — neither is visible there, so stash the path now.
+if(WIN32)
+    set(_transcribe_zlib "${ZLIB_LIBRARY_RELEASE}")
+    if(NOT _transcribe_zlib)
+        set(_transcribe_zlib "${ZLIB_LIBRARY}")
+    endif()
+    set(TRANSCRIBE_ZLIB_ARCHIVE "${_transcribe_zlib}"
+        CACHE INTERNAL "resolved zlib archive for the install link manifest")
+endif()
 
 if(WIN32)
     # Windows toolchains hide M_PI and friends behind _USE_MATH_DEFINES

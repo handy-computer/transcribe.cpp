@@ -23,6 +23,8 @@
 
 #include "transcribe.h"
 
+#include <math.h> /* INFINITY (MSVC rejects a constant 1.0/0.0 — error C2124) */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,8 +44,8 @@ extern "C" {
  *   Check shape "X > thold"  →  disable with +INF (_THOLD_DISABLED).
  *   Check shape "X < thold"  →  disable with -INF (_LOGPROB_DISABLED).
  */
-#define TRANSCRIBE_WHISPER_THOLD_DISABLED   ((float) (1.0 / 0.0))  /* +INF */
-#define TRANSCRIBE_WHISPER_LOGPROB_DISABLED ((float) (-1.0 / 0.0)) /* -INF */
+#define TRANSCRIBE_WHISPER_THOLD_DISABLED   ((float) INFINITY)   /* +INF */
+#define TRANSCRIBE_WHISPER_LOGPROB_DISABLED ((float) -INFINITY)  /* -INF */
 
 /*
  * How an initial prompt composes with condition_on_prev_tokens on

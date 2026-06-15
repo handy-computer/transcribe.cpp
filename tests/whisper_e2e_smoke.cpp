@@ -13,10 +13,13 @@
 
 #include <sys/stat.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR

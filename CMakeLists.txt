@@ -60,6 +60,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+include(GNUInstallDirs)
+
 # Hidden symbol visibility by default per PLAN.md.
 set(CMAKE_C_VISIBILITY_PRESET       hidden)
 set(CMAKE_CXX_VISIBILITY_PRESET     hidden)
@@ -281,11 +283,35 @@ if(TRANSCRIBE_X86_CONSERVATIVE)
     endforeach()
 endif()
 
-# OpenMP: ggml defaults GGML_OPENMP ON and probes for it gracefully, so leave
-# ggml's own default in place when we want OpenMP. Only force it OFF (matching
-# the GGML_OPENMP=OFF posture official wheels use) when OpenMP is switched off,
-# so one TRANSCRIBE_USE_OPENMP knob covers ggml and our host-decoder TU.
-if(NOT TRANSCRIBE_USE_OPENMP)
+# OpenMP — CENTRAL POLICY (read before changing the Windows/MSVC threading).
+#
+# ggml defaults GGML_OPENMP ON and probes for it gracefully, so leave ggml's own
+# default in place when we want OpenMP. Only force it OFF (matching the
+# GGML_OPENMP=OFF posture official wheels use) when OpenMP is switched off, so
+# one TRANSCRIBE_USE_OPENMP knob covers ggml and our host-decoder TU.
+#
+# The catch: ggml's NON-OpenMP CPU threadpool barrier (ggml_barrier's custom
+# spin path) DEADLOCKS under MSVC codegen on Windows — any multi-threaded CPU
+# run wedges its workers in the barrier spin (it works on every other compiler).
+# OpenMP's `#pragma omp barrier` is the only working multi-threaded CPU path on
+# MSVC. But OpenMP is a per-CONSUMER tradeoff, not a global flag, so this is not
+# one switch — it is a deliberate, documented split:
+#
+#   - Rust binding (CPU is its default backend, standalone process): MUST have
+#     OpenMP on Windows. Its build.rs passes -DGGML_OPENMP=ON; the guard below
+#     honors that explicit value. MSVC auto-links vcomp via the /openmp pragma in
+#     the ggml objects (no -fopenmp flag, so the link manifest is untouched);
+#     vcomp140.dll ships in the VC++ runtime the binary already needs.
+#   - Python wheels (default to the Vulkan GPU backend; deliberately vendor NO
+#     OpenMP so ggml's runtime cannot collide with numpy/torch's own OpenMP/MKL
+#     in one process — see python-wheels.yml): leave GGML_OPENMP unset and get
+#     the force-off below. KNOWN LIMITATION as a consequence: multi-threaded CPU
+#     compute on Windows is unsupported for the wheels (they use Vulkan). Lifting
+#     it needs a non-OpenMP fix (e.g. single-threaded CPU on Windows, or patching
+#     ggml's barrier) rather than forcing OpenMP and the coexistence hazard back.
+#
+# So: honor an explicit -DGGML_OPENMP=... (the Rust opt-in); otherwise force OFF.
+if(NOT TRANSCRIBE_USE_OPENMP AND NOT DEFINED CACHE{GGML_OPENMP})
     set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 endif()
 
@@ -314,6 +340,20 @@ if(TRANSCRIBE_GGML_BACKEND_DL)
             "(backend modules are shared libraries loaded at runtime)")
     endif()
     set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+    # The package-local default loader resolves the directory that contains
+    # libtranscribe itself. Install backend modules there too, unless a caller
+    # explicitly chose a different provider layout and will pass it to
+    # transcribe_init_backends(dir).
+    #
+    # Test emptiness, not DEFINED: ggml declares GGML_BACKEND_DIR as an empty
+    # cache var of its own, so on any reconfigure it is already DEFINED (as "")
+    # and a `NOT DEFINED CACHE{...}` guard would skip our override, leaving the
+    # modules in ggml's default bin/ where the lib-dir loader cannot find them.
+    # `NOT GGML_BACKEND_DIR` treats an empty/unset value as "ours to set" while
+    # still respecting a non-empty caller-provided path.
+    if(NOT GGML_BACKEND_DIR)
+        set(GGML_BACKEND_DIR "${CMAKE_INSTALL_LIBDIR}" CACHE PATH "" FORCE)
+    endif()
     # ggml hard-errors on GGML_NATIVE + GGML_BACKEND_DL (x86): native tuning
     # is incompatible with feature-scored modules. A module build is a
     # distribution build, so never tune it to the build host.

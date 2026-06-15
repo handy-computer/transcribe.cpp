@@ -173,7 +173,14 @@
 
 #ifndef TRANSCRIBE_API
 #  if defined(_WIN32) && !defined(__GNUC__)
-#    ifdef TRANSCRIBE_BUILD
+#    if defined(TRANSCRIBE_STATIC)
+       /* Static archive (lib build or static consumer): no dllimport/export.
+        * A consumer linking the static transcribe.lib must NOT see dllimport
+        * or the linker chases __imp_* thunks the archive never provides
+        * (LNK2019). The static `transcribe` CMake target propagates this
+        * PUBLIC; non-CMake static consumers define it themselves. */
+#      define TRANSCRIBE_API
+#    elif defined(TRANSCRIBE_BUILD)
 #      define TRANSCRIBE_API __declspec(dllexport)
 #    else
 #      define TRANSCRIBE_API __declspec(dllimport)
@@ -744,6 +751,20 @@ typedef enum {
  */
 TRANSCRIBE_API transcribe_status transcribe_init_backends(
     const char * artifact_dir);
+
+/*
+ * Package-local default for dynamic-backend builds.
+ *
+ * In a dynamic-backend build, resolves the directory containing the loaded
+ * libtranscribe itself and delegates to transcribe_init_backends(dir). This
+ * keeps the search package-local: it does NOT scan the executable directory,
+ * current working directory, or system paths. Ship backend modules next to
+ * libtranscribe for this helper to find them.
+ *
+ * In non-dynamic builds the compute backends are compiled in, so this is a
+ * no-op returning TRANSCRIBE_OK.
+ */
+TRANSCRIBE_API transcribe_status transcribe_init_backends_default(void);
 
 /*
  * Number of compute devices currently registered with the runtime

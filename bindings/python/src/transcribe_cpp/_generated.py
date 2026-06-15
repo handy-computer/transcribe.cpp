@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "0007af60bfcecf7e"
+PUBLIC_HEADER_HASH = "fe9ed398c408e5d9"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -276,6 +276,8 @@ def configure(lib):
     lib.transcribe_get_word.argtypes = [_c.c_void_p, _c.c_int, _c.POINTER(transcribe_word)]
     lib.transcribe_init_backends.restype = _c.c_int
     lib.transcribe_init_backends.argtypes = [_c.c_char_p]
+    lib.transcribe_init_backends_default.restype = _c.c_int
+    lib.transcribe_init_backends_default.argtypes = []
     lib.transcribe_log_set.restype = None
     lib.transcribe_log_set.argtypes = [_c.CFUNCTYPE(None, _c.c_int, _c.c_char_p, _c.c_void_p), _c.c_void_p]
     lib.transcribe_model_accepts_ext_kind.restype = _c.c_bool

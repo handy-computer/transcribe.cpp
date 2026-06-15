@@ -37,6 +37,18 @@
 
 #include "arch/whisper/bin_load.h"
 
+#if defined(TRANSCRIBE_GGML_BACKEND_DL) && defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(TRANSCRIBE_GGML_BACKEND_DL)
+#include <dlfcn.h>
+#endif
+
 #include <sys/stat.h>
 
 // MSVC's <sys/stat.h> has the _S_IFDIR mode bits but not the POSIX
@@ -713,7 +725,85 @@ static bool valid_stream_commit_policy(int policy) {
 // unnamed namespace; gcc gives them internal linkage, which strips them
 // from the shared library on Linux (undefined references at link).
 
+// ggml's MSVC timer (ggml_time_us/ms in ggml.c) divides QueryPerformanceCounter
+// by a global frequency that ggml_time_init() fills in from
+// QueryPerformanceFrequency. ggml_init() calls it on first use, but every
+// family times its own load (`ggml_time_us()` at the top of <family>_load)
+// BEFORE any ggml context exists — so on Windows/MSVC the divisor is still 0
+// and model load faults with STATUS_INTEGER_DIVIDE_BY_ZERO (0xC0000094). POSIX
+// ggml_time_* read clock_gettime directly (no divisor) so the missing init is
+// silently harmless there; arm64 masks integer ÷0 as 0. ggml.h documents
+// ggml_time_init() as "call this once at the beginning of the program" — do
+// exactly that at the first public entry point.
+static void ensure_ggml_time_init() {
+    static std::once_flag once;
+    std::call_once(once, [] { ggml_time_init(); });
+}
+
+#if defined(TRANSCRIBE_GGML_BACKEND_DL)
+static std::filesystem::path library_self_dir() {
+#if defined(_WIN32)
+    HMODULE module = nullptr;
+    const auto flags =
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+    if (!GetModuleHandleExW(
+            flags,
+            reinterpret_cast<LPCWSTR>(&transcribe_init_backends_default),
+            &module))
+    {
+        return {};
+    }
+
+    std::wstring path(1024, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(
+            module, path.data(), static_cast<DWORD>(path.size()));
+        if (n == 0) {
+            return {};
+        }
+        if (n < path.size()) {
+            path.resize(n);
+            break;
+        }
+        if (path.size() >= 32768) {
+            return {};
+        }
+        path.resize(path.size() * 2);
+    }
+    return std::filesystem::path(path).parent_path();
+#else
+    Dl_info info {};
+    if (dladdr(reinterpret_cast<const void *>(&transcribe_init_backends_default), &info) == 0 ||
+        info.dli_fname == nullptr || info.dli_fname[0] == '\0')
+    {
+        return {};
+    }
+    std::filesystem::path path(info.dli_fname);
+    std::error_code ec;
+    auto canonical = std::filesystem::weakly_canonical(path, ec);
+    if (ec) {
+        canonical = std::filesystem::absolute(path, ec);
+    }
+    if (ec) {
+        canonical = path;
+    }
+    return canonical.parent_path();
+#endif
+}
+
+static std::string path_for_c_api(const std::filesystem::path & path) {
+#if defined(_WIN32)
+    const auto u8 = path.u8string();
+    return std::string(u8.begin(), u8.end());
+#else
+    return path.string();
+#endif
+}
+#endif
+
 extern "C" transcribe_status transcribe_init_backends(const char * artifact_dir) {
+    ensure_ggml_time_init();
     if (artifact_dir == nullptr || artifact_dir[0] == '\0') {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -782,6 +872,23 @@ extern "C" transcribe_status transcribe_init_backends(const char * artifact_dir)
         return TRANSCRIBE_ERR_BACKEND;
     }
     return TRANSCRIBE_OK;
+}
+
+extern "C" transcribe_status transcribe_init_backends_default(void) {
+    ensure_ggml_time_init();
+#if !defined(TRANSCRIBE_GGML_BACKEND_DL)
+    return TRANSCRIBE_OK;
+#else
+    const auto dir = library_self_dir();
+    if (dir.empty()) {
+        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "transcribe_init_backends_default: could not resolve the "
+            "directory containing libtranscribe");
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    const auto s = path_for_c_api(dir);
+    return transcribe_init_backends(s.c_str());
+#endif
 }
 
 extern "C" int transcribe_backend_device_count(void) {
@@ -1240,6 +1347,9 @@ extern "C" transcribe_status transcribe_model_load_file(
     const struct transcribe_model_load_params * params,
     struct transcribe_model **             out_model)
 {
+    // Set up ggml's timer before any family's load-timing ggml_time_us() runs
+    // (Windows/MSVC ÷0 otherwise — see ensure_ggml_time_init).
+    ensure_ggml_time_init();
     if (out_model == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }

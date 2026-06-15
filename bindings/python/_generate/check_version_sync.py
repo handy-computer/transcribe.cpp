@@ -40,8 +40,12 @@ INIT = REPO / "bindings" / "python" / "src" / "transcribe_cpp" / "__init__.py"
 # so its gate is the tag itself (release-workflow concern, not this script).
 BINDING_MANIFESTS = [
     # (relative path, extractor name, active)
-    ("bindings/rust/Cargo.toml", "cargo", False),
-    ("bindings/rust/sys/Cargo.toml", "cargo", False),
+    # The Rust crates are real (0.0.1), so they're version-locked. The sys
+    # crate's manifest is the repo-root Cargo.toml (it carries the whole C++
+    # tree); the safe wrapper is the sibling member at
+    # bindings/rust/transcribe-cpp/.
+    ("Cargo.toml", "cargo", True),
+    ("bindings/rust/transcribe-cpp/Cargo.toml", "cargo", True),
     ("bindings/typescript/package.json", "npm", False),
 ]
 

@@ -1,0 +1,9 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2021"
+publish = false
+# Dev tooling only: not shipped, so it does not carry the workspace MSRV.
+
+[dependencies]
+bindgen = "0.72"
