@@ -19,13 +19,34 @@ public enum LogLevel: Sendable {
 /// Holds the global Swift log handler. The native sink is process-global and
 /// may fire from any thread (including ggml worker threads), so access is
 /// lock-guarded.
+///
+/// The native `transcribe_log_set` is startup-only (C contract): calling it
+/// repeatedly after models/threads exist is unsupported. So the binding installs
+/// ONE native trampoline (the first time a handler is set or logging disabled)
+/// and thereafter only swaps the Swift handler behind it — `transcribe_log_set`
+/// is called at most once per process.
 private final class LogState: @unchecked Sendable {
     static let shared = LogState()
     private let lock = NSLock()
     private var handler: (@Sendable (LogLevel, String) -> Void)?
+    private var trampolineInstalled = false
+    /// Times `transcribe_log_set` has actually been invoked. Test hook for the
+    /// "install once" invariant; must never exceed 1.
+    private(set) var nativeInstallCount = 0
 
+    /// Swap the Swift handler, installing the native trampoline exactly once.
     func set(_ h: (@Sendable (LogLevel, String) -> Void)?) {
-        lock.lock(); handler = h; lock.unlock()
+        lock.lock()
+        handler = h
+        let needInstall = !trampolineInstalled
+        if needInstall {
+            trampolineInstalled = true
+            nativeInstallCount += 1
+        }
+        lock.unlock()
+        // Outside the lock: the C call only stores the callback (it never invokes
+        // it synchronously), but keep it off the lock the trampoline also takes.
+        if needInstall { transcribe_log_set(logTrampoline, nil) }
     }
     func current() -> (@Sendable (LogLevel, String) -> Void)? {
         lock.lock(); defer { lock.unlock() }
@@ -42,16 +63,21 @@ private func logTrampoline(
 
 extension Transcribe {
     /// Route native log messages (library + ggml diagnostics) to `handler`.
-    /// Per the C contract, call once at process startup, before loading models
-    /// or creating sessions. The handler may be invoked from any thread.
+    /// Best called once at startup (before loading models), but safe to call
+    /// later or repeatedly: the native trampoline is installed once and only the
+    /// Swift handler is swapped. The handler may be invoked from any thread.
     public static func setLogHandler(_ handler: @escaping @Sendable (LogLevel, String) -> Void) {
         LogState.shared.set(handler)
-        transcribe_log_set(logTrampoline, nil)
     }
 
-    /// Disable logging entirely (library and ggml messages are dropped).
+    /// Disable logging (library and ggml messages are dropped). Swaps the Swift
+    /// handler to none behind the single installed trampoline; does not re-touch
+    /// the native sink beyond the one-time install.
     public static func disableLogging() {
         LogState.shared.set(nil)
-        transcribe_log_set(nil, nil)
     }
+
+    /// Times the native `transcribe_log_set` has been invoked this process.
+    /// Internal test hook for the "install once" invariant.
+    static var nativeLogSetCount: Int { LogState.shared.nativeInstallCount }
 }

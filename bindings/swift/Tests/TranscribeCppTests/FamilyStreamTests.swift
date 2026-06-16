@@ -32,7 +32,10 @@ final class FamilyStreamTests: XCTestCase {
         let stream = try session.stream(
             .init(), StreamOptions(family: .parakeetStream(ParakeetStreamOptions(attContextRight: -1))))
         try Fixtures.drive(stream, pcm: pcm)
-        XCTAssertTrue(stream.text.full.lowercased().contains("country"), stream.text.full)
+        // Non-empty, not content: the CI parakeet canary is a lenient Q4_K_M
+        // quant (see .github/actions/fetch-canary), so we assert the stream ran
+        // and produced text — matching Rust's family.rs contract.
+        XCTAssertFalse(stream.text.full.isEmpty, "parakeet cache-aware produced no text")
     }
 
     // MARK: parakeet buffered (PARAKEET_BUFFERED_STREAM)
@@ -51,7 +54,8 @@ final class FamilyStreamTests: XCTestCase {
         let stream = try model.session().stream(
             .init(), StreamOptions(family: .parakeetBuffered(ParakeetBufferedStreamOptions())))
         try Fixtures.drive(stream, pcm: pcm)
-        XCTAssertTrue(stream.text.full.lowercased().contains("country"), stream.text.full)
+        // Non-empty, not content (lenient Q4_K_M CI canary; matches Rust).
+        XCTAssertFalse(stream.text.full.isEmpty, "buffered stream produced no text")
     }
 
     // MARK: voxtral realtime (VOXTRAL_REALTIME_STREAM)

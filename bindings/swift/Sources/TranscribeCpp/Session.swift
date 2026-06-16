@@ -92,9 +92,22 @@ public final class Session {
             let n = Int(transcribe_batch_n_results(ptr))
             return (0..<n).map { i in
                 let s = transcribe_batch_status(ptr, Int32(i))
-                return s == TRANSCRIBE_OK
-                    ? .success(batchTranscript(i))
-                    : .failure(TranscribeError.make(s, context: "utterance \(i)"))
+                let context = "utterance \(i)"
+                switch s {
+                case TRANSCRIBE_OK:
+                    return .success(batchTranscript(i))
+                // Per-utterance abort/truncation preserves a readable partial
+                // (C contract) — attach it, mirroring `run` and the Rust/Python
+                // batch paths, instead of dropping it on the floor.
+                case TRANSCRIBE_ERR_ABORTED:
+                    return .failure(TranscribeError.aborted(
+                        message: TranscribeError.message(s, context), partial: batchTranscript(i)))
+                case TRANSCRIBE_ERR_OUTPUT_TRUNCATED:
+                    return .failure(TranscribeError.outputTruncated(
+                        message: TranscribeError.message(s, context), partial: batchTranscript(i)))
+                default:
+                    return .failure(TranscribeError.make(s, context: context))
+                }
             }
         }
     }

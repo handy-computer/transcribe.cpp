@@ -35,4 +35,17 @@ final class LoggingTests: XCTestCase {
         Transcribe.disableLogging()
         XCTAssertGreaterThanOrEqual(Transcribe.devices().count, 1)
     }
+
+    /// The native sink is startup-only (C contract): repeated set/disable must
+    /// swap the Swift handler behind a SINGLE installed trampoline, never
+    /// re-call `transcribe_log_set`. The count is process-cumulative, so the
+    /// invariant is "at most once" regardless of what other tests did first.
+    func testNativeLogSetInstalledAtMostOnce() {
+        Transcribe.setLogHandler { _, _ in }
+        Transcribe.disableLogging()
+        Transcribe.setLogHandler { _, _ in }
+        Transcribe.disableLogging()
+        XCTAssertLessThanOrEqual(
+            Transcribe.nativeLogSetCount, 1, "transcribe_log_set must be installed at most once")
+    }
 }

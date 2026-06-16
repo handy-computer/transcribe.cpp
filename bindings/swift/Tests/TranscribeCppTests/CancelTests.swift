@@ -109,4 +109,25 @@ final class CancelTests: XCTestCase {
             }
         }
     }
+
+    /// A per-utterance aborted batch slot must carry the preserved (possibly
+    /// empty) partial transcript, not nil — matching `run` and the Rust/Python
+    /// batch paths. Pre-cancelling makes the batch abort deterministically.
+    func testBatchAbortedSlotPreservesPartial() throws {
+        let (path, pcm) = try Fixtures.modelAndAudio()
+        let long = Array(repeating: pcm, count: 4).flatMap { $0 }
+        let session = try Model(path: path).session()
+        let token = CancellationToken()
+        token.cancel()
+        session.setCancellationToken(token)
+        let results = try session.runBatch([long])
+        XCTAssertEqual(results.count, 1)
+        guard case .failure(let err) = results[0] else {
+            return XCTFail("expected the aborted slot to be a failure")
+        }
+        guard case TranscribeError.aborted(_, let partial) = err else {
+            return XCTFail("expected .aborted, got \(err)")
+        }
+        XCTAssertNotNil(partial, "an aborted batch slot must preserve its partial transcript")
+    }
 }

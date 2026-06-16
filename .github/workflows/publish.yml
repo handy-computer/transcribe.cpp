@@ -327,7 +327,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${GITHUB_REF_NAME}" \
+          set -e
+          tag="${GITHUB_REF_NAME}"
+          # This job has no ordering dependency on release-assets (which also
+          # creates the tag's release), so create it here if it does not exist
+          # yet. `|| true` tolerates a concurrent create from the other job (a
+          # 422 "already exists"); the upload below then succeeds either way.
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" --notes "transcribe.cpp $tag" --verify-tag || true
+          gh release upload "$tag" \
             bindings/swift/build-apple/TranscribeCpp.xcframework.zip --clobber
       - name: Checksum for the mirror repo's Package.swift
         run: |
