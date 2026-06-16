@@ -111,6 +111,15 @@ request fails cleanly from the load path. Probe first with
   are thread-safe. `Transcribe.setLogHandler` should be called once at startup.
 - Resource cleanup is automatic under ARC (`deinit` frees the handles); a
   `Session`'s strong reference to its `Model` keeps close ordering safe.
+- **Release `Model`s before the process exits on Metal.** On macOS 15+ / iOS 18+,
+  ggml's Metal backend keeps model GPU memory resident and asserts every GPU
+  resource is released before its own teardown at process exit. A `Model` parked
+  in a top-level/global `let` that outlives `main` is therefore still alive when
+  that teardown runs and aborts the process *after* your work completes. Normal
+  object lifetimes are fine — this only bites the "global model, then exit"
+  pattern. In a short-lived program (CLI, script), scope the model so ARC frees
+  it before exit; the bundled examples wrap their work in a `do { … }` block for
+  exactly this reason.
 
 ## Objective-C and C++ consumers
 
