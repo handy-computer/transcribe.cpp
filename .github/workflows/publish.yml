@@ -17,10 +17,11 @@ name: publish
 #
 #   RELEASE (push tag v0.0.X): same full build, then with the `pypi`
 #     environment (add a required-reviewer rule once the repo is public):
-#     dist-* → PyPI, cu12 wheels → GitHub release assets for the tag, and
-#     the wheel-index workflow is dispatched so /whl/cu12 picks them up.
-#     cu12 → PyPI additionally when the repo variable CU12_ON_PYPI is
-#     "true" (set it once the PyPI file-size request is granted).
+#     dist-* → PyPI, cu12 wheels → draft GitHub release assets for the tag,
+#     Rust crates → crates.io, Swift → the draft release, then the draft is
+#     published and wheel-index.yml is dispatched so /whl/cu12 picks it up.
+#     cu12 → PyPI additionally when the repo variable CU12_ON_PYPI is "true"
+#     (set it once the PyPI file-size request is granted).
 
 on:
   push:
@@ -43,9 +44,27 @@ jobs:
     # arches under MSVC, ~3 h on 16vcpu), and the TestPyPI rehearsal neither
     # publishes nor smokes its output (cu12 wheels exceed TestPyPI's file
     # cap). Validate it on demand with its own workflow_dispatch.
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v')
     uses: ./.github/workflows/cuda-windows.yml
     secrets: inherit
+
+  create-release:
+    # Tags only. Owns creation of the GitHub Release object. Keep it draft
+    # until the mandatory publishers have succeeded and assets are verified.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the draft release for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" --notes "transcribe.cpp $tag" --verify-tag --draft
 
   publish-testpypi:
     # Rehearsal target (dispatch only — real tags go to PyPI).
@@ -164,12 +183,11 @@ jobs:
     # cu12's primary distribution home: wheels as GitHub release assets,
     # served to pip through the PEP 503 index on Pages (wheel-index.yml).
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [wheels, cuda-windows]
+    needs: [create-release, wheels, cuda-windows]
     runs-on: [self-hosted, Linux, X64, hetzner]
     timeout-minutes: 30
     permissions:
-      contents: write  # create the release + upload assets
-      actions: write   # dispatch wheel-index
+      contents: write  # upload release assets
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -185,15 +203,12 @@ jobs:
           pattern: native-*
           merge-multiple: true
           path: native-bundles
-      - name: Create the release for the tag and attach the cu12 wheels
+      - name: Attach the cu12 wheels
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           tag="${GITHUB_REF#refs/tags/}"
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
-              --title "$tag" --notes "transcribe.cpp $tag" --verify-tag
           gh release upload "$tag" cu12/*.whl --repo "$GITHUB_REPOSITORY" --clobber
       - name: Attach the native bundles (versioned names)
         env:
@@ -210,12 +225,6 @@ jobs:
           done
           ls -la upload/
           gh release upload "$tag" upload/*.tar.gz --repo "$GITHUB_REPOSITORY" --clobber
-      - name: Refresh the PEP 503 index (requires Pages enabled on the repo)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh workflow run wheel-index.yml --repo "$GITHUB_REPOSITORY" || \
-            echo "::warning::wheel-index dispatch failed — is the workflow on the default branch and Pages enabled?"
 
   # ---- Rust crates (crates.io) -------------------------------------------------
   # The Rust release path mirrors the Python one: a dispatch REHEARSAL that
@@ -310,6 +319,7 @@ jobs:
     # emits the checksum. The mirror-repo Package.swift bump is the final step
     # (CJ-gated — needs the dedicated SwiftPM repo + a deploy key; see the plan).
     if: startsWith(github.ref, 'refs/tags/v')
+    needs: [create-release]
     runs-on: macos-15
     permissions:
       contents: write  # attach the release asset
@@ -329,15 +339,9 @@ jobs:
         run: |
           set -e
           tag="${GITHUB_REF_NAME}"
-          # This job has no ordering dependency on release-assets (which also
-          # creates the tag's release), so create it here if it does not exist
-          # yet. `|| true` tolerates a concurrent create from the other job (a
-          # 422 "already exists"); the upload below then succeeds either way.
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
-              --title "$tag" --notes "transcribe.cpp $tag" --verify-tag || true
           gh release upload "$tag" \
-            bindings/swift/build-apple/TranscribeCpp.xcframework.zip --clobber
+            bindings/swift/build-apple/TranscribeCpp.xcframework.zip \
+            --repo "$GITHUB_REPOSITORY" --clobber
       - name: Checksum for the mirror repo's Package.swift
         run: |
           echo "binaryTarget(url: .../TranscribeCpp.xcframework.zip,"
@@ -347,3 +351,59 @@ jobs:
       # it, so `swift package add` resolves the release. Needs the mirror repo +
       # a deploy key secret. Until then, the asset + checksum above are produced
       # but not wired into a resolvable SwiftPM tag.
+
+  finalize-release:
+    # Tags only. Publish the draft GitHub Release only after its hosted assets
+    # and the core PyPI publish have completed. crates.io has its own approval
+    # gate and does not host artifacts on this release.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [publish-pypi, release-assets, swift-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # publish the draft release
+      actions: write   # dispatch wheel-index
+    steps:
+      - name: Verify assets and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          ver="${tag#v}"
+          assets_file="$(mktemp)"
+
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name' | sort > "$assets_file"
+
+          echo "Release assets:"
+          sed 's/^/  /' "$assets_file"
+
+          require_asset() {
+            name="$1"
+            if ! grep -Fxq "$name" "$assets_file"; then
+              echo "::error::missing release asset: $name"
+              exit 1
+            fi
+          }
+
+          require_asset "TranscribeCpp.xcframework.zip"
+          require_asset "transcribe-native-${ver}-linux-x86_64-cpu-vulkan.tar.gz"
+          require_asset "transcribe-native-${ver}-linux-aarch64-cpu-vulkan.tar.gz"
+          require_asset "transcribe-native-${ver}-macos-arm64-metal.tar.gz"
+          require_asset "transcribe-native-${ver}-macos-x86_64-cpu.tar.gz"
+          require_asset "transcribe-native-${ver}-windows-x86_64-cpu-vulkan.tar.gz"
+
+          cu12_count="$(grep -Ec '^transcribe_cpp_native_cu12-.*\.whl$' "$assets_file" || true)"
+          if [ "$cu12_count" -lt 2 ]; then
+            echo "::error::expected at least two cu12 provider wheels, found $cu12_count"
+            exit 1
+          fi
+
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+
+      - name: Refresh the PEP 503 index (requires Pages enabled on the repo)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run wheel-index.yml --repo "$GITHUB_REPOSITORY" || \
+            echo "::warning::wheel-index dispatch failed — is the workflow on the default branch and Pages enabled?"
