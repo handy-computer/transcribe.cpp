@@ -104,9 +104,16 @@ request fails cleanly from the load path. Probe first with
   (`run`/`runBatch`/stream feed) is serialized by an internal per-model lock,
   matching the C library's "one in-flight run per model" rule. Concurrent runs
   from many threads queue and execute one at a time.
+- **An active stream holds the model's compute lease for its whole lifetime**
+  (begin → `finalize`/`reset`/drop). While a stream is live, a `run`,
+  `runBatch`, or second `stream` on *any* session of the same model is refused
+  with `TranscribeError.busy` rather than racing into undefined behavior — the
+  C "one in-flight run per model" rule covers streams, not just offline runs.
+  Finish (or drop) the stream before issuing other compute on that model.
 - **`Session`** is single-threaded: use one from one thread at a time (it may
   move between threads if never used concurrently). For parallel transcription,
-  use one `Session` per thread off a shared `Model`.
+  use one `Session` per thread off a shared `Model` (serialized, one in flight
+  at a time); for true parallelism, load one `Model` per worker.
 - **Callbacks** (cancellation, logging) may fire on native worker threads and
   are thread-safe. `Transcribe.setLogHandler` should be called once at startup.
 - Resource cleanup is automatic under ARC (`deinit` frees the handles); a
@@ -120,6 +127,37 @@ request fails cleanly from the load path. Probe first with
   pattern. In a short-lived program (CLI, script), scope the model so ARC frees
   it before exit; the bundled examples wrap their work in a `do { … }` block for
   exactly this reason.
+
+## Cancellation
+
+Install a `CancellationToken` on a session and call `cancel()` from any thread
+to abort an in-flight `run`/`runBatch`/stream `feed`. The aborted call throws
+`TranscribeError.aborted` with the partial transcript preserved. This is the
+primary, thread-agnostic mechanism, and the same model the Rust and Python
+bindings use.
+
+```swift
+let token = CancellationToken()
+session.setCancellationToken(token)
+// later, from anywhere — a Stop button, a timeout:
+token.cancel()
+```
+
+The `async` `run`/`runBatch` additionally bridge Swift structured concurrency:
+cancelling the surrounding `Task` aborts the run (it throws `.aborted`, again
+with the partial). This auto-bridge is active **only when you have not installed
+your own token** — the native abort has a single slot, so a token you install
+takes precedence and `Task.cancel()` is then not observed. Pick one mechanism
+per session.
+
+```swift
+let task = Task { try await session.run(pcm) }   // no token installed
+// …user navigates away / times out:
+task.cancel()                                     // run aborts, throws .aborted
+```
+
+(The run-mode enum is named `TranscriptionTask`, not `Task`, so it never
+shadows Swift's `Task` in files that `import TranscribeCpp`.)
 
 ## Objective-C and C++ consumers
 

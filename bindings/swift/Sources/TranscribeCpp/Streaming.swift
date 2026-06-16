@@ -97,8 +97,27 @@ public struct StreamUpdate: Sendable, Equatable {
 /// model lock (the compute path).
 public final class Stream {
     private let session: Session
+    /// True while this stream holds the model's compute lease (set at begin,
+    /// cleared at finalize/reset/deinit). Tracked per-stream so `deinit` never
+    /// releases a lease a *different* session has since acquired — mirrors the
+    /// Rust binding's `holds_lease`. Mutated only under `model.runLock`; the
+    /// `deinit` guard reads it on the deallocating thread, where no other
+    /// reference to this `Stream` can exist (so no concurrent mutation).
+    var holdsLease = true
 
     init(_ session: Session) { self.session = session }
+
+    /// Abandon any unfinalized stream when the handle is dropped: without this,
+    /// a `Stream` that goes out of scope without `finalize()`/`reset()` would
+    /// leave the session stuck ACTIVE and the model's compute lease held
+    /// forever. Reset is idempotent and safe from any state.
+    deinit {
+        guard holdsLease else { return }
+        session.model.runLock.lock()
+        transcribe_stream_reset(session.ptr)
+        session.model.streamActive = false
+        session.model.runLock.unlock()
+    }
 
     /// Feed a PCM frame (16 kHz mono float32). Returns per-call change metadata.
     public func feed(_ frame: [Float]) throws -> StreamUpdate {
@@ -114,6 +133,9 @@ public final class Stream {
     }
 
     /// Signal end of input; flushes buffered audio and emits remaining text.
+    /// Either way the stream is no longer active, so the model's compute lease
+    /// is released here (not deferred to `deinit`) — another session may
+    /// proceed without waiting for this `Stream` to drop.
     @discardableResult
     public func finalize() throws -> StreamUpdate {
         session.model.runLock.lock()
@@ -121,14 +143,19 @@ public final class Stream {
         var update = transcribe_stream_update()
         transcribe_stream_update_init(&update)
         let status = transcribe_stream_finalize(session.ptr, &update)
+        if holdsLease { session.model.streamActive = false; holdsLease = false }
         try TranscribeError.check(status, context: "stream_finalize")
         return StreamUpdate(update)
     }
 
-    /// Abandon the stream and return the session to idle.
+    /// Abandon the stream and return the session to idle. Releases the model's
+    /// compute lease (the stream is no longer active).
     @discardableResult
     public func reset() -> StreamState {
+        session.model.runLock.lock()
         transcribe_stream_reset(session.ptr)
+        if holdsLease { session.model.streamActive = false; holdsLease = false }
+        session.model.runLock.unlock()
         return state
     }
 
@@ -150,17 +177,24 @@ public final class Stream {
 extension Session {
     /// Begin a streaming run. The session must support streaming (else
     /// `.notImplemented`) and be idle/finished/failed (not already streaming).
+    /// Claims the model's compute lease for the whole stream lifetime: a second
+    /// stream — or an offline run — on ANY session of the same model is refused
+    /// with `.busy` until this stream finalizes, resets, or is dropped.
     public func stream(
         _ runOptions: RunOptions = .init(), _ streamOptions: StreamOptions = .init()
     ) throws -> Stream {
         model.runLock.lock()
         defer { model.runLock.unlock() }
+        if model.streamActive {
+            throw TranscribeError.busy("a stream is already active on this model")
+        }
         let status = runOptions.withCParams { runParams in
             streamOptions.withCParams { streamParams in
                 transcribe_stream_begin(ptr, runParams, streamParams)
             }
         }
         try TranscribeError.check(status, context: "stream_begin")
+        model.streamActive = true
         return Stream(self)
     }
 }

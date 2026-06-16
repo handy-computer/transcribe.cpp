@@ -2,7 +2,10 @@ import CTranscribe
 
 // MARK: - Enums
 
-public enum Task: Sendable {
+/// The run mode: plain transcription or speech translation. Named
+/// `TranscriptionTask` (not `Task`) so it does not shadow Swift's
+/// `_Concurrency.Task` in files that `import TranscribeCpp`.
+public enum TranscriptionTask: Sendable {
     case transcribe, translate
     var cValue: transcribe_task {
         self == .transcribe ? TRANSCRIBE_TASK_TRANSCRIBE : TRANSCRIBE_TASK_TRANSLATE
@@ -106,7 +109,7 @@ public struct SessionOptions: Sendable {
 }
 
 public struct RunOptions: Sendable {
-    public var task: Task
+    public var task: TranscriptionTask
     public var timestamps: TimestampKind
     public var pnc: Pnc
     public var itn: Itn
@@ -122,7 +125,7 @@ public struct RunOptions: Sendable {
     public var family: RunExtension?
 
     public init(
-        task: Task = .transcribe,
+        task: TranscriptionTask = .transcribe,
         timestamps: TimestampKind = .none,
         pnc: Pnc = .default,
         itn: Itn = .default,

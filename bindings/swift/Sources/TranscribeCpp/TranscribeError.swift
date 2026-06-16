@@ -8,6 +8,11 @@ import CTranscribe
 /// `.aborted` / `.outputTruncated` carry the preserved partial `Transcript`
 /// (the C side keeps partial output readable after those statuses); it is `nil`
 /// when the error is built outside a run (e.g. by `check`).
+///
+/// `.busy` is a binding-level error (no C status maps to it): the C library
+/// allows at most one in-flight run/stream across all sessions of a model (the
+/// 0.x limitation in `include/transcribe.h`), and the wrapper refuses an
+/// overlapping run/stream rather than racing into the documented UB.
 public enum TranscribeError: Error {
     case invalidArgument(String)
     case notImplemented(String)
@@ -21,6 +26,7 @@ public enum TranscribeError: Error {
     case aborted(message: String, partial: Transcript?)
     case outputTruncated(message: String, partial: Transcript?)
     case versionMismatch(String)
+    case busy(String)
     case other(status: Int32, message: String)
 
     /// Status description, prefixed with `context` when given.

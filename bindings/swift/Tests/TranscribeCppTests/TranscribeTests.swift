@@ -120,6 +120,16 @@ final class TranscribeTests: XCTestCase {
         let transcript = try await model.session().run(pcm)
         XCTAssertTrue(transcript.text.lowercased().contains("country"), transcript.text)
     }
+
+    func testAsyncRunBatch() async throws {
+        let (path, pcm) = try Fixtures.modelAndAudio()
+        let model = try Model(path: path)
+        let results = try await model.session().runBatch([pcm, pcm])
+        XCTAssertEqual(results.count, 2)
+        for result in results {
+            XCTAssertTrue(try result.get().text.lowercased().contains("country"))
+        }
+    }
 }
 
 /// The granularity strictly finer than `kind`, or nil if already finest.

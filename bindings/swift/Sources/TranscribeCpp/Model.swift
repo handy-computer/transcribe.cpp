@@ -4,13 +4,22 @@ import Foundation
 /// A loaded model. Safe to share across threads (`@unchecked Sendable`): the C
 /// API allows concurrent queries and session creation, and the compute path is
 /// serialized by an internal lock (the C "one in-flight run per model"
-/// contract — the same per-model mutex the Rust binding uses). A `Model`
-/// outlives every `Session` derived from it; the session holds a strong
+/// contract — the same per-model mutex + stream lease the Rust binding uses). A
+/// `Model` outlives every `Session` derived from it; the session holds a strong
 /// reference, so close ordering is automatic under ARC.
 public final class Model: @unchecked Sendable {
     let ptr: OpaquePointer
-    /// Serializes the run/feed/finalize compute path across all sessions.
+    /// Serializes the run/feed/finalize compute path across all sessions, and
+    /// guards `streamActive`.
     let runLock = NSLock()
+    /// The compute lease: `true` while some session holds an ACTIVE stream.
+    /// The C contract allows at most one in-flight run/stream across ALL
+    /// sessions of a model, and an active stream spans begin..finalize/reset/
+    /// drop — so `run`/`runBatch`/another `stream` are refused with `.busy`
+    /// while it is held, rather than racing into the documented UB (corrupted
+    /// decodes on CPU, command-buffer failures on Metal). Always accessed under
+    /// `runLock`.
+    var streamActive = false
 
     /// Load a model from a GGUF file. Runs the pre-1.0 version gate first.
     public init(path: String, options: ModelOptions = .init()) throws {

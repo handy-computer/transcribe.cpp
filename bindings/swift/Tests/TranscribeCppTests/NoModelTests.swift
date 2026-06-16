@@ -62,6 +62,18 @@ final class NoModelTests: XCTestCase {
         }
     }
 
+    // The run-mode enum is `TranscriptionTask` (renamed off `Task` so it does
+    // not shadow Swift's concurrency `Task`). Lock the public name + `task:`
+    // option here so an accidental rename is caught without a model.
+    func testTranscriptionTaskOptionRoundTrips() {
+        let translate = RunOptions(task: .translate)
+        guard case .translate = translate.task else {
+            return XCTFail("task option did not round-trip to .translate")
+        }
+        let task: TranscriptionTask = .transcribe
+        guard case .transcribe = task else { return XCTFail("TranscriptionTask.transcribe") }
+    }
+
     func testJunkFileIsModelLoadError() throws {
         let junk = FileManager.default.temporaryDirectory
             .appendingPathComponent("junk-\(UUID().uuidString).gguf")

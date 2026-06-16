@@ -53,4 +53,60 @@ final class CancelTests: XCTestCase {
             _ = partial  // partial transcript may be present
         }
     }
+
+    // MARK: - Swift task cancellation bridge (async)
+
+    /// The `async` run bridges Swift structured concurrency: cancelling the
+    /// surrounding `Task` must abort the in-flight run (throwing `.aborted`)
+    /// when the caller has NOT installed their own token. A long clip ensures
+    /// the native abort poll trips well before the run could finish.
+    func testAsyncRunBridgesTaskCancellation() async throws {
+        let (path, pcm) = try Fixtures.modelAndAudio()
+        let long = Array(repeating: pcm, count: 6).flatMap { $0 }
+        let session = try Model(path: path).session()  // no caller token -> bridge active
+        // Bare `Task` must resolve to Swift's concurrency type: the run-mode enum
+        // is `TranscriptionTask`, so it no longer shadows `_Concurrency.Task`.
+        let task = Task { try await session.run(long) }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("a cancelled Task must abort the bridged async run")
+        } catch let error as TranscribeError {
+            guard case .aborted = error else {
+                return XCTFail("expected .aborted from a cancelled task, got \(error)")
+            }
+        }
+        XCTAssertTrue(session.wasAborted)
+    }
+
+    /// The bridge must never clobber a caller-installed token: there is a single
+    /// native abort slot, so a token the caller installed takes precedence and
+    /// survives an async run unchanged. (Guards the "only when no caller token"
+    /// rule — passes pre- and post-bridge; fails if the bridge installs blindly.)
+    func testAsyncRunPreservesCallerInstalledToken() async throws {
+        let (path, pcm) = try Fixtures.modelAndAudio()
+        let session = try Model(path: path).session()
+        let myToken = CancellationToken()
+        session.setCancellationToken(myToken)
+        _ = try await session.run(pcm)
+        XCTAssertTrue(session.cancelToken === myToken, "bridge must not replace the caller's token")
+    }
+
+    /// `runBatch` shares the same bridge as `run`. A whole-batch abort surfaces
+    /// as per-slot `.aborted` failures (the binding does not throw on batch-level
+    /// ABORTED, per include/transcribe.h) and `wasAborted` records it.
+    func testAsyncRunBatchBridgesTaskCancellation() async throws {
+        let (path, pcm) = try Fixtures.modelAndAudio()
+        let long = Array(repeating: pcm, count: 6).flatMap { $0 }
+        let session = try Model(path: path).session()
+        let task = Task { try await session.runBatch([long]) }
+        task.cancel()
+        let results = (try? await task.value) ?? []
+        XCTAssertTrue(session.wasAborted, "Task.cancel must abort the bridged async runBatch")
+        if let first = results.first, case .failure(let err) = first {
+            guard case TranscribeError.aborted = err else {
+                return XCTFail("expected a per-slot .aborted, got \(err)")
+            }
+        }
+    }
 }

@@ -5,9 +5,10 @@
 /// and C++ consumers can `#import` the bundled `transcribe/extensions.h`
 /// directly; this wrapper is the Swift-native surface.
 ///
-/// Status: M1 walking skeleton — the FFI/import/link plumbing is proven and the
-/// no-model surface (version, ABI, device discovery, errors) is wired. Model /
-/// Session / Stream land in M2–M3 (see notes/swift-bindings-plan.md).
+/// The full surface is implemented: `Model` / `Session` / `Stream`, offline and
+/// streaming transcription, batch, cancellation, logging, and family
+/// extensions, plus the no-model surface (version, ABI, device discovery,
+/// errors). See `notes/swift-bindings-plan.md` for the capability matrix.
 import CTranscribe
 
 /// Top-level, model-free entry points: identity, ABI introspection, the

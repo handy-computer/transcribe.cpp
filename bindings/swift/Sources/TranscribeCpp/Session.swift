@@ -52,6 +52,10 @@ public final class Session {
     public func run(_ pcm: [Float], options: RunOptions = .init()) throws -> Transcript {
         model.runLock.lock()
         defer { model.runLock.unlock() }
+        if model.streamActive {
+            throw TranscribeError.busy(
+                "a stream is active on this model; finish or drop it before run()")
+        }
         return try options.withCParams { params in
             let status = pcm.withUnsafeBufferPointer {
                 transcribe_run(ptr, $0.baseAddress, Int32($0.count), params)
@@ -68,6 +72,10 @@ public final class Session {
     ) throws -> [Result<Transcript, Error>] {
         model.runLock.lock()
         defer { model.runLock.unlock() }
+        if model.streamActive {
+            throw TranscribeError.busy(
+                "a stream is active on this model; finish or drop it before runBatch()")
+        }
         return try options.withCParams { params in
             let counts = inputs.map { Int32($0.count) }
             let status = withPCMPointers(inputs[...], []) { pointers in
@@ -93,7 +101,9 @@ public final class Session {
 
     // MARK: - Offline run (async convenience)
 
-    /// `run` hopped off the caller's thread/actor onto a background queue.
+    /// `run` hopped off the caller's thread/actor onto a background queue, with
+    /// Swift task cancellation bridged to the native abort (see
+    /// `withTaskCancellationBridge`).
     ///
     /// The `nonisolated(unsafe)` capture is sound: the continuation resumes
     /// exactly once, the work runs serialized under the model lock, and the
@@ -102,22 +112,42 @@ public final class Session {
     /// contract this type documents.
     public func run(_ pcm: [Float], options: RunOptions = .init()) async throws -> Transcript {
         nonisolated(unsafe) let this = self
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                continuation.resume(with: Result { try this.run(pcm, options: options) })
-            }
-        }
+        return try await withTaskCancellationBridge { try this.run(pcm, options: options) }
     }
 
-    /// `runBatch` hopped off the caller's thread/actor onto a background queue.
+    /// `runBatch` hopped off the caller's thread/actor onto a background queue,
+    /// with Swift task cancellation bridged to the native abort.
     public func runBatch(
         _ inputs: [[Float]], options: RunOptions = .init()
     ) async throws -> [Result<Transcript, Error>] {
         nonisolated(unsafe) let this = self
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                continuation.resume(with: Result { try this.runBatch(inputs, options: options) })
+        return try await withTaskCancellationBridge { try this.runBatch(inputs, options: options) }
+    }
+
+    /// Hop a blocking call to a background queue and bridge Swift structured-
+    /// concurrency cancellation to the native abort: if the surrounding `Task`
+    /// is cancelled, the run aborts and throws `.aborted` (with the partial
+    /// transcript preserved), matching the synchronous `CancellationToken` path.
+    ///
+    /// The bridge installs its own token ONLY when the caller has not installed
+    /// one — it never clobbers a caller's `CancellationToken` (there is a single
+    /// native abort slot, so a caller-installed token takes precedence and
+    /// `Task.cancel()` is then not observed). The bridged token is removed when
+    /// the call returns, restoring the session's prior (no-token) state.
+    private func withTaskCancellationBridge<T>(
+        _ body: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        let bridged = (cancelToken == nil) ? CancellationToken() : nil
+        if let bridged { setCancellationToken(bridged) }
+        defer { if bridged != nil { clearCancellationToken() } }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+                DispatchQueue.global().async {
+                    cont.resume(with: Result { try body() })
+                }
             }
+        } onCancel: {
+            bridged?.cancel()
         }
     }
 
