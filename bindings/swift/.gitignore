@@ -1,3 +1,7 @@
 .build
 .swiftpm
 Package.resolved
+
+# Locally built native artifact (the release binaryTarget is a remote
+# url:+checksum:; dev/CI build it here via scripts/ci/build_xcframework.sh).
+build-apple/

@@ -3,10 +3,8 @@
 Python bindings for [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp),
 a C/C++ speech-to-text library built on ggml.
 
-> **Status: in development.** The API below works against a locally built native
-> library. Prebuilt wheels (bundled native code, GPU provider packages) are not
-> published yet — for now you point the binding at a `libtranscribe` shared
-> library you built. Watch the repository for the first wheel release.
+> **Status: in development.** Until wheels are published, use a locally built
+> `libtranscribe` through repo auto-discovery or `TRANSCRIBE_LIBRARY`.
 
 ```python
 import transcribe_cpp
@@ -17,15 +15,14 @@ with transcribe_cpp.Model("model.gguf") as model:
         print(result.text)
 ```
 
-`run()` takes 16 kHz mono float32 PCM (buffer-protocol object or sequence). It
-does not decode containers or resample — convert first, e.g.
-`ffmpeg -i in.wav -ar 16000 -ac 1 out.wav`. With numpy:
+`run()` takes mono 16 kHz float32 PCM (buffer-protocol object or sequence). It
+does not decode containers or resample; convert audio before calling it.
 
 ```python
 import numpy as np
 
-pcm = np.asarray(audio, dtype=np.float32)   # 1-D, 16 kHz mono in [-1, 1)
-# stereo (frames, channels)? downmix first — 2-D input is rejected:
+pcm = np.asarray(audio, dtype=np.float32)   # 1-D, 16 kHz mono
+# Downmix stereo first; 2-D input is rejected:
 # pcm = audio.mean(axis=1).astype(np.float32)
 result = session.run(pcm)
 ```
@@ -45,29 +42,26 @@ Long transcriptions can be cancelled from another thread with
 `session.cancel()` — the run raises `Aborted` with the partial transcript on
 `exc.partial_result` (same for `OutputTruncated`).
 
-## Backends and escape hatches
+## Backends
 
-`Model(backend=...)` picks the compute device (`"auto"` → best available);
-`transcribe_cpp.backends()` lists what registered and
-`backend_available(kind)` probes one kind. Environment overrides:
+`Model(backend=...)` picks the compute device (`"auto"` uses the best
+available). `transcribe_cpp.backends()` lists registered backends and
+`backend_available(kind)` checks one kind.
 
 | Variable | Effect |
 |---|---|
-| `TRANSCRIBE_BACKEND` | overrides the `backend="auto"` *default* (an explicit `backend=` argument always wins) — the escape hatch for machines whose best-ranked device misbehaves |
-| `TRANSCRIBE_NATIVE_PROVIDER` | force a specific installed native provider package (e.g. `cu12`) |
-| `TRANSCRIBE_LIBRARY` | load exactly this shared library (developer override) |
+| `TRANSCRIBE_BACKEND` | overrides the `"auto"` default; explicit `backend=` still wins |
+| `TRANSCRIBE_NATIVE_PROVIDER` | forces an installed native provider package, for example `cu12` |
+| `TRANSCRIBE_LIBRARY` | loads exactly this shared library |
 
-Once wheels are published: `pip install transcribe-cpp` ships CPU plus the
-platform accelerator (Metal on macOS arm64, Vulkan on Linux/Windows) with
-graceful CPU fallback; `pip install "transcribe-cpp[cu12]"` adds the CUDA 12
-provider (which also bundles Vulkan, so non-NVIDIA machines keep GPU
-acceleration).
+Planned wheels will bundle CPU plus platform accelerators;
+`transcribe-cpp[cu12]` will add the CUDA 12 provider.
 
 ## Running from a working tree
 
 The binding loads the native library at import and verifies its ABI layout and
-version before use. Build a shared library and the binding finds it
-automatically from the repo, or point `TRANSCRIBE_LIBRARY` at one:
+version before use. Build a shared library, then run from the repo or point
+`TRANSCRIBE_LIBRARY` at it:
 
 ```bash
 cmake -B build-shared -DTRANSCRIBE_BUILD_SHARED=ON
@@ -78,11 +72,9 @@ PYTHONPATH=src uv run --no-project python examples/transcribe_wav.py \
     ../../models/whisper-tiny.en/whisper-tiny.en-Q5_K_M.gguf ../../samples/jfk.wav
 ```
 
-Run the test suite. No-model tests (import, ABI layout, version gate,
-status-code/enum agreement, PCM validation, provider selection) always run;
-model tests skip when the default whisper-tiny.en + jfk.wav assets are absent
-(override with `TRANSCRIBE_SMOKE_MODEL` / `TRANSCRIBE_SMOKE_AUDIO` /
-`TRANSCRIBE_SMOKE_STREAMING_MODEL`):
+No-model tests always run; model tests skip unless smoke assets are present.
+Override paths with `TRANSCRIBE_SMOKE_MODEL`, `TRANSCRIBE_SMOKE_AUDIO`, and
+`TRANSCRIBE_SMOKE_STREAMING_MODEL`.
 
 ```bash
 cd bindings/python
