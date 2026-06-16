@@ -1,0 +1,118 @@
+name: swift-ci
+
+# Every-PR gates for the Swift binding (TranscribeCpp). Thin per-binding
+# workflow on the shared rails: the binding-agnostic C contracts are certified
+# in native-ci.yml; this file adds only what the Swift layer introduces.
+#
+#   - swift-gates:  the public-ABI drift gate — the pinned hash in
+#                   ABIHash.swift compared against include/transcribe.abihash
+#                   (scripts/ci/swift_abihash_check.py). No native build; fast,
+#                   runs everywhere. (Swift has no generated FFI layer: the
+#                   Clang importer reads the headers directly, so the gate is a
+#                   pinned constant, not a regen check. Version-sync is the git
+#                   tag + the load-time gate, not check_version_sync.py.)
+#   - swift-macos:  build the macOS slice of the xcframework
+#                   (scripts/ci/build_xcframework.sh), then `swift test` the
+#                   no-model tier against the real binaryTarget — the Swift
+#                   analog of Rust's no_model.rs (version/ABI/device discovery).
+#   - swift-ios:    cross-compile the iOS device + simulator slices
+#                   (build-verify only — no iOS runner executes models here).
+#
+# Two test tiers (requirements §4): the no-model tests always run; the
+# model-gated tier (real transcription/streaming/cancel/family ext) un-skips
+# only when the canary GGUFs are fetched (fetch-canary + HF_TOKEN). The model
+# tier lands with M4 — this workflow ships the no-model tier first.
+#
+# Path filters follow native-ci.yml's shape: the binding's own tree plus the
+# native paths it compiles from (binding behavior depends on the C side).
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - "bindings/swift/**"
+      - "src/**"
+      - "include/**"
+      - "ggml/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "scripts/ci/build_xcframework.sh"
+      - "scripts/ci/swift_abihash_check.py"
+      - ".github/workflows/swift-ci.yml"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+concurrency:
+  group: swift-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Public-ABI drift gate (pinned hash vs include/transcribe.abihash)
+        run: uv run --no-project scripts/ci/swift_abihash_check.py
+
+  swift-macos:
+    runs-on: macos-15
+    env:
+      # The CMake builds inside build_xcframework.sh honor these launcher env
+      # vars (CMake initializes CMAKE_<LANG>_COMPILER_LAUNCHER from them).
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      # Present on this repo's runs, empty on forks — fetch-canary skips cleanly
+      # when empty and the model tier of `swift test` then XCTSkips.
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v8.2.0  # fetch-canary fetches via uvx
+      - name: Install build deps
+        run: brew install ninja ccache
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-swift-macos-${{ github.sha }}
+          restore-keys: ccache-swift-macos-
+      - name: Build the macOS xcframework slice
+        run: TRANSCRIBE_XCFRAMEWORK_SLICES="macos" scripts/ci/build_xcframework.sh
+      # Fetch the canary GGUFs (whisper-tiny + moonshine-streaming-tiny) and
+      # export TRANSCRIBE_SMOKE_MODEL / _STREAMING_MODEL. Audio falls back to the
+      # in-repo samples/jfk.wav. Skips cleanly without HF_TOKEN (the model tier
+      # then XCTSkips — the two-tier scheme, requirements §4).
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: swift test (no-model + model tiers)
+        working-directory: bindings/swift
+        run: swift test
+      # The 5 canonical examples (§6) run on every leg under the same skip
+      # rules as the model tier: each transcribes with the canary or exits 0
+      # with a skip note (models/ is gitignored, so forks skip cleanly).
+      - name: Run the canonical examples
+        working-directory: bindings/swift
+        run: |
+          for example in transcribe-file streaming batch backend-select error-handling; do
+            echo "== $example =="
+            swift run "$example"
+          done
+
+  swift-ios:
+    runs-on: macos-15
+    env:
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: brew install ninja ccache
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-swift-ios-${{ github.sha }}
+          restore-keys: ccache-swift-ios-
+      - name: Cross-compile the iOS device + simulator slices (build-verify)
+        run: TRANSCRIBE_XCFRAMEWORK_SLICES="ios-device ios-sim" scripts/ci/build_xcframework.sh

@@ -42,6 +42,23 @@ PROMPTED_STREAMING_MODEL = (
     REPO
     / "models/nemotron-3.5-asr-streaming-0.6b/nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf"
 )
+# Per-family streaming-extension canaries. These exercise the parakeet/voxtral
+# stream-extension happy path (materialize -> accept -> begin -> feed). Not in
+# the CI fetch-canary set (parakeet is added once the canary repos exist;
+# voxtral is local-only — ~2.5 GB Q4_K_M is too heavy for CI), so each gates on
+# its own env var / in-repo GGUF and skips cleanly when absent.
+PARAKEET_STREAM_MODEL = (
+    REPO
+    / "models/nemotron-speech-streaming-en-0.6b"
+    / "nemotron-speech-streaming-en-0.6b-Q8_0.gguf"
+)
+PARAKEET_BUFFERED_MODEL = (
+    REPO / "models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q8_0.gguf"
+)
+VOXTRAL_MODEL = (
+    REPO
+    / "models/Voxtral-Mini-4B-Realtime-2602/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf"
+)
 
 
 def load_wav(path: Path) -> "array.array":
@@ -112,3 +129,31 @@ def prompted_streaming_model_path() -> Path:
             "(set TRANSCRIBE_SMOKE_PROMPTED_MODEL)"
         )
     return path
+
+
+def _family_model(env_var: str, default: Path) -> Path:
+    override = os.environ.get(env_var)
+    path = Path(override) if override else default
+    if not path.is_file():
+        pytest.skip(f"model not present: {path} (set {env_var})")
+    return path
+
+
+@pytest.fixture(scope="session")
+def parakeet_stream_model_path() -> Path:
+    """Cache-aware parakeet streaming canary (accepts PARAKEET_STREAM)."""
+    return _family_model("TRANSCRIBE_SMOKE_PARAKEET_STREAM_MODEL", PARAKEET_STREAM_MODEL)
+
+
+@pytest.fixture(scope="session")
+def parakeet_buffered_model_path() -> Path:
+    """Chunked/buffered parakeet streaming canary (accepts PARAKEET_BUFFERED_STREAM)."""
+    return _family_model(
+        "TRANSCRIBE_SMOKE_PARAKEET_BUFFERED_MODEL", PARAKEET_BUFFERED_MODEL
+    )
+
+
+@pytest.fixture(scope="session")
+def voxtral_model_path() -> Path:
+    """Voxtral realtime streaming canary (accepts VOXTRAL_REALTIME_STREAM)."""
+    return _family_model("TRANSCRIBE_SMOKE_VOXTRAL_MODEL", VOXTRAL_MODEL)

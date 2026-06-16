@@ -134,3 +134,73 @@ def test_supports_probe_all_features(model_path):
             assert model.supports(feature) in (True, False)
         with pytest.raises(t.InvalidArgument, match="unknown feature"):
             model.supports("levitation")
+
+
+# --- model-gated: per-family stream-extension happy path --------------------
+#
+# These prove the parakeet/voxtral stream extensions end to end: the typed
+# options materialize a kind-tagged struct, the model ACCEPTS the kind on its
+# stream slot, ``stream_begin`` consumes it, and a short feed + finalize emits
+# text. NOT a transcription-accuracy check (that is the family port's C-level /
+# WER job) — a short feed keeps these fast even for the 4B voxtral model, so we
+# assert the stream ran and produced non-empty text rather than pinning content.
+# Mirrors Swift's FamilyStreamTests. Each gates on its own per-family GGUF and
+# skips cleanly when absent (parakeet runs in CI once the canary repos exist;
+# voxtral is local-only — ~2.5 GB is too heavy for CI).
+
+SHORT_FEED_SAMPLES = 2 * 16000  # ~2 s at 16 kHz mono
+
+
+def _drive_short(stream, pcm):
+    """Feed ~2 s of audio in 100 ms chunks, then finalize and return the update."""
+    clip = pcm[:SHORT_FEED_SAMPLES]
+    for i in range(0, len(clip), 1600):
+        stream.feed(clip[i : i + 1600])
+    return stream.finalize()
+
+
+def test_parakeet_cache_aware_acceptance_discriminates(parakeet_stream_model_path):
+    # The header's documented discrimination: the cache-aware variant accepts
+    # PARAKEET_STREAM and rejects PARAKEET_BUFFERED_STREAM.
+    with t.Model(parakeet_stream_model_path) as model:
+        assert model.accepts(t.ParakeetStreamOptions()) is True
+        assert model.accepts(t.ParakeetBufferedStreamOptions()) is False
+
+
+def test_parakeet_cache_aware_streams_with_extension(
+        parakeet_stream_model_path, audio_pcm):
+    with t.Model(parakeet_stream_model_path) as model, model.session() as session:
+        # att_context_right=-1 selects the model's default (max-accuracy) menu entry.
+        with session.stream(
+                family=t.ParakeetStreamOptions(att_context_right=-1)) as stream:
+            update = _drive_short(stream, audio_pcm)
+            text = stream.text().full
+    assert update.is_final
+    assert text.strip(), "cache-aware stream produced no text"
+
+
+def test_parakeet_buffered_streams_with_extension(
+        parakeet_buffered_model_path, audio_pcm):
+    with t.Model(parakeet_buffered_model_path) as model:
+        assert model.accepts(t.ParakeetBufferedStreamOptions()) is True
+        # Defaults (left/chunk/right = -1) resolve to the model's menu default
+        # (L=5600/C=1040/R=1040). An explicit override must be an 80 ms multiple
+        # AND land on a tuple in the training menu, else stream_begin returns
+        # INVALID_ARG — so the path-proving choice is the default.
+        with model.session() as session, session.stream(
+                family=t.ParakeetBufferedStreamOptions()) as stream:
+            update = _drive_short(stream, audio_pcm)
+            text = stream.text().full
+    assert update.is_final
+    assert text.strip(), "buffered stream produced no text"
+
+
+def test_voxtral_realtime_streams_with_extension(voxtral_model_path, audio_pcm):
+    with t.Model(voxtral_model_path) as model:
+        assert model.accepts(t.VoxtralRealtimeStreamOptions()) is True
+        with model.session() as session, session.stream(
+                family=t.VoxtralRealtimeStreamOptions(num_delay_tokens=4)) as stream:
+            update = _drive_short(stream, audio_pcm)
+            text = stream.text().full
+    assert update.is_final
+    assert text.strip(), "voxtral produced no text"

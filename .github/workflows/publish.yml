@@ -272,3 +272,69 @@ jobs:
         run: cargo publish -p transcribe-cpp-sys
       - name: Publish transcribe-cpp (the safe wrapper; resolves the just-published sys)
         run: cargo publish -p transcribe-cpp
+
+  # ---------------------------------------------------------------------------
+  # Swift binding (TranscribeCpp) — xcframework release.
+  #
+  # The Swift package is consumed as a prebuilt static `.xcframework`
+  # binaryTarget (notes/swift-bindings-plan.md; requirements §5). Releasing it
+  # means: build the four Apple slices, zip + checksum the xcframework, attach
+  # the zip as a release asset, then point the mirror repo's Package.swift
+  # `binaryTarget(url:checksum:)` at it. "Releases are cut from CI, never a
+  # laptop." macOS runner: the xcframework needs Xcode (libtool/xcodebuild).
+  # ---------------------------------------------------------------------------
+  swift-rehearsal:
+    # The shipped-artifact gate (§4): build the real xcframework and run the
+    # suite against it (transcribes the canary through the published shape).
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v8.2.0
+      - run: brew install ninja
+      - name: Build the full xcframework (macOS + iOS device + iOS simulator)
+        run: scripts/ci/build_xcframework.sh
+      - name: Package + checksum (proves the release artifact + licenses)
+        run: scripts/ci/package_xcframework.sh
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: swift test against the built xcframework
+        working-directory: bindings/swift
+        run: swift test
+
+  swift-release:
+    # Tags only. Builds the artifact, attaches the zip to the tag's release, and
+    # emits the checksum. The mirror-repo Package.swift bump is the final step
+    # (CJ-gated — needs the dedicated SwiftPM repo + a deploy key; see the plan).
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    permissions:
+      contents: write  # attach the release asset
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install ninja
+      - name: Build the full xcframework
+        run: scripts/ci/build_xcframework.sh
+      - name: Package + checksum
+        id: pkg
+        run: |
+          scripts/ci/package_xcframework.sh | tee pkg.txt
+          echo "checksum=$(awk '/checksum:/ {print $2}' pkg.txt)" >> "$GITHUB_OUTPUT"
+      - name: Attach the xcframework zip to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            bindings/swift/build-apple/TranscribeCpp.xcframework.zip --clobber
+      - name: Checksum for the mirror repo's Package.swift
+        run: |
+          echo "binaryTarget(url: .../TranscribeCpp.xcframework.zip,"
+          echo "             checksum: \"${{ steps.pkg.outputs.checksum }}\")"
+      # TODO(CJ): push the thin Swift sources + the url/checksum-bearing
+      # Package.swift to the dedicated mirror repo (transcribe-cpp-swift) and tag
+      # it, so `swift package add` resolves the release. Needs the mirror repo +
+      # a deploy key secret. Until then, the asset + checksum above are produced
+      # but not wired into a resolvable SwiftPM tag.

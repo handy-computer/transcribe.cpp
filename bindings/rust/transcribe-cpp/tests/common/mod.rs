@@ -60,6 +60,41 @@ pub fn smoke_streaming_model() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// A per-family streaming-extension canary: env override or the in-repo GGUF,
+/// `None` when neither is present (clean skip). Not in the CI fetch-canary set,
+/// so these run locally and skip in CI.
+fn family_model(env_var: &str, default_rel: &str) -> Option<PathBuf> {
+    ensure_backends();
+    let path = std::env::var_os(env_var)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join(default_rel));
+    path.is_file().then_some(path)
+}
+
+/// Cache-aware parakeet streaming canary (accepts PARAKEET_STREAM).
+pub fn smoke_parakeet_stream_model() -> Option<PathBuf> {
+    family_model(
+        "TRANSCRIBE_SMOKE_PARAKEET_STREAM_MODEL",
+        "models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b-Q8_0.gguf",
+    )
+}
+
+/// Chunked/buffered parakeet streaming canary (accepts PARAKEET_BUFFERED_STREAM).
+pub fn smoke_parakeet_buffered_model() -> Option<PathBuf> {
+    family_model(
+        "TRANSCRIBE_SMOKE_PARAKEET_BUFFERED_MODEL",
+        "models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b-Q8_0.gguf",
+    )
+}
+
+/// Voxtral realtime streaming canary (accepts VOXTRAL_REALTIME_STREAM).
+pub fn smoke_voxtral_model() -> Option<PathBuf> {
+    family_model(
+        "TRANSCRIBE_SMOKE_VOXTRAL_MODEL",
+        "models/Voxtral-Mini-4B-Realtime-2602/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf",
+    )
+}
+
 /// Both fixtures together; prints a skip note and returns `None` if either is
 /// missing (so the caller can `return` early — the Rust equivalent of skip).
 pub fn smoke_fixtures(test: &str) -> Option<(PathBuf, Vec<f32>)> {
