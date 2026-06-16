@@ -49,7 +49,10 @@ fn parakeet_cache_aware_acceptance_discriminates() {
         "cache-aware should accept PARAKEET_STREAM"
     );
     assert!(
-        !model.accepts_ext(ExtSlot::Stream, TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM),
+        !model.accepts_ext(
+            ExtSlot::Stream,
+            TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM
+        ),
         "cache-aware should reject PARAKEET_BUFFERED_STREAM"
     );
 }
@@ -73,20 +76,27 @@ fn parakeet_cache_aware_streams_with_extension() {
     let mut stream = session.stream(&RunOptions::default(), &opts).unwrap();
     let (is_final, text) = short_feed_text(&mut stream, &pcm);
     assert!(is_final);
-    assert!(!text.trim().is_empty(), "cache-aware stream produced no text");
+    assert!(
+        !text.trim().is_empty(),
+        "cache-aware stream produced no text"
+    );
 }
 
 #[test]
 fn parakeet_buffered_streams_with_extension() {
-    let (Some(model_path), Some(pcm)) =
-        (common::smoke_parakeet_buffered_model(), common::smoke_audio())
-    else {
+    let (Some(model_path), Some(pcm)) = (
+        common::smoke_parakeet_buffered_model(),
+        common::smoke_audio(),
+    ) else {
         eprintln!("skip parakeet_buffered_streams_with_extension: model/audio absent");
         return;
     };
     let model = Model::load(&model_path).unwrap();
     assert!(
-        model.accepts_ext(ExtSlot::Stream, TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM),
+        model.accepts_ext(
+            ExtSlot::Stream,
+            TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM
+        ),
         "buffered model should accept PARAKEET_BUFFERED_STREAM"
     );
     // Defaults (left/chunk/right = None -> -1) resolve to the model's menu
@@ -120,10 +130,12 @@ fn voxtral_realtime_streams_with_extension() {
     );
     let mut session = model.session().unwrap();
     let opts = StreamOptions {
-        family: Some(StreamExtension::VoxtralRealtime(VoxtralRealtimeStreamOptions {
-            num_delay_tokens: Some(4),
-            ..Default::default()
-        })),
+        family: Some(StreamExtension::VoxtralRealtime(
+            VoxtralRealtimeStreamOptions {
+                num_delay_tokens: Some(4),
+                ..Default::default()
+            },
+        )),
         ..Default::default()
     };
     let mut stream = session.stream(&RunOptions::default(), &opts).unwrap();
