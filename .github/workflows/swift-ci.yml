@@ -50,7 +50,7 @@ concurrency:
 
 jobs:
   swift-gates:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v8.2.0
@@ -58,7 +58,7 @@ jobs:
         run: uv run --no-project scripts/ci/swift_abihash_check.py
 
   swift-macos:
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64]
     env:
       # The CMake builds inside build_xcframework.sh honor these launcher env
       # vars (CMake initializes CMAKE_<LANG>_COMPILER_LAUNCHER from them).
@@ -101,7 +101,7 @@ jobs:
           done
 
   swift-ios:
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64]
     env:
       CMAKE_C_COMPILER_LAUNCHER: ccache
       CMAKE_CXX_COMPILER_LAUNCHER: ccache
