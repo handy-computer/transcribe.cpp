@@ -31,7 +31,7 @@
     "build": "tsc",
     "build:native": "node scripts/build-from-source.mjs",
     "pretest": "npm run build",
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test test/*.test.mjs",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
