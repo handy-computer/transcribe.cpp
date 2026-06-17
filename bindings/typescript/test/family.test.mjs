@@ -57,7 +57,11 @@ modelTest("parakeet buffered stream extension", PARAKEET_BUFFERED_MODEL, async (
   try {
     assert.equal(m.accepts({ kind: "parakeet_buffered" }), true);
     const s = m.createSession();
-    const stream = await s.stream({ family: { kind: "parakeet_buffered", chunkMs: 2000 } });
+    // Defaults land in the model's chunk/left/right menu; an arbitrary chunkMs
+    // (e.g. 2000 -> 25 encoder frames) is rejected by stream_begin. Field
+    // plumbing for a stream-slot ext is already covered by the cache-aware test
+    // above (attContextRight), so here we just exercise the buffered path.
+    const stream = await s.stream({ family: { kind: "parakeet_buffered" } });
     await feedChunks(stream, jfk());
     await stream.finalize();
     assert.ok((stream.text.committed + stream.text.full).trim().length > 0);
