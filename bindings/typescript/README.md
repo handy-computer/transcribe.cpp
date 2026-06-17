@@ -85,7 +85,7 @@ model.accepts({ kind: "whisper" }); // does this model take that extension?
 ### Resource management
 
 Both `TranscribeModel` and `Session` implement `Symbol.dispose`, so `using`
-works (TypeScript 5.2+ / Node 20+):
+works (TypeScript 5.2+ / Node 22+):
 
 ```ts
 using model = await TranscribeModel.load("model.gguf");
@@ -128,7 +128,7 @@ owned and outlive the model.
 The binding is one native artifact (koffi, an N-API addon) plus plain ESM, so any
 runtime with N-API support runs the same package — there is no per-runtime build.
 
-- **Node ≥ 20** — the primary, fully tested target.
+- **Node ≥ 22** — the primary, fully tested target.
 - **Deno ≥ 2** — runs the package unmodified via `deno run` (use `--allow-ffi
   --allow-read --allow-env`, or `-A`). Note: `deno compile` does not bundle native
   addons, so the compiled-binary path is unsupported.

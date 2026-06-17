@@ -25,7 +25,7 @@
   },
   "keywords": ["transcription", "speech-to-text", "asr", "stt", "ggml", "whisper", "parakeet"],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
