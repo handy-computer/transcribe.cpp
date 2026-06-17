@@ -103,10 +103,10 @@ jobs:
       matrix:
         include:
           - label: linux-static
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-2vcpu-ubuntu-2404
             features: ""
           - label: linux-shared
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-2vcpu-ubuntu-2404
             features: "--features shared"
           # Loadable per-ISA backend modules (the multi-ISA CPU provider posture)
           # exercised through Rust: build.rs turns on BACKEND_DL + CPU_ALL_VARIANTS
@@ -114,7 +114,7 @@ jobs:
           # init_backends_default() loads them. CPU-only (no Vulkan SDK needed);
           # the C-level Vulkan degradation three-tier stays in native-ci.
           - label: linux-dynamic-backends
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-2vcpu-ubuntu-2404
             features: "--features dynamic-backends"
           # macOS arm64 on the bare-metal M4 mini (all macOS arm64 CI on owned
           # hardware; the source build turns Metal on, and real hardware is the

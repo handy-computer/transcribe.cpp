@@ -78,7 +78,7 @@ jobs:
         run: uv run --no-project bindings/python/_generate/check_version_sync.py
 
   python-shared:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
