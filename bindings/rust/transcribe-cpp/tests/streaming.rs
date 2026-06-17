@@ -70,9 +70,11 @@ fn on_finalize_policy_commits_full_text() {
     let mut session = Model::load(&model_path).unwrap().session().unwrap();
     let opts = StreamOptions {
         commit_policy: transcribe_cpp::CommitPolicy::OnFinalize,
-        family: Some(StreamExtension::MoonshineStreaming(MoonshineStreamingOptions {
-            min_decode_interval_ms: Some(COARSE_DECODE_INTERVAL_MS),
-        })),
+        family: Some(StreamExtension::MoonshineStreaming(
+            MoonshineStreamingOptions {
+                min_decode_interval_ms: Some(COARSE_DECODE_INTERVAL_MS),
+            },
+        )),
         ..Default::default()
     };
     let mut stream = session.stream(&RunOptions::default(), &opts).unwrap();
@@ -94,9 +96,11 @@ fn stream_revision_advances() {
     };
     let mut session = Model::load(&model_path).unwrap().session().unwrap();
     let opts = StreamOptions {
-        family: Some(StreamExtension::MoonshineStreaming(MoonshineStreamingOptions {
-            min_decode_interval_ms: Some(COARSE_DECODE_INTERVAL_MS),
-        })),
+        family: Some(StreamExtension::MoonshineStreaming(
+            MoonshineStreamingOptions {
+                min_decode_interval_ms: Some(COARSE_DECODE_INTERVAL_MS),
+            },
+        )),
         ..Default::default()
     };
     let mut stream = session.stream(&RunOptions::default(), &opts).unwrap();
