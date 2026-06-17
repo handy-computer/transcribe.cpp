@@ -6,6 +6,18 @@ mod common;
 use transcribe_cpp::{Model, RunOptions, StreamExtension, StreamOptions, StreamState};
 use transcribe_cpp::{MoonshineStreamingOptions, Stream};
 
+/// Partial-decode cadence for the mechanics tests that only assert the
+/// post-finalize text. Aligned to the model, not an arbitrary number: the
+/// streaming encoder emits one frame per 20 ms (frame_len 80 × 4 subsampling),
+/// and the default cadence is one 12-frame cumulative right-context window
+/// (240 ms). This is 4 such windows — 48 encoder frames — so a partial decode
+/// fires ~once/second instead of ~4×/second. Each partial decode re-decodes the
+/// transcript from BOS, so quartering their count is a ~4× speedup; the
+/// post-finalize assertions are unaffected (finalize still does the full
+/// decode). `streams_jfk_committed_text` deliberately keeps the 240 ms default
+/// so the realistic cadence + the default-resolution path stay covered.
+const COARSE_DECODE_INTERVAL_MS: i32 = 960;
+
 fn feed_in_chunks(stream: &mut Stream<'_>, pcm: &[f32], chunk: usize) {
     for frame in pcm.chunks(chunk) {
         stream.feed(frame).expect("feed");
@@ -58,6 +70,9 @@ fn on_finalize_policy_commits_full_text() {
     let mut session = Model::load(&model_path).unwrap().session().unwrap();
     let opts = StreamOptions {
         commit_policy: transcribe_cpp::CommitPolicy::OnFinalize,
+        family: Some(StreamExtension::MoonshineStreaming(MoonshineStreamingOptions {
+            min_decode_interval_ms: Some(COARSE_DECODE_INTERVAL_MS),
+        })),
         ..Default::default()
     };
     let mut stream = session.stream(&RunOptions::default(), &opts).unwrap();
@@ -78,9 +93,13 @@ fn stream_revision_advances() {
         return;
     };
     let mut session = Model::load(&model_path).unwrap().session().unwrap();
-    let mut stream = session
-        .stream(&RunOptions::default(), &StreamOptions::default())
-        .unwrap();
+    let opts = StreamOptions {
+        family: Some(StreamExtension::MoonshineStreaming(MoonshineStreamingOptions {
+            min_decode_interval_ms: Some(COARSE_DECODE_INTERVAL_MS),
+        })),
+        ..Default::default()
+    };
+    let mut stream = session.stream(&RunOptions::default(), &opts).unwrap();
     let r0 = stream.revision();
     feed_in_chunks(&mut stream, &pcm, 1600);
     stream.finalize().unwrap();
