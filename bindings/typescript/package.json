@@ -1,7 +1,7 @@
 {
   "name": "transcribe-cpp",
-  "version": "0.0.0",
-  "description": "TypeScript/Node.js bindings for transcribe.cpp (pre-release name reservation placeholder)",
+  "version": "0.0.1",
+  "description": "TypeScript/Node.js bindings for transcribe.cpp — a C/C++ speech-to-text library built on ggml",
   "type": "module",
   "exports": {
     ".": {
@@ -25,13 +25,27 @@
   },
   "keywords": ["transcription", "speech-to-text", "asr", "stt", "ggml", "whisper", "parakeet"],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "bun run build"
+    "build:native": "node scripts/build-from-source.mjs",
+    "pretest": "npm run build",
+    "test": "node --test \"test/*.test.mjs\"",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "koffi": "^3.0.2"
+  },
+  "optionalDependencies": {
+    "@transcribe-cpp/darwin-arm64-metal": "0.0.1",
+    "@transcribe-cpp/darwin-x64-cpu": "0.0.1",
+    "@transcribe-cpp/linux-x64-cpu-vulkan": "0.0.1",
+    "@transcribe-cpp/linux-arm64-cpu-vulkan": "0.0.1",
+    "@transcribe-cpp/win32-x64-cpu-vulkan": "0.0.1"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.6.0"
   }
 }

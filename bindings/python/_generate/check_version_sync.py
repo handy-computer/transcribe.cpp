@@ -46,7 +46,7 @@ BINDING_MANIFESTS = [
     # bindings/rust/transcribe-cpp/.
     ("Cargo.toml", "cargo", True),
     ("bindings/rust/transcribe-cpp/Cargo.toml", "cargo", True),
-    ("bindings/typescript/package.json", "npm", False),
+    ("bindings/typescript/package.json", "npm", True),
 ]
 
 

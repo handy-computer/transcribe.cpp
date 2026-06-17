@@ -352,6 +352,112 @@ jobs:
       # a deploy key secret. Until then, the asset + checksum above are produced
       # but not wired into a resolvable SwiftPM tag.
 
+  # ---- npm (TypeScript) --------------------------------------------------------
+  # Mirrors the Python/Rust path: a dispatch REHEARSAL that builds + installs the
+  # shipped tarballs and transcribes the canary (the §4 shipped-artifact gate),
+  # and a tag-gated RELEASE that turns the native bundles into per-platform npm
+  # packages and publishes them with the pure-TS API package.
+
+  ts-rehearsal:
+    # Pack the API + a platform package, install from the tarballs into a clean
+    # dir, and transcribe the canary — exactly the clean-machine path, no
+    # TRANSCRIBE_LIBRARY (the install stands on the platform package alone).
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, macOS, ARM64]
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: astral-sh/setup-uv@v8.2.0
+      - run: command -v ninja >/dev/null || brew install ninja
+      - name: Build + install a shared libtranscribe (the native-bundle twin)
+        run: |
+          cmake -B build-shared -G Ninja -DTRANSCRIBE_BUILD_SHARED=ON \
+            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON
+          cmake --build build-shared --target transcribe
+          cmake --install build-shared --prefix "$PWD/ts-native"
+      - name: Pack API + platform tarballs
+        working-directory: bindings/typescript
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          ver="$(node -p "require('./package.json').version")"
+          node scripts/pack-platform.mjs --lib-dir "$GITHUB_WORKSPACE/ts-native/lib" \
+            --tuple darwin-arm64-metal --version "$ver" --out /tmp/ts-platform
+          rm -rf /tmp/ts-tarballs && mkdir -p /tmp/ts-tarballs
+          npm pack --pack-destination /tmp/ts-tarballs
+          (cd /tmp/ts-platform/darwin-arm64-metal && npm pack --pack-destination /tmp/ts-tarballs)
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: Install from tarballs (clean dir) and transcribe the canary
+        run: |
+          rm -rf /tmp/ts-consumer && mkdir -p /tmp/ts-consumer
+          (cd /tmp/ts-consumer && npm init -y >/dev/null && \
+            npm install --no-audit --no-fund /tmp/ts-tarballs/*.tgz)
+          TS_PKG_ENTRY=/tmp/ts-consumer/node_modules/transcribe-cpp/dist/index.js \
+          TRANSCRIBE_SMOKE_AUDIO="$GITHUB_WORKSPACE/samples/jfk.wav" \
+            node scripts/ci/ts_packed_smoke.mjs
+
+  ts-release:
+    # Tags only. Build each @transcribe-cpp/<platform> package from its native
+    # bundle (the exact bytes the wheels shipped) and publish them + the pure-TS
+    # API package to npm. The `npm` environment carries the approval gate.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [create-release, wheels]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: native-bundles
+      - name: Build platform packages from the native bundles
+        working-directory: bindings/typescript
+        run: |
+          set -e
+          npm install --no-audit --no-fund
+          npm run build
+          ver="$(node -p "require('./package.json').version")"
+          out=/tmp/ts-platform
+          # build-tuple (bundle) -> npm tuple (Node platform-arch convention)
+          map() { case "$1" in
+            macos-arm64-metal) echo darwin-arm64-metal ;;
+            macos-x86_64-cpu) echo darwin-x64-cpu ;;
+            linux-x86_64-cpu-vulkan) echo linux-x64-cpu-vulkan ;;
+            linux-aarch64-cpu-vulkan) echo linux-arm64-cpu-vulkan ;;
+            windows-x86_64-cpu-vulkan) echo win32-x64-cpu-vulkan ;;
+            *) echo "" ;; esac; }
+          for f in "$GITHUB_WORKSPACE"/native-bundles/transcribe-native-*.tar.gz; do
+            base="$(basename "$f" .tar.gz)"; build_tuple="${base#transcribe-native-}"
+            npm_tuple="$(map "$build_tuple")"
+            [ -n "$npm_tuple" ] || { echo "::warning::no npm tuple for $build_tuple"; continue; }
+            ex="/tmp/extract/$build_tuple"; rm -rf "$ex"; mkdir -p "$ex"; tar xzf "$f" -C "$ex"
+            libdir="$(dirname "$(find "$ex" \( -name 'libtranscribe.*' -o -name 'transcribe.dll' \) | head -1)")"
+            node scripts/pack-platform.mjs --lib-dir "$libdir" --tuple "$npm_tuple" --version "$ver" --out "$out"
+          done
+          echo "TS_VER=$ver" >> "$GITHUB_ENV"
+      - name: Publish platform packages, then the API package
+        working-directory: bindings/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -e
+          for d in /tmp/ts-platform/*/; do
+            echo "publishing $(node -p "require('${d}package.json').name")"
+            npm publish "$d" --access public
+          done
+          npm publish --access public   # the API package (transcribe-cpp)
+
   finalize-release:
     # Tags only. Publish the draft GitHub Release only after its hosted assets
     # and the core PyPI publish have completed. crates.io has its own approval
