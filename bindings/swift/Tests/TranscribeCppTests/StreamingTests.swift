@@ -35,6 +35,7 @@ final class StreamingTests: XCTestCase {
         let stream = try session.stream()
         try Fixtures.drive(stream, pcm: pcm)
         XCTAssertGreaterThan(stream.revision, 0)
+        XCTAssertNil(stream.lastStatus, "a healthy stream has no failure status")
     }
 
     func testStreamResetReturnsToIdleAndIsReusable() throws {

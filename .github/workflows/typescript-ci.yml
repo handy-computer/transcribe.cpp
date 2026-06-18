@@ -1,0 +1,206 @@
+name: typescript-ci
+
+# Every-PR gates for the TypeScript/Node binding (npm package transcribe-cpp).
+# Thin per-binding workflow on the shared rails: the binding-agnostic C
+# contracts are certified in native-ci.yml; this file adds only what the koffi
+# FFI layer introduces.
+#
+#   - ts-gates:  the generated-FFI drift gate (generate.py --check, which covers
+#                _generated.py + transcribe.abihash + the TS _generated.ts),
+#                version-sync, and the TypeScript typecheck (tsc). No native
+#                build — fast, runs everywhere including forks.
+#   - ts-build:  build a shared libtranscribe, then run the node:test suite and
+#                the 5 canonical examples against it on linux, macos, and windows.
+#
+# Two test tiers (requirements §4): the no-model tests (version/ABI/error
+# mapping/device discovery) always run, including on forks. The model-gated
+# tests (transcription, streaming, cancel, family extensions) un-skip only when
+# the canary GGUFs are fetched — same fetch-canary action + HF_TOKEN gate the
+# other bindings use — and skip cleanly otherwise.
+#
+# Scope: Node only for v1 (koffi is N-API-based; Bun/Deno are a documented
+# follow-up). Path filters follow native-ci.yml's shape: the binding's own tree
+# plus the native paths it loads from. Branch protection is OFF (project
+# decision, 2026-06-13).
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - "bindings/typescript/**"
+      - "src/**"
+      - "include/**"
+      - "ggml/**"
+      - "cmake/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "bindings/python/_generate/generate.py"
+      - "bindings/python/_generate/check_version_sync.py"
+      - ".github/workflows/typescript-ci.yml"
+      - ".github/actions/**"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ts-gates:
+    # Cheap, native-build-free gates. generate.py --check needs libclang; users
+    # never do, because the FFI surface (_generated.ts) is committed.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0 # for the python gate scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install libclang (FFI generator)
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev clang
+      - name: FFI drift gate (_generated.py + transcribe.abihash + _generated.ts)
+        run: uv run --no-project --with 'libclang==18.1.1' bindings/python/_generate/generate.py --check
+      - name: Version sync (header <-> every active manifest)
+        run: uv run --no-project python bindings/python/_generate/check_version_sync.py
+      - name: Install + typecheck
+        working-directory: bindings/typescript
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+  ts-build:
+    name: ts-build (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64
+            runner: blacksmith-2vcpu-ubuntu-2404
+            lib: libtranscribe.so
+            lib_subdir: src       # .so is a LIBRARY artifact (build-shared/src)
+            cmake_flags: ""
+          # macOS arm64 on owned hardware; Metal on, embedded library (matches
+          # native-ci / the shipped macOS wheel posture).
+          - label: macos-arm64
+            runner: [self-hosted, macOS, ARM64]
+            lib: libtranscribe.dylib
+            lib_subdir: src
+            cmake_flags: "-DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON"
+          # Windows / MSVC (Blacksmith windows-2025, the wheel + rust-ci image).
+          # The first koffi load of this tree on Windows: it proves transcribe.dll
+          # and its co-located ggml DLLs resolve. koffi's first LoadLibraryW fails
+          # to find the sibling DLLs (Windows does not search a DLL's own dir for
+          # its deps), then retries with LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, which
+          # does — so the package-local layout the loader/pack-platform ship is
+          # exactly what this exercises. transcribe.dll is a RUNTIME artifact
+          # (build-shared/bin, not src). MSVC + Ninja + vcpkg zlib mirror rust-ci's
+          # Windows leg; no ccache there, so it's a cold ggml build every run.
+          - label: windows-x64
+            runner: blacksmith-2vcpu-windows-2025
+            lib: transcribe.dll
+            lib_subdir: bin       # DLL is a RUNTIME artifact (build-shared/bin)
+            cmake_flags: ""
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60          # headroom for the cold MSVC ggml build on Windows
+    env:
+      # Gates the model-test tier: present on this repo's branches, absent on
+      # forks (where fetch-canary skips and the model tests skip cleanly).
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: denoland/setup-deno@v2
+        if: runner.os != 'Windows'   # the Deno smoke below is non-Windows only
+        with:
+          deno-version: v2.x
+      - uses: astral-sh/setup-uv@v8.2.0 # fetch-canary fetches via uvx
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
+      # Windows toolchain mirrors rust-ci's Windows leg: cl.exe ambient for the
+      # Ninja generator (else CMake silently falls back to the image's MinGW gcc),
+      # and static zlib against the dynamic CRT resolved via CMAKE_PREFIX_PATH.
+      - name: Set up MSVC (cl.exe on PATH for the Ninja generator)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install build deps (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ninja --no-progress -y
+          vcpkg install zlib:x64-windows-static-md
+          $zlibPrefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md" -replace '\\','/'
+          Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$zlibPrefix"
+      - name: Enable ccache launcher
+        if: runner.os == 'Linux'
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+      - name: CPU ISA signature (ccache key)
+        if: runner.os == 'Linux'
+        run: echo "CPU_SIG=$(grep -m1 '^flags' /proc/cpuinfo | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
+      - name: ccache (native source build)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-ts-build-${{ matrix.label }}-${{ env.CPU_SIG }}-${{ github.sha }}
+          restore-keys: ccache-ts-build-${{ matrix.label }}-${{ env.CPU_SIG }}-
+      - name: Build shared libtranscribe
+        # bash on every OS (Git Bash on the Windows runner) so the body and the
+        # GITHUB_ENV append are identical. $GITHUB_WORKSPACE, not $PWD: on Windows
+        # bash, $PWD is an MSYS /d/... path koffi/node can't open; the workspace
+        # var is a native path. lib_subdir selects bin (Windows RUNTIME) vs src.
+        shell: bash
+        run: |
+          cmake -B build-shared -G Ninja -DTRANSCRIBE_BUILD_SHARED=ON ${{ matrix.cmake_flags }}
+          cmake --build build-shared --target transcribe
+          echo "TRANSCRIBE_LIBRARY=$GITHUB_WORKSPACE/build-shared/${{ matrix.lib_subdir }}/${{ matrix.lib }}" >> "$GITHUB_ENV"
+      - name: Install + build the binding
+        working-directory: bindings/typescript
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      # The canary GGUFs upgrade the suite from no-model gates to real
+      # transcription/streaming/cancel/extension coverage. jfk.wav ships in-repo;
+      # only the model paths need exporting (fetch-canary handles that).
+      #
+      # Windows is no-model-only for now: that is the koffi DLL-resolution proof
+      # this leg was added for, and it is unaffected. The model tier is deferred
+      # because loading a model spins up the ggml CPU threadpool, and on MSVC with
+      # OpenMP (vcomp) the runtime crashes (0xC0000005) at process exit under
+      # node/koffi, after the run itself succeeds. Skipping the canary makes the
+      # model-gated tests and the (model-loading) examples self-skip cleanly. Drop
+      # this guard to re-enable the Windows model tier once that teardown crash in
+      # the MSVC OpenMP runtime is fixed.
+      - uses: ./.github/actions/fetch-canary
+        if: runner.os != 'Windows'
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: Conformance (no-model tier always; model tier when canary present)
+        working-directory: bindings/typescript
+        run: npm test
+      - name: Examples (CI-executed; §6 Rosetta set)
+        working-directory: bindings/typescript
+        shell: bash   # the loop is bash syntax; Git Bash makes it identical on Windows
+        run: |
+          for ex in transcribe-file streaming batch backend-select error-handling; do
+            echo "=== example: $ex ==="
+            node "examples/$ex.mjs"
+          done
+      # Deno runs the SAME unmodified package via N-API (no adapter). Proves the
+      # binding is engine-portable; self-skips when the canary is absent. Non-
+      # Windows: the Windows leg's job is the Node + koffi DLL-resolution proof,
+      # and Deno-on-Windows N-API quirks shouldn't gate that signal.
+      - name: Deno smoke (run the package as-is under deno)
+        if: runner.os != 'Windows'
+        working-directory: bindings/typescript
+        run: deno run --allow-ffi --allow-read --allow-env --allow-sys examples/transcribe-file.mjs
+      - name: ccache stats
+        if: runner.os == 'Linux'
+        run: ccache -s | head -8

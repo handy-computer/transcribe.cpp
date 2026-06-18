@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parents[3]
 HEADER = REPO / "include" / "transcribe.h"
 PYPROJECT = REPO / "bindings" / "python" / "pyproject.toml"
 INIT = REPO / "bindings" / "python" / "src" / "transcribe_cpp" / "__init__.py"
+TS_PACKAGE_JSON = REPO / "bindings" / "typescript" / "package.json"
 
 # Binding package manifests (requirements doc §2: every manifest is derived
 # from or gated against the header). Gated by the `active` flag: a 0.0.0
@@ -46,7 +47,7 @@ BINDING_MANIFESTS = [
     # bindings/rust/transcribe-cpp/.
     ("Cargo.toml", "cargo", True),
     ("bindings/rust/transcribe-cpp/Cargo.toml", "cargo", True),
-    ("bindings/typescript/package.json", "npm", False),
+    ("bindings/typescript/package.json", "npm", True),
 ]
 
 
@@ -107,6 +108,20 @@ def native_pin_versions(text: str) -> "dict[str, str | None]":
     return {f"pyproject.toml ({name} pin)": version for name, version in pins}
 
 
+def npm_optional_pins(text: str) -> "dict[str, str | None]":
+    # The npm analog of native_pin_versions: the API package
+    # (bindings/typescript/package.json) pins each @transcribe-cpp/<platform>
+    # provider in optionalDependencies at an exact version. Pre-1.0 they must
+    # share the base version with everything else, exactly as the Python native
+    # pins do. The release job (ts-release) re-syncs them to the published
+    # version; this is the static counterpart so a forgotten bump fails CI.
+    block = re.search(r'"optionalDependencies"\s*:\s*\{([^}]*)\}', text, re.S)
+    pins = re.findall(r'"(@transcribe-cpp/[^"]+)"\s*:\s*"([^"]+)"', block.group(1)) if block else []
+    if not pins:
+        return {"package.json (optionalDependencies)": None}
+    return {f"package.json ({name} pin)": version for name, version in pins}
+
+
 def main() -> int:
     pyproject_text = PYPROJECT.read_text()
     sources = {
@@ -115,6 +130,8 @@ def main() -> int:
         "__init__.__version__": init_version(INIT.read_text()),
     }
     sources.update(native_pin_versions(pyproject_text))
+    if TS_PACKAGE_JSON.exists():
+        sources.update(npm_optional_pins(TS_PACKAGE_JSON.read_text()))
 
     # Binding manifests: active ones join the equality set; inactive ones
     # must merely exist and parse (placeholder versions are reported, not

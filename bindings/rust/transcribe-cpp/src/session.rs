@@ -581,6 +581,20 @@ impl Stream<'_> {
         unsafe { sys::transcribe_stream_revision(self.session.ptr) }
     }
 
+    /// The stream's recorded terminal failure, or `None` while it is healthy.
+    ///
+    /// Set after a [`feed`](Self::feed) / [`finalize`](Self::finalize)
+    /// transitioned the stream to [`StreamState::Failed`]; reset by a new
+    /// stream. Inspect it when [`state`](Self::state) is `Failed` to learn why.
+    pub fn last_status(&self) -> Option<Error> {
+        let status = unsafe { sys::transcribe_stream_last_status(self.session.ptr) };
+        if status == sys::transcribe_status::TRANSCRIBE_OK {
+            None
+        } else {
+            Some(error_for_status(status, "stream"))
+        }
+    }
+
     /// Whether the stream was ended by cancellation.
     pub fn was_aborted(&self) -> bool {
         self.session.was_aborted()

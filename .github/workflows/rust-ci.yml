@@ -25,6 +25,15 @@ name: rust-ci
 # `return` early (a clean skip) otherwise. One `cargo test` invocation runs
 # both tiers; the model tier self-skips when the canary env is absent.
 #
+# Posture cost split: the model tier (canary fetch + the model-gated tests + the
+# examples) runs ONLY on the representative *-static leg of each OS. The *-shared
+# and *-dynamic-backends legs are LINK-posture proofs, not marshalling proofs
+# (the marshalling code is byte-identical across postures), so they run build +
+# the -sys FFI smoke + the always-on no-model tier (which still covers the
+# dynamic-backends module load) and skip the canary fetch — dropping the
+# duplicated model-tier cost (chiefly the moonshine streaming conformance) from
+# the legs that can't catch a marshalling regression anyway.
+#
 # Windows joins here: the first cargo-driven MSVC build of this tree (static
 # posture). cl.exe comes from msvc-dev-cmd, zlib from vcpkg as a static lib
 # against the dynamic CRT (`x64-windows-static-md`, matching Rust's default /MD
@@ -105,9 +114,11 @@ jobs:
           - label: linux-static
             runner: blacksmith-2vcpu-ubuntu-2404
             features: ""
+            model_tier: true   # representative leg for linux: full model tier
           - label: linux-shared
             runner: blacksmith-2vcpu-ubuntu-2404
             features: "--features shared"
+            model_tier: false  # link-posture proof only (build + -sys smoke + no-model)
           # Loadable per-ISA backend modules (the multi-ISA CPU provider posture)
           # exercised through Rust: build.rs turns on BACKEND_DL + CPU_ALL_VARIANTS
           # on x86, the modules install into the -sys prefix, and the safe crate's
@@ -116,15 +127,18 @@ jobs:
           - label: linux-dynamic-backends
             runner: blacksmith-2vcpu-ubuntu-2404
             features: "--features dynamic-backends"
+            model_tier: false  # no-model tier still covers the DL module load
           # macOS arm64 on the bare-metal M4 mini (all macOS arm64 CI on owned
           # hardware; the source build turns Metal on, and real hardware is the
           # trustworthy place to exercise it). Same posture as native-ci.
           - label: macos-arm64-static
             runner: [self-hosted, macOS, ARM64]
             features: ""
+            model_tier: true   # representative leg for macOS: full model tier
           - label: macos-arm64-shared
             runner: [self-hosted, macOS, ARM64]
             features: "--features shared"
+            model_tier: false  # link-posture proof only
           # Windows / MSVC (Blacksmith windows-2025, same image family as the
           # wheel lane). First cargo-driven MSVC build of this tree; no ccache
           # here (MSVC + ccache is fiddly), so every run is a cold ggml build —
@@ -134,9 +148,11 @@ jobs:
           - label: windows-static
             runner: blacksmith-2vcpu-windows-2025
             features: ""
+            model_tier: true   # representative leg for windows: full model tier
           - label: windows-shared
             runner: blacksmith-2vcpu-windows-2025
             features: "--features shared"
+            model_tier: false  # link-posture proof only
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -215,7 +231,12 @@ jobs:
       # (forks have none): without it the model tests skip cleanly, leaving the
       # always-on no-model tier. jfk.wav ships in-repo, so only the two model
       # paths need exporting (fetch-canary handles that).
-      - uses: ./.github/actions/fetch-canary
+      # Model tier runs only on the representative *-static leg per OS. The
+      # shared / dynamic-backends legs skip the canary fetch, so the model-gated
+      # tests in the conformance step below self-skip and only the no-model tier
+      # runs there (build + link posture + FFI surface proof).
+      - if: matrix.model_tier
+        uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
       - name: Safe-crate conformance (no-model tier always; model tier when canary present)
@@ -225,6 +246,7 @@ jobs:
       # the TRANSCRIBE_SMOKE_* env fetch-canary exports (or skips cleanly + exits
       # 0). shell:bash so the loop is identical on the windows runner (Git Bash).
       - name: Examples (CI-executed; §6 Rosetta set)
+        if: matrix.model_tier  # examples need the canary models; only the model-tier legs have them
         shell: bash
         run: |
           for ex in transcribe-file streaming batch backend-select error-handling; do

@@ -161,8 +161,13 @@ public final class Stream {
 
     public var state: StreamState { StreamState(transcribe_stream_get_state(session.ptr)) }
     public var revision: Int32 { transcribe_stream_revision(session.ptr) }
-    public var lastStatus: Int32 {
-        Int32(bitPattern: transcribe_stream_last_status(session.ptr).rawValue)
+
+    /// The stream's recorded terminal failure, or `nil` while it is healthy.
+    /// Set after a `feed`/`finalize` transitioned the stream to `.failed`; reset
+    /// by a new stream. Inspect it when `state == .failed` to learn why.
+    public var lastStatus: TranscribeError? {
+        let status = transcribe_stream_last_status(session.ptr)
+        return status == TRANSCRIBE_OK ? nil : TranscribeError.make(status, context: "stream")
     }
 
     /// The UI-stable text snapshot (committed / tentative / full).
