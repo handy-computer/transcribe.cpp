@@ -1,9 +1,9 @@
 /**
  * transcribe.cpp — TypeScript/Node.js bindings.
  *
- * A koffi FFI binding over the shared native library. Offline transcription,
- * backend discovery, log routing, and cooperative cancellation. Streaming,
- * batch, and family extensions land in later milestones.
+ * A koffi FFI binding over the shared native library: offline transcription and
+ * batch, streaming with committed/tentative text, typed per-family extensions,
+ * backend discovery, log routing, and cooperative cancellation.
  */
 
 import { native, setLogHandler, type LogHandler, type Native } from "./native.js";
@@ -136,6 +136,10 @@ function callAsync<T = number>(fn: any, ...args: any[]): Promise<T> {
   );
 }
 
+// Coerce caller PCM to a Float32Array. A Float32Array is returned AS-IS (no
+// copy): the buffer is borrowed across the async native call, which reads it on
+// a worker thread, so callers must not mutate it until the promise resolves
+// (documented on run/runBatch/feed). Other inputs already produce a fresh array.
 function toFloat32(pcm: PcmLike): Float32Array {
   let out: Float32Array;
   if (pcm instanceof Float32Array) out = pcm;
@@ -550,6 +554,11 @@ export class Session {
     };
   }
 
+  /**
+   * Transcribe one clip. The input PCM is borrowed, not copied: native code
+   * reads it on a worker thread while this runs, so do not mutate the buffer
+   * (e.g. reuse a scratch array) until the returned promise resolves.
+   */
   async run(pcm: PcmLike, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
     const n = this.#n;
     const F = n.F;
@@ -604,7 +613,11 @@ export class Session {
     return p;
   }
 
-  /** Offline batch transcription; each item carries its own success/failure. */
+  /**
+   * Offline batch transcription; each item carries its own success/failure.
+   * Inputs are borrowed, not copied: native code reads them on a worker thread
+   * while this runs, so do not mutate them until the returned promise resolves.
+   */
   async runBatch(pcms: PcmLike[], opts: TranscribeOptions = {}): Promise<BatchItem[]> {
     const n = this.#n;
     const F = n.F;
@@ -811,7 +824,11 @@ export class Stream {
     }
   }
 
-  /** Feed one chunk of PCM; returns the update snapshot. */
+  /**
+   * Feed one chunk of PCM; returns the update snapshot. The chunk is borrowed,
+   * not copied: native code reads it on a worker thread while the feed runs, so
+   * do not mutate it (e.g. reuse a capture buffer) until the promise resolves.
+   */
   async feed(pcm: PcmLike): Promise<StreamUpdate> {
     const n = this.#n;
     const h = this.#session.handle; // throws if the session was disposed
@@ -829,11 +846,14 @@ export class Stream {
       this.#inFlight = true;
       this.#sessionControl.enterCompute("feed()/finalize()");
       try {
-        check(
-          n,
-          await callAsync<number>(n.F.streamFeed, h, samples, samples.length, u),
-          "transcribe_stream_feed",
-        );
+        const status = await callAsync<number>(n.F.streamFeed, h, samples, samples.length, u);
+        if (status !== g.TRANSCRIBE_OK) {
+          // Native feed failures leave the stream in FAILED, which is no longer
+          // an active stream in the C API. Keep the wrapper readable for
+          // state/lastStatus, but free the model-wide compute slot.
+          this.#releaseLease();
+        }
+        check(n, status, "transcribe_stream_feed");
       } finally {
         this.#inFlight = false;
         this.#sessionControl.leaveCompute("feed()/finalize()");

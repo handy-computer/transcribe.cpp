@@ -232,12 +232,15 @@ export function bindLibrary(libraryPath: string): Bound {
   return { koffi, lib, T, F };
 }
 
+let abortProtoType: any = null;
+let logProtoType: any = null;
+
 /** koffi proto for the abort callback: `bool (void *userdata)`. */
 export function abortProto(): any {
-  return koffi.proto("bool TranscribeAbortCb(void *udata)");
+  return (abortProtoType ??= koffi.proto("bool TranscribeAbortCb(void *udata)"));
 }
 
 /** koffi proto for the log callback: `void (int level, const char *msg, void *ud)`. */
 export function logProto(): any {
-  return koffi.proto("void TranscribeLogCb(int level, const char *msg, void *udata)");
+  return (logProtoType ??= koffi.proto("void TranscribeLogCb(int level, const char *msg, void *udata)"));
 }

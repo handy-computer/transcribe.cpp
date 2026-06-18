@@ -8,6 +8,7 @@ import {
   version,
   getAvailableBackends,
   backendAvailable,
+  setLogHandler,
   TranscribeModel,
   Stream,
   ModelFileNotFound,
@@ -21,6 +22,17 @@ test("Stream does not expose internal lease/teardown controls", () => {
   for (const name of ["releaseLease", "deactivate", "invalidate"]) {
     assert.equal(name in Stream.prototype, false, `${name} must not be on Stream.prototype`);
   }
+});
+
+test("setLogHandler works before and after native bootstrap", () => {
+  const seen = [];
+  setLogHandler((level, message) => seen.push([level, message]));
+  const v = version();
+  assert.match(v.version, /^\d+\.\d+\.\d+/);
+
+  setLogHandler(null);
+  setLogHandler(() => {});
+  setLogHandler(null);
 });
 
 test("version exposes base version, commit, and header hash", () => {

@@ -84,8 +84,8 @@ model.accepts({ kind: "whisper" }); // does this model take that extension?
 
 ### Resource management
 
-Both `TranscribeModel` and `Session` implement `Symbol.dispose`, so `using`
-works (TypeScript 5.2+ / Node 22+):
+`TranscribeModel`, `Session`, and `Stream` all implement `Symbol.dispose`, so
+`using` works (TypeScript 5.2+ / Node 22+):
 
 ```ts
 using model = await TranscribeModel.load("model.gguf");
@@ -93,8 +93,8 @@ using session = model.createSession();
 // disposed automatically at block exit
 ```
 
-Disposing a model disposes its sessions; disposal is idempotent and order-
-independent.
+Disposing a model disposes its sessions; disposing a stream resets it (releasing
+the model lease). Disposal is idempotent and order-independent.
 
 ## Backend selection
 
@@ -144,6 +144,10 @@ while a call against it is in flight** — it is single-threaded in the C librar
 - Disposing a `Session` or `TranscribeModel` while a stream is still active
   releases the lease and invalidates the stream — its later calls throw rather
   than touch the freed handle.
+- The **input PCM is borrowed, not copied**: `run`/`runBatch`/`feed` hand the
+  buffer to native code that reads it on the worker thread, so do not mutate it
+  (e.g. reuse a scratch/capture buffer) until the returned promise resolves.
+  Pass a fresh buffer per call, or `await` before overwriting.
 
 The normal pattern is safe — `await` first, then read:
 
