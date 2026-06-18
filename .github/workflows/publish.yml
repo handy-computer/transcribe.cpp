@@ -52,7 +52,7 @@ jobs:
     # Tags only. Owns creation of the GitHub Release object. Keep it draft
     # until the mandatory publishers have succeeded and assets are verified.
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
@@ -296,7 +296,7 @@ jobs:
     # The shipped-artifact gate (§4): build the real xcframework and run the
     # suite against it (transcribes the canary through the published shape).
     if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-15
+    runs-on: [self-hosted, macOS, ARM64]
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -320,7 +320,7 @@ jobs:
     # (CJ-gated — needs the dedicated SwiftPM repo + a deploy key; see the plan).
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [create-release]
-    runs-on: macos-15
+    runs-on: blacksmith-6vcpu-macos-15
     permissions:
       contents: write  # attach the release asset
     steps:
@@ -476,7 +476,7 @@ jobs:
     # gate and does not host artifacts on this release.
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [publish-pypi, release-assets, swift-release]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: write  # publish the draft release
       actions: write   # dispatch wheel-index
