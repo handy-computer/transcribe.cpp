@@ -169,7 +169,17 @@ jobs:
       # The canary GGUFs upgrade the suite from no-model gates to real
       # transcription/streaming/cancel/extension coverage. jfk.wav ships in-repo;
       # only the model paths need exporting (fetch-canary handles that).
+      #
+      # Windows is no-model-only for now: that is the koffi DLL-resolution proof
+      # this leg was added for, and it is unaffected. The model tier is deferred
+      # because loading a model spins up the ggml CPU threadpool, and on MSVC with
+      # OpenMP (vcomp) the runtime crashes (0xC0000005) at process exit under
+      # node/koffi, after the run itself succeeds. Skipping the canary makes the
+      # model-gated tests and the (model-loading) examples self-skip cleanly. Drop
+      # this guard to re-enable the Windows model tier once that teardown crash in
+      # the MSVC OpenMP runtime is fixed.
       - uses: ./.github/actions/fetch-canary
+        if: runner.os != 'Windows'
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
       - name: Conformance (no-model tier always; model tier when canary present)
