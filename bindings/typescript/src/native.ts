@@ -41,6 +41,26 @@ function ensureLogCallback(bound: Bound): void {
   };
   logRegistered = bound.koffi.register(thunk, bound.koffi.pointer(logProto()));
   bound.F.logSet(logRegistered, null);
+
+  // Sever the native->JS log path at process exit, before koffi tears down the
+  // callback trampoline. A dlopen'd backend module (the Linux/Windows
+  // cpu-vulkan builds; macOS compiles metal in and never dlopens) can emit a
+  // diagnostic during teardown that routes through the transcribe sink into the
+  // freed trampoline and crashes. transcribe_shutdown() disables the sink and
+  // detaches ggml's logger; if the loaded library predates that symbol, falling
+  // back to logSet(null) still clears the trampoline from the sink. We do NOT
+  // koffi.unregister: freeing the trampoline while a worker thread might still
+  // hold it is a use-after-free — leaving it registered keeps any stale call
+  // landing on live memory. Registered here, before initBackends, so a failed
+  // backend init still detaches cleanly on exit.
+  process.once("exit", () => {
+    try {
+      if (bound.F.shutdown) bound.F.shutdown();
+      else bound.F.logSet(null, null);
+    } catch {
+      /* exiting; nothing to recover */
+    }
+  });
 }
 
 export function native(): Native {

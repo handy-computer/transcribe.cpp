@@ -229,6 +229,17 @@ export function bindLibrary(libraryPath: string): Bound {
     streamLastStatus: lib.func("transcribe_stream_last_status", "int", ["void *"]),
   };
 
+  // Opportunistic: an internal teardown hook used by the process-exit handler to
+  // sever the native->JS log path before koffi frees the callback trampoline.
+  // It is exported but intentionally not in the public header, so an older
+  // same-version libtranscribe (e.g. a hand-pointed TRANSCRIBE_LIBRARY) may lack
+  // it — bind it if present, else the exit handler falls back to logSet(null).
+  try {
+    F.shutdown = lib.func("transcribe_shutdown", "void", []);
+  } catch {
+    F.shutdown = null;
+  }
+
   return { koffi, lib, T, F };
 }
 
