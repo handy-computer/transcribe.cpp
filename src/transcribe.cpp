@@ -383,28 +383,6 @@ extern "C" void transcribe_log_set(transcribe_log_callback cb, void * userdata) 
     ggml_log_set(&transcribe_ggml_log_bridge, nullptr);
 }
 
-// Internal teardown hook. Exported (so an FFI host can resolve it) but
-// deliberately NOT declared in any public header: it has no stable lifecycle
-// contract in 0.x and exists to serve one concrete need. The TypeScript/koffi
-// binding installs a persistent log callback whose trampoline is freed when the
-// host process exits. A backend module loaded via dlopen (the cpu-vulkan
-// Linux/Windows builds; a compiled-in backend such as macOS metal never
-// dlopens, so it never hits this) can emit a diagnostic during process
-// teardown; routed through the transcribe sink into an already-freed trampoline,
-// that is a crash. A host calls this from its exit path to sever every
-// native->JS logging route first. Logging-only by design: the log sink is the
-// only persistent native->host callback (the abort callback is per-run). It
-// frees nothing the host owns and is safe to call more than once.
-extern "C" TRANSCRIBE_API void transcribe_shutdown(void) {
-    // Stop ggml routing diagnostics through our bridge...
-    ggml_log_set(nullptr, nullptr);
-    // ...and disable the transcribe sink so any remaining emitter loads the
-    // sentinel and drops before reaching the host callback. Same store ordering
-    // as transcribe_log_set; we never free the host's callback target here.
-    g_log_userdata.store(nullptr, std::memory_order_relaxed);
-    g_log_cb.store(&transcribe_log_cb_disabled, std::memory_order_release);
-}
-
 // Internal emission helper. Not part of the public ABI, not declared in
 // any header. Used by transcribe_print_timings and the advisory-warn
 // path; future logging from the loader / frontend / decode can call
