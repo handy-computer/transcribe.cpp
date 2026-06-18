@@ -428,6 +428,18 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
           ver="$(node -p "require('./package.json').version")"
+          # Sync the API package's @transcribe-cpp/* platform pins to the version
+          # we publish, so the tarball pins the exact bytes we ship (the static
+          # gate in check_version_sync.py enforces the base match; this nails the
+          # exact pin). Without this the pins go stale on the first version bump
+          # and the install resolves a mismatched native -> load-time AbiError.
+          node -e '
+            const fs = require("node:fs");
+            const v = process.argv[1];
+            const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            for (const k of Object.keys(p.optionalDependencies || {})) p.optionalDependencies[k] = v;
+            fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
+          ' "$ver"
           out=/tmp/ts-platform
           # build-tuple (bundle) -> npm tuple (Node platform-arch convention)
           map() { case "$1" in

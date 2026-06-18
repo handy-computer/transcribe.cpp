@@ -1229,6 +1229,18 @@ class Stream:
     def revision(self) -> int:
         return _lib.transcribe_stream_revision(self._h)
 
+    @property
+    def last_status(self) -> TranscribeError | None:
+        """The stream's recorded terminal failure, or None while it is healthy.
+
+        Set after a ``feed()`` / ``finalize()`` transitioned the stream to
+        ``"failed"``; reset by ``begin`` / ``reset``. Inspect it when
+        :attr:`state` is ``"failed"`` to learn why."""
+        status = _lib.transcribe_stream_last_status(self._h)
+        if status == _generated.TRANSCRIBE_OK:
+            return None
+        return exception_for_status(status, _status_string(status), "stream")
+
     def reset(self) -> None:
         """Return the session to idle, discarding stream state. Idempotent."""
         if self._active:

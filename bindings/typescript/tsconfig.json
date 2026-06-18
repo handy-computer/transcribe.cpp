@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "ESNext.Disposable"],
     "declaration": true,
+    "stripInternal": true,
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,

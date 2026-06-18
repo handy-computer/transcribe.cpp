@@ -12,7 +12,7 @@
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "README.md", "LICENSE", "scripts/build-from-source.mjs"],
   "license": "MIT",
   "author": "The transcribe.cpp authors",
   "homepage": "https://github.com/handy-computer/transcribe.cpp#readme",

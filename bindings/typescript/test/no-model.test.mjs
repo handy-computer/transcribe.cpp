@@ -9,9 +9,19 @@ import {
   getAvailableBackends,
   backendAvailable,
   TranscribeModel,
+  Stream,
   ModelFileNotFound,
   ModelLoadError,
 } from "../dist/index.js";
+
+test("Stream does not expose internal lease/teardown controls", () => {
+  // releaseLease()/deactivate() must NOT be reachable from user code — calling
+  // the lease release on a live stream would reopen the cross-session race.
+  // They live in a module-private map, not on the class.
+  for (const name of ["releaseLease", "deactivate", "invalidate"]) {
+    assert.equal(name in Stream.prototype, false, `${name} must not be on Stream.prototype`);
+  }
+});
 
 test("version exposes base version, commit, and header hash", () => {
   const v = version();

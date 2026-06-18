@@ -47,6 +47,11 @@ fn streams_jfk_committed_text() {
     let update = stream.finalize().unwrap();
     assert!(update.is_final);
     assert_eq!(stream.state(), StreamState::Finished);
+    assert!(
+        stream.last_status().is_none(),
+        "a healthy finished stream has no failure: {:?}",
+        stream.last_status()
+    );
 
     let text = stream.text();
     // `full` is the authoritative raw hypothesis. (committed_text is a

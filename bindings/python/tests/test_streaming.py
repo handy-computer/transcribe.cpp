@@ -30,9 +30,11 @@ def test_streaming_real(streaming_model_path, audio_pcm):
             update = stream.finalize()
             committed = stream.text().committed
             revision, state = stream.revision, stream.state
+            last_status = stream.last_status
     assert update.is_final, update
     assert state == "finished", state
     assert revision >= 1
+    assert last_status is None, last_status
     assert "country" in committed.lower(), committed
 
 

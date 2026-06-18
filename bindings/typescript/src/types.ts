@@ -1,5 +1,7 @@
 /** Public value types for the transcribe.cpp TypeScript binding. */
 
+import type { TranscribeError } from "./errors.js";
+
 export type Backend = "auto" | "cpu" | "cpu_accel" | "cuda" | "vulkan" | "metal";
 export type KvType = "auto" | "f32" | "f16";
 export type Task = "transcribe" | "translate";
@@ -118,10 +120,12 @@ export interface TranscribeOptions {
 /** A native compute device the runtime discovered. */
 export interface DeviceInfo extends BackendInfo {}
 
-/** One result of a batch run: success carries the transcript, failure the error. */
+/** One result of a batch run: success carries the transcript, failure the error.
+ *  On failure, `error.utteranceIndex` is set, and `error.partialResult` carries any
+ *  recovered transcript when the failure was an abort/truncation. */
 export type BatchItem =
   | { ok: true; result: TranscriptionResult }
-  | { ok: false; error: Error };
+  | { ok: false; error: TranscribeError };
 
 // ---- streaming -------------------------------------------------------------
 

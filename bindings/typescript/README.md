@@ -113,12 +113,53 @@ satisfied raises a `BackendError`.
 
 ## Thread-safety
 
-JavaScript is single-threaded, but inference runs on a libuv worker thread (via
-koffi's async calls), so the event loop stays responsive. Each `TranscribeModel`
-serializes its own compute with an internal mutex — the C library allows only one
-compute in flight per model, across all of its sessions — so concurrent `run`s on
-sibling sessions are safe and run one after another. A single `Session` is
-single-use-at-a-time: don't call `run`/`feed` on the same session concurrently.
+Your JavaScript runs on one thread, but `run`/`feed`/`finalize` dispatch the
+native compute to a **libuv worker thread** (via koffi's async calls), so the
+event loop stays responsive while inference runs.
+
+The C library allows **one compute in flight per model** — a `run`, a `runBatch`,
+or an *active stream* — across all of its sessions. The binding enforces this:
+every compute call serializes through an internal model-wide mutex, and an active
+stream holds a model-wide lease for its whole lifetime. While a stream is active
+(after `stream()`, before `finalize()`/`reset()`), a `run`/`runBatch`/`stream` on
+any session of that model is refused with a `Busy` error rather than allowed to
+race. So to parallelize, load one model per worker; to share a model, finalize or
+reset the stream first. A single `Session` is single-use-at-a-time — don't call
+`run`/`feed` on the same session concurrently.
+
+Hand-offs are ordered, not racy: `finalize()`/`reset()`/`dispose()` release the
+lease only after the native teardown runs on the shared queue, so the slot is
+never freed early. Issue the teardown before the next `stream()`/`run()` and it
+is correctly serialized — `stream.reset(); const next = await session.stream()`
+works without awaiting the (void) `reset()`. The reverse order — beginning before
+the teardown — is refused with `Busy`, by design.
+
+Because the compute is genuinely on another thread, **do not touch a session
+while a call against it is in flight** — it is single-threaded in the C library:
+
+- Reading a stream's `text`/`state`/`revision`/`lastStatus`, or a session's
+  `limits`/`wasAborted`, during an un-awaited `feed`/`finalize`/`run` **throws**.
+- `reset()` and `dispose()` are safe to call any time: the native teardown is
+  deferred behind any in-flight call, so it never frees a session mid-compute.
+- Disposing a `Session` or `TranscribeModel` while a stream is still active
+  releases the lease and invalidates the stream — its later calls throw rather
+  than touch the freed handle.
+
+The normal pattern is safe — `await` first, then read:
+
+```ts
+await stream.feed(chunk);
+const { committed, tentative } = stream.text; // ✓ feed has completed
+
+const p = stream.feed(chunk);
+stream.text;                                  // ✗ throws: read while feed in flight
+await p;
+```
+
+Since JavaScript has no destructors, a stream holds the model's lease until you
+`finalize()`, `reset()`, or let `using` dispose it — drop the reference without
+one and the model stays `Busy` until you dispose the session or model. Always
+finalize/reset (or use `using`).
 
 Result strings are copied at the boundary; the objects you get back are fully
 owned and outlive the model.
@@ -142,9 +183,12 @@ The universal fallback when no prebuilt package exists for your platform (a new
 arch, a custom backend, or a single self-contained library):
 
 ```sh
-# from a transcribe.cpp checkout, or pass --source <repo>
+# from a transcribe.cpp checkout:
 npm run build:native -- --source /path/to/transcribe.cpp
 # add --self-contained to link ggml into one libtranscribe
+
+# from a consumer project (the script ships in the package):
+node node_modules/transcribe-cpp/scripts/build-from-source.mjs --source /path/to/transcribe.cpp
 ```
 
 This drives CMake directly (the binding is FFI over a shared library, not an

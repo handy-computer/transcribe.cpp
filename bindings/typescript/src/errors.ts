@@ -8,6 +8,8 @@ export class TranscribeError extends Error {
   readonly status: number;
   /** Set on per-utterance failures from a batch run. */
   utteranceIndex?: number;
+  /** Any partial transcript recovered before the error (set on Aborted / OutputTruncated). */
+  partialResult?: TranscriptionResult;
 
   constructor(message: string, status: number = g.TRANSCRIBE_OK) {
     super(message);
@@ -18,6 +20,14 @@ export class TranscribeError extends Error {
 
 export class InvalidArgument extends TranscribeError {}
 export class NotImplementedByModel extends TranscribeError {}
+
+/**
+ * Raised when another compute already occupies the model. The C library allows
+ * at most one run / batch / active stream in flight per model across ALL of its
+ * sessions (transcribe.h); a sibling op while a stream is active is refused with
+ * this rather than allowed to race. Binding-side error, so `status` is 0.
+ */
+export class Busy extends TranscribeError {}
 export class ModelFileNotFound extends TranscribeError {}
 export class ModelLoadError extends TranscribeError {}
 export class OutOfMemory extends TranscribeError {}
@@ -27,15 +37,11 @@ export class AbiError extends TranscribeError {}
 export class InputTooLong extends TranscribeError {}
 export class VersionMismatch extends TranscribeError {}
 
-/** Raised when a run is cancelled; carries any partial transcript. */
-export class Aborted extends TranscribeError {
-  partialResult?: TranscriptionResult;
-}
+/** Raised when a run is cancelled; carries any partial transcript in `partialResult`. */
+export class Aborted extends TranscribeError {}
 
-/** Raised when decode hits the context/generation cap; carries the partial. */
-export class OutputTruncated extends TranscribeError {
-  partialResult?: TranscriptionResult;
-}
+/** Raised when decode hits the context/generation cap; carries the partial in `partialResult`. */
+export class OutputTruncated extends TranscribeError {}
 
 const STATUS_TO_EXC: Record<number, new (m: string, s?: number) => TranscribeError> = {
   [g.TRANSCRIBE_ERR_INVALID_ARG]: InvalidArgument,
