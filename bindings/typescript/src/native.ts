@@ -28,6 +28,15 @@ export type LogHandler = (level: number, message: string) => void;
 let logHandler: LogHandler | null = null;
 let logRegistered: any = null;
 
+// Install the native dispatch trampoline. Called lazily from setLogHandler the
+// first time a host opts into logging — deliberately NOT at bootstrap. The koffi
+// callback trampoline must not coexist with ggml worker threads in a process
+// that later exits: on the dlopen'd backend builds (Linux/Windows cpu-vulkan;
+// macOS metal is compiled in and never dlopens) their teardown ordering
+// segfaults the process at exit. A process that never sets a log handler never
+// carries the trampoline, so loading and running a model stays crash-free. The
+// host that does want logs accepts that risk here and gets the best-effort exit
+// detach below as mitigation.
 function ensureLogCallback(bound: Bound): void {
   if (logRegistered) return;
   const thunk = (level: number, msg: string) => {
@@ -42,17 +51,12 @@ function ensureLogCallback(bound: Bound): void {
   logRegistered = bound.koffi.register(thunk, bound.koffi.pointer(logProto()));
   bound.F.logSet(logRegistered, null);
 
-  // Sever the native->JS log path at process exit, before koffi tears down the
-  // callback trampoline. A dlopen'd backend module (the Linux/Windows
-  // cpu-vulkan builds; macOS compiles metal in and never dlopens) can emit a
-  // diagnostic during teardown that routes through the transcribe sink into the
-  // freed trampoline and crashes. transcribe_shutdown() disables the sink and
-  // detaches ggml's logger; if the loaded library predates that symbol, falling
-  // back to logSet(null) still clears the trampoline from the sink. We do NOT
-  // koffi.unregister: freeing the trampoline while a worker thread might still
-  // hold it is a use-after-free — leaving it registered keeps any stale call
-  // landing on live memory. Registered here, before initBackends, so a failed
-  // backend init still detaches cleanly on exit.
+  // Best-effort mitigation for the opted-in case: sever the native->JS log path
+  // at process exit, before koffi tears down the trampoline. transcribe_shutdown
+  // disables the transcribe sink and detaches ggml's logger; a library that
+  // predates the symbol falls back to logSet(null), which still clears the
+  // trampoline from the sink. We do NOT koffi.unregister — freeing the
+  // trampoline while a worker thread might still hold it is a use-after-free.
   process.once("exit", () => {
     try {
       if (bound.F.shutdown) bound.F.shutdown();
@@ -78,10 +82,8 @@ export function native(): Native {
     );
   }
 
-  // transcribe_log_set is only supported as a startup-time install. Register a
-  // stable JS dispatch callback once, before backend init can create worker
-  // threads; setLogHandler later only swaps the JS target.
-  ensureLogCallback(bound);
+  // The log callback is installed lazily by setLogHandler, NOT here: a process
+  // that never logs must not carry the koffi trampoline (see ensureLogCallback).
 
   // Register backend modules package-local. On a compiled-in build this is a
   // near no-op; on a dynamic-backend bundle it scans the artifact dir.
@@ -110,10 +112,18 @@ export function native(): Native {
  * event-loop thread (proven by the M2 spike), so the handler runs on the main
  * thread. Exceptions thrown by the handler are swallowed (never re-enter C).
  *
- * The native callback is installed once during lazy bootstrap, before backend
- * initialization. Later calls only swap this JS handler; they never call
- * transcribe_log_set again.
+ * The native dispatch trampoline is installed lazily here, the first time a
+ * non-null handler is set, and never removed; later calls only swap the JS
+ * target. Installing it is opt-in by design — a process that never logs must
+ * not carry the trampoline (see ensureLogCallback for why). Disabling without
+ * ever having logged silences native diagnostics without installing one.
  */
 export function setLogHandler(handler: LogHandler | null): void {
   logHandler = handler;
+  if (handler) {
+    ensureLogCallback(native());
+  } else if (!logRegistered) {
+    native().F.logSet(null, null);
+  }
+  // handler === null with a trampoline already installed: the thunk drops.
 }
