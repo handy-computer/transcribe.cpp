@@ -41,26 +41,6 @@ function ensureLogCallback(bound: Bound): void {
   };
   logRegistered = bound.koffi.register(thunk, bound.koffi.pointer(logProto()));
   bound.F.logSet(logRegistered, null);
-
-  // Detach before teardown. This callback lives for the whole process (unlike
-  // the per-run abort callback, which is unregister-paired), so without this
-  // the native side still holds the koffi trampoline when the library unloads
-  // and its ggml worker threads come down — on Windows that teardown order
-  // crashes with an access violation (0xC0000005). logSet(null) drops the
-  // native reference first, so the unload no longer touches a freed trampoline.
-  process.once("exit", () => {
-    try {
-      bound.F.logSet(null, null);
-    } catch {
-      /* exiting; nothing to recover */
-    }
-    try {
-      bound.koffi.unregister(logRegistered);
-    } catch {
-      /* exiting; nothing to recover */
-    }
-    logRegistered = null;
-  });
 }
 
 export function native(): Native {
