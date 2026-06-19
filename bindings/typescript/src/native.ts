@@ -8,6 +8,7 @@ import { resolveLibrary } from "./loader.js";
 import { abortProto, bindLibrary, type Bound, logProto } from "./ffi.js";
 import { verifyLayouts } from "./abi.js";
 import { BackendError, VersionMismatch } from "./errors.js";
+import { OUR_VERSION, baseVersion } from "./version.js";
 import * as g from "./_generated.js";
 
 export interface Native extends Bound {
@@ -18,9 +19,6 @@ export interface Native extends Bound {
 }
 
 let cached: Native | null = null;
-
-const OUR_VERSION = `${g.TRANSCRIBE_VERSION_MAJOR}.${g.TRANSCRIBE_VERSION_MINOR}.${g.TRANSCRIBE_VERSION_PATCH}`;
-const baseVersion = (v: string): string => (/^\d+(?:\.\d+)*/.exec(v.trim())?.[0] ?? v.trim());
 
 // ---- log routing -----------------------------------------------------------
 

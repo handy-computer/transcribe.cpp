@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import * as g from "./_generated.js";
+import { OUR_VERSION, baseVersion } from "./version.js";
 import { AbiError, BackendError, TranscribeError, VersionMismatch } from "./errors.js";
 
 export interface Resolved {
@@ -32,13 +33,6 @@ const LIB_NAME =
     : process.platform === "win32"
       ? "transcribe.dll"
       : "libtranscribe.so";
-
-const OUR_VERSION = `${g.TRANSCRIBE_VERSION_MAJOR}.${g.TRANSCRIBE_VERSION_MINOR}.${g.TRANSCRIBE_VERSION_PATCH}`;
-
-function baseVersion(v: string): string {
-  const m = /^\d+(?:\.\d+)*/.exec(v.trim());
-  return m ? m[0] : v.trim();
-}
 
 /**
  * The platform-package tuple for this host, or null if unsupported. Uses the

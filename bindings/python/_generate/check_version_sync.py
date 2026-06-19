@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
-"""Fail if the library version drifts across its three sources of truth.
+"""Fail if the library version drifts across every place it is duplicated.
 
 The native library version is defined once, in
 ``include/transcribe.h`` (``TRANSCRIBE_VERSION_{MAJOR,MINOR,PATCH}``); CMake
-parses it from there. The Python package repeats it in two more places —
-``bindings/python/pyproject.toml`` (``project.version``) and the
-``__version__`` in ``bindings/python/src/transcribe_cpp/__init__.py``. The
-import-time gate enforces base-version match against the *loaded* library at
-runtime; this script is the static, build-time counterpart so a forgotten bump
-fails CI before anything is published.
+parses it from there. Every binding repeats it — in package manifests, lockfiles,
+the Python ``__version__``, the cross-package dependency pins, and the Swift
+``compiledVersion`` literal. The import-time gate enforces base-version match
+against the *loaded* library at runtime; this script is the static, build-time
+counterpart so a forgotten bump fails CI before anything is published.
+
+This covers every §1b spot in ``notes/releasing.md`` — including the ones that
+used to be §1c blind spots: the ``transcribe-cpp-sys`` dependency *pin*, both
+``Cargo.lock`` entries, both ``package-lock.json`` spots, and Swift
+``compiledVersion``. (Lockfile *internal* consistency — a stale lock silently
+rewritten by an unlocked command — is still the job of the locked-command
+checks, ``cargo metadata --locked`` / ``npm ci``, run in release-preflight.)
 
 Comparison is on the PEP 440 *release segment* (``MAJOR.MINOR.PATCH``): the
-header is always a clean triple, while the Python side may legitimately carry a
+header is always a clean triple, while a package side may legitimately carry a
 ``.postN`` packaging suffix that must still be accepted.
 
     uv run --no-project bindings/python/_generate/check_version_sync.py
 
-Exit 0 when all three agree on the base version; 1 on drift; 2 if a version
-could not be located (treated as a hard error, not a pass).
+Exit 0 when all agree on the base version; 1 on drift; 2 if a version could not
+be located (treated as a hard error, not a pass).
 """
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -31,6 +38,10 @@ HEADER = REPO / "include" / "transcribe.h"
 PYPROJECT = REPO / "bindings" / "python" / "pyproject.toml"
 INIT = REPO / "bindings" / "python" / "src" / "transcribe_cpp" / "__init__.py"
 TS_PACKAGE_JSON = REPO / "bindings" / "typescript" / "package.json"
+RUST_SAFE_CARGO = REPO / "bindings" / "rust" / "transcribe-cpp" / "Cargo.toml"
+CARGO_LOCK = REPO / "Cargo.lock"
+PACKAGE_LOCK = REPO / "bindings" / "typescript" / "package-lock.json"
+SWIFT_SOURCE = REPO / "bindings" / "swift" / "Sources" / "TranscribeCpp" / "TranscribeCpp.swift"
 
 # Binding package manifests (requirements doc §2: every manifest is derived
 # from or gated against the header). Gated by the `active` flag: a 0.0.0
@@ -122,6 +133,50 @@ def npm_optional_pins(text: str) -> "dict[str, str | None]":
     return {f"package.json ({name} pin)": version for name, version in pins}
 
 
+def cargo_sys_pin(text: str) -> str | None:
+    # The safe crate's dependency *pin* on the sys crate (a different field from
+    # its own [package].version, which cargo_version() returns):
+    #   transcribe-cpp-sys = { version = "X.Y.Z", path = "../../..", ... }
+    m = re.search(
+        r'transcribe-cpp-sys\s*=\s*\{[^}]*?\bversion\s*=\s*"([^"]+)"', text
+    )
+    return m.group(1) if m else None
+
+
+def cargo_lock_versions(text: str) -> "dict[str, str | None]":
+    # The two workspace crates pinned in Cargo.lock. cargo writes name then
+    # version on consecutive lines within each [[package]] block; the closing
+    # quote in the name match keeps "transcribe-cpp" from also matching
+    # "transcribe-cpp-sys".
+    out: dict[str, str | None] = {}
+    for name in ("transcribe-cpp", "transcribe-cpp-sys"):
+        m = re.search(rf'name = "{re.escape(name)}"\nversion = "([^"]+)"', text)
+        out[f"Cargo.lock ({name})"] = m.group(1) if m else None
+    return out
+
+
+def package_lock_versions(text: str) -> "dict[str, str | None]":
+    # The two spots npm keeps a root version in the lockfile: top-level
+    # `.version` and `.packages[""].version` (the root package's own node).
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return {"package-lock.json (root)": None, 'package-lock.json (packages[""])': None}
+    return {
+        "package-lock.json (root)": data.get("version"),
+        'package-lock.json (packages[""])': (data.get("packages") or {}).get("", {}).get("version"),
+    }
+
+
+def swift_compiled_version(text: str) -> str | None:
+    # The hand-maintained Swift literal `compiledVersion = "X.Y.Z"` that the
+    # SwiftPM load gate (Transcribe.ensureCompatible) compares against the
+    # linked library. (The Swift ABI pin is checked separately by
+    # swift_abihash_check.py against include/transcribe.abihash.)
+    m = re.search(r'compiledVersion\s*=\s*"([^"]+)"', text)
+    return m.group(1) if m else None
+
+
 def main() -> int:
     pyproject_text = PYPROJECT.read_text()
     sources = {
@@ -132,6 +187,23 @@ def main() -> int:
     sources.update(native_pin_versions(pyproject_text))
     if TS_PACKAGE_JSON.exists():
         sources.update(npm_optional_pins(TS_PACKAGE_JSON.read_text()))
+
+    # Formerly §1c blind spots — now part of the equality set (releasing.md §8
+    # P0 #2 slice B). Each file must exist; a missing one is a hard error below.
+    sources["Cargo.toml (sys dep pin)"] = (
+        cargo_sys_pin(RUST_SAFE_CARGO.read_text()) if RUST_SAFE_CARGO.exists() else None
+    )
+    if CARGO_LOCK.exists():
+        sources.update(cargo_lock_versions(CARGO_LOCK.read_text()))
+    else:
+        sources["Cargo.lock"] = None
+    if PACKAGE_LOCK.exists():
+        sources.update(package_lock_versions(PACKAGE_LOCK.read_text()))
+    else:
+        sources["package-lock.json"] = None
+    sources["TranscribeCpp.swift (compiledVersion)"] = (
+        swift_compiled_version(SWIFT_SOURCE.read_text()) if SWIFT_SOURCE.exists() else None
+    )
 
     # Binding manifests: active ones join the equality set; inactive ones
     # must merely exist and parse (placeholder versions are reported, not

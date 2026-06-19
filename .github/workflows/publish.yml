@@ -1,32 +1,48 @@
 name: publish
 
-# Release pipeline (plan M5 tail). Auth is PyPI Trusted Publishing (OIDC) —
-# no tokens anywhere; the publishers are registered against THIS filename
-# (publish.yml) and the `testpypi` / `pypi` environments.
+# Release pipeline. Two phases with a HARD BARRIER between them, plus a single
+# preflight gate in front of everything.
 #
-#   REHEARSAL (workflow_dispatch): builds + validates the FULL matrix by
-#     calling python-wheels.yml and cuda-windows.yml, publishes the
-#     PyPI-bound set (api wheel, native wheels, sdist — the dist-*
-#     artifacts) to TestPyPI, then proves a clean-machine install FROM
-#     TestPyPI with a real transcription. cu12 wheels are NOT rehearsed on
-#     TestPyPI (197 MB > its 100 MB file cap); their home is GitHub release
-#     assets + the /whl/cu12 index, exercised on real tags.
-#     NOTE: (Test)PyPI filenames are write-once — a failed rehearsal
-#     iteration means bumping the patch version in include/transcribe.h
-#     (the single version source) and re-dispatching.
+#   release-preflight (GATE): the hard tier (scripts/release/prepare.py --check
+#     — tag/dispatch version == source tree, version sync across every §1b spot,
+#     Python/TS + Rust FFI + abihash drift, Swift ABI pin, and lockfile
+#     freshness) gates the WHOLE run. A soft infra doctor only warns. Nothing
+#     builds or publishes until this passes, so a mistag/drift/stale-lock stops
+#     the run before any expensive matrix work or immutable upload.
 #
-#   RELEASE (push tag v0.0.X): same full build, then with the `pypi`
-#     environment (add a required-reviewer rule once the repo is public):
-#     dist-* → PyPI, cu12 wheels → draft GitHub release assets for the tag,
-#     Rust crates → crates.io, Swift → the draft release, then the draft is
-#     published and wheel-index.yml is dispatched so /whl/cu12 picks it up.
-#     cu12 → PyPI additionally when the repo variable CU12_ON_PYPI is "true"
-#     (set it once the PyPI file-size request is granted).
+#   VALIDATE (Actions artifacts only — no registry touched): wheels
+#     (python-wheels.yml), cuda-windows (cuda-windows.yml), swift-build
+#     (xcframework -> artifact, NOT the Release), rust-verify (cargo publish
+#     --dry-run + packed-crate smoke). These run on BOTH a release tag and a
+#     workflow_dispatch rehearsal; Windows CUDA is release-required, not special.
+#
+#   PUBLISH (tags only — immutable uploads): create-release, publish-pypi,
+#     rust-release, ts-release, release-assets each `needs:` the FULL validation
+#     set, so no immutable publish (crates.io / PyPI / npm / GitHub Release) can
+#     start while any release-required lane is still unproven — retiring the
+#     0.0.1/0.0.2 crates burns. finalize-release flips the draft Release public
+#     only after all four publishers land.
+#
+#   REHEARSAL (workflow_dispatch): the VALIDATE jobs plus publish-testpypi /
+#     smoke-testpypi / rust-rehearsal / swift-rehearsal / ts-rehearsal — full
+#     build + TestPyPI clean-install, NO prod registry touched. Requires a
+#     `version` input that release-preflight asserts equals the source tree.
+#
+# Auth is PyPI Trusted Publishing (OIDC) — no PyPI tokens; crates =
+# CARGO_REGISTRY_TOKEN; npm = NPM_TOKEN; Release assets / draft = GITHUB_TOKEN.
+#
+#   NOTE: (Test)PyPI filenames are write-once — a failed rehearsal iteration
+#   means bumping the version (scripts/release/prepare.py X.Y.Z) and re-running.
 
 on:
   push:
     tags: ["v[0-9]*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "X.Y.Z being rehearsed — MUST equal the source tree version (release-preflight asserts it)."
+        required: true
+        type: string
 
 # Never two publishes at once; never cancel one mid-upload.
 concurrency:
@@ -34,44 +50,153 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Full build + validation matrix; the artifacts published below are the
-  # exact files these workflows tested post-repair.
+  # ===========================================================================
+  # GATE — runs first on every event; everything else `needs:` it.
+  # ===========================================================================
+  release-preflight:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Install preflight deps (libclang for cargo xtask bindgen)
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
+      - name: Assert the tag / dispatch version equals the source tree
+        id: srcver
+        run: |
+          set -euo pipefail
+          src="$(grep -E '^#define TRANSCRIBE_VERSION_(MAJOR|MINOR|PATCH) ' include/transcribe.h \
+                 | grep -oE '[0-9]+$' | paste -sd. -)"
+          echo "source tree version: $src"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            if [ "${GITHUB_REF_NAME}" != "v${src}" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match the source version v${src} — retag the prepared commit."
+              exit 1
+            fi
+          else
+            want='${{ inputs.version }}'
+            if [ "${want}" != "${src}" ]; then
+              echo "::error::dispatch version ${want} does not match the source version ${src}."
+              exit 1
+            fi
+          fi
+          echo "version=$src" >> "$GITHUB_OUTPUT"
+          echo "version assertion ok"
+      - name: Hard tier — public-registry availability (no reused/burned version)
+        run: |
+          set -euo pipefail
+          ver='${{ steps.srcver.outputs.version }}'
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            uv run --no-project scripts/release/check_registries.py "$ver"
+          else
+            uv run --no-project scripts/release/check_registries.py "$ver" --rehearsal
+          fi
+      - name: Hard tier — release consistency (prepare.py --check)
+        run: uv run --no-project scripts/release/prepare.py --check
+      - name: Soft tier — infra doctor (warns only, never gates)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: uv run --no-project scripts/release/doctor.py
+
+  # ===========================================================================
+  # VALIDATE — build + verify only; produce Actions artifacts, touch no
+  # registry. Runs on a tag AND a rehearsal. The publish phase below `needs:`
+  # the full set [release-preflight, wheels, cuda-windows, swift-build,
+  # rust-verify].
+  # ===========================================================================
   wheels:
+    # Full build + validation matrix; the artifacts published below are the
+    # exact files these workflows tested post-repair.
+    needs: [release-preflight]
     uses: ./.github/workflows/python-wheels.yml
     secrets: inherit
+
   cuda-windows:
-    # Tags only: the heaviest build in the project (nvcc over ggml-cuda x 5
-    # arches under MSVC, ~3 h on 16vcpu), and the TestPyPI rehearsal neither
-    # publishes nor smokes its output (cu12 wheels exceed TestPyPI's file
-    # cap). Validate it on demand with its own workflow_dispatch.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # The heaviest build in the project (nvcc over ggml-cuda x 5 arches under
+    # MSVC, ~3 h). Now release-required on BOTH events: a rehearsal proves it
+    # too, and no immutable publish starts until it is green.
+    needs: [release-preflight]
     uses: ./.github/workflows/cuda-windows.yml
     secrets: inherit
 
-  create-release:
-    # Tags only. Owns creation of the GitHub Release object. Keep it draft
-    # until the mandatory publishers have succeeded and assets are verified.
+  swift-build:
+    # Tags only — the tag-path validation twin of swift-rehearsal. Build the
+    # xcframework + checksum and stash the zip as an ACTIONS ARTIFACT; the upload
+    # to the GitHub Release happens later in release-assets (publish phase), so
+    # no release asset exists until the whole validation phase is green.
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    permissions:
-      contents: write
+    needs: [release-preflight]
+    runs-on: blacksmith-6vcpu-macos-15
     steps:
-      - name: Create the draft release for the tag
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@v4
+      - run: brew install ninja
+      - name: Build the full xcframework
+        run: scripts/ci/build_xcframework.sh
+      - name: Package + checksum
+        id: pkg
         run: |
-          set -e
-          tag="${GITHUB_REF_NAME}"
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
-              --title "$tag" --notes "transcribe.cpp $tag" --verify-tag --draft
+          scripts/ci/package_xcframework.sh | tee pkg.txt
+          echo "checksum=$(awk '/checksum:/ {print $2}' pkg.txt)" >> "$GITHUB_OUTPUT"
+      - name: Checksum for the mirror repo's Package.swift (informational)
+        run: |
+          echo "binaryTarget(url: .../TranscribeCpp.xcframework.zip,"
+          echo "             checksum: \"${{ steps.pkg.outputs.checksum }}\")"
+      - name: Stash the xcframework as an artifact (attached to the Release in release-assets)
+        uses: actions/upload-artifact@v7
+        with:
+          name: swift-xcframework
+          path: bindings/swift/build-apple/TranscribeCpp.xcframework.zip
+          if-no-files-found: error
 
+  rust-verify:
+    # Tags only — the tag-path validation twin of rust-rehearsal. Dry-run the
+    # sys crate (full verify build, as cargo would publish it) and run the
+    # packed-crate smoke; NO upload. The safe crate cannot be dry-run-verified
+    # pre-publish (sys-first ordering), so the packed smoke exercises it instead.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release-preflight]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 40
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+      - name: Dry-run transcribe-cpp-sys (full verify build, as cargo would publish it)
+        run: cargo publish --dry-run --allow-dirty -p transcribe-cpp-sys
+      - uses: ./.github/actions/fetch-canary
+        with:
+          hf-token: ${{ secrets.HF_TOKEN }}
+      - name: Packed-crate smoke (build the native lib from the shipped tarball, transcribe)
+        run: uv run --no-project python scripts/ci/rust_packed_smoke.py
+
+  # ===========================================================================
+  # REHEARSAL — workflow_dispatch only. Proves the shipped artifacts against
+  # TestPyPI / packed tarballs without touching prod registries.
+  # ===========================================================================
   publish-testpypi:
     # Rehearsal target (dispatch only — real tags go to PyPI).
     # Blacksmith, not the Hetzner box: gh-action-pypi-publish is a Docker
     # container action and needs docker on the runner.
+    #
+    # TestPyPI filenames are WRITE-ONCE, so this upload waits on the full
+    # rehearsal validation matrix (Windows CUDA + the Rust/Swift/TS rehearsal
+    # lanes), not just the wheels — the same "no immutable publish while any
+    # release-required lane is unproven" rule the tag path enforces. A later
+    # CUDA/Swift/TS failure must not force a version bump just to re-rehearse.
     if: github.event_name == 'workflow_dispatch'
-    needs: [wheels]
+    needs: [release-preflight, wheels, cuda-windows, rust-rehearsal, swift-rehearsal, ts-rehearsal]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 30
     environment: testpypi
@@ -150,93 +275,10 @@ jobs:
           print("ok: clean machine installed from TestPyPI and transcribed")
           EOF
 
-  publish-pypi:
-    # The real thing. Gate: only version tags reach this, and the `pypi`
-    # environment carries the approval rule once the repo is public.
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [wheels, cuda-windows]
-    # Blacksmith for the same docker-container-action reason as testpypi.
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    timeout-minutes: 30
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: dist-*
-          merge-multiple: true
-          path: dist
-      - name: Add cu12 wheels (only once the PyPI size request is granted)
-        if: vars.CU12_ON_PYPI == 'true'
-        uses: actions/download-artifact@v8
-        with:
-          pattern: cuda-dist-*
-          merge-multiple: true
-          path: dist
-      - run: ls -la dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist
-
-  release-assets:
-    # cu12's primary distribution home: wheels as GitHub release assets,
-    # served to pip through the PEP 503 index on Pages (wheel-index.yml).
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [create-release, wheels, cuda-windows]
-    runs-on: [self-hosted, Linux, X64, hetzner]
-    timeout-minutes: 30
-    permissions:
-      contents: write  # upload release assets
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: cuda-dist-*
-          merge-multiple: true
-          path: cu12
-      # The canonical native bundles (extracted from the repaired wheels by
-      # python-wheels.yml). On the release they become the distribution home
-      # for non-PyPI ecosystems: npm platform packages and prebuilt-Rust
-      # fetch these exact bytes by tag instead of rebuilding.
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: native-*
-          merge-multiple: true
-          path: native-bundles
-      - name: Attach the cu12 wheels
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          tag="${GITHUB_REF#refs/tags/}"
-          gh release upload "$tag" cu12/*.whl --repo "$GITHUB_REPOSITORY" --clobber
-      - name: Attach the native bundles (versioned names)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          tag="${GITHUB_REF#refs/tags/}"
-          ver="${tag#v}"
-          mkdir -p upload
-          for f in native-bundles/transcribe-native-*.tar.gz; do
-            base="$(basename "$f" .tar.gz)"
-            tuple="${base#transcribe-native-}"
-            cp "$f" "upload/transcribe-native-${ver}-${tuple}.tar.gz"
-          done
-          ls -la upload/
-          gh release upload "$tag" upload/*.tar.gz --repo "$GITHUB_REPOSITORY" --clobber
-
-  # ---- Rust crates (crates.io) -------------------------------------------------
-  # The Rust release path mirrors the Python one: a dispatch REHEARSAL that
-  # validates without uploading, and a tag-gated RELEASE cut from CI. crates.io
-  # has no TestPyPI analog, so the rehearsal is `cargo publish --dry-run` plus
-  # the packed-crate smoke (build libtranscribe from the shipped tarball and
-  # transcribe) — the Rust "test the shipped artifact" gate (requirements §4).
-
   rust-rehearsal:
-    # Dispatch only. Independent of the wheel jobs (no `needs`): the Rust and
-    # Python release artifacts don't share build steps.
+    # Dispatch only — the rehearsal twin of rust-verify.
     if: github.event_name == 'workflow_dispatch'
+    needs: [release-preflight]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 40
     env:
@@ -250,52 +292,22 @@ jobs:
       - name: Dry-run transcribe-cpp-sys (full verify build, as cargo would publish it)
         run: cargo publish --dry-run --allow-dirty -p transcribe-cpp-sys
       # The safe crate cannot be dry-run-verified pre-publish: it depends on
-      # transcribe-cpp-sys = "0.0.1", and the registry only has the 0.0.0
-      # name-reservation placeholder until sys actually publishes (sys-first
-      # ordering). Its packaging is verified at release time below; here the
-      # packed-crate smoke exercises it against the packed sys instead.
+      # transcribe-cpp-sys = "0.0.x", and the registry only has the placeholder
+      # until sys actually publishes (sys-first ordering). Its packaging is
+      # verified at release time below; here the packed-crate smoke exercises it
+      # against the packed sys instead.
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
       - name: Packed-crate smoke (build the native lib from the shipped tarball, transcribe)
         run: uv run --no-project python scripts/ci/rust_packed_smoke.py
 
-  rust-release:
-    # Tags only. Releases are cut from CI, never a laptop (requirements §5).
-    # sys publishes FIRST (the safe crate resolves it by version), then the safe
-    # crate. The `crates-io` environment carries the approval gate (CJ approves)
-    # and holds CARGO_REGISTRY_TOKEN. cargo waits for the index to carry sys
-    # before returning, so the safe publish that follows resolves it.
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    timeout-minutes: 40
-    environment: crates-io
-    env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
-      - name: Publish transcribe-cpp-sys (the native-carrying crate; verifies the build)
-        run: cargo publish -p transcribe-cpp-sys
-      - name: Publish transcribe-cpp (the safe wrapper; resolves the just-published sys)
-        run: cargo publish -p transcribe-cpp
-
-  # ---------------------------------------------------------------------------
-  # Swift binding (TranscribeCpp) — xcframework release.
-  #
-  # The Swift package is consumed as a prebuilt static `.xcframework`
-  # binaryTarget (notes/swift-bindings-plan.md; requirements §5). Releasing it
-  # means: build the four Apple slices, zip + checksum the xcframework, attach
-  # the zip as a release asset, then point the mirror repo's Package.swift
-  # `binaryTarget(url:checksum:)` at it. "Releases are cut from CI, never a
-  # laptop." macOS runner: the xcframework needs Xcode (libtool/xcodebuild).
-  # ---------------------------------------------------------------------------
   swift-rehearsal:
-    # The shipped-artifact gate (§4): build the real xcframework and run the
-    # suite against it (transcribes the canary through the published shape).
+    # Dispatch only — the rehearsal twin of swift-build: build the real
+    # xcframework and run the suite against it (transcribes the canary through
+    # the published shape).
     if: github.event_name == 'workflow_dispatch'
+    needs: [release-preflight]
     runs-on: [self-hosted, macOS, ARM64]
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -314,55 +326,12 @@ jobs:
         working-directory: bindings/swift
         run: swift test
 
-  swift-release:
-    # Tags only. Builds the artifact, attaches the zip to the tag's release, and
-    # emits the checksum. The mirror-repo Package.swift bump is the final step
-    # (CJ-gated — needs the dedicated SwiftPM repo + a deploy key; see the plan).
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [create-release]
-    runs-on: blacksmith-6vcpu-macos-15
-    permissions:
-      contents: write  # attach the release asset
-    steps:
-      - uses: actions/checkout@v4
-      - run: brew install ninja
-      - name: Build the full xcframework
-        run: scripts/ci/build_xcframework.sh
-      - name: Package + checksum
-        id: pkg
-        run: |
-          scripts/ci/package_xcframework.sh | tee pkg.txt
-          echo "checksum=$(awk '/checksum:/ {print $2}' pkg.txt)" >> "$GITHUB_OUTPUT"
-      - name: Attach the xcframework zip to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          tag="${GITHUB_REF_NAME}"
-          gh release upload "$tag" \
-            bindings/swift/build-apple/TranscribeCpp.xcframework.zip \
-            --repo "$GITHUB_REPOSITORY" --clobber
-      - name: Checksum for the mirror repo's Package.swift
-        run: |
-          echo "binaryTarget(url: .../TranscribeCpp.xcframework.zip,"
-          echo "             checksum: \"${{ steps.pkg.outputs.checksum }}\")"
-      # TODO(CJ): push the thin Swift sources + the url/checksum-bearing
-      # Package.swift to the dedicated mirror repo (transcribe-cpp-swift) and tag
-      # it, so `swift package add` resolves the release. Needs the mirror repo +
-      # a deploy key secret. Until then, the asset + checksum above are produced
-      # but not wired into a resolvable SwiftPM tag.
-
-  # ---- npm (TypeScript) --------------------------------------------------------
-  # Mirrors the Python/Rust path: a dispatch REHEARSAL that builds + installs the
-  # shipped tarballs and transcribes the canary (the §4 shipped-artifact gate),
-  # and a tag-gated RELEASE that turns the native bundles into per-platform npm
-  # packages and publishes them with the pure-TS API package.
-
   ts-rehearsal:
-    # Pack the API + a platform package, install from the tarballs into a clean
-    # dir, and transcribe the canary — exactly the clean-machine path, no
-    # TRANSCRIBE_LIBRARY (the install stands on the platform package alone).
+    # Dispatch only. Pack the API + a platform package, install from the
+    # tarballs into a clean dir, and transcribe the canary — exactly the
+    # clean-machine path, no TRANSCRIBE_LIBRARY.
     if: github.event_name == 'workflow_dispatch'
+    needs: [release-preflight]
     runs-on: [self-hosted, macOS, ARM64]
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -402,26 +371,108 @@ jobs:
           TRANSCRIBE_SMOKE_AUDIO="$GITHUB_WORKSPACE/samples/jfk.wav" \
             node scripts/ci/ts_packed_smoke.mjs
 
-  ts-release:
-    # Tags only. Build each @transcribe-cpp/<platform> package from its native
-    # bundle (the exact bytes the wheels shipped) and publish them + the pure-TS
-    # API package to npm. The `npm` environment carries the approval gate.
+  # ===========================================================================
+  # PUBLISH — tags only. Each immutable upload `needs:` the FULL validation set,
+  # so nothing is published while any release-required lane is still unproven.
+  # ===========================================================================
+  create-release:
+    # Owns creation of the GitHub Release object — created AFTER validation, not
+    # at workflow start. Keep it draft until the mandatory publishers have
+    # succeeded and assets are verified (finalize-release).
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [create-release, wheels]
+    needs: [release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
     runs-on: blacksmith-2vcpu-ubuntu-2404
-    environment: npm
+    permissions:
+      contents: write
+    steps:
+      - name: Create the draft release for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" --notes "transcribe.cpp $tag" --verify-tag --draft
+
+  publish-pypi:
+    # The real thing. Gate: only version tags reach this, and the `pypi`
+    # environment carries the approval rule once the repo is public. Waits for
+    # the full validation set — including cuda-windows even when CU12_ON_PYPI is
+    # false: PyPI should not go public while a release-required lane is unproven.
+    # Also waits on create-release: no immutable registry upload starts unless the
+    # GitHub Release object itself was created (else PyPI could land with no Release).
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [create-release, release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    # Blacksmith for the same docker-container-action reason as testpypi.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 30
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Add cu12 wheels (only once the PyPI size request is granted)
+        if: vars.CU12_ON_PYPI == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cuda-dist-*
+          merge-multiple: true
+          path: dist
+      - run: ls -la dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  rust-release:
+    # Tags only. Releases are cut from CI, never a laptop (requirements §5).
+    # sys publishes FIRST (the safe crate resolves it by version), then the safe
+    # crate. `crates-io` carries the approval gate + CARGO_REGISTRY_TOKEN. NOW
+    # gated behind the full validation set AND create-release (it previously had
+    # NO needs: and could burn the immutable crates.io version before anything
+    # else built, or before the Release object even existed).
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [create-release, release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 40
+    environment: crates-io
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+      - name: Publish transcribe-cpp-sys (the native-carrying crate; verifies the build)
+        run: cargo publish -p transcribe-cpp-sys
+      - name: Publish transcribe-cpp (the safe wrapper; resolves the just-published sys)
+        run: cargo publish -p transcribe-cpp
+
+  ts-pack:
+    # Tags only — VALIDATION-phase TS packaging (NO npm publish). Build each
+    # @transcribe-cpp/<platform> package from its native bundle (the exact bytes
+    # the wheels shipped) + the pure-TS API package, sync the platform pins, and
+    # `npm pack` them all to .tgz uploaded as the `ts-tarballs` artifact. The
+    # publish job consumes those exact bytes, so a packaging failure can never
+    # land AFTER PyPI/crates have already started.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [release-preflight, wheels]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: "https://registry.npmjs.org"
       - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           merge-multiple: true
           path: native-bundles
-      - name: Build platform packages from the native bundles
+      - name: Build + pack platform packages and the API package
         working-directory: bindings/typescript
         run: |
           set -e
@@ -429,10 +480,10 @@ jobs:
           npm run build
           ver="$(node -p "require('./package.json').version")"
           # Sync the API package's @transcribe-cpp/* platform pins to the version
-          # we publish, so the tarball pins the exact bytes we ship (the static
-          # gate in check_version_sync.py enforces the base match; this nails the
-          # exact pin). Without this the pins go stale on the first version bump
-          # and the install resolves a mismatched native -> load-time AbiError.
+          # we publish, so the packed API tarball pins the exact bytes we ship
+          # (the static gate in check_version_sync.py enforces the base match;
+          # this nails the exact pin). Without this the pins go stale on the first
+          # version bump and the install resolves a mismatched native -> AbiError.
           node -e '
             const fs = require("node:fs");
             const v = process.argv[1];
@@ -457,25 +508,117 @@ jobs:
             libdir="$(dirname "$(find "$ex" \( -name 'libtranscribe.*' -o -name 'transcribe.dll' \) | head -1)")"
             node scripts/pack-platform.mjs --lib-dir "$libdir" --tuple "$npm_tuple" --version "$ver" --out "$out"
           done
-          echo "TS_VER=$ver" >> "$GITHUB_ENV"
+          # Pack to .tgz: platform packages and the API package into separate dirs
+          # so the publish job can order them (platforms first, API last).
+          rm -rf /tmp/ts-tarballs && mkdir -p /tmp/ts-tarballs/platform /tmp/ts-tarballs/api
+          for d in "$out"/*/; do
+            (cd "$d" && npm pack --pack-destination /tmp/ts-tarballs/platform)
+          done
+          npm pack --pack-destination /tmp/ts-tarballs/api
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ts-tarballs
+          path: /tmp/ts-tarballs
+          if-no-files-found: error
+
+  ts-release:
+    # Tags only — PUBLISH phase. Download the tarballs ts-pack validated and npm
+    # publish those exact bytes (platform packages first so the API package's
+    # optionalDependencies resolve at install time). Publishing a pre-packed
+    # tarball does NOT re-run prepublishOnly, so no build happens here — only the
+    # upload. The `npm` environment carries the approval gate.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [create-release, release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    environment: npm
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v8
+        with:
+          name: ts-tarballs
+          path: ts-tarballs
       - name: Publish platform packages, then the API package
-        working-directory: bindings/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
-          for d in /tmp/ts-platform/*/; do
-            echo "publishing $(node -p "require('${d}package.json').name")"
-            npm publish "$d" --access public
+          for t in ts-tarballs/platform/*.tgz; do
+            echo "publishing $t"
+            npm publish "$t" --access public
           done
-          npm publish --access public   # the API package (transcribe-cpp)
+          npm publish ts-tarballs/api/*.tgz --access public   # the API package (transcribe-cpp)
+
+  release-assets:
+    # cu12's primary distribution home (wheels as GitHub release assets, served
+    # to pip through the PEP 503 index on Pages), the canonical native bundles,
+    # AND the Swift xcframework (built+validated in swift-build, uploaded here).
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [create-release, release-preflight, wheels, cuda-windows, swift-build, rust-verify, ts-pack]
+    runs-on: [self-hosted, Linux, X64, hetzner]
+    timeout-minutes: 30
+    permissions:
+      contents: write  # upload release assets
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cuda-dist-*
+          merge-multiple: true
+          path: cu12
+      # The canonical native bundles (extracted from the repaired wheels by
+      # python-wheels.yml). On the release they become the distribution home
+      # for non-PyPI ecosystems: npm platform packages and prebuilt-Rust
+      # fetch these exact bytes by tag instead of rebuilding.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: native-bundles
+      # The Swift xcframework zip produced by swift-build in the validation phase.
+      - uses: actions/download-artifact@v8
+        with:
+          name: swift-xcframework
+          path: swift
+      - name: Attach the cu12 wheels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release upload "$tag" cu12/*.whl --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Attach the native bundles (versioned names)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="${GITHUB_REF#refs/tags/}"
+          ver="${tag#v}"
+          mkdir -p upload
+          for f in native-bundles/transcribe-native-*.tar.gz; do
+            base="$(basename "$f" .tar.gz)"
+            tuple="${base#transcribe-native-}"
+            cp "$f" "upload/transcribe-native-${ver}-${tuple}.tar.gz"
+          done
+          ls -la upload/
+          gh release upload "$tag" upload/*.tar.gz --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Attach the Swift xcframework
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release upload "$tag" swift/TranscribeCpp.xcframework.zip \
+            --repo "$GITHUB_REPOSITORY" --clobber
 
   finalize-release:
     # Tags only. Publish the draft GitHub Release only after its hosted assets
-    # and the core PyPI publish have completed. crates.io has its own approval
-    # gate and does not host artifacts on this release.
+    # AND all four immutable publishers (PyPI, crates.io, npm, Release assets)
+    # have completed — so the public Release can't finalize before crates/npm
+    # have landed (closes sharp-edge #5).
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [publish-pypi, release-assets, swift-release]
+    needs: [publish-pypi, rust-release, ts-release, release-assets]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: write  # publish the draft release
