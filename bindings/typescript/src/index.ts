@@ -110,6 +110,56 @@ function busyError(op: string): Busy {
   );
 }
 
+// Native frees are queued behind the model lock (below), which resolves on a
+// promise microtask. `process.exit()` terminates WITHOUT draining the microtask
+// queue, so those deferred frees would never run — leaving native resources
+// (model weights, session compute buffers) alive when the library's C++ static
+// destructors run at process exit. On macOS >= 15 that aborts the process:
+// ggml-metal's device teardown asserts every Metal buffer was freed first
+// (GGML_ASSERT([rsets->data count] == 0), the residency-set collection). A
+// process 'exit' handler runs synchronously and BEFORE those static destructors,
+// so we flush any still-pending frees there. Every pending free registers itself
+// here; it deletes itself once it has run (idempotent via the `done` guard), so
+// the flush never double-frees and a clean (natural) exit finds nothing to do.
+const PENDING_FREES = new Set<() => void>();
+// Models the user loaded but has not disposed. On exit we force-dispose them so
+// their native frees get registered in PENDING_FREES and flushed below —
+// otherwise an undisposed model leaks its (residency-set-backed) weight buffers
+// and aborts at the macOS-15 ggml-metal teardown just like a disposed-but-
+// process.exit()'d one.
+const LIVE_MODELS = new Set<TranscribeModel>();
+let exitHookInstalled = false;
+
+function ensureExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once("exit", () => {
+    // 1) Force-dispose any still-live model. dispose() runs synchronously and
+    //    enqueues its session + model frees into PENDING_FREES (its deferred
+    //    microtask won't run at exit, but the registration does). Snapshot
+    //    first: dispose() removes the model from LIVE_MODELS as it goes.
+    for (const m of [...LIVE_MODELS]) {
+      try {
+        m.dispose();
+      } catch {
+        /* best-effort teardown */
+      }
+    }
+    // 2) Flush every pending native free synchronously. Insertion order frees
+    //    sessions before their model, honoring the C contract that a model
+    //    outlives its sessions. The lease release (`after`) is intentionally
+    //    skipped — the process is exiting, so only the native frees matter.
+    for (const free of PENDING_FREES) {
+      try {
+        free();
+      } catch {
+        /* best-effort teardown; a native free cannot meaningfully fail */
+      }
+    }
+    PENDING_FREES.clear();
+  });
+}
+
 /**
  * Run a native free/reset behind the model lock, after any in-flight (and
  * queued) worker call drains, so it never overlaps a compute on a libuv worker.
@@ -118,11 +168,23 @@ function busyError(op: string): Busy {
  * the stream un-reset until the native state has actually been torn down.
  * Best-effort: errors are swallowed (a free cannot meaningfully fail) and the
  * floating promise is marked intentional with `void`.
+ *
+ * The native free is also registered in PENDING_FREES so a `process.exit()` that
+ * skips the microtask queue still tears the resource down at exit (see above).
  */
 function deferFree(lock: Mutex, fn: () => void, after?: () => void): void {
+  let done = false;
+  const free = (): void => {
+    if (done) return;
+    done = true;
+    PENDING_FREES.delete(free);
+    fn();
+  };
+  PENDING_FREES.add(free);
+  ensureExitHook();
   void lock.run(async () => {
     try {
-      fn();
+      free();
     } catch {
       /* native free is infallible in practice; nothing to recover */
     }
@@ -994,6 +1056,11 @@ export class TranscribeModel {
   private constructor(n: Native, handle: any) {
     this.#n = n;
     this.#h = handle;
+    // Track the model so an undisposed-then-process.exit() still frees its
+    // native (Metal) buffers at exit (see ensureExitHook). Loading alone
+    // allocates weight buffers, so install the hook here, not just on dispose.
+    LIVE_MODELS.add(this);
+    ensureExitHook();
   }
 
   static async load(path: string, opts: ModelOptions = {}): Promise<TranscribeModel> {
@@ -1108,6 +1175,7 @@ export class TranscribeModel {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    LIVE_MODELS.delete(this); // its frees are now queued in PENDING_FREES
     // Snapshot: each dispose() untracks itself from #sessions as we go and
     // queues its native free on the model lock. Queue modelFree last, so the
     // FIFO lock runs it after every session free (the C contract: a model may
