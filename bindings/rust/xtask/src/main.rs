@@ -89,6 +89,12 @@ fn generate(root: &Path) -> String {
         // Only emit declarations from our own headers (skip stdint/stddef).
         .allowlist_file(r".*/include/transcribe\.h")
         .allowlist_file(r".*/include/transcribe/.*\.h")
+        // Version macros are deliberately NOT emitted: a version-only bump must
+        // not churn the committed bindings or the abihash (notes/releasing.md
+        // §8 P0 #1). The runtime version comes from CARGO_PKG_VERSION instead
+        // (transcribe-cpp/src/version.rs), matching the Python/TS generator,
+        // which drops these from both its output and the hashed digest.
+        .blocklist_item(r"TRANSCRIBE_VERSION_(MAJOR|MINOR|PATCH|NUMBER)")
         // Compile-time layout assertions (free belt-and-suspenders; the
         // per-field check is otherwise waived for bindgen).
         .layout_tests(true)

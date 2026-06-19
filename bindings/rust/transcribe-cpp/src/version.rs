@@ -14,14 +14,14 @@ use crate::error::{Error, Result};
 use crate::result::owned_str;
 use crate::types::AbiStruct;
 
-/// The base version string this crate's generated FFI was built against.
+/// The base version string this crate's bindings were built against.
+///
+/// Taken from this crate's own `Cargo.toml` (`CARGO_PKG_VERSION`), not the
+/// generated FFI macros: a version-only bump must not churn the committed
+/// bindings or the abihash (notes/releasing.md §8 P0 #1). The generators no
+/// longer emit `TRANSCRIBE_VERSION_*`, so this is also the only source left.
 pub fn compiled_version() -> String {
-    format!(
-        "{}.{}.{}",
-        sys::TRANSCRIBE_VERSION_MAJOR,
-        sys::TRANSCRIBE_VERSION_MINOR,
-        sys::TRANSCRIBE_VERSION_PATCH
-    )
+    base(env!("CARGO_PKG_VERSION")).to_string()
 }
 
 /// The `MAJOR.MINOR.PATCH` version string of the linked native library.

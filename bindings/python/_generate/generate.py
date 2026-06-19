@@ -108,11 +108,22 @@ def in_headers(cursor) -> bool:
     return f is not None and str(INCLUDE) in str(f.name)
 
 
+# Version macros are deliberately excluded from BOTH the emitted bindings and the
+# hashed ABI digest: a version-only bump (editing TRANSCRIBE_VERSION_* in
+# include/transcribe.h) must not churn _generated.py / _generated.ts or the
+# abihash (notes/releasing.md §8 P0 #1). Each binding reads its own version from
+# its package metadata at runtime, not from these macros. Every OTHER integer
+# object-like macro (e.g. the EXT FourCCs) is still captured.
+_VERSION_MACROS = frozenset(
+    f"TRANSCRIBE_VERSION_{c}" for c in ("MAJOR", "MINOR", "PATCH", "NUMBER")
+)
+
+
 def int_macro_value(value_tokens):
     """Parse an object-like macro's value as an int, or None if it isn't one.
 
-    Captures integer constants (EXT kind FourCCs, version components); skips
-    string, attribute, and float/expression macros, which don't parse as int.
+    Captures integer constants (EXT kind FourCCs); skips string, attribute, and
+    float/expression macros, which don't parse as int.
     """
     s = "".join(value_tokens).rstrip("uUlL")
     try:
@@ -144,7 +155,7 @@ def collect(tu) -> Surface:
                     seen_enum.add(e.spelling)
                     s.enum_constants.append((e.spelling, e.enum_value))
         elif c.kind == CursorKind.MACRO_DEFINITION and c.spelling.startswith("TRANSCRIBE_"):
-            if c.spelling in seen_macro:
+            if c.spelling in seen_macro or c.spelling in _VERSION_MACROS:
                 continue
             tokens = [t.spelling for t in c.get_tokens()]
             if len(tokens) < 2:

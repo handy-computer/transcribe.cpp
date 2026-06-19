@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "fe9ed398c408e5d9";
+export const PUBLIC_HEADER_HASH = "2273744299e5aa65";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -99,9 +99,6 @@ export const TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM = 1396853584;
 export const TRANSCRIBE_EXT_KIND_PARAKEET_STREAM = 1414744912;
 export const TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM = 1414746710;
 export const TRANSCRIBE_EXT_KIND_WHISPER_RUN = 1314015319;
-export const TRANSCRIBE_VERSION_MAJOR = 0;
-export const TRANSCRIBE_VERSION_MINOR = 0;
-export const TRANSCRIBE_VERSION_PATCH = 1;
 
 export interface StructLayout { size: number; align: number; offsets: Record<string, number>; }
 export const STRUCT_LAYOUT: Record<string, StructLayout> = {
