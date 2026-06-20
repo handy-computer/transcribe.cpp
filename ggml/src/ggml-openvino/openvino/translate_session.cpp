@@ -3,15 +3,17 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
-#include "pass/eliminate_zp.h"
 #include "pass/mark_decompression_convert_constant_folding.h"
 #include "pass/squeeze_matmul.h"
+#include "rt_info/weightless_caching_attributes.hpp"
 
 #include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
+#include <openvino/core/preprocess/pre_post_process.hpp>
+#include <openvino/core/type/element_type.hpp>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
@@ -33,7 +35,6 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
-#include <openvino/core/preprocess/pre_post_process.hpp>
 
 namespace ov {
 namespace frontend {
@@ -77,49 +78,48 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
     return pairs;
 }
 
-void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
-
-    auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name, bool is_static) {
+void add_sliced_mask_stateful(TensorMap & tensor_map) {
+    auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name) {
         if ((tensor_map.find(mask_name) != tensor_map.end()) &&
             (tensor_map.find("token_len_per_seq") != tensor_map.end())) {
             auto token_len_per_seq = tensor_map.at("token_len_per_seq").get_node_shared_ptr();
             auto mask = tensor_map.at(mask_name).get_node_shared_ptr();
-            std::shared_ptr<ov::Node> mask_sliced;
-            if (is_static) {
-                mask_sliced = mask;
-            } else if (ggml_model_decoder.is_stateful()) {
-                auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0,0});
-                auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,1});
-                auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-                auto three_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
-                auto neg_one_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
-                auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {-2,-1});
-                auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
-                auto gather_inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, neg_one_1d, three_1d);
-                auto reshaped_inp_pos = std::make_shared<ov::op::v1::Reshape>(gather_inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {1}), false);
-                auto inp_pos_incremented = std::make_shared<ov::op::v1::Add>(reshaped_inp_pos, ov::op::v0::Constant::create(ov::element::i32, ov::Shape{1}, {1}));
-                auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len_per_seq, std::make_shared<v1::ConvertLike>(inp_pos_incremented, token_len_per_seq)}, 0);
-                mask_sliced =
-                    std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
-                mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
-                mask_sliced->set_friendly_name(sliced_name);
-            } else {
-                auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-                auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-                auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-                mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, token_len_per_seq, one, two);
-                mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
-                mask_sliced->set_friendly_name(sliced_name);
-            }
+            std::shared_ptr<ov::Node> mask_sliced = mask;
+            auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+            auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+            auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+            auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+
+            auto step = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+            auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
+
+            auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
+            auto last_inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, neg_one, three);
+            auto last_inp_pos_1d = std::make_shared<ov::op::v1::Reshape>(
+                last_inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {1}), false);
+            auto last_inp_pos_cvt = std::make_shared<ov::op::v0::Convert>(last_inp_pos_1d, ov::element::i64);
+            auto last_inp_pos_inc = std::make_shared<ov::op::v1::Add>(last_inp_pos_cvt, one);
+
+            mask_sliced = std::make_shared<ov::op::v8::Slice>(mask, zero, last_inp_pos_inc, step, axes);
+            mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
+            mask_sliced->set_friendly_name(sliced_name);
+
             tensor_map.insert({sliced_name, mask_sliced->output(0)});
         }
     };
 
-    create_sliced_mask("self_kq_mask", "KQ_mask_sliced", ggml_model_decoder.is_static());
-    create_sliced_mask("self_kq_mask_swa", "KQ_mask_swa_sliced", ggml_model_decoder.is_static());
+    create_sliced_mask("self_kq_mask", "KQ_mask_sliced");
+    create_sliced_mask("self_kq_mask_swa", "KQ_mask_swa_sliced");
 }
 
 void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
+    // When ROPE ops in the graph have divergent op_params (e.g. gemma4's mixed
+    // SWA/non-SWA layers with different n_dims or freq_base), a shared sin/cos
+    // precompute cannot broadcast across every ROPE use. Skip it here and let
+    // translate_rope() build sin/cos per-op from its own op_params.
+    if (ggml_model_decoder.has_mixed_rope_params()) {
+        return;
+    }
     int32_t * rope_params = ggml_model_decoder.get_rope_params();
     if (tensor_map.find("inp_pos") == tensor_map.end() || rope_params == nullptr) {
         return;
@@ -142,8 +142,11 @@ void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) 
 
 // Create common patterns
 void preprocess(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
-    add_sliced_mask(tensor_map, ggml_model_decoder);
-    add_rope_sin_cos(tensor_map, ggml_model_decoder);
+    if (ggml_model_decoder.is_stateful()) {
+        add_sliced_mask_stateful(tensor_map);
+    }
+    // This optimization is error-prone
+    // add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }
 
 }  // namespace
@@ -240,6 +243,31 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     resulting_model = std::make_shared<Model>(results, used_params);
 
     apply_transformations(resulting_model);
+
+    // Set WeightlessCacheAttribute on large constants to avoid unnecessary memory copies
+    // in the NPUW plugin. Without this attribute, NPUW's LazyTensor constructor
+    // (lazy_tensor.cpp, op::Const::Const) will memcpy every constant "in case export
+    // occurs", doubling memory usage per compile_model call.
+    //
+    // The bin_offset field serves as a unique key (not a real file offset) — this is
+    // the same convention the GPU plugin uses for non-IR models (see
+    // Plugin::set_weightless_cache_attributes in intel_gpu/src/plugin/plugin.cpp).
+    // Each constant must have a distinct bin_offset, otherwise GPU's weightless cache
+    // import will map multiple constants to the same data.
+    //
+    // Small constants (< 16 elements) are excluded since they may be introduced by
+    // optimization patterns and the overhead is negligible.
+    size_t offset = 0;
+    for (auto & node : resulting_model->get_ordered_ops()) {
+        if (auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node);
+            cnst && cnst->get_byte_size() / cnst->get_element_type().size() >= 16) {
+            auto & rt_info = cnst->get_rt_info();
+            if (rt_info.find(ov::WeightlessCacheAttribute::get_type_info_static()) == rt_info.end()) {
+                rt_info[ov::WeightlessCacheAttribute::get_type_info_static()] =
+                    ov::WeightlessCacheAttribute(cnst->get_byte_size(), offset++, cnst->get_element_type());
+            }
+        }
+    }
     return resulting_model;
 }
 
@@ -257,26 +285,25 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         }
 
         if (ggml_model_decoder->is_static()) {
-            manager.register_pass<pass::EliminateZeroPoints>();
             manager.register_pass<pass::SqueezeMatmul>();
         }
         manager.run_passes(model);
         if (ggml_model_decoder->is_stateful()) {
             auto output_names = ggml_model_decoder->get_model_output_names();
             std::map<std::string, int> model_output_indexes;
-            for (size_t i=0; i<output_names.size(); i++) {
+            for (size_t i = 0; i < output_names.size(); i++) {
                 model_output_indexes.insert(std::make_pair(output_names[i], i));
             }
             ov::preprocess::PrePostProcessor ppp(model);
-            for (size_t i=0; i<model->get_output_size(); i++) {
+            for (size_t i = 0; i < model->get_output_size(); i++) {
                 auto output_friendly_name = model->output(i).get_node_shared_ptr()->get_friendly_name();
                 auto output_id = model_output_indexes[output_friendly_name];
                 auto model_output_shape = model->output(i).get_partial_shape();
                 auto decoder_output_shape = ggml_model_decoder->get_output_shape(output_id);
-                if (model_output_shape.rank().is_static() && decoder_output_shape.rank().is_static()
-                    && model_output_shape.rank().get_length() + 1 == decoder_output_shape.rank().get_length()
-                    && decoder_output_shape[0].is_static() && decoder_output_shape[0].get_length() == 1) {
-                    ppp.output(i).postprocess().custom([](const ov::Output<ov::Node>& node) {
+                if (model_output_shape.rank().is_static() && decoder_output_shape.rank().is_static() &&
+                    model_output_shape.rank().get_length() + 1 == decoder_output_shape.rank().get_length() &&
+                    decoder_output_shape[0].is_static() && decoder_output_shape[0].get_length() == 1) {
+                    ppp.output(i).postprocess().custom([](const ov::Output<ov::Node> & node) {
                         auto axes = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{1}, {0});
                         return std::make_shared<ov::op::v0::Unsqueeze>(node, axes);
                     });

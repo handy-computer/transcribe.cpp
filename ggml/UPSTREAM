@@ -1,8 +1,8 @@
 repo: https://github.com/ggml-org/ggml
-sha:  404fcb9d7c96989569e68c9e7881ee3465a05c50
+sha:  707321c4cf6d21cb4bc831aa8b687dbf01a521ce
 
 This directory is a vendored snapshot of ggml at the SHA above. Do not edit
-files in this directory by hand. To pick up upstream changes, re-clone
-ggml-org/ggml at a new SHA, replace this directory wholesale, and update the
-sha line above. A scripts/sync-ggml.sh helper will be added when the sync
-workflow is needed.
+files in this directory by hand; local changes are overwritten on the next sync.
+To move the snapshot, run scripts/sync-ggml.sh <ref> from the repo root: it
+re-vendors this directory and rewrites this file. The snapshot is upstream's
+tracked tree at the SHA, minus .github/ (upstream CI, irrelevant to a vendor).
