@@ -198,7 +198,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build zlib1g-dev \
-            libvulkan-dev glslc patchelf ccache
+            libvulkan-dev glslc spirv-headers patchelf ccache
       - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
         # ggml builds with -march=native here (the dev posture under test);
         # ccache hashes the literal flag, not the ISA it resolves to, so a

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Vulkan toolchain (headers + loader + glslc) from pinned Khronos
+# Build the Vulkan toolchain (headers + SPIRV-Headers + loader + glslc) from pinned Khronos
 # tags inside the manylinux_2_28 container, for the Linux cpu+vulkan provider
 # wheel (cibuildwheel before-all hook; see [tool.cibuildwheel.linux] in the
 # repo-root pyproject.toml).
@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-VULKAN_SDK_TAG="vulkan-sdk-1.4.350.0"   # Vulkan-Headers + Vulkan-Loader
+VULKAN_SDK_TAG="vulkan-sdk-1.4.350.0"   # Vulkan-Headers + SPIRV-Headers + Vulkan-Loader
 SHADERC_TAG="v2026.2"                   # google/shaderc (glslc)
 
 PREFIX=/usr/local
@@ -52,6 +52,16 @@ git clone --quiet --depth 1 --branch "$VULKAN_SDK_TAG" \
 cmake -S "$WORK/headers" -B "$WORK/headers/build" -G Ninja \
     -DCMAKE_INSTALL_PREFIX="$STAGE" >/dev/null
 cmake --install "$WORK/headers/build" >/dev/null
+
+# 1b. SPIRV-Headers: header-only, seconds. ggml-vulkan's CMakeLists now does
+#     find_package(SPIRV-Headers CONFIG REQUIRED) (added in the ggml v0.15.2
+#     sync), so the SPIRV-HeadersConfig.cmake must be on CMAKE_PREFIX_PATH.
+#     Same Khronos vulkan-sdk-* tag as the Vulkan headers.
+git clone --quiet --depth 1 --branch "$VULKAN_SDK_TAG" \
+    https://github.com/KhronosGroup/SPIRV-Headers "$WORK/spirv-headers"
+cmake -S "$WORK/spirv-headers" -B "$WORK/spirv-headers/build" -G Ninja \
+    -DCMAKE_INSTALL_PREFIX="$STAGE" >/dev/null
+cmake --install "$WORK/spirv-headers/build" >/dev/null
 
 # 2. Vulkan-Loader: link-time libvulkan.so for the ggml-vulkan module. WSI
 #    support off — compute-only linking, no X11/Wayland build deps. At
