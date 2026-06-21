@@ -87,7 +87,7 @@ public enum Feature: Sendable {
 
 public struct ModelOptions: Sendable {
     public var backend: Backend
-    /// GPU device ordinal; must be 0 in 0.x.
+    /// GPU device registry index. 0 means auto / first matching device.
     public var gpuDevice: Int32
     public init(backend: Backend = .auto, gpuDevice: Int32 = 0) {
         self.backend = backend

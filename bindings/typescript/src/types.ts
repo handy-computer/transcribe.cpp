@@ -105,7 +105,7 @@ export interface BackendInfo {
 export interface ModelOptions {
   /** "auto" (default), or an explicit backend. */
   backend?: Backend;
-  /** GPU device ordinal for multi-GPU hosts. */
+  /** GPU device registry index. 0 means auto / first matching device. */
   gpuDevice?: number;
 }
 

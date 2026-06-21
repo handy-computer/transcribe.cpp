@@ -32,7 +32,7 @@ use crate::version;
 pub struct ModelOptions {
     /// Which backend to request. Default [`Backend::Auto`].
     pub backend: Backend,
-    /// Reserved for multi-device selection; must be 0 in 0.x.
+    /// GPU device registry index. 0 means auto / first matching device.
     pub gpu_device: i32,
 }
 

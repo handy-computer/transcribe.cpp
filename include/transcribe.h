@@ -775,16 +775,17 @@ TRANSCRIBE_API transcribe_status transcribe_init_backends_default(void);
 TRANSCRIBE_API int transcribe_backend_device_count(void);
 
 /*
- * Device type: the vendor-agnostic ggml classification of a device,
+ * Device type: ggml's vendor-agnostic classification of a device,
  * orthogonal to `kind` below (which carries the vendor: metal/vulkan/cuda/
- * ...). Use this to tell a discrete GPU from an integrated one, or a
- * host-memory accelerator from the CPU. The numeric values mirror ggml's
- * device-type enum.
+ * ...). Backends report this classification themselves, so treat it as a
+ * runtime hint about CPU/GPU/IGPU/ACCEL placement rather than a portable
+ * hardware-memory taxonomy. The numeric values mirror ggml's device-type
+ * enum.
  */
 typedef enum {
     TRANSCRIBE_DEVICE_TYPE_CPU   = 0,  /* CPU using system memory */
-    TRANSCRIBE_DEVICE_TYPE_GPU   = 1,  /* discrete GPU with dedicated memory */
-    TRANSCRIBE_DEVICE_TYPE_IGPU  = 2,  /* integrated GPU using host memory */
+    TRANSCRIBE_DEVICE_TYPE_GPU   = 1,  /* backend-reported GPU */
+    TRANSCRIBE_DEVICE_TYPE_IGPU  = 2,  /* backend-reported integrated GPU */
     TRANSCRIBE_DEVICE_TYPE_ACCEL = 3,  /* host-memory accelerator (BLAS/AMX) */
 } transcribe_device_type;
 

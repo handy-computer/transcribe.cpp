@@ -57,7 +57,7 @@ void print_usage(const char * argv0) {
         "  --quiet            suppress progress lines on stderr\n"
         "  --threads N        CPU threads (default 0 = library default)\n"
         "  --backend KIND     request a specific backend:\n"
-        "                       auto|cpu|cpu_accel|metal|vulkan (default auto)\n"
+        "                       auto|cpu|cpu_accel|metal|vulkan|cuda (default auto)\n"
         "                     cpu is strict CPU (no GPU, no BLAS/AMX).\n"
         "                     cpu_accel is CPU + host-memory accelerators\n"
         "                       (BLAS/AMX) when the build includes them.\n"

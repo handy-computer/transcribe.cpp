@@ -487,10 +487,7 @@ transcribe_status load(
     // The dispatcher has already verified out_model is non-null and
     // the loader has a valid gguf_context with general.architecture
     // set. *out_model is currently null (the dispatcher cleared it).
-    // params->backend is consumed below in the backend init block;
-    // params->gpu_device is reserved per the public header contract
-    // and is not yet honored (multi-device selection is a future
-    // release).
+    // Backend and device selection are resolved below via load_common.
 
     const int64_t t_load_start = ggml_time_us();
 

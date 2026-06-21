@@ -22,9 +22,10 @@ public enum Backend: Sendable, Equatable {
     }
 }
 
-/// The vendor-agnostic class of a compute device, orthogonal to `Device.kind`
-/// (which carries the vendor). Distinguishes a discrete GPU from an integrated
-/// one, and a host-memory accelerator from the CPU.
+/// ggml's vendor-agnostic class for a compute device, orthogonal to
+/// `Device.kind` (which carries the vendor). Backends report this classification
+/// themselves, so use it as a runtime hint rather than a portable
+/// hardware-memory taxonomy.
 public enum DeviceType: Sendable, Equatable {
     case cpu
     case gpu

@@ -915,11 +915,23 @@ void fill_backend_device(ggml_backend_dev_t dev, uint64_t caller_size,
     ggml_backend_dev_props props{};
     ggml_backend_dev_get_props(dev, &props);
 
+    const transcribe::BackendKind kind = transcribe::classify_device(dev);
+    const char * kind_name = transcribe::kind_name(kind);
+    const char * name = ggml_backend_dev_name(dev);
+    if (name == nullptr || name[0] == '\0') {
+        name = (props.name != nullptr && props.name[0] != '\0')
+            ? props.name : kind_name;
+    }
+    const char * description = ggml_backend_dev_description(dev);
+    if (description == nullptr) {
+        description = props.description != nullptr ? props.description : "";
+    }
+
     struct transcribe_backend_device staged{};
     staged.struct_size  = caller_size;
-    staged.name         = ggml_backend_dev_name(dev);
-    staged.description  = ggml_backend_dev_description(dev);
-    staged.kind         = transcribe::kind_name(transcribe::classify_device(dev));
+    staged.name         = name;
+    staged.description  = description;
+    staged.kind         = kind_name;
     staged.device_id    = props.device_id;
     staged.memory_total = props.memory_total;
     staged.memory_free  = props.memory_free;

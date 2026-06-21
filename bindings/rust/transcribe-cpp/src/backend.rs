@@ -17,16 +17,17 @@ use crate::error::{check, Result};
 use crate::result::{owned_opt_str, owned_str};
 use crate::types::Backend;
 
-/// The vendor-agnostic class of a compute device, orthogonal to
-/// [`Device::kind`] (which carries the vendor). Distinguishes a discrete GPU
-/// from an integrated one, and a host-memory accelerator from the CPU.
+/// ggml's vendor-agnostic class for a compute device, orthogonal to
+/// [`Device::kind`] (which carries the vendor). Backends report this
+/// classification themselves, so use it as a runtime hint rather than a
+/// portable hardware-memory taxonomy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceType {
     /// CPU using system memory.
     Cpu,
-    /// Discrete GPU with dedicated memory.
+    /// Backend-reported GPU.
     Gpu,
-    /// Integrated GPU using host memory.
+    /// Backend-reported integrated GPU.
     Igpu,
     /// Host-memory accelerator (BLAS/AMX/...).
     Accel,

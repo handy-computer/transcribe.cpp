@@ -6,7 +6,7 @@
 // Rationale
 // ---------
 // The public API exposes a small `transcribe_backend_request` enum
-// (auto|cpu|cpu_accel|metal|vulkan). Internally the library needs two related
+// (auto|cpu|cpu_accel|metal|vulkan|cuda). Internally the library needs two related
 // things that don't belong in the public header:
 //
 //   1. A typed classification of whatever ggml backend we actually
