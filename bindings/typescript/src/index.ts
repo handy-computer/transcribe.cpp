@@ -25,6 +25,7 @@ import type {
   BatchItem,
   Capabilities,
   CommitPolicy,
+  DeviceType,
   ExtSlot,
   FamilyExtension,
   Feature,
@@ -268,6 +269,28 @@ export function libraryPath(): string {
   return native().libraryPath;
 }
 
+const DEVICE_TYPE_NAMES: Record<number, DeviceType> = {
+  [g.TRANSCRIBE_DEVICE_TYPE_CPU]: "cpu",
+  [g.TRANSCRIBE_DEVICE_TYPE_GPU]: "gpu",
+  [g.TRANSCRIBE_DEVICE_TYPE_IGPU]: "igpu",
+  [g.TRANSCRIBE_DEVICE_TYPE_ACCEL]: "accel",
+};
+
+// Decode a koffi-filled transcribe_backend_device struct into a BackendInfo.
+// memory_* are uint64 (bigint from koffi) but stay well under 2^53 for any
+// real device, so num() narrows them losslessly.
+function deviceFromRaw(dev: any): BackendInfo {
+  return {
+    name: dev.name ?? "",
+    description: dev.description ?? "",
+    kind: dev.kind ?? "",
+    deviceType: DEVICE_TYPE_NAMES[dev.device_type] ?? "gpu",
+    deviceId: dev.device_id ?? null,
+    memoryTotal: num(dev.memory_total),
+    memoryFree: num(dev.memory_free),
+  };
+}
+
 export function getAvailableBackends(): BackendInfo[] {
   const n = native();
   const count = n.F.backendDeviceCount();
@@ -276,7 +299,7 @@ export function getAvailableBackends(): BackendInfo[] {
     const dev: any = {};
     n.F.backendDeviceInit(dev);
     check(n, n.F.getBackendDevice(i, dev), `reading backend device ${i}`);
-    out.push({ name: dev.name ?? "", description: dev.description ?? "", kind: dev.kind ?? "" });
+    out.push(deviceFromRaw(dev));
   }
   return out;
 }
@@ -1170,6 +1193,16 @@ export class TranscribeModel {
   }
   get backend(): string {
     return this.#n.F.modelBackend(this.handle) ?? "";
+  }
+
+  /** The compute device this model is running on. `memoryFree` is a live
+   *  snapshot, so read this again to poll how much device memory is left
+   *  after the model loaded. */
+  get device(): BackendInfo {
+    const dev: any = {};
+    this.#n.F.backendDeviceInit(dev);
+    check(this.#n, this.#n.F.modelGetDevice(this.handle, dev), "reading model device");
+    return deviceFromRaw(dev);
   }
 
   dispose(): void {

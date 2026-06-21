@@ -65,6 +65,10 @@ export function bindLibrary(libraryPath: string): Bound {
     modelArch: lib.func("transcribe_model_arch_string", "str", ["void *"]),
     modelVariant: lib.func("transcribe_model_variant_string", "str", ["void *"]),
     modelBackend: lib.func("transcribe_model_backend", "str", ["void *"]),
+    modelGetDevice: lib.func("transcribe_model_get_device", "int", [
+      "void *",
+      iop(T.transcribe_backend_device),
+    ]),
     modelSupports: lib.func("transcribe_model_supports", "bool", ["void *", "int"]),
     tokenize: lib.func("transcribe_tokenize", "int", ["void *", "str", "int32_t *", "size_t"]),
     capabilitiesInit: lib.func("transcribe_capabilities_init", "void", [

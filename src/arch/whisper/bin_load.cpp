@@ -686,12 +686,13 @@ transcribe_status load_from_bin(const char *                           path,
 
     // ---- Backend plan ----
     if (auto st = transcribe::load_common::init_backends(
-            params->backend, "whisper", m->plan);
+            params->backend, params->gpu_device, "whisper", m->plan);
         st != TRANSCRIBE_OK)
     {
         return st;
     }
     m->backend = ggml_backend_name(m->plan.primary);
+    m->primary_backend = m->plan.primary;
 
     // ---- Allocate backend buffer ----
     ggml_backend_buffer_t buf =

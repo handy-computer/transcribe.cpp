@@ -73,6 +73,20 @@ public final class Model: @unchecked Sendable {
     /// The runtime backend bound to this model, e.g. "metal" / "cpu".
     public var backend: String { String(cString: transcribe_model_backend(ptr)) }
 
+    /// The compute `Device` this model is running on — the one that owns its
+    /// weights. `memoryFree` is a live snapshot, so read this again to poll how
+    /// much device memory is left after the model loaded. Throws if the model
+    /// has no resolved compute device.
+    public var device: Device {
+        get throws {
+            var raw = transcribe_backend_device()
+            transcribe_backend_device_init(&raw)
+            try TranscribeError.check(
+                transcribe_model_get_device(ptr, &raw), context: "model_get_device")
+            return Device(raw)
+        }
+    }
+
     /// Tokenize plain UTF-8 text into the model's vocabulary (no special
     /// tokens). Throws `.notImplemented` for vocabularies without an encoder.
     public func tokenize(_ text: String) throws -> [Int32] {

@@ -22,14 +22,57 @@ public enum Backend: Sendable, Equatable {
     }
 }
 
+/// ggml's vendor-agnostic class for a compute device, orthogonal to
+/// `Device.kind` (which carries the vendor). Backends report this classification
+/// themselves, so use it as a runtime hint rather than a portable
+/// hardware-memory taxonomy.
+public enum DeviceType: Sendable, Equatable {
+    case cpu
+    case gpu
+    case igpu
+    case accel
+
+    init(_ c: transcribe_device_type) {
+        switch c.rawValue {
+        case TRANSCRIBE_DEVICE_TYPE_CPU.rawValue: self = .cpu
+        case TRANSCRIBE_DEVICE_TYPE_IGPU.rawValue: self = .igpu
+        case TRANSCRIBE_DEVICE_TYPE_ACCEL.rawValue: self = .accel
+        // includes TRANSCRIBE_DEVICE_TYPE_GPU and any unknown value
+        default: self = .gpu
+        }
+    }
+}
+
 /// A registered compute device.
 public struct Device: Sendable, Equatable {
     /// ggml device name, e.g. "Metal".
     public let name: String
     /// Human-readable description, e.g. "Apple M4 Max".
     public let description: String
-    /// Classified kind string, e.g. "cpu", "metal", "vulkan", "cuda".
+    /// Classified vendor kind string, e.g. "cpu", "metal", "vulkan", "cuda".
     public let kind: String
+    /// The CPU/GPU/IGPU/ACCEL axis, orthogonal to `kind`.
+    public let deviceType: DeviceType
+    /// Stable hardware id (PCI bus id) when the backend reports one, else nil
+    /// (e.g. Metal).
+    public let deviceId: String?
+    /// Reported device memory capacity in bytes, or 0 if unreported.
+    public let memoryTotal: UInt64
+    /// Available device memory in bytes — a snapshot at query time, or 0 if
+    /// unreported. Re-query (`TranscribeCpp.devices()` or `Model.device`) to
+    /// refresh; backend-defined and not comparable across device kinds.
+    public let memoryFree: UInt64
+
+    /// Build from the raw C struct the library filled.
+    init(_ raw: transcribe_backend_device) {
+        name = raw.name.map { String(cString: $0) } ?? ""
+        description = raw.description.map { String(cString: $0) } ?? ""
+        kind = raw.kind.map { String(cString: $0) } ?? ""
+        deviceType = DeviceType(raw.device_type)
+        deviceId = raw.device_id.map { String(cString: $0) }
+        memoryTotal = raw.memory_total
+        memoryFree = raw.memory_free
+    }
 }
 
 /// A public ABI struct, for the no-model layout-liveness check. Mirrors the

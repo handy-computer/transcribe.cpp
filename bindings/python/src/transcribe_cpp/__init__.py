@@ -25,7 +25,7 @@ import os
 import threading
 import weakref
 from dataclasses import dataclass
-from typing import Literal, Sequence, Union
+from typing import Literal, Optional, Sequence, Union
 
 from . import _abi, _generated
 from ._library import _base_version, artifact_dir, load_library, selected_provider
@@ -240,6 +240,14 @@ def native_provider() -> str | None:
     return selected_provider()
 
 
+_DEVICE_TYPE_NAMES = {
+    _generated.TRANSCRIBE_DEVICE_TYPE_CPU: "cpu",
+    _generated.TRANSCRIBE_DEVICE_TYPE_GPU: "gpu",
+    _generated.TRANSCRIBE_DEVICE_TYPE_IGPU: "igpu",
+    _generated.TRANSCRIBE_DEVICE_TYPE_ACCEL: "accel",
+}
+
+
 @dataclass(frozen=True)
 class BackendDevice:
     """One registered compute device (owned copies of the C strings)."""
@@ -247,23 +255,42 @@ class BackendDevice:
     name: str
     description: str
     kind: str  # "cpu" | "accel" | "metal" | "vulkan" | "cuda" | "sycl" | "gpu" | "unknown"
+    device_type: str  # vendor-agnostic class: "cpu" | "gpu" | "igpu" | "accel"
+    device_id: Optional[str]  # stable hw id (PCI bus id), or None (e.g. Metal)
+    memory_total: int  # reported capacity in bytes, or 0 if unreported
+    # Available bytes — a SNAPSHOT at query time, or 0 if unreported. Re-query
+    # (via backends() or Model.device) to refresh; backend-defined and not
+    # comparable across device kinds.
+    memory_free: int
+
+
+def _backend_device_from_raw(dev) -> BackendDevice:
+    """Build a BackendDevice from a library-filled transcribe_backend_device."""
+    return BackendDevice(
+        name=_decode(dev.name),
+        description=_decode(dev.description),
+        kind=_decode(dev.kind),
+        device_type=_DEVICE_TYPE_NAMES.get(dev.device_type, "gpu"),
+        device_id=_decode(dev.device_id) if dev.device_id else None,
+        memory_total=int(dev.memory_total),
+        memory_free=int(dev.memory_free),
+    )
 
 
 def backends() -> list[BackendDevice]:
     """The compute devices registered with the native runtime — what the
     process can actually run on, after backend-module loading and graceful
-    degradation (e.g. a Vulkan module skipped on a machine without Vulkan)."""
+    degradation (e.g. a Vulkan module skipped on a machine without Vulkan).
+
+    Each device's ``memory_free`` is live as of the call; call again to poll
+    a device's available memory over time."""
     devices = []
     for i in range(_lib.transcribe_backend_device_count()):
         dev = _generated.transcribe_backend_device()
         _lib.transcribe_backend_device_init(_byref(dev))
         _check(_lib.transcribe_get_backend_device(i, _byref(dev)),
                f"reading backend device {i}")
-        devices.append(BackendDevice(
-            name=_decode(dev.name),
-            description=_decode(dev.description),
-            kind=_decode(dev.kind),
-        ))
+        devices.append(_backend_device_from_raw(dev))
     return devices
 
 
@@ -780,6 +807,18 @@ class Model:
     @property
     def backend(self) -> str:
         return _decode(_lib.transcribe_model_backend(self._h))
+
+    @property
+    def device(self) -> BackendDevice:
+        """The compute device this model is running on. ``memory_free`` is a
+        live snapshot, so read this again to poll how much device memory is
+        left after the model loaded. Raises if the model has no resolved
+        compute device."""
+        dev = _generated.transcribe_backend_device()
+        _lib.transcribe_backend_device_init(_byref(dev))
+        _check(_lib.transcribe_model_get_device(self._h, _byref(dev)),
+               "model_get_device")
+        return _backend_device_from_raw(dev)
 
     @property
     def capabilities(self) -> Capabilities:

@@ -37,6 +37,11 @@ struct Arch;
 class Tokenizer;
 } // namespace transcribe
 
+// Forward declaration for the resolved primary backend handle stored below.
+// The full type comes from ggml-backend.h in the .cpp that fills it.
+struct ggml_backend;
+typedef struct ggml_backend * ggml_backend_t;
+
 // The public C ABI forward-declares this as `struct transcribe_model;`,
 // so the real definition stays in the global namespace and uses the
 // `struct` keyword for ABI compatibility with C callers.
@@ -57,6 +62,14 @@ struct transcribe_model {
     // full semantics. In 2B no real backend is wired, so loaders leave
     // this empty.
     std::string backend;
+
+    // The resolved primary compute backend this model runs on (the handle
+    // that owns the weight buffer). Set by per-family load() right where it
+    // sets `backend`, from BackendPlan::primary. Used by the public
+    // transcribe_model_get_device() accessor to recover the device — and its
+    // live memory — without exposing the per-family BackendPlan. nullptr
+    // until a family binds it.
+    ggml_backend_t primary_backend = nullptr;
 
     // Public capabilities. Per-family load() fills this in directly,
     // calling set_languages() for the languages chain. Immutable after

@@ -487,10 +487,7 @@ transcribe_status load(
     // The dispatcher has already verified out_model is non-null and
     // the loader has a valid gguf_context with general.architecture
     // set. *out_model is currently null (the dispatcher cleared it).
-    // params->backend is consumed below in the backend init block;
-    // params->gpu_device is reserved per the public header contract
-    // and is not yet honored (multi-device selection is a future
-    // release).
+    // Backend and device selection are resolved below via load_common.
 
     const int64_t t_load_start = ggml_time_us();
 
@@ -689,7 +686,7 @@ transcribe_status load(
         (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
 
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, "parakeet", m->plan);
+            backend_req, (params != nullptr) ? params->gpu_device : 0, "parakeet", m->plan);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
@@ -698,6 +695,7 @@ transcribe_status load(
 
     // Label for the public API: report the primary backend.
     m->backend = ggml_backend_name(m->plan.primary);
+    m->primary_backend = m->plan.primary;
 
     // Allocate a backend buffer for every tensor in ctx_meta on the
     // primary backend. After this returns, each ggml_tensor in

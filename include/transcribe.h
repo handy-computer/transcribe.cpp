@@ -775,20 +775,54 @@ TRANSCRIBE_API transcribe_status transcribe_init_backends_default(void);
 TRANSCRIBE_API int transcribe_backend_device_count(void);
 
 /*
+ * Device type: ggml's vendor-agnostic classification of a device,
+ * orthogonal to `kind` below (which carries the vendor: metal/vulkan/cuda/
+ * ...). Backends report this classification themselves, so treat it as a
+ * runtime hint about CPU/GPU/IGPU/ACCEL placement rather than a portable
+ * hardware-memory taxonomy. The numeric values mirror ggml's device-type
+ * enum.
+ */
+typedef enum {
+    TRANSCRIBE_DEVICE_TYPE_CPU   = 0,  /* CPU using system memory */
+    TRANSCRIBE_DEVICE_TYPE_GPU   = 1,  /* backend-reported GPU */
+    TRANSCRIBE_DEVICE_TYPE_IGPU  = 2,  /* backend-reported integrated GPU */
+    TRANSCRIBE_DEVICE_TYPE_ACCEL = 3,  /* host-memory accelerator (BLAS/AMX) */
+} transcribe_device_type;
+
+/*
  * One registered compute device.
  *
- * name / description / kind are borrowed pointers into runtime-owned
- * storage: valid for the life of the process, never freed by the caller.
+ * name / description / kind / device_id are borrowed pointers into
+ * runtime-owned storage: valid for the life of the process, never freed by
+ * the caller.
  *
- * kind is the library's classification, one of: "cpu", "accel" (a
+ * kind is the library's vendor classification, one of: "cpu", "accel" (a
  * host-memory accelerator such as BLAS/AMX), "metal", "vulkan", "cuda",
- * "sycl", "gpu" (an unrecognized GPU), or "unknown".
+ * "sycl", "gpu" (an unrecognized GPU), or "unknown". device_type is the
+ * orthogonal CPU/GPU/IGPU/ACCEL axis.
+ *
+ * device_id is a stable hardware identifier when the backend reports one
+ * (for PCI devices the lower-case bus id "domain:bus:device.function", e.g.
+ * "0000:c1:00.0"), or NULL when unknown (e.g. Metal).
+ *
+ * memory_total is the device's reported capacity in bytes. memory_free is a
+ * SNAPSHOT of available bytes at the moment this struct was filled; it goes
+ * stale the instant anything allocates — re-call the accessor to refresh it,
+ * as every fill re-queries the driver live. Both numbers are backend-defined
+ * and NOT comparable across kinds: on Apple unified memory `total` is the
+ * recommended max working-set size (not system RAM) and `free` nets out only
+ * this process's allocations; on a discrete GPU they are device-global; on
+ * the CPU they are system RAM. 0 means the backend does not report it.
  */
 struct transcribe_backend_device {
-    uint64_t     struct_size;  /* sizeof(*this); set by _init() */
-    const char * name;         /* ggml device name, e.g. "Metal" */
-    const char * description;  /* human-readable, e.g. "Apple M4 Max" */
-    const char * kind;         /* classified kind string; see above */
+    uint64_t               struct_size;  /* sizeof(*this); set by _init() */
+    const char *           name;         /* ggml device name, e.g. "Metal" */
+    const char *           description;  /* human-readable, e.g. "Apple M4 Max" */
+    const char *           kind;         /* vendor kind string; see above */
+    const char *           device_id;    /* stable hw id (PCI bus id) or NULL */
+    uint64_t               memory_total; /* reported capacity in bytes, or 0 */
+    uint64_t               memory_free;  /* available bytes snapshot, or 0 */
+    transcribe_device_type device_type;  /* CPU/GPU/IGPU/ACCEL axis */
 };
 
 TRANSCRIBE_API void transcribe_backend_device_init(
@@ -797,6 +831,11 @@ TRANSCRIBE_API void transcribe_backend_device_init(
 /*
  * Fill *out (initialized via transcribe_backend_device_init) with device
  * `index` in [0, transcribe_backend_device_count()).
+ *
+ * memory_free is live as of this call; re-invoke to refresh it (e.g. to
+ * poll a device's available memory over time). The device handles are
+ * stable for the life of the process, so the same index always names the
+ * same device.
  */
 TRANSCRIBE_API transcribe_status transcribe_get_backend_device(
     int                                index,
@@ -812,6 +851,22 @@ TRANSCRIBE_API transcribe_status transcribe_get_backend_device(
  */
 TRANSCRIBE_API bool transcribe_backend_available(
     transcribe_backend_request kind);
+
+/*
+ * Fill *out (initialized via transcribe_backend_device_init) with the
+ * compute device this loaded model is running on — the device that owns its
+ * weights and runs most of its graph. Same struct and same live-snapshot
+ * semantics as transcribe_get_backend_device: memory_free is current as of
+ * the call, so re-invoke to ask "how much memory is left on the device my
+ * model landed on" at any time after load.
+ *
+ * Returns TRANSCRIBE_ERR_INVALID_ARG if model or out is NULL (or out fails
+ * the struct-size check), or TRANSCRIBE_ERR_BACKEND if the model has no
+ * resolved compute device.
+ */
+TRANSCRIBE_API transcribe_status transcribe_model_get_device(
+    const struct transcribe_model *    model,
+    struct transcribe_backend_device * out);
 
 /*
  * Initialization of caller-owned params structs.
@@ -843,13 +898,29 @@ TRANSCRIBE_API bool transcribe_backend_available(
  * backend:    which backend to request. See transcribe_backend_request
  *             for the semantics of each value. Default is AUTO.
  *
- * gpu_device: Reserved for future multi-device selection. 0 means
- *             "auto / the first device of the chosen kind" and is the
- *             default; any other value returns TRANSCRIBE_ERR_INVALID_ARG
- *             in 0.x. AUTO always picks the first device of the chosen
- *             kind in ggml's registry order; explicit METAL/VULKAN
- *             requests likewise pick the first matching device. There is
- *             no per-device selection in the current release.
+ * gpu_device: Multi-GPU selector. 0 (the default) means "auto / the first
+ *             device of the chosen kind": AUTO picks the first GPU/IGPU in
+ *             ggml's registry order, and explicit METAL/VULKAN/CUDA requests
+ *             pick the first matching device, as before.
+ *
+ *             A value > 0 selects the GPU/IGPU device at that global ggml
+ *             registry index — the same index space transcribe_get_backend_device()
+ *             enumerates, so enumerate first to choose one. The selected
+ *             device becomes the model's primary backend, validated against
+ *             `backend`: it must be a GPU/IGPU, and for an explicit
+ *             METAL/VULKAN/CUDA request it must be that vendor. The index is
+ *             order-dependent — ggml's registry order can shift across driver
+ *             updates or hosts, so treat it as a runtime selection, not a
+ *             stable identifier; correlate via the enumerated device's name /
+ *             device_id when you need stability.
+ *
+ *             gpu_device is rejected with TRANSCRIBE_ERR_INVALID_ARG when it
+ *             is negative, out of range, names a non-GPU device, names a
+ *             device whose vendor doesn't match an explicit GPU request, or
+ *             is non-zero alongside a CPU / CPU_ACCEL request (there is no
+ *             GPU to select). Note there is no way to explicitly select the
+ *             device at registry index 0; that is exactly what AUTO /
+ *             first-of-kind already picks.
  */
 struct transcribe_model_load_params {
     uint64_t                   struct_size;

@@ -891,6 +891,56 @@ extern "C" transcribe_status transcribe_init_backends_default(void) {
 #endif
 }
 
+namespace {
+
+// Map ggml's device-type enum onto the public transcribe_device_type. GPU
+// and any unexpected type (e.g. the META tensor-parallel aggregate, which we
+// never construct) collapse to GPU; the dedicated CPU/IGPU/ACCEL cases are
+// reported faithfully.
+transcribe_device_type to_device_type(enum ggml_backend_dev_type t) {
+    switch (t) {
+        case GGML_BACKEND_DEVICE_TYPE_CPU:   return TRANSCRIBE_DEVICE_TYPE_CPU;
+        case GGML_BACKEND_DEVICE_TYPE_IGPU:  return TRANSCRIBE_DEVICE_TYPE_IGPU;
+        case GGML_BACKEND_DEVICE_TYPE_ACCEL: return TRANSCRIBE_DEVICE_TYPE_ACCEL;
+        case GGML_BACKEND_DEVICE_TYPE_GPU:
+        default:                             return TRANSCRIBE_DEVICE_TYPE_GPU;
+    }
+}
+
+// Fill a caller-owned transcribe_backend_device from a ggml device, honoring
+// the caller's declared struct_size via copy_out_prefix. ggml_backend_dev_get_props
+// queries memory live, so every call observes a fresh memory_free snapshot.
+void fill_backend_device(ggml_backend_dev_t dev, uint64_t caller_size,
+                         struct transcribe_backend_device * out) {
+    ggml_backend_dev_props props{};
+    ggml_backend_dev_get_props(dev, &props);
+
+    const transcribe::BackendKind kind = transcribe::classify_device(dev);
+    const char * kind_name = transcribe::kind_name(kind);
+    const char * name = ggml_backend_dev_name(dev);
+    if (name == nullptr || name[0] == '\0') {
+        name = (props.name != nullptr && props.name[0] != '\0')
+            ? props.name : kind_name;
+    }
+    const char * description = ggml_backend_dev_description(dev);
+    if (description == nullptr) {
+        description = props.description != nullptr ? props.description : "";
+    }
+
+    struct transcribe_backend_device staged{};
+    staged.struct_size  = caller_size;
+    staged.name         = name;
+    staged.description  = description;
+    staged.kind         = kind_name;
+    staged.device_id    = props.device_id;
+    staged.memory_total = props.memory_total;
+    staged.memory_free  = props.memory_free;
+    staged.device_type  = to_device_type(props.type);
+    copy_out_prefix(out, &staged, caller_size, sizeof(staged));
+}
+
+} // namespace
+
 extern "C" int transcribe_backend_device_count(void) {
     return static_cast<int>(ggml_backend_dev_count());
 }
@@ -911,9 +961,7 @@ extern "C" transcribe_status transcribe_get_backend_device(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
     ggml_backend_dev_t dev = ggml_backend_dev_get(static_cast<size_t>(index));
-    out->name        = ggml_backend_dev_name(dev);
-    out->description = ggml_backend_dev_description(dev);
-    out->kind        = transcribe::kind_name(transcribe::classify_device(dev));
+    fill_backend_device(dev, out->struct_size, out);
     return TRANSCRIBE_OK;
 }
 
@@ -1371,22 +1419,11 @@ extern "C" transcribe_status transcribe_model_load_file(
         return st;
     }
 
-    // Reserved-field validation. gpu_device is documented in the public
-    // header as 0 = auto/default in 0.x, reserved for future multi-device
-    // selection. 0 is the zero value so a {0} / default-initialized struct
-    // passes; reject anything else now so that callers who pass a stale
-    // explicit device index (or garbage) get a clean error today rather
-    // than a silent success followed by surprise behavior when we actually
-    // wire device selection up. A stderr line is included because "invalid
-    // argument" alone doesn't tell the caller which field tripped. When
-    // multi-device support lands this check relaxes to `< 0 || >= n_devices`.
-    if (params->gpu_device != 0) {
-        transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-            "transcribe_model_load_file: gpu_device must be 0 (auto) in 0.x "
-            "(got %d); multi-device selection is reserved for a "
-            "future release", params->gpu_device);
-        return TRANSCRIBE_ERR_INVALID_ARG;
-    }
+    // gpu_device is validated where the device registry is available — in
+    // load_common::init_backends, which each family calls. 0 means auto/first
+    // of kind; a positive index selects a specific GPU; negative / out of
+    // range / kind-mismatched values return TRANSCRIBE_ERR_INVALID_ARG from
+    // there. See the public header and transcribe-load-common.h.
 
     // Raw-validate the backend request before the families' first
     // enum-typed load of it (see enum_field_raw). init_backends re-checks
@@ -2660,6 +2697,31 @@ extern "C" const char * transcribe_model_backend(const struct transcribe_model *
         return "";
     }
     return model->backend.c_str();
+}
+
+extern "C" transcribe_status transcribe_model_get_device(
+    const struct transcribe_model *    model,
+    struct transcribe_backend_device * out)
+{
+    if (model == nullptr || out == nullptr) {
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (const auto st = check_struct_size(out->struct_size, k_min_backend_device_size);
+        st != TRANSCRIBE_OK)
+    {
+        return st;
+    }
+    // The model's primary backend is bound by per-family load(); a model
+    // that never resolved one (or a 2B build with no real backend) has none.
+    if (model->primary_backend == nullptr) {
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    ggml_backend_dev_t dev = ggml_backend_get_device(model->primary_backend);
+    if (dev == nullptr) {
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    fill_backend_device(dev, out->struct_size, out);
+    return TRANSCRIBE_OK;
 }
 
 // ---------------------------------------------------------------------------

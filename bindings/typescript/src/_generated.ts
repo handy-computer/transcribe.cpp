@@ -11,7 +11,7 @@
 // Stable digest of the ABI surface (structs, enums, macros, layout,
 // prototypes), computed by the Python oracle and pinned here so a header
 // ABI change turns this binding's drift check red for conscious review.
-export const PUBLIC_HEADER_HASH = "2273744299e5aa65";
+export const PUBLIC_HEADER_HASH = "ebe6a6816e34a24e";
 
 // === enum constants ===
 export const TRANSCRIBE_OK = 0;
@@ -77,6 +77,10 @@ export const TRANSCRIBE_BACKEND_METAL = 2;
 export const TRANSCRIBE_BACKEND_VULKAN = 3;
 export const TRANSCRIBE_BACKEND_CPU_ACCEL = 4;
 export const TRANSCRIBE_BACKEND_CUDA = 5;
+export const TRANSCRIBE_DEVICE_TYPE_CPU = 0;
+export const TRANSCRIBE_DEVICE_TYPE_GPU = 1;
+export const TRANSCRIBE_DEVICE_TYPE_IGPU = 2;
+export const TRANSCRIBE_DEVICE_TYPE_ACCEL = 3;
 export const TRANSCRIBE_FEATURE_INITIAL_PROMPT = 0;
 export const TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK = 1;
 export const TRANSCRIBE_FEATURE_LONG_FORM = 2;
@@ -103,7 +107,7 @@ export const TRANSCRIBE_EXT_KIND_WHISPER_RUN = 1314015319;
 export interface StructLayout { size: number; align: number; offsets: Record<string, number>; }
 export const STRUCT_LAYOUT: Record<string, StructLayout> = {
   'transcribe_ext': { size: 16, align: 8, offsets: {'size': 0, 'kind': 8} },
-  'transcribe_backend_device': { size: 32, align: 8, offsets: {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24} },
+  'transcribe_backend_device': { size: 64, align: 8, offsets: {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24, 'device_id': 32, 'memory_total': 40, 'memory_free': 48, 'device_type': 56} },
   'transcribe_model_load_params': { size: 16, align: 8, offsets: {'struct_size': 0, 'backend': 8, 'gpu_device': 12} },
   'transcribe_session_params': { size: 24, align: 8, offsets: {'struct_size': 0, 'n_threads': 8, 'kv_type': 12, 'n_ctx': 16} },
   'transcribe_run_params': { size: 64, align: 8, offsets: {'struct_size': 0, 'task': 8, 'timestamps': 12, 'pnc': 16, 'itn': 20, 'language': 24, 'target_language': 32, 'keep_special_tags': 40, 'family': 48, 'spec_k_drafts': 56} },
@@ -145,7 +149,7 @@ export const ABI_STRUCT_IDS: Record<string, number> = {
 export function defineTypes(koffi: any): Record<string, any> {
   const T: Record<string, any> = {};
   T['transcribe_ext'] = koffi.struct({ size: 'uint64_t', kind: 'uint32_t' });
-  T['transcribe_backend_device'] = koffi.struct({ struct_size: 'uint64_t', name: 'char *', description: 'char *', kind: 'char *' });
+  T['transcribe_backend_device'] = koffi.struct({ struct_size: 'uint64_t', name: 'char *', description: 'char *', kind: 'char *', device_id: 'char *', memory_total: 'uint64_t', memory_free: 'uint64_t', device_type: 'int' });
   T['transcribe_model_load_params'] = koffi.struct({ struct_size: 'uint64_t', backend: 'int', gpu_device: 'int' });
   T['transcribe_session_params'] = koffi.struct({ struct_size: 'uint64_t', n_threads: 'int', kv_type: 'int', n_ctx: 'int32_t' });
   T['transcribe_run_params'] = koffi.struct({ struct_size: 'uint64_t', task: 'int', timestamps: 'int', pnc: 'int', itn: 'int', language: 'char *', target_language: 'char *', keep_special_tags: 'bool', family: 'void *', spec_k_drafts: 'int32_t' });
@@ -207,6 +211,7 @@ export const FUNCTION_SIGNATURES: Record<string, FnSig> = {
   'transcribe_model_backend': { ret: 'const char *', args: ['const struct transcribe_model *'] },
   'transcribe_model_free': { ret: 'void', args: ['struct transcribe_model *'] },
   'transcribe_model_get_capabilities': { ret: 'transcribe_status', args: ['const struct transcribe_model *', 'struct transcribe_capabilities *'] },
+  'transcribe_model_get_device': { ret: 'transcribe_status', args: ['const struct transcribe_model *', 'struct transcribe_backend_device *'] },
   'transcribe_model_load_file': { ret: 'transcribe_status', args: ['const char *', 'const struct transcribe_model_load_params *', 'struct transcribe_model **'] },
   'transcribe_model_load_params_init': { ret: 'void', args: ['struct transcribe_model_load_params *'] },
   'transcribe_model_supports': { ret: '_Bool', args: ['const struct transcribe_model *', 'transcribe_feature'] },

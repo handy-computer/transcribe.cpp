@@ -121,9 +121,84 @@ bool valid_backend_request(int raw) {
     return false;
 }
 
+// Resolve a BackendPlan for an explicit device selection (gpu_device > 0).
+// `dev_index` is a global ggml registry index. The selected device becomes
+// the primary; `requested` constrains what kind it must be. Only GPU/IGPU
+// devices are selectable this way — strict/accel CPU requests reject a
+// non-zero gpu_device before reaching here. The assembled plan mirrors the
+// specific-GPU path: primary GPU, then ACCEL, then CPU last as the fallback.
+transcribe_status init_backends_explicit_index(transcribe_backend_request requested,
+                                               int                        dev_index,
+                                               const char *               error_tag,
+                                               BackendPlan &              out)
+{
+    const size_t n = ggml_backend_dev_count();
+    if (dev_index < 0 || static_cast<size_t>(dev_index) >= n) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: gpu_device %d out of range [0, %zu)",
+                     error_tag, dev_index, n);
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    ggml_backend_dev_t dev = ggml_backend_dev_get(static_cast<size_t>(dev_index));
+    const auto dev_type = ggml_backend_dev_type(dev);
+    if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU &&
+        dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU)
+    {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: gpu_device %d (%s) is not a GPU device",
+                     error_tag, dev_index, ggml_backend_dev_name(dev));
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    const BackendKind got = classify_device(dev);
+
+    // A specific vendor request pins the kind; AUTO accepts any GPU.
+    BackendKind wanted = BackendKind::Unknown;  // Unknown == "any GPU" (AUTO)
+    switch (requested) {
+        case TRANSCRIBE_BACKEND_METAL:  wanted = BackendKind::Metal;  break;
+        case TRANSCRIBE_BACKEND_VULKAN: wanted = BackendKind::Vulkan; break;
+        case TRANSCRIBE_BACKEND_CUDA:   wanted = BackendKind::Cuda;   break;
+        case TRANSCRIBE_BACKEND_AUTO:   break;
+        default:
+            // CPU / CPU_ACCEL never reach here (caller rejects nonzero
+            // gpu_device for them); anything else is a programming error.
+            return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (wanted != BackendKind::Unknown && got != wanted) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: gpu_device %d is a %s device but %s was requested",
+                     error_tag, dev_index, kind_name(got), kind_name(wanted));
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+
+    ggml_backend_t gpu_be = ggml_backend_dev_init(dev, nullptr);
+    if (gpu_be == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: failed to initialize gpu_device %d (%s)",
+                     error_tag, dev_index, ggml_backend_dev_name(dev));
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+    log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+                 "%s: using %s backend (gpu_device %d): %s",
+                 error_tag, kind_name(got), dev_index, ggml_backend_dev_name(dev));
+
+    out.primary      = gpu_be;
+    out.primary_kind = got;
+    out.scheduler_list.push_back(gpu_be);
+
+    append_accel_backends(out.scheduler_list, error_tag);
+
+    ggml_backend_t cpu_be = init_cpu_backend(error_tag);
+    if (cpu_be == nullptr) return TRANSCRIBE_ERR_BACKEND;
+    out.scheduler_list.push_back(cpu_be);
+    return TRANSCRIBE_OK;
+}
+
 } // namespace
 
 transcribe_status init_backends(transcribe_backend_request requested,
+                                int                        gpu_device,
                                 const char *               error_tag,
                                 BackendPlan &              out)
 {
@@ -138,6 +213,35 @@ transcribe_status init_backends(transcribe_backend_request requested,
     out.requested = static_cast<transcribe_backend_request>(
         valid_backend_request(requested_raw) ? requested_raw
                                              : TRANSCRIBE_BACKEND_AUTO);
+
+    // Explicit device selection. 0 is "auto / first of kind" and falls
+    // through to the per-request logic below; a negative index is always
+    // invalid; a positive index pins a specific GPU/IGPU device.
+    if (gpu_device < 0) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "%s: gpu_device must be >= 0 (got %d)",
+                     error_tag, gpu_device);
+        return TRANSCRIBE_ERR_INVALID_ARG;
+    }
+    if (gpu_device > 0) {
+        if (!valid_backend_request(requested_raw)) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: invalid transcribe_backend_request value %d",
+                         error_tag, requested_raw);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        // gpu_device names a GPU; a CPU-only request has nothing to select.
+        if (requested_raw == TRANSCRIBE_BACKEND_CPU ||
+            requested_raw == TRANSCRIBE_BACKEND_CPU_ACCEL)
+        {
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                         "%s: gpu_device %d is invalid for a CPU backend request",
+                         error_tag, gpu_device);
+            return TRANSCRIBE_ERR_INVALID_ARG;
+        }
+        return init_backends_explicit_index(out.requested, gpu_device,
+                                            error_tag, out);
+    }
 
     // Explicit switch over the enum so an unknown / garbage value
     // from a C caller never silently collapses into AUTO. Unknown
