@@ -689,7 +689,7 @@ transcribe_status load(
         (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
 
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, "parakeet", m->plan);
+            backend_req, (params != nullptr) ? params->gpu_device : 0, "parakeet", m->plan);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
@@ -698,6 +698,7 @@ transcribe_status load(
 
     // Label for the public API: report the primary backend.
     m->backend = ggml_backend_name(m->plan.primary);
+    m->primary_backend = m->plan.primary;
 
     // Allocate a backend buffer for every tensor in ctx_meta on the
     // primary backend. After this returns, each ggml_tensor in

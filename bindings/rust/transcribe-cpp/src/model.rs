@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use transcribe_cpp_sys as sys;
 
+use crate::backend::Device;
 use crate::error::{check, Result};
 use crate::result::owned_str;
 use crate::session::Session;
@@ -195,6 +196,18 @@ impl Model {
     /// to detect CPU fallback after requesting a GPU.
     pub fn backend(&self) -> String {
         owned_str(unsafe { sys::transcribe_model_backend(self.inner.ptr) })
+    }
+
+    /// The compute [`Device`] this model is running on — the one that owns its
+    /// weights. Its `memory_free` is a live snapshot, so re-call to poll how
+    /// much memory is left on the device after the model loaded. Errors with
+    /// [`Error::Backend`](crate::Error) if the model has no resolved device.
+    pub fn device(&self) -> Result<Device> {
+        let mut raw: sys::transcribe_backend_device = unsafe { std::mem::zeroed() };
+        unsafe { sys::transcribe_backend_device_init(&mut raw) };
+        let status = unsafe { sys::transcribe_model_get_device(self.inner.ptr, &mut raw) };
+        check(status, "model_get_device")?;
+        Ok(Device::from_raw(&raw))
     }
 
     /// Tokenize plain UTF-8 text into the model's vocabulary (no BOS/EOS, no

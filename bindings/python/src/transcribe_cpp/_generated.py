@@ -13,7 +13,7 @@ import ctypes as _c
 # Stable digest of the ABI surface below (structs, enums, macros, layout,
 # prototypes). A native provider package echoes this back so the API
 # package can reject an ABI-mismatched provider before dlopen.
-PUBLIC_HEADER_HASH = "2273744299e5aa65"
+PUBLIC_HEADER_HASH = "ebe6a6816e34a24e"
 
 # === enum constants ===
 TRANSCRIBE_OK = 0
@@ -79,6 +79,10 @@ TRANSCRIBE_BACKEND_METAL = 2
 TRANSCRIBE_BACKEND_VULKAN = 3
 TRANSCRIBE_BACKEND_CPU_ACCEL = 4
 TRANSCRIBE_BACKEND_CUDA = 5
+TRANSCRIBE_DEVICE_TYPE_CPU = 0
+TRANSCRIBE_DEVICE_TYPE_GPU = 1
+TRANSCRIBE_DEVICE_TYPE_IGPU = 2
+TRANSCRIBE_DEVICE_TYPE_ACCEL = 3
 TRANSCRIBE_FEATURE_INITIAL_PROMPT = 0
 TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK = 1
 TRANSCRIBE_FEATURE_LONG_FORM = 2
@@ -145,7 +149,7 @@ class transcribe_whisper_chunk_trace(_c.Structure):
     pass
 
 transcribe_ext._fields_ = [("size", _c.c_uint64), ("kind", _c.c_uint32)]
-transcribe_backend_device._fields_ = [("struct_size", _c.c_uint64), ("name", _c.c_char_p), ("description", _c.c_char_p), ("kind", _c.c_char_p)]
+transcribe_backend_device._fields_ = [("struct_size", _c.c_uint64), ("name", _c.c_char_p), ("description", _c.c_char_p), ("kind", _c.c_char_p), ("device_id", _c.c_char_p), ("memory_total", _c.c_uint64), ("memory_free", _c.c_uint64), ("device_type", _c.c_int)]
 transcribe_model_load_params._fields_ = [("struct_size", _c.c_uint64), ("backend", _c.c_int), ("gpu_device", _c.c_int)]
 transcribe_session_params._fields_ = [("struct_size", _c.c_uint64), ("n_threads", _c.c_int), ("kv_type", _c.c_int), ("n_ctx", _c.c_int32)]
 transcribe_run_params._fields_ = [("struct_size", _c.c_uint64), ("task", _c.c_int), ("timestamps", _c.c_int), ("pnc", _c.c_int), ("itn", _c.c_int), ("language", _c.c_char_p), ("target_language", _c.c_char_p), ("keep_special_tags", _c.c_bool), ("family", _c.POINTER(transcribe_ext)), ("spec_k_drafts", _c.c_int32)]
@@ -187,7 +191,7 @@ ABI_STRUCT_IDS = {
 # C-compiler layout captured at generation (for offset self-check).
 STRUCT_LAYOUT = {
     'transcribe_ext': {'size': 16, 'align': 8, 'offsets': {'size': 0, 'kind': 8}},
-    'transcribe_backend_device': {'size': 32, 'align': 8, 'offsets': {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24}},
+    'transcribe_backend_device': {'size': 64, 'align': 8, 'offsets': {'struct_size': 0, 'name': 8, 'description': 16, 'kind': 24, 'device_id': 32, 'memory_total': 40, 'memory_free': 48, 'device_type': 56}},
     'transcribe_model_load_params': {'size': 16, 'align': 8, 'offsets': {'struct_size': 0, 'backend': 8, 'gpu_device': 12}},
     'transcribe_session_params': {'size': 24, 'align': 8, 'offsets': {'struct_size': 0, 'n_threads': 8, 'kv_type': 12, 'n_ctx': 16}},
     'transcribe_run_params': {'size': 64, 'align': 8, 'offsets': {'struct_size': 0, 'task': 8, 'timestamps': 12, 'pnc': 16, 'itn': 20, 'language': 24, 'target_language': 32, 'keep_special_tags': 40, 'family': 48, 'spec_k_drafts': 56}},
@@ -287,6 +291,8 @@ def configure(lib):
     lib.transcribe_model_free.argtypes = [_c.c_void_p]
     lib.transcribe_model_get_capabilities.restype = _c.c_int
     lib.transcribe_model_get_capabilities.argtypes = [_c.c_void_p, _c.POINTER(transcribe_capabilities)]
+    lib.transcribe_model_get_device.restype = _c.c_int
+    lib.transcribe_model_get_device.argtypes = [_c.c_void_p, _c.POINTER(transcribe_backend_device)]
     lib.transcribe_model_load_file.restype = _c.c_int
     lib.transcribe_model_load_file.argtypes = [_c.c_char_p, _c.POINTER(transcribe_model_load_params), _c.POINTER(_c.c_void_p)]
     lib.transcribe_model_load_params_init.restype = None

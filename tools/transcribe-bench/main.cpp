@@ -37,6 +37,7 @@ struct bench_args {
     int                        n_threads = 0;
     bool                       quiet     = false;
     transcribe_backend_request backend   = TRANSCRIBE_BACKEND_AUTO;
+    int                        gpu_device = 0;  // --device N: 0 = auto, >0 = index
     // Passed through to transcribe_run_params::spec_k_drafts. -1 = family
     // default, 0 = spec decode off, > 0 = explicit draft length. Silently
     // ignored by families without supports_spec_decode. Set by
@@ -60,6 +61,8 @@ void print_usage(const char * argv0) {
         "                     cpu is strict CPU (no GPU, no BLAS/AMX).\n"
         "                     cpu_accel is CPU + host-memory accelerators\n"
         "                       (BLAS/AMX) when the build includes them.\n"
+        "  --device N         GPU device index: 0 = auto (first of kind),\n"
+        "                       >0 selects that ggml registry index\n"
         "  --spec-k-drafts N  speculative-decode draft length on the offline\n"
         "                     path: -1 = family default, 0 = off, > 0 = K.\n"
         "                     Ignored by families without spec support.\n"
@@ -108,6 +111,11 @@ bool parse_args(int argc, char ** argv, bench_args & out) {
         else if (a == "--backend")  {
             auto v = need_val(i, "--backend"); if (!v) return false;
             if (!parse_backend_kind(v, out.backend)) return false;
+        }
+        else if (a == "--device")   {
+            auto v = need_val(i, "--device"); if (!v) return false;
+            out.gpu_device = std::atoi(v);
+            if (out.gpu_device < 0) { std::fprintf(stderr, "error: --device must be >= 0 (0 = auto)\n"); return false; }
         }
         else {
             std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
@@ -206,6 +214,7 @@ int main(int argc, char ** argv) {
     if (!quiet) std::fprintf(stderr, "loading model %s\n", args.model_path.c_str());
     struct transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
     mp.backend = args.backend;
+    mp.gpu_device = args.gpu_device;
     struct transcribe_model *      model = nullptr;
     if (const transcribe_status st =
             transcribe_model_load_file(args.model_path.c_str(), &mp, &model);

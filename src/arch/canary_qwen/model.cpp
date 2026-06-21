@@ -707,13 +707,14 @@ transcribe_status load(
     // ---- Backend plan + alloc + stream tensor data ----
     const transcribe_backend_request backend_req =
         (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
-    if (auto st = load_common::init_backends(backend_req, "canary_qwen", m->plan);
+    if (auto st = load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0, "canary_qwen", m->plan);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
         return st;
     }
     m->backend = ggml_backend_name(m->plan.primary);
+    m->primary_backend = m->plan.primary;
 
     ggml_backend_buffer_t weights_buffer =
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);

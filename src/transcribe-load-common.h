@@ -48,6 +48,16 @@ namespace transcribe::load_common {
 //                Library-internal classification of what each value
 //                actually picks up is documented in
 //                transcribe-backend.h.
+//   gpu_device:  multi-GPU selector. 0 (the default) means "auto / the
+//                first device of the chosen kind" — the existing
+//                first-of-kind behavior. A value > 0 selects the GPU/IGPU
+//                device at that global ggml registry index (the same index
+//                space transcribe_get_backend_device() enumerates) as the
+//                primary, validated against `requested`: the device must be
+//                a GPU/IGPU, and for a specific METAL/VULKAN/CUDA request it
+//                must be that vendor. gpu_device is not valid for a
+//                CPU / CPU_ACCEL request (there is no GPU to pick) nor
+//                negative; both return TRANSCRIBE_ERR_INVALID_ARG.
 //   error_tag:   log prefix, e.g. "parakeet".
 //   out:         populated on success. out.primary is the backend
 //                that owns the weight buffer; out.scheduler_list
@@ -57,12 +67,17 @@ namespace transcribe::load_common {
 //
 // Returns:
 //   TRANSCRIBE_OK         on success.
+//   TRANSCRIBE_ERR_INVALID_ARG if gpu_device is negative, out of range,
+//                          names a non-GPU device, names a device whose
+//                          vendor doesn't match a specific GPU request, or
+//                          is non-zero for a CPU request.
 //   TRANSCRIBE_ERR_BACKEND if the caller asked for a specific
 //                          backend (METAL / VULKAN) that could not
 //                          be initialized, or if the CPU backend
 //                          itself fails to initialize (there is no
 //                          fallback past CPU).
 transcribe_status init_backends(transcribe_backend_request requested,
+                                int                        gpu_device,
                                 const char *               error_tag,
                                 BackendPlan &              out);
 

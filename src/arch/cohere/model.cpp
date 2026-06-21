@@ -674,7 +674,7 @@ transcribe_status load(
         (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
 
     if (const transcribe_status st = transcribe::load_common::init_backends(
-            backend_req, "cohere", m->plan);
+            backend_req, (params != nullptr) ? params->gpu_device : 0, "cohere", m->plan);
         st != TRANSCRIBE_OK)
     {
         gguf_free(gguf_data);
@@ -682,6 +682,7 @@ transcribe_status load(
     }
 
     m->backend = ggml_backend_name(m->plan.primary);
+    m->primary_backend = m->plan.primary;
 
     ggml_backend_buffer_t weights_buffer =
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);

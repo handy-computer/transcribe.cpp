@@ -14,8 +14,36 @@ use std::path::Path;
 use transcribe_cpp_sys as sys;
 
 use crate::error::{check, Result};
-use crate::result::owned_str;
+use crate::result::{owned_opt_str, owned_str};
 use crate::types::Backend;
+
+/// The vendor-agnostic class of a compute device, orthogonal to
+/// [`Device::kind`] (which carries the vendor). Distinguishes a discrete GPU
+/// from an integrated one, and a host-memory accelerator from the CPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceType {
+    /// CPU using system memory.
+    Cpu,
+    /// Discrete GPU with dedicated memory.
+    Gpu,
+    /// Integrated GPU using host memory.
+    Igpu,
+    /// Host-memory accelerator (BLAS/AMX/...).
+    Accel,
+}
+
+impl DeviceType {
+    fn from_raw(raw: sys::transcribe_device_type) -> Self {
+        use sys::transcribe_device_type as T;
+        match raw {
+            T::TRANSCRIBE_DEVICE_TYPE_CPU => DeviceType::Cpu,
+            T::TRANSCRIBE_DEVICE_TYPE_IGPU => DeviceType::Igpu,
+            T::TRANSCRIBE_DEVICE_TYPE_ACCEL => DeviceType::Accel,
+            // includes TRANSCRIBE_DEVICE_TYPE_GPU and any unknown value
+            _ => DeviceType::Gpu,
+        }
+    }
+}
 
 /// One registered compute device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,9 +52,36 @@ pub struct Device {
     pub name: String,
     /// Human-readable description, e.g. "Apple M4 Max".
     pub description: String,
-    /// Classified kind: "cpu", "accel", "metal", "vulkan", "cuda", "sycl",
-    /// "gpu", or "unknown".
+    /// Classified vendor kind: "cpu", "accel", "metal", "vulkan", "cuda",
+    /// "sycl", "gpu", or "unknown".
     pub kind: String,
+    /// The CPU/GPU/IGPU/ACCEL axis, orthogonal to [`Device::kind`].
+    pub device_type: DeviceType,
+    /// Stable hardware id when the backend reports one (PCI bus id for PCI
+    /// devices), or `None` (e.g. Metal).
+    pub device_id: Option<String>,
+    /// Reported device memory capacity in bytes, or 0 if unreported.
+    pub memory_total: u64,
+    /// Available device memory in bytes — a snapshot at the time this was
+    /// queried, or 0 if unreported. Re-query (via [`devices`] or
+    /// [`crate::Model::device`]) to refresh it; the value is backend-defined
+    /// and not comparable across device kinds.
+    pub memory_free: u64,
+}
+
+impl Device {
+    /// Build a [`Device`] from the raw FFI struct filled by the library.
+    pub(crate) fn from_raw(raw: &sys::transcribe_backend_device) -> Device {
+        Device {
+            name: owned_str(raw.name),
+            description: owned_str(raw.description),
+            kind: owned_str(raw.kind),
+            device_type: DeviceType::from_raw(raw.device_type),
+            device_id: owned_opt_str(raw.device_id),
+            memory_total: raw.memory_total,
+            memory_free: raw.memory_free,
+        }
+    }
 }
 
 /// Load backend modules from `dir` (dynamic builds) and register their
@@ -76,11 +131,7 @@ pub fn devices() -> Vec<Device> {
         unsafe { sys::transcribe_backend_device_init(&mut raw) };
         let status = unsafe { sys::transcribe_get_backend_device(i, &mut raw) };
         if status == sys::transcribe_status::TRANSCRIBE_OK {
-            out.push(Device {
-                name: owned_str(raw.name),
-                description: owned_str(raw.description),
-                kind: owned_str(raw.kind),
-            });
+            out.push(Device::from_raw(&raw));
         }
     }
     out

@@ -430,15 +430,18 @@ static void test_load_invalid(void) {
           == TRANSCRIBE_ERR_BAD_STRUCT_SIZE);
     CHECK(m == NULL);
 
-    /* gpu_device must be 0 (auto) in 0.x; any other value -> INVALID_ARG,
-     * checked before the file is touched. */
+    /* gpu_device selection is validated during load against the live device
+     * registry (in load_common::init_backends), not as an upfront reserved-
+     * field check — so a nonzero gpu_device no longer short-circuits to
+     * INVALID_ARG before the file is even opened. A missing file still
+     * surfaces as FILE_NOT_FOUND regardless of gpu_device. */
     struct transcribe_model_load_params mp_dev;
     transcribe_model_load_params_init(&mp_dev);
     mp_dev.gpu_device = 1;
     m = (struct transcribe_model *)0xdeadbeef;
     CHECK(transcribe_model_load_file("/__transcribe_smoke_does_not_exist__.gguf",
                                      &mp_dev, &m)
-          == TRANSCRIBE_ERR_INVALID_ARG);
+          == TRANSCRIBE_ERR_FILE_NOT_FOUND);
     CHECK(m == NULL);
 
     /* Otherwise-valid call against a path that does not exist on disk

@@ -124,12 +124,14 @@ struct cli_args {
                                 // 0/1 keeps the per-file serial loop.
     bool        translate = false;
     bool        quiet     = false;
+    bool        list_devices = false; // --list-devices: print devices and exit
     bool        batch_jsonl = false; // --batch-jsonl: output JSONL
     int         repeat    = 1;
     int         n_threads = 0; // 0 = library default (all cores)
     int         n_ctx     = 0; // 0 = model's true max; >0 lowers the cap
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
     transcribe_backend_request backend = TRANSCRIBE_BACKEND_AUTO;
+    int         gpu_device = 0; // --device N: 0 = auto, >0 = registry index
     transcribe_timestamp_kind timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
 
     // Whisper-family knobs. Ignored for non-Whisper models.
@@ -204,6 +206,8 @@ void print_usage(const char * argv0) {
         "                        max audio.\n"
         "  --kv-type TYPE        flash-attn KV type: auto, f32, f16 (default: auto)\n"
         "  --backend TYPE        compute backend: auto, cpu, cpu_accel, metal, vulkan (default: auto)\n"
+        "  --device N            GPU device index from --list-devices: 0 = auto\n"
+        "                        (first of kind), >0 selects that registry index\n"
         "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: none)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
@@ -240,8 +244,50 @@ void print_usage(const char * argv0) {
         "                        supports_spec_decode. -1 = family default,\n"
         "                        0 = off, > 0 = explicit K. Silently ignored\n"
         "                        by families without spec support.\n"
+        "  --list-devices        list registered compute devices (with memory)\n"
+        "                        and exit; ignores all other options\n"
         "  -h, --help            show this help\n",
         argv0, argv0);
+}
+
+// Print every registered compute device and its live memory, then return an
+// exit code. Used by --list-devices. Calls transcribe_init_backends_default()
+// first so dynamic-backend builds register their modules (no-op when the
+// backends are compiled in).
+int list_devices_main() {
+    const transcribe_status st = transcribe_init_backends_default();
+    if (st != TRANSCRIBE_OK) {
+        std::fprintf(stderr,
+                     "warning: transcribe_init_backends_default() returned %d; "
+                     "listing whatever registered\n", (int) st);
+    }
+    const int n = transcribe_backend_device_count();
+    if (n <= 0) {
+        std::fprintf(stderr, "no compute devices registered\n");
+        return EXIT_FAILURE;
+    }
+    std::printf("%d compute device(s):\n", n);
+    for (int i = 0; i < n; ++i) {
+        struct transcribe_backend_device d;
+        transcribe_backend_device_init(&d);
+        if (transcribe_get_backend_device(i, &d) != TRANSCRIBE_OK) {
+            continue;
+        }
+        const char * type_str =
+            d.device_type == TRANSCRIBE_DEVICE_TYPE_CPU   ? "cpu"   :
+            d.device_type == TRANSCRIBE_DEVICE_TYPE_GPU   ? "gpu"   :
+            d.device_type == TRANSCRIBE_DEVICE_TYPE_IGPU  ? "igpu"  :
+            d.device_type == TRANSCRIBE_DEVICE_TYPE_ACCEL ? "accel" : "?";
+        const double gib = 1024.0 * 1024.0 * 1024.0;
+        std::printf("  [%d] %s\n", i,
+                    (d.description && *d.description) ? d.description : d.name);
+        std::printf("      name=%s  kind=%s  type=%s  id=%s\n",
+                    d.name ? d.name : "?", d.kind ? d.kind : "?", type_str,
+                    (d.device_id && *d.device_id) ? d.device_id : "(none)");
+        std::printf("      memory: %.2f GiB total, %.2f GiB free\n",
+                    (double) d.memory_total / gib, (double) d.memory_free / gib);
+    }
+    return EXIT_SUCCESS;
 }
 
 bool parse_args(int argc, char ** argv, cli_args & out) {
@@ -258,6 +304,8 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
         if (a == "-h" || a == "--help") {
             print_usage(argv[0]);
             std::exit(0);
+        } else if (a == "--list-devices") {
+            out.list_devices = true;
         } else if (a == "-m" || a == "--model") {
             const char * v = take_value(a.c_str());
             if (!v) return false;
@@ -316,6 +364,14 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             else if (vs == "cuda")      out.backend = TRANSCRIBE_BACKEND_CUDA;
             else {
                 std::fprintf(stderr, "error: --backend must be auto, cpu, cpu_accel, metal, vulkan, or cuda\n");
+                return false;
+            }
+        } else if (a == "--device") {
+            const char * v = take_value(a.c_str());
+            if (!v) return false;
+            out.gpu_device = std::atoi(v);
+            if (out.gpu_device < 0) {
+                std::fprintf(stderr, "error: --device must be >= 0 (0 = auto)\n");
                 return false;
             }
         } else if (a == "--timestamps") {
@@ -437,6 +493,11 @@ bool parse_args(int argc, char ** argv, cli_args & out) {
             out.wav_path = a;
         }
     }
+    // --list-devices is a standalone query handled before any audio is
+    // needed, so skip the audio-input requirement for it.
+    if (out.list_devices) {
+        return true;
+    }
     if (out.wav_path.empty() && out.batch_file.empty()) {
         std::fprintf(stderr, "error: missing audio.wav or --batch\n");
         return false;
@@ -475,6 +536,15 @@ int main(int argc, char ** argv) {
     if (!parse_args(argc, argv, args)) {
         print_usage(argv[0]);
         return EXIT_FAILURE;
+    }
+
+    // Device listing is a standalone query: no model, no audio. Honor it
+    // before any other setup so `--list-devices` works on its own.
+    if (args.list_devices) {
+        if (!args.quiet) {
+            transcribe_log_set(log_cb, nullptr);
+        }
+        return list_devices_main();
     }
 
     // Install the log sink ONCE at startup, before any models or contexts
@@ -529,6 +599,7 @@ int main(int argc, char ** argv) {
         // Load model once.
         struct transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
         mp.backend = args.backend;
+        mp.gpu_device = args.gpu_device;
         struct transcribe_model *      model = nullptr;
         const transcribe_status        load_st =
             transcribe_model_load_file(args.model_path.c_str(), &mp, &model);
@@ -888,6 +959,7 @@ int main(int argc, char ** argv) {
     if (!args.model_path.empty()) {
         struct transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
         mp.backend = args.backend;
+        mp.gpu_device = args.gpu_device;
         struct transcribe_model *      model = nullptr;
         const transcribe_status        st =
             transcribe_model_load_file(args.model_path.c_str(), &mp, &model);

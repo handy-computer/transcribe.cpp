@@ -59,6 +59,7 @@ mod version;
 
 pub use backend::{
     backend_available, device_count, devices, init_backends, init_backends_default, Device,
+    DeviceType,
 };
 pub use cancel::CancelToken;
 pub use error::{Error, Result};

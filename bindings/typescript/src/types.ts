@@ -82,10 +82,24 @@ export interface TranscriptionResult {
   truncated: boolean;
 }
 
+/** Vendor-agnostic device class, orthogonal to {@link BackendInfo.kind}. */
+export type DeviceType = "cpu" | "gpu" | "igpu" | "accel";
+
 export interface BackendInfo {
   name: string;
   description: string;
   kind: string;
+  /** The CPU/GPU/IGPU/ACCEL axis, orthogonal to `kind`. */
+  deviceType: DeviceType;
+  /** Stable hardware id (PCI bus id) when the backend reports one, else null
+   *  (e.g. Metal). */
+  deviceId: string | null;
+  /** Reported device memory capacity in bytes, or 0 if unreported. */
+  memoryTotal: number;
+  /** Available device memory in bytes — a snapshot at query time, or 0 if
+   *  unreported. Re-query (via {@link getAvailableBackends} or `model.device`)
+   *  to refresh; backend-defined and not comparable across device kinds. */
+  memoryFree: number;
 }
 
 export interface ModelOptions {
