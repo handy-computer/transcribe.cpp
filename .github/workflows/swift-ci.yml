@@ -86,18 +86,28 @@ jobs:
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
+      # The xcframework ships a DYNAMIC CTranscribe.framework (so app consumers
+      # need no -ObjC and Xcode auto-embeds it). Command-line `swift test` /
+      # `swift run`, unlike Xcode, don't reliably stage that framework into the
+      # built binary's runtime search path across toolchains (an Xcode-beta
+      # runner fails to; stable Xcode happens to succeed) — so point an rpath at
+      # the built macOS slice. DYLD_FRAMEWORK_PATH won't do it: the hardened
+      # swiftpm test helper strips DYLD_* env vars.
       - name: swift test (no-model + model tiers)
         working-directory: bindings/swift
-        run: swift test
+        run: |
+          FW_DIR="$(cd build-apple/TranscribeCpp.xcframework/macos-*/ && pwd)"
+          swift test -Xlinker -rpath -Xlinker "$FW_DIR"
       # The 5 canonical examples (§6) run on every leg under the same skip
       # rules as the model tier: each transcribes with the canary or exits 0
       # with a skip note (models/ is gitignored, so forks skip cleanly).
       - name: Run the canonical examples
         working-directory: bindings/swift
         run: |
+          FW_DIR="$(cd build-apple/TranscribeCpp.xcframework/macos-*/ && pwd)"
           for example in transcribe-file streaming batch backend-select error-handling; do
             echo "== $example =="
-            swift run "$example"
+            swift run "$example" -Xlinker -rpath -Xlinker "$FW_DIR"
           done
 
   swift-ios:
