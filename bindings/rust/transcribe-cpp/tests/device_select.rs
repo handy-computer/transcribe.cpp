@@ -11,8 +11,7 @@ fn loaded_model_reports_an_enumerated_device() {
     // A model loaded with default options resolves a device. That Device has no
     // registry index (transcribe_model_get_device does not expose one), and it
     // correlates back to a device from devices() by name (+ device_id when set).
-    let Some((model_path, _)) =
-        common::smoke_fixtures("loaded_model_reports_an_enumerated_device")
+    let Some((model_path, _)) = common::smoke_fixtures("loaded_model_reports_an_enumerated_device")
     else {
         return;
     };
@@ -25,9 +24,9 @@ fn loaded_model_reports_an_enumerated_device() {
     // It must match one of the enumerated devices by name, and by device_id
     // when the model device reports one.
     let all = devices();
-    let matched = all.iter().any(|d| {
-        d.name == dev.name && (dev.device_id.is_none() || d.device_id == dev.device_id)
-    });
+    let matched = all
+        .iter()
+        .any(|d| d.name == dev.name && (dev.device_id.is_none() || d.device_id == dev.device_id));
     assert!(
         matched,
         "model device {dev:?} not found among enumerated devices {all:?}"
@@ -37,8 +36,7 @@ fn loaded_model_reports_an_enumerated_device() {
 #[test]
 fn negative_gpu_device_is_invalid_argument() {
     // gpu_device must be >= 0; -1 is rejected before any device lookup.
-    let Some((model_path, _)) =
-        common::smoke_fixtures("negative_gpu_device_is_invalid_argument")
+    let Some((model_path, _)) = common::smoke_fixtures("negative_gpu_device_is_invalid_argument")
     else {
         return;
     };
