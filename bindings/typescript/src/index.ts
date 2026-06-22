@@ -279,15 +279,16 @@ const DEVICE_TYPE_NAMES: Record<number, DeviceType> = {
 // Decode a koffi-filled transcribe_backend_device struct into a BackendInfo.
 // memory_* are uint64 (bigint from koffi) but stay well under 2^53 for any
 // real device, so num() narrows them losslessly.
-function deviceFromRaw(dev: any): BackendInfo {
+function deviceFromRaw(dev: any, index: number | null = null): BackendInfo {
   return {
     name: dev.name ?? "",
     description: dev.description ?? "",
     kind: dev.kind ?? "",
-    deviceType: DEVICE_TYPE_NAMES[dev.device_type] ?? "gpu",
+    deviceType: DEVICE_TYPE_NAMES[dev.device_type] ?? "unknown",
     deviceId: dev.device_id ?? null,
     memoryTotal: num(dev.memory_total),
     memoryFree: num(dev.memory_free),
+    index,
   };
 }
 
@@ -299,7 +300,7 @@ export function getAvailableBackends(): BackendInfo[] {
     const dev: any = {};
     n.F.backendDeviceInit(dev);
     check(n, n.F.getBackendDevice(i, dev), `reading backend device ${i}`);
-    out.push(deviceFromRaw(dev));
+    out.push(deviceFromRaw(dev, i));
   }
   return out;
 }

@@ -25,6 +25,27 @@ def test_at_least_one_device_registered():
         }
 
 
+def test_backends_non_empty():
+    # A CPU device always exists, so the list is never empty.
+    assert t.backends(), "backends() returned an empty list — a CPU device must exist"
+
+
+def test_device_index_and_fields():
+    # Each device carries its registry index (the value Model(..., gpu_device=)
+    # selects with) and well-formed metadata. Pin the device-selection surface.
+    devices = t.backends()
+    for i, dev in enumerate(devices):
+        assert dev.index == i, f"device {i} reported index {dev.index}"
+        assert dev.device_type in {"cpu", "gpu", "igpu", "accel", "unknown"}, (
+            f"device {i} device_type {dev.device_type!r}"
+        )
+        assert dev.memory_total >= 0
+        assert dev.memory_free >= 0
+        assert dev.device_id is None or isinstance(dev.device_id, str)
+        assert isinstance(dev.name, str) and dev.name
+        assert isinstance(dev.kind, str) and dev.kind
+
+
 def test_cpu_always_available():
     # Every shipped configuration includes a CPU backend (compiled in or as
     # the baseline module); a process without one is mispackaged.

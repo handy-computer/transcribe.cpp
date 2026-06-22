@@ -73,7 +73,7 @@ public enum Transcribe {
             var raw = transcribe_backend_device()
             transcribe_backend_device_init(&raw)
             guard transcribe_get_backend_device(index, &raw) == TRANSCRIBE_OK else { continue }
-            devices.append(Device(raw))
+            devices.append(Device(raw, index: Int(index)))
         }
         return devices
     }

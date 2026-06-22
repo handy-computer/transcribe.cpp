@@ -51,6 +51,30 @@ final class NoModelTests: XCTestCase {
         XCTAssertTrue(Transcribe.devices().contains { $0.kind == "cpu" })
     }
 
+    // Device-selection surface (no model). `devices()` is non-empty and each
+    // enumerated device carries a usable, self-consistent descriptor.
+    func testDevicesEnumerationIsNonEmpty() {
+        XCTAssertFalse(Transcribe.devices().isEmpty)
+    }
+
+    func testEnumeratedDevicesAreSelfConsistent() {
+        let devices = Transcribe.devices()
+        for (i, dev) in devices.enumerated() {
+            // `index` is the registry index — the value to pass as gpuDevice.
+            XCTAssertEqual(dev.index, i, "device \(i) index mismatch")
+            // A CPU-kind device must classify on the CPU axis.
+            if dev.kind == "cpu" {
+                XCTAssertEqual(dev.deviceType, .cpu, "device \(i) cpu kind/type mismatch")
+            }
+            // deviceId is either absent (e.g. Metal) or a non-empty id.
+            if let deviceId = dev.deviceId {
+                XCTAssertFalse(deviceId.isEmpty, "device \(i) has an empty deviceId")
+            }
+            XCTAssertFalse(dev.name.isEmpty, "device \(i) has an empty name")
+            XCTAssertFalse(dev.kind.isEmpty, "device \(i) has an empty kind")
+        }
+    }
+
     // Error-mapping integration (no canary needed): the two load-failure
     // classes map to distinct cases. Mirrors Rust's no_model error tests and
     // Python's test_errors.py integration cases.

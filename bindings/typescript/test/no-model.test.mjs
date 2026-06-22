@@ -51,6 +51,33 @@ test("at least one CPU backend is registered", () => {
   );
 });
 
+test("getAvailableBackends returns a non-empty array", () => {
+  const devices = getAvailableBackends();
+  assert.ok(Array.isArray(devices), "expected an array");
+  assert.ok(devices.length >= 1, "expected >= 1 device");
+});
+
+test("each backend device has a well-formed, index-aligned shape", () => {
+  const devices = getAvailableBackends();
+  devices.forEach((dev, i) => {
+    assert.equal(dev.index, i, `device ${i} index should equal its position`);
+    assert.ok(
+      ["cpu", "gpu", "igpu", "accel", "unknown"].includes(dev.deviceType),
+      `device ${i} deviceType ${JSON.stringify(dev.deviceType)} is not a known class`,
+    );
+    assert.ok(dev.memoryTotal >= 0, `device ${i} memoryTotal must be >= 0`);
+    assert.ok(dev.memoryFree >= 0, `device ${i} memoryFree must be >= 0`);
+    assert.ok(
+      dev.deviceId === null || typeof dev.deviceId === "string",
+      `device ${i} deviceId must be null or a string`,
+    );
+    assert.equal(typeof dev.name, "string");
+    assert.ok(dev.name.length > 0, `device ${i} name must be non-empty`);
+    assert.equal(typeof dev.kind, "string");
+    assert.ok(dev.kind.length > 0, `device ${i} kind must be non-empty`);
+  });
+});
+
 test("backendAvailable is a clean boolean probe", () => {
   assert.equal(backendAvailable("cpu"), true);
   assert.equal(typeof backendAvailable("cuda"), "boolean");

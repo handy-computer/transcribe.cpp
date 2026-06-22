@@ -207,7 +207,7 @@ impl Model {
         unsafe { sys::transcribe_backend_device_init(&mut raw) };
         let status = unsafe { sys::transcribe_model_get_device(self.inner.ptr, &mut raw) };
         check(status, "model_get_device")?;
-        Ok(Device::from_raw(&raw))
+        Ok(Device::from_raw(&raw, None))
     }
 
     /// Tokenize plain UTF-8 text into the model's vocabulary (no BOS/EOS, no

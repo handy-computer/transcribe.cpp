@@ -82,8 +82,10 @@ export interface TranscriptionResult {
   truncated: boolean;
 }
 
-/** Vendor-agnostic device class, orthogonal to {@link BackendInfo.kind}. */
-export type DeviceType = "cpu" | "gpu" | "igpu" | "accel";
+/** Vendor-agnostic device class, orthogonal to {@link BackendInfo.kind}.
+ *  `"unknown"` is reported for a device-type value newer than this binding —
+ *  distinguish such devices by {@link BackendInfo.deviceId} / name, not this axis. */
+export type DeviceType = "cpu" | "gpu" | "igpu" | "accel" | "unknown";
 
 export interface BackendInfo {
   name: string;
@@ -100,6 +102,13 @@ export interface BackendInfo {
    *  unreported. Re-query (via {@link getAvailableBackends} or `model.device`)
    *  to refresh; backend-defined and not comparable across device kinds. */
   memoryFree: number;
+  /** Registry index of this device — the value to pass as
+   *  {@link ModelOptions.gpuDevice} to select it (0 selects the auto / first
+   *  device). `null` when this came from `model.device`, since
+   *  `transcribe_model_get_device` does not expose an index; correlate such a
+   *  device back to {@link getAvailableBackends} by `deviceId` / `name`
+   *  instead. Order-dependent and not stable across driver updates or hosts. */
+  index: number | null;
 }
 
 export interface ModelOptions {
@@ -130,9 +139,6 @@ export interface TranscribeOptions {
   /** A run-slot family extension (e.g. whisper). */
   family?: FamilyExtension;
 }
-
-/** A native compute device the runtime discovered. */
-export interface DeviceInfo extends BackendInfo {}
 
 /** One result of a batch run: success carries the transcript, failure the error.
  *  On failure, `error.utteranceIndex` is set, and `error.partialResult` carries any

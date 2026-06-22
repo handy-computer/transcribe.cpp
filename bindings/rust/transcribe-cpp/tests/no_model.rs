@@ -5,7 +5,7 @@ mod common;
 
 use transcribe_cpp::{
     abi_struct_size, backend_available, compiled_version, device_count, devices, header_hash,
-    init_backends_default, version, AbiStruct, Backend, Error, Model,
+    init_backends_default, version, AbiStruct, Backend, DeviceType, Error, Model,
 };
 
 #[test]
@@ -47,6 +47,47 @@ fn at_least_a_cpu_device() {
     assert!(backend_available(Backend::Cpu));
     let devices = devices();
     assert!(devices.iter().any(|d| d.kind == "cpu"), "{devices:?}");
+}
+
+#[test]
+fn devices_is_non_empty() {
+    // Every build has at least the CPU device registered after backend init.
+    init_backends_default().expect("init_backends_default");
+    let devices = devices();
+    assert!(!devices.is_empty(), "devices() returned empty");
+}
+
+#[test]
+fn device_fields_are_well_formed() {
+    // Walk every enumerated device and check the invariants the binding
+    // promises: the registry index matches its position, the device-type axis
+    // is consistent for a CPU device, and the string fields are well-formed
+    // (device_id is None or non-empty; name/kind are never empty).
+    init_backends_default().expect("init_backends_default");
+    let devices = devices();
+    for (i, dev) in devices.iter().enumerate() {
+        // Enumerated devices carry their registry index = position.
+        assert_eq!(dev.index, Some(i), "device {i}: {dev:?}");
+
+        // name / kind are always populated.
+        assert!(!dev.name.is_empty(), "device {i} empty name: {dev:?}");
+        assert!(!dev.kind.is_empty(), "device {i} empty kind: {dev:?}");
+
+        // device_id is either absent or a non-empty stable id.
+        if let Some(id) = &dev.device_id {
+            assert!(!id.is_empty(), "device {i} empty device_id: {dev:?}");
+        }
+
+        // The "cpu" kind must report the CPU device-type (the one cross-build
+        // invariant we can assert without depending on present hardware).
+        if dev.kind == "cpu" {
+            assert_eq!(
+                dev.device_type,
+                DeviceType::Cpu,
+                "cpu-kind device {i} not DeviceType::Cpu: {dev:?}"
+            );
+        }
+    }
 }
 
 #[test]

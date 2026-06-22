@@ -31,14 +31,19 @@ public enum DeviceType: Sendable, Equatable {
     case gpu
     case igpu
     case accel
+    /// A device-type value this binding does not recognize — reported by a
+    /// runtime newer than the header this binding was built against.
+    /// Distinguish such devices by `Device.deviceId` / `Device.name`, not by
+    /// this axis.
+    case unknown
 
     init(_ c: transcribe_device_type) {
         switch c.rawValue {
         case TRANSCRIBE_DEVICE_TYPE_CPU.rawValue: self = .cpu
+        case TRANSCRIBE_DEVICE_TYPE_GPU.rawValue: self = .gpu
         case TRANSCRIBE_DEVICE_TYPE_IGPU.rawValue: self = .igpu
         case TRANSCRIBE_DEVICE_TYPE_ACCEL.rawValue: self = .accel
-        // includes TRANSCRIBE_DEVICE_TYPE_GPU and any unknown value
-        default: self = .gpu
+        default: self = .unknown
         }
     }
 }
@@ -62,9 +67,17 @@ public struct Device: Sendable, Equatable {
     /// unreported. Re-query (`TranscribeCpp.devices()` or `Model.device`) to
     /// refresh; backend-defined and not comparable across device kinds.
     public let memoryFree: UInt64
+    /// Registry index of this device — the value to pass as
+    /// `ModelOptions(gpuDevice:)` to select it (0 selects the auto / first
+    /// device). `nil` when this `Device` came from `Model.device`, since
+    /// `transcribe_model_get_device` does not expose an index; correlate such a
+    /// device back to `devices()` by `deviceId` / `name` instead.
+    /// Order-dependent and not stable across driver updates or hosts.
+    public let index: Int?
 
-    /// Build from the raw C struct the library filled.
-    init(_ raw: transcribe_backend_device) {
+    /// Build from the raw C struct the library filled. `index` is the registry
+    /// index when the device came from enumeration, else nil.
+    init(_ raw: transcribe_backend_device, index: Int? = nil) {
         name = raw.name.map { String(cString: $0) } ?? ""
         description = raw.description.map { String(cString: $0) } ?? ""
         kind = raw.kind.map { String(cString: $0) } ?? ""
@@ -72,6 +85,7 @@ public struct Device: Sendable, Equatable {
         deviceId = raw.device_id.map { String(cString: $0) }
         memoryTotal = raw.memory_total
         memoryFree = raw.memory_free
+        self.index = index
     }
 }
 

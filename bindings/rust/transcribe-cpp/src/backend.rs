@@ -31,6 +31,11 @@ pub enum DeviceType {
     Igpu,
     /// Host-memory accelerator (BLAS/AMX/...).
     Accel,
+    /// A device-type value this binding does not recognize — reported by a
+    /// runtime newer than the header this binding was generated against.
+    /// Distinguish such devices by [`Device::device_id`] / [`Device::name`],
+    /// not by this axis.
+    Unknown,
 }
 
 impl DeviceType {
@@ -38,10 +43,10 @@ impl DeviceType {
         use sys::transcribe_device_type as T;
         match raw {
             T::TRANSCRIBE_DEVICE_TYPE_CPU => DeviceType::Cpu,
+            T::TRANSCRIBE_DEVICE_TYPE_GPU => DeviceType::Gpu,
             T::TRANSCRIBE_DEVICE_TYPE_IGPU => DeviceType::Igpu,
             T::TRANSCRIBE_DEVICE_TYPE_ACCEL => DeviceType::Accel,
-            // includes TRANSCRIBE_DEVICE_TYPE_GPU and any unknown value
-            _ => DeviceType::Gpu,
+            _ => DeviceType::Unknown,
         }
     }
 }
@@ -68,11 +73,21 @@ pub struct Device {
     /// [`crate::Model::device`]) to refresh it; the value is backend-defined
     /// and not comparable across device kinds.
     pub memory_free: u64,
+    /// Registry index of this device — the value to pass as
+    /// [`ModelOptions::gpu_device`](crate::ModelOptions) to select it (0
+    /// selects the auto / first device). `None` when this `Device` came from
+    /// [`crate::Model::device`], since `transcribe_model_get_device` does not
+    /// expose an index; correlate such a device back to [`devices`] by
+    /// `device_id` / `name` instead. Order-dependent and not stable across
+    /// driver updates or hosts.
+    pub index: Option<usize>,
 }
 
 impl Device {
     /// Build a [`Device`] from the raw FFI struct filled by the library.
-    pub(crate) fn from_raw(raw: &sys::transcribe_backend_device) -> Device {
+    /// `index` is the registry index when the device came from enumeration,
+    /// or `None` when it came from `transcribe_model_get_device`.
+    pub(crate) fn from_raw(raw: &sys::transcribe_backend_device, index: Option<usize>) -> Device {
         Device {
             name: owned_str(raw.name),
             description: owned_str(raw.description),
@@ -81,6 +96,7 @@ impl Device {
             device_id: owned_opt_str(raw.device_id),
             memory_total: raw.memory_total,
             memory_free: raw.memory_free,
+            index,
         }
     }
 }
@@ -132,7 +148,7 @@ pub fn devices() -> Vec<Device> {
         unsafe { sys::transcribe_backend_device_init(&mut raw) };
         let status = unsafe { sys::transcribe_get_backend_device(i, &mut raw) };
         if status == sys::transcribe_status::TRANSCRIBE_OK {
-            out.push(Device::from_raw(&raw));
+            out.push(Device::from_raw(&raw, Some(i as usize)));
         }
     }
     out

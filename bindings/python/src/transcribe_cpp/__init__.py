@@ -146,6 +146,10 @@ if _artifact is not None:
 
 _byref = ctypes.byref
 
+# transcribe_tokenize returns INT32_MIN to signal "this model has no tokenizer
+# encode path" (distinct from the negative grow-buffer signal).
+_INT32_MIN = -(2 ** 31)
+
 # Callback function types — must match the generated argtypes for
 # transcribe_log_set / transcribe_set_abort_callback. ctypes acquires the GIL
 # when C invokes these, and a CFUNCTYPE instance must be kept alive for as long
@@ -255,25 +259,36 @@ class BackendDevice:
     name: str
     description: str
     kind: str  # "cpu" | "accel" | "metal" | "vulkan" | "cuda" | "sycl" | "gpu" | "unknown"
-    device_type: str  # vendor-agnostic class: "cpu" | "gpu" | "igpu" | "accel"
+    # Vendor-agnostic class: "cpu" | "gpu" | "igpu" | "accel", or "unknown" for a
+    # value reported by a runtime newer than this binding (tell such devices
+    # apart by device_id / name, not by this axis).
+    device_type: str
     device_id: Optional[str]  # stable hw id (PCI bus id), or None (e.g. Metal)
     memory_total: int  # reported capacity in bytes, or 0 if unreported
     # Available bytes — a SNAPSHOT at query time, or 0 if unreported. Re-query
     # (via backends() or Model.device) to refresh; backend-defined and not
     # comparable across device kinds.
     memory_free: int
+    # Registry index of this device — the value to pass as ``Model(...,
+    # gpu_device=index)`` to select it (0 selects the auto / first device).
+    # None when the device came from Model.device, since the underlying
+    # transcribe_model_get_device() does not expose an index; correlate such a
+    # device back to backends() by device_id / name instead. The index is
+    # order-dependent and not stable across driver updates or hosts.
+    index: Optional[int] = None
 
 
-def _backend_device_from_raw(dev) -> BackendDevice:
+def _backend_device_from_raw(dev, index: Optional[int] = None) -> BackendDevice:
     """Build a BackendDevice from a library-filled transcribe_backend_device."""
     return BackendDevice(
         name=_decode(dev.name),
         description=_decode(dev.description),
         kind=_decode(dev.kind),
-        device_type=_DEVICE_TYPE_NAMES.get(dev.device_type, "gpu"),
+        device_type=_DEVICE_TYPE_NAMES.get(dev.device_type, "unknown"),
         device_id=_decode(dev.device_id) if dev.device_id else None,
         memory_total=int(dev.memory_total),
         memory_free=int(dev.memory_free),
+        index=index,
     )
 
 
@@ -290,7 +305,7 @@ def backends() -> list[BackendDevice]:
         _lib.transcribe_backend_device_init(_byref(dev))
         _check(_lib.transcribe_get_backend_device(i, _byref(dev)),
                f"reading backend device {i}")
-        devices.append(_backend_device_from_raw(dev))
+        devices.append(_backend_device_from_raw(dev, index=i))
     return devices
 
 
@@ -853,6 +868,24 @@ class Model:
         """Whether the model accepts a family extension on its slot."""
         return bool(_lib.transcribe_model_accepts_ext_kind(
             self._h, _EXT_SLOTS[options._slot], options._kind))
+
+    def tokenize(self, text: str) -> list[int]:
+        """Tokenize plain UTF-8 ``text`` into the model's vocabulary ids (no
+        BOS/EOS, no special tags). Raises :class:`NotImplementedByModel` for
+        families whose tokenizer has no encode path (e.g. SentencePiece today).
+        """
+        data = text.encode("utf-8")
+        cap = max(len(data), 16)
+        while True:
+            buf = (ctypes.c_int32 * cap)()
+            n = _lib.transcribe_tokenize(self._h, data, buf, cap)
+            if n == _INT32_MIN:
+                raise NotImplementedByModel(
+                    "model tokenizer has no encode path")
+            if n < 0:  # buffer too small: library asked for -n slots, retry
+                cap = -n
+                continue
+            return [buf[i] for i in range(n)]
 
     def session(self, *, n_threads: int = 0, kv_type: KVType = "auto",
                 n_ctx: int = 0) -> "Session":
