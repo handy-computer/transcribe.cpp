@@ -1,0 +1,42 @@
+# XcodeGen spec for the TranscribeDemo iOS app (the generated .xcodeproj is
+# git-ignored — regenerate it, don't commit it):
+#   brew install xcodegen        # one-time
+#   cd bindings/swift/Examples/TranscribeDemo && xcodegen generate
+#   open TranscribeDemo.xcodeproj
+#
+# The app consumes the local Swift package (../.. = bindings/swift) the normal
+# way — `import TranscribeCpp`, nothing special. The package resolves the native
+# library from build-apple/TranscribeCpp.xcframework (run
+# scripts/ci/build_xcframework.sh first), and Xcode embeds the dynamic framework
+# into the app bundle automatically.
+name: TranscribeDemo
+options:
+  bundleIdPrefix: com.transcribe
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  TranscribeCpp:
+    path: ../..
+
+targets:
+  TranscribeDemo:
+    type: application
+    platform: iOS
+    sources:
+      - path: TranscribeDemo
+    dependencies:
+      - package: TranscribeCpp
+        product: TranscribeCpp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.transcribe.demo
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: TranscribeDemo
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.9"
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
