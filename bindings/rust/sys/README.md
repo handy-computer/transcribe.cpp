@@ -18,12 +18,10 @@ this crate.
 
 ## Build prerequisites
 
-A C++ toolchain, **CMake**, and **zlib**. zlib is system-provided on Linux
-(`zlib1g-dev`) and macOS; on Windows install it with
-`vcpkg install zlib:x64-windows-static-md` (static lib against the dynamic CRT,
-matching Rust's default `/MD` on `x86_64-pc-windows-msvc`) and point
-`CMAKE_PREFIX_PATH` at the vcpkg install tree. The static link is the default;
-the `shared` feature links a shared library instead.
+A C++ toolchain and **CMake**. There is no external compression dependency —
+the deflate codec (miniz) is vendored into the library, so no system zlib /
+vcpkg setup is required on any platform. The static link is the default; the
+`shared` feature links a shared library instead.
 
 ## Features
 

@@ -112,7 +112,6 @@ link_dylib() {
         "$min_flag" \
         "${force_args[@]}" \
         -framework Foundation -framework Metal -framework MetalKit -framework Accelerate \
-        -lz \
         -install_name "$install_name" \
         -o "$out"
 }

@@ -250,5 +250,5 @@ to your `build.rs` as `DEP_TRANSCRIBE_CPP_RUNTIME_DIR`.
 
 ## License
 
-MIT. Bundled native packages include third-party license texts (ggml and any
-bundled backend runtimes).
+MIT. Bundled native packages include third-party license texts (ggml, miniz,
+and any bundled backend runtimes).

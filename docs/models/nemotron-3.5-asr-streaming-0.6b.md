@@ -173,8 +173,11 @@ on WER (Stage 7), not tensor tolerances.
 - **Languages:** 40 language-locales (e.g. `en-US`, `en-GB`, `es-ES`,
   `fr-FR`, `de-DE`, `it-IT`, `pt-BR`, `nl-NL`, `ru-RU`, `zh-CN`, `ja-JP`,
   `ko-KR`, `hi-IN`, `ar-AR`, …), selected via `--language <locale>`.
-- **Language detection:** `auto` mode emits a `<lang-XX>` tag in the
-  transcript.
+- **Language detection:** `auto` mode emits `<ll-RR>` locale tags (e.g.
+  `<en-US>`, `<zh-CN>`) in the raw token stream. A tag can appear anywhere
+  in the sequence, not only at the end. They are stripped from the returned
+  text by default (offline and streaming); pass `keep_special_tags` / CLI
+  `--raw-tokens` to keep them.
 - **Punctuation & capitalization:** native (PnC).
 - **Timestamps:** token- and word-level.
 - **Streaming:** cache-aware chunked streaming, selectable via
@@ -185,8 +188,6 @@ on WER (Stage 7), not tensor tolerances.
 
 ## Known limitations
 
-- The language tag (`<lang-XX>`) is currently surfaced in the transcript
-  text; tag stripping (`strip_lang_tags`) is not yet wired into the CLI.
 - The auxiliary CTC head present in the upstream checkpoint is dropped at
   conversion (the RNN-T head is the inference path); CTC-argmax timestamps
   are not available.

@@ -116,6 +116,12 @@ add_library(transcribe
     arch/medasr/capabilities.cpp
     arch/medasr/weights.cpp
     arch/medasr/encoder.cpp
+    # Vendored miniz (src/third_party/miniz, see its UPSTREAM file): the
+    # deflate compressor behind Whisper's compression-ratio heuristic. Compiled
+    # into libtranscribe itself so the static/shared artifact is self-contained
+    # (no external zlib to find, link, or stage). Trim flags + warning
+    # suppression are set below.
+    third_party/miniz/miniz.c
 )
 
 # The parakeet host decoder's matmul fallback (linear()) parallelizes its
@@ -230,25 +236,36 @@ set_target_properties(transcribe PROPERTIES
     SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
-# zlib for Whisper's temperature-fallback compression_ratio metric
-# (HF generation_whisper.py:_retrieve_compression_ratio uses
-# len(token_bytes) / len(zlib.compress(token_bytes)) to detect decoder
-# token-id loops). System zlib is ubiquitous; compile fails if absent.
-find_package(ZLIB REQUIRED)
-target_link_libraries(transcribe PRIVATE ZLIB::ZLIB)
+# miniz (vendored, src/third_party/miniz) provides the deflate compressor for
+# Whisper's temperature-fallback compression_ratio metric (HF
+# generation_whisper.py:_retrieve_compression_ratio uses
+# len(token_bytes) / len(deflate(token_bytes)) to detect decoder token-id
+# loops). Replaces system zlib so there is no find_package(ZLIB) / vcpkg
+# dependency and nothing extra to stage into the install link manifest.
+#
+# Trim flags reach both miniz.c and its only consumer (arch/whisper/model.cpp),
+# so they are PRIVATE on the target, not per-source:
+#   NO_INFLATE_APIS  compress-only (this also makes miniz.h auto-define
+#                    MINIZ_NO_ARCHIVE_APIS, so ZIP is off too — defining the
+#                    latter here as well would clash with that and warn).
+#   NO_STDIO         no file I/O    NO_TIME      no wall-clock
+#   NO_ZLIB_COMPATIBLE_NAMES  don't export global compress/crc32/Z_OK/... that
+#                             could collide with a real zlib downstream; call
+#                             sites use the mz_-prefixed native API instead.
+target_compile_definitions(transcribe PRIVATE
+    MINIZ_NO_INFLATE_APIS
+    MINIZ_NO_STDIO
+    MINIZ_NO_TIME
+    MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+)
 
-# Export the resolved zlib archive for the install link manifest
-# (cmake/transcribe-install.cmake, top-level scope). On Windows the static
-# consumer must link zlib by file (vcpkg spells it zlib.lib, not z), but
-# ZLIB::ZLIB is a subdirectory-local imported target and ZLIB_LIBRARY is a
-# normal var in THIS scope — neither is visible there, so stash the path now.
-if(WIN32)
-    set(_transcribe_zlib "${ZLIB_LIBRARY_RELEASE}")
-    if(NOT _transcribe_zlib)
-        set(_transcribe_zlib "${ZLIB_LIBRARY}")
-    endif()
-    set(TRANSCRIBE_ZLIB_ARCHIVE "${_transcribe_zlib}"
-        CACHE INTERNAL "resolved zlib archive for the install link manifest")
+# miniz is third-party C; its style trips our -Wshadow/-Wpedantic/-Wextra set.
+# Silence warnings for this one translation unit only (-w / MSVC /w wins over
+# the project flags transcribe_apply_warnings appends to the whole target).
+if(MSVC)
+    set_source_files_properties(third_party/miniz/miniz.c PROPERTIES COMPILE_OPTIONS "/w")
+else()
+    set_source_files_properties(third_party/miniz/miniz.c PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
 if(WIN32)

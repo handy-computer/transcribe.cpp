@@ -26,6 +26,7 @@ fi
 # its license texts).
 cp "${REPO_ROOT}/LICENSE" "${XCFRAMEWORK}/LICENSE"
 cp "${REPO_ROOT}/ggml/LICENSE" "${XCFRAMEWORK}/LICENSE.ggml"
+cp "${REPO_ROOT}/src/third_party/miniz/LICENSE" "${XCFRAMEWORK}/LICENSE.miniz"
 
 # Deterministic zip from the output dir (store the path as
 # "TranscribeCpp.xcframework/..." so SwiftPM unpacks it correctly).

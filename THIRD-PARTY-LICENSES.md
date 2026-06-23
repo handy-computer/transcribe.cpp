@@ -1,13 +1,24 @@
 # Third-party licenses
 
-The prebuilt native artifact (`TranscribeCpp.xcframework`) statically links the
-following third-party code. Their license texts travel inside the xcframework
-(`LICENSE.ggml`, `LICENSE.miniz`) and are reproduced here.
+transcribe.cpp is MIT-licensed (see [`LICENSE`](LICENSE)). It vendors and links
+the third-party components below, each under its own permissive license. The
+authoritative license text for each ships in-tree at the path noted; copies are
+reproduced here for convenience.
+
+| Component | License | Vendored at | Pin |
+|-----------|---------|-------------|-----|
+| ggml      | MIT     | [`ggml/LICENSE`](ggml/LICENSE) | see [`ggml/UPSTREAM`](ggml/UPSTREAM) |
+| miniz     | MIT     | [`src/third_party/miniz/LICENSE`](src/third_party/miniz/LICENSE) | see [`src/third_party/miniz/UPSTREAM`](src/third_party/miniz/UPSTREAM) |
+
+Prebuilt artifacts (the Swift xcframework, the native Python wheels, and the
+npm platform packages) carry these same texts alongside the binaries — see each
+binding's packaging for the bundled `LICENSE.ggml` / `LICENSE.miniz` files.
+
+---
 
 ## ggml
 
-`libggml` (the tensor library underlying transcribe.cpp) is vendored and linked
-into the native artifact.
+The tensor library underlying transcribe.cpp. Vendored under `ggml/`.
 
 ```
 MIT License
@@ -33,10 +44,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+---
+
 ## miniz
 
-`miniz` (the vendored single-file deflate codec used for Whisper's
-compression-ratio heuristic) is compiled into the native artifact.
+A single-file deflate/inflate (zlib-subset) codec. transcribe.cpp uses it only
+for Whisper's temperature-fallback compression-ratio heuristic; it replaces the
+previous system-zlib dependency. Vendored under `src/third_party/miniz/`.
+
+miniz is MIT-licensed. (The comment block at the top of the amalgamated
+`miniz.c` / `miniz.h` still reads "public domain" — a stale artifact from the
+project's pre-relicensing history; upstream's current and authoritative license
+is the MIT text below, also shipped at `src/third_party/miniz/LICENSE`.)
 
 ```
 Copyright 2013-2014 RAD Game Tools and Valve Software
@@ -62,5 +81,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
-
-transcribe.cpp itself is MIT-licensed; see `LICENSE`.
