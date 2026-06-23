@@ -857,6 +857,53 @@ static bool is_lang_tag_piece(const std::string & p) {
     return i == end; // interior consumed exactly up to '>'
 }
 
+// Single source of truth for "drop this piece from the public result when
+// keep_special_tags is off." A piece is stripped if the vocab marks it
+// CONTROL (canary/nemotron tag pieces are CONTROL-typed in the GGUF) or it
+// matches the multilingual <ll-RR> locale-tag pattern (transitional fallback
+// for GGUFs predating the converter's CONTROL marking). Used by both the
+// offline (decode_and_populate) and streaming (rebuild_streaming_result_text)
+// result builders so they strip exactly the same set.
+static bool is_strippable_special(const transcribe::Tokenizer & tok, int id) {
+    return tok.is_control(id) || is_lang_tag_piece(tok.token(id));
+}
+
+// Normalize a decoded transcript's whitespace: collapse runs of ASCII spaces
+// to one and trim both ends. Stripping an interior tag leaves its neighbours'
+// spaces adjacent (double space); a stripped trailing tag leaves a trailing
+// space. An ASR transcript never carries meaningful double/edge whitespace, so
+// this is a no-op when nothing was stripped. Shared by both result builders.
+static void normalize_transcript_whitespace(std::string & s) {
+    std::string norm;
+    norm.reserve(s.size());
+    bool prev_space = false;
+    for (char ch : s) {
+        const bool is_space = (ch == ' ');
+        if (is_space && prev_space) continue;
+        norm.push_back(ch);
+        prev_space = is_space;
+    }
+    while (!norm.empty() && norm.front() == ' ') norm.erase(norm.begin());
+    while (!norm.empty() && norm.back()  == ' ') norm.pop_back();
+    s.swap(norm);
+}
+
+// Milliseconds spanned by one encoder frame, following NeMo's reference
+// conversion (collections/asr/parts/utils/timestamp_utils.py:
+// time_seconds = frame_offset * window_stride * subsampling_factor, where
+// window_stride is the preprocessor hop in seconds = hop_length /
+// sample_rate). NeMo keeps the product in floating point; we keep the per-
+// frame stride as a double and round once at the call site to the public
+// API's ms grain. Returned as a double (NOT pre-rounded to an integer) so a
+// non-integral stride doesn't quantize before the multiply. Single source of
+// truth for both the offline and streaming result builders.
+static double parakeet_ms_per_enc_frame(const ParakeetHParams & hp) {
+    return 1000.0 *
+        static_cast<double>(hp.enc_subsampling_factor) *
+        static_cast<double>(hp.fe_hop_length) /
+        static_cast<double>(hp.fe_sample_rate);
+}
+
 // (run_one_shot_inner) and the batched path (run_batch_inner). `enc` is
 // the row-major [T_enc, d_enc] encoder activation for ONE utterance;
 // utt_index >= 0 tags the optional tensor dump per utterance, -1 for the
@@ -926,12 +973,8 @@ static transcribe_status decode_and_populate(
     // relative to the mel hop, so one encoder frame corresponds to
     // `subsampling_factor * hop_length / sample_rate` seconds of
     // audio. For Parakeet 0.6B v2/v3 that's 8 * 160 / 16000 = 0.08 s
-    // per frame, i.e. 80 ms.
-    const double frame_to_ms =
-        1000.0 *
-        static_cast<double>(pm->hparams.enc_subsampling_factor) *
-        static_cast<double>(pm->hparams.fe_hop_length) /
-        static_cast<double>(pm->hparams.fe_sample_rate);
+    // per frame, i.e. 80 ms. Shared with the streaming builder.
+    const double frame_to_ms = parakeet_ms_per_enc_frame(pm->hparams);
 
     // SentencePiece word-boundary marker U+2581 ("▁"). UTF-8 bytes
     // 0xE2 0x96 0x81. A token whose decoded text starts with the
@@ -958,8 +1001,7 @@ static transcribe_status decode_and_populate(
     // dropped once all shipped artifacts carry the metadata.
     const bool strip_tags = (params == nullptr) ? true : !params->keep_special_tags;
     for (const TdtToken & rt : pc->raw_tokens) {
-        if (strip_tags &&
-            (tok.is_control(rt.id) || is_lang_tag_piece(tok.token(rt.id)))) {
+        if (strip_tags && is_strippable_special(tok, rt.id)) {
             continue;
         }
         transcribe_session::TokenEntry te;
@@ -1071,25 +1113,7 @@ static transcribe_status decode_and_populate(
         for (const auto & tk : pc->tokens) all_ids.push_back(tk.id);
         std::string full = tok.decode(all_ids.data(),
                                       static_cast<int>(all_ids.size()));
-        // Normalize whitespace: removing a <ll-RR> language tag from the id
-        // sequence leaves its neighbours' spaces adjacent (double space), and
-        // a stripped trailing tag leaves a trailing space. Collapse runs of
-        // spaces to one and trim both ends — an ASR transcript never carries
-        // meaningful double/edge whitespace. No-op when nothing was stripped.
-        {
-            std::string norm;
-            norm.reserve(full.size());
-            bool prev_space = false;
-            for (char ch : full) {
-                const bool is_space = (ch == ' ');
-                if (is_space && prev_space) continue;
-                norm.push_back(ch);
-                prev_space = is_space;
-            }
-            while (!norm.empty() && norm.front() == ' ') norm.erase(norm.begin());
-            while (!norm.empty() && norm.back()  == ' ') norm.pop_back();
-            full.swap(norm);
-        }
+        normalize_transcript_whitespace(full);
         seg.text       = full;
         pc->full_text  = std::move(full);
         pc->segments.push_back(std::move(seg));
@@ -2541,34 +2565,45 @@ void rebuild_streaming_result_text(ParakeetSession * pc,
         return;
     }
 
-    const auto & hp = pm->hparams;
-    // Frame-to-ms ratio: encoder frame at index f spans
-    // f * (hop * subsampling) / sample_rate seconds.
-    const int64_t ms_per_frame =
-        static_cast<int64_t>(hp.fe_hop_length) *
-        static_cast<int64_t>(hp.enc_subsampling_factor) *
-        1000 / static_cast<int64_t>(hp.fe_sample_rate);
+    // Frame-to-ms ratio, identical to the offline builder and NeMo's
+    // reference (see parakeet_ms_per_enc_frame): float multiply, rounded once
+    // per token below.
+    const double frame_to_ms = parakeet_ms_per_enc_frame(pm->hparams);
+
+    // Strip multilingual <ll-RR> language tags (e.g. the trailing "<en-US>"
+    // / "<zh-CN>" the nemotron-3.5 vocab emits) and other CONTROL pieces
+    // from the public streaming result by default, mirroring the offline
+    // builder (decode_and_populate) so streaming honors the same documented
+    // contract. Gated on the keep_special_tags run param captured at
+    // stream_begin (CLI --raw-tokens). Only the public projection is
+    // filtered: pc->raw_tokens stays whole, so the decoder/commit cursor and
+    // the raw token accessors are unaffected.
+    const transcribe::Tokenizer & tok = pm->tok;
+    const bool strip_tags = !pc->stream_run_params.keep_special_tags;
 
     pc->tokens.reserve(pc->raw_tokens.size());
     std::vector<int32_t> all_ids;
     all_ids.reserve(pc->raw_tokens.size());
     for (const auto & tk : pc->raw_tokens) {
+        if (strip_tags && is_strippable_special(tok, tk.id)) {
+            continue;
+        }
         transcribe_session::TokenEntry te;
         te.id           = tk.id;
         te.p            = tk.p;
-        te.t0_ms        = tk.step_at_emit * ms_per_frame;
-        te.t1_ms        = (tk.step_at_emit + tk.duration_frames) * ms_per_frame;
+        te.t0_ms        = static_cast<int64_t>(std::llround(
+            frame_to_ms * static_cast<double>(tk.step_at_emit)));
+        te.t1_ms        = static_cast<int64_t>(std::llround(
+            frame_to_ms * static_cast<double>(tk.step_at_emit + tk.duration_frames)));
         te.seg_index    = 0;
         te.word_index   = -1;
-        te.text         = pm->tok.decode(&tk.id, 1);
+        te.text         = tok.decode(&tk.id, 1);
         pc->tokens.push_back(std::move(te));
         all_ids.push_back(tk.id);
     }
-    pc->full_text = pm->tok.decode(all_ids.data(),
-                                      static_cast<int>(all_ids.size()));
-    if (!pc->full_text.empty() && pc->full_text.front() == ' ') {
-        pc->full_text.erase(pc->full_text.begin());
-    }
+    pc->full_text = tok.decode(all_ids.data(),
+                                 static_cast<int>(all_ids.size()));
+    normalize_transcript_whitespace(pc->full_text);
     pc->has_result  = true;
     pc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 }
