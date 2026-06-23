@@ -25,7 +25,10 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 
-#include <zlib.h>
+// miniz (vendored, src/third_party/miniz) replaces system zlib for the
+// compression-ratio heuristic below. Built trimmed with
+// MINIZ_NO_ZLIB_COMPATIBLE_NAMES, so we call the mz_-prefixed native API.
+#include "third_party/miniz/miniz.h"
 
 #include <algorithm>
 #include <cmath>
@@ -821,9 +824,15 @@ transcribe_status run_whisper_encoder_on_window(
 
 // HF _retrieve_compression_ratio (generation_whisper.py:1948-1954).
 // Packs each token id as little-endian with width = floor(log2(V)/8) + 1
-// bytes, zlib-compresses, returns len(raw)/len(compressed). For Whisper's
+// bytes, deflate-compresses, returns len(raw)/len(compressed). For Whisper's
 // vocab (≤ 65536) the width is 2. ratio > threshold ⇒ decoder is
 // repeating token ids, triggers temperature escalation.
+//
+// HF uses Python's zlib; we use vendored miniz (also level-6 deflate). The
+// compressed byte counts can differ by a few bytes between the two deflate
+// implementations, so this ratio is not bit-identical to the HF reference.
+// Accepted intentionally: the metric only gates a coarse 2.4 repetition
+// threshold, not numeric output, so small deltas do not move WER.
 //
 // Zero-length input returns 0 (no raw bytes to score).
 float compute_compression_ratio_hf(
@@ -848,12 +857,12 @@ float compute_compression_ratio_hf(
         }
     }
 
-    uLongf dest_len = compressBound(static_cast<uLong>(raw.size()));
-    std::vector<Bytef> compressed(dest_len);
-    const int rc = compress(compressed.data(), &dest_len,
-                            raw.data(),
-                            static_cast<uLong>(raw.size()));
-    if (rc != Z_OK || dest_len == 0) {
+    mz_ulong dest_len = mz_compressBound(static_cast<mz_ulong>(raw.size()));
+    std::vector<unsigned char> compressed(dest_len);
+    const int rc = mz_compress(compressed.data(), &dest_len,
+                               raw.data(),
+                               static_cast<mz_ulong>(raw.size()));
+    if (rc != MZ_OK || dest_len == 0) {
         // Degenerate: treat as unratio-able so thresholds pass.
         return 0.0f;
     }

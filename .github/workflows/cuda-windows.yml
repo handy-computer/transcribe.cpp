@@ -80,15 +80,6 @@ jobs:
           use-local-cache: false
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
       - uses: astral-sh/setup-uv@v8.2.0
-      - name: Install zlib (vcpkg, static — libtranscribe requires it)
-        # Identical to wheel-windows: static-md so no zlib1.dll exists for
-        # delvewheel to vendor; forward slashes because CMAKE_ARGS passes
-        # through scikit-build-core's CMakeInit.txt where backslashes are
-        # eaten as escapes.
-        run: |
-          vcpkg install zlib:x64-windows-static-md
-          $tc = "$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -replace '\\','/'
-          Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$tc -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}

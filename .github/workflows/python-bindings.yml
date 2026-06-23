@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
       - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
         # ggml builds with -march=native here (the dev posture under test);
         # ccache hashes the literal flag, not the ISA it resolves to, so a

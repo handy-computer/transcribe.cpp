@@ -89,7 +89,7 @@ jobs:
       - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
       - name: Install build deps (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.2.0  # fixtures are generated via uv
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
       - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
         # ggml builds with -march=native here (the dev posture under test);
         # ccache hashes the literal flag, not the ISA it resolves to, so a
@@ -197,7 +197,7 @@ jobs:
       - name: Install build deps (Vulkan SDK pieces + patchelf)
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build zlib1g-dev \
+          sudo apt-get install -y cmake ninja-build \
             libvulkan-dev glslc spirv-headers patchelf ccache
       - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)
         # ggml builds with -march=native here (the dev posture under test);

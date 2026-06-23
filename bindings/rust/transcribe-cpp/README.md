@@ -14,10 +14,10 @@ cargo add transcribe-cpp
 ```
 
 The native library is compiled from source by the `transcribe-cpp-sys` crate, so
-a first build needs a C++ toolchain, **CMake**, and **zlib** (system zlib on
-Linux/macOS; on Windows, `vcpkg install zlib:x64-windows-static-md` and point
-`CMAKE_PREFIX_PATH` at it). No prebuilt download and no environment variables on
-the happy path.
+a first build needs a C++ toolchain and **CMake**. There is no external
+compression dependency (the deflate codec is vendored), so no system zlib /
+vcpkg setup is required on any platform. No prebuilt download and no environment
+variables on the happy path.
 
 ## Quickstart
 
