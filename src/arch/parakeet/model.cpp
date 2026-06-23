@@ -888,6 +888,22 @@ static void normalize_transcript_whitespace(std::string & s) {
     s.swap(norm);
 }
 
+// Milliseconds spanned by one encoder frame, following NeMo's reference
+// conversion (collections/asr/parts/utils/timestamp_utils.py:
+// time_seconds = frame_offset * window_stride * subsampling_factor, where
+// window_stride is the preprocessor hop in seconds = hop_length /
+// sample_rate). NeMo keeps the product in floating point; we keep the per-
+// frame stride as a double and round once at the call site to the public
+// API's ms grain. Returned as a double (NOT pre-rounded to an integer) so a
+// non-integral stride doesn't quantize before the multiply. Single source of
+// truth for both the offline and streaming result builders.
+static double parakeet_ms_per_enc_frame(const ParakeetHParams & hp) {
+    return 1000.0 *
+        static_cast<double>(hp.enc_subsampling_factor) *
+        static_cast<double>(hp.fe_hop_length) /
+        static_cast<double>(hp.fe_sample_rate);
+}
+
 // (run_one_shot_inner) and the batched path (run_batch_inner). `enc` is
 // the row-major [T_enc, d_enc] encoder activation for ONE utterance;
 // utt_index >= 0 tags the optional tensor dump per utterance, -1 for the
@@ -957,12 +973,8 @@ static transcribe_status decode_and_populate(
     // relative to the mel hop, so one encoder frame corresponds to
     // `subsampling_factor * hop_length / sample_rate` seconds of
     // audio. For Parakeet 0.6B v2/v3 that's 8 * 160 / 16000 = 0.08 s
-    // per frame, i.e. 80 ms.
-    const double frame_to_ms =
-        1000.0 *
-        static_cast<double>(pm->hparams.enc_subsampling_factor) *
-        static_cast<double>(pm->hparams.fe_hop_length) /
-        static_cast<double>(pm->hparams.fe_sample_rate);
+    // per frame, i.e. 80 ms. Shared with the streaming builder.
+    const double frame_to_ms = parakeet_ms_per_enc_frame(pm->hparams);
 
     // SentencePiece word-boundary marker U+2581 ("▁"). UTF-8 bytes
     // 0xE2 0x96 0x81. A token whose decoded text starts with the
@@ -2553,13 +2565,10 @@ void rebuild_streaming_result_text(ParakeetSession * pc,
         return;
     }
 
-    const auto & hp = pm->hparams;
-    // Frame-to-ms ratio: encoder frame at index f spans
-    // f * (hop * subsampling) / sample_rate seconds.
-    const int64_t ms_per_frame =
-        static_cast<int64_t>(hp.fe_hop_length) *
-        static_cast<int64_t>(hp.enc_subsampling_factor) *
-        1000 / static_cast<int64_t>(hp.fe_sample_rate);
+    // Frame-to-ms ratio, identical to the offline builder and NeMo's
+    // reference (see parakeet_ms_per_enc_frame): float multiply, rounded once
+    // per token below.
+    const double frame_to_ms = parakeet_ms_per_enc_frame(pm->hparams);
 
     // Strip multilingual <ll-RR> language tags (e.g. the trailing "<en-US>"
     // / "<zh-CN>" the nemotron-3.5 vocab emits) and other CONTROL pieces
@@ -2582,8 +2591,10 @@ void rebuild_streaming_result_text(ParakeetSession * pc,
         transcribe_session::TokenEntry te;
         te.id           = tk.id;
         te.p            = tk.p;
-        te.t0_ms        = tk.step_at_emit * ms_per_frame;
-        te.t1_ms        = (tk.step_at_emit + tk.duration_frames) * ms_per_frame;
+        te.t0_ms        = static_cast<int64_t>(std::llround(
+            frame_to_ms * static_cast<double>(tk.step_at_emit)));
+        te.t1_ms        = static_cast<int64_t>(std::llround(
+            frame_to_ms * static_cast<double>(tk.step_at_emit + tk.duration_frames)));
         te.seg_index    = 0;
         te.word_index   = -1;
         te.text         = tok.decode(&tk.id, 1);
