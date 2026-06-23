@@ -258,8 +258,9 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
         stage_windows_dlls(prefix);
     }
 
-    // Metadata for the safe crate's build script (available as
-    // DEP_TRANSCRIBE_* because this crate sets `links = "transcribe"`).
+    // Metadata for the safe crate's build script (DEP_TRANSCRIBE_* because this
+    // crate sets `links = "transcribe"`). The wrapper re-emits these one more hop
+    // as DEP_TRANSCRIBE_CPP_* for downstream packaging — see its build.rs.
     println!(
         "cargo:include_dir={}",
         prefix
@@ -267,6 +268,28 @@ fn emit_link_lines(prefix: &Path, manifest_path: &Path) {
             .display()
     );
     println!("cargo:lib_dir={}", lib_dir.display());
+
+    // Runtime-artifact dirs for downstream PACKAGING. Only a shared posture
+    // produces separate runtime files to ship next to a consumer's executable;
+    // a static build bakes everything into the consumer binary, so these stay
+    // unset and the consumer reads their absence as "nothing to bundle".
+    if shared {
+        let bin_dir = prefix.join("bin");
+        // The ONE directory a consumer copies into their installer. Windows keeps
+        // the runtime DLLs in bin/; on Unix the .so/.dylib live in lib_dir. A
+        // single value so the consumer needs no per-OS cfg — `bin_dir` alone
+        // would be too Windows-specific.
+        let runtime_dir = if is_windows { &bin_dir } else { &lib_dir };
+        println!("cargo:runtime_dir={}", runtime_dir.display());
+        println!("cargo:bin_dir={}", bin_dir.display());
+        // dynamic-backends: the loadable compute modules (a ggml backend subdir,
+        // or bin/ on Windows). The manifest already records the install-relative
+        // path; forward it so a consumer bundles the modules too — without them a
+        // relocated DL build registers zero compute devices.
+        if let Some(rel) = json["module_dir"].as_str() {
+            println!("cargo:module_dir={}", prefix.join(rel).display());
+        }
+    }
 }
 
 /// Copy the installed runtime DLLs (`<prefix>/bin/*.dll` — transcribe.dll plus

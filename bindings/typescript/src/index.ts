@@ -7,6 +7,7 @@
  */
 
 import { native, setLogHandler, type LogHandler, type Native } from "./native.js";
+import { resolveLibrary } from "./loader.js";
 import * as g from "./_generated.js";
 import {
   Aborted,
@@ -267,6 +268,22 @@ export function version(): { version: string; commit: string; headerHash: string
 
 export function libraryPath(): string {
   return native().libraryPath;
+}
+
+/**
+ * The directory holding the native library and its sibling ggml libs / backend
+ * modules — resolved WITHOUT loading the library (no dlopen, no ABI check, no
+ * backend init), unlike every other entry point here.
+ *
+ * This is the build/packaging hook: call it from a bundler config or pack step
+ * to copy the native artifacts into your installer (Electron `asarUnpack`, Tauri
+ * `resources`, etc.). Resolution follows the same order as the runtime loader
+ * (`TRANSCRIBE_LIBRARY` → the `@transcribe-cpp/<platform>` package → a local
+ * prebuild → the dev tree) and throws if nothing is found. For runtime use,
+ * `libraryPath()` returns the resolved library path of the *loaded* binding.
+ */
+export function artifactDir(): string {
+  return resolveLibrary().artifactDir;
 }
 
 const DEVICE_TYPE_NAMES: Record<number, DeviceType> = {
