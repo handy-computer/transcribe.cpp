@@ -587,7 +587,7 @@ extern "C"
     {
         return mz_adler32(adler, ptr, buf_len);
     }
-    
+
 #define MAX_WBITS 15
 #define MAX_MEM_LEVEL 9
 
@@ -1054,7 +1054,7 @@ typedef mz_uint32 tinfl_bit_buf_t;
 #endif
 
 #endif /*#ifndef MINIZ_NO_INFLATE_APIS*/
- 
+
 #pragma once
 
 
