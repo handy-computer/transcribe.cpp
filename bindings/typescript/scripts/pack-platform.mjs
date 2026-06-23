@@ -83,11 +83,12 @@ const contract = fs.existsSync(srcContract)
 fs.writeFileSync(path.join(pkgDir, "contract.json"), JSON.stringify(contract, null, 2) + "\n");
 files.push("contract.json");
 
-// 3) Third-party license texts (ggml at minimum) — required by §5.
+// 3) Third-party license texts (ggml + miniz at minimum) — required by §5.
 fs.mkdirSync(path.join(pkgDir, "licenses"), { recursive: true });
 for (const [name, rel] of [
   ["LICENSE", "LICENSE"],
   ["LICENSE.ggml", "ggml/LICENSE"],
+  ["LICENSE.miniz", "src/third_party/miniz/LICENSE"],
 ]) {
   const p = path.join(REPO, rel);
   if (fs.existsSync(p)) fs.cpSync(p, path.join(pkgDir, "licenses", name));

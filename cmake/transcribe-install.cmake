@@ -22,43 +22,13 @@
 # downstream surprise.
 #
 # Windows note: the static-posture system-library translation below is
-# provisional (zlib via vcpkg spells differently, MSVC has no -framework/
-# -lstdc++); it gets exercised and completed when the Rust branch does its
-# MSVC shakeout. The smoke lanes cover linux + macos.
+# provisional (MSVC has no -framework/-lstdc++); it gets exercised and completed
+# when the Rust branch does its MSVC shakeout. The smoke lanes cover linux +
+# macos. (miniz is vendored into libtranscribe, so there is no external
+# compression library to translate here anymore.)
 
 include(GNUInstallDirs)
 include("${CMAKE_CURRENT_LIST_DIR}/transcribe-backend-kinds.cmake")
-
-# Resolve the absolute path of the static zlib archive find_package(ZLIB) gave
-# us. Used on Windows, where vcpkg spells the lib `zlib.lib` (not `z`) and a
-# bare `-l z` is unsatisfiable: we stage the real archive into the lib dir and
-# link it by name. Tries the imported target's per-config location first, then
-# the configuration-less location, then the raw ZLIB_LIBRARY cache var.
-function(_transcribe_zlib_archive out)
-    set(_loc "")
-    # src/CMakeLists.txt stashes this from the find_package(ZLIB) scope: the
-    # imported target and ZLIB_LIBRARY are NOT visible at this top-level scope
-    # (subdirectory-local target / normal var), so prefer the captured cache var.
-    if(TRANSCRIBE_ZLIB_ARCHIVE)
-        set(_loc "${TRANSCRIBE_ZLIB_ARCHIVE}")
-    endif()
-    if(NOT _loc AND TARGET ZLIB::ZLIB)
-        get_target_property(_loc ZLIB::ZLIB IMPORTED_LOCATION_RELEASE)
-        if(NOT _loc)
-            get_target_property(_loc ZLIB::ZLIB IMPORTED_LOCATION)
-        endif()
-    endif()
-    if(NOT _loc AND ZLIB_LIBRARY)
-        set(_loc "${ZLIB_LIBRARY}")
-    endif()
-    # Only a single real archive on disk is stage-able (a debug/optimized
-    # keyworded list or a bare -l name is not).
-    if(_loc AND EXISTS "${_loc}")
-        set(${out} "${_loc}" PARENT_SCOPE)
-    else()
-        set(${out} "" PARENT_SCOPE)
-    endif()
-endfunction()
 
 # --- headers + the ABI digest ------------------------------------------------
 install(FILES
@@ -118,28 +88,12 @@ if(NOT TRANSCRIBE_BUILD_SHARED)
     endif()
 
     # Translate libtranscribe's PRIVATE link list (the configure-time truth
-    # for zlib / OpenMP / Accelerate / system BLAS) into consumer terms.
+    # for OpenMP / Accelerate / system BLAS) into consumer terms. The deflate
+    # compressor (miniz) is vendored straight into libtranscribe, so it never
+    # appears here.
     get_target_property(_transcribe_links transcribe LINK_LIBRARIES)
     foreach(_dep IN LISTS _transcribe_links)
-        if(_dep STREQUAL "ZLIB::ZLIB")
-            if(WIN32)
-                # MSVC/vcpkg name the static lib `zlib.lib`, not `z`, so the
-                # POSIX `-l z` is unsatisfiable. Stage the resolved archive next
-                # to libtranscribe (keeping the lib dir self-contained) and link
-                # it by name through the same search path as the rest of the set.
-                _transcribe_zlib_archive(_zlib_archive)
-                if(_zlib_archive)
-                    install(FILES "${_zlib_archive}"
-                        DESTINATION ${CMAKE_INSTALL_LIBDIR})
-                    get_filename_component(_zlib_name "${_zlib_archive}" NAME_WE)
-                    list(APPEND _libraries "${_zlib_name}")
-                else()
-                    list(APPEND _system_libs zlib)  # last resort: a bare name
-                endif()
-            else()
-                list(APPEND _system_libs z)
-            endif()
-        elseif(_dep STREQUAL "OpenMP::OpenMP_CXX")
+        if(_dep STREQUAL "OpenMP::OpenMP_CXX")
             list(APPEND _link_flags -fopenmp)
         elseif(_dep MATCHES "^-framework (.+)$")
             list(APPEND _frameworks "${CMAKE_MATCH_1}")

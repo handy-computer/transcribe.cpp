@@ -36,9 +36,9 @@ description = "CUDA 12 native provider for transcribe-cpp (speech-to-text, ggml)
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
-# Copies of the repo + ggml licenses (PEP 639 paths cannot escape the
+# Copies of the repo + ggml + miniz licenses (PEP 639 paths cannot escape the
 # project directory; texts are static).
-license-files = ["LICENSE", "LICENSE-ggml"]
+license-files = ["LICENSE", "LICENSE-ggml", "LICENSE-miniz"]
 authors = [{ name = "The transcribe.cpp authors" }]
 keywords = ["transcription", "speech-to-text", "asr", "ggml", "cuda"]
 classifiers = [

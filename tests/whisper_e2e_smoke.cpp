@@ -259,8 +259,8 @@ int main() {
         CHECK(tr.t1_ms > tr.t0_ms);
         CHECK(tr.temperature_used == 0.0f);
         CHECK(tr.n_fallbacks == 0);
-        /* compression_ratio can be <1 for short clips because zlib's
-         * header overhead exceeds the savings on a few dozen tokens;
+        /* compression_ratio can be <1 for short clips because the deflate
+         * header overhead (miniz) exceeds the savings on a few dozen tokens;
          * just assert the metric populated to a real finite number. */
         CHECK(tr.compression_ratio >= 0.0f);
         CHECK(tr.compression_ratio < 10.0f);

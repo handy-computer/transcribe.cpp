@@ -172,7 +172,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v8.2.0
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
       - name: Dry-run transcribe-cpp-sys (full verify build, as cargo would publish it)
         run: cargo publish --dry-run --allow-dirty -p transcribe-cpp-sys
       - uses: ./.github/actions/fetch-canary
@@ -288,7 +288,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v8.2.0  # fetch-canary + the packed-smoke script
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
       - name: Dry-run transcribe-cpp-sys (full verify build, as cargo would publish it)
         run: cargo publish --dry-run --allow-dirty -p transcribe-cpp-sys
       # The safe crate cannot be dry-run-verified pre-publish: it depends on
@@ -446,7 +446,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
       - name: Publish transcribe-cpp-sys (the native-carrying crate; verifies the build)
         run: cargo publish -p transcribe-cpp-sys
       - name: Publish transcribe-cpp (the safe wrapper; resolves the just-published sys)

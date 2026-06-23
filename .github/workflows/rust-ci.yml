@@ -35,11 +35,9 @@ name: rust-ci
 # the legs that can't catch a marshalling regression anyway.
 #
 # Windows joins here: the first cargo-driven MSVC build of this tree (static
-# posture). cl.exe comes from msvc-dev-cmd, zlib from vcpkg as a static lib
-# against the dynamic CRT (`x64-windows-static-md`, matching Rust's default /MD
-# on x86_64-pc-windows-msvc), resolved by find_package(ZLIB) via
-# CMAKE_PREFIX_PATH. The static Windows link manifest's zlib translation lives
-# in cmake/transcribe-install.cmake.
+# posture). cl.exe comes from msvc-dev-cmd; the build has no external library
+# dependency to resolve (miniz is vendored into libtranscribe), so there is no
+# vcpkg / CMAKE_PREFIX_PATH setup.
 #
 # Path filters follow native-ci.yml's shape: the binding's own tree plus the
 # native paths it compiles from (binding behavior depends on the C side, so
@@ -176,7 +174,7 @@ jobs:
           echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build zlib1g-dev ccache
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
       - name: Install build deps (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -196,14 +194,6 @@ jobs:
         shell: pwsh
         run: |
           choco install ninja --no-progress -y
-          # Static zlib against the DYNAMIC CRT (-static-md): matches Rust's
-          # default /MD on x86_64-pc-windows-msvc. A /MT (x64-windows-static)
-          # zlib would clash with the CRT rustc links. find_package(ZLIB)
-          # resolves it from CMAKE_PREFIX_PATH — no vcpkg toolchain file needed.
-          vcpkg install zlib:x64-windows-static-md
-          # Forward slashes: backslashes get eaten as escapes downstream.
-          $zlibPrefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md" -replace '\\','/'
-          Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$zlibPrefix"
           # cmake-crate honors CMAKE_GENERATOR from the environment.
           Add-Content $env:GITHUB_ENV "CMAKE_GENERATOR=Ninja"
       - name: CPU ISA signature (segregates ccache across the heterogeneous fleet)

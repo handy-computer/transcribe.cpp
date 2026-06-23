@@ -214,7 +214,7 @@ jobs:
 
   wheel-windows:
     # Blacksmith Windows Server 2025 (public beta) — same image family as
-    # GitHub's windows-2025, so vcvars/vcpkg/the Vulkan SDK installer behave
+    # GitHub's windows-2025, so vcvars and the Vulkan SDK installer behave
     # identically. This lane is the overall long pole (MSVC over ggml + the
     # fat-CPU tier matrix + Vulkan shaders) — expect a long wall-clock on
     # 2vcpu; cost is the same as a bigger runner (per-vcpu-minute billing).
@@ -253,16 +253,6 @@ jobs:
       - uses: ./.github/actions/fetch-canary
         with:
           hf-token: ${{ secrets.HF_TOKEN }}
-      - name: Install zlib (vcpkg, static — libtranscribe requires it)
-        # Static (-static-md: static lib, dynamic CRT) so no zlib1.dll exists
-        # at runtime and delvewheel has nothing to vendor for it. The
-        # toolchain file reaches scikit-build-core via CMAKE_ARGS.
-        run: |
-          vcpkg install zlib:x64-windows-static-md
-          # Forward slashes: CMAKE_ARGS values pass through scikit-build-core's
-          # CMakeInit.txt cache file, where backslashes are eaten as escapes.
-          $tc = "$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -replace '\\','/'
-          Add-Content $env:GITHUB_ENV "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$tc -DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
       - name: Build, repair, and test the wheel (cibuildwheel)
         run: uvx --from "$env:CIBW_PIN" cibuildwheel --output-dir wheelhouse
       - uses: actions/upload-artifact@v7
@@ -318,7 +308,6 @@ jobs:
           EOF
       - name: Compile + transcribe from the sdist (no repo sources)
         run: |
-          sudo apt-get update && sudo apt-get install -y zlib1g-dev
           uv venv --seed sdist-venv --python 3.12
           # The tarball is the only native source here: pip drives the full
           # scikit-build-core compile (cmake/ninja arrive as build deps).

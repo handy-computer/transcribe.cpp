@@ -211,5 +211,5 @@ You can also point `TRANSCRIBE_LIBRARY` at any `libtranscribe` you built.
 
 ## License
 
-MIT. Bundled native packages include third-party license texts (ggml and any
-bundled backend runtimes).
+MIT. Bundled native packages include third-party license texts (ggml, miniz,
+and any bundled backend runtimes).

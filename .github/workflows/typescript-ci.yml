@@ -94,7 +94,7 @@ jobs:
           # its deps), then retries with LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, which
           # does — so the package-local layout the loader/pack-platform ship is
           # exactly what this exercises. transcribe.dll is a RUNTIME artifact
-          # (build-shared/bin, not src). MSVC + Ninja + vcpkg zlib mirror rust-ci's
+          # (build-shared/bin, not src). MSVC + Ninja mirror rust-ci's
           # Windows leg; no ccache there, so it's a cold ggml build every run.
           - label: windows-x64
             runner: blacksmith-2vcpu-windows-2025
@@ -121,8 +121,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
       # Windows toolchain mirrors rust-ci's Windows leg: cl.exe ambient for the
-      # Ninja generator (else CMake silently falls back to the image's MinGW gcc),
-      # and static zlib against the dynamic CRT resolved via CMAKE_PREFIX_PATH.
+      # Ninja generator (else CMake silently falls back to the image's MinGW gcc).
       - name: Set up MSVC (cl.exe on PATH for the Ninja generator)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
@@ -133,9 +132,6 @@ jobs:
         shell: pwsh
         run: |
           choco install ninja --no-progress -y
-          vcpkg install zlib:x64-windows-static-md
-          $zlibPrefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md" -replace '\\','/'
-          Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$zlibPrefix"
       - name: Enable ccache launcher
         if: runner.os == 'Linux'
         run: |

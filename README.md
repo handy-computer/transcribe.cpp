@@ -138,10 +138,13 @@ tools/transcribe-quantize/ Quantization tool source
 docs/                      Porting and validation guidance
 scripts/                   Python converter + test tooling
 ggml/                      Vendored ggml (see ggml/UPSTREAM for pinned SHA)
+src/third_party/miniz/     Vendored miniz deflate codec (see its UPSTREAM file)
 samples/                   Test audio files
 tests/                     Unit and smoke tests
 ```
 
 ## License
 
-transcribe.cpp is MIT-licensed. See [LICENSE](LICENSE) for details.
+transcribe.cpp is MIT-licensed. See [LICENSE](LICENSE) for details. Vendored
+third-party components (ggml, miniz — both MIT) are attributed in
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).

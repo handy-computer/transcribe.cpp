@@ -116,7 +116,7 @@ image = (
     )
     .apt_install(
         "build-essential", "cmake", "ninja-build", "git", "ca-certificates",
-        "zlib1g-dev", "libopenblas-dev", "curl", "tar", "rsync", "ccache",
+        "libopenblas-dev", "curl", "tar", "rsync", "ccache",
     )
     .pip_install("huggingface_hub", "pyyaml")
     .run_commands(
