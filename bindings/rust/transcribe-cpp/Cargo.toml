@@ -10,6 +10,10 @@ repository = "https://github.com/handy-computer/transcribe.cpp"
 homepage = "https://github.com/handy-computer/transcribe.cpp"
 keywords = ["transcription", "speech", "asr", "stt", "ggml"]
 categories = ["multimedia::audio", "api-bindings"]
+# A unique `links` name so build.rs can re-emit the -sys crate's location
+# metadata one more hop (as DEP_TRANSCRIBE_CPP_*) for downstream packaging. No
+# native linking happens here — that lives in -sys. See build.rs.
+links = "transcribe_cpp"
 
 [lib]
 name = "transcribe_cpp"

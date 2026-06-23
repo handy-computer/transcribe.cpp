@@ -200,6 +200,45 @@ N-API addon, so `cmake-js` does not apply) and installs into `prebuilds/<tuple>/
 which the loader finds automatically. Requires `cmake` and a C/C++ toolchain.
 You can also point `TRANSCRIBE_LIBRARY` at any `libtranscribe` you built.
 
+## Packaging an app (Electron / Tauri)
+
+The native code ships as a self-contained `@transcribe-cpp/<platform>` package
+(the shared library plus its sibling ggml libs / backend modules, in one
+directory). Because npm resolution is transitive, your app can locate that
+directory at *build* time — there is nothing special to wire through.
+`artifactDir()` returns it **without loading the library** (no dlopen), which is
+exactly what a bundler/pack step needs:
+
+```js
+import { artifactDir } from "transcribe-cpp";
+import * as fs from "node:fs";
+
+const dir = artifactDir();
+const lib =
+  process.platform === "win32" ? "transcribe.dll"
+  : process.platform === "darwin" ? "libtranscribe.dylib"
+  : "libtranscribe.so";
+
+// HARD-FAIL if the artifact is missing/empty: better to break the build than
+// ship a silently broken installer that crashes at first transcribe() call.
+if (!fs.existsSync(`${dir}/${lib}`)) {
+  throw new Error(`native library not found in ${dir}; the platform package is not bundled`);
+}
+// copy `dir` into your app resources, or feed it to your bundler config…
+```
+
+The native files are real binaries, so they must not be packed into an asar
+archive. With **electron-builder**, unpack the platform packages:
+
+```jsonc
+// package.json → "build"
+{ "asarUnpack": ["node_modules/@transcribe-cpp/**"] }
+```
+
+For a **Tauri** app whose native bits come from the Rust crate instead, see that
+crate's "Packaging a distributable" section — there the artifact dir is exposed
+to your `build.rs` as `DEP_TRANSCRIBE_CPP_RUNTIME_DIR`.
+
 ## Waived requirements
 
 - **Per-field ABI layout is not waived** (unlike Rust/Swift): TypeScript has no
