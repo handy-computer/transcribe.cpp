@@ -352,7 +352,16 @@ if(TRANSCRIBE_GGML_BACKEND_DL)
     # `NOT GGML_BACKEND_DIR` treats an empty/unset value as "ours to set" while
     # still respecting a non-empty caller-provided path.
     if(NOT GGML_BACKEND_DIR)
-        set(GGML_BACKEND_DIR "${CMAKE_INSTALL_LIBDIR}" CACHE PATH "" FORCE)
+        # The directory that holds libtranscribe itself — which is where the
+        # package-local loader scans. That's bin/ on Windows (a DLL is a RUNTIME
+        # artifact installed to bin, so transcribe.dll lives there) and lib/
+        # elsewhere. Using lib/ unconditionally would strand the modules away
+        # from transcribe.dll on Windows, where the loader can't find them.
+        if(WIN32)
+            set(GGML_BACKEND_DIR "${CMAKE_INSTALL_BINDIR}" CACHE PATH "" FORCE)
+        else()
+            set(GGML_BACKEND_DIR "${CMAKE_INSTALL_LIBDIR}" CACHE PATH "" FORCE)
+        endif()
     endif()
     # ggml hard-errors on GGML_NATIVE + GGML_BACKEND_DL (x86): native tuning
     # is incompatible with feature-scored modules. A module build is a

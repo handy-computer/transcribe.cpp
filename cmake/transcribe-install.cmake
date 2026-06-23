@@ -40,7 +40,13 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/transcribe"
     FILES_MATCHING PATTERN "*.h")
 
 # --- libtranscribe ------------------------------------------------------------
-# ggml's own install rules already cover ggml / ggml-base / the backend libs.
+# ggml's own install rules cover ggml / ggml-base. They ALSO declare an install
+# for each backend module, but ggml_add_backend_library() uses `LIBRARY
+# DESTINATION` only — and a MODULE library's .dll is the RUNTIME artifact on
+# Windows, so that rule installs nothing there: the loadable ggml-*.dll backend
+# modules never reach bin/, leaving a shared/dynamic-backends install with zero
+# compute backends next to libtranscribe. We re-install their RUNTIME artifact
+# below (mirrors what python-wheel-install.cmake already does for the wheel).
 # In shared mode, give every library a self-referential rpath so the
 # installed lib dir is self-contained: under RUNPATH semantics the LOADING
 # object's rpath resolves its deps, so libtranscribe needs $ORIGIN to find
@@ -59,6 +65,21 @@ install(TARGETS transcribe
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# Re-install the ggml backend MODULE libraries' RUNTIME artifact on Windows.
+# ggml_add_backend_library() installs each module with `LIBRARY DESTINATION
+# ${GGML_BACKEND_DIR}` only; on Windows a MODULE library's .dll is the RUNTIME
+# artifact, so that rule installs NOTHING and the loadable ggml-cpu-*/ggml-vulkan
+# DLLs never get installed at all — a DL build then registers zero compute
+# devices. `_backend_targets` (from transcribe_backend_kinds above) is the full
+# module set, incl. every CPU ISA variant. GGML_BACKEND_DIR is the directory that
+# holds libtranscribe (bin on Windows; set in the top-level CMakeLists), so this
+# co-locates the modules with transcribe.dll where the package-local loader
+# scans. MODULE libraries have no import lib, so RUNTIME alone is complete. No-op
+# on Unix, where ggml's LIBRARY rule already installed the .so to GGML_BACKEND_DIR.
+if(WIN32 AND TRANSCRIBE_GGML_BACKEND_DL AND _backend_targets)
+    install(TARGETS ${_backend_targets} RUNTIME DESTINATION ${GGML_BACKEND_DIR})
+endif()
 
 # --- the link manifest (transcribe-link.json) --------------------------------
 set(_libraries transcribe)
