@@ -87,6 +87,7 @@ fn main() {
     let shared = feature("SHARED") || dynamic_backends;
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let is_apple = matches!(target_os.as_str(), "macos" | "ios");
     let is_x86 = matches!(target_arch.as_str(), "x86" | "x86_64");
 
@@ -97,6 +98,25 @@ fn main() {
         .define("TRANSCRIBE_BUILD_EXAMPLES", "OFF")
         .define("TRANSCRIBE_BUILD_TOOLS", "OFF")
         .define("TRANSCRIBE_BUILD_SHARED", if shared { "ON" } else { "OFF" });
+
+    // Force optimization on MSVC. `.profile("Release")` only selects the *config*
+    // (and CRT) of the Visual Studio multi-config generator — it does NOT
+    // guarantee optimization. cmake-rs strips `/O*` from the cc-derived flags
+    // ("let cmake deal with optimization") and then, for the VS generator,
+    // overwrites CMAKE_<LANG>_FLAGS_RELEASE with those stripped flags — dropping
+    // CMake's default `/O2 /Ob2 /DNDEBUG`. The "Release" build then compiles ggml
+    // UNOPTIMIZED with assertions live: ~7x slower on CPU (realtime collapses to
+    // ~1x) and a pred-heavy ~3x slower decode on Vulkan. Flags passed via
+    // cflag/cxxflag are injected verbatim (un-stripped) into that same
+    // CMAKE_<LANG>_FLAGS_RELEASE — the var the VS generator actually respects — so
+    // re-adding them here restores optimization. (Off-MSVC the GNU/Clang lanes get
+    // -O from the profile and CMake's Release init flags aren't stripped.)
+    if target_env == "msvc" {
+        for flag in ["/O2", "/Ob2", "/DNDEBUG"] {
+            cfg.cflag(flag);
+            cfg.cxxflag(flag);
+        }
+    }
 
     // Dynamic backend modules: each compute backend becomes a loadable module
     // next to libtranscribe, picked at runtime by transcribe_init_backends().
