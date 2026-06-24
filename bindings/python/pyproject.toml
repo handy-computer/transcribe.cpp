@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "transcribe-cpp"
-version = "0.0.6"
+version = "0.0.7"
 description = "Python bindings for transcribe.cpp"
 readme = "README.md"
 # 3.8 is EOL (2024-10); 3.9 is the floor. The binding is ctypes-only, so there
@@ -34,13 +34,13 @@ classifiers = [
 # packaging fix still resolves); the import-time version/header-hash check in
 # _library.py is the runtime backstop. check_version_sync.py gates this pin
 # against include/transcribe.h.
-dependencies = ["transcribe-cpp-native==0.0.6.*"]
+dependencies = ["transcribe-cpp-native==0.0.7.*"]
 
 [project.optional-dependencies]
 # Opt-in accelerator providers — ADDITIVE: they install alongside the default
 # provider and the best one wins at runtime. Same base-version pin contract
 # as the hard dependency (gated by check_version_sync.py).
-cu12 = ["transcribe-cpp-native-cu12==0.0.6.*"]
+cu12 = ["transcribe-cpp-native-cu12==0.0.7.*"]
 # Test-only deps. Run with: uv run --extra test pytest (from bindings/python).
 # numpy is here so the numpy PCM-input tests run in every lane instead of
 # silently skipping wherever numpy happens to be absent.
