@@ -66,19 +66,22 @@ install(TARGETS transcribe
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-# Re-install the ggml backend MODULE libraries' RUNTIME artifact on Windows.
-# ggml_add_backend_library() installs each module with `LIBRARY DESTINATION
-# ${GGML_BACKEND_DIR}` only; on Windows a MODULE library's .dll is the RUNTIME
-# artifact, so that rule installs NOTHING and the loadable ggml-cpu-*/ggml-vulkan
-# DLLs never get installed at all — a DL build then registers zero compute
-# devices. `_backend_targets` (from transcribe_backend_kinds above) is the full
-# module set, incl. every CPU ISA variant. GGML_BACKEND_DIR is the directory that
-# holds libtranscribe (bin on Windows; set in the top-level CMakeLists), so this
-# co-locates the modules with transcribe.dll where the package-local loader
-# scans. MODULE libraries have no import lib, so RUNTIME alone is complete. No-op
-# on Unix, where ggml's LIBRARY rule already installed the .so to GGML_BACKEND_DIR.
+# Install the ggml backend MODULE libraries beside libtranscribe on Windows.
+# In CMake's install() model a MODULE library is a LIBRARY artifact on EVERY
+# platform — Windows included; its .dll is NOT a RUNTIME artifact — so the
+# destination must be LIBRARY. A RUNTIME-only destination hard-errors at configure
+# with "install TARGETS given no LIBRARY DESTINATION for module target ...", which
+# broke every Windows dynamic-backends configure. With LIBRARY DESTINATION the
+# loadable ggml-cpu-*/ggml-vulkan DLLs land in GGML_BACKEND_DIR — the directory
+# holding libtranscribe (bin on Windows; set in the top-level CMakeLists) — so
+# they sit next to transcribe.dll where the package-local loader scans.
+# `_backend_targets` (from transcribe_backend_kinds above) is the full module set,
+# incl. every CPU ISA variant. RUNTIME is kept too as a harmless belt-and-braces.
+# No-op on Unix, where ggml's own LIBRARY rule already installs the .so.
 if(WIN32 AND TRANSCRIBE_GGML_BACKEND_DL AND _backend_targets)
-    install(TARGETS ${_backend_targets} RUNTIME DESTINATION ${GGML_BACKEND_DIR})
+    install(TARGETS ${_backend_targets}
+            LIBRARY DESTINATION ${GGML_BACKEND_DIR}
+            RUNTIME DESTINATION ${GGML_BACKEND_DIR})
 endif()
 
 # --- the link manifest (transcribe-link.json) --------------------------------
