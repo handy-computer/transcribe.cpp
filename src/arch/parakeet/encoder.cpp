@@ -84,6 +84,27 @@ bool detect_direct_dw_in_block(const char * backend) {
     return true;
 }
 
+// Pre-encode (subsampling) depthwise dispatch. Same direct path as the
+// in-block site EXCEPT on Metal, where ggml_conv_2d_dw_direct's CONV_2D_DW
+// op is unsupported in this vendored ggml (see conv_2d_dw_f32's comment in
+// conformer.cpp) so the im2col helper must be used. CPU and Vulkan have a
+// native CONV_2D_DW: the direct path avoids both the ~31x im2col expansion
+// AND the degenerate per-channel [1 x K] batched matmul the im2col path
+// emits (m=1, batch=channels) — a large, GPU-/CPU-idle pre-encode cost
+// (~40-50ms here). Historically this was hardcoded to the im2col helper to
+// preserve Metal behavior; making it backend-aware keeps Metal correct
+// while letting CPU/Vulkan take the fast path. Env vars match the in-block
+// overrides.
+bool detect_direct_dw_in_pre_encode(const char * backend) {
+    if (std::getenv("TRANSCRIBE_CONV_DIRECT_DW")    != nullptr) return true;
+    if (std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW") != nullptr) return false;
+    if (backend != nullptr &&
+        (std::strstr(backend, "Metal") != nullptr || std::strstr(backend, "metal") != nullptr)) {
+        return false;
+    }
+    return true;
+}
+
 // ----- Views ------------------------------------------------------
 
 conf::PreEncodeView to_view(const ParakeetPreEncode & pe) {
@@ -284,7 +305,7 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     conf::ConvPolicy policy {};
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode = false;
+    policy.direct_dw_in_pre_encode = detect_direct_dw_in_pre_encode(backend_name);
     // Cache-aware streaming variants (NeMo `causal_downsampling=true`)
     // use CausalConv2D for the pre-encode subsample stack (left=k-1,
     // right=stride-1 pad on both spatial axes). We infer this from the
@@ -757,7 +778,7 @@ EncoderBuild build_encoder_graph_streaming(
     conf::ConvPolicy policy {};
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
-    policy.direct_dw_in_pre_encode = false;
+    policy.direct_dw_in_pre_encode = detect_direct_dw_in_pre_encode(backend_name);
     // See the offline analog in build_encoder_graph: causal pre-encode
     // is the cache-aware streaming convention only.
     policy.causal_pre_encode =

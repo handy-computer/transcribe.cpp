@@ -546,8 +546,23 @@ inline void linear(const float * W,
 #endif
     for (int r = 0; r < out_dim; ++r) {
         const float * row = W + static_cast<size_t>(r) * static_cast<size_t>(in_dim);
-        float acc = 0.0f;
-        for (int c = 0; c < in_dim; ++c) {
+        // Eight independent accumulators break the single-acc reduction
+        // dependency chain so the compiler can auto-vectorize the dot (the
+        // serial version pins it to one FMA's latency — ~7x off on MSVC, the
+        // dominant decode cost). Pure fp32, DL-safe, portable: no intrinsics,
+        // no ggml-cpu symbols, no arch flags. The tree-shaped final sum changes
+        // float reassociation only (argmax-robust, transcript-identical).
+        float a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0;
+        int c = 0;
+        const int in8 = in_dim & ~7;
+        for (; c < in8; c += 8) {
+            a0 += row[c + 0] * x[c + 0]; a1 += row[c + 1] * x[c + 1];
+            a2 += row[c + 2] * x[c + 2]; a3 += row[c + 3] * x[c + 3];
+            a4 += row[c + 4] * x[c + 4]; a5 += row[c + 5] * x[c + 5];
+            a6 += row[c + 6] * x[c + 6]; a7 += row[c + 7] * x[c + 7];
+        }
+        float acc = ((a0 + a1) + (a2 + a3)) + ((a4 + a5) + (a6 + a7));
+        for (; c < in_dim; ++c) {
             acc += row[c] * x[c];
         }
         y[r] = acc + (b != nullptr ? b[r] : 0.0f);
@@ -774,7 +789,15 @@ void joint_step(const HostJoint &     j,
     // Cost: ~joint_n adds + 1 logsumexp. For joint_n=1030 that's ~2K
     // ops per decode iter, negligible vs the joint_h × pred_hidden +
     // joint_h × joint_n matmuls (~1.3M ops).
-    {
+    //
+    // GREEDY FAST PATH: the log_softmax is a uniform per-row shift, so it leaves
+    // BOTH the token/duration argmax AND token_confidence (which re-softmaxes the
+    // token sub-range, absorbing the shift) invariant. It is therefore only
+    // needed to make the `dec.joint.0` dump comparable to NeMo's normalized
+    // reference. Skip it entirely unless dumping — saves a joint_n-wide
+    // max+exp+log+sub pass (joint_n≈1030, with a double exp) on every decode
+    // iteration. Bit-identical decode output either way.
+    if (transcribe::debug::enabled()) {
         float max_v = out_logits[0];
         for (int i = 1; i < j.joint_n; ++i) {
             if (out_logits[i] > max_v) max_v = out_logits[i];
@@ -813,13 +836,6 @@ void precompute_enc_proj(const HostJoint &    j,
                 1.0f, enc_out, d_enc,
                 j.enc_w.data(), d_enc,
                 0.0f, out.data(), joint_h);
-#else
-    for (int t = 0; t < T; ++t) {
-        const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
-        float * proj = out.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
-        linear(j.enc_w.data(), frame, nullptr, joint_h, d_enc, proj, n_threads);
-    }
-#endif
     // Add bias to every row.
     for (int t = 0; t < T; ++t) {
         float * proj = out.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
@@ -827,6 +843,32 @@ void precompute_enc_proj(const HostJoint &    j,
             proj[k] += j.enc_b[static_cast<size_t>(k)];
         }
     }
+#else
+    // No BLAS: this is a [T, d_enc] x [d_enc, joint_h]^T GEMM. The previous code
+    // ran it as T serial sgemv calls via linear(), and linear() only threads when
+    // out_dim >= 2048 — joint_h is below that, so the whole projection ran
+    // single-threaded (~90 ms for T=138 on this model, the dominant decode cost,
+    // paid on CPU even under the Vulkan backend since the decoder is host code).
+    // The rows are fully independent, so parallelize over T and fold the bias in.
+    // The inner dot auto-vectorizes (FMA/AVX-512) under the project's arch flags.
+    const float * enc_w = j.enc_w.data();
+    const float * enc_b = j.enc_b.data();
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(n_threads > 0 ? n_threads : 1)
+#endif
+    for (int t = 0; t < T; ++t) {
+        const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
+        float * proj = out.data() + static_cast<size_t>(t) * static_cast<size_t>(joint_h);
+        for (int r = 0; r < joint_h; ++r) {
+            const float * row = enc_w + static_cast<size_t>(r) * static_cast<size_t>(d_enc);
+            float acc = 0.0f;
+            for (int c = 0; c < d_enc; ++c) {
+                acc += row[c] * frame[c];
+            }
+            proj[r] = acc + enc_b[static_cast<size_t>(r)];
+        }
+    }
+#endif
 }
 
 // Argmax over a contiguous fp32 range. Returns the index of the
