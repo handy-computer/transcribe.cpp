@@ -122,6 +122,12 @@ struct ParakeetModel final : public transcribe_model {
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
 
+    // On a CPU primary backend, the encoder's 2D Q8_0 matmul weights are
+    // allocated in the CPU_REPACK extra buffer (interleaved blocked-GEMM
+    // layout for the AVX-512 VNNI kernels); this holds that buffer. Decoder
+    // weights stay in backend_buffer. Null on GPU primary / when disabled.
+    ggml_backend_buffer_t   repack_buffer = nullptr;
+
     // Fused BN parameters live in a separate ggml context + buffer,
     // computed at load time from the raw BN tensors. Freed in dtor.
     ggml_context *          bn_fused_ctx    = nullptr;

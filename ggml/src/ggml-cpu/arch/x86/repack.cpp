@@ -1445,6 +1445,112 @@ static void gemm_q4_b32_8x8_q8_0_lut_avx(int n, float * GGML_RESTRICT s, size_t 
 
 #endif // defined(__AVX2__) || defined(__AVX512F__)
 
+// ===========================================================================
+// transcribe.cpp: AVX-512 VNNI (AVX2 fallback) Q8_0 x4 blocked GEMM/GEMV.
+//
+// Upstream ggml has no x86 blocked GEMM for Q8_0 weights (only Q4_0/Q4_K/IQ4_NL),
+// so Q8_0 matmuls fall back to the per-row vec_dot — ~2x slower than a tuned int8
+// GEMM (the ONNX/MLAS gap). These mirror the q8_0_4x8 generic layout exactly
+// (weight block_q8_0x4 qs[k*32 + j*8 + i], 4 cols, blocklen 8; GEMM activation
+// block_q8_0x4 qs[k*32 + m*8 + i]; GEMV activation plain block_q8_0 qs[k*8 + i])
+// and are simpler than the Q4_0 kernels — no nibble unpack/LUT.
+//
+// s8*s8 via VNNI dpbusd (which is u8*s8): dpbusd(|a|, b*sign(a)) == sum(a*b),
+// using AVX2 _mm256_sign_epi8 for |a| and the signed b; falls back to
+// maddubs+madd on AVX2-without-VNNI (no saturation: |a|<=127,|b|<=127 ->
+// pair sum <= 32258 < 32767). The 8 int32 lanes from one 32-byte (4col x 8)
+// dpbusd are pair-reduced to 4 per-column sums.
+#if defined(__AVX2__) || defined(__AVX512F__)
+static inline __m256i q8_0_x4_acc_dot(__m256i acc, __m256i a /*s8 act*/, __m256i b /*s8 weight*/) {
+    const __m256i ax = _mm256_sign_epi8(a, a); // |a|  -> u8
+    const __m256i sy = _mm256_sign_epi8(b, a); // b * sign(a)  -> s8
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+    return _mm256_dpbusd_epi32(acc, ax, sy);
+#elif defined(__AVXVNNI__)
+    return _mm256_dpbusd_avx_epi32(acc, ax, sy);
+#else
+    const __m256i p16 = _mm256_maddubs_epi16(ax, sy);
+    return _mm256_add_epi32(acc, _mm256_madd_epi16(_mm256_set1_epi16(1), p16));
+#endif
+}
+// acc lanes [c0a,c0b,c1a,c1b,c2a,c2b,c3a,c3b] -> [c0,c1,c2,c3]
+static inline __m128i q8_0_x4_reduce(__m256i acc) {
+    const __m256i h = _mm256_hadd_epi32(acc, acc); // lo:[c0,c1,c0,c1] hi:[c2,c3,c2,c3]
+    return _mm_unpacklo_epi64(_mm256_castsi256_si128(h), _mm256_extracti128_si256(h, 1));
+}
+#endif
+
+void ggml_gemv_q8_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+#if defined(__AVX2__) || defined(__AVX512F__)
+    {
+        const int nb = n / QK8_0;
+        const block_q8_0 * GGML_RESTRICT a_ptr = (const block_q8_0 *) vy;
+        for (int x = 0; x < nc / 4; x++) {
+            const block_q8_0x4 * GGML_RESTRICT b_ptr = (const block_q8_0x4 *) vx + x * nb;
+            __m128 sumf = _mm_setzero_ps();
+            for (int l = 0; l < nb; l++) {
+                __m256i acc = _mm256_setzero_si256();
+                for (int k = 0; k < 4; k++) {
+                    const __m256i W = _mm256_loadu_si256((const __m256i *)(b_ptr[l].qs + k * 32));
+                    int64_t am; memcpy(&am, a_ptr[l].qs + k * 8, 8);
+                    acc = q8_0_x4_acc_dot(acc, _mm256_set1_epi64x(am), W);
+                }
+                const __m128 db = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *) b_ptr[l].d));
+                const __m128 cf = _mm_cvtepi32_ps(q8_0_x4_reduce(acc));
+                sumf = _mm_fmadd_ps(cf, _mm_mul_ps(db, _mm_set1_ps(GGML_CPU_FP16_TO_FP32(a_ptr[l].d))), sumf);
+            }
+            _mm_storeu_ps(s + x * 4, sumf);
+        }
+        return;
+    }
+#endif
+    ggml_gemv_q8_0_4x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_q8_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+#if defined(__AVX2__) || defined(__AVX512F__)
+    {
+        const int nb = n / QK8_0;
+        for (int y = 0; y < nr / 4; y++) {
+            const block_q8_0x4 * GGML_RESTRICT a_ptr = (const block_q8_0x4 *) vy + y * nb;
+            for (int x = 0; x < nc / 4; x++) {
+                const block_q8_0x4 * GGML_RESTRICT b_ptr = (const block_q8_0x4 *) vx + x * nb;
+                __m128 sumf0 = _mm_setzero_ps(), sumf1 = _mm_setzero_ps();
+                __m128 sumf2 = _mm_setzero_ps(), sumf3 = _mm_setzero_ps();
+                for (int l = 0; l < nb; l++) {
+                    __m256i acc0 = _mm256_setzero_si256(), acc1 = _mm256_setzero_si256();
+                    __m256i acc2 = _mm256_setzero_si256(), acc3 = _mm256_setzero_si256();
+                    for (int k = 0; k < 4; k++) {
+                        const __m256i W = _mm256_loadu_si256((const __m256i *)(b_ptr[l].qs + k * 32));
+                        int64_t a0, a1, a2, a3;
+                        memcpy(&a0, a_ptr[l].qs + k * 32 + 0 * 8, 8);
+                        memcpy(&a1, a_ptr[l].qs + k * 32 + 1 * 8, 8);
+                        memcpy(&a2, a_ptr[l].qs + k * 32 + 2 * 8, 8);
+                        memcpy(&a3, a_ptr[l].qs + k * 32 + 3 * 8, 8);
+                        acc0 = q8_0_x4_acc_dot(acc0, _mm256_set1_epi64x(a0), W);
+                        acc1 = q8_0_x4_acc_dot(acc1, _mm256_set1_epi64x(a1), W);
+                        acc2 = q8_0_x4_acc_dot(acc2, _mm256_set1_epi64x(a2), W);
+                        acc3 = q8_0_x4_acc_dot(acc3, _mm256_set1_epi64x(a3), W);
+                    }
+                    const __m128 db = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *) b_ptr[l].d));
+                    float da[4]; _mm_storeu_ps(da, _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *) a_ptr[l].d)));
+                    sumf0 = _mm_fmadd_ps(_mm_cvtepi32_ps(q8_0_x4_reduce(acc0)), _mm_mul_ps(db, _mm_set1_ps(da[0])), sumf0);
+                    sumf1 = _mm_fmadd_ps(_mm_cvtepi32_ps(q8_0_x4_reduce(acc1)), _mm_mul_ps(db, _mm_set1_ps(da[1])), sumf1);
+                    sumf2 = _mm_fmadd_ps(_mm_cvtepi32_ps(q8_0_x4_reduce(acc2)), _mm_mul_ps(db, _mm_set1_ps(da[2])), sumf2);
+                    sumf3 = _mm_fmadd_ps(_mm_cvtepi32_ps(q8_0_x4_reduce(acc3)), _mm_mul_ps(db, _mm_set1_ps(da[3])), sumf3);
+                }
+                _mm_storeu_ps(s + (y * 4 + 0) * bs + x * 4, sumf0);
+                _mm_storeu_ps(s + (y * 4 + 1) * bs + x * 4, sumf1);
+                _mm_storeu_ps(s + (y * 4 + 2) * bs + x * 4, sumf2);
+                _mm_storeu_ps(s + (y * 4 + 3) * bs + x * 4, sumf3);
+            }
+        }
+        return;
+    }
+#endif
+    ggml_gemm_q8_0_4x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+}
+
 void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
 #if defined(__AVX2__) || defined(__AVX512F__)
     {

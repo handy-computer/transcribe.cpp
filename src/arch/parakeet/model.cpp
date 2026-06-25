@@ -73,6 +73,7 @@
 #include <fstream>
 #include <ios>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -158,6 +159,10 @@ ParakeetModel::~ParakeetModel() {
     if (ctx_meta != nullptr) {
         ggml_free(ctx_meta);
         ctx_meta = nullptr;
+    }
+    if (repack_buffer != nullptr) {
+        ggml_backend_buffer_free(repack_buffer);
+        repack_buffer = nullptr;
     }
     if (backend_buffer != nullptr) {
         ggml_backend_buffer_free(backend_buffer);
@@ -702,6 +707,86 @@ transcribe_status load(
     // ctx_meta has its `buffer` and `data` slot bound to the backend
     // allocation. We still need to upload the actual weight bytes
     // from the GGUF data section.
+    //
+    // On a CPU primary backend, route the encoder's 2D Q8_0 matmul weights
+    // through the CPU_REPACK extra buffer type: ggml interleaves them into the
+    // blocked-GEMM layout at upload, and the AVX-512 VNNI gemm/gemv kernels in
+    // ggml-cpu/arch/x86/repack.cpp run them markedly faster than the per-row
+    // vec_dot fallback. The DECODER weights (joint.*, pred.*) and all non-matmul
+    // tensors must stay in the default host buffer: the host decoder reads
+    // several of them back via ggml_backend_tensor_get, which is only valid on
+    // un-repacked (pass-through) data. Disable with TRANSCRIBE_NO_CPU_REPACK=1.
+    ggml_backend_buffer_type_t repack_buft = nullptr;
+    if (m->plan.primary_kind == BackendKind::Cpu &&
+        std::getenv("TRANSCRIBE_NO_CPU_REPACK") == nullptr) {
+        if (ggml_backend_dev_t dev = ggml_backend_get_device(m->plan.primary)) {
+            if (ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev)) {
+                auto get_extra = (ggml_backend_dev_get_extra_bufts_t)
+                    ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_extra_bufts");
+                if (get_extra != nullptr) {
+                    if (ggml_backend_buffer_type_t * bufts = get_extra(dev)) {
+                        for (int i = 0; bufts[i] != nullptr; ++i) {
+                            if (std::strcmp(ggml_backend_buft_name(bufts[i]), "CPU_REPACK") == 0) {
+                                repack_buft = bufts[i];
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Select which weights to repack: any quantized 2D encoder ("enc.*") weight
+    // ggml can block — Q8_0 -> our AVX-512 VNNI blocked GEMM; Q4_0/Q4_K/Q5_K/
+    // Q6_K/IQ4_NL -> ggml's own x86 blocked GEMMs. This is the FF / attention-
+    // projection / pre_encode.out set. get_optimal_repack_type (in the repack
+    // buffer's init_tensor) returns null for anything it can't repack (wrong
+    // divisibility / unsupported type); those pass through and run the normal
+    // per-row path, so a permissive filter is safe. Decoder weights (joint.*,
+    // pred.*) are excluded by the name prefix — the host decoder reads them back
+    // and a repacked tensor reads back garbage.
+    auto wants_repack = [](const ggml_tensor * t) -> bool {
+        return ggml_is_quantized(t->type) && ggml_n_dims(t) == 2 &&
+               std::strncmp(t->name, "enc.", 4) == 0;
+    };
+
+    if (repack_buft != nullptr) {
+        size_t       repack_size = 0;
+        const size_t align       = ggml_backend_buft_get_alignment(repack_buft);
+        int          n_repack    = 0;
+        for (ggml_tensor * t = ggml_get_first_tensor(m->ctx_meta); t != nullptr;
+             t = ggml_get_next_tensor(m->ctx_meta, t)) {
+            if (wants_repack(t)) {
+                repack_size += GGML_PAD(ggml_backend_buft_get_alloc_size(repack_buft, t), align);
+                ++n_repack;
+            }
+        }
+        if (n_repack > 0) {
+            m->repack_buffer = ggml_backend_buft_alloc_buffer(repack_buft, repack_size);
+            if (m->repack_buffer == nullptr) {
+                gguf_free(gguf_data);
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: repack buffer alloc failed");
+                return TRANSCRIBE_ERR_GGUF;
+            }
+            ggml_backend_buffer_set_usage(m->repack_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_tallocr ta = ggml_tallocr_new(m->repack_buffer);
+            for (ggml_tensor * t = ggml_get_first_tensor(m->ctx_meta); t != nullptr;
+                 t = ggml_get_next_tensor(m->ctx_meta, t)) {
+                if (wants_repack(t) && ggml_tallocr_alloc(&ta, t) != GGML_STATUS_SUCCESS) {
+                    gguf_free(gguf_data);
+                    log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: repack tensor alloc failed");
+                    return TRANSCRIBE_ERR_GGUF;
+                }
+            }
+            log_msg(TRANSCRIBE_LOG_LEVEL_INFO,
+                    "parakeet: CPU_REPACK enabled — %d encoder quantized weights repacked for the blocked GEMM",
+                    n_repack);
+        }
+    }
+
+    // Allocate every remaining (not-yet-allocated) tensor in the default host
+    // buffer; the repacked encoder weights above are skipped (already bound).
     ggml_backend_buffer_t weights_buffer =
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
@@ -1487,6 +1572,32 @@ static transcribe_status run_one_shot_inner(
     }
 
     // ----- Compute --------------------------------------------------
+    // Temporary env-gated per-op profiler (TRANSCRIBE_PROFILE_OPS=1). Forces
+    // per-node eval+sync so we can bucket wall time by op type. Inflates total
+    // encode time (serializes), but the RELATIVE breakdown is the signal.
+    struct OpProf {
+        std::map<std::string,double> us;
+        std::map<std::string,long long> cnt;
+        int64_t t0 = 0;
+        const ggml_tensor * cur = nullptr;
+    };
+    static OpProf s_prof;            // static so the C-style callback can reach it
+    const bool do_prof = std::getenv("TRANSCRIBE_PROFILE_OPS") != nullptr;
+    if (do_prof) {
+        s_prof.us.clear(); s_prof.cnt.clear();
+        ggml_backend_sched_set_eval_callback(pc->sched,
+            [](ggml_tensor * t, bool ask, void *) -> bool {
+                if (ask) { s_prof.t0 = ggml_time_us(); s_prof.cur = t; return true; }
+                const double dt = static_cast<double>(ggml_time_us() - s_prof.t0);
+                std::string key = ggml_op_name(s_prof.cur->op);
+                if (s_prof.cur->op == GGML_OP_MUL_MAT && s_prof.cur->src[0]) {
+                    key += "/"; key += ggml_type_name(s_prof.cur->src[0]->type);
+                }
+                s_prof.us[key] += dt; s_prof.cnt[key] += 1;
+                return true;
+            }, nullptr);
+    }
+
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs =
             ggml_backend_sched_graph_compute(pc->sched, eb.graph);
@@ -1498,6 +1609,18 @@ static transcribe_status run_one_shot_inner(
         return TRANSCRIBE_ERR_GGUF;
     }
     pc->t_encode_us = ggml_time_us() - t_enc_start;
+    if (do_prof) {
+        ggml_backend_sched_set_eval_callback(pc->sched, nullptr, nullptr);
+        std::vector<std::pair<std::string,double>> rows(s_prof.us.begin(), s_prof.us.end());
+        std::sort(rows.begin(), rows.end(),
+                  [](const auto&a,const auto&b){ return a.second > b.second; });
+        double tot = 0; for (auto&r:rows) tot += r.second;
+        log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "=== op profile (total %.1f ms over %zu op-types) ===", tot/1000.0, rows.size());
+        for (auto&r:rows) {
+            log_msg(TRANSCRIBE_LOG_LEVEL_INFO, "  %-24s %8.1f ms  %5.1f%%  (%lld calls)",
+                    r.first.c_str(), r.second/1000.0, 100.0*r.second/tot, s_prof.cnt[r.first]);
+        }
+    }
     pc->t_decode_us = 0;
 
     // ----- Dump intermediates (debug only) -------------------------

@@ -432,7 +432,14 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
     // note: only the first sources are checked for extra buffer types to reduce overhead, increase if necessary
     for (int i = 0; i < 4; i++) {
         if (op->src[i] && op->src[i]->buffer &&
-            ggml_backend_cpu_is_extra_buffer_type(op->src[i]->buffer->buft)) {
+            ggml_backend_cpu_is_extra_buffer_type(op->src[i]->buffer->buft) &&
+            // Only delegate to the extra buffer's op support when THIS source was
+            // actually converted by it (tensor->extra holds the repack traits). A
+            // pass-through tensor that merely happens to live in the extra buffer
+            // (e.g. an F32 conv weight in a mixed-dtype weight set placed wholesale
+            // in CPU_REPACK) must fall through to the normal CPU op support, or ops
+            // like IM2COL on that weight would be wrongly rejected.
+            op->src[i]->extra != nullptr) {
             auto * buf_extra = (ggml::cpu::extra_buffer_type *) op->src[i]->buffer->buft->context;
             return buf_extra->supports_op(dev, op);
         }
