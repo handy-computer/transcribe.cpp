@@ -238,7 +238,7 @@ static void test_init_macros(void) {
     transcribe_run_params_init(&rp_macro);
     CHECK(rp_macro.struct_size        == sizeof(struct transcribe_run_params));
     CHECK(rp_macro.task               == TRANSCRIBE_TASK_TRANSCRIBE);
-    CHECK(rp_macro.timestamps         == TRANSCRIBE_TIMESTAMPS_NONE);
+    CHECK(rp_macro.timestamps         == TRANSCRIBE_TIMESTAMPS_AUTO);
     CHECK(rp_macro.pnc                == TRANSCRIBE_PNC_MODE_DEFAULT);
     CHECK(rp_macro.itn                == TRANSCRIBE_ITN_MODE_DEFAULT);
     CHECK(rp_macro.language           == NULL);

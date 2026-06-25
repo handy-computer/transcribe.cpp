@@ -132,13 +132,12 @@ int main() {
         CHECK(st == TRANSCRIBE_OK);
         CHECK(std::strstr(transcribe_full_text(ctx), "country") != nullptr);
         CHECK_EQ_INT(transcribe_returned_timestamp_kind(ctx),
-                     TRANSCRIBE_TIMESTAMPS_NONE);
-        CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
+                     TRANSCRIBE_TIMESTAMPS_SEGMENT);
+        CHECK(transcribe_n_segments(ctx) >= 1);
         {
             transcribe_segment seg; transcribe_segment_init(&seg);
             CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg), TRANSCRIBE_OK);
-            CHECK_EQ_INT(seg.t0_ms, 0);
-            CHECK_EQ_INT(seg.t1_ms, 0);
+            CHECK(seg.t1_ms >= seg.t0_ms);
         }
     }
 

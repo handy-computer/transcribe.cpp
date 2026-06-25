@@ -29,10 +29,10 @@ impl Task {
 /// Requested (or returned) timestamp granularity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TimestampKind {
-    /// Text only, no alignment data. The default for a run.
-    #[default]
+    /// Text only, no alignment data.
     None,
     /// "Richest the model supports" — resolved per-family at run time.
+    #[default]
     Auto,
     /// Segment-level start/end times.
     Segment,
