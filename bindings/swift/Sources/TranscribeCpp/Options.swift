@@ -126,7 +126,10 @@ public struct RunOptions: Sendable {
 
     public init(
         task: TranscriptionTask = .transcribe,
-        timestamps: TimestampKind = .none,
+        // .auto ("richest the model supports", per-family) mirrors the C
+        // transcribe_run_params_init default: whisper resolves it to .segment
+        // (its robust path), no-timestamp families resolve to .none.
+        timestamps: TimestampKind = .auto,
         pnc: Pnc = .default,
         itn: Itn = .default,
         language: String? = nil,

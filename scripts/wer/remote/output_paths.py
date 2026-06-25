@@ -30,6 +30,7 @@ def write_hyp(
     batch_size: int | None = None,
     timestamps: str = "none",
     stream_chunk_ms: int = 0,
+    stream_att_right: int = -1,
 ) -> Path:
     out_dir = root / "reports" / "wer"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -38,6 +39,7 @@ def write_hyp(
     bs_tag = "" if batch_size is None else f".b{batch_size}"
     ts_tag = "" if timestamps == "none" else f".ts-{timestamps}"
     stream_tag = "" if stream_chunk_ms <= 0 else f".stream{stream_chunk_ms}ms"
-    out_path = out_dir / f"{slug}.{ds}{bs_tag}{ts_tag}{stream_tag}.jsonl"
+    r_tag = "" if stream_att_right < 0 else f".r{stream_att_right}"
+    out_path = out_dir / f"{slug}.{ds}{bs_tag}{ts_tag}{stream_tag}{r_tag}.jsonl"
     out_path.write_text(hyp_jsonl)
     return out_path

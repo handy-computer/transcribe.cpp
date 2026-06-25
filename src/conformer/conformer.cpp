@@ -634,7 +634,10 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
                            ggml_tensor *       x,
                            ggml_tensor *       pos_emb,
                            const BlockView &   b,
-                           const BlockParams & params)
+                           const BlockParams & params,
+                           ggml_tensor *       x_q,
+                           ggml_tensor *       k_full,
+                           ggml_tensor *       v_full)
 {
     const int     d_model  = params.d_model;
     const int     n_head   = params.n_head;
@@ -644,8 +647,29 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     const int     att_context_right = params.att_context_right;
     const int     head_dim = d_model / n_head;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    const int64_t T_q      = x->ne[1];
-    const int64_t pos_len  = pos_emb->ne[1];
+    // Query/key-value split (see the x_q / k_full contracts in
+    // conformer.h). kv_cached: K/V arrive pre-projected and x is the
+    // query-only activation. q_sliced: queries from x_q, K/V projected
+    // from x. rect covers both — the score geometry is rectangular
+    // [T_kv, T_q]. Neither set keeps T_q == T_kv and the historical
+    // topology bit-for-bit.
+    const bool    kv_cached = (k_full != nullptr && v_full != nullptr);
+    const bool    q_sliced  = !kv_cached && (x_q != nullptr && x_q != x);
+    const bool    rect      = kv_cached || q_sliced;
+    const int64_t T_kv      = kv_cached ? k_full->ne[1] : x->ne[1];
+    const int64_t T_q       = q_sliced  ? x_q->ne[1]    : x->ne[1];
+    // With a precomputed pos projection, pos_emb may be null (the
+    // caller's graph carries no pos_emb input at all).
+    ggml_tensor * pos_proj = params.streaming_pos_proj_in;
+    const int64_t pos_len  = pos_proj != nullptr ? pos_proj->ne[1]
+                                                 : pos_emb->ne[1];
+    if (rect && pos_len != T_q + T_kv - 1) {
+        std::fprintf(stderr,
+                     "conformer rel_pos_mhsa: rectangular pos_emb length "
+                     "%lld != T_q + T_kv - 1 = %lld\n",
+                     (long long)pos_len, (long long)(T_q + T_kv - 1));
+        return nullptr;
+    }
     // Utterance batch at ne[2] of the [d_model, T, B] activation. After the
     // head split below the batch moves to ne[3] (heads take ne[2]). When
     // batched we force the manual attention path: ggml_flash_attn_ext's
@@ -661,7 +685,11 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     // TRANSCRIBE_NO_FLASH=1 forces the manual mul_mat + soft_max path for
     // both single-shot and batched (used by the bit-exact CPU tensor gate,
     // since flash casts the rel-pos mask to F16 while manual stays F32).
-    const bool    flash     = use_flash;
+    // Rectangular geometry also forces manual: ggml_flash_attn_ext
+    // requires the mask's ne[1] padded to GGML_KQ_MASK_PAD, which the
+    // rectangular [T_kv, T_q] streaming mask does not satisfy — and at
+    // streaming geometry the manual path is faster anyway on CPU.
+    const bool    flash     = use_flash && !rect;
 
     // Local-attention bookkeeping. With both window sides non-negative
     // in the Regular style, pos_emb arrives at the smaller
@@ -678,13 +706,20 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     // ----- Q, K, V, P projections ---------------------------------
     // Q, K, V may have bias (Cohere) or not (Parakeet). Pos projection
     // (attn_pos_w) never has a bias in either family.
-    ggml_tensor * q = ggml_mul_mat(ctx, b.attn_q_w, x);
+    ggml_tensor * q = ggml_mul_mat(ctx, b.attn_q_w, q_sliced ? x_q : x);
     if (b.attn_q_b != nullptr) q = ggml_add(ctx, q, b.attn_q_b);
-    ggml_tensor * k = ggml_mul_mat(ctx, b.attn_k_w, x);
-    if (b.attn_k_b != nullptr) k = ggml_add(ctx, k, b.attn_k_b);
-    ggml_tensor * v = ggml_mul_mat(ctx, b.attn_v_w, x);
-    if (b.attn_v_b != nullptr) v = ggml_add(ctx, v, b.attn_v_b);
-    ggml_tensor * p = ggml_mul_mat(ctx, b.attn_pos_w, pos_emb);
+    // KV-cache mode: keys/values arrive pre-projected (bias included).
+    ggml_tensor * k = k_full;
+    ggml_tensor * v = v_full;
+    if (!kv_cached) {
+        k = ggml_mul_mat(ctx, b.attn_k_w, x);
+        if (b.attn_k_b != nullptr) k = ggml_add(ctx, k, b.attn_k_b);
+        v = ggml_mul_mat(ctx, b.attn_v_w, x);
+        if (b.attn_v_b != nullptr) v = ggml_add(ctx, v, b.attn_v_b);
+    }
+    ggml_tensor * p = pos_proj == nullptr
+        ? ggml_mul_mat(ctx, b.attn_pos_w, pos_emb)
+        : nullptr;
 
     // ----- Split heads --------------------------------------------
     // pos_bias_u/v broadcast onto [head_dim, n_head, T, 1] BEFORE
@@ -702,16 +737,21 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     q_u = ggml_permute(ctx, q_u, 0, 2, 1, 3);
     q_v = ggml_cont(ctx, ggml_permute(ctx, q_v, 0, 2, 1, 3));
 
-    k = ggml_reshape_4d(ctx, k, head_dim, n_head, T_q, B);
+    k = ggml_reshape_4d(ctx, k, head_dim, n_head, T_kv, B);
     k = ggml_permute(ctx, k, 0, 2, 1, 3);
 
-    v = ggml_reshape_4d(ctx, v, head_dim, n_head, T_q, B);
+    v = ggml_reshape_4d(ctx, v, head_dim, n_head, T_kv, B);
     v = ggml_permute(ctx, v, 0, 2, 1, 3);
 
     // Position scores are batch-independent (pos_emb has no batch axis), so
     // p keeps ne[3] == 1 and broadcasts across the batch in the mul_mat.
-    p = ggml_reshape_4d(ctx, p, head_dim, n_head, pos_len, 1);
-    p = ggml_cont(ctx, ggml_permute(ctx, p, 0, 2, 1, 3));
+    // The precomputed pos_proj is exactly this tensor, memoized.
+    if (p != nullptr) {
+        p = ggml_reshape_4d(ctx, p, head_dim, n_head, pos_len, 1);
+        p = ggml_cont(ctx, ggml_permute(ctx, p, 0, 2, 1, 3));
+    } else {
+        p = pos_proj;
+    }
 
     // ----- Position mask / bias -----------------------------------
     // matrix_bd = rel_shift(q_v @ p^T), truncated to [T_q, T_q].
@@ -760,9 +800,17 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         }
     }
 
+    // rel_shift generalizes to the rectangular case: with input
+    // [T_q + T_kv - 1, T_q] it yields out[k, q] = in[k - q + T_q - 1, q],
+    // i.e. row k holds the score of key k against query q for relative
+    // offset (T_kv - 1) - (k - q + T_q - 1) = (T_kv - T_q) + q - k —
+    // exactly the query-at-absolute-position (T_kv - T_q + q) semantics
+    // the streaming x_q path needs. The square offline case is the
+    // T_q == T_kv specialization. The zero column injected by the trick
+    // only lands at k >= T_kv, which the view below slices off.
     matrix_bd = rel_shift(ctx, matrix_bd);
     matrix_bd = ggml_view_4d(ctx, matrix_bd,
-                             T_q, T_q, n_head, B,
+                             T_kv, T_q, n_head, B,
                              matrix_bd->nb[1], matrix_bd->nb[2],
                              matrix_bd->nb[3], /*offset=*/0);
     // The view is non-contiguous (nb[1] stays at parent's
@@ -897,29 +945,59 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
     //        new_cache = concat(prev_cache[T_q_new:], x_norm)
     //      and cpy it into streaming_channel_out (per NeMo:
     //      q_keep_size = T_q_new with cache_drop_size = 0; the cache
-    //      stays at size T_cache).
-    //   2. Virtualize x_norm for the attention call:
+    //      stays at size T_cache). KV-cache mode rotates last_k/last_v
+    //      instead (see kv_mode below).
+    //   2. Virtualize x_norm for the K/V side:
     //        x_norm_virtual = concat(prev_cache, x_norm)
-    //      so rel_pos_mhsa runs on T_virtual = T_cache + T_q_new
-    //      positions. The pos_emb and chunked_mask the caller built
-    //      are sized for T_virtual.
-    //   3. Slice the attention output to the last T_q_new rows so it
-    //      lines up with the running residual (which still has
-    //      T_q_new frames).
+    //      so rel_pos_mhsa attends over T_virtual = T_cache + T_q_new
+    //      keys. Queries are sliced to the T_q_new new frames (x_q_new),
+    //      so the attention output already has T_q_new rows — no output
+    //      slice needed. The pos_emb / chunked_mask are sized for that
+    //      rectangular [T_virtual, T_q_new] geometry.
     //
     // T_q_new is taken from the running x's ne[1] (x is the post-pre-
     // encode + post-FF1 running tensor; its time dim hasn't changed
     // yet at this point).
     {
         const bool streaming = (params.streaming_channel_in != nullptr);
+        // KV-cache streaming: keys/values are cached pre-projected, so
+        // the channel cache (and its concat/write) is skipped entirely
+        // and x_norm stays at the new frames throughout.
+        const bool kv_mode = streaming &&
+            params.streaming_kv_k_in != nullptr &&
+            params.streaming_kv_v_in != nullptr;
         const int64_t T_q_new = streaming ? x->ne[1] : 0;
         const int64_t T_cache = streaming
             ? params.streaming_channel_in->ne[1]
             : 0;
+        ggml_tensor * x_q_new = nullptr;
         ggml_tensor * x_norm = layer_norm(ctx, x,
                                           b.norm_attn_w, b.norm_attn_b);
 
-        if (streaming) {
+        // Streaming cache rotation: new_cache = concat(prev[T_q_new:],
+        // fresh) for the common T_q_new < cache-size case, else the
+        // last cache-size rows of fresh. Shared by the channel cache
+        // and the KV cache (identical rolling-window semantics).
+        const auto emit_rotated_cache = [&](ggml_tensor * prev,
+                                            ggml_tensor * fresh,
+                                            ggml_tensor * out) {
+            const int64_t Tc = prev->ne[1];
+            ggml_tensor * new_cache = nullptr;
+            if (T_q_new < Tc) {
+                ggml_tensor * prev_tail = ggml_view_2d(
+                    ctx, prev, prev->ne[0], Tc - T_q_new, prev->nb[1],
+                    /*offset=*/T_q_new * prev->nb[1]);
+                new_cache = ggml_concat(ctx, prev_tail, fresh, /*dim=*/1);
+            } else {
+                new_cache = ggml_view_2d(
+                    ctx, fresh, fresh->ne[0], Tc, fresh->nb[1],
+                    (T_q_new - Tc) * fresh->nb[1]);
+            }
+            ggml_tensor * cpy = ggml_cpy(ctx, new_cache, out);
+            ggml_build_forward_expand(params.streaming_graph, cpy);
+        };
+
+        if (streaming && !kv_mode) {
             // Emit the new cache slot before we virtualize x_norm
             // for attention. Source: prev_cache tail (T_cache - T_q_new
             // rows) concatenated with this chunk's x_norm (T_q_new
@@ -958,23 +1036,48 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
                 ggml_build_forward_expand(params.streaming_graph, cpy);
             }
 
-            // Virtual-T attention: prepend the previous cache to
-            // x_norm and let rel_pos_mhsa run as usual.
+            // Virtual-T attention with query slicing: the pre-concat
+            // x_norm doubles as the query-only input, so attention output
+            // is computed for just the T_q_new new frames while K/V span
+            // the full virtual window (after the concat below).
+            x_q_new = x_norm;
             x_norm = ggml_concat(ctx, params.streaming_channel_in,
                                  x_norm, /*dim=*/1);
         }
 
-        ggml_tensor * attn_out = rel_pos_mhsa(ctx, x_norm, pos_emb, b, params);
+        ggml_tensor * attn_out = nullptr;
+        if (kv_mode) {
+            // Project K/V for the new frames only, prepend the cached
+            // window, and rotate the cache forward.
+            ggml_tensor * k_new = ggml_mul_mat(ctx, b.attn_k_w, x_norm);
+            if (b.attn_k_b != nullptr) k_new = ggml_add(ctx, k_new, b.attn_k_b);
+            ggml_tensor * v_new = ggml_mul_mat(ctx, b.attn_v_w, x_norm);
+            if (b.attn_v_b != nullptr) v_new = ggml_add(ctx, v_new, b.attn_v_b);
 
-        if (streaming) {
-            // attn_out: [d_model, T_virtual]. Slice to last T_q_new.
-            const int64_t T_virt = attn_out->ne[1];
-            attn_out = ggml_view_2d(
-                ctx, attn_out,
-                attn_out->ne[0], T_q_new,
-                attn_out->nb[1],
-                (T_virt - T_q_new) * attn_out->nb[1]);
-            attn_out = ggml_cont(ctx, attn_out);
+            ggml_tensor * k_all = ggml_concat(
+                ctx, params.streaming_kv_k_in, k_new, /*dim=*/1);
+            ggml_tensor * v_all = ggml_concat(
+                ctx, params.streaming_kv_v_in, v_new, /*dim=*/1);
+
+            if (params.streaming_kv_k_out != nullptr &&
+                params.streaming_kv_v_out != nullptr &&
+                params.streaming_graph != nullptr)
+            {
+                emit_rotated_cache(params.streaming_kv_k_in, k_new,
+                                   params.streaming_kv_k_out);
+                emit_rotated_cache(params.streaming_kv_v_in, v_new,
+                                   params.streaming_kv_v_out);
+            }
+
+            attn_out = rel_pos_mhsa(ctx, x_norm, pos_emb, b, params,
+                                    /*x_q=*/nullptr, k_all, v_all);
+        } else {
+            // x_q_new is the new-frame query slice when streaming, or
+            // nullptr offline (full self-attention). rel_pos_mhsa already
+            // returns only the T_q_new query rows in the streaming case,
+            // so no output slicing is needed.
+            attn_out = rel_pos_mhsa(ctx, x_norm, pos_emb, b, params,
+                                    x_q_new);
         }
 
         x = ggml_add(ctx, x, attn_out);

@@ -130,6 +130,7 @@ export interface TranscribeOptions {
   task?: Task;
   language?: string;
   targetLanguage?: string;
+  /** Default "auto" (richest the model supports, per-family). */
   timestamps?: TimestampKind;
   keepSpecialTags?: boolean;
   /** Speculative-decode draft count; -1 = family default. */

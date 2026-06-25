@@ -50,6 +50,32 @@ NVIDIA's self-reported number on the same split at
 `att_context_size=[70, 13]` (1.12s chunk, w/o PnC) is 2.32% (from the
 [HF model card](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b)).
 
+## Streaming WER
+
+In cache-aware streaming mode the encoder runs incrementally over fixed
+chunks while carrying constant-memory caches. WER on the full LibriSpeech
+test-clean split (2620 utterances) at the default `att_context_right=13`
+setting.
+
+| Quantization | WER (streaming, R=13) |
+| --- | ---: |
+| F16  | 2.29% |
+| Q8_0 | 2.31% |
+
+Streaming matches offline (2.31%) and NVIDIA's NeMo cache-aware streaming
+reference on the same split (2.31%)
+
+Reproduction:
+
+```bash
+uv run scripts/wer/run.py \
+  --cli build/bin/transcribe-cli \
+  --model models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b-Q8_0.gguf \
+  --manifest <librispeech test-clean manifest> --out hyps.jsonl \
+  --stream-chunk-ms 1040 --stream-att-right 13
+uv run scripts/wer/score.py hyps.jsonl
+```
+
 ## Quick Start
 
 ```bash

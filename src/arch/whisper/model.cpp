@@ -1974,9 +1974,16 @@ transcribe_status whisper_run(
         //     skip_ending_double_timestamps: if history's last two ids are
         //     both timestamps, drop the last one (PR #34537 / #35750).
         //   elif initial prompt is set:
-        //     prev_tokens = [<|startofprev|>, prompt_text_ids...] (every chunk)
+        //     prev_tokens = [<|startofprev|>, prompt_text_ids...]
+        //       ALL_SEGMENTS:   every chunk
+        //       FIRST_SEGMENT:  first chunk only
         //   else:
         //     prev_tokens = empty (Stage 2 behavior)
+        //
+        // HF (_prepare_decoder_input_ids) re-applies the prompt on
+        // EVERY chunk here regardless of prompt_condition. We deliberately
+        // diverge for FIRST_SEGMENT (the default) to match whisper.cpp /
+        // OpenAI, which prime only the first window.
         std::vector<int32_t> prev_tokens;
         if (do_condition_on_prev_tokens && !prev_history_segments.empty() &&
             prev_sot_id >= 0)
@@ -2005,7 +2012,10 @@ transcribe_status whisper_run(
                                           max_prev_cap);
             prev_tokens.insert(prev_tokens.end(),
                                hist.end() - cap, hist.end());
-        } else if (!prompt_text_ids.empty() && prev_sot_id >= 0) {
+        } else if (!prompt_text_ids.empty() && prev_sot_id >= 0 &&
+                   (is_first_chunk ||
+                    wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS)) {
+            // FIRST_SEGMENT primes the initial prompt on the first window
             prev_tokens.push_back(prev_sot_id);
             prev_tokens.insert(prev_tokens.end(),
                                prompt_text_ids.begin(),

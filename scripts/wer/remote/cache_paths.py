@@ -15,6 +15,7 @@ def hyp_cache_paths(
     timestamps: str = "none",
     language: str = "",
     stream_chunk_ms: int = 0,
+    stream_att_right: int = -1,
 ) -> tuple[str, str]:
     """Deterministic Volume paths for the (model, dataset, subset, batch,
     sort) tuple.
@@ -40,8 +41,12 @@ def hyp_cache_paths(
     # Streaming (--stream-chunk-ms) produces different hyps than the offline
     # path, so it gets its own cache slot. 0 = offline (no tag, compatible).
     stream_tag = "" if stream_chunk_ms <= 0 else f".stream{stream_chunk_ms}ms"
+    # Cache-aware latency preset (--stream-att-right). -1 = unset (model
+    # default R), no tag so it stays compatible with already-cached entries;
+    # any explicit R gets its own slot so e.g. R=13 and R=0 never collide.
+    r_tag = "" if stream_att_right < 0 else f".r{stream_att_right}"
     base = (f"/data/wer/hyps/{hyp_fp}/{slug}."
-            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{lang_tag}{stream_tag}")
+            f"{dataset_id(dataset_spec)}.{subset_tag}{bs_tag}{sort_tag}{ts_tag}{lang_tag}{stream_tag}{r_tag}")
     return f"{base}.jsonl", f"{base}.summary.json"
 
 

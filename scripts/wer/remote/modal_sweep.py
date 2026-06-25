@@ -461,6 +461,7 @@ def _run_wer_impl(
     timestamps: str = "none",
     language: str = "",
     stream_chunk_ms: int = 0,
+    stream_att_right: int = -1,
     dataset_status: dict | None = None,
 ) -> dict:
     """Run scripts/wer/run.py on `n_utts` (or full manifest) and return the
@@ -480,7 +481,7 @@ def _run_wer_impl(
     # when a hyp for this (fingerprint, model, dataset, subset) already exists.
     cache_hyp, cache_sum = hyp_cache_paths(
         HYP_FP, model_file, dataset_spec, n_utts, batch_size, sort_by_length,
-        timestamps, language, stream_chunk_ms)
+        timestamps, language, stream_chunk_ms, stream_att_right)
     if os.path.exists(cache_hyp) and os.path.exists(cache_sum) \
        and os.path.getsize(cache_hyp) > 0:
         _log_prepared_dataset("wer", dataset_status)
@@ -537,6 +538,8 @@ def _run_wer_impl(
         cmd += ["--language", language]
     if stream_chunk_ms and stream_chunk_ms > 0:
         cmd += ["--stream-chunk-ms", str(stream_chunk_ms)]
+        if stream_att_right >= 0:
+            cmd += ["--stream-att-right", str(stream_att_right)]
     print(f"[wer] $ {' '.join(cmd)}")
     t0 = time.time()
     rc, stderr_tail = run_subprocess_capturing_stderr(cmd, cwd="/work", env=env)
@@ -584,6 +587,7 @@ def _run_wer_impl(
         "utt_per_s": subset_count / wall_s if wall_s > 0 else 0.0,
         "batch_size": batch_size,
         "stream_chunk_ms": stream_chunk_ms,
+        "stream_att_right": stream_att_right,
         "mel_s": mel_ms / 1000.0,
         "encode_s": enc_ms / 1000.0,
         "decode_s": dec_ms / 1000.0,
@@ -633,6 +637,7 @@ def _register_runner(gpu_id: str):
         timestamps: str = "none",
         language: str = "",
         stream_chunk_ms: int = 0,
+        stream_att_right: int = -1,
         dataset_status: dict | None = None,
     ) -> dict:
         # Prefer the build_dir the local entrypoint computed and built into:
@@ -645,6 +650,7 @@ def _register_runner(gpu_id: str):
             batch_size=batch_size, sort_by_length=sort_by_length,
             timestamps=timestamps, language=language,
             stream_chunk_ms=stream_chunk_ms,
+            stream_att_right=stream_att_right,
             dataset_status=dataset_status,
         )
 
@@ -885,6 +891,7 @@ def sweep(
     timestamps: str = "none",
     language: str = "",
     stream_chunk_ms: int = 0,
+    stream_att_right: int = -1,
 ) -> None:
     """Fan WER across one or more models on one GPU class.
 
@@ -968,7 +975,8 @@ def sweep(
     n = None if n_utts < 0 else n_utts
     futs = [(c, runner.spawn(c["repo"], c["file"], c["dataset"], n,
                              c["bs"], sort_by_length, build_dir, timestamps,
-                             language, stream_chunk_ms, dataset_status))
+                             language, stream_chunk_ms, stream_att_right,
+                             dataset_status))
             for c in cells]
 
     rows, failures = [], []
@@ -982,7 +990,8 @@ def sweep(
             p = write_hyp(repo_root, res["hyp_jsonl"], c["file"], c["dataset"],
                           batch_size=(bs if bs != 1 else None),
                           timestamps=timestamps,
-                          stream_chunk_ms=stream_chunk_ms)
+                          stream_chunk_ms=stream_chunk_ms,
+                          stream_att_right=stream_att_right)
             s = res["summary"]
             rows.append((slug, c["dataset"], s["n_utts"], s["audio_s"],
                          s["wall_s"], s["rtf_wall"], str(p)))

@@ -46,7 +46,7 @@ from .errors import (
     raise_for_status,
 )
 
-__version__ = "0.0.7"
+__version__ = "0.0.8"
 
 # String-enum types, exported so callers (and type checkers) can name them.
 Backend = Literal["auto", "cpu", "metal", "vulkan", "cpu_accel", "cuda"]
@@ -975,7 +975,7 @@ class Session:
     def run(self, pcm: PCMLike, *, task: Task = "transcribe",
             language: str | None = None,
             target_language: str | None = None,
-            timestamps: Timestamps = "none",
+            timestamps: Timestamps = "auto",
             keep_special_tags: bool = False,
             spec_k_drafts: int = -1,
             family: FamilyExtension | None = None) -> Result:
@@ -1011,7 +1011,7 @@ class Session:
     def run_batch(self, pcms: Sequence[PCMLike], *, task: Task = "transcribe",
                   language: str | None = None,
                   target_language: str | None = None,
-                  timestamps: Timestamps = "none",
+                  timestamps: Timestamps = "auto",
                   keep_special_tags: bool = False,
                   spec_k_drafts: int = -1,
                   family: FamilyExtension | None = None,
@@ -1339,7 +1339,7 @@ def transcribe(
     task: Task = "transcribe",
     language: str | None = None,
     target_language: str | None = None,
-    timestamps: Timestamps = "none",
+    timestamps: Timestamps = "auto",
     keep_special_tags: bool = False,
     spec_k_drafts: int = -1,
     family: FamilyExtension | None = None,

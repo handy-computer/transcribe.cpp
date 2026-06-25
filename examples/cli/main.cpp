@@ -132,7 +132,7 @@ struct cli_args {
     transcribe_kv_type kv_type = TRANSCRIBE_KV_TYPE_AUTO;
     transcribe_backend_request backend = TRANSCRIBE_BACKEND_AUTO;
     int         gpu_device = 0; // --device N: 0 = auto, >0 = registry index
-    transcribe_timestamp_kind timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
+    transcribe_timestamp_kind timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
 
     // Whisper-family knobs. Ignored for non-Whisper models.
     std::string initial_prompt;                // --initial-prompt TEXT
@@ -209,7 +209,7 @@ void print_usage(const char * argv0) {
         "                        (default: auto)\n"
         "  --device N            GPU device index from --list-devices: 0 = auto\n"
         "                        (first of kind), >0 selects that registry index\n"
-        "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: none)\n"
+        "  --timestamps TYPE     timestamps: auto, none, segment, word, token (default: auto)\n"
         "  --batch FILE          batch mode: FILE has one wav path per line\n"
         "  --batch-jsonl         output one JSON line per file (for batch)\n"
         "  --batch-size N        group N utterances into one transcribe_run_batch\n"

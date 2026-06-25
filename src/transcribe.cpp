@@ -497,6 +497,9 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
     std::memset(p, 0, sizeof(*p));
     p->struct_size = sizeof(*p);
     p->spec_k_drafts = -1;  // family default
+    // Default to AUTO ("richest the model supports", resolved per-family at
+    // run time) rather than the memset NONE.
+    p->timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
 }
 
 extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * p) {
