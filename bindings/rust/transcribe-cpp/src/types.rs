@@ -32,10 +32,6 @@ pub enum TimestampKind {
     /// Text only, no alignment data.
     None,
     /// "Richest the model supports" — resolved per-family at run time.
-    /// The default for a run: matches the wider Whisper ecosystem
-    /// (whisper.cpp / OpenAI / HF decode with timestamps by default) and
-    /// avoids Whisper's fragile no-timestamps path. No-timestamp families
-    /// resolve this back to [`None`](Self::None), so it is a safe default.
     #[default]
     Auto,
     /// Segment-level start/end times.
