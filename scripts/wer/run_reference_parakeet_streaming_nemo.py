@@ -55,6 +55,16 @@ def main() -> int:
     p.add_argument("--pad-and-drop-preencoded", action="store_true",
                    help="Treat the first chunk like subsequent (ONNX-export "
                         "first-chunk semantics).")
+    # Uniform reference contract (modal_sweep _run_one_reference always passes
+    # these). Streaming is inherently per-utterance, so --batch-size >1 and
+    # --mode are accepted and ignored; --device selects the torch device.
+    p.add_argument("--device", default="cuda",
+                   help="Torch device (cuda|cpu); falls back to cpu if cuda "
+                        "is unavailable.")
+    p.add_argument("--batch-size", type=int, default=1,
+                   help="Uniform-contract arg; ignored (streaming is bs=1).")
+    p.add_argument("--mode", default="streaming",
+                   help="Uniform-contract arg; this runner is always streaming.")
     args = p.parse_args()
 
     if not args.manifest.exists():
@@ -95,6 +105,9 @@ def main() -> int:
         else:
             raise last
     model.eval()
+    dev = "cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu"
+    model = model.to(dev)
+    print(f"device: {dev}")
     load_ms = (time.monotonic() - t0) * 1000
 
     if model.encoder.att_context_style != "chunked_limited":
@@ -167,8 +180,8 @@ def main() -> int:
                     channel_len,
                     previous_hypotheses,
                 ) = model.conformer_stream_step(
-                    processed_signal=chunk_audio.to(torch.float32),
-                    processed_signal_length=chunk_lengths,
+                    processed_signal=chunk_audio.to(dev, torch.float32),
+                    processed_signal_length=chunk_lengths.to(dev),
                     cache_last_channel=cache_lc,
                     cache_last_time=cache_lt,
                     cache_last_channel_len=channel_len,
