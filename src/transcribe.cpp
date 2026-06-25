@@ -497,6 +497,16 @@ extern "C" void transcribe_run_params_init(struct transcribe_run_params * p) {
     std::memset(p, 0, sizeof(*p));
     p->struct_size = sizeof(*p);
     p->spec_k_drafts = -1;  // family default
+    // Default to AUTO ("richest the model supports", resolved per-family at
+    // run time) rather than the memset NONE. AUTO matches the wider Whisper
+    // ecosystem (whisper.cpp no_timestamps=false, OpenAI without_timestamps=
+    // False, HF return_timestamps), which decode WITH timestamps by default.
+    // Whisper's no-timestamps path is fragile: with an initial_prompt set it
+    // can collapse to a degenerate early-EOT result (reproducible identically
+    // in HF transformers and whisper.cpp). AUTO routes Whisper through its
+    // SEGMENT path (no DTW), while no-timestamp families (cohere, sensevoice,
+    // canary, granite_nar) resolve AUTO back to NONE — no behavior change.
+    p->timestamps = TRANSCRIBE_TIMESTAMPS_AUTO;
 }
 
 extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * p) {

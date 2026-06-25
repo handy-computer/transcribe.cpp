@@ -219,7 +219,16 @@ def main() -> int:
                    help="transcribe-cli binary path")
     p.add_argument("--language", default="en")
     p.add_argument("--initial-prompt",
-                   help="initial prompt text / glossary to pass to both HF and C++")
+                   help="initial prompt text / glossary to pass to both HF and C++. "
+                        "NOTE: with --prompt-condition first (the default), the C++ "
+                        "engine DELIBERATELY diverges from HF — it primes the prompt "
+                        "on the first window only (whisper.cpp/OpenAI behavior) "
+                        "instead of every window. HF re-primes every window, which "
+                        "can collapse interior windows on out-of-distribution "
+                        "prompts; the C++ behavior is the robust drop-in. So a "
+                        "prompted run with prompt-condition=first is EXPECTED to "
+                        "show non-zero WER vs HF and is not a regression. Use "
+                        "--prompt-condition all for a like-for-like HF comparison.")
     p.add_argument("--prompt-condition", choices=["first", "all"], default="first",
                    help="prompt placement when --initial-prompt is set")
     p.add_argument("--no-condition", action="store_true",

@@ -6,7 +6,12 @@
  * backend discovery, log routing, and cooperative cancellation.
  */
 
-import { native, setLogHandler, type LogHandler, type Native } from "./native.js";
+import {
+  native,
+  setLogHandler,
+  type LogHandler,
+  type Native,
+} from "./native.js";
 import { resolveLibrary } from "./loader.js";
 import * as g from "./_generated.js";
 import {
@@ -67,7 +72,10 @@ const KV_TYPES: Record<KvType, number> = {
   f32: g.TRANSCRIBE_KV_TYPE_F32,
   f16: g.TRANSCRIBE_KV_TYPE_F16,
 };
-const TASKS = { transcribe: g.TRANSCRIBE_TASK_TRANSCRIBE, translate: g.TRANSCRIBE_TASK_TRANSLATE };
+const TASKS = {
+  transcribe: g.TRANSCRIBE_TASK_TRANSCRIBE,
+  translate: g.TRANSCRIBE_TASK_TRANSLATE,
+};
 const TIMESTAMPS: Record<TimestampKind, number> = {
   none: g.TRANSCRIBE_TIMESTAMPS_NONE,
   auto: g.TRANSCRIBE_TIMESTAMPS_AUTO,
@@ -89,7 +97,11 @@ const FEATURES: Record<Feature, number> = {
 
 // ---- helpers ---------------------------------------------------------------
 
-function lookup<T extends string>(map: Record<string, number>, key: T, what: string): number {
+function lookup<T extends string>(
+  map: Record<string, number>,
+  key: T,
+  what: string,
+): number {
   const v = map[key];
   if (v === undefined) {
     throw new TranscribeError(
@@ -196,7 +208,9 @@ function deferFree(lock: Mutex, fn: () => void, after?: () => void): void {
 
 function callAsync<T = number>(fn: any, ...args: any[]): Promise<T> {
   return new Promise((resolve, reject) =>
-    fn.async(...args, (err: Error | null, res: T) => (err ? reject(err) : resolve(res))),
+    fn.async(...args, (err: Error | null, res: T) =>
+      err ? reject(err) : resolve(res),
+    ),
   );
 }
 
@@ -212,11 +226,15 @@ function toFloat32(pcm: PcmLike): Float32Array {
   else if (ArrayBuffer.isView(pcm)) {
     const b = pcm as Buffer;
     if (b.byteLength % 4 !== 0) {
-      throw new TranscribeError("PCM byte length must be a multiple of 4 (float32)");
+      throw new TranscribeError(
+        "PCM byte length must be a multiple of 4 (float32)",
+      );
     }
     out = new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
   } else {
-    throw new TranscribeError("PCM must be a Float32Array, number[], ArrayBuffer, or Buffer");
+    throw new TranscribeError(
+      "PCM must be a Float32Array, number[], ArrayBuffer, or Buffer",
+    );
   }
   if (out.length === 0) throw new TranscribeError("PCM is empty");
   return out;
@@ -261,9 +279,17 @@ class Mutex {
 // one exception: `headerHash` below is the compile-time PUBLIC_HEADER_HASH and
 // is the value the binding *expects*, not one read from the loaded library.
 
-export function version(): { version: string; commit: string; headerHash: string } {
+export function version(): {
+  version: string;
+  commit: string;
+  headerHash: string;
+} {
   const n = native();
-  return { version: n.F.version(), commit: n.F.versionCommit(), headerHash: g.PUBLIC_HEADER_HASH };
+  return {
+    version: n.F.version(),
+    commit: n.F.versionCommit(),
+    headerHash: g.PUBLIC_HEADER_HASH,
+  };
 }
 
 export function libraryPath(): string {
@@ -375,7 +401,10 @@ function batchAccessors(n: Native, h: any, i: number): Accessors {
   };
 }
 
-function materialize(n: Native, acc: Accessors): Omit<TranscriptionResult, "aborted" | "truncated"> {
+function materialize(
+  n: Native,
+  acc: Accessors,
+): Omit<TranscriptionResult, "aborted" | "truncated"> {
   const F = n.F;
 
   const segments: Segment[] = [];
@@ -510,7 +539,11 @@ const FAMILY: Record<string, FamilyReg> = {
     kind: g.TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM,
     type: "transcribe_parakeet_buffered_stream_ext",
     init: "parakeetBufferedStreamExtInit",
-    map: (o) => ({ left_ms: o.leftMs, chunk_ms: o.chunkMs, right_ms: o.rightMs }),
+    map: (o) => ({
+      left_ms: o.leftMs,
+      chunk_ms: o.chunkMs,
+      right_ms: o.rightMs,
+    }),
   },
   voxtral: {
     slot: "stream",
@@ -530,16 +563,26 @@ const FAMILY: Record<string, FamilyReg> = {
  * accepts the kind. The returned buffer must be kept alive (held via the params
  * object) until the native call returns.
  */
-function buildFamily(n: Native, modelHandle: any, family: FamilyExtension, slot: ExtSlot): any {
+function buildFamily(
+  n: Native,
+  modelHandle: any,
+  family: FamilyExtension,
+  slot: ExtSlot,
+): any {
   const reg = FAMILY[family.kind];
-  if (!reg) throw new InvalidArgument(`unknown family extension kind ${JSON.stringify(family.kind)}`);
+  if (!reg)
+    throw new InvalidArgument(
+      `unknown family extension kind ${JSON.stringify(family.kind)}`,
+    );
   if (reg.slot !== slot) {
     throw new InvalidArgument(
       `family "${family.kind}" is a ${reg.slot} extension, not valid for a ${slot} call`,
     );
   }
   if (!n.F.modelAcceptsExtKind(modelHandle, SLOT[reg.slot], reg.kind)) {
-    throw new UnsupportedRequest(`this model does not accept the "${family.kind}" ${reg.slot} extension`);
+    throw new UnsupportedRequest(
+      `this model does not accept the "${family.kind}" ${reg.slot} extension`,
+    );
   }
   const ext: any = {};
   n.F[reg.init](ext); // defaults + struct_size + kind
@@ -574,7 +617,10 @@ function toStreamUpdate(u: any): StreamUpdate {
  * owning Session within this module. The closures capture the Stream; WeakMap
  * ephemeron semantics keep that from pinning it in memory.
  */
-const STREAM_TEARDOWN = new WeakMap<Stream, { deactivate(): void; invalidate(): void; releaseLease(): void }>();
+const STREAM_TEARDOWN = new WeakMap<
+  Stream,
+  { deactivate(): void; invalidate(): void; releaseLease(): void }
+>();
 
 interface SessionControl {
   enterCompute(kind: string): void;
@@ -640,7 +686,9 @@ export class Session {
   /** Reads touch the session; forbidden while a worker call is in flight. */
   #assertNotComputing(what: string): void {
     if (this.#inFlight) {
-      throw new TranscribeError(`cannot read session ${what} while ${this.#inFlight} is in flight; await it first`);
+      throw new TranscribeError(
+        `cannot read session ${what} while ${this.#inFlight} is in flight; await it first`,
+      );
     }
   }
 
@@ -662,7 +710,10 @@ export class Session {
    * reads it on a worker thread while this runs, so do not mutate the buffer
    * (e.g. reuse a scratch array) until the returned promise resolves.
    */
-  async run(pcm: PcmLike, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
+  async run(
+    pcm: PcmLike,
+    opts: TranscribeOptions = {},
+  ): Promise<TranscriptionResult> {
     const n = this.#n;
     const F = n.F;
     const h = this.handle;
@@ -671,7 +722,8 @@ export class Session {
     const p = this.#buildRunParams(opts);
 
     return this.#lock.run(async () => {
-      if (this.#disposed) throw new TranscribeError("session has been disposed");
+      if (this.#disposed)
+        throw new TranscribeError("session has been disposed");
       if (this.#lock.streamActive) throw busyError("run");
       const cancel = this.#installAbort(opts.signal);
       let status: number;
@@ -683,7 +735,10 @@ export class Session {
         cancel?.();
       }
 
-      if (status === g.TRANSCRIBE_ERR_ABORTED || status === g.TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
+      if (
+        status === g.TRANSCRIBE_ERR_ABORTED ||
+        status === g.TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+      ) {
         const partial: TranscriptionResult = {
           ...materialize(n, singleAccessors(n, h)),
           aborted: F.wasAborted(h),
@@ -698,7 +753,11 @@ export class Session {
       }
       check(n, status, "transcribe_run");
 
-      return { ...materialize(n, singleAccessors(n, h)), aborted: F.wasAborted(h), truncated: F.wasTruncated(h) };
+      return {
+        ...materialize(n, singleAccessors(n, h)),
+        aborted: F.wasAborted(h),
+        truncated: F.wasTruncated(h),
+      };
     });
   }
 
@@ -707,12 +766,18 @@ export class Session {
     const p: any = {};
     n.F.runParamsInit(p);
     p.task = lookup(TASKS, opts.task ?? "transcribe", "task");
-    p.timestamps = lookup(TIMESTAMPS, opts.timestamps ?? "none", "timestamps");
+    // Default "auto" mirrors the C transcribe_run_params_init default:
+    // whisper resolves it to "segment" (its robust path), no-timestamp
+    // families resolve to "none".
+    p.timestamps = lookup(TIMESTAMPS, opts.timestamps ?? "auto", "timestamps");
     if (opts.language !== undefined) p.language = opts.language;
-    if (opts.targetLanguage !== undefined) p.target_language = opts.targetLanguage;
-    if (opts.keepSpecialTags !== undefined) p.keep_special_tags = opts.keepSpecialTags;
+    if (opts.targetLanguage !== undefined)
+      p.target_language = opts.targetLanguage;
+    if (opts.keepSpecialTags !== undefined)
+      p.keep_special_tags = opts.keepSpecialTags;
     if (opts.specKDrafts !== undefined) p.spec_k_drafts = opts.specKDrafts;
-    if (opts.family) p.family = buildFamily(n, this.#model.handle, opts.family, "run");
+    if (opts.family)
+      p.family = buildFamily(n, this.#model.handle, opts.family, "run");
     return p;
   }
 
@@ -721,23 +786,35 @@ export class Session {
    * Inputs are borrowed, not copied: native code reads them on a worker thread
    * while this runs, so do not mutate them until the returned promise resolves.
    */
-  async runBatch(pcms: PcmLike[], opts: TranscribeOptions = {}): Promise<BatchItem[]> {
+  async runBatch(
+    pcms: PcmLike[],
+    opts: TranscribeOptions = {},
+  ): Promise<BatchItem[]> {
     const n = this.#n;
     const F = n.F;
     const h = this.handle;
-    if (pcms.length === 0) throw new InvalidArgument("runBatch requires at least one input");
+    if (pcms.length === 0)
+      throw new InvalidArgument("runBatch requires at least one input");
     const arrays = pcms.map(toFloat32);
     const counts = Int32Array.from(arrays, (a) => a.length);
     const p = this.#buildRunParams(opts);
 
     return this.#lock.run(async () => {
-      if (this.#disposed) throw new TranscribeError("session has been disposed");
+      if (this.#disposed)
+        throw new TranscribeError("session has been disposed");
       if (this.#lock.streamActive) throw busyError("runBatch");
       const cancel = this.#installAbort(opts.signal);
       let status: number;
       this.#inFlight = "runBatch()";
       try {
-        status = await callAsync<number>(F.runBatch, h, arrays, counts, arrays.length, p);
+        status = await callAsync<number>(
+          F.runBatch,
+          h,
+          arrays,
+          counts,
+          arrays.length,
+          p,
+        );
       } finally {
         this.#inFlight = null;
         cancel?.();
@@ -753,12 +830,23 @@ export class Session {
         if (st === g.TRANSCRIBE_OK) {
           out.push({
             ok: true,
-            result: { ...materialize(n, batchAccessors(n, h, i)), aborted: false, truncated: false },
+            result: {
+              ...materialize(n, batchAccessors(n, h, i)),
+              aborted: false,
+              truncated: false,
+            },
           });
         } else {
-          const error = exceptionForStatus(st, F.statusString(st), `utterance ${i}`);
+          const error = exceptionForStatus(
+            st,
+            F.statusString(st),
+            `utterance ${i}`,
+          );
           error.utteranceIndex = i;
-          if (st === g.TRANSCRIBE_ERR_ABORTED || st === g.TRANSCRIBE_ERR_OUTPUT_TRUNCATED) {
+          if (
+            st === g.TRANSCRIBE_ERR_ABORTED ||
+            st === g.TRANSCRIBE_ERR_OUTPUT_TRUNCATED
+          ) {
             error.partialResult = {
               ...materialize(n, batchAccessors(n, h, i)),
               aborted: st === g.TRANSCRIBE_ERR_ABORTED,
@@ -787,16 +875,22 @@ export class Session {
     });
     const sp: any = {};
     F.streamParamsInit(sp);
-    sp.commit_policy = lookup(COMMIT_POLICIES, opts.commitPolicy ?? "auto", "commitPolicy");
+    sp.commit_policy = lookup(
+      COMMIT_POLICIES,
+      opts.commitPolicy ?? "auto",
+      "commitPolicy",
+    );
     if (opts.stablePrefixAgreementN !== undefined) {
       sp.stable_prefix_agreement_n = opts.stablePrefixAgreementN;
     }
-    if (opts.family) sp.family = buildFamily(n, this.#model.handle, opts.family, "stream");
+    if (opts.family)
+      sp.family = buildFamily(n, this.#model.handle, opts.family, "stream");
 
     return this.#lock.run(async () => {
       // Recheck inside the lock: dispose() may have run after we captured `h`
       // but before this queued body — don't begin a stream on a dead session.
-      if (this.#disposed) throw new TranscribeError("session has been disposed");
+      if (this.#disposed)
+        throw new TranscribeError("session has been disposed");
       if (this.#lock.streamActive) throw busyError("begin a stream");
       check(n, F.streamBegin(h, rp, sp), "transcribe_stream_begin");
       this.#lock.streamActive = true; // claim the lease for the whole stream lifetime
@@ -826,7 +920,10 @@ export class Session {
       flag.aborted = true;
     };
     signal.addEventListener("abort", onAbort, { once: true });
-    const cbPtr = n.koffi.register(() => flag.aborted, n.koffi.pointer(n.abortProto));
+    const cbPtr = n.koffi.register(
+      () => flag.aborted,
+      n.koffi.pointer(n.abortProto),
+    );
     n.F.setAbortCallback(this.handle, cbPtr, null);
     return () => {
       n.F.setAbortCallback(this.handle, null, null);
@@ -860,7 +957,11 @@ export class Session {
     const n = this.#n;
     const h = this.#h;
     this.#h = null;
-    deferFree(this.#lock, () => n.F.sessionFree(h), () => teardown?.releaseLease());
+    deferFree(
+      this.#lock,
+      () => n.F.sessionFree(h),
+      () => teardown?.releaseLease(),
+    );
   }
 
   [Symbol.dispose](): void {
@@ -887,7 +988,8 @@ export class Stream {
     this.#session = session;
     this.#lock = lock;
     const sessionControl = SESSION_CONTROL.get(session);
-    if (!sessionControl) throw new TranscribeError("session control is missing");
+    if (!sessionControl)
+      throw new TranscribeError("session control is missing");
     this.#sessionControl = sessionControl;
     this.#keepalive = keepalive;
     // Expose the teardown surface ONLY to the owning Session, via the
@@ -923,7 +1025,9 @@ export class Stream {
 
   #assertCurrent(what: string): void {
     if (this.#stale) {
-      throw new TranscribeError(`cannot ${what}: stream is no longer current for this session`);
+      throw new TranscribeError(
+        `cannot ${what}: stream is no longer current for this session`,
+      );
     }
   }
 
@@ -949,7 +1053,13 @@ export class Stream {
       this.#inFlight = true;
       this.#sessionControl.enterCompute("feed()/finalize()");
       try {
-        const status = await callAsync<number>(n.F.streamFeed, h, samples, samples.length, u);
+        const status = await callAsync<number>(
+          n.F.streamFeed,
+          h,
+          samples,
+          samples.length,
+          u,
+        );
         if (status !== g.TRANSCRIBE_OK) {
           // Native feed failures leave the stream in FAILED, which is no longer
           // an active stream in the C API. Keep the wrapper readable for
@@ -1104,7 +1214,10 @@ export class TranscribeModel {
     ensureExitHook();
   }
 
-  static async load(path: string, opts: ModelOptions = {}): Promise<TranscribeModel> {
+  static async load(
+    path: string,
+    opts: ModelOptions = {},
+  ): Promise<TranscribeModel> {
     const n = native();
     const p: any = {};
     n.F.modelLoadParamsInit(p);
@@ -1114,7 +1227,8 @@ export class TranscribeModel {
     const out: any[] = [null];
     const st = await callAsync<number>(n.F.modelLoadFile, path, p, out);
     check(n, st, `loading model ${path}`);
-    if (!out[0]) throw new ModelLoadError(`model load returned a null handle for ${path}`);
+    if (!out[0])
+      throw new ModelLoadError(`model load returned a null handle for ${path}`);
     return new TranscribeModel(n, out[0]);
   }
 
@@ -1134,14 +1248,20 @@ export class TranscribeModel {
 
     const out: any[] = [null];
     check(n, n.F.sessionInit(this.handle, p, out), "opening session");
-    if (!out[0]) throw new TranscribeError("session init returned a null handle");
-    const session = new Session(n, this, out[0], this.#lock, (s) => this.#sessions.delete(s));
+    if (!out[0])
+      throw new TranscribeError("session init returned a null handle");
+    const session = new Session(n, this, out[0], this.#lock, (s) =>
+      this.#sessions.delete(s),
+    );
     this.#sessions.add(session);
     return session;
   }
 
   /** Convenience: one session, one run, disposed after. */
-  async transcribe(pcm: PcmLike, opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
+  async transcribe(
+    pcm: PcmLike,
+    opts: TranscribeOptions = {},
+  ): Promise<TranscriptionResult> {
     const session = this.createSession();
     try {
       return await session.run(pcm, opts);
@@ -1176,7 +1296,10 @@ export class TranscribeModel {
   }
 
   supports(feature: Feature): boolean {
-    return this.#n.F.modelSupports(this.handle, lookup(FEATURES, feature, "feature"));
+    return this.#n.F.modelSupports(
+      this.handle,
+      lookup(FEATURES, feature, "feature"),
+    );
   }
 
   /** Whether this model accepts the given family extension on its slot. */
@@ -1195,7 +1318,9 @@ export class TranscribeModel {
       const buf = new Int32Array(cap);
       const r = F.tokenize(this.handle, text, buf, cap);
       if (r === INT_MIN) {
-        throw new NotImplementedByModel("this model's tokenizer does not support encode");
+        throw new NotImplementedByModel(
+          "this model's tokenizer does not support encode",
+        );
       }
       if (r >= 0) return buf.subarray(0, r);
       cap = -r; // buffer too small; -r is the count needed
@@ -1219,7 +1344,11 @@ export class TranscribeModel {
   get device(): BackendInfo {
     const dev: any = {};
     this.#n.F.backendDeviceInit(dev);
-    check(this.#n, this.#n.F.modelGetDevice(this.handle, dev), "reading model device");
+    check(
+      this.#n,
+      this.#n.F.modelGetDevice(this.handle, dev),
+      "reading model device",
+    );
     return deviceFromRaw(dev);
   }
 

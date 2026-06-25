@@ -46,7 +46,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         RunOptions {
             task: Task::Transcribe,
-            timestamps: TimestampKind::None,
+            timestamps: TimestampKind::Auto,
             pnc: Pnc::Default,
             itn: Itn::Default,
             language: None,
