@@ -18,6 +18,18 @@
 #define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
 
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+// Gate for the in-order little-core (Cortex-A55) tuned kernels below.
+// Default on; escape hatch TRANSCRIBE_A55_GEMM=0 restores stock kernels.
+static bool ggml_a55_gemm_enabled(void) {
+    static const bool en = [] {
+        const char * v = getenv("TRANSCRIBE_A55_GEMM");
+        return !(v && v[0] == '0');
+    }();
+    return en;
+}
+#endif
+
 #if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Woverlength-strings"
 #endif
@@ -209,7 +221,7 @@ void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
 #endif
 }
 
-void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static void ggml_gemv_q4_0_4x4_q8_0_stock(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -268,6 +280,319 @@ void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     return;
 #endif // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     ggml_gemv_q4_0_4x4_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+}
+
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+// A55-tuned gemv: 1 activation row (plain q8_0), 4-col weight groups.
+// The stock version chains 8 sdots into one accumulator (3-4 cy latency
+// each). Here blocks alternate between two iacc/scale register sets and the
+// fixup of block l is woven into block l+1's unpack/dot stream; activation
+// loads are paired ldr d. Processes 2 blocks per iteration (nb must be even,
+// else caller falls back to stock).
+//
+// Per-parity register sets: EVEN iacc v12/v13, wd v3, ad v1; ODD iacc
+// v24/v25, wd v2, ad v0. Weights v4-11 (reloaded per block), act v16-19,
+// facc v20, mask v30.
+static void ggml_gemv_q4_0_4x4_q8_0_a55(int n, float * s, const void * vx,
+                                        const void * vy, int nc) {
+    const int nb = n / 32;
+    for (int x = 0; x < nc / 4; x++) {
+        const char * b = (const char *) vx + (size_t) x * nb * 72;
+        const char * a = (const char *) vy;
+        float * sx = s + x * 4;
+        int cnt = nb / 2;
+        __asm__ __volatile__(
+            "movi v30.16b, #0xF0\n"
+            "movi v20.4s, #0\n"
+            "movi v12.4s, #0\n movi v13.4s, #0\n"
+            "movi v24.4s, #0\n movi v25.4s, #0\n"
+            // dummy odd-prev scales: zero so the first woven fixup adds 0
+            "movi v2.4s, #0\n movi v0.4s, #0\n"
+
+            "1:\n"
+            // ---- even block: dots into v12/v13, weave odd-prev fixup ----
+            "ldr q4, [%[b], #8]\n"
+            "ldr q5, [%[b], #24]\n"
+            "ldr q6, [%[b], #40]\n"
+            "ldr q7, [%[b], #56]\n"
+            "prfm pldl1strm, [%[b], #288]\n"
+            "and v8.16b, v4.16b, v30.16b\n"
+            "ldr d16, [%[a], #2]\n"
+            "and v9.16b, v5.16b, v30.16b\n"
+            "ldr d17, [%[a], #10]\n"
+            "and v10.16b, v6.16b, v30.16b\n"
+            "ldr d18, [%[a], #18]\n"
+            "and v11.16b, v7.16b, v30.16b\n"
+            "ldr d19, [%[a], #26]\n"
+            "shl v4.16b, v4.16b, #4\n"
+            "ldr d3, [%[b]]\n"             // wd even (fp16x4)
+            "shl v5.16b, v5.16b, #4\n"
+            "ldr h1, [%[a]]\n"             // ad even (fp16 scalar)
+            "shl v6.16b, v6.16b, #4\n"
+            "shl v7.16b, v7.16b, #4\n"
+            // odd-prev fixup part 1
+            "add v24.4s, v24.4s, v25.4s\n"
+            "fcvtl v3.4s, v3.4h\n"
+            "fcvt s1, h1\n"
+            "scvtf v24.4s, v24.4s, #4\n"
+            "sdot v12.4s, v4.16b, v16.4b[0]\n"
+            "sdot v13.4s, v5.16b, v16.4b[1]\n"
+            "fmul v24.4s, v24.4s, v2.4s\n"
+            "sdot v12.4s, v6.16b, v17.4b[0]\n"
+            "sdot v13.4s, v7.16b, v17.4b[1]\n"
+            "fmla v20.4s, v24.4s, v0.s[0]\n"
+            "sdot v12.4s, v8.16b, v18.4b[0]\n"
+            "sdot v13.4s, v9.16b, v18.4b[1]\n"
+            "movi v24.4s, #0\n"
+            "sdot v12.4s, v10.16b, v19.4b[0]\n"
+            "sdot v13.4s, v11.16b, v19.4b[1]\n"
+            "movi v25.4s, #0\n"
+
+            // ---- odd block: dots into v24/v25, weave even fixup ----
+            "ldr q4, [%[b], #80]\n"
+            "ldr q5, [%[b], #96]\n"
+            "ldr q6, [%[b], #112]\n"
+            "ldr q7, [%[b], #128]\n"
+            "prfm pldl1strm, [%[b], #352]\n"
+            "and v8.16b, v4.16b, v30.16b\n"
+            "ldr d16, [%[a], #36]\n"
+            "and v9.16b, v5.16b, v30.16b\n"
+            "ldr d17, [%[a], #44]\n"
+            "and v10.16b, v6.16b, v30.16b\n"
+            "ldr d18, [%[a], #52]\n"
+            "and v11.16b, v7.16b, v30.16b\n"
+            "ldr d19, [%[a], #60]\n"
+            "shl v4.16b, v4.16b, #4\n"
+            "ldr d2, [%[b], #72]\n"        // wd odd
+            "shl v5.16b, v5.16b, #4\n"
+            "ldr h0, [%[a], #34]\n"        // ad odd
+            "shl v6.16b, v6.16b, #4\n"
+            "shl v7.16b, v7.16b, #4\n"
+            // even fixup part 1
+            "add v12.4s, v12.4s, v13.4s\n"
+            "fcvtl v2.4s, v2.4h\n"
+            "fcvt s0, h0\n"
+            "scvtf v12.4s, v12.4s, #4\n"
+            "sdot v24.4s, v4.16b, v16.4b[0]\n"
+            "sdot v25.4s, v5.16b, v16.4b[1]\n"
+            "fmul v12.4s, v12.4s, v3.4s\n"
+            "sdot v24.4s, v6.16b, v17.4b[0]\n"
+            "sdot v25.4s, v7.16b, v17.4b[1]\n"
+            "fmla v20.4s, v12.4s, v1.s[0]\n"
+            "sdot v24.4s, v8.16b, v18.4b[0]\n"
+            "sdot v25.4s, v9.16b, v18.4b[1]\n"
+            "movi v12.4s, #0\n"
+            "sdot v24.4s, v10.16b, v19.4b[0]\n"
+            "sdot v25.4s, v11.16b, v19.4b[1]\n"
+            "movi v13.4s, #0\n"
+
+            "add %[b], %[b], #144\n"
+            "add %[a], %[a], #68\n"
+            "subs %w[cnt], %w[cnt], #1\n"
+            "b.ne 1b\n"
+            // final odd fixup
+            "add v24.4s, v24.4s, v25.4s\n"
+            "scvtf v24.4s, v24.4s, #4\n"
+            "fmul v24.4s, v24.4s, v2.4s\n"
+            "fmla v20.4s, v24.4s, v0.s[0]\n"
+            "str q20, [%[s]]\n"
+            : [b] "+r" (b), [a] "+r" (a), [cnt] "+r" (cnt)
+            : [s] "r" (sx)
+            : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9",
+              "v10", "v11", "v12", "v13", "v16", "v17", "v18", "v19", "v20",
+              "v24", "v25", "v30", "cc", "memory");
+    }
+}
+// A55-tuned 2-row tail: both leftover rows (plain q8_0) in ONE weight pass,
+// halving the tail's weight-stream traffic vs two gemv calls. Called from
+// forward_mul_mat's tail handling via the gemv2 template hook.
+// iaccs: row0 v12(lo)/v13(hi), row1 v14(lo)/v15(hi); facc v20/v21;
+// act row0 v16-19, row1 v22,v23,v26,v27; wd v3, ad0 v1, ad1 v0; mask v30.
+extern "C" void ggml_gemv2_q4_0_4x4_q8_0_a55(int n, float * s, size_t bs, const void * vx,
+                                             const void * vy, size_t vy_stride, int nc);
+extern "C" void ggml_gemv2_q4_0_4x4_q8_0_a55(int n, float * s, size_t bs, const void * vx,
+                                             const void * vy, size_t vy_stride, int nc) {
+    const int nb = n / 32;
+    for (int x = 0; x < nc / 4; x++) {
+        const char * b  = (const char *) vx + (size_t) x * nb * 72;
+        const char * a0 = (const char *) vy;
+        const char * a1 = a0 + vy_stride;
+        float * s0 = s + x * 4;
+        float * s1 = s + bs + x * 4;
+        int cnt = nb;
+        __asm__ __volatile__(
+            "movi v30.16b, #0xF0\n"
+            "movi v20.4s, #0\n movi v21.4s, #0\n"
+            "movi v12.4s, #0\n movi v13.4s, #0\n"
+            "movi v14.4s, #0\n movi v15.4s, #0\n"
+
+            "1:\n"
+            "ldr q4, [%[b], #8]\n"
+            "ldr q5, [%[b], #24]\n"
+            "ldr q6, [%[b], #40]\n"
+            "ldr q7, [%[b], #56]\n"
+            "prfm pldl1strm, [%[b], #288]\n"
+            "and v8.16b, v4.16b, v30.16b\n"
+            "ldr d16, [%[a0], #2]\n"
+            "and v9.16b, v5.16b, v30.16b\n"
+            "ldr d17, [%[a0], #10]\n"
+            "and v10.16b, v6.16b, v30.16b\n"
+            "ldr d18, [%[a0], #18]\n"
+            "and v11.16b, v7.16b, v30.16b\n"
+            "ldr d19, [%[a0], #26]\n"
+            "shl v4.16b, v4.16b, #4\n"
+            "ldr d22, [%[a1], #2]\n"
+            "shl v5.16b, v5.16b, #4\n"
+            "ldr d23, [%[a1], #10]\n"
+            "shl v6.16b, v6.16b, #4\n"
+            "ldr d26, [%[a1], #18]\n"
+            "shl v7.16b, v7.16b, #4\n"
+            "ldr d27, [%[a1], #26]\n"
+            // dots: rows alternate, each iacc hit every 4 ops
+            "sdot v12.4s, v4.16b, v16.4b[0]\n"
+            "ldr d3, [%[b]]\n"
+            "sdot v14.4s, v4.16b, v22.4b[0]\n"
+            "ldr h1, [%[a0]]\n"
+            "sdot v13.4s, v8.16b, v18.4b[0]\n"
+            "ldr h0, [%[a1]]\n"
+            "sdot v15.4s, v8.16b, v26.4b[0]\n"
+            "sdot v12.4s, v5.16b, v16.4b[1]\n"
+            "fcvtl v3.4s, v3.4h\n"
+            "sdot v14.4s, v5.16b, v22.4b[1]\n"
+            "fcvt s1, h1\n"
+            "sdot v13.4s, v9.16b, v18.4b[1]\n"
+            "fcvt s0, h0\n"
+            "sdot v15.4s, v9.16b, v26.4b[1]\n"
+            "sdot v12.4s, v6.16b, v17.4b[0]\n"
+            "sdot v14.4s, v6.16b, v23.4b[0]\n"
+            "sdot v13.4s, v10.16b, v19.4b[0]\n"
+            "sdot v15.4s, v10.16b, v27.4b[0]\n"
+            "sdot v12.4s, v7.16b, v17.4b[1]\n"
+            "sdot v14.4s, v7.16b, v23.4b[1]\n"
+            "sdot v13.4s, v11.16b, v19.4b[1]\n"
+            "sdot v15.4s, v11.16b, v27.4b[1]\n"
+            // fixup both rows
+            "add v12.4s, v12.4s, v13.4s\n"
+            "add v14.4s, v14.4s, v15.4s\n"
+            "add %[b], %[b], #72\n"
+            "scvtf v12.4s, v12.4s, #4\n"
+            "scvtf v14.4s, v14.4s, #4\n"
+            "add %[a0], %[a0], #34\n"
+            "fmul v12.4s, v12.4s, v3.4s\n"
+            "fmul v14.4s, v14.4s, v3.4s\n"
+            "add %[a1], %[a1], #34\n"
+            "fmla v20.4s, v12.4s, v1.s[0]\n"
+            "fmla v21.4s, v14.4s, v0.s[0]\n"
+            "movi v12.4s, #0\n"
+            "movi v13.4s, #0\n"
+            "movi v14.4s, #0\n"
+            "movi v15.4s, #0\n"
+            "subs %w[cnt], %w[cnt], #1\n"
+            "b.ne 1b\n"
+            "str q20, [%[s0]]\n"
+            "str q21, [%[s1]]\n"
+            : [b] "+r" (b), [a0] "+r" (a0), [a1] "+r" (a1), [cnt] "+r" (cnt)
+            : [s0] "r" (s0), [s1] "r" (s1)
+            : "v0", "v1", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
+              "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
+              "v20", "v21", "v22", "v23", "v26", "v27", "v30", "cc", "memory");
+    }
+}
+// q8_0 weights variant of the pair tail: same structure, no nibble unpack,
+// weight chunks loaded directly into v4-11.
+extern "C" void ggml_gemv2_q8_0_4x4_q8_0_a55(int n, float * s, size_t bs, const void * vx,
+                                             const void * vy, size_t vy_stride, int nc);
+extern "C" void ggml_gemv2_q8_0_4x4_q8_0_a55(int n, float * s, size_t bs, const void * vx,
+                                             const void * vy, size_t vy_stride, int nc) {
+    const int nb = n / 32;
+    for (int x = 0; x < nc / 4; x++) {
+        const char * b  = (const char *) vx + (size_t) x * nb * 136;
+        const char * a0 = (const char *) vy;
+        const char * a1 = a0 + vy_stride;
+        float * s0 = s + x * 4;
+        float * s1 = s + bs + x * 4;
+        int cnt = nb;
+        __asm__ __volatile__(
+            "movi v20.4s, #0\n movi v21.4s, #0\n"
+            "movi v12.4s, #0\n movi v13.4s, #0\n"
+            "movi v14.4s, #0\n movi v15.4s, #0\n"
+
+            "1:\n"
+            "ldr d16, [%[a0], #2]\n"
+            "ldr d17, [%[a0], #10]\n"
+            "ldr d18, [%[a0], #18]\n"
+            "ldr d19, [%[a0], #26]\n"
+            "ldr d22, [%[a1], #2]\n"
+            "ldr d23, [%[a1], #10]\n"
+            "ldr d26, [%[a1], #18]\n"
+            "ldr d27, [%[a1], #26]\n"
+            "ldr q4,  [%[b], #8]\n"
+            "ldr q5,  [%[b], #24]\n"
+            "ldr q6,  [%[b], #40]\n"
+            "ldr q7,  [%[b], #56]\n"
+            "ldr q8,  [%[b], #72]\n"
+            "ldr q9,  [%[b], #88]\n"
+            "ldr q10, [%[b], #104]\n"
+            "ldr q11, [%[b], #120]\n"
+            "prfm pldl1strm, [%[b], #416]\n"
+            "sdot v12.4s, v4.16b, v16.4b[0]\n"
+            "ldr d3, [%[b]]\n"
+            "sdot v14.4s, v4.16b, v22.4b[0]\n"
+            "ldr h1, [%[a0]]\n"
+            "sdot v13.4s, v8.16b, v18.4b[0]\n"
+            "ldr h0, [%[a1]]\n"
+            "sdot v15.4s, v8.16b, v26.4b[0]\n"
+            "sdot v12.4s, v5.16b, v16.4b[1]\n"
+            "fcvtl v3.4s, v3.4h\n"
+            "sdot v14.4s, v5.16b, v22.4b[1]\n"
+            "fcvt s1, h1\n"
+            "sdot v13.4s, v9.16b, v18.4b[1]\n"
+            "fcvt s0, h0\n"
+            "sdot v15.4s, v9.16b, v26.4b[1]\n"
+            "sdot v12.4s, v6.16b, v17.4b[0]\n"
+            "sdot v14.4s, v6.16b, v23.4b[0]\n"
+            "sdot v13.4s, v10.16b, v19.4b[0]\n"
+            "sdot v15.4s, v10.16b, v27.4b[0]\n"
+            "sdot v12.4s, v7.16b, v17.4b[1]\n"
+            "sdot v14.4s, v7.16b, v23.4b[1]\n"
+            "sdot v13.4s, v11.16b, v19.4b[1]\n"
+            "sdot v15.4s, v11.16b, v27.4b[1]\n"
+            "add v12.4s, v12.4s, v13.4s\n"
+            "add v14.4s, v14.4s, v15.4s\n"
+            "add %[b], %[b], #136\n"
+            "scvtf v12.4s, v12.4s\n"
+            "scvtf v14.4s, v14.4s\n"
+            "add %[a0], %[a0], #34\n"
+            "fmul v12.4s, v12.4s, v3.4s\n"
+            "fmul v14.4s, v14.4s, v3.4s\n"
+            "add %[a1], %[a1], #34\n"
+            "fmla v20.4s, v12.4s, v1.s[0]\n"
+            "fmla v21.4s, v14.4s, v0.s[0]\n"
+            "movi v12.4s, #0\n"
+            "movi v13.4s, #0\n"
+            "movi v14.4s, #0\n"
+            "movi v15.4s, #0\n"
+            "subs %w[cnt], %w[cnt], #1\n"
+            "b.ne 1b\n"
+            "str q20, [%[s0]]\n"
+            "str q21, [%[s1]]\n"
+            : [b] "+r" (b), [a0] "+r" (a0), [a1] "+r" (a1), [cnt] "+r" (cnt)
+            : [s0] "r" (s0), [s1] "r" (s1)
+            : "v0", "v1", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
+              "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
+              "v20", "v21", "v22", "v23", "v26", "v27", "cc", "memory");
+    }
+}
+#endif // aarch64 && NEON && DOTPROD
+
+void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    if ((n / 32) % 2 == 0 && ggml_a55_gemm_enabled()) {
+        ggml_gemv_q4_0_4x4_q8_0_a55(n, s, vx, vy, nc);
+        return;
+    }
+#endif
+    ggml_gemv_q4_0_4x4_q8_0_stock(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemv_q4_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -1823,7 +2148,7 @@ void ggml_gemv_q8_0_4x8_q8_0(int                        n,
     ggml_gemv_q8_0_4x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
 
-void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+static void ggml_gemm_q4_0_4x4_q8_0_stock(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -2302,6 +2627,364 @@ void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     return;
 #endif // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
     ggml_gemm_q4_0_4x4_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+}
+
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+// In-order little-core (Cortex-A55/A53) tuned 12-row tile for q4_0x4 weights.
+//
+// Why: on the A55 a 128-bit ldr q costs ~2.5 cycles and never dual-issues
+// with NEON ops, while a 64-bit ldr d interleaved 1:1 between NEON ops is
+// free (measured). The stock kernel above also restreams the whole weight
+// matrix once per 4 rows when nr < 16 (the streaming-decode case). This tile
+// processes 12 rows (3 q8_0x4 groups) in a single weight pass with all
+// activation loads as paired ldr d halves (sdot reads lanes [0],[1] only).
+//
+// Register map: v0 0xF0 mask, v1/v2 act scales (alternating), v3 weight
+// scales, v4-7 low-nibble weights (<<4), v8-11 high-nibble weights,
+// v12-15 int accumulators, v16-19 rotating activation halves, v20-31 float
+// accumulators. Contraction order matches the stock kernel bit-exactly.
+#define Q4T12_CHUNK(WREG, ALO, AHI, L1, L2)                 \
+        "sdot v12.4s, " WREG ".16b, " ALO ".4b[0]\n"        \
+        "sdot v13.4s, " WREG ".16b, " ALO ".4b[1]\n"        \
+        L1                                                  \
+        "sdot v14.4s, " WREG ".16b, " AHI ".4b[0]\n"        \
+        "sdot v15.4s, " WREG ".16b, " AHI ".4b[1]\n"        \
+        L2
+
+#define Q4T12_GROUP(AP, NXT0, NXT1, NXT2, NXT3, NXT4)                         \
+    Q4T12_CHUNK("v4",  "v16", "v17", "ldr d16, [" AP ", #40]\n",  "ldr d17, [" AP ", #48]\n")  \
+    Q4T12_CHUNK("v5",  "v18", "v19", "ldr d18, [" AP ", #56]\n",  "ldr d19, [" AP ", #64]\n")  \
+    Q4T12_CHUNK("v6",  "v16", "v17", "ldr d16, [" AP ", #72]\n",  "ldr d17, [" AP ", #80]\n")  \
+    Q4T12_CHUNK("v7",  "v18", "v19", "ldr d18, [" AP ", #88]\n",  "ldr d19, [" AP ", #96]\n")  \
+    Q4T12_CHUNK("v8",  "v16", "v17", "ldr d16, [" AP ", #104]\n", "ldr d17, [" AP ", #112]\n") \
+    Q4T12_CHUNK("v9",  "v18", "v19", "ldr d18, [" AP ", #120]\n", "ldr d19, [" AP ", #128]\n") \
+    Q4T12_CHUNK("v10", "v16", "v17", NXT0, NXT1)                              \
+    Q4T12_CHUNK("v11", "v18", "v19", NXT2, NXT3 NXT4)
+
+#define Q4T12_FIXUP(AD, F0, F1, F2, F3, CVT)                \
+        "scvtf v12.4s, v12.4s, #4\n"                        \
+        "scvtf v13.4s, v13.4s, #4\n"                        \
+        "scvtf v14.4s, v14.4s, #4\n"                        \
+        "scvtf v15.4s, v15.4s, #4\n"                        \
+        "fmul v12.4s, v12.4s, v3.4s\n"                      \
+        "fmul v13.4s, v13.4s, v3.4s\n"                      \
+        "fmul v14.4s, v14.4s, v3.4s\n"                      \
+        "fmul v15.4s, v15.4s, v3.4s\n"                      \
+        CVT                                                 \
+        "fmla " F0 ".4s, v12.4s, " AD ".s[0]\n"             \
+        "fmla " F1 ".4s, v13.4s, " AD ".s[1]\n"             \
+        "fmla " F2 ".4s, v14.4s, " AD ".s[2]\n"             \
+        "fmla " F3 ".4s, v15.4s, " AD ".s[3]\n"             \
+        "movi v12.4s, #0\n"                                 \
+        "movi v13.4s, #0\n"                                 \
+        "movi v14.4s, #0\n"                                 \
+        "movi v15.4s, #0\n"
+
+static void ggml_gemm_q4_0_4x4_q8_0_a55_tile12(const void * b, const void * a, int nb,
+                                               float * s, size_t bs_bytes) {
+    const char * a0 = (const char *) a;
+    const char * a1 = a0 + (size_t) nb * 136;   // sizeof(block_q8_0x4)
+    const char * a2 = a1 + (size_t) nb * 136;
+    int cnt = nb;
+    void * stmp;
+    __asm__ __volatile__(
+        "movi v20.4s, #0\n movi v21.4s, #0\n movi v22.4s, #0\n movi v23.4s, #0\n"
+        "movi v24.4s, #0\n movi v25.4s, #0\n movi v26.4s, #0\n movi v27.4s, #0\n"
+        "movi v28.4s, #0\n movi v29.4s, #0\n movi v30.4s, #0\n movi v31.4s, #0\n"
+        "movi v0.16b, #0xF0\n"
+        "movi v12.4s, #0\n movi v13.4s, #0\n movi v14.4s, #0\n movi v15.4s, #0\n"
+        "ldr q4, [%[b], #8]\n"
+        "ldr q5, [%[b], #24]\n"
+        "ldr q6, [%[b], #40]\n"
+        "ldr q7, [%[b], #56]\n"
+        "ldr d3, [%[b]]\n"
+        "ldr d1, [%[a0]]\n"
+        "ldr d16, [%[a0], #8]\n"
+        "ldr d17, [%[a0], #16]\n"
+        "ldr d18, [%[a0], #24]\n"
+        "ldr d19, [%[a0], #32]\n"
+        "fcvtl v3.4s, v3.4h\n"
+
+        "1:\n"
+        "and v8.16b, v4.16b, v0.16b\n"
+        "prfm pldl1keep, [%[b], #216]\n"
+        "and v9.16b, v5.16b, v0.16b\n"
+        "prfm pldl1keep, [%[b], #280]\n"
+        "and v10.16b, v6.16b, v0.16b\n"
+        "and v11.16b, v7.16b, v0.16b\n"
+        "shl v4.16b, v4.16b, #4\n"
+        "shl v5.16b, v5.16b, #4\n"
+        "shl v6.16b, v6.16b, #4\n"
+        "shl v7.16b, v7.16b, #4\n"
+        "fcvtl v2.4s, v1.4h\n"
+
+        Q4T12_GROUP("%[a0]",
+                    "ldr d16, [%[a1], #8]\n", "ldr d17, [%[a1], #16]\n",
+                    "ldr d18, [%[a1], #24]\n", "ldr d19, [%[a1], #32]\n",
+                    "ldr d1, [%[a1]]\n")
+        Q4T12_FIXUP("v2", "v20", "v21", "v22", "v23", "fcvtl v1.4s, v1.4h\n")
+
+        Q4T12_GROUP("%[a1]",
+                    "ldr d16, [%[a2], #8]\n", "ldr d17, [%[a2], #16]\n",
+                    "ldr d18, [%[a2], #24]\n", "ldr d19, [%[a2], #32]\n",
+                    "ldr d2, [%[a2]]\n")
+        Q4T12_FIXUP("v1", "v24", "v25", "v26", "v27", "fcvtl v2.4s, v2.4h\n")
+
+        Q4T12_CHUNK("v4",  "v16", "v17", "ldr d16, [%[a2], #40]\n",  "ldr d17, [%[a2], #48]\n")
+        Q4T12_CHUNK("v5",  "v18", "v19", "ldr d18, [%[a2], #56]\n",  "ldr d19, [%[a2], #64]\n")
+        Q4T12_CHUNK("v6",  "v16", "v17", "ldr d16, [%[a2], #72]\n",  "ldr d17, [%[a2], #80]\n")
+        Q4T12_CHUNK("v7",  "v18", "v19", "ldr d18, [%[a2], #88]\n",  "ldr d19, [%[a2], #96]\n")
+        Q4T12_CHUNK("v8",  "v16", "v17", "ldr d16, [%[a2], #104]\n", "ldr d17, [%[a2], #112]\n")
+        Q4T12_CHUNK("v9",  "v18", "v19", "ldr d18, [%[a2], #120]\n", "ldr d19, [%[a2], #128]\n")
+
+        "subs %w[cnt], %w[cnt], #1\n"
+        "b.eq 2f\n"
+        Q4T12_CHUNK("v10", "v16", "v17", "ldr d16, [%[a0], #144]\n", "ldr d17, [%[a0], #152]\n")
+        Q4T12_CHUNK("v11", "v18", "v19", "ldr d18, [%[a0], #160]\n",
+                    "ldr d19, [%[a0], #168]\n" "ldr d1, [%[a0], #136]\n")
+        "ldr q4, [%[b], #80]\n"
+        "scvtf v12.4s, v12.4s, #4\n"
+        "scvtf v13.4s, v13.4s, #4\n"
+        "ldr q5, [%[b], #96]\n"
+        "scvtf v14.4s, v14.4s, #4\n"
+        "scvtf v15.4s, v15.4s, #4\n"
+        "ldr q6, [%[b], #112]\n"
+        "fmul v12.4s, v12.4s, v3.4s\n"
+        "fmul v13.4s, v13.4s, v3.4s\n"
+        "ldr q7, [%[b], #128]\n"
+        "fmul v14.4s, v14.4s, v3.4s\n"
+        "fmul v15.4s, v15.4s, v3.4s\n"
+        "ldr d3, [%[b], #72]\n"
+        "fmla v28.4s, v12.4s, v2.s[0]\n"
+        "add %[b], %[b], #72\n"
+        "fmla v29.4s, v13.4s, v2.s[1]\n"
+        "add %[a0], %[a0], #136\n"
+        "fmla v30.4s, v14.4s, v2.s[2]\n"
+        "add %[a1], %[a1], #136\n"
+        "fmla v31.4s, v15.4s, v2.s[3]\n"
+        "add %[a2], %[a2], #136\n"
+        "fcvtl v3.4s, v3.4h\n"
+        "movi v12.4s, #0\n"
+        "movi v13.4s, #0\n"
+        "movi v14.4s, #0\n"
+        "movi v15.4s, #0\n"
+        "b 1b\n"
+
+        "2:\n"
+        Q4T12_CHUNK("v10", "v16", "v17", "", "")
+        Q4T12_CHUNK("v11", "v18", "v19", "", "")
+        "scvtf v12.4s, v12.4s, #4\n"
+        "scvtf v13.4s, v13.4s, #4\n"
+        "scvtf v14.4s, v14.4s, #4\n"
+        "scvtf v15.4s, v15.4s, #4\n"
+        "fmul v12.4s, v12.4s, v3.4s\n"
+        "fmul v13.4s, v13.4s, v3.4s\n"
+        "fmul v14.4s, v14.4s, v3.4s\n"
+        "fmul v15.4s, v15.4s, v3.4s\n"
+        "fmla v28.4s, v12.4s, v2.s[0]\n"
+        "fmla v29.4s, v13.4s, v2.s[1]\n"
+        "fmla v30.4s, v14.4s, v2.s[2]\n"
+        "fmla v31.4s, v15.4s, v2.s[3]\n"
+        "mov %[stmp], %[s]\n"
+        "str q20, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q21, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q22, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q23, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q24, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q25, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q26, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q27, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q28, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q29, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q30, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q31, [%[stmp]]\n"
+        : [b] "+r" (b), [a0] "+r" (a0), [a1] "+r" (a1), [a2] "+r" (a2),
+          [cnt] "+r" (cnt), [stmp] "=&r" (stmp)
+        : [s] "r" (s), [bsb] "r" (bs_bytes)
+        : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
+          "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20",
+          "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30",
+          "v31", "cc", "memory");
+}
+
+// 8-row (2 group) variant of the tile above, used for the 5..8-row tail of a
+// matmul so the whole tail costs ONE weight pass instead of the 2-3 passes of
+// the gemm4 + pair + gemv split (the dominant cost at small streaming chunks,
+// e.g. N=7 at --stream-att-right 6). Rows beyond `sr` are zero-padded
+// activation lanes built by forward_mul_mat; their results are computed but
+// not stored. Scale regs: v2 carries group-a0 scales across the loop edge
+// (staged as d2), v1 group-a1 scales (converted in the first fixup).
+#define Q4T8_STORE_ROW(QREG)                                \
+        "add %[stmp], %[stmp], %[bsb]\n"                    \
+        "str " QREG ", [%[stmp]]\n"                         \
+        "subs %w[sr], %w[sr], #1\n"                         \
+        "b.eq 3f\n"
+
+static void ggml_gemm_q4_0_4x4_q8_0_a55_tile8(const void * b, const void * a, int nb,
+                                              float * s, size_t bs_bytes, int sr) {
+    const char * a0 = (const char *) a;
+    const char * a1 = a0 + (size_t) nb * 136;   // sizeof(block_q8_0x4)
+    int cnt = nb;
+    void * stmp;
+    __asm__ __volatile__(
+        "movi v20.4s, #0\n movi v21.4s, #0\n movi v22.4s, #0\n movi v23.4s, #0\n"
+        "movi v24.4s, #0\n movi v25.4s, #0\n movi v26.4s, #0\n movi v27.4s, #0\n"
+        "movi v0.16b, #0xF0\n"
+        "movi v12.4s, #0\n movi v13.4s, #0\n movi v14.4s, #0\n movi v15.4s, #0\n"
+        "ldr q4, [%[b], #8]\n"
+        "ldr q5, [%[b], #24]\n"
+        "ldr q6, [%[b], #40]\n"
+        "ldr q7, [%[b], #56]\n"
+        "ldr d3, [%[b]]\n"
+        "ldr d2, [%[a0]]\n"
+        "ldr d16, [%[a0], #8]\n"
+        "ldr d17, [%[a0], #16]\n"
+        "ldr d18, [%[a0], #24]\n"
+        "ldr d19, [%[a0], #32]\n"
+        "fcvtl v3.4s, v3.4h\n"
+
+        "1:\n"
+        "and v8.16b, v4.16b, v0.16b\n"
+        "prfm pldl1keep, [%[b], #216]\n"
+        "and v9.16b, v5.16b, v0.16b\n"
+        "prfm pldl1keep, [%[b], #280]\n"
+        "and v10.16b, v6.16b, v0.16b\n"
+        "and v11.16b, v7.16b, v0.16b\n"
+        "shl v4.16b, v4.16b, #4\n"
+        "shl v5.16b, v5.16b, #4\n"
+        "shl v6.16b, v6.16b, #4\n"
+        "shl v7.16b, v7.16b, #4\n"
+        "fcvtl v2.4s, v2.4h\n"
+
+        Q4T12_GROUP("%[a0]",
+                    "ldr d16, [%[a1], #8]\n", "ldr d17, [%[a1], #16]\n",
+                    "ldr d18, [%[a1], #24]\n", "ldr d19, [%[a1], #32]\n",
+                    "ldr d1, [%[a1]]\n")
+        Q4T12_FIXUP("v2", "v20", "v21", "v22", "v23", "fcvtl v1.4s, v1.4h\n")
+
+        Q4T12_CHUNK("v4",  "v16", "v17", "ldr d16, [%[a1], #40]\n",  "ldr d17, [%[a1], #48]\n")
+        Q4T12_CHUNK("v5",  "v18", "v19", "ldr d18, [%[a1], #56]\n",  "ldr d19, [%[a1], #64]\n")
+        Q4T12_CHUNK("v6",  "v16", "v17", "ldr d16, [%[a1], #72]\n",  "ldr d17, [%[a1], #80]\n")
+        Q4T12_CHUNK("v7",  "v18", "v19", "ldr d18, [%[a1], #88]\n",  "ldr d19, [%[a1], #96]\n")
+        Q4T12_CHUNK("v8",  "v16", "v17", "ldr d16, [%[a1], #104]\n", "ldr d17, [%[a1], #112]\n")
+        Q4T12_CHUNK("v9",  "v18", "v19", "ldr d18, [%[a1], #120]\n", "ldr d19, [%[a1], #128]\n")
+
+        "subs %w[cnt], %w[cnt], #1\n"
+        "b.eq 2f\n"
+        Q4T12_CHUNK("v10", "v16", "v17", "ldr d16, [%[a0], #144]\n", "ldr d17, [%[a0], #152]\n")
+        Q4T12_CHUNK("v11", "v18", "v19", "ldr d18, [%[a0], #160]\n",
+                    "ldr d19, [%[a0], #168]\n" "ldr d2, [%[a0], #136]\n")
+        "ldr q4, [%[b], #80]\n"
+        "scvtf v12.4s, v12.4s, #4\n"
+        "scvtf v13.4s, v13.4s, #4\n"
+        "ldr q5, [%[b], #96]\n"
+        "scvtf v14.4s, v14.4s, #4\n"
+        "scvtf v15.4s, v15.4s, #4\n"
+        "ldr q6, [%[b], #112]\n"
+        "fmul v12.4s, v12.4s, v3.4s\n"
+        "fmul v13.4s, v13.4s, v3.4s\n"
+        "ldr q7, [%[b], #128]\n"
+        "fmul v14.4s, v14.4s, v3.4s\n"
+        "fmul v15.4s, v15.4s, v3.4s\n"
+        "ldr d3, [%[b], #72]\n"
+        "fmla v24.4s, v12.4s, v1.s[0]\n"
+        "add %[b], %[b], #72\n"
+        "fmla v25.4s, v13.4s, v1.s[1]\n"
+        "add %[a0], %[a0], #136\n"
+        "fmla v26.4s, v14.4s, v1.s[2]\n"
+        "add %[a1], %[a1], #136\n"
+        "fmla v27.4s, v15.4s, v1.s[3]\n"
+        "fcvtl v3.4s, v3.4h\n"
+        "movi v12.4s, #0\n"
+        "movi v13.4s, #0\n"
+        "movi v14.4s, #0\n"
+        "movi v15.4s, #0\n"
+        "b 1b\n"
+
+        "2:\n"
+        Q4T12_CHUNK("v10", "v16", "v17", "", "")
+        Q4T12_CHUNK("v11", "v18", "v19", "", "")
+        "scvtf v12.4s, v12.4s, #4\n"
+        "scvtf v13.4s, v13.4s, #4\n"
+        "scvtf v14.4s, v14.4s, #4\n"
+        "scvtf v15.4s, v15.4s, #4\n"
+        "fmul v12.4s, v12.4s, v3.4s\n"
+        "fmul v13.4s, v13.4s, v3.4s\n"
+        "fmul v14.4s, v14.4s, v3.4s\n"
+        "fmul v15.4s, v15.4s, v3.4s\n"
+        "fmla v24.4s, v12.4s, v1.s[0]\n"
+        "fmla v25.4s, v13.4s, v1.s[1]\n"
+        "fmla v26.4s, v14.4s, v1.s[2]\n"
+        "fmla v27.4s, v15.4s, v1.s[3]\n"
+        "mov %[stmp], %[s]\n"
+        "str q20, [%[stmp]]\n"
+        "subs %w[sr], %w[sr], #1\n"
+        "b.eq 3f\n"
+        Q4T8_STORE_ROW("q21")
+        Q4T8_STORE_ROW("q22")
+        Q4T8_STORE_ROW("q23")
+        Q4T8_STORE_ROW("q24")
+        Q4T8_STORE_ROW("q25")
+        Q4T8_STORE_ROW("q26")
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q27, [%[stmp]]\n"
+        "3:\n"
+        : [b] "+r" (b), [a0] "+r" (a0), [a1] "+r" (a1),
+          [cnt] "+r" (cnt), [stmp] "=&r" (stmp), [sr] "+r" (sr)
+        : [s] "r" (s), [bsb] "r" (bs_bytes)
+        : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
+          "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20",
+          "v21", "v22", "v23", "v24", "v25", "v26", "v27", "cc", "memory");
+}
+
+#endif // aarch64 && NEON && DOTPROD
+
+void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    if (ggml_a55_gemm_enabled()) {
+        const int nb = n / QK8_0;
+        int y = 0;
+        while (nr - y >= 12) {
+            const char * a  = (const char *) vy + (size_t) (y / 4) * nb * 136;
+            float *      sy = s + (size_t) y * bs;
+            for (int x = 0; x < nc / 4; x++) {
+                ggml_gemm_q4_0_4x4_q8_0_a55_tile12(
+                    (const char *) vx + (size_t) x * nb * 72, a, nb,
+                    sy + x * 4, bs * sizeof(float));
+            }
+            y += 12;
+        }
+        const int r = nr - y;
+        if (r >= 5) {   // 5-8 row tail in one weight pass (rows 5-7 zero-padded
+                        // into a second q8_0x4 group by forward_mul_mat)
+            const char * a  = (const char *) vy + (size_t) (y / 4) * nb * 136;
+            float *      sy = s + (size_t) y * bs;
+            for (int x = 0; x < nc / 4; x++) {
+                ggml_gemm_q4_0_4x4_q8_0_a55_tile8(
+                    (const char *) vx + (size_t) x * nb * 72, a, nb,
+                    sy + x * 4, bs * sizeof(float), r);
+            }
+        } else if (r > 0) {   // 4 leftover rows: stock tail loop (bit-exact)
+            GGML_ASSERT(r == 4);  // 1-3 row tails never reach gemm
+            ggml_gemm_q4_0_4x4_q8_0_stock(n, s + (size_t) y * bs, bs, vx,
+                                          (const char *) vy + (size_t) (y / 4) * nb * 136,
+                                          r, nc);
+        }
+        return;
+    }
+#endif
+    ggml_gemm_q4_0_4x4_q8_0_stock(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemm_q4_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -4935,13 +5618,9 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
     ggml_gemm_q6_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
-void ggml_gemm_q8_0_4x4_q8_0(int                        n,
-                             float * GGML_RESTRICT      s,
-                             size_t                     bs,
-                             const void * GGML_RESTRICT vx,
-                             const void * GGML_RESTRICT vy,
-                             int                        nr,
-                             int                        nc) {
+static void ggml_gemm_q8_0_4x4_q8_0_stock(int n, float * GGML_RESTRICT s, size_t bs,
+                                          const void * GGML_RESTRICT vx,
+                                          const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk                = QK8_0;
     const int nb                = n / qk;
     const int ncols_interleaved = 4;
@@ -5001,6 +5680,329 @@ void ggml_gemm_q8_0_4x4_q8_0(int                        n,
     return;
 #endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     ggml_gemm_q8_0_4x4_q8_0_generic(n, s, bs, vx, vy, nr, nc);
+}
+
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+// A55-tuned 12-row q8_0x4 tile. Same structure and load discipline as the
+// q4_0 tile above (see Q4T12_* macros: act loads as paired ldr d, single
+// weight pass for 3 row groups), minus the nibble unpack: the 8 weight
+// chunk regs v4-11 are loaded directly (8 ldr q in the guarded tail).
+// Fixup uses plain scvtf (weights are not x16). v0 unused, v1/v2 act
+// scales, v3 weight scales.
+#define Q8T12_FIXUP(AD, F0, F1, F2, F3, CVT)                \
+        "scvtf v12.4s, v12.4s\n"                            \
+        "scvtf v13.4s, v13.4s\n"                            \
+        "scvtf v14.4s, v14.4s\n"                            \
+        "scvtf v15.4s, v15.4s\n"                            \
+        "fmul v12.4s, v12.4s, v3.4s\n"                      \
+        "fmul v13.4s, v13.4s, v3.4s\n"                      \
+        "fmul v14.4s, v14.4s, v3.4s\n"                      \
+        "fmul v15.4s, v15.4s, v3.4s\n"                      \
+        CVT                                                 \
+        "fmla " F0 ".4s, v12.4s, " AD ".s[0]\n"             \
+        "fmla " F1 ".4s, v13.4s, " AD ".s[1]\n"             \
+        "fmla " F2 ".4s, v14.4s, " AD ".s[2]\n"             \
+        "fmla " F3 ".4s, v15.4s, " AD ".s[3]\n"             \
+        "movi v12.4s, #0\n"                                 \
+        "movi v13.4s, #0\n"                                 \
+        "movi v14.4s, #0\n"                                 \
+        "movi v15.4s, #0\n"
+
+static void ggml_gemm_q8_0_4x4_q8_0_a55_tile12(const void * b, const void * a, int nb,
+                                               float * s, size_t bs_bytes) {
+    const char * a0 = (const char *) a;
+    const char * a1 = a0 + (size_t) nb * 136;
+    const char * a2 = a1 + (size_t) nb * 136;
+    int cnt = nb;
+    void * stmp;
+    __asm__ __volatile__(
+        "movi v20.4s, #0\n movi v21.4s, #0\n movi v22.4s, #0\n movi v23.4s, #0\n"
+        "movi v24.4s, #0\n movi v25.4s, #0\n movi v26.4s, #0\n movi v27.4s, #0\n"
+        "movi v28.4s, #0\n movi v29.4s, #0\n movi v30.4s, #0\n movi v31.4s, #0\n"
+        "movi v12.4s, #0\n movi v13.4s, #0\n movi v14.4s, #0\n movi v15.4s, #0\n"
+        "ldr q4,  [%[b], #8]\n"
+        "ldr q5,  [%[b], #24]\n"
+        "ldr q6,  [%[b], #40]\n"
+        "ldr q7,  [%[b], #56]\n"
+        "ldr q8,  [%[b], #72]\n"
+        "ldr q9,  [%[b], #88]\n"
+        "ldr q10, [%[b], #104]\n"
+        "ldr q11, [%[b], #120]\n"
+        "ldr d3, [%[b]]\n"
+        "ldr d1, [%[a0]]\n"
+        "ldr d16, [%[a0], #8]\n"
+        "ldr d17, [%[a0], #16]\n"
+        "ldr d18, [%[a0], #24]\n"
+        "ldr d19, [%[a0], #32]\n"
+        "fcvtl v3.4s, v3.4h\n"
+
+        "1:\n"
+        "prfm pldl1keep, [%[b], #280]\n"
+        "prfm pldl1keep, [%[b], #344]\n"
+        "fcvtl v2.4s, v1.4h\n"
+
+        Q4T12_GROUP("%[a0]",
+                    "ldr d16, [%[a1], #8]\n", "ldr d17, [%[a1], #16]\n",
+                    "ldr d18, [%[a1], #24]\n", "ldr d19, [%[a1], #32]\n",
+                    "ldr d1, [%[a1]]\n")
+        Q8T12_FIXUP("v2", "v20", "v21", "v22", "v23", "fcvtl v1.4s, v1.4h\n")
+
+        Q4T12_GROUP("%[a1]",
+                    "ldr d16, [%[a2], #8]\n", "ldr d17, [%[a2], #16]\n",
+                    "ldr d18, [%[a2], #24]\n", "ldr d19, [%[a2], #32]\n",
+                    "ldr d2, [%[a2]]\n")
+        Q8T12_FIXUP("v1", "v24", "v25", "v26", "v27", "fcvtl v2.4s, v2.4h\n")
+
+        Q4T12_CHUNK("v4",  "v16", "v17", "ldr d16, [%[a2], #40]\n",  "ldr d17, [%[a2], #48]\n")
+        Q4T12_CHUNK("v5",  "v18", "v19", "ldr d18, [%[a2], #56]\n",  "ldr d19, [%[a2], #64]\n")
+        Q4T12_CHUNK("v6",  "v16", "v17", "ldr d16, [%[a2], #72]\n",  "ldr d17, [%[a2], #80]\n")
+        Q4T12_CHUNK("v7",  "v18", "v19", "ldr d18, [%[a2], #88]\n",  "ldr d19, [%[a2], #96]\n")
+        Q4T12_CHUNK("v8",  "v16", "v17", "ldr d16, [%[a2], #104]\n", "ldr d17, [%[a2], #112]\n")
+        Q4T12_CHUNK("v9",  "v18", "v19", "ldr d18, [%[a2], #120]\n", "ldr d19, [%[a2], #128]\n")
+
+        "subs %w[cnt], %w[cnt], #1\n"
+        "b.eq 2f\n"
+        Q4T12_CHUNK("v10", "v16", "v17", "ldr d16, [%[a0], #144]\n", "ldr d17, [%[a0], #152]\n")
+        Q4T12_CHUNK("v11", "v18", "v19", "ldr d18, [%[a0], #160]\n",
+                    "ldr d19, [%[a0], #168]\n" "ldr d1, [%[a0], #136]\n")
+        // weights for next block + g3 fixup
+        "ldr q4, [%[b], #144]\n"
+        "scvtf v12.4s, v12.4s\n"
+        "scvtf v13.4s, v13.4s\n"
+        "ldr q5, [%[b], #160]\n"
+        "scvtf v14.4s, v14.4s\n"
+        "scvtf v15.4s, v15.4s\n"
+        "ldr q6, [%[b], #176]\n"
+        "fmul v12.4s, v12.4s, v3.4s\n"
+        "fmul v13.4s, v13.4s, v3.4s\n"
+        "ldr q7, [%[b], #192]\n"
+        "fmul v14.4s, v14.4s, v3.4s\n"
+        "fmul v15.4s, v15.4s, v3.4s\n"
+        "ldr q8, [%[b], #208]\n"
+        "fmla v28.4s, v12.4s, v2.s[0]\n"
+        "fmla v29.4s, v13.4s, v2.s[1]\n"
+        "ldr q9, [%[b], #224]\n"
+        "fmla v30.4s, v14.4s, v2.s[2]\n"
+        "fmla v31.4s, v15.4s, v2.s[3]\n"
+        "ldr q10, [%[b], #240]\n"
+        "movi v12.4s, #0\n"
+        "movi v13.4s, #0\n"
+        "ldr q11, [%[b], #256]\n"
+        "movi v14.4s, #0\n"
+        "movi v15.4s, #0\n"
+        "ldr d3, [%[b], #136]\n"
+        "add %[b], %[b], #136\n"
+        "add %[a0], %[a0], #136\n"
+        "add %[a1], %[a1], #136\n"
+        "add %[a2], %[a2], #136\n"
+        "fcvtl v3.4s, v3.4h\n"
+        "b 1b\n"
+
+        "2:\n"
+        Q4T12_CHUNK("v10", "v16", "v17", "", "")
+        Q4T12_CHUNK("v11", "v18", "v19", "", "")
+        "scvtf v12.4s, v12.4s\n"
+        "scvtf v13.4s, v13.4s\n"
+        "scvtf v14.4s, v14.4s\n"
+        "scvtf v15.4s, v15.4s\n"
+        "fmul v12.4s, v12.4s, v3.4s\n"
+        "fmul v13.4s, v13.4s, v3.4s\n"
+        "fmul v14.4s, v14.4s, v3.4s\n"
+        "fmul v15.4s, v15.4s, v3.4s\n"
+        "fmla v28.4s, v12.4s, v2.s[0]\n"
+        "fmla v29.4s, v13.4s, v2.s[1]\n"
+        "fmla v30.4s, v14.4s, v2.s[2]\n"
+        "fmla v31.4s, v15.4s, v2.s[3]\n"
+        "mov %[stmp], %[s]\n"
+        "str q20, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q21, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q22, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q23, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q24, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q25, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q26, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q27, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q28, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q29, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q30, [%[stmp]]\n"
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q31, [%[stmp]]\n"
+        : [b] "+r" (b), [a0] "+r" (a0), [a1] "+r" (a1), [a2] "+r" (a2),
+          [cnt] "+r" (cnt), [stmp] "=&r" (stmp)
+        : [s] "r" (s), [bsb] "r" (bs_bytes)
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
+          "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20",
+          "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30",
+          "v31", "cc", "memory");
+}
+
+// 8-row q8_0x4 tail tile; see the q4_0 tile8 above for the role and the
+// zero-padding contract. Same scale-reg discipline (v2 staged across the
+// loop edge as d2, v1 converted in the first fixup).
+static void ggml_gemm_q8_0_4x4_q8_0_a55_tile8(const void * b, const void * a, int nb,
+                                              float * s, size_t bs_bytes, int sr) {
+    const char * a0 = (const char *) a;
+    const char * a1 = a0 + (size_t) nb * 136;
+    int cnt = nb;
+    void * stmp;
+    __asm__ __volatile__(
+        "movi v20.4s, #0\n movi v21.4s, #0\n movi v22.4s, #0\n movi v23.4s, #0\n"
+        "movi v24.4s, #0\n movi v25.4s, #0\n movi v26.4s, #0\n movi v27.4s, #0\n"
+        "movi v12.4s, #0\n movi v13.4s, #0\n movi v14.4s, #0\n movi v15.4s, #0\n"
+        "ldr q4,  [%[b], #8]\n"
+        "ldr q5,  [%[b], #24]\n"
+        "ldr q6,  [%[b], #40]\n"
+        "ldr q7,  [%[b], #56]\n"
+        "ldr q8,  [%[b], #72]\n"
+        "ldr q9,  [%[b], #88]\n"
+        "ldr q10, [%[b], #104]\n"
+        "ldr q11, [%[b], #120]\n"
+        "ldr d3, [%[b]]\n"
+        "ldr d2, [%[a0]]\n"
+        "ldr d16, [%[a0], #8]\n"
+        "ldr d17, [%[a0], #16]\n"
+        "ldr d18, [%[a0], #24]\n"
+        "ldr d19, [%[a0], #32]\n"
+        "fcvtl v3.4s, v3.4h\n"
+
+        "1:\n"
+        "prfm pldl1keep, [%[b], #280]\n"
+        "prfm pldl1keep, [%[b], #344]\n"
+        "fcvtl v2.4s, v2.4h\n"
+
+        Q4T12_GROUP("%[a0]",
+                    "ldr d16, [%[a1], #8]\n", "ldr d17, [%[a1], #16]\n",
+                    "ldr d18, [%[a1], #24]\n", "ldr d19, [%[a1], #32]\n",
+                    "ldr d1, [%[a1]]\n")
+        Q8T12_FIXUP("v2", "v20", "v21", "v22", "v23", "fcvtl v1.4s, v1.4h\n")
+
+        Q4T12_CHUNK("v4",  "v16", "v17", "ldr d16, [%[a1], #40]\n",  "ldr d17, [%[a1], #48]\n")
+        Q4T12_CHUNK("v5",  "v18", "v19", "ldr d18, [%[a1], #56]\n",  "ldr d19, [%[a1], #64]\n")
+        Q4T12_CHUNK("v6",  "v16", "v17", "ldr d16, [%[a1], #72]\n",  "ldr d17, [%[a1], #80]\n")
+        Q4T12_CHUNK("v7",  "v18", "v19", "ldr d18, [%[a1], #88]\n",  "ldr d19, [%[a1], #96]\n")
+        Q4T12_CHUNK("v8",  "v16", "v17", "ldr d16, [%[a1], #104]\n", "ldr d17, [%[a1], #112]\n")
+        Q4T12_CHUNK("v9",  "v18", "v19", "ldr d18, [%[a1], #120]\n", "ldr d19, [%[a1], #128]\n")
+
+        "subs %w[cnt], %w[cnt], #1\n"
+        "b.eq 2f\n"
+        Q4T12_CHUNK("v10", "v16", "v17", "ldr d16, [%[a0], #144]\n", "ldr d17, [%[a0], #152]\n")
+        Q4T12_CHUNK("v11", "v18", "v19", "ldr d18, [%[a0], #160]\n",
+                    "ldr d19, [%[a0], #168]\n" "ldr d2, [%[a0], #136]\n")
+        // weights for next block + group-a1 fixup
+        "ldr q4, [%[b], #144]\n"
+        "scvtf v12.4s, v12.4s\n"
+        "scvtf v13.4s, v13.4s\n"
+        "ldr q5, [%[b], #160]\n"
+        "scvtf v14.4s, v14.4s\n"
+        "scvtf v15.4s, v15.4s\n"
+        "ldr q6, [%[b], #176]\n"
+        "fmul v12.4s, v12.4s, v3.4s\n"
+        "fmul v13.4s, v13.4s, v3.4s\n"
+        "ldr q7, [%[b], #192]\n"
+        "fmul v14.4s, v14.4s, v3.4s\n"
+        "fmul v15.4s, v15.4s, v3.4s\n"
+        "ldr q8, [%[b], #208]\n"
+        "fmla v24.4s, v12.4s, v1.s[0]\n"
+        "fmla v25.4s, v13.4s, v1.s[1]\n"
+        "ldr q9, [%[b], #224]\n"
+        "fmla v26.4s, v14.4s, v1.s[2]\n"
+        "fmla v27.4s, v15.4s, v1.s[3]\n"
+        "ldr q10, [%[b], #240]\n"
+        "movi v12.4s, #0\n"
+        "movi v13.4s, #0\n"
+        "ldr q11, [%[b], #256]\n"
+        "movi v14.4s, #0\n"
+        "movi v15.4s, #0\n"
+        "ldr d3, [%[b], #136]\n"
+        "add %[b], %[b], #136\n"
+        "add %[a0], %[a0], #136\n"
+        "add %[a1], %[a1], #136\n"
+        "fcvtl v3.4s, v3.4h\n"
+        "b 1b\n"
+
+        "2:\n"
+        Q4T12_CHUNK("v10", "v16", "v17", "", "")
+        Q4T12_CHUNK("v11", "v18", "v19", "", "")
+        "scvtf v12.4s, v12.4s\n"
+        "scvtf v13.4s, v13.4s\n"
+        "scvtf v14.4s, v14.4s\n"
+        "scvtf v15.4s, v15.4s\n"
+        "fmul v12.4s, v12.4s, v3.4s\n"
+        "fmul v13.4s, v13.4s, v3.4s\n"
+        "fmul v14.4s, v14.4s, v3.4s\n"
+        "fmul v15.4s, v15.4s, v3.4s\n"
+        "fmla v24.4s, v12.4s, v1.s[0]\n"
+        "fmla v25.4s, v13.4s, v1.s[1]\n"
+        "fmla v26.4s, v14.4s, v1.s[2]\n"
+        "fmla v27.4s, v15.4s, v1.s[3]\n"
+        "mov %[stmp], %[s]\n"
+        "str q20, [%[stmp]]\n"
+        "subs %w[sr], %w[sr], #1\n"
+        "b.eq 3f\n"
+        Q4T8_STORE_ROW("q21")
+        Q4T8_STORE_ROW("q22")
+        Q4T8_STORE_ROW("q23")
+        Q4T8_STORE_ROW("q24")
+        Q4T8_STORE_ROW("q25")
+        Q4T8_STORE_ROW("q26")
+        "add %[stmp], %[stmp], %[bsb]\n"
+        "str q27, [%[stmp]]\n"
+        "3:\n"
+        : [b] "+r" (b), [a0] "+r" (a0), [a1] "+r" (a1),
+          [cnt] "+r" (cnt), [stmp] "=&r" (stmp), [sr] "+r" (sr)
+        : [s] "r" (s), [bsb] "r" (bs_bytes)
+        : "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10",
+          "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20",
+          "v21", "v22", "v23", "v24", "v25", "v26", "v27", "cc", "memory");
+}
+#endif // aarch64 && NEON && DOTPROD
+
+void ggml_gemm_q8_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy, int nr, int nc) {
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    if (ggml_a55_gemm_enabled()) {
+        const int nb = n / QK8_0;
+        int y = 0;
+        while (nr - y >= 12) {
+            const char * a  = (const char *) vy + (size_t) (y / 4) * nb * 136;
+            float *      sy = s + (size_t) y * bs;
+            for (int x = 0; x < nc / 4; x++) {
+                ggml_gemm_q8_0_4x4_q8_0_a55_tile12(
+                    (const char *) vx + (size_t) x * nb * 136, a, nb,
+                    sy + x * 4, bs * sizeof(float));
+            }
+            y += 12;
+        }
+        const int r = nr - y;
+        if (r >= 5) {   // 5-8 row tail in one weight pass (see q4_0 dispatcher)
+            const char * a  = (const char *) vy + (size_t) (y / 4) * nb * 136;
+            float *      sy = s + (size_t) y * bs;
+            for (int x = 0; x < nc / 4; x++) {
+                ggml_gemm_q8_0_4x4_q8_0_a55_tile8(
+                    (const char *) vx + (size_t) x * nb * 136, a, nb,
+                    sy + x * 4, bs * sizeof(float), r);
+            }
+        } else if (r > 0) {
+            GGML_ASSERT(r == 4);  // 1-3 row tails never reach gemm
+            ggml_gemm_q8_0_4x4_q8_0_stock(n, s + (size_t) y * bs, bs, vx,
+                                          (const char *) vy + (size_t) (y / 4) * nb * 136,
+                                          r, nc);
+        }
+        return;
+    }
+#endif
+    ggml_gemm_q8_0_4x4_q8_0_stock(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemm_q8_0_4x8_q8_0(int                        n,

@@ -13,12 +13,17 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "gguf.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <ios>
+#include <map>
+#include <utility>
 #include <vector>
 
 namespace transcribe::load_common {
@@ -107,6 +112,187 @@ ggml_backend_t init_cpu_backend(const char * error_tag) {
 }
 
 } // namespace
+
+// Locate the CPU backend's repack buffer type ("CPU_REPACK") through
+// the public extra-buffer-types registry hook. Returns nullptr when the
+// build carries no repack support (GGML_CPU_REPACK=OFF) or the device
+// exposes no extra buffer types — callers then fall back to the default
+// layout. Going through the registry rather than the internal
+// ggml_backend_cpu_repack_buffer_type() symbol also guarantees the
+// compute path will actually consult the repacked tensor traits: ggml's
+// CPU backend only dispatches extra-buffer kernels for buffer types it
+// itself registered.
+ggml_backend_buffer_type_t find_cpu_repack_buft(ggml_backend_t cpu_backend) {
+    ggml_backend_dev_t dev = ggml_backend_get_device(cpu_backend);
+    if (dev == nullptr) return nullptr;
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (reg == nullptr) return nullptr;
+    auto get_extra = reinterpret_cast<ggml_backend_dev_get_extra_bufts_t>(
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_extra_bufts"));
+    if (get_extra == nullptr) return nullptr;
+    ggml_backend_buffer_type_t * it = get_extra(dev);
+    for (; it != nullptr && *it != nullptr; ++it) {
+        const char * name = ggml_backend_buft_name(*it);
+        if (name != nullptr && std::strcmp(name, "CPU_REPACK") == 0) {
+            return *it;
+        }
+    }
+    return nullptr;
+}
+
+// The repack buffer can only hold tensors the runtime selects an
+// interleaved kernel for — a function of dtype, ne[1] divisibility, and
+// CPU features — and its set_tensor hard-asserts on anything else.
+// Rather than replicate ggml's (version-dependent) selection table,
+// probe with a throwaway one-block tensor of the same dtype and ne[1]
+// divisibility class: init_tensor leaves `extra` null exactly when no
+// kernel was selected.
+bool probe_repack_support(ggml_backend_buffer_type_t buft,
+                          ggml_type                  type,
+                          int64_t                    ne1)
+{
+    const int64_t probe_ne1 =
+        (ne1 % 16 == 0) ? 16 :
+        (ne1 %  8 == 0) ?  8 :
+        (ne1 %  4 == 0) ?  4 : 3;
+
+    ggml_init_params ip = {2 * ggml_tensor_overhead(), nullptr, true};
+    ggml_context * ctx = ggml_init(ip);
+    if (ctx == nullptr) return false;
+    ggml_tensor * probe =
+        ggml_new_tensor_2d(ctx, type, ggml_blck_size(type), probe_ne1);
+    if (probe == nullptr) { ggml_free(ctx); return false; }
+
+    ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(
+        buft,
+        ggml_backend_buft_get_alloc_size(buft, probe) +
+            ggml_backend_buft_get_alignment(buft));
+    if (buf == nullptr) { ggml_free(ctx); return false; }
+
+    ggml_tallocr ta = ggml_tallocr_new(buf);
+    const bool ok =
+        ggml_tallocr_alloc(&ta, probe) == GGML_STATUS_SUCCESS &&
+        probe->extra != nullptr;
+
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx);
+    return ok;
+}
+
+transcribe_status alloc_weights_cpu_repack(
+    ggml_context *          ctx_meta,
+    const BackendPlan &     plan,
+    bool                  (*is_repack_candidate)(const ggml_tensor *),
+    const char *            error_tag,
+    ggml_backend_buffer_t * out_main,
+    ggml_backend_buffer_t * out_repack)
+{
+    *out_main   = nullptr;
+    *out_repack = nullptr;
+
+    const char * env      = std::getenv("TRANSCRIBE_NO_REPACK");
+    const bool   disabled = env != nullptr && env[0] != '\0' && env[0] != '0';
+
+    ggml_backend_buffer_type_t buft = nullptr;
+    if (!disabled &&
+        plan.primary_kind == BackendKind::Cpu &&
+        plan.primary != nullptr &&
+        is_repack_candidate != nullptr)
+    {
+        buft = find_cpu_repack_buft(plan.primary);
+    }
+
+    if (buft != nullptr) {
+        // Pass 1: the candidates the runtime can actually repack. The
+        // probe result depends only on (dtype, ne[1] divisibility), so
+        // it is memoized per class.
+        std::vector<ggml_tensor *> selected;
+        size_t       total = 0;
+        const size_t align = ggml_backend_buft_get_alignment(buft);
+        std::map<std::pair<int, int64_t>, bool> probe_cache;
+
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta);
+             t != nullptr;
+             t = ggml_get_next_tensor(ctx_meta, t))
+        {
+            if (t->data != nullptr || t->view_src != nullptr) continue;
+            if (ggml_n_dims(t) != 2)                          continue;
+            if (!ggml_is_quantized(t->type))                  continue;
+            if (!is_repack_candidate(t))                      continue;
+
+            const int64_t cls = (t->ne[1] % 16 == 0) ? 16
+                              : (t->ne[1] %  8 == 0) ?  8
+                              : (t->ne[1] %  4 == 0) ?  4 : 3;
+            const auto key = std::make_pair(static_cast<int>(t->type), cls);
+            auto it = probe_cache.find(key);
+            if (it == probe_cache.end()) {
+                it = probe_cache
+                         .emplace(key, probe_repack_support(buft, t->type, t->ne[1]))
+                         .first;
+            }
+            if (!it->second) continue;
+
+            selected.push_back(t);
+            total += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), align);
+        }
+
+        if (!selected.empty()) {
+            ggml_backend_buffer_t rbuf =
+                ggml_backend_buft_alloc_buffer(buft, total);
+            if (rbuf == nullptr) {
+                // Not fatal: the candidates simply fall through to the
+                // default buffer below.
+                std::fprintf(stderr,
+                    "%s: repack buffer alloc failed (%zu bytes) — "
+                    "using default weight layout\n", error_tag, total);
+            } else {
+                ggml_tallocr ta = ggml_tallocr_new(rbuf);
+                bool ok = true;
+                for (ggml_tensor * t : selected) {
+                    if (ggml_tallocr_alloc(&ta, t) != GGML_STATUS_SUCCESS ||
+                        t->extra == nullptr)
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) {
+                    // Some tensors are already bound to rbuf; the model
+                    // is not salvageable mid-allocation. The caller
+                    // discards all load state on error.
+                    ggml_backend_buffer_free(rbuf);
+                    std::fprintf(stderr,
+                        "%s: repack tensor allocation failed\n", error_tag);
+                    return TRANSCRIBE_ERR_BACKEND;
+                }
+                ggml_backend_buffer_set_usage(
+                    rbuf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                *out_repack = rbuf;
+                std::fprintf(stderr,
+                    "%s: %zu weight tensors (%.1f MB) in CPU repack layout\n",
+                    error_tag, selected.size(),
+                    static_cast<double>(total) / (1024.0 * 1024.0));
+            }
+        }
+    }
+
+    // Everything not claimed above (or everything, on the fallback
+    // paths) lands in the primary backend's default buffer type.
+    ggml_backend_buffer_t main_buf =
+        ggml_backend_alloc_ctx_tensors(ctx_meta, plan.primary);
+    if (main_buf == nullptr) {
+        if (*out_repack != nullptr) {
+            ggml_backend_buffer_free(*out_repack);
+            *out_repack = nullptr;
+        }
+        std::fprintf(stderr,
+            "%s: ggml_backend_alloc_ctx_tensors failed\n", error_tag);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    ggml_backend_buffer_set_usage(main_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    *out_main = main_buf;
+    return TRANSCRIBE_OK;
+}
 
 transcribe_status init_backends(transcribe_backend_request requested,
                                 const char *               error_tag,
@@ -315,6 +501,23 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
 
     if (slots.empty()) return TRANSCRIBE_OK;
 
+    // The promotion exists for CPUs whose F16 matmul path has to
+    // upconvert scalar-wise (Zen 2 class). On CPUs with native fp16
+    // vector arithmetic the F16 path is the faster one — measured on
+    // Cortex-A55 at conformer pointwise shapes: F16 5.6 GFLOPS vs
+    // promoted-F32 2.25 GFLOPS — so promoting there is a pessimization.
+    // TRANSCRIBE_CONV_PW_F32=1 forces the old behavior for A/B testing.
+    const char * force_f32 = std::getenv("TRANSCRIBE_CONV_PW_F32");
+    const bool   forced    = force_f32 != nullptr &&
+                             force_f32[0] != '\0' && force_f32[0] != '0';
+    if (!forced && ggml_cpu_has_fp16_va()) {
+        std::fprintf(stderr,
+            "%s: keeping %zu conv pointwise weights in F16 "
+            "(CPU has native fp16 vector arithmetic)\n",
+            error_tag, slots.size());
+        return TRANSCRIBE_OK;
+    }
+
     // New ctx sized for exactly the replacement tensors plus a small
     // slack. no_alloc=true — ggml_backend_alloc_ctx_tensors will
     // allocate the storage buffer separately below.
@@ -389,6 +592,169 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
     std::fprintf(stderr,
         "%s: promoted %zu conv pointwise weights from F16 → F32 "
         "for CPU backend\n", error_tag, slots.size());
+    return TRANSCRIBE_OK;
+}
+
+transcribe_status quantize_conv_pw_to_repack_on_cpu(
+    const BackendPlan &                plan,
+    const std::vector<ConvPwF32Slot> & slots,
+    const char *                       error_tag,
+    ggml_context **                    out_ctx,
+    ggml_backend_buffer_t *            out_buffer)
+{
+    if (plan.primary_kind != BackendKind::Cpu) return TRANSCRIBE_OK;
+    if (plan.primary == nullptr)               return TRANSCRIBE_OK;
+    if (slots.empty())                         return TRANSCRIBE_OK;
+
+    // Same kill switch as the weight routing in
+    // alloc_weights_cpu_repack: TRANSCRIBE_NO_REPACK disables every
+    // repack-layout transform at once.
+    {
+        const char * nr = std::getenv("TRANSCRIBE_NO_REPACK");
+        if (nr != nullptr && nr[0] != '\0' && nr[0] != '0') {
+            return TRANSCRIBE_OK;
+        }
+    }
+
+    ggml_type qtype = GGML_TYPE_Q8_0;
+    {
+        const char * env = std::getenv("TRANSCRIBE_CONV_PW_QUANT");
+        if (env != nullptr) {
+            if (std::strcmp(env, "0") == 0 || std::strcmp(env, "off") == 0) {
+                return TRANSCRIBE_OK;
+            } else if (std::strcmp(env, "q4_0") == 0) {
+                qtype = GGML_TYPE_Q4_0;
+            } else if (std::strcmp(env, "q8_0") == 0) {
+                qtype = GGML_TYPE_Q8_0;
+            } else {
+                std::fprintf(stderr,
+                    "%s: unknown TRANSCRIBE_CONV_PW_QUANT=\"%s\" "
+                    "(want q4_0 | q8_0 | off) — using q8_0\n",
+                    error_tag, env);
+            }
+        }
+    }
+
+    ggml_backend_buffer_type_t buft = find_cpu_repack_buft(plan.primary);
+    if (buft == nullptr) return TRANSCRIBE_OK;
+
+    // Validate every slot is an F16 1x1 conv kernel whose 2-D matmul
+    // view [K, N] quantizes and repacks cleanly. Any mismatch makes
+    // the whole transform a no-op — half-transformed weight sets would
+    // be harder to reason about than either pure state.
+    const int64_t qblck = ggml_blck_size(qtype);
+    for (const auto & s : slots) {
+        const ggml_tensor * t = s.src;
+        if (t->type != GGML_TYPE_F16)             return TRANSCRIBE_OK;
+        if (t->ne[0] != 1 || t->ne[3] != 1)       return TRANSCRIBE_OK;
+        if (t->ne[1] % qblck != 0)                return TRANSCRIBE_OK;
+        if (!probe_repack_support(buft, qtype, t->ne[2])) {
+            return TRANSCRIBE_OK;
+        }
+    }
+
+    const auto * f16_traits = ggml_get_type_traits(GGML_TYPE_F16);
+    if (f16_traits == nullptr || f16_traits->to_float == nullptr) {
+        return TRANSCRIBE_OK;
+    }
+
+    const size_t ctx_size = slots.size() * ggml_tensor_overhead() + 256;
+    ggml_init_params params = {ctx_size, nullptr, true};
+    ggml_context * ctx = ggml_init(params);
+    if (ctx == nullptr) return TRANSCRIBE_ERR_BACKEND;
+
+    // 2-D [K, N] replacements. The F16 source bytes for ne=[1, K, N]
+    // are laid out exactly as the row-major [K, N] matmul operand, so
+    // the only data transform is the quantization itself.
+    std::vector<ggml_tensor *> replacements;
+    replacements.reserve(slots.size());
+    size_t       total = 0;
+    const size_t align = ggml_backend_buft_get_alignment(buft);
+    for (const auto & s : slots) {
+        ggml_tensor * r = ggml_new_tensor_2d(
+            ctx, qtype, s.src->ne[1], s.src->ne[2]);
+        if (r == nullptr) {
+            ggml_free(ctx);
+            return TRANSCRIBE_ERR_BACKEND;
+        }
+        ggml_set_name(r, s.src->name);
+        replacements.push_back(r);
+        total += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, r), align);
+    }
+
+    ggml_backend_buffer_t buffer =
+        ggml_backend_buft_alloc_buffer(buft, total);
+    if (buffer == nullptr) {
+        std::fprintf(stderr,
+            "%s: conv_pw repack buffer alloc failed (%zu bytes)\n",
+            error_tag, total);
+        ggml_free(ctx);
+        return TRANSCRIBE_OK; // non-fatal: keep the F16 path
+    }
+    ggml_tallocr ta = ggml_tallocr_new(buffer);
+    for (ggml_tensor * r : replacements) {
+        if (ggml_tallocr_alloc(&ta, r) != GGML_STATUS_SUCCESS ||
+            r->extra == nullptr)
+        {
+            std::fprintf(stderr,
+                "%s: conv_pw repack tensor alloc failed\n", error_tag);
+            ggml_backend_buffer_free(buffer);
+            ggml_free(ctx);
+            return TRANSCRIBE_OK; // non-fatal: keep the F16 path
+        }
+    }
+    ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    std::vector<uint8_t> f16_staging;
+    std::vector<float>   f32_staging;
+    std::vector<uint8_t> q_staging;
+    for (size_t i = 0; i < slots.size(); ++i) {
+        ggml_tensor * src = slots[i].src;
+        ggml_tensor * dst = replacements[i];
+        const int64_t K       = src->ne[1];
+        const int64_t N       = src->ne[2];
+        const int64_t n_elem  = K * N;
+        const size_t f16_bytes = ggml_nbytes(src);
+        const size_t q_bytes   = ggml_nbytes(dst);
+
+        if (f16_staging.size() < f16_bytes) f16_staging.resize(f16_bytes);
+        if (f32_staging.size() < static_cast<size_t>(n_elem)) {
+            f32_staging.resize(static_cast<size_t>(n_elem));
+        }
+        if (q_staging.size() < q_bytes) q_staging.resize(q_bytes);
+
+        ggml_backend_tensor_get(src, f16_staging.data(), 0, f16_bytes);
+        f16_traits->to_float(f16_staging.data(), f32_staging.data(), n_elem);
+        const size_t written = ggml_quantize_chunk(
+            qtype, f32_staging.data(), q_staging.data(),
+            /*start=*/0, /*nrows=*/N, /*n_per_row=*/K, /*imatrix=*/nullptr);
+        if (written != q_bytes) {
+            std::fprintf(stderr,
+                "%s: conv_pw quantize size mismatch on \"%s\" "
+                "(%zu vs %zu)\n",
+                error_tag, src->name, written, q_bytes);
+            ggml_backend_buffer_free(buffer);
+            ggml_free(ctx);
+            return TRANSCRIBE_OK; // non-fatal: keep the F16 path
+        }
+        // set_tensor on the repack buffer performs the interleave.
+        ggml_backend_tensor_set(dst, q_staging.data(), 0, q_bytes);
+    }
+
+    // Repoint only after every upload succeeded, so the failure paths
+    // above never leave a weights struct half-pointing into a freed
+    // buffer.
+    for (size_t i = 0; i < slots.size(); ++i) {
+        *slots[i].dst_slot = replacements[i];
+    }
+
+    *out_ctx    = ctx;
+    *out_buffer = buffer;
+
+    std::fprintf(stderr,
+        "%s: quantized %zu conv pointwise weights F16 → %s "
+        "in CPU repack layout\n",
+        error_tag, slots.size(), ggml_type_name(qtype));
     return TRANSCRIBE_OK;
 }
 

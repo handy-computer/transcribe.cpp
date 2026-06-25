@@ -3964,6 +3964,7 @@ template <> void gemv<block_q4_0, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t
     ggml_gemv_q4_0_4x4_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
+
 template <> void gemv<block_q4_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_q4_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
@@ -4052,6 +4053,115 @@ template <> void gemv<block_q2_K, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_
     ggml_gemv_q2_K_16x1_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 #endif
+
+// gemv2: two leftover src1 rows (plain PARAM_TYPE layout, vy_stride apart)
+// against the same weights in one pass. Default falls back to two gemv
+// calls; arch-tuned overrides (A55) handle both rows per weight stream.
+template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE>
+void gemv2(int n, float * s, size_t bs, const void * vx, const void * vy,
+           size_t vy_stride, int nc) {
+    gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(n, s, bs, vx, vy, 1, nc);
+    gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(n, s + bs, bs, vx,
+        (const void *) ((const char *) vy + vy_stride), 1, nc);
+}
+
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+extern "C" void ggml_gemv2_q4_0_4x4_q8_0_a55(int n, float * s, size_t bs, const void * vx,
+                                             const void * vy, size_t vy_stride, int nc);
+extern "C" void ggml_gemv2_q8_0_4x4_q8_0_a55(int n, float * s, size_t bs, const void * vx,
+                                             const void * vy, size_t vy_stride, int nc);
+static bool ggml_a55_pair_enabled(void) {
+    static const bool en = [] {
+        const char * v = getenv("TRANSCRIBE_A55_GEMM");
+        return !(v && v[0] == '0');
+    }();
+    return en;
+}
+template <> void gemv2<block_q4_0, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs,
+        const void * vx, const void * vy, size_t vy_stride, int nc) {
+    if (ggml_a55_pair_enabled()) {
+        ggml_gemv2_q4_0_4x4_q8_0_a55(n, s, bs, vx, vy, vy_stride, nc);
+        return;
+    }
+    gemv<block_q4_0, 4, 4, GGML_TYPE_Q8_0>(n, s, bs, vx, vy, 1, nc);
+    gemv<block_q4_0, 4, 4, GGML_TYPE_Q8_0>(n, s + bs, bs, vx,
+        (const void *) ((const char *) vy + vy_stride), 1, nc);
+}
+template <> void gemv2<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs,
+        const void * vx, const void * vy, size_t vy_stride, int nc) {
+    if (ggml_a55_pair_enabled()) {
+        ggml_gemv2_q8_0_4x4_q8_0_a55(n, s, bs, vx, vy, vy_stride, nc);
+        return;
+    }
+    gemv<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(n, s, bs, vx, vy, 1, nc);
+    gemv<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(n, s + bs, bs, vx,
+        (const void *) ((const char *) vy + vy_stride), 1, nc);
+}
+#endif
+
+// a55 padded-tail contract. When a matmul's leftover rows after the 12-row
+// tiles number 5-7 (ne11 % 12 in 5..7), forward_mul_mat zero-pads the final
+// partial q8_0x4 activation group to 4 rows and the arch gemm consumes the
+// whole 5-8 row tail in ONE weight pass (tile8) instead of the 2-3 passes of
+// the gemm4 + pair + gemv split. The quantize side and the dispatch side must
+// agree on when the padded layout exists, so the predicate lives here.
+// Multi-plane src1 keeps the unpadded layout (the padded group would overlap
+// the next plane's region).
+template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE>
+inline bool a55_padded_tail(int64_t ne11, int64_t ne12) {
+    GGML_UNUSED(ne11); GGML_UNUSED(ne12);
+    return false;
+}
+
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+static inline bool a55_padded_tail_common(int64_t ne11, int64_t ne12) {
+    if (ne12 != 1 || !ggml_a55_pair_enabled()) {
+        return false;
+    }
+    const int64_t r = ne11 % 12;
+    return (ne11 % 4) != 0 && r >= 5 && r <= 7;
+}
+template <> inline bool a55_padded_tail<block_q4_0, 4, 4, GGML_TYPE_Q8_0>(int64_t ne11, int64_t ne12) {
+    return a55_padded_tail_common(ne11, ne12);
+}
+template <> inline bool a55_padded_tail<block_q8_0, 4, 4, GGML_TYPE_Q8_0>(int64_t ne11, int64_t ne12) {
+    return a55_padded_tail_common(ne11, ne12);
+}
+
+// Quantize the final 1-3 leftover f32 rows plus zero rows into one q8_0x4
+// group (same in-block layout as ggml_quantize_mat_q8_0_4x4_generic). The
+// zero lanes have d = 0 and qs = 0, so the tile's extra computed rows are
+// exactly 0 and are not stored anyway.
+static void ggml_quantize_mat_q8_0_4x4_pad(const float * x, size_t stride_bytes, int nrows,
+                                           int64_t k, void * vy) {
+    assert(k % QK8_0 == 0);
+    assert(nrows >= 1 && nrows <= 3);
+    const int nb = (int) (k / QK8_0);
+    block_q8_0x4 * y = (block_q8_0x4 *) vy;
+    for (int i = 0; i < nb; i++) {
+        for (int r = 0; r < 4; r++) {
+            if (r >= nrows) {
+                y[i].d[r] = GGML_CPU_FP32_TO_FP16(0.0f);
+                for (int j = 0; j < QK8_0; j++) {
+                    y[i].qs[(j / 4) * 16 + r * 4 + (j % 4)] = 0;
+                }
+                continue;
+            }
+            const float * xr = (const float *) ((const char *) x + (size_t) r * stride_bytes) + (size_t) i * QK8_0;
+            float amax = 0.0f;
+            for (int j = 0; j < QK8_0; j++) {
+                amax = MAX(amax, fabsf(xr[j]));
+            }
+            const float d  = amax / ((1 << 7) - 1);
+            const float id = d ? 1.0f / d : 0.0f;
+            y[i].d[r] = GGML_CPU_FP32_TO_FP16(d);
+            for (int j = 0; j < QK8_0; j++) {
+                y[i].qs[(j / 4) * 16 + r * 4 + (j % 4)] = (int8_t) roundf(xr[j] * id);
+            }
+        }
+    }
+}
+#endif // aarch64 && NEON && DOTPROD
 
 // gemm
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PARAM_TYPE>
@@ -4162,7 +4272,11 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         switch (op->op) {
             case GGML_OP_MUL_MAT:
                 {
-                    size = ggml_row_size(PARAM_TYPE, ggml_nelements(op->src[1]));
+                    // rows padded to a multiple of 4 so the a55 tail tiles can
+                    // consume a zero-padded final interleaved group
+                    const struct ggml_tensor * s1 = op->src[1];
+                    size = ggml_row_size(PARAM_TYPE, s1->ne[0]) *
+                           GGML_PAD(s1->ne[1], 4) * s1->ne[2] * s1->ne[3];
                     return true;
                 }
             case GGML_OP_MUL_MAT_ID:
@@ -4238,12 +4352,24 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         GGML_ASSERT(src1_ptr + src1_col_stride * nrows <= (const char *) params->wdata + params->wsize);
 
         // If there are more than three rows in src1, use gemm; otherwise, use gemv.
+        // With the a55 padded tail, the gemm consumes ALL rows (the final
+        // partial group was zero-padded at quantize time) in one weight pass.
+        const int64_t gemm_rows =
+            (nrows > 3 && a55_padded_tail<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne11, ne12))
+                ? nrows : nrows - (nrows % 4);
         if (nrows > 3) {
             gemm<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr) + src0_start, nb1 / nb0,
                                                              src0_ptr + src0_start * nb01, src1_ptr,
-                                                             nrows - (nrows % 4), ncols);
+                                                             gemm_rows, ncols);
         }
-        for (int iter = nrows - (nrows % 4); iter < nrows; iter++) {
+        int iter = gemm_rows;
+        for (; iter + 1 < nrows; iter += 2) {   // leftover row pairs share one weight pass
+            gemv2<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr + (iter * nb1)) + src0_start,
+                                                              nb1 / nb0, src0_ptr + src0_start * nb01,
+                                                              src1_ptr + (src1_col_stride * iter),
+                                                              src1_col_stride, ncols);
+        }
+        for (; iter < nrows; iter++) {
             gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00, (float *) (dst_ptr + (iter * nb1)) + src0_start,
                                                              ne01, src0_ptr + src0_start * nb01,
                                                              src1_ptr + (src1_col_stride * iter), 1 /* nrows */, ncols);
@@ -4303,6 +4429,18 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             }
 
             const int64_t i11_processed = ne11 - ne11 % 4;
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+            if (a55_padded_tail<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne11, ne12)) {
+                // zero-pad the leftover rows into one more interleaved group
+                // so the gemm tail tile can run them in a single weight pass
+                if (ith == 0) {
+                    ggml_quantize_mat_q8_0_4x4_pad((const float *) (data_ptr + i11_processed * nb11),
+                                                   nb11, (int) (ne11 - i11_processed), ne10,
+                                                   (void *) (wdata_ptr + i11_processed * nbw1));
+                }
+                continue;
+            }
+#endif
             for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
                 from_float((float *) (data_ptr + i11 * nb11), (void *) (wdata_ptr + i11 * nbw1), ne10);
             }

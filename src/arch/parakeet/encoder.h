@@ -255,6 +255,31 @@ struct StreamingEncoderCacheIO {
     // build_encoder_graph_streaming so the caller can copy back.
     std::vector<ggml_tensor *> channel_out;
     std::vector<ggml_tensor *> time_out;
+
+    // Optional KV cache (driver-owned persistent tensors, one per
+    // layer, [d_model, T_cache] each): pre-projected attention
+    // keys/values replacing the last_channel recompute. When all four
+    // vectors are sized to n_layers and the builder enables the KV
+    // path (query slicing on, no dump harness, no
+    // TRANSCRIBE_NO_STREAM_KV), blocks consume k_in/v_in, emit
+    // k_out/v_out rotation tensors, and leave channel_out null.
+    std::vector<ggml_tensor *> k_in;
+    std::vector<ggml_tensor *> v_in;
+    std::vector<ggml_tensor *> k_out;
+    std::vector<ggml_tensor *> v_out;
+
+    // Optional rel-pos projection memoization (driver-owned persistent
+    // tensors, one per layer, shape [head_dim, pos_len, n_head, 1]).
+    // pos_emb is a pure function of the chunk geometry, so
+    // attn_pos_w @ pos_emb is identical for every chunk with the same
+    // pos_len. When pos_proj_len matches the pos_len this build
+    // derives, the blocks consume pos_proj[i] directly and the graph
+    // references no pos_emb input at all (the builder leaves
+    // eb.pos_emb_in null). On mismatch the blocks compute the
+    // projection inline as before; the driver then refills the cache
+    // for the new geometry (see ensure_pos_proj_cache in model.cpp).
+    std::vector<ggml_tensor *> pos_proj;
+    int                        pos_proj_len = -1;
 };
 
 // Build a cache-aware streaming encoder graph. Same overall topology

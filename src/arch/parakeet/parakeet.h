@@ -15,6 +15,7 @@
 #pragma once
 
 #include "decoder.h"
+#include "encoder.h"
 #include "transcribe-backend.h"
 #include "transcribe-session.h"
 #include "transcribe-mel.h"
@@ -122,6 +123,13 @@ struct ParakeetModel final : public transcribe_model {
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
 
+    // Subset of ctx_meta weights held in the CPU repack ("CPU_REPACK")
+    // buffer type — quantized encoder GEMM weights converted at load
+    // into interleaved layouts for ggml's optimized matmul kernels.
+    // Null on non-CPU primaries, builds without repack support, and
+    // under TRANSCRIBE_NO_REPACK. Freed alongside backend_buffer.
+    ggml_backend_buffer_t   repack_buffer = nullptr;
+
     // Fused BN parameters live in a separate ggml context + buffer,
     // computed at load time from the raw BN tensors. Freed in dtor.
     ggml_context *          bn_fused_ctx    = nullptr;
@@ -151,6 +159,15 @@ struct ParakeetModel final : public transcribe_model {
     // never touches the originals again.
     ggml_context *          conv_pw_f32_ctx    = nullptr;
     ggml_backend_buffer_t   conv_pw_f32_buffer = nullptr;
+
+    // Quantized (Q8_0 by default) 2-D repack-layout replacements for
+    // the F16 1x1 pointwise conv weights on CPU primaries with repack
+    // support — see load_common::quantize_conv_pw_to_repack_on_cpu.
+    // Mutually exclusive with the F32 promotion above (the quantize
+    // transform runs first; when it repoints the slots the promotion
+    // sees no F16 sources left and no-ops). Freed in the dtor.
+    ggml_context *          conv_pw_q_ctx    = nullptr;
+    ggml_backend_buffer_t   conv_pw_q_buffer = nullptr;
 
     // Mel front-end. Constructed once at load() time from the
     // hparams (precomputes the periodic Hann window + Slaney mel
@@ -212,6 +229,32 @@ struct ParakeetStreamingCaches {
     //   last_time[i]    = ne[k_minus_1, d_model, 1, 1]
     std::vector<ggml_tensor *> last_channel;
     std::vector<ggml_tensor *> last_time;
+
+    // KV-cache variant of last_channel: per-layer pre-projected
+    // attention keys/values (bias included) over the same T_cache
+    // window, ne[d_model, T_cache, 1, 1] each. Mathematically
+    // equivalent to recomputing K/V from last_channel every chunk —
+    // k(t)/v(t) depend only on the frame's pre-attention activation —
+    // but the per-chunk K/V projections then run on T_q_new columns
+    // instead of T_cache + T_q_new. The default streaming graph
+    // consumes these and leaves last_channel untouched;
+    // TRANSCRIBE_NO_STREAM_KV=1 (or an active dump harness, which
+    // compares last_channel against NeMo) restores the recompute
+    // path. Cleared alongside the other caches at stream_begin.
+    std::vector<ggml_tensor *> last_k;
+    std::vector<ggml_tensor *> last_v;
+
+    // Rel-pos projection memoization: per-layer
+    // [head_dim, pos_proj_len, n_head, 1] f32 tensors holding
+    // attn_pos_w @ pos_emb in attention-ready layout. Geometry-keyed
+    // (pos_proj_len), not content-keyed, so it survives across chunks
+    // AND streams; rebuilt by ensure_pos_proj_cache whenever a chunk's
+    // pos_len differs. Own ctx + buffer because the size changes with
+    // geometry while the caches above are fixed at stream_begin.
+    ggml_context *             pos_proj_ctx = nullptr;
+    ggml_backend_buffer_t      pos_proj_buf = nullptr;
+    std::vector<ggml_tensor *> pos_proj;
+    int                        pos_proj_len = -1;
 
     int32_t channel_len = 0;
 
@@ -371,6 +414,22 @@ struct ParakeetSession final : public transcribe_session {
     // context destructor.
     ParakeetStreamingCaches        stream_caches;
     ParakeetStreamingDecoderState  stream_dec_state;
+
+    // ---- steady-state streaming graph reuse ----
+    //
+    // The per-chunk streaming encoder graph is fully determined by the
+    // chunk geometry (mel frames fed, pre-encode drop); every steady-state
+    // chunk in a stream shares it. Cache the built graph (metadata in
+    // stream_gctx) plus its scheduler allocation, and pay only the input
+    // refills (mel, mask, pos_emb) per chunk instead of build + alloc.
+    // Invalidated on geometry change, on stream_begin, and whenever
+    // something else resets pc->sched (today: ensure_pos_proj_cache).
+    ggml_context *          stream_gctx     = nullptr;
+    EncoderBuild            stream_eb {};
+    StreamingEncoderCacheIO stream_eb_io {};
+    int                     stream_g_frames = -1;
+    int                     stream_g_drop   = -1;
+    bool                    stream_g_valid  = false;
 
     // ---- Buffered streaming state (parakeet-unified-en-0.6b) ----
     //

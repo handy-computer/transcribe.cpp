@@ -90,6 +90,57 @@ transcribe_status stream_tensor_data(const std::string &   path,
                                      ggml_context *        ctx_meta,
                                      const char *          error_tag);
 
+// Allocate every tensor in `ctx_meta` on the primary backend, routing
+// the subset selected by `is_repack_candidate` through the CPU repack
+// buffer type ("CPU_REPACK") when available. Tensors held there are
+// converted at upload time into interleaved layouts that ggml's
+// optimized GEMM kernels (SDOT / i8mm / AVX2) consume directly —
+// measured 4.3x over the plain Q4_0 path on Cortex-A55 at conformer
+// FFN shapes.
+//
+// The repack layout supports ONLY ggml_mul_mat consumption: the buffer
+// type has no get_tensor (readback aborts) and no kernel for any other
+// op. The predicate must therefore select only weights that flow
+// exclusively through mul_mat in compute graphs — never tensors the
+// loader or decoder reads back to host (BatchNorm fusion, host decoder
+// weight extraction, joint weight residency) and never get_rows
+// operands.
+//
+// Per-tensor eligibility beyond the predicate is decided here:
+// 2-D, quantized dtype, and a runtime probe that the repack
+// machinery selects a kernel for this (dtype, ne[1], CPU-feature)
+// combination. Ineligible candidates silently stay in the default
+// buffer, so the predicate may over-approximate by name.
+//
+// Behavior:
+//   - plan.primary_kind != Cpu, no repack support in the build, or
+//     TRANSCRIBE_NO_REPACK set: every tensor lands in the default
+//     buffer; *out_repack stays null. Functionally identical to plain
+//     ggml_backend_alloc_ctx_tensors.
+//   - On success both buffers are marked USAGE_WEIGHTS. The caller
+//     owns both and must free *out_repack (when non-null) alongside
+//     the main buffer, before the backends.
+transcribe_status alloc_weights_cpu_repack(
+    ggml_context *          ctx_meta,
+    const BackendPlan &     plan,
+    bool                  (*is_repack_candidate)(const ggml_tensor *),
+    const char *            error_tag,
+    ggml_backend_buffer_t * out_main,
+    ggml_backend_buffer_t * out_repack);
+
+// Locate the CPU backend's repack buffer type ("CPU_REPACK") via the
+// extra-buffer-types registry hook. Returns nullptr when the build has
+// no repack support or the device exposes no extra buffer types.
+ggml_backend_buffer_type_t find_cpu_repack_buft(ggml_backend_t cpu_backend);
+
+// Probe whether the repack machinery selects an interleaved kernel for
+// (dtype, ne[1] divisibility class) on this CPU. The repack buffer's
+// set_tensor hard-asserts on unsupported tensors, so callers must
+// probe before routing a tensor there.
+bool probe_repack_support(ggml_backend_buffer_type_t buft,
+                          ggml_type                  type,
+                          int64_t                    ne1);
+
 // A single F16 → F32 promotion target: `dst_slot` is a pointer into a
 // family weights struct (e.g. &block.conv_pw1_w) that currently holds
 // the F16 source tensor and will be repointed to the F32 replacement.
@@ -97,6 +148,37 @@ struct ConvPwF32Slot {
     ggml_tensor ** dst_slot;
     ggml_tensor *  src;
 };
+
+// Quantize a list of F16 1x1 pointwise-conv weights into 2-D quantized
+// tensors held in the CPU repack buffer, when the primary backend is
+// CPU and the build carries repack support. The conv weights ship as
+// ne=[1, K, N] (or [1, 1, K, N]) conv-shaped tensors; the replacement
+// is the byte-identical 2-D [K, N] matmul view of the same data,
+// quantized to `qtype` (default Q8_0, override with
+// TRANSCRIBE_CONV_PW_QUANT=q4_0|q8_0|off) and stored interleaved so
+// the optimized repack GEMM kernels consume it directly. conv_module
+// in src/conformer detects the 2-D replacement and feeds it straight
+// to ggml_mul_mat without the reshape.
+//
+// Motivation: on CPUs with fp16 vector arithmetic the F16 mul_mat path
+// still runs ~3.3 GFLOPS at streaming conformer shapes on a
+// Cortex-A55 while the Q8_0 repack path runs ~11 GFLOPS 1T — and the
+// weight bandwidth halves. WER impact of the extra F16→Q8_0
+// quantization is expected inside the Q8_0 release tolerance but must
+// be confirmed by the Stage 7 sweep before this default ships.
+//
+// Same gating, ownership, and no-op semantics as
+// promote_conv_pw_f16_to_f32_on_cpu: returns TRANSCRIBE_OK without
+// touching the outparams when the primary is not CPU, slots is empty,
+// repack is unavailable (build, probe, or TRANSCRIBE_NO_REPACK), or
+// the env override says off. On success each slot's *dst_slot is
+// repointed and the originals stay resident in the main buffer.
+transcribe_status quantize_conv_pw_to_repack_on_cpu(
+    const BackendPlan &                plan,
+    const std::vector<ConvPwF32Slot> & slots,
+    const char *                       error_tag,
+    ggml_context **                    out_ctx,
+    ggml_backend_buffer_t *            out_buffer);
 
 // Dequantize a list of pointwise-conv weights from F16 to F32 when the
 // primary backend is CPU. Used by conformer families (parakeet, cohere)

@@ -337,6 +337,42 @@ struct BlockParams {
     // Ignored in offline mode (streaming_channel_in == nullptr).
     int streaming_T_q_new = 0;
 
+    // Optional streaming KV cache for this block (all four set
+    // together, or none): persistent [d_model, T_cache] tensors holding
+    // the previous chunks' pre-projected attention keys/values (bias
+    // included). When set, the block computes K/V projections only for
+    // the new frames, concatenates the cache in front, runs attention
+    // against the combined window, and emits the rotated cache via
+    // ggml_cpy into the *_out tensors (the driver copies them into the
+    // persistent cache after compute, exactly like streaming_channel_*).
+    // streaming_channel_in/_out are ignored in this mode — the channel
+    // cache is the recompute-K/V representation of the same state.
+    // Requires streaming_q_slice (the rectangular mask/pos geometry).
+    ggml_tensor * streaming_kv_k_in  = nullptr;
+    ggml_tensor * streaming_kv_v_in  = nullptr;
+    ggml_tensor * streaming_kv_k_out = nullptr;
+    ggml_tensor * streaming_kv_v_out = nullptr;
+
+    // Optional precomputed rel-pos projection for this block: the
+    // [head_dim, pos_len, n_head, 1] result of
+    // cont(permute(reshape(attn_pos_w @ pos_emb))) from a previous
+    // chunk with identical geometry. When non-null, rel_pos_mhsa
+    // consumes it directly and never touches pos_emb (which may then
+    // be null). Streaming-only memoization; offline paths leave this
+    // null.
+    ggml_tensor * streaming_pos_proj_in = nullptr;
+
+    // Streaming attention query slicing. When true (the default), the
+    // block computes attention queries only for the T_q_new new frames
+    // (K/V still span the full T_cache + T_q_new virtual window), via
+    // rel_pos_mhsa's x_q parameter — ~5x less attention work per chunk
+    // at nemotron geometry (14 new vs 70 virtual). When false, the
+    // block runs the historical path: full T_virtual x T_virtual
+    // attention followed by an output slice. The caller must size
+    // pos_emb and attn_chunked_mask consistently with this flag (see
+    // rel_pos_mhsa's x_q contract). Ignored offline.
+    bool streaming_q_slice = true;
+
     // Graph the helpers use to forward-expand their cache-write cpy
     // nodes. The streaming cache outputs are SIDE outputs (not
     // reachable from the encoder's `out` tensor), so they have to be
@@ -461,11 +497,30 @@ ggml_tensor * conv_module(ggml_context *      ctx,
 //     matrix_bd before flash_attn / soft_max_ext.
 //
 // Otherwise (Regular + att_context_* == -1) -> unrestricted attention.
+// x_q (optional): query-only activation [d_model, T_q, B] with T_q !=
+// x->ne[1]. When non-null, K/V (and the keys of the score matrix) come
+// from `x` while queries come from `x_q` — the cache-aware streaming
+// case where only the new frames need attention output but the cached
+// frames still serve as keys/values. Requirements in this mode:
+//   - pos_emb length must be T_q + T_k - 1 with the zero-offset row at
+//     index T_k - 1 (row i holds relative offset (T_k - 1) - i)
+//   - attn_chunked_mask (if any) must be [T_k, T_q]
+//   - the flash path is bypassed (manual mul_mat + soft_max only)
+// Null (default) keeps the historical self-attention behavior.
+//
+// k_full / v_full (optional, set together): pre-projected keys/values
+// [d_model, T_k, 1, 1] (bias already applied). When set, the helper
+// skips its own K/V projections entirely, queries come from `x`, and
+// the same rectangular requirements as x_q apply. Streaming KV-cache
+// path; mutually exclusive with x_q.
 ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
                            ggml_tensor *       x,
                            ggml_tensor *       pos_emb,
                            const BlockView &   b,
-                           const BlockParams & params);
+                           const BlockParams & params,
+                           ggml_tensor *       x_q = nullptr,
+                           ggml_tensor *       k_full = nullptr,
+                           ggml_tensor *       v_full = nullptr);
 
 // ===========================================================================
 // Top-level block + pre-encode

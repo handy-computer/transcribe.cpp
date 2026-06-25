@@ -18,6 +18,7 @@
 #include "weights.h"
 
 #include "transcribe-debug.h"
+#include "transcribe-load-common.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -155,9 +156,14 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w,
     // Free any partial state so the caller can cleanly retry (e.g. native→fp32).
     auto fail = [&]() -> bool {
         if (j.w_buf     != nullptr) { ggml_backend_buffer_free(j.w_buf); j.w_buf = nullptr; }
+        if (j.w_buf_repack != nullptr) {
+            ggml_backend_buffer_free(j.w_buf_repack);
+            j.w_buf_repack = nullptr;
+        }
         if (j.w_ctx     != nullptr) { ggml_free(j.w_ctx);                j.w_ctx = nullptr; }
         if (j.w_backend != nullptr) { ggml_backend_free(j.w_backend);    j.w_backend = nullptr; }
         j.gw_w = nullptr; j.gw_b = nullptr; j.w_ready = false;
+        j.w_repacked = false;
         return false;
     };
 
@@ -182,6 +188,43 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w,
     j.gw_w = ggml_new_tensor_2d(j.w_ctx, w_type, joint_h, joint_n);
     j.gw_b = ggml_new_tensor_1d(j.w_ctx, GGML_TYPE_F32, joint_n);
 
+    // Route the quantized weight through the CPU repack buffer when the
+    // machinery supports this (dtype, joint_n) combination: the
+    // per-step GEMV then runs ggml's interleaved SDOT kernels. The
+    // probe-first pattern matches alloc_weights_cpu_repack; on any
+    // failure the weight falls through to the plain buffer below.
+    if (ggml_is_quantized(w_type)) {
+        ggml_backend_buffer_type_t rbuft =
+            transcribe::load_common::find_cpu_repack_buft(j.w_backend);
+        if (rbuft != nullptr &&
+            transcribe::load_common::probe_repack_support(
+                rbuft, w_type, joint_n))
+        {
+            const size_t sz =
+                ggml_backend_buft_get_alloc_size(rbuft, j.gw_w) +
+                ggml_backend_buft_get_alignment(rbuft);
+            j.w_buf_repack = ggml_backend_buft_alloc_buffer(rbuft, sz);
+            if (j.w_buf_repack != nullptr) {
+                ggml_tallocr ta = ggml_tallocr_new(j.w_buf_repack);
+                if (ggml_tallocr_alloc(&ta, j.gw_w) == GGML_STATUS_SUCCESS &&
+                    j.gw_w->extra != nullptr)
+                {
+                    ggml_backend_buffer_set_usage(
+                        j.w_buf_repack, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    j.w_repacked = true;
+                } else {
+                    // Unbind before freeing so the plain-path allocation
+                    // below sees an unallocated tensor.
+                    j.gw_w->data   = nullptr;
+                    j.gw_w->buffer = nullptr;
+                    j.gw_w->extra  = nullptr;
+                    ggml_backend_buffer_free(j.w_buf_repack);
+                    j.w_buf_repack = nullptr;
+                }
+            }
+        }
+    }
+
     j.w_buf = ggml_backend_alloc_ctx_tensors(j.w_ctx, j.w_backend);
     if (j.w_buf == nullptr) return fail();
 
@@ -203,6 +246,146 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w,
                             static_cast<size_t>(joint_n) * sizeof(float));
 
     j.w_ready = true;
+    return true;
+}
+
+// Make the predictor LSTM gate weights resident as ggml tensors in
+// their native dtype, repack layout when supported (see the
+// HostPredictor::gw_lstm comment). Failure is non-fatal: w_ready stays
+// false and the decode loops use the fp32 host mirror.
+// TRANSCRIBE_PRED_GGML=0 disables the whole path.
+bool build_predictor_weight_ggml(HostPredictor &           p,
+                                 const ParakeetPredictor & src)
+{
+    {
+        const char * env = std::getenv("TRANSCRIBE_PRED_GGML");
+        if (env != nullptr && env[0] == '0') return false;
+    }
+    const int n_layers = static_cast<int>(src.lstm.size());
+    const int H        = p.pred_hidden;
+    if (n_layers <= 0 || H <= 0) return false;
+
+    auto fail = [&]() -> bool {
+        if (p.w_buf        != nullptr) { ggml_backend_buffer_free(p.w_buf);        p.w_buf = nullptr; }
+        if (p.w_buf_repack != nullptr) { ggml_backend_buffer_free(p.w_buf_repack); p.w_buf_repack = nullptr; }
+        if (p.w_ctx        != nullptr) { ggml_free(p.w_ctx);                       p.w_ctx = nullptr; }
+        if (p.w_backend    != nullptr) { ggml_backend_free(p.w_backend);           p.w_backend = nullptr; }
+        p.gw_lstm.clear();
+        p.w_ready = false;
+        return false;
+    };
+
+    p.w_backend = ggml_backend_cpu_init();
+    if (p.w_backend == nullptr) return fail();
+
+    ggml_init_params ip {};
+    ip.mem_size   = static_cast<size_t>(3 * n_layers + 2) *
+                    ggml_tensor_overhead();
+    ip.mem_buffer = nullptr;
+    ip.no_alloc   = true;
+    p.w_ctx = ggml_init(ip);
+    if (p.w_ctx == nullptr) return fail();
+
+    // Mirror each source tensor at its native dtype and shape
+    // ([H, 4H] for the gate matmuls). All-or-nothing repack: either
+    // every Wx/Wh lands interleaved or none does, so the numerics are
+    // uniform across layers.
+    p.gw_lstm.assign(static_cast<size_t>(n_layers), {});
+    for (int i = 0; i < n_layers; ++i) {
+        const auto & lw = src.lstm[static_cast<size_t>(i)];
+        if (lw.Wx == nullptr || lw.Wh == nullptr || lw.b == nullptr) {
+            return fail();
+        }
+        auto & gl = p.gw_lstm[static_cast<size_t>(i)];
+        gl.Wx = ggml_new_tensor_2d(p.w_ctx, lw.Wx->type, H, 4 * H);
+        gl.Wh = ggml_new_tensor_2d(p.w_ctx, lw.Wh->type, H, 4 * H);
+        gl.b  = ggml_new_tensor_1d(p.w_ctx, GGML_TYPE_F32, 4 * H);
+        if (gl.Wx == nullptr || gl.Wh == nullptr || gl.b == nullptr) {
+            return fail();
+        }
+        ggml_set_name(gl.Wx, lw.Wx->name);
+        ggml_set_name(gl.Wh, lw.Wh->name);
+        ggml_set_name(gl.b,  lw.b->name);
+    }
+
+    // Try the repack layout for the gate matmuls.
+    {
+        const ggml_type t0 = p.gw_lstm[0].Wx->type;
+        bool uniform = ggml_is_quantized(t0);
+        for (const auto & gl : p.gw_lstm) {
+            uniform = uniform && gl.Wx->type == t0 && gl.Wh->type == t0;
+        }
+        ggml_backend_buffer_type_t rbuft = uniform
+            ? transcribe::load_common::find_cpu_repack_buft(p.w_backend)
+            : nullptr;
+        if (rbuft != nullptr &&
+            transcribe::load_common::probe_repack_support(
+                rbuft, t0, 4 * H))
+        {
+            size_t total = 0;
+            const size_t align = ggml_backend_buft_get_alignment(rbuft);
+            for (const auto & gl : p.gw_lstm) {
+                total += GGML_PAD(
+                    ggml_backend_buft_get_alloc_size(rbuft, gl.Wx), align);
+                total += GGML_PAD(
+                    ggml_backend_buft_get_alloc_size(rbuft, gl.Wh), align);
+            }
+            p.w_buf_repack = ggml_backend_buft_alloc_buffer(rbuft, total);
+            if (p.w_buf_repack != nullptr) {
+                ggml_tallocr ta = ggml_tallocr_new(p.w_buf_repack);
+                bool ok = true;
+                for (auto & gl : p.gw_lstm) {
+                    ok = ok &&
+                        ggml_tallocr_alloc(&ta, gl.Wx) == GGML_STATUS_SUCCESS &&
+                        gl.Wx->extra != nullptr &&
+                        ggml_tallocr_alloc(&ta, gl.Wh) == GGML_STATUS_SUCCESS &&
+                        gl.Wh->extra != nullptr;
+                    if (!ok) break;
+                }
+                if (ok) {
+                    ggml_backend_buffer_set_usage(
+                        p.w_buf_repack, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                } else {
+                    for (auto & gl : p.gw_lstm) {
+                        gl.Wx->data = nullptr; gl.Wx->buffer = nullptr;
+                        gl.Wx->extra = nullptr;
+                        gl.Wh->data = nullptr; gl.Wh->buffer = nullptr;
+                        gl.Wh->extra = nullptr;
+                    }
+                    ggml_backend_buffer_free(p.w_buf_repack);
+                    p.w_buf_repack = nullptr;
+                }
+            }
+        }
+    }
+
+    // Everything not repack-bound (biases, and the matmuls on the
+    // fallback path) lands in the plain CPU buffer.
+    p.w_buf = ggml_backend_alloc_ctx_tensors(p.w_ctx, p.w_backend);
+    if (p.w_buf == nullptr) return fail();
+    ggml_backend_buffer_set_usage(p.w_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    // Upload verbatim native bytes (repack set_tensor interleaves) and
+    // the fp32 biases from the already-built host mirror.
+    std::vector<uint8_t> staging;
+    for (int i = 0; i < n_layers; ++i) {
+        const auto & lw = src.lstm[static_cast<size_t>(i)];
+        auto &       gl = p.gw_lstm[static_cast<size_t>(i)];
+        for (const auto & pair :
+             {std::make_pair(lw.Wx, gl.Wx), std::make_pair(lw.Wh, gl.Wh)})
+        {
+            const size_t nb = ggml_nbytes(pair.first);
+            if (nb != ggml_nbytes(pair.second)) return fail();
+            if (staging.size() < nb) staging.resize(nb);
+            ggml_backend_tensor_get(pair.first, staging.data(), 0, nb);
+            ggml_backend_tensor_set(pair.second, staging.data(), 0, nb);
+        }
+        ggml_backend_tensor_set(
+            gl.b, p.lstm[static_cast<size_t>(i)].b.data(), 0,
+            static_cast<size_t>(4 * H) * sizeof(float));
+    }
+
+    p.w_ready = true;
     return true;
 }
 
@@ -257,7 +440,12 @@ bool build_joint_graph(JointGraph & g, const HostJoint & j, int n_threads) {
 
     g.backend = ggml_backend_cpu_init();
     if (g.backend == nullptr) return fail();
-    ggml_backend_cpu_set_n_threads(g.backend, std::max(1, n_threads));
+    // With the repacked weight the GEMV is sub-millisecond; the CPU
+    // backend's per-graph_compute thread spawn (~1-3 ms on little
+    // cores) would dominate, so run it inline on the calling thread.
+    // The plain-layout fallback keeps the threaded matmul.
+    ggml_backend_cpu_set_n_threads(
+        g.backend, j.w_repacked ? 1 : std::max(1, n_threads));
 
     ggml_init_params ip {};
     ip.mem_size   = ggml_tensor_overhead() * 8 + ggml_graph_overhead();
@@ -285,12 +473,175 @@ bool build_joint_graph(JointGraph & g, const HostJoint & j, int n_threads) {
     return true;
 }
 
+// Per-decode-call compute graph for one full predictor step (all LSTM
+// layers). Mirrors JointGraph: the weights are the model-resident
+// HostPredictor::gw_lstm; this owns only the per-step I/O tensors, the
+// op intermediates, and a 1-thread CPU backend (the GEMVs are
+// sub-millisecond against repacked weights — a thread spawn would cost
+// more than it saves, so the whole step runs inline on the calling
+// thread).
+struct PredictorGraph {
+    ggml_context *        ctx     = nullptr;
+    ggml_backend_t        backend = nullptr;
+    ggml_backend_buffer_t buf     = nullptr;
+    ggml_cgraph *         graph   = nullptr;
+    ggml_tensor *         x_in    = nullptr;   // [H] f32 embed row
+    std::vector<ggml_tensor *> h_in,  c_in;    // [H] f32 per layer
+    std::vector<ggml_tensor *> h_out, c_out;   // [H] f32 per layer
+    bool                  ready   = false;
+
+    PredictorGraph() = default;
+    ~PredictorGraph() {
+        if (buf     != nullptr) ggml_backend_buffer_free(buf);
+        if (ctx     != nullptr) ggml_free(ctx);
+        if (backend != nullptr) ggml_backend_free(backend);
+    }
+    PredictorGraph(const PredictorGraph &)             = delete;
+    PredictorGraph & operator=(const PredictorGraph &) = delete;
+};
+
+bool build_predictor_graph(PredictorGraph & g, const HostPredictor & p) {
+    if (!p.w_ready || p.gw_lstm.empty()) return false;
+    const int H        = p.pred_hidden;
+    const int n_layers = static_cast<int>(p.gw_lstm.size());
+
+    auto fail = [&]() -> bool {
+        if (g.buf     != nullptr) { ggml_backend_buffer_free(g.buf); g.buf = nullptr; }
+        if (g.ctx     != nullptr) { ggml_free(g.ctx);                g.ctx = nullptr; }
+        if (g.backend != nullptr) { ggml_backend_free(g.backend);    g.backend = nullptr; }
+        g.graph = nullptr; g.x_in = nullptr;
+        g.h_in.clear(); g.c_in.clear(); g.h_out.clear(); g.c_out.clear();
+        g.ready = false;
+        return false;
+    };
+
+    g.backend = ggml_backend_cpu_init();
+    if (g.backend == nullptr) return fail();
+    ggml_backend_cpu_set_n_threads(g.backend, 1);
+
+    ggml_init_params ip {};
+    ip.mem_size   = static_cast<size_t>(n_layers) * 24 *
+                        ggml_tensor_overhead() +
+                    ggml_graph_overhead() + 4096;
+    ip.mem_buffer = nullptr;
+    ip.no_alloc   = true;
+    g.ctx = ggml_init(ip);
+    if (g.ctx == nullptr) return fail();
+
+    g.graph = ggml_new_graph(g.ctx);
+    g.x_in = ggml_new_tensor_1d(g.ctx, GGML_TYPE_F32, H);
+    ggml_set_input(g.x_in);
+    g.h_in.resize(static_cast<size_t>(n_layers));
+    g.c_in.resize(static_cast<size_t>(n_layers));
+    g.h_out.resize(static_cast<size_t>(n_layers));
+    g.c_out.resize(static_cast<size_t>(n_layers));
+
+    ggml_tensor * x = g.x_in;
+    for (int l = 0; l < n_layers; ++l) {
+        const auto & gl = p.gw_lstm[static_cast<size_t>(l)];
+        ggml_tensor * h_prev = ggml_new_tensor_1d(g.ctx, GGML_TYPE_F32, H);
+        ggml_tensor * c_prev = ggml_new_tensor_1d(g.ctx, GGML_TYPE_F32, H);
+        ggml_set_input(h_prev);
+        ggml_set_input(c_prev);
+        g.h_in[static_cast<size_t>(l)] = h_prev;
+        g.c_in[static_cast<size_t>(l)] = c_prev;
+
+        // gates = Wx @ x + b + Wh @ h_prev, gate order [i, f, g, o]
+        // (matches the host lstm_step mirror).
+        ggml_tensor * gates = ggml_add(
+            g.ctx,
+            ggml_add(g.ctx, ggml_mul_mat(g.ctx, gl.Wx, x), gl.b),
+            ggml_mul_mat(g.ctx, gl.Wh, h_prev));
+
+        const size_t es = ggml_element_size(gates);
+        ggml_tensor * gi = ggml_view_1d(g.ctx, gates, H, 0 * H * es);
+        ggml_tensor * gf = ggml_view_1d(g.ctx, gates, H, 1 * H * es);
+        ggml_tensor * gg = ggml_view_1d(g.ctx, gates, H, 2 * H * es);
+        ggml_tensor * go = ggml_view_1d(g.ctx, gates, H, 3 * H * es);
+
+        ggml_tensor * c_new = ggml_add(
+            g.ctx,
+            ggml_mul(g.ctx, ggml_sigmoid(g.ctx, gf), c_prev),
+            ggml_mul(g.ctx, ggml_sigmoid(g.ctx, gi),
+                     ggml_tanh(g.ctx, gg)));
+        ggml_tensor * h_new = ggml_mul(
+            g.ctx, ggml_sigmoid(g.ctx, go), ggml_tanh(g.ctx, c_new));
+
+        ggml_set_output(h_new);
+        ggml_set_output(c_new);
+        g.h_out[static_cast<size_t>(l)] = h_new;
+        g.c_out[static_cast<size_t>(l)] = c_new;
+        ggml_build_forward_expand(g.graph, h_new);
+        ggml_build_forward_expand(g.graph, c_new);
+
+        x = h_new;
+    }
+
+    g.buf = ggml_backend_alloc_ctx_tensors(g.ctx, g.backend);
+    if (g.buf == nullptr) return fail();
+    g.ready = true;
+    return true;
+}
+
+// ggml twin of predictor_step (below): one full predictor step through
+// the resident gate weights. Same I/O contract — reads prev_state,
+// writes new_state, returns the last layer's new hidden state.
+const float * predictor_step_ggml(const HostPredictor & p,
+                                  const PredictorGraph & g,
+                                  int                    last_token,
+                                  const LstmState &      prev_state,
+                                  LstmState &            new_state)
+{
+    const int H        = p.pred_hidden;
+    const int n_layers = static_cast<int>(p.gw_lstm.size());
+    const size_t hb    = static_cast<size_t>(H) * sizeof(float);
+
+    if (last_token < 0) {
+        static thread_local std::vector<float> zeros;
+        if (static_cast<int>(zeros.size()) < H) {
+            zeros.assign(static_cast<size_t>(H), 0.0f);
+        }
+        ggml_backend_tensor_set(g.x_in, zeros.data(), 0, hb);
+    } else {
+        const size_t row_off =
+            static_cast<size_t>(last_token) * static_cast<size_t>(H);
+        ggml_backend_tensor_set(
+            g.x_in, p.embed_w.data() + row_off, 0, hb);
+    }
+    for (int l = 0; l < n_layers; ++l) {
+        ggml_backend_tensor_set(
+            g.h_in[static_cast<size_t>(l)],
+            prev_state.h[static_cast<size_t>(l)].data(), 0, hb);
+        ggml_backend_tensor_set(
+            g.c_in[static_cast<size_t>(l)],
+            prev_state.c[static_cast<size_t>(l)].data(), 0, hb);
+    }
+    ggml_backend_graph_compute(g.backend, g.graph);
+    for (int l = 0; l < n_layers; ++l) {
+        ggml_backend_tensor_get(
+            g.h_out[static_cast<size_t>(l)],
+            new_state.h[static_cast<size_t>(l)].data(), 0, hb);
+        ggml_backend_tensor_get(
+            g.c_out[static_cast<size_t>(l)],
+            new_state.c[static_cast<size_t>(l)].data(), 0, hb);
+    }
+    return new_state.h.back().data();
+}
+
 } // namespace
 
 HostJoint::~HostJoint() {
-    if (w_buf     != nullptr) ggml_backend_buffer_free(w_buf);
-    if (w_ctx     != nullptr) ggml_free(w_ctx);
-    if (w_backend != nullptr) ggml_backend_free(w_backend);
+    if (w_buf        != nullptr) ggml_backend_buffer_free(w_buf);
+    if (w_buf_repack != nullptr) ggml_backend_buffer_free(w_buf_repack);
+    if (w_ctx        != nullptr) ggml_free(w_ctx);
+    if (w_backend    != nullptr) ggml_backend_free(w_backend);
+}
+
+HostPredictor::~HostPredictor() {
+    if (w_buf        != nullptr) ggml_backend_buffer_free(w_buf);
+    if (w_buf_repack != nullptr) ggml_backend_buffer_free(w_buf_repack);
+    if (w_ctx        != nullptr) ggml_free(w_ctx);
+    if (w_backend    != nullptr) ggml_backend_free(w_backend);
 }
 
 // Resolve a decode thread count: n_threads <= 0 means "auto" → min(8, cores),
@@ -405,6 +756,11 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
             return TRANSCRIBE_ERR_GGUF;
         }
     }
+
+    // Resident ggml gate weights (native dtype, repack layout when
+    // supported). Non-fatal on failure — the fp32 mirror above is the
+    // fallback path.
+    build_predictor_weight_ggml(out.predictor, w.predictor);
 
     // ----- Joint mirror -----
     out.joint.d_enc       = hp.enc_d_model;
@@ -696,6 +1052,7 @@ void joint_step(const HostJoint &     j,
                 int                   n_threads,
                 const float *         enc_proj,
                 const float *         pred_state,
+                bool                  reuse_pred_proj,
                 std::vector<float> &  scratch_pred_proj,
                 std::vector<float> &  scratch_summed,
                 std::vector<float> &  out_logits)
@@ -704,8 +1061,17 @@ void joint_step(const HostJoint &     j,
     if (static_cast<int>(scratch_summed.size())    < j.joint_h) scratch_summed.resize(static_cast<size_t>(j.joint_h));
     if (static_cast<int>(out_logits.size())        < j.joint_n) out_logits.resize(static_cast<size_t>(j.joint_n));
 
-    linear(j.pred_w.data(), pred_state, j.pred_b.data(), j.joint_h, j.pred_hidden,
-           scratch_pred_proj.data(), n_threads);
+    // `reuse_pred_proj` extends the caller's predictor cache: on a blank
+    // emission `pred_state` is the same pointer with the same contents as
+    // the previous iteration, so `scratch_pred_proj` (caller-owned, written
+    // only here) still holds pred_w @ pred_state + pred_b. Skipping the
+    // matmul is bit-exact and elides the pred_w stream (joint_h ×
+    // pred_hidden fp32, ~1.6 MB at 640x640) on the 60-80% of iterations
+    // that follow a blank.
+    if (!reuse_pred_proj) {
+        linear(j.pred_w.data(), pred_state, j.pred_b.data(), j.joint_h, j.pred_hidden,
+               scratch_pred_proj.data(), n_threads);
+    }
 
     for (int i = 0; i < j.joint_h; ++i) {
         scratch_summed[i] = enc_proj[i] + scratch_pred_proj[i];
@@ -757,8 +1123,13 @@ void joint_step(const HostJoint &     j,
     //
     // Cost: ~joint_n adds + 1 logsumexp. For joint_n=1030 that's ~2K
     // ops per decode iter, negligible vs the joint_h × pred_hidden +
-    // joint_h × joint_n matmuls (~1.3M ops).
-    {
+    // joint_h × joint_n matmuls (~1.3M ops) — but NOT negligible for
+    // the 13k-class multilingual joint once the matmuls are fast
+    // (~1 ms of libm exp per iter on a Cortex-A55). Argmax, duration
+    // argmax, and token_confidence are all invariant to the shift (see
+    // above), so the normalization only matters when the dump harness
+    // is comparing raw logits against NeMo. Skip it otherwise.
+    if (transcribe::debug::enabled()) {
         float max_v = out_logits[0];
         for (int i = 1; i < j.joint_n; ++i) {
             if (out_logits[i] > max_v) max_v = out_logits[i];
@@ -909,6 +1280,11 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     JointGraph jg;
     build_joint_graph(jg, w.joint, nt);
 
+    // Per-call predictor compute graph against the resident gate
+    // weights; pg.ready == false falls back to the fp32 host mirror.
+    PredictorGraph pg;
+    build_predictor_graph(pg, w.predictor);
+
     // Two LSTM states, both pre-sized: `state` is the committed
     // state we read from each iteration; `next_state` is where the
     // predictor writes the new step's outputs. On a non-blank
@@ -966,11 +1342,15 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
 
         // ----- Predictor (one LSTM step) -----
         const int64_t t0 = ggml_time_us();
+        const bool pred_reused = !predictor_dirty;  // pred_proj cache follows the LSTM cache
         const float * decoder_out;
         if (predictor_dirty) {
-            decoder_out = predictor_step(
-                w.predictor, last_token, state, next_state,
-                scratch_x, scratch_gates, scratch_hh, nt);
+            decoder_out = pg.ready
+                ? predictor_step_ggml(w.predictor, pg, last_token,
+                                      state, next_state)
+                : predictor_step(
+                      w.predictor, last_token, state, next_state,
+                      scratch_x, scratch_gates, scratch_hh, nt);
             predictor_dirty = false;
         } else {
             decoder_out = next_state.h.back().data();
@@ -980,7 +1360,7 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         // ----- Joint (using precomputed encoder projection) -----
         const float * enc_proj =
             enc_proj_all.data() + static_cast<size_t>(step) * static_cast<size_t>(joint_h);
-        joint_step(w.joint, jg, nt, enc_proj, decoder_out,
+        joint_step(w.joint, jg, nt, enc_proj, decoder_out, pred_reused,
                    scratch_pred_proj, scratch_summed,
                    logits);
         const int64_t t2 = ggml_time_us();
@@ -1150,6 +1530,11 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
     JointGraph jg;
     build_joint_graph(jg, w.joint, nt);
 
+    // Per-call predictor compute graph against the resident gate
+    // weights; pg.ready == false falls back to the fp32 host mirror.
+    PredictorGraph pg;
+    build_predictor_graph(pg, w.predictor);
+
     LstmState state;
     LstmState next_state;
     state.reset(n_layers, H);
@@ -1192,11 +1577,15 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
         ++iter;
 
         const int64_t t0 = ggml_time_us();
+        const bool pred_reused = !predictor_dirty;  // pred_proj cache follows the LSTM cache
         const float * decoder_out;
         if (predictor_dirty) {
-            decoder_out = predictor_step(
-                w.predictor, last_token, state, next_state,
-                scratch_x, scratch_gates, scratch_hh, nt);
+            decoder_out = pg.ready
+                ? predictor_step_ggml(w.predictor, pg, last_token,
+                                      state, next_state)
+                : predictor_step(
+                      w.predictor, last_token, state, next_state,
+                      scratch_x, scratch_gates, scratch_hh, nt);
             predictor_dirty = false;
         } else {
             decoder_out = next_state.h.back().data();
@@ -1205,7 +1594,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 
         const float * enc_proj =
             enc_proj_all.data() + static_cast<size_t>(step) * static_cast<size_t>(joint_h);
-        joint_step(w.joint, jg, nt, enc_proj, decoder_out,
+        joint_step(w.joint, jg, nt, enc_proj, decoder_out, pred_reused,
                    scratch_pred_proj, scratch_summed,
                    logits);
         const int64_t t2 = ggml_time_us();
@@ -1341,6 +1730,11 @@ transcribe_status decode_rnnt_greedy_streaming(
     JointGraph jg;
     build_joint_graph(jg, w.joint, nt);
 
+    // Per-call predictor compute graph against the resident gate
+    // weights; pg.ready == false falls back to the fp32 host mirror.
+    PredictorGraph pg;
+    build_predictor_graph(pg, w.predictor);
+
     // Validate state_io shape; reset if degenerate (paranoid guard).
     if (static_cast<int>(state_io.h.size()) != n_layers ||
         static_cast<int>(state_io.c.size()) != n_layers)
@@ -1388,23 +1782,42 @@ transcribe_status decode_rnnt_greedy_streaming(
 
     bool predictor_dirty = true;
 
+    static const int prof_stream = [] {
+        const char * env = std::getenv("TRANSCRIBE_PROFILE_STREAM");
+        return env ? std::atoi(env) : 0;
+    }();
+    int64_t t_pred_us = 0, t_joint_us = 0;
+    int n_pred = 0;
+
     while (step < T_enc_new && iter < max_iters) {
         ++iter;
 
+        const int64_t t0 = prof_stream ? ggml_time_us() : 0;
+        const bool pred_reused = !predictor_dirty;  // pred_proj cache follows the LSTM cache
         const float * decoder_out;
         if (predictor_dirty) {
-            decoder_out = predictor_step(
-                w.predictor, last_token, state, next_state,
-                scratch_x, scratch_gates, scratch_hh, nt);
+            decoder_out = pg.ready
+                ? predictor_step_ggml(w.predictor, pg, last_token,
+                                      state, next_state)
+                : predictor_step(
+                      w.predictor, last_token, state, next_state,
+                      scratch_x, scratch_gates, scratch_hh, nt);
             predictor_dirty = false;
+            ++n_pred;
         } else {
             decoder_out = next_state.h.back().data();
         }
+        const int64_t t1 = prof_stream ? ggml_time_us() : 0;
 
         const float * enc_proj = enc_proj_all.data() +
             static_cast<size_t>(step) * static_cast<size_t>(joint_h);
-        joint_step(w.joint, jg, nt, enc_proj, decoder_out,
+        joint_step(w.joint, jg, nt, enc_proj, decoder_out, pred_reused,
                    scratch_pred_proj, scratch_summed, logits);
+        if (prof_stream) {
+            const int64_t t2 = ggml_time_us();
+            t_pred_us  += t1 - t0;
+            t_joint_us += t2 - t1;
+        }
 
         const float * token_logits = logits.data();
         const int pred_token = argmax_range(token_logits, n_token_cls);
@@ -1433,6 +1846,14 @@ transcribe_status decode_rnnt_greedy_streaming(
                 new_symbols = 0;
             }
         }
+    }
+
+    if (prof_stream) {
+        std::fprintf(stderr,
+                     "[profile_stream] decode: iters=%d preds=%d T_new=%d "
+                     "pred=%.1f ms joint=%.1f ms\n",
+                     iter, n_pred, T_enc_new,
+                     t_pred_us / 1000.0, t_joint_us / 1000.0);
     }
 
     if (iter >= max_iters) {

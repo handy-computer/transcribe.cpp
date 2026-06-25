@@ -80,6 +80,35 @@ struct HostPredictor {
     int                       pred_vocab  = 0; // includes the +1 start row
     std::vector<float>        embed_w;          // [pred_vocab, pred_hidden]
     std::vector<HostLstmLayer> lstm;            // pred_n_layers entries
+
+    // --- resident ggml weights for the LSTM gate matmuls ---
+    // Same pattern as HostJoint::gw_* below: the Wx/Wh gate projections
+    // are kept as ggml tensors in their native (quantized) dtype —
+    // routed through the CPU repack buffer when supported — so each
+    // predictor step runs two interleaved-SDOT GEMVs per layer instead
+    // of streaming the 26 MB fp32 mirror through a scalar loop
+    // (~25 ms -> ~2 ms per step on Cortex-A55). The fp32 mirrors above
+    // stay resident as the fallback path (TRANSCRIBE_PRED_GGML=0 or
+    // build failure). Immutable after load; per-step compute state
+    // lives in the per-decode-call PredictorGraph (decoder.cpp).
+    struct GgmlLstmLayer {
+        ggml_tensor * Wx = nullptr; // [pred_hidden, 4*pred_hidden] native
+        ggml_tensor * Wh = nullptr; // [pred_hidden, 4*pred_hidden] native
+        ggml_tensor * b  = nullptr; // [4*pred_hidden] f32
+    };
+    ggml_context *             w_ctx        = nullptr;
+    ggml_backend_t             w_backend    = nullptr; // alloc-only
+    ggml_backend_buffer_t      w_buf        = nullptr;
+    ggml_backend_buffer_t      w_buf_repack = nullptr;
+    std::vector<GgmlLstmLayer> gw_lstm;
+    bool                       w_ready      = false;
+
+    HostPredictor() = default;
+    ~HostPredictor();
+    HostPredictor(const HostPredictor &)             = delete;
+    HostPredictor & operator=(const HostPredictor &) = delete;
+    HostPredictor(HostPredictor &&)                  = delete;
+    HostPredictor & operator=(HostPredictor &&)      = delete;
 };
 
 struct HostJoint {
@@ -113,6 +142,16 @@ struct HostJoint {
     ggml_context *        w_ctx     = nullptr;
     ggml_backend_t        w_backend = nullptr; // alloc-only; never graph_compute'd
     ggml_backend_buffer_t w_buf     = nullptr;
+    // CPU repack ("CPU_REPACK") buffer holding gw_w in interleaved GEMM
+    // layout when the dtype/CPU combination supports it — the per-step
+    // 13k-row GEMV then dispatches the optimized SDOT kernels (~5x on
+    // Cortex-A55). Null when unsupported; gw_w then lands in w_buf in
+    // the plain layout. w_repacked mirrors which case happened so the
+    // per-decode JointGraph can pick its thread count (the repack GEMV
+    // is sub-millisecond — a thread spawn would cost more than it
+    // saves).
+    ggml_backend_buffer_t w_buf_repack = nullptr;
+    bool                  w_repacked   = false;
     ggml_tensor *         gw_w      = nullptr; // [joint_h, joint_n] native/fp32 weight
     ggml_tensor *         gw_b      = nullptr; // [joint_n] fp32 bias
     bool                  w_ready   = false;

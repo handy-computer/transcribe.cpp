@@ -843,16 +843,49 @@ EncoderBuild build_encoder_graph_streaming(
     const int64_t T_cache  = cache_io.channel_in[0]->ne[1];
     const int64_t T_virt   = T_cache + T_q_new;
 
-    // ----- Pos_emb sized for T_virtual -----
-    const int64_t pos_len = 2 * T_virt - 1;
-    eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
-                                       hp.enc_d_model, pos_len);
-    ggml_set_name(eb.pos_emb_in, "stream.pos_emb.in");
-    ggml_set_input(eb.pos_emb_in);
+    // Query slicing (BlockParams::streaming_q_slice): queries cover only
+    // the T_q_new new frames, K/V the full virtual window. pos_emb and
+    // the chunked mask are sized for that rectangular geometry. The
+    // host-side fills in emit_streaming_chunk read the sizes back off
+    // these tensors, so builder and driver stay in sync by construction.
+    // TRANSCRIBE_STREAM_FULL_Q=1 restores the historical full-query
+    // topology (square mask, 2*T_virt-1 pos rows) for A/B comparison.
+    const bool q_slice = (std::getenv("TRANSCRIBE_STREAM_FULL_Q") == nullptr);
 
-    // Chunked mask: [T_virtual, T_virtual]. Built host-side.
+    // Streaming KV cache: consume per-layer pre-projected K/V instead
+    // of recomputing them from the channel cache (K/V projections then
+    // run on T_q_new columns instead of T_virt). Requires the
+    // rectangular q_slice geometry. Disabled when the dump harness is
+    // active — the numerical validation compares last_channel snapshots
+    // against NeMo, and this mode neither reads nor writes them — and
+    // under TRANSCRIBE_NO_STREAM_KV=1.
+    const bool kv_cache_mode = q_slice &&
+        !transcribe::debug::enabled() &&
+        std::getenv("TRANSCRIBE_NO_STREAM_KV") == nullptr &&
+        static_cast<int>(cache_io.k_in.size()) == n_layers &&
+        static_cast<int>(cache_io.v_in.size()) == n_layers;
+
+    // ----- Pos_emb -----
+    const int64_t pos_len = q_slice ? (T_virt + T_q_new - 1)
+                                    : (2 * T_virt - 1);
+    // Rel-pos projection memoization: when the driver's cache matches
+    // this chunk's pos_len, every block consumes its precomputed
+    // projection and the graph needs no pos_emb input at all.
+    const bool pos_proj_hit =
+        cache_io.pos_proj_len == pos_len &&
+        static_cast<int>(cache_io.pos_proj.size()) == n_layers;
+    if (!pos_proj_hit) {
+        eb.pos_emb_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                                           hp.enc_d_model, pos_len);
+        ggml_set_name(eb.pos_emb_in, "stream.pos_emb.in");
+        ggml_set_input(eb.pos_emb_in);
+    }
+
+    // Chunked mask: [T_virtual, T_q] (keys x queries). Built host-side.
     eb.chunked_mask_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
-                                            T_virt, T_virt, 1, 1);
+                                            T_virt,
+                                            q_slice ? T_q_new : T_virt,
+                                            1, 1);
     ggml_set_name(eb.chunked_mask_in, "stream.attn.chunked_mask.in");
     ggml_set_input(eb.chunked_mask_in);
 
@@ -869,7 +902,13 @@ EncoderBuild build_encoder_graph_streaming(
     bparams.n_head            = hp.enc_n_heads;
     bparams.conv_kernel       = hp.enc_conv_kernel;
     bparams.kv_type           = kv_type;
-    bparams.use_flash         = true;
+    // Same flash-attention opt-out as the offline builder. On CPU the
+    // flash kernel is dramatically slower than the manual mul_mat +
+    // soft_max path at streaming geometry (T_q ~14, T_k ~70): measured
+    // ~33 ms/layer vs ~1 ms on a Cortex-A55. The numerics gate
+    // (flash casts the rel-pos mask to F16, manual stays F32) is the
+    // same one the offline path documents.
+    bparams.use_flash         = (std::getenv("TRANSCRIBE_NO_FLASH") == nullptr);
     bparams.policy            = policy;
     // No att_context_left/right here: ChunkedLimited derives the attention
     // band entirely from attn_chunked_mask (built host-side in
@@ -887,33 +926,66 @@ EncoderBuild build_encoder_graph_streaming(
         : conf::BlockParams::ConvNormType::BatchNorm;
     bparams.streaming_graph    = eb.graph;
     bparams.streaming_T_q_new  = static_cast<int>(T_q_new);
+    bparams.streaming_q_slice  = q_slice;
 
     cache_io.channel_out.assign(n_layers, nullptr);
     cache_io.time_out.assign(n_layers, nullptr);
     const int k_minus_1 = static_cast<int>(cache_io.time_in[0]->ne[0]);
 
+    if (kv_cache_mode) {
+        cache_io.k_out.assign(n_layers, nullptr);
+        cache_io.v_out.assign(n_layers, nullptr);
+    }
     for (int i = 0; i < n_layers; ++i) {
         // Per-layer cache I/O. The "in" tensors are from the
         // persistent cache buffer (passed in by the driver). The
         // "out" tensors are fresh in compute_ctx; the helpers fill
         // them via ggml_cpy and the driver reads them after compute.
-        ggml_tensor * cache_ch_out = ggml_new_tensor_2d(
-            ctx, GGML_TYPE_F32, hp.enc_d_model, T_cache);
+        // KV mode swaps the channel cache for pre-projected K/V (the
+        // channel_out slot stays null; the driver rotates whichever
+        // outs are present).
         ggml_tensor * cache_tm_out = ggml_new_tensor_2d(
             ctx, GGML_TYPE_F32, k_minus_1, hp.enc_d_model);
-        if (cache_ch_out == nullptr || cache_tm_out == nullptr) return eb;
+        if (cache_tm_out == nullptr) return eb;
         char nm[64];
-        std::snprintf(nm, sizeof(nm), "stream.cache_ch_out.%d", i);
-        ggml_set_name(cache_ch_out, nm);
         std::snprintf(nm, sizeof(nm), "stream.cache_tm_out.%d", i);
         ggml_set_name(cache_tm_out, nm);
-        ggml_set_output(cache_ch_out);
         ggml_set_output(cache_tm_out);
+
+        ggml_tensor * cache_ch_out = nullptr;
+        ggml_tensor * cache_k_out  = nullptr;
+        ggml_tensor * cache_v_out  = nullptr;
+        if (kv_cache_mode) {
+            cache_k_out = ggml_new_tensor_2d(
+                ctx, GGML_TYPE_F32, hp.enc_d_model, T_cache);
+            cache_v_out = ggml_new_tensor_2d(
+                ctx, GGML_TYPE_F32, hp.enc_d_model, T_cache);
+            if (cache_k_out == nullptr || cache_v_out == nullptr) return eb;
+            std::snprintf(nm, sizeof(nm), "stream.cache_k_out.%d", i);
+            ggml_set_name(cache_k_out, nm);
+            std::snprintf(nm, sizeof(nm), "stream.cache_v_out.%d", i);
+            ggml_set_name(cache_v_out, nm);
+            ggml_set_output(cache_k_out);
+            ggml_set_output(cache_v_out);
+        } else {
+            cache_ch_out = ggml_new_tensor_2d(
+                ctx, GGML_TYPE_F32, hp.enc_d_model, T_cache);
+            if (cache_ch_out == nullptr) return eb;
+            std::snprintf(nm, sizeof(nm), "stream.cache_ch_out.%d", i);
+            ggml_set_name(cache_ch_out, nm);
+            ggml_set_output(cache_ch_out);
+        }
 
         bparams.streaming_channel_in  = cache_io.channel_in[i];
         bparams.streaming_channel_out = cache_ch_out;
         bparams.streaming_time_in     = cache_io.time_in[i];
         bparams.streaming_time_out    = cache_tm_out;
+        bparams.streaming_pos_proj_in =
+            pos_proj_hit ? cache_io.pos_proj[i] : nullptr;
+        bparams.streaming_kv_k_in  = kv_cache_mode ? cache_io.k_in[i] : nullptr;
+        bparams.streaming_kv_v_in  = kv_cache_mode ? cache_io.v_in[i] : nullptr;
+        bparams.streaming_kv_k_out = cache_k_out;
+        bparams.streaming_kv_v_out = cache_v_out;
 
         x = conf::build_conformer_block(ctx, x, eb.pos_emb_in,
                                         to_view(w.blocks[i]),
@@ -922,6 +994,10 @@ EncoderBuild build_encoder_graph_streaming(
 
         cache_io.channel_out[i] = cache_ch_out;
         cache_io.time_out[i]    = cache_tm_out;
+        if (kv_cache_mode) {
+            cache_io.k_out[i] = cache_k_out;
+            cache_io.v_out[i] = cache_v_out;
+        }
     }
 
     // Tag the streaming per-chunk encoder output so the host-side dump
