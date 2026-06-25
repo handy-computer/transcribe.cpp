@@ -122,8 +122,21 @@ ParakeetSession::~ParakeetSession() {
         ggml_free(stream_caches.ctx);
         stream_caches.ctx = nullptr;
     }
+    // Rel-pos projection memo (own ctx + buffer; geometry-keyed).
+    if (stream_caches.pos_proj_buf != nullptr) {
+        ggml_backend_buffer_free(stream_caches.pos_proj_buf);
+        stream_caches.pos_proj_buf = nullptr;
+    }
+    if (stream_caches.pos_proj_ctx != nullptr) {
+        ggml_free(stream_caches.pos_proj_ctx);
+        stream_caches.pos_proj_ctx = nullptr;
+    }
+    stream_caches.pos_proj.clear();
+    stream_caches.pos_proj_len = -1;
     stream_caches.last_channel.clear();
     stream_caches.last_time.clear();
+    stream_caches.last_k.clear();
+    stream_caches.last_v.clear();
     stream_caches.initialized = false;
 }
 
@@ -385,10 +398,11 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // 2 tensors per layer (last_channel + last_time) plus headroom
-    // for descriptor / view tensors created during graph build.
+    // 4 tensors per layer (last_channel + last_time + last_k + last_v)
+    // plus headroom for descriptor / view tensors created during graph
+    // build.
     const size_t ctx_size =
-        static_cast<size_t>(2 * n_layer + 8) * ggml_tensor_overhead();
+        static_cast<size_t>(4 * n_layer + 8) * ggml_tensor_overhead();
     ggml_init_params ip {};
     ip.mem_size   = ctx_size;
     ip.mem_buffer = nullptr;
@@ -402,6 +416,8 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
 
     pc->stream_caches.last_channel.assign(n_layer, nullptr);
     pc->stream_caches.last_time.assign(n_layer, nullptr);
+    pc->stream_caches.last_k.assign(n_layer, nullptr);
+    pc->stream_caches.last_v.assign(n_layer, nullptr);
     for (int i = 0; i < n_layer; ++i) {
         ggml_tensor * lc = ggml_new_tensor_2d(pc->stream_caches.ctx,
                                               GGML_TYPE_F32,
@@ -409,7 +425,15 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
         ggml_tensor * lt = ggml_new_tensor_2d(pc->stream_caches.ctx,
                                               GGML_TYPE_F32,
                                               k_minus_1, d_model);
-        if (lc == nullptr || lt == nullptr) {
+        ggml_tensor * lk = ggml_new_tensor_2d(pc->stream_caches.ctx,
+                                              GGML_TYPE_F32,
+                                              d_model, T_cache);
+        ggml_tensor * lv = ggml_new_tensor_2d(pc->stream_caches.ctx,
+                                              GGML_TYPE_F32,
+                                              d_model, T_cache);
+        if (lc == nullptr || lt == nullptr ||
+            lk == nullptr || lv == nullptr)
+        {
             ggml_free(pc->stream_caches.ctx);
             pc->stream_caches.ctx = nullptr;
             return TRANSCRIBE_ERR_OOM;
@@ -419,8 +443,14 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
         ggml_set_name(lc, name);
         std::snprintf(name, sizeof(name), "stream.cache.last_time.%d", i);
         ggml_set_name(lt, name);
+        std::snprintf(name, sizeof(name), "stream.cache.last_k.%d", i);
+        ggml_set_name(lk, name);
+        std::snprintf(name, sizeof(name), "stream.cache.last_v.%d", i);
+        ggml_set_name(lv, name);
         pc->stream_caches.last_channel[i] = lc;
         pc->stream_caches.last_time[i]    = lt;
+        pc->stream_caches.last_k[i]       = lk;
+        pc->stream_caches.last_v[i]       = lv;
     }
 
     pc->stream_caches.buffer =
@@ -2107,10 +2137,10 @@ static int64_t us_to_ms(int64_t us) {
 // pc->pos_div_term are resized in place.
 void fill_streaming_pos_emb(ParakeetSession * pc,
                             ggml_tensor *     pos_emb_in,
-                            int               d_model)
+                            int               d_model,
+                            int               zero_index)
 {
     const int pos_len = static_cast<int>(pos_emb_in->ne[1]);
-    const int zero_index = (pos_len - 1) / 2;
 
     pc->pos_buf.assign(static_cast<size_t>(pos_len) * d_model, 0.0f);
     pc->pos_div_term.resize(static_cast<size_t>(d_model / 2));
@@ -2149,6 +2179,8 @@ void fill_streaming_chunked_mask(ggml_tensor * mask_in,
                                  int           att_context_left,
                                  int           att_context_right)
 {
+    const int n_q_rows = static_cast<int>(mask_in->ne[1]);
+    const int q_first  = T_virtual - n_q_rows;
     const int chunk_size  = att_context_right + 1;
     const int left_chunks = (chunk_size > 0)
         ? (att_context_left / chunk_size)
@@ -2156,15 +2188,15 @@ void fill_streaming_chunked_mask(ggml_tensor * mask_in,
     const int invalid_cache_threshold = T_cache - channel_len;
 
     std::vector<float> mask_buf(
-        static_cast<size_t>(T_virtual) * static_cast<size_t>(T_virtual));
-    for (int q = 0; q < T_virtual; ++q) {
+        static_cast<size_t>(n_q_rows) * static_cast<size_t>(T_virtual));
+    for (int q = q_first; q < T_virtual; ++q) {
         const int q_chunk     = (chunk_size > 0) ? (q / chunk_size) : 0;
         const int k_min_chunk = (q_chunk - left_chunks > 0)
             ? (q_chunk - left_chunks) : 0;
         const int k_min = k_min_chunk * chunk_size;
         const int k_max = (q_chunk + 1) * chunk_size; // exclusive
         float * row = mask_buf.data() +
-            static_cast<size_t>(q) * T_virtual;
+            static_cast<size_t>(q - q_first) * T_virtual;
         for (int k = 0; k < T_virtual; ++k) {
             const bool in_band      = (k >= k_min && k < k_max);
             const bool cache_unfilled = (k < invalid_cache_threshold);
@@ -2175,6 +2207,111 @@ void fill_streaming_chunked_mask(ggml_tensor * mask_in,
     }
     ggml_backend_tensor_set(mask_in, mask_buf.data(),
                             0, mask_buf.size() * sizeof(float));
+}
+
+// Rebuild the per-layer rel-pos projection cache for `pos_len` (see
+// ParakeetStreamingCaches::pos_proj). Runs a small one-off graph —
+// n_layers mul_mats of [d_model, d_model] x [d_model, pos_len] plus
+// layout massaging — through the session scheduler, reading the pos_emb
+// values from pc->pos_buf (filled by fill_streaming_pos_emb earlier in
+// the same chunk). Called only on a geometry change: in practice twice
+// per stream session (first-chunk geometry, then steady state) and
+// never again, since the cache is geometry-keyed, not stream-keyed.
+transcribe_status ensure_pos_proj_cache(ParakeetSession * pc,
+                                        ParakeetModel *   pm,
+                                        int               pos_len)
+{
+    const auto & hp       = pm->hparams;
+    const int    n_layers = static_cast<int>(pm->weights.blocks.size());
+    const int    d_model  = hp.enc_d_model;
+    const int    n_head   = hp.enc_n_heads;
+    const int    head_dim = d_model / n_head;
+
+    if (pc->pos_buf.size() <
+        static_cast<size_t>(pos_len) * static_cast<size_t>(d_model))
+    {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "parakeet stream: pos_proj cache fill without pos_buf "
+            "(%zu < %d*%d)", pc->pos_buf.size(), pos_len, d_model);
+        return TRANSCRIBE_ERR_BACKEND;
+    }
+
+    auto & sc = pc->stream_caches;
+    if (sc.pos_proj_buf != nullptr) {
+        ggml_backend_buffer_free(sc.pos_proj_buf);
+        sc.pos_proj_buf = nullptr;
+    }
+    if (sc.pos_proj_ctx != nullptr) {
+        ggml_free(sc.pos_proj_ctx);
+        sc.pos_proj_ctx = nullptr;
+    }
+    sc.pos_proj.assign(static_cast<size_t>(n_layers), nullptr);
+    sc.pos_proj_len = -1;
+
+    ggml_init_params pip {};
+    pip.mem_size   = (static_cast<size_t>(n_layers) + 2) *
+                     ggml_tensor_overhead();
+    pip.mem_buffer = nullptr;
+    pip.no_alloc   = true;
+    sc.pos_proj_ctx = ggml_init(pip);
+    if (sc.pos_proj_ctx == nullptr) return TRANSCRIBE_ERR_OOM;
+
+    for (int i = 0; i < n_layers; ++i) {
+        ggml_tensor * t = ggml_new_tensor_3d(
+            sc.pos_proj_ctx, GGML_TYPE_F32, head_dim, pos_len, n_head);
+        if (t == nullptr) return TRANSCRIBE_ERR_OOM;
+        char nm[64];
+        std::snprintf(nm, sizeof(nm), "stream.pos_proj.%d", i);
+        ggml_set_name(t, nm);
+        sc.pos_proj[static_cast<size_t>(i)] = t;
+    }
+    sc.pos_proj_buf = ggml_backend_alloc_ctx_tensors(
+        sc.pos_proj_ctx, pm->plan.primary);
+    if (sc.pos_proj_buf == nullptr) return TRANSCRIBE_ERR_OOM;
+
+    // One-off projection graph.
+    ggml_init_params gip {};
+    gip.mem_size   = 4 * 1024 * 1024;
+    gip.mem_buffer = nullptr;
+    gip.no_alloc   = true;
+    ggml_context * gctx = ggml_init(gip);
+    if (gctx == nullptr) return TRANSCRIBE_ERR_OOM;
+
+    ggml_cgraph * graph = ggml_new_graph_custom(gctx, 512, false);
+    ggml_tensor * pos_in = ggml_new_tensor_2d(
+        gctx, GGML_TYPE_F32, d_model, pos_len);
+    ggml_set_name(pos_in, "pos_proj.pos_emb.in");
+    ggml_set_input(pos_in);
+    for (int i = 0; i < n_layers; ++i) {
+        ggml_tensor * p = ggml_mul_mat(
+            gctx, pm->weights.blocks[static_cast<size_t>(i)].attn_pos_w,
+            pos_in);
+        p = ggml_reshape_4d(gctx, p, head_dim, n_head, pos_len, 1);
+        p = ggml_cont(gctx, ggml_permute(gctx, p, 0, 2, 1, 3));
+        ggml_tensor * cpy = ggml_cpy(
+            gctx, p, sc.pos_proj[static_cast<size_t>(i)]);
+        ggml_build_forward_expand(graph, cpy);
+    }
+
+    transcribe_status st = TRANSCRIBE_OK;
+    ggml_backend_sched_reset(pc->sched);
+    if (!ggml_backend_sched_alloc_graph(pc->sched, graph)) {
+        st = TRANSCRIBE_ERR_BACKEND;
+    } else {
+        ggml_backend_tensor_set(
+            pos_in, pc->pos_buf.data(), 0,
+            static_cast<size_t>(pos_len) * d_model * sizeof(float));
+        if (ggml_backend_sched_graph_compute(pc->sched, graph) !=
+            GGML_STATUS_SUCCESS)
+        {
+            st = TRANSCRIBE_ERR_BACKEND;
+        }
+    }
+    ggml_free(gctx);
+    if (st == TRANSCRIBE_OK) {
+        sc.pos_proj_len = pos_len;
+    }
+    return st;
 }
 
 } // namespace
@@ -2318,8 +2455,12 @@ transcribe_status emit_streaming_chunk(
     }
 
     StreamingEncoderCacheIO cache_io;
-    cache_io.channel_in = pc->stream_caches.last_channel;
-    cache_io.time_in    = pc->stream_caches.last_time;
+    cache_io.channel_in   = pc->stream_caches.last_channel;
+    cache_io.time_in      = pc->stream_caches.last_time;
+    cache_io.k_in         = pc->stream_caches.last_k;
+    cache_io.v_in         = pc->stream_caches.last_v;
+    cache_io.pos_proj     = pc->stream_caches.pos_proj;
+    cache_io.pos_proj_len = pc->stream_caches.pos_proj_len;
 
     EncoderBuild eb = build_encoder_graph_streaming(
         pc->compute_ctx, pm->weights, hp,
@@ -2352,8 +2493,19 @@ transcribe_status emit_streaming_chunk(
         static_cast<size_t>(n_mel_chunk_frames) *
             static_cast<size_t>(hp.fe_num_mels) * sizeof(float));
 
-    // Build & upload pos_emb (sized for T_virtual).
-    fill_streaming_pos_emb(pc, eb.pos_emb_in, hp.enc_d_model);
+    const int T_virtual = static_cast<int>(eb.chunked_mask_in->ne[0]);
+    const int T_cache   = hp.enc_att_context_left;
+    const int T_q_new   = T_virtual - T_cache;
+
+    // Build & upload pos_emb. The zero-offset row sits at T_virtual - 1
+    // in both the square (pos_len = 2*T_virtual-1) and the query-sliced
+    // rectangular (pos_len = T_virtual + T_q_new - 1) geometries. Null
+    // when every block consumes the memoized rel-pos projection — the
+    // graph then carries no pos_emb input at all.
+    if (eb.pos_emb_in != nullptr) {
+        fill_streaming_pos_emb(pc, eb.pos_emb_in, hp.enc_d_model,
+                               /*zero_index=*/T_virtual - 1);
+    }
 
     // Build & upload chunked mask with cache-unfilled prefix masking.
     // The mask band is a function of the (att_context_left, att_context_right)
@@ -2363,9 +2515,6 @@ transcribe_status emit_streaming_chunk(
     // the default-R chunking accidentally equivalent on the new-frame rows),
     // but reading the resolved values makes the mask correct by construction
     // for any future variant whose menu breaks those invariants.
-    const int T_virtual = static_cast<int>(eb.chunked_mask_in->ne[0]);
-    const int T_cache   = hp.enc_att_context_left;
-    const int T_q_new   = T_virtual - T_cache;
     fill_streaming_chunked_mask(
         eb.chunked_mask_in, T_virtual, T_cache,
         pc->stream_caches.channel_len,
@@ -2485,23 +2634,58 @@ transcribe_status emit_streaming_chunk(
     // (the conv_module cache_next logic in conformer/conformer.cpp
     // covers T_q_new < pad_left explicitly), so reaching this branch
     // indicates a builder bug.
+    // KV-cache mode rotates last_k/last_v and leaves the channel cache
+    // untouched (the builder set channel_out to null); the recompute
+    // path rotates last_channel. The time (conv) cache rotates in both.
+    const bool kv_mode = !cache_io.k_out.empty();
     for (int i = 0; i < n_layers; ++i) {
-        if (cache_io.channel_out[i] == nullptr || cache_io.channel_out[i]->buffer == nullptr ||
-            cache_io.time_out[i]    == nullptr || cache_io.time_out[i]->buffer    == nullptr)
-        {
+        ggml_tensor * ch = cache_io.channel_out[i];
+        ggml_tensor * tm = cache_io.time_out[i];
+        ggml_tensor * ko = kv_mode ? cache_io.k_out[i] : nullptr;
+        ggml_tensor * vo = kv_mode ? cache_io.v_out[i] : nullptr;
+        const bool attn_ok = kv_mode
+            ? (ko != nullptr && ko->buffer != nullptr &&
+               vo != nullptr && vo->buffer != nullptr)
+            : (ch != nullptr && ch->buffer != nullptr);
+        if (!attn_ok || tm == nullptr || tm->buffer == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "parakeet stream: cache_out unallocated at layer %d "
                 "(att_context_right=%d) — builder bug",
                 i, pc->stream_caches.att_context_right);
             return TRANSCRIBE_ERR_BACKEND;
         }
-        ggml_backend_tensor_copy(cache_io.channel_out[i],
-                                 pc->stream_caches.last_channel[i]);
-        ggml_backend_tensor_copy(cache_io.time_out[i],
-                                 pc->stream_caches.last_time[i]);
+        if (kv_mode) {
+            ggml_backend_tensor_copy(ko, pc->stream_caches.last_k[i]);
+            ggml_backend_tensor_copy(vo, pc->stream_caches.last_v[i]);
+        } else {
+            ggml_backend_tensor_copy(ch, pc->stream_caches.last_channel[i]);
+        }
+        ggml_backend_tensor_copy(tm, pc->stream_caches.last_time[i]);
     }
     pc->stream_caches.channel_len = std::min(
         T_cache, pc->stream_caches.channel_len + T_q_new);
+
+    // Refill the rel-pos projection memo on geometry change, so the next
+    // chunk with this pos_len consumes the cached projections instead of
+    // running the per-layer linear_pos matmuls. Must come after the cache
+    // rotation above: ensure_pos_proj_cache resets the scheduler, which
+    // releases this chunk graph's compute buffers (cache_out lives there).
+    // A failure only loses the memoization — streaming continues on the
+    // inline-compute path — so it logs and degrades.
+    if (eb.pos_emb_in != nullptr) {
+        const int pos_len_cur = static_cast<int>(eb.pos_emb_in->ne[1]);
+        if (pos_len_cur != pc->stream_caches.pos_proj_len) {
+            if (const transcribe_status st =
+                    ensure_pos_proj_cache(pc, pm, pos_len_cur);
+                st != TRANSCRIBE_OK)
+            {
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                    "parakeet stream: pos_proj cache fill failed (%s) — "
+                    "continuing without memoization",
+                    transcribe_status_string(st));
+            }
+        }
+    }
 
     if (dump_on) {
         char namebuf[128];

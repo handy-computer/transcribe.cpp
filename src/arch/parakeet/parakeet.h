@@ -213,6 +213,32 @@ struct ParakeetStreamingCaches {
     std::vector<ggml_tensor *> last_channel;
     std::vector<ggml_tensor *> last_time;
 
+    // KV-cache variant of last_channel: per-layer pre-projected
+    // attention keys/values (bias included) over the same T_cache
+    // window, ne[d_model, T_cache, 1, 1] each. Mathematically
+    // equivalent to recomputing K/V from last_channel every chunk —
+    // k(t)/v(t) depend only on the frame's pre-attention activation —
+    // but the per-chunk K/V projections then run on T_q_new columns
+    // instead of T_cache + T_q_new. The default streaming graph
+    // consumes these and leaves last_channel untouched; an active dump
+    // harness (which compares last_channel against NeMo) falls back to
+    // the channel recompute path. Cleared alongside the other caches at
+    // stream_begin.
+    std::vector<ggml_tensor *> last_k;
+    std::vector<ggml_tensor *> last_v;
+
+    // Rel-pos projection memoization: per-layer
+    // [head_dim, pos_proj_len, n_head, 1] f32 tensors holding
+    // attn_pos_w @ pos_emb in attention-ready layout. Geometry-keyed
+    // (pos_proj_len), not content-keyed, so it survives across chunks
+    // AND streams; rebuilt by ensure_pos_proj_cache whenever a chunk's
+    // pos_len differs. Own ctx + buffer because the size changes with
+    // geometry while the caches above are fixed at stream_begin.
+    ggml_context *             pos_proj_ctx = nullptr;
+    ggml_backend_buffer_t      pos_proj_buf = nullptr;
+    std::vector<ggml_tensor *> pos_proj;
+    int                        pos_proj_len = -1;
+
     int32_t channel_len = 0;
 
     // Absolute mel-frame cursor across the whole stream — used to
