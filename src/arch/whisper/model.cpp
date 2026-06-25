@@ -757,6 +757,33 @@ transcribe_status run_whisper_encoder_on_window(
                          "whisper run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
+
+        // Apply the caller's CPU thread count to the scheduler's backends.
+        // Mirrors the Parakeet path (arch/parakeet/model.cpp): iterate the sched
+        // backends and set n_threads via the registry proc address. GPU backends
+        // ignore it; CPU/BLAS backends use it. Without this, whisper's graph
+        // compute ran at ggml's default thread count regardless of
+        // params.n_threads. Set once here at sched creation — the scheduler (and
+        // the backends' thread count) persists across the reused encoder and
+        // decoder graphs, and cc->n_threads is fixed for the session.
+        {
+            int n_threads = cc->n_threads;
+            if (n_threads <= 0) {
+                n_threads = std::min(8, std::max(1, static_cast<int>(
+                    std::thread::hardware_concurrency())));
+            }
+            for (int i = 0; i < ggml_backend_sched_get_n_backends(cc->sched); ++i) {
+                ggml_backend_t     be  = ggml_backend_sched_get_backend(cc->sched, i);
+                ggml_backend_dev_t dev = ggml_backend_get_device(be);
+                ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+                if (reg == nullptr) continue;
+                auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
+                    ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+                if (fn != nullptr) {
+                    fn(be, n_threads);
+                }
+            }
+        }
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
