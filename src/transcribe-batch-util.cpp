@@ -57,6 +57,7 @@ int default_n_threads(int cap) {
     return n;
 }
 
+
 int configure_sched_n_threads(ggml_backend_sched_t sched, int requested) {
     const int n_threads = requested > 0 ? requested : default_n_threads();
     if (sched == nullptr) return n_threads;

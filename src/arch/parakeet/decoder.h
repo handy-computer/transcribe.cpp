@@ -3,33 +3,30 @@
 // Implements the predictor (2-layer LSTM) + joint network forward +
 // greedy decode driver (TDT, RNN-T, and CTC heads).
 //
-// Execution model. The predictor LSTM, the joint's encoder/predictor
-// input projections, the activation, and the greedy search all run on
-// host in fp32: each is a small per-step operation (a 640-wide LSTM step
-// is ~6.5 MFLOPs; the joint input projections ~2.7 MFLOPs), so keeping
-// them on host avoids per-step graph dispatch and keeps the bring-up dump
-// points (compare_tensors.py) trivial to wire.
+// Execution model. The decoder runs entirely as ggml graphs on ONE shared,
+// per-decode CPU threadpool: the predictor LSTM (per-step graph), the
+// per-utterance encoder projection (one GEMM), and the joint network (pred_w
+// proj + sum + activation + out_w proj, one graph). PredGraph owns the backend
+// and threadpool; the enc_proj and joint graphs borrow it, so the whole decode
+// shares a single pool with no oversubscription. Every decode call builds its
+// own graphs (reentrant); the weights are model-resident fp32 ggml tensors
+// (HostPredictor::lstm_w_* and HostJoint::gw_*/g_pred_*), built once at load.
 //
-// The exception is the joint OUTPUT projection (out_w: joint_n × joint_h).
-// At small vocab (~1k for the English parakeets) it is also negligible and
-// runs on host. At the multilingual vocab (13k) it grows to ~17 MFLOPs per
-// step and dominates decode, so it runs through a ggml graph: the weight
-// stays resident on the model (build_joint_weight / HostJoint::gw_*) while
-// each decode call builds its own stack-local JointGraph (act/logits/graph/
-// backend) around it, keeping concurrent decode reentrant. ggml's threaded,
-// SIMD matmul replaces the scalar host loop. The weight keeps its native
-// (quantized) dtype
-// by default — ggml streams the quantized bytes (~4× less weight bandwidth) and
-// quantizes the activation on the fly, the same regime the encoder runs in and
-// WER-validated equal to fp32 on English. The caller falls back to an
-// fp32-dequant graph (faithful to the host reference: max rel logit diff ~3e-7
-// vs ~3e-3 for the native weight) if the native build fails or when
-// TRANSCRIBE_JOINT_FP32=1 forces it; failing both, the host matmul still serves.
-// The graph is built once and recomputed in place per step.
+// This is a deliberate "one threading system" design: the decoder used to run
+// host fp32 matmuls on a bespoke worker pool, which coexisted badly with ggml's
+// own pool (teardown / oversubscription / MSVC-vcomp bugs). Routing everything
+// through ggml deleted that second system. The CPU backend is always available
+// (the decoder runs on host even when the model is on a GPU), so a graph build
+// failure is a hard decode error rather than a host fallback.
 //
-// Memory cost: a load-time host mirror of the predictor + joint weights
-// (~35 MB on v2, ~73 MB on v3) against the ~2.4 GB encoder footprint. The
-// mirror is built once in build_host_decoder_weights via
+// All weights are fp32 (the LSTM and joint matmuls are n=1 GEMV per step, where
+// quantization buys no usable bandwidth and would only add drift); fp32 keeps
+// decode numerically faithful to the historical host reference. Any joint
+// quantization is a model/quant-level concern, not done here.
+//
+// Memory cost: a load-time host + resident-ggml mirror of the predictor + joint
+// weights (~35 MB on v2, ~73 MB on v3) against the ~2.4 GB encoder footprint.
+// The mirror is built once in build_host_decoder_weights via
 // ggml_backend_tensor_get (universal across host buffers, Metal unified
 // memory, and discrete GPUs).
 //
@@ -70,9 +67,19 @@ struct ParakeetHParams;
 // W_ih + W_hh bias pre-summed at conversion time.
 
 struct HostLstmLayer {
-    std::vector<float> Wx;  // [4*pred_hidden, pred_hidden]
-    std::vector<float> Wh;  // [4*pred_hidden, pred_hidden]
-    std::vector<float> b;   // [4*pred_hidden]
+    // Host fp32 mirrors — LOAD-TIME SCRATCH ONLY: filled at load, uploaded into
+    // the resident ggml tensors below by build_pred_weights, then freed.
+    std::vector<float> Wx;  // [4*pred_hidden, pred_hidden] (freed after load)
+    std::vector<float> Wh;  // [4*pred_hidden, pred_hidden] (freed after load)
+    std::vector<float> b;   // [4*pred_hidden]              (freed after load)
+
+    // Resident fp32 ggml mirrors of the three weights above, consumed by the
+    // ggml predictor graph. Row-major [4*H, H] host bytes map to ggml ne
+    // fast-to-slow [H, 4*H] (the mul_mat operand); bias is [4*H]. Borrowed
+    // pointers into HostPredictor::lstm_w_ctx — owned/freed by ~HostPredictor.
+    ggml_tensor * g_Wx = nullptr;
+    ggml_tensor * g_Wh = nullptr;
+    ggml_tensor * g_b  = nullptr;
 };
 
 struct HostPredictor {
@@ -80,6 +87,27 @@ struct HostPredictor {
     int                       pred_vocab  = 0; // includes the +1 start row
     std::vector<float>        embed_w;          // [pred_vocab, pred_hidden]
     std::vector<HostLstmLayer> lstm;            // pred_n_layers entries
+
+    // --- resident ggml LSTM weights (immutable, model-owned) ---
+    // fp32 mirror of the per-layer Wx/Wh/b, made resident once at load so the
+    // per-decode-call PredGraph reads them without re-uploading. Same
+    // immutable-half / mutable-per-call split as HostJoint::gw_* + the
+    // stack-local JointGraph. fp32 (not native quant): the per-step LSTM
+    // matmuls are n=1 GEMV — tinyBLAS skips them (n<2) and they gain no usable
+    // weight-bandwidth benefit, so fp32 stays closest to the host reference at
+    // no speed cost. Owned here; freed by ~HostPredictor. On build failure
+    // lstm_ready stays false and the decode reports a hard error.
+    ggml_context *        lstm_w_ctx     = nullptr;
+    ggml_backend_t        lstm_w_backend = nullptr; // alloc-only; never compute'd
+    ggml_backend_buffer_t lstm_w_buf     = nullptr;
+    bool                  lstm_ready     = false;
+
+    HostPredictor() = default;
+    ~HostPredictor();
+    HostPredictor(const HostPredictor &)             = delete;
+    HostPredictor & operator=(const HostPredictor &) = delete;
+    HostPredictor(HostPredictor &&)                  = delete;
+    HostPredictor & operator=(HostPredictor &&)      = delete;
 };
 
 struct HostJoint {
@@ -88,32 +116,36 @@ struct HostJoint {
     int         joint_h     = 0;
     int         joint_n     = 0; // total output classes (vocab+blank+durations)
     std::string activation;       // "relu" / "sigmoid" / "tanh"
-    std::vector<float> enc_w;    // [joint_h, d_enc]
-    std::vector<float> enc_b;    // [joint_h]
-    std::vector<float> pred_w;   // [joint_h, pred_hidden]
-    std::vector<float> pred_b;   // [joint_h]
-    std::vector<float> out_w;    // [joint_n, joint_h] (host fallback path)
-    std::vector<float> out_b;    // [joint_n]
 
-    // --- resident ggml weight for the out_w projection ---
-    // The output projection (out_w: joint_n × joint_h) dominates RNN-T
-    // decode once the vocab is large (13k for the multilingual variant).
-    // We keep the weight + bias resident as ggml tensors in their native
-    // (quantized) dtype so the per-step matmul gets ggml's threaded + SIMD
-    // quantized kernel and ~4× less weight bandwidth than streaming the
-    // fp32 host mirror every step.
-    //
-    // This is the IMMUTABLE, model-owned half: built once at load and only
-    // ever read after that, so it is safe to share across every context.
-    // The MUTABLE per-step compute state (activation input, logits output,
-    // the graph, and a compute backend) lives in a stack-local JointGraph
-    // built per decode call (see decoder.cpp) — that is what makes
-    // concurrent decode on contexts sharing this model reentrant.
-    // Owned here; freed by ~HostJoint.
+    // Host fp32 weight mirrors — LOAD-TIME SCRATCH ONLY. read_tensor_to_f32
+    // fills these at load; build_joint_weight uploads them into the resident
+    // ggml tensors below and then frees them, so the decode hot path reads only
+    // the resident tensors. (out_w is not mirrored here — gw_w is built straight
+    // from the model tensor.)
+    std::vector<float> enc_w;    // [joint_h, d_enc]       (freed after load)
+    std::vector<float> enc_b;    // [joint_h]              (freed after load)
+    std::vector<float> pred_w;   // [joint_h, pred_hidden] (freed after load)
+    std::vector<float> pred_b;   // [joint_h]              (freed after load)
+    std::vector<float> out_b;    // [joint_n]              (freed after load)
+
+    // --- resident ggml weights (immutable, model-owned) ---
+    // The whole joint runs as one ggml graph (build_joint_graph), so every joint
+    // weight is resident as an fp32 ggml tensor: the encoder projection
+    // (g_enc_w/g_enc_b), the predictor projection (g_pred_w/g_pred_b), and the
+    // output projection (gw_w/gw_b). fp32 keeps decode faithful to the host
+    // reference; any joint quantization is a model/quant-level concern. Built
+    // once at load and only read after — safe to share across every context;
+    // the mutable per-decode state lives in a stack-local JointGraph (see
+    // decoder.cpp), which is what keeps concurrent decode reentrant. Owned here;
+    // freed by ~HostJoint.
     ggml_context *        w_ctx     = nullptr;
     ggml_backend_t        w_backend = nullptr; // alloc-only; never graph_compute'd
     ggml_backend_buffer_t w_buf     = nullptr;
-    ggml_tensor *         gw_w      = nullptr; // [joint_h, joint_n] native/fp32 weight
+    ggml_tensor *         g_enc_w   = nullptr; // [d_enc, joint_h] fp32 weight
+    ggml_tensor *         g_enc_b   = nullptr; // [joint_h] fp32 bias
+    ggml_tensor *         g_pred_w  = nullptr; // [pred_hidden, joint_h] fp32 weight
+    ggml_tensor *         g_pred_b  = nullptr; // [joint_h] fp32 bias
+    ggml_tensor *         gw_w      = nullptr; // [joint_h, joint_n] fp32 weight
     ggml_tensor *         gw_b      = nullptr; // [joint_n] fp32 bias
     bool                  w_ready   = false;
 

@@ -268,6 +268,9 @@ set(GGML_METAL    ${TRANSCRIBE_METAL}  CACHE BOOL "" FORCE)
 set(GGML_VULKAN   ${TRANSCRIBE_VULKAN} CACHE BOOL "" FORCE)
 set(GGML_CUDA     ${TRANSCRIBE_CUDA}   CACHE BOOL "" FORCE)
 set(GGML_BLAS OFF CACHE BOOL "" FORCE)
+# tinyBLAS (Justine Tunney's llamafile_sgemm CPU kernels): ~29% faster encoder on
+# CPU (q8_0 GEMM), numerically WER-equivalent. On by default; CPU-backend only.
+set(GGML_LLAMAFILE ON CACHE BOOL "" FORCE)
 
 # Conservative x86 floor (see the option's comment above): one switch fans
 # out to GGML_NATIVE plus the full x86 SIMD tier list. Placed BEFORE
