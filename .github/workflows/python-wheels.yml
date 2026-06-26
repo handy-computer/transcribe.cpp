@@ -390,8 +390,9 @@ jobs:
       # contract.json + licenses, re-containered byte-for-byte. Like the wheel it
       # does NOT carry the CUDA runtime (cudart/cublas) — the consumer supplies it
       # (see the TS binding's src/cuda.ts / TRANSCRIBE_CUDA_RUNTIME_DIR). The
-      # `modal volume get` above lands the wheel at the wheelhouse-cu12 root, so
-      # the extractor's single-wheel glob picks it up (assets/ rides alongside).
+      # `modal volume get` above lands both wheels at the wheelhouse-cu12 root
+      # (the native provider + the pure-python API wheel that rides along for the
+      # smokes); the extractor selects the transcribe_cpp_native* wheel by name.
       - name: Extract the native bundle
         if: env.MODAL_TOKEN_ID != ''
         run: |

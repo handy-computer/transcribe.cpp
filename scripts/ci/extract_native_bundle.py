@@ -56,10 +56,23 @@ def main() -> int:
     args = ap.parse_args()
 
     wheels = sorted(Path(args.wheel_dir).glob("*.whl"))
-    if len(wheels) != 1:
-        fail(f"expected exactly one wheel in {args.wheel_dir}, found "
-             f"{[w.name for w in wheels]}")
-    wheel = wheels[0]
+    # The native provider wheel is the one we extract from. On the cu12 Modal
+    # volume a pure-python API wheel (transcribe_cpp-*-py3-none-any.whl) rides
+    # alongside it so the smokes can install the pair from the volume alone
+    # (modal_cuda_build.py step 3), so select the native wheel by name rather
+    # than assuming the dir holds exactly one. Single-wheel callers (the
+    # cibuildwheel lanes, the Windows cu12 path) are unchanged.
+    native = [w for w in wheels if w.name.startswith("transcribe_cpp_native")]
+    if native:
+        if len(native) != 1:
+            fail(f"expected exactly one native wheel in {args.wheel_dir}, found "
+                 f"{[w.name for w in native]}")
+        wheel = native[0]
+    elif len(wheels) == 1:
+        wheel = wheels[0]
+    else:
+        fail(f"expected one wheel (or one transcribe_cpp_native* wheel) in "
+             f"{args.wheel_dir}, found {[w.name for w in wheels]}")
 
     bundle_name = f"transcribe-native-{args.tuple_name}"
     out_dir = Path(args.out)
