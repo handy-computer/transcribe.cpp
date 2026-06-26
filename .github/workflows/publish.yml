@@ -459,8 +459,13 @@ jobs:
     # `npm pack` them all to .tgz uploaded as the `ts-tarballs` artifact. The
     # publish job consumes those exact bytes, so a packaging failure can never
     # land AFTER PyPI/crates have already started.
+    #
+    # Needs cuda-windows too: the win32-x64-cuda platform package is packed from
+    # that workflow's native-windows-x86_64-cuda bundle (the linux-x64-cuda
+    # bundle rides in on `wheels`). Without the dep, ts-pack could finish before
+    # the bundle exists and silently skip the Windows CUDA package.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [release-preflight, wheels]
+    needs: [release-preflight, wheels, cuda-windows]
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
@@ -499,6 +504,11 @@ jobs:
             linux-x86_64-cpu-vulkan) echo linux-x64-cpu-vulkan ;;
             linux-aarch64-cpu-vulkan) echo linux-arm64-cpu-vulkan ;;
             windows-x86_64-cpu-vulkan) echo win32-x64-cpu-vulkan ;;
+            # Opt-in CUDA platform packages (NOT in the API package's
+            # optionalDependencies — installed explicitly; the loader prefers
+            # them). Absent on forks / no-Modal runs; the loop just skips them.
+            linux-x86_64-cuda) echo linux-x64-cuda ;;
+            windows-x86_64-cuda) echo win32-x64-cuda ;;
             *) echo "" ;; esac; }
           for f in "$GITHUB_WORKSPACE"/native-bundles/transcribe-native-*.tar.gz; do
             base="$(basename "$f" .tar.gz)"; build_tuple="${base#transcribe-native-}"

@@ -4,7 +4,10 @@
  *
  *   1. TRANSCRIBE_LIBRARY  — explicit path (developer escape hatch).
  *   2. A per-platform npm package `@transcribe-cpp/<tuple>` (the prebuilt
- *      bundle wrapping the shared `transcribe-native-<tuple>` bytes).
+ *      bundle wrapping the shared `transcribe-native-<tuple>` bytes). On a host
+ *      with a CUDA build, the opt-in `@transcribe-cpp/<host>-cuda` package is
+ *      preferred when installed (it is a strict superset — cuda + vulkan + cpu),
+ *      else the default `<host>-cpu-vulkan` / `<host>-metal` package.
  *   3. A dev build tree (build-shared/src, build/src, …) found by walking up.
  *
  * Before dlopen of a platform package, its `contract.json` is validated
@@ -25,6 +28,12 @@ export interface Resolved {
   artifactDir: string;
   /** Provider package name, or null for env/dev resolution. */
   provider: string | null;
+  /**
+   * Backend kinds the resolved artifact advertises (from its contract.json),
+   * or empty for env/dev resolution where no contract is read. Drives the
+   * CUDA-runtime preload in native.ts.
+   */
+  backends: string[];
 }
 
 const LIB_NAME =
@@ -54,10 +63,34 @@ function platformTuple(): string | null {
   return null;
 }
 
-/** Validate a bundle's contract.json. Throws on a real mismatch. */
-function validateContract(dir: string, provider: string): void {
+/**
+ * Candidate platform-package tuples for this host, most-preferred first. A
+ * CUDA-capable host lists its opt-in `<host>-cuda` tuple ahead of the default:
+ * the CUDA package is a strict superset (cuda + vulkan + cpu modules), so when a
+ * user has installed it we load it and let ggml pick CUDA at runtime — falling
+ * back to its bundled Vulkan/CPU when no driver is present. Hosts without a CUDA
+ * build just list their single default tuple.
+ */
+function preferredTuples(): string[] {
+  const base = platformTuple();
+  if (!base) return [];
+  const { platform, arch } = process;
+  if (arch === "x64" && (platform === "linux" || platform === "win32")) {
+    return [`${platform}-x64-cuda`, base];
+  }
+  return [base];
+}
+
+interface Contract {
+  version?: string;
+  header_hash?: string;
+  backends?: string[];
+}
+
+/** Validate a bundle's contract.json and return it. Throws on a real mismatch. */
+function validateContract(dir: string, provider: string): Contract {
   const file = path.join(dir, "contract.json");
-  let contract: { version?: string; header_hash?: string };
+  let contract: Contract;
   try {
     contract = JSON.parse(fs.readFileSync(file, "utf8"));
   } catch (e) {
@@ -77,21 +110,30 @@ function validateContract(dir: string, provider: string): void {
         `Pre-1.0 requires an exact base-version match.`,
     );
   }
+  return contract;
 }
 
 function tryPlatformPackage(): Resolved | null {
-  const tuple = platformTuple();
-  if (!tuple) return null;
-  const provider = `@transcribe-cpp/${tuple}`;
   const require = createRequire(import.meta.url);
-  let dir: string;
-  try {
-    dir = path.dirname(require.resolve(`${provider}/package.json`));
-  } catch {
-    return null; // package not installed — fall through to dev tree
+  // Most-preferred tuple first (CUDA ahead of the default on capable hosts).
+  for (const tuple of preferredTuples()) {
+    const provider = `@transcribe-cpp/${tuple}`;
+    let dir: string;
+    try {
+      dir = path.dirname(require.resolve(`${provider}/package.json`));
+    } catch {
+      continue; // not installed — try the next candidate, then the dev tree
+    }
+    // A contract mismatch is fatal, not a fall-through.
+    const contract = validateContract(dir, provider);
+    return {
+      libraryPath: path.join(dir, LIB_NAME),
+      artifactDir: dir,
+      provider,
+      backends: contract.backends ?? [],
+    };
   }
-  validateContract(dir, provider); // a contract mismatch is fatal, not a fall-through
-  return { libraryPath: path.join(dir, LIB_NAME), artifactDir: dir, provider };
+  return null;
 }
 
 /** A library produced by the source build (`npm run build:native`). */
@@ -103,7 +145,12 @@ function tryLocalPrebuild(): Resolved | null {
   const dir = path.join(pkgRoot, "prebuilds", tuple, "lib");
   const cand = path.join(dir, LIB_NAME);
   return fs.existsSync(cand)
-    ? { libraryPath: cand, artifactDir: dir, provider: `source-build:${tuple}` }
+    ? {
+        libraryPath: cand,
+        artifactDir: dir,
+        provider: `source-build:${tuple}`,
+        backends: [],
+      }
     : null;
 }
 
@@ -127,7 +174,12 @@ function tryDevTree(): Resolved | null {
   for (const rel of ["build-shared/src", "build-shared/bin", "build/src", "build/bin"]) {
     const cand = path.join(root, rel, LIB_NAME);
     if (fs.existsSync(cand)) {
-      return { libraryPath: cand, artifactDir: path.dirname(cand), provider: null };
+      return {
+        libraryPath: cand,
+        artifactDir: path.dirname(cand),
+        provider: null,
+        backends: [],
+      };
     }
   }
   return null;
@@ -139,7 +191,12 @@ export function resolveLibrary(): Resolved {
     if (!fs.existsSync(override)) {
       throw new TranscribeError(`TRANSCRIBE_LIBRARY points at a missing file: ${override}`);
     }
-    return { libraryPath: override, artifactDir: path.dirname(override), provider: null };
+    return {
+      libraryPath: override,
+      artifactDir: path.dirname(override),
+      provider: null,
+      backends: [],
+    };
   }
   return (
     tryPlatformPackage() ??
