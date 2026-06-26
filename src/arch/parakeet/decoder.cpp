@@ -1618,7 +1618,6 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    const int nt        = resolve_decode_threads(n_threads);
     const int n_classes = w.ctc_head.n_classes;
     const int blank_id  = w.ctc_head.blank_id;
 
@@ -1636,8 +1635,10 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
 #else
     // No BLAS: project all T frames in parallel over the shared parallel_for_all
     // helper (one thread spawn for the utterance; rows within a frame are a
-    // serial, auto-vectorized dot). The bias is folded in below.
+    // serial, auto-vectorized dot). The bias is folded in below. (nt is unused
+    // on BLAS builds — cblas_sgemm owns its own threading — so it lives here.)
     {
+        const int nt    = resolve_decode_threads(n_threads);
         const float * Wc = w.ctc_head.weight.data();
         transcribe::parallel_for_all(T_enc, nt, [&](int t) {
             const float * frame = enc_out + static_cast<size_t>(t) * static_cast<size_t>(d_enc);
