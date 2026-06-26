@@ -111,6 +111,34 @@ const model = await TranscribeModel.load("model.gguf", { backend: "metal" });
 loader/driver degrades silently to CPU; an explicit backend that cannot be
 satisfied raises a `BackendError`.
 
+## CUDA (NVIDIA GPUs)
+
+The default package ships CPU + the platform accelerator (Metal on macOS,
+Vulkan on Linux/Windows). CUDA is an **opt-in** package for `linux-x64` /
+`win32-x64`, installed alongside the default:
+
+```sh
+npm install transcribe-cpp @transcribe-cpp/linux-x64-cuda   # or win32-x64-cuda
+```
+
+The CUDA package is a strict superset (cuda + vulkan + cpu), and the loader
+**prefers it automatically** when installed — no code change. Without an NVIDIA
+driver it degrades to its own Vulkan/CPU modules, exactly like the default.
+
+The **CUDA runtime is not bundled** (mirroring the Python `cu12` wheel, which
+gets it from the `nvidia-*-cu12` pip wheels — Node has no equivalent). Supply it
+one of two ways:
+
+- a **system CUDA 12 toolkit** already on the loader path (`LD_LIBRARY_PATH` /
+  the default DLL search path) — nothing else to do; or
+- point **`TRANSCRIBE_CUDA_RUNTIME_DIR`** at a directory containing
+  `libcudart.so.12` + `libcublas.so.12` + `libcublasLt.so.12` (Windows:
+  `cudart64_12.dll` etc.). A `site-packages/nvidia` tree from
+  `pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12` works directly.
+
+If neither is present the CUDA module quietly fails to load and Vulkan/CPU keep
+working — the same degradation contract as a missing driver.
+
 ## Thread-safety
 
 Your JavaScript runs on one thread, but `run`/`feed`/`finalize` dispatch the

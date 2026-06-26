@@ -5,6 +5,7 @@
  */
 
 import { resolveLibrary } from "./loader.js";
+import { preloadCudaRuntime } from "./cuda.js";
 import { abortProto, bindLibrary, type Bound, logProto } from "./ffi.js";
 import { verifyLayouts } from "./abi.js";
 import { BackendError, VersionMismatch } from "./errors.js";
@@ -45,6 +46,11 @@ export function native(): Native {
   if (cached) return cached;
 
   const resolved = resolveLibrary();
+  // Bring-your-own CUDA runtime: if the selected provider advertises cuda,
+  // preload cudart/cublas (the TS twin of the Python cu12 provider's prepare()
+  // hook) BEFORE any dlopen, so the ggml-cuda module's DT_NEEDED sonames resolve
+  // when initBackends loads it below. A no-op without cuda or the runtime dir.
+  if (resolved.backends.includes("cuda")) preloadCudaRuntime();
   const bound = bindLibrary(resolved.libraryPath);
   verifyLayouts(bound);
 
