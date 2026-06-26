@@ -125,12 +125,15 @@ option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 # and bench workflow relies on. The Python wheel/provider build sets it ON to
 # produce a shared libtranscribe the FFI layer can dlopen.
 #
-# TRANSCRIBE_USE_OPENMP / TRANSCRIBE_USE_SYSTEM_BLAS default ON to keep the
-# developer build fast (ggml OpenMP, Accelerate/system BLAS host decoder).
-# Official provider wheels pass them OFF so no libgomp/libiomp or OpenBLAS/MKL
-# runtime is vendored into the wheel where it can collide with PyTorch/NumPy.
+# TRANSCRIBE_USE_OPENMP defaults OFF: we use ggml's native CPU threadpool
+# everywhere (see the OpenMP CENTRAL POLICY below — OpenMP's process-global pool
+# is a teardown/coexistence liability for an embeddable library, and the native
+# pool is now correct on MSVC and under oversubscription). Opt in with
+# -DTRANSCRIBE_USE_OPENMP=ON. TRANSCRIBE_USE_SYSTEM_BLAS stays ON for the
+# Accelerate/system-BLAS host decoder; official provider wheels pass it OFF so no
+# OpenBLAS/MKL runtime is vendored where it can collide with PyTorch/NumPy.
 option(TRANSCRIBE_BUILD_SHARED    "Build libtranscribe + ggml as shared libraries"  OFF)
-option(TRANSCRIBE_USE_OPENMP      "Use OpenMP (ggml + Parakeet host-decoder TU)"     ON)
+option(TRANSCRIBE_USE_OPENMP      "Use OpenMP (ggml + Parakeet host-decoder TU)"     OFF)
 option(TRANSCRIBE_USE_SYSTEM_BLAS "Link non-Apple system BLAS for the host decoder"  ON)
 
 # Dynamic ggml backends: each backend (CPU, Vulkan, CUDA, ...) becomes a
@@ -283,34 +286,36 @@ if(TRANSCRIBE_X86_CONSERVATIVE)
     endforeach()
 endif()
 
-# OpenMP — CENTRAL POLICY (read before changing the Windows/MSVC threading).
+# OpenMP — CENTRAL POLICY.
 #
-# ggml defaults GGML_OPENMP ON and probes for it gracefully, so leave ggml's own
-# default in place when we want OpenMP. Only force it OFF (matching the
-# GGML_OPENMP=OFF posture official wheels use) when OpenMP is switched off, so
-# one TRANSCRIBE_USE_OPENMP knob covers ggml and our host-decoder TU.
+# DEFAULT: OFF. We use ggml's native CPU threadpool everywhere; OpenMP is an
+# opt-in (-DTRANSCRIBE_USE_OPENMP=ON), not the default. One TRANSCRIBE_USE_OPENMP
+# knob covers both ggml (GGML_OPENMP) and our Parakeet host-decoder TU.
 #
-# The catch: ggml's NON-OpenMP CPU threadpool barrier (ggml_barrier's custom
-# spin path) DEADLOCKS under MSVC codegen on Windows — any multi-threaded CPU
-# run wedges its workers in the barrier spin (it works on every other compiler).
-# OpenMP's `#pragma omp barrier` is the only working multi-threaded CPU path on
-# MSVC. But OpenMP is a per-CONSUMER tradeoff, not a global flag, so this is not
-# one switch — it is a deliberate, documented split:
+# Why native, not OpenMP — OpenMP's runtime pool is process-global and outlives
+# any single compute, which is a liability for an embeddable/dlopen'd library:
+#   - Teardown crash: a binding (node/koffi, ctypes, ...) calls in on a worker
+#     thread, libgomp/vcomp spawns its pool there, and at process teardown the
+#     loader unmaps the runtime out from under those still-live pool threads ->
+#     SIGSEGV / 0xC0000005. The native pool joins its threads per graph_compute,
+#     so nothing outlives the call and there is nothing to unmap-race.
+#   - Coexistence: a vendored libgomp/libiomp can collide with numpy/torch/MKL's
+#     own OpenMP in one process. The native pool vendors no second runtime.
 #
-#   - Rust binding (CPU is its default backend, standalone process): MUST have
-#     OpenMP on Windows. Its build.rs passes -DGGML_OPENMP=ON; the guard below
-#     honors that explicit value. MSVC auto-links vcomp via the /openmp pragma in
-#     the ggml objects (no -fopenmp flag, so the link manifest is untouched);
-#     vcomp140.dll ships in the VC++ runtime the binary already needs.
-#   - Python wheels (default to the Vulkan GPU backend; deliberately vendor NO
-#     OpenMP so ggml's runtime cannot collide with numpy/torch's own OpenMP/MKL
-#     in one process — see python-wheels.yml): leave GGML_OPENMP unset and get
-#     the force-off below. KNOWN LIMITATION as a consequence: multi-threaded CPU
-#     compute on Windows is unsupported for the wheels (they use Vulkan). Lifting
-#     it needs a non-OpenMP fix (e.g. single-threaded CPU on Windows, or patching
-#     ggml's barrier) rather than forcing OpenMP and the coexistence hazard back.
+# This used to be a per-consumer SPLIT because ggml's native barrier deadlocked
+# under MSVC (its spin `relax` was a no-op on MSVC, so a waiter starved an
+# un-arrived worker under oversubscription) — OpenMP was the only working
+# multi-threaded CPU path on Windows. That barrier is now fixed (ggml-cpu.c:
+# YieldProcessor() relax + a bounded-spin ggml_thread_yield fallback), so the
+# native pool is correct on MSVC and under oversubscription. The split is gone:
+#   - Rust binding: no longer needs -DGGML_OPENMP=ON on Windows; native pool.
+#   - Python wheels: already vendored no OpenMP; multi-threaded CPU now works on
+#     every platform (the old "CPU-on-Windows unsupported" limitation is lifted).
+#   - perf: native persistent/ephemeral pool is on par with OpenMP (it is
+#     llama.cpp's default). Thread count is sized affinity-aware in
+#     transcribe-batch-util (default_n_threads) to avoid needless oversubscription.
 #
-# So: honor an explicit -DGGML_OPENMP=... (the Rust opt-in); otherwise force OFF.
+# So: honor an explicit -DGGML_OPENMP=... (opt-in); otherwise force OFF.
 if(NOT TRANSCRIBE_USE_OPENMP AND NOT DEFINED CACHE{GGML_OPENMP})
     set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 endif()
