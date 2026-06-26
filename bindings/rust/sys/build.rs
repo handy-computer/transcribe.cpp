@@ -167,19 +167,15 @@ fn main() {
         "TRANSCRIBE_USE_OPENMP",
         if feature("OPENMP") { "ON" } else { "OFF" },
     );
-    // ggml's non-OpenMP CPU threadpool barrier deadlocks under MSVC on Windows;
-    // OpenMP's `#pragma omp barrier` is the only working multi-threaded CPU path
-    // there. The Rust binding is CPU-default and standalone (no numpy/torch
-    // OpenMP-coexistence concern), so it opts ggml into OpenMP on Windows.
-    // GGML-internal only: TRANSCRIBE_USE_OPENMP stays off, so the link manifest
-    // emits no (GNU-only) -fopenmp and the Parakeet host-decoder TU is unchanged;
-    // MSVC auto-links vcomp via the ggml objects' /openmp pragma. CMakeLists
-    // honors this explicit GGML_OPENMP and skips its force-off. See the full
-    // per-consumer policy (incl. why the Python wheels stay OpenMP-free) in the
-    // "OpenMP — CENTRAL POLICY" block of the root CMakeLists.txt.
-    if target_os == "windows" {
-        cfg.define("GGML_OPENMP", "ON");
-    }
+    // Windows no longer needs ggml's OpenMP. ggml's native CPU threadpool barrier
+    // used to deadlock under MSVC (its spin `relax` compiled to a no-op, starving
+    // an un-arrived worker), so OpenMP was the only multi-threaded CPU path there.
+    // That barrier is fixed upstream (ggml-cpu.c: YieldProcessor relax + a
+    // bounded-spin ggml_thread_yield fallback), so the native pool is correct on
+    // MSVC — and avoids the vcomp pool that crashes at teardown when a host
+    // dlopen/dlcloses this lib. We therefore leave GGML_OPENMP at its
+    // CMakeLists-forced OFF on every platform; `--features openmp` is the only
+    // opt-in. See the "OpenMP — CENTRAL POLICY" block in the root CMakeLists.txt.
 
     // Escape hatch: forward arbitrary configure args so the curated features are
     // never a hard ceiling. Anything CMake accepts (-DGGML_*, a -DTRANSCRIBE_*
