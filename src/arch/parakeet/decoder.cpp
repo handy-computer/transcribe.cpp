@@ -1,16 +1,17 @@
 // arch/parakeet/decoder.cpp - Parakeet TDT decoder implementation.
 //
-// See decoder.h for the API contract and the rationale for running
-// the decoder on host instead of via a backend graph. The
-// implementation is intentionally dependency-light: <vector>, <cmath>,
-// <cstring> for the math; the only ggml include is for tensor reads
-// at load time.
+// See decoder.h for the API contract. The predictor LSTM, the encoder
+// projection, and the joint network all run as ggml backend graphs on a
+// single shared CPU backend + persistent threadpool (owned by PredGraph;
+// see build_pred_graph). Decode weights are uploaded to resident ggml
+// tensors at load time and the host-side fp32 mirrors are then freed.
 //
-// Numerical-accuracy strategy: every step is a small enough operation
-// (a few hundred dot products of length 640) that compounding error
-// stays within ~1e-4 of the reference on CPU. The
-// per-step dump points wired below feed scripts/compare_tensors.py
-// for the bring-up loop and are gated on TRANSCRIBE_DUMP_DIR.
+// Numerical-accuracy strategy: ggml's reduction order differs slightly
+// from a naive host loop, so per-step values drift ~1e-7 vs the reference;
+// over a full utterance this stays within ~1e-4 and the greedy transcript
+// is unchanged. The per-step dump points wired below feed
+// scripts/compare_tensors.py for the bring-up loop and are gated on
+// TRANSCRIBE_DUMP_DIR.
 
 #include "decoder.h"
 
@@ -29,7 +30,8 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-alloc.h"
-#include "ggml-cpu.h"   // EXPERIMENT(option2): persistent ggml_threadpool for joint
+#include "ggml-cpu.h"   // ggml_threadpool_params_default (the rest of the CPU
+                        // backend API is reached via the registry, see above)
 
 #include <thread>
 
@@ -58,11 +60,11 @@ namespace transcribe::parakeet {
 namespace {
 
 // Read all elements of a ggml_tensor into a host fp32 vector,
-// dequantizing as needed via ggml_get_type_traits()->to_float. The
-// host decoder runs entirely on fp32 (linear / lstm_step / joint_step
-// in this file are all hand-rolled fp32 matmuls), so quantized weight
-// tensors are dequantized exactly once at load time and the per-decode
-// hot path pays no readback or dequant cost.
+// dequantizing as needed via ggml_get_type_traits()->to_float. Decode
+// weights are uploaded to resident fp32 ggml tensors once at load time
+// (see build_pred_weights / build_joint_weight), so quantized weight
+// tensors are dequantized exactly once here and the per-decode hot path
+// pays no readback or dequant cost.
 //
 // Source dtype support is whatever ggml's type traits register a
 // to_float implementation for: F32, F16, BF16, all the Q* and IQ*
@@ -312,7 +314,8 @@ struct JointGraph {
 
 // Build the full joint graph on the shared `backend` (PredGraph's pool). Returns
 // false (g.ready == false) if the resident weights are absent or any ggml step
-// fails; the caller then uses the host joint_step fallback.
+// fails; the driver treats a non-ready joint graph as a hard decode error (there
+// is no host fallback — the resident weights are the only copy).
 bool build_joint_graph(JointGraph & g, const HostJoint & j, ggml_backend_t backend) {
     if (backend == nullptr) return false;
     if (!j.w_ready || j.gw_w == nullptr || j.gw_b == nullptr ||
@@ -383,6 +386,15 @@ static void * cpu_backend_proc(ggml_backend_t backend, const char * name) {
     return reg != nullptr ? ggml_backend_reg_get_proc_address(reg, name) : nullptr;
 }
 
+// Free a CPU-backend threadpool via the registry. Resolving the free fn needs
+// the backend alive, so callers must invoke this BEFORE freeing the backend.
+static void free_cpu_threadpool(ggml_backend_t backend, ggml_threadpool_t tp) {
+    if (tp == nullptr || backend == nullptr) return;
+    if (auto fn = (pfn_threadpool_free) cpu_backend_proc(backend, "ggml_threadpool_free")) {
+        fn(tp);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-call predictor (LSTM) compute graph
 // ---------------------------------------------------------------------------
@@ -414,13 +426,7 @@ struct PredGraph {
     ~PredGraph() {
         if (buf != nullptr) ggml_backend_buffer_free(buf);
         if (ctx != nullptr) ggml_free(ctx);
-        // Free the threadpool BEFORE the backend (resolving the free fn needs the
-        // backend's registry). DL-safe: ggml_threadpool_free is a CPU-module symbol.
-        if (tp != nullptr && backend != nullptr) {
-            if (auto fn = (pfn_threadpool_free) cpu_backend_proc(backend, "ggml_threadpool_free")) {
-                fn(tp);
-            }
-        }
+        free_cpu_threadpool(backend, tp); // before ggml_backend_free(backend)
         if (backend != nullptr) ggml_backend_free(backend);
     }
     PredGraph(const PredGraph &)             = delete;
@@ -438,9 +444,10 @@ bool build_pred_graph(PredGraph & g, const HostPredictor & p, int n_threads) {
     if (H == 0 || L == 0) return false;
 
     auto fail = [&]() -> bool {
-        if (g.buf     != nullptr) { ggml_backend_buffer_free(g.buf); g.buf = nullptr; }
-        if (g.ctx     != nullptr) { ggml_free(g.ctx);                g.ctx = nullptr; }
-        if (g.backend != nullptr) { ggml_backend_free(g.backend);    g.backend = nullptr; }
+        if (g.buf != nullptr) { ggml_backend_buffer_free(g.buf); g.buf = nullptr; }
+        if (g.ctx != nullptr) { ggml_free(g.ctx);                g.ctx = nullptr; }
+        free_cpu_threadpool(g.backend, g.tp); g.tp = nullptr; // before freeing backend
+        if (g.backend != nullptr) { ggml_backend_free(g.backend); g.backend = nullptr; }
         g.x = nullptr; g.graph = nullptr; g.ready = false;
         g.ph.clear(); g.pc.clear(); g.nh.clear(); g.nc.clear();
         return false;
@@ -546,8 +553,9 @@ HostPredictor::~HostPredictor() {
     if (lstm_w_backend != nullptr) ggml_backend_free(lstm_w_backend);
 }
 
-// Resolve a decode thread count: n_threads <= 0 means "auto" → min(8, cores),
-// matching the encoder default. Threaded through to the joint compute backend
+// Resolve a decode thread count: n_threads <= 0 means "auto" → min(8, usable
+// cpus) via default_n_threads(), matching the encoder default. Threaded through
+// to the joint compute backend
 // and the per-call ggml decode graphs; no process-global state is set,
 // so concurrent decodes on one model do not stomp each other.
 static int resolve_decode_threads(int n_threads) {
@@ -659,12 +667,13 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
         }
     }
 
-    // Make the predictor LSTM weights resident as fp32 ggml tensors for the
-    // ggml predictor graph path. Non-fatal: on
-    // failure lstm_ready stays false, so the decode returns a hard error.
+    // Make the predictor LSTM weights resident as fp32 ggml tensors for the ggml
+    // predictor graph. Fatal: there is no host fallback, so a failure here means
+    // the model cannot decode — fail fast at load rather than at first decode.
     if (!build_pred_weights(out.predictor)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-            "parakeet decoder: predictor ggml weight build failed; using host lstm");
+            "parakeet decoder: predictor ggml weight build failed");
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     // ----- Joint mirror -----
@@ -686,20 +695,23 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
     // Make the joint weights resident as fp32 ggml tensors for the joint graph.
     // fp32 keeps decode numerically faithful to the historical host path (the
     // out_w matmul was always fp32 there); any joint quantization is handled at
-    // the model/quant level. On build failure w_ready stays false, so the joint
-    // graph build is skipped and the decode reports a hard error (no host
-    // fallback).
-    if (w.joint.out_w != nullptr) {
-        const int ne0 = static_cast<int>(w.joint.out_w->ne[0]);
-        const int ne1 = static_cast<int>(w.joint.out_w->ne[1]);
-        if (ne0 != out.joint.joint_h || ne1 != out.joint.joint_n) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "parakeet decoder: out_w ne [%d,%d] != [joint_h=%d, joint_n=%d]",
-                ne0, ne1, out.joint.joint_h, out.joint.joint_n);
-        } else if (!build_joint_weight(out.joint, w.joint.out_w)) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                "parakeet decoder: joint ggml weight build failed");
-        }
+    // the model/quant level. Fatal: with no host fallback, a failure here means
+    // the model cannot decode — fail fast at load.
+    if (w.joint.out_w == nullptr) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: joint out_w missing");
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    const int ne0 = static_cast<int>(w.joint.out_w->ne[0]);
+    const int ne1 = static_cast<int>(w.joint.out_w->ne[1]);
+    if (ne0 != out.joint.joint_h || ne1 != out.joint.joint_n) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+            "parakeet decoder: out_w ne [%d,%d] != [joint_h=%d, joint_n=%d]",
+            ne0, ne1, out.joint.joint_h, out.joint.joint_n);
+        return TRANSCRIBE_ERR_GGUF;
+    }
+    if (!build_joint_weight(out.joint, w.joint.out_w)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: joint ggml weight build failed");
+        return TRANSCRIBE_ERR_BACKEND;
     }
 
     // ----- TDT params -----
@@ -782,8 +794,9 @@ const float * predictor_step_ggml(const HostPredictor & predictor,
 //
 // `enc_proj` is the precomputed encoder projection for this frame
 // (enc_w @ enc_frame + enc_b, `joint_h` floats). The caller batches
-// all T_enc projections via sgemm before the decode loop so they
-// are computed once rather than redundantly per iteration.
+// all T_enc projections via one ggml GEMM (precompute_enc_proj_ggml)
+// before the decode loop so they are computed once rather than
+// redundantly per iteration.
 //
 //   pred_proj = pred_w @ pred_state + pred_b     [joint_h]
 //   summed    = enc_proj + pred_proj             [joint_h]
@@ -897,7 +910,11 @@ bool precompute_enc_proj_ggml(const HostJoint &    j,
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph, res);
-    ggml_backend_graph_compute(backend, graph);
+    if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
+        ggml_backend_buffer_free(buf);
+        ggml_free(ctx);
+        return false;
+    }
 
     ggml_backend_tensor_get(res, out.data(), 0,
                             static_cast<size_t>(T) * static_cast<size_t>(joint_h) * sizeof(float));
@@ -1031,7 +1048,10 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     const int joint_h = w.joint.joint_h;
     std::vector<float> enc_proj_all;
     const int64_t t_enc_proj_start = ggml_time_us();
-    precompute_enc_proj_ggml(w.joint, pg.backend, enc_out, T_enc, d_enc, enc_proj_all);
+    if (!precompute_enc_proj_ggml(w.joint, pg.backend, enc_out, T_enc, d_enc, enc_proj_all)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: enc_proj graph failed");
+        return TRANSCRIBE_ERR_BACKEND;
+    }
     const int64_t t_enc_proj_us = ggml_time_us() - t_enc_proj_start;
 
     // Per-call scratch reused across every decode step.
@@ -1272,7 +1292,10 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
     const int joint_h = w.joint.joint_h;
     std::vector<float> enc_proj_all;
     const int64_t t_enc_proj_start = ggml_time_us();
-    precompute_enc_proj_ggml(w.joint, pg.backend, enc_out, T_enc, d_enc, enc_proj_all);
+    if (!precompute_enc_proj_ggml(w.joint, pg.backend, enc_out, T_enc, d_enc, enc_proj_all)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: enc_proj graph failed");
+        return TRANSCRIBE_ERR_BACKEND;
+    }
     const int64_t t_enc_proj_us = ggml_time_us() - t_enc_proj_start;
 
     std::vector<float> scratch_x;
@@ -1480,7 +1503,10 @@ transcribe_status decode_rnnt_greedy_streaming(
     // Precompute encoder projections for this chunk only.
     const int joint_h = w.joint.joint_h;
     std::vector<float> enc_proj_all;
-    precompute_enc_proj_ggml(w.joint, pg.backend, enc_out, T_enc_new, d_enc, enc_proj_all);
+    if (!precompute_enc_proj_ggml(w.joint, pg.backend, enc_out, T_enc_new, d_enc, enc_proj_all)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder (rnnt-stream): enc_proj graph failed");
+        return TRANSCRIBE_ERR_BACKEND;
+    }
 
     // Working state. We mutate `state` and `next_state`; on return we
     // copy `state` (the COMMITTED state after the last non-blank

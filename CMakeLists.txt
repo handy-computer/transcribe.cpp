@@ -133,7 +133,7 @@ option(TRANSCRIBE_LTO            "Enable LTO in Release"    OFF)
 # Accelerate/system-BLAS host decoder; official provider wheels pass it OFF so no
 # OpenBLAS/MKL runtime is vendored where it can collide with PyTorch/NumPy.
 option(TRANSCRIBE_BUILD_SHARED    "Build libtranscribe + ggml as shared libraries"  OFF)
-option(TRANSCRIBE_USE_OPENMP      "Use OpenMP (ggml + Parakeet host-decoder TU)"     OFF)
+option(TRANSCRIBE_USE_OPENMP      "Use OpenMP for ggml's CPU threadpool"             OFF)
 option(TRANSCRIBE_USE_SYSTEM_BLAS "Link non-Apple system BLAS for the host decoder"  ON)
 
 # Dynamic ggml backends: each backend (CPU, Vulkan, CUDA, ...) becomes a
@@ -292,8 +292,8 @@ endif()
 # OpenMP — CENTRAL POLICY.
 #
 # DEFAULT: OFF. We use ggml's native CPU threadpool everywhere; OpenMP is an
-# opt-in (-DTRANSCRIBE_USE_OPENMP=ON), not the default. One TRANSCRIBE_USE_OPENMP
-# knob covers both ggml (GGML_OPENMP) and our Parakeet host-decoder TU.
+# opt-in (-DTRANSCRIBE_USE_OPENMP=ON), not the default. The TRANSCRIBE_USE_OPENMP
+# knob simply drives ggml's GGML_OPENMP.
 #
 # Why native, not OpenMP — OpenMP's runtime pool is process-global and outlives
 # any single compute, which is a liability for an embeddable/dlopen'd library:

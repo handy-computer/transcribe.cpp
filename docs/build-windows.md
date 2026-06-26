@@ -93,10 +93,12 @@ cmake --build build --target transcribe-cli --config Release
 Notes:
 - The Visual Studio generator is **multi-config**, so pass `--config Release`
   at build time (omitting it yields a Debug build).
-- A successful configure prints `Found OpenMP`. **OpenMP matters on
-  Windows**: ggml's non-OpenMP CPU threadpool barrier deadlocks under MSVC,
-  so OpenMP is the working multi-threaded CPU path. MSVC auto-links it
-  (`vcomp`) — no action needed, just don't disable it.
+- OpenMP is **not** required on Windows. ggml's native CPU threadpool is the
+  default everywhere (see the OpenMP CENTRAL POLICY in the top-level
+  `CMakeLists.txt`); the MSVC barrier bug that once forced OpenMP here is fixed,
+  so the native pool is correct under MSVC and oversubscription. Build with the
+  defaults; opt into OpenMP only with `-DTRANSCRIBE_USE_OPENMP=ON` if you have a
+  specific reason.
 - `no BLAS found — decoder uses scalar fallback` is fine; it only affects
   host-side decoder speed, not correctness.
 - `uv not found on PATH` is harmless — it only skips an optional test.

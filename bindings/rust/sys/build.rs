@@ -157,12 +157,14 @@ fn main() {
     if feature("CUDA") {
         cfg.define("TRANSCRIBE_CUDA", "ON");
     }
-    // Force OpenMP OFF unless explicitly opted in. TRANSCRIBE_USE_OPENMP
-    // defaults ON and auto-detects, but its `-fopenmp` shows up only as a
-    // manifest link_flag → a `cargo:rustc-link-arg` that does NOT propagate to
-    // downstream binaries, so a static consumer link fails with undefined
-    // GOMP_*/omp_* symbols. A self-contained static build is the default;
-    // `--features openmp` opts in (and then owns providing the OpenMP runtime).
+    // Keep OpenMP OFF unless explicitly opted in. TRANSCRIBE_USE_OPENMP already
+    // defaults OFF in CMake (the native ggml threadpool is the default path); we
+    // set it explicitly here so `--features openmp` is the single switch. We keep
+    // it OFF by default because OpenMP's `-fopenmp` shows up only as a manifest
+    // link_flag → a `cargo:rustc-link-arg` that does NOT propagate to downstream
+    // binaries, so a static consumer link would fail with undefined GOMP_*/omp_*
+    // symbols. A self-contained static build is the default; `--features openmp`
+    // opts in (and then owns providing the OpenMP runtime).
     cfg.define(
         "TRANSCRIBE_USE_OPENMP",
         if feature("OPENMP") { "ON" } else { "OFF" },
