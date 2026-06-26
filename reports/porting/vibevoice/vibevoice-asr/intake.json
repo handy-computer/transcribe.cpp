@@ -1,0 +1,203 @@
+{
+  "schema_version": "transcribe-intake-v1",
+  "family": "vibevoice",
+  "hf_repo": "microsoft/VibeVoice-ASR",
+  "hf_revision": "d0c9efdb8d614685062c04425d91e01b6f37d944",
+  "sources": {
+    "config": {
+      "kind": "hf_file",
+      "path": "config.json",
+      "status": "found"
+    },
+    "preprocessor": {
+      "kind": "hf_file",
+      "path": "preprocessor_config.json|feature_extractor_config.json",
+      "status": "accepted_gap",
+      "detail": "No spectrogram preprocessor ships. The frontend is a raw-24kHz-waveform learned VAE tokenizer defined in reference code (acoustic_tokenizer_config + semantic_tokenizer_config in config.json), not an STFT/mel feature extractor."
+    },
+    "tokenizer_config": {
+      "kind": "hf_file",
+      "path": "tokenizer_config.json",
+      "status": "accepted_gap",
+      "detail": "No tokenizer ships in the model repo. VibeVoiceASRProcessor.from_pretrained loads the LM tokenizer from Qwen/Qwen2.5-7B (language_model_pretrained_name)."
+    },
+    "tokenizer_json": {
+      "kind": "hf_file",
+      "path": "tokenizer.json",
+      "status": "accepted_gap",
+      "detail": "Inherited from Qwen/Qwen2.5-7B; not present in this repo."
+    },
+    "generation_config": {
+      "kind": "hf_file",
+      "path": "generation_config.json",
+      "status": "missing",
+      "detail": "Generation params are passed by the demo script at call time (max_new_tokens, num_beams, do_sample, temperature, top_p); capture them from reference code at Stage 2."
+    },
+    "safetensors_metadata": {
+      "kind": "hf_api",
+      "path": "HfApi.get_safetensors_metadata",
+      "status": "found",
+      "detail": "header-only floating dtype distribution; 8 shards, ~17.4 GB total, BF16=1177; no tensor payloads downloaded"
+    },
+    "reference_code": {
+      "kind": "reference_code",
+      "path": "github.com/microsoft/VibeVoice (vibevoice python package): modular/modeling_vibevoice_asr.py, processor/vibevoice_asr_processor.py, demo/vibevoice_asr_inference_from_file.py, docs/vibevoice-asr.md",
+      "status": "found",
+      "detail": "Canonical reference implementation. Tech report arXiv:2601.18184."
+    }
+  },
+  "variants": [
+    {
+      "name": "vibevoice-asr",
+      "memory_gb": 17.4,
+      "files": [
+        "model-00001-of-00008.safetensors",
+        "model-00002-of-00008.safetensors",
+        "model-00003-of-00008.safetensors",
+        "model-00004-of-00008.safetensors",
+        "model-00005-of-00008.safetensors",
+        "model-00006-of-00008.safetensors",
+        "model-00007-of-00008.safetensors",
+        "model-00008-of-00008.safetensors"
+      ]
+    }
+  ],
+  "config": {
+    "architecture_candidates": [
+      "audio-llm"
+    ],
+    "key_fields": {
+      "architectures": [
+        "VibeVoiceForASRTraining"
+      ],
+      "model_type": "vibevoice",
+      "decoder_config.model_type": "qwen2",
+      "decoder_config.hidden_size": 3584,
+      "decoder_config.num_hidden_layers": 28,
+      "decoder_config.num_attention_heads": 28,
+      "decoder_config.num_key_value_heads": 4,
+      "decoder_config.intermediate_size": 18944,
+      "decoder_config.vocab_size": 152064,
+      "decoder_config.max_position_embeddings": 131072,
+      "decoder_config.rope_theta": 1000000.0,
+      "acoustic_vae_dim": 64,
+      "semantic_vae_dim": 128,
+      "acoustic_tokenizer.encoder_ratios": [8, 5, 5, 4, 2, 2],
+      "acoustic_tokenizer.encoder_depths": "3-3-3-3-3-3-8",
+      "acoustic_tokenizer.mixer_layer": "depthwise_conv",
+      "has_diffusion_head": true
+    }
+  },
+  "dtype": {
+    "expected": "bfloat16",
+    "source": "weights_header",
+    "evidence": "safetensors header BF16=1177 (all floating tensors); component configs self-declare dtype=bfloat16; model card states BF16. config top-level dtype=float32 is the autoset default and is contradicted by the weights.",
+    "details": {
+      "config_declared": "float32",
+      "header_distribution": {
+        "BF16": 1177
+      }
+    },
+    "expected_f32_tensors": [
+      "*norm*",
+      "*bias*"
+    ]
+  },
+  "frontend": {
+    "sample_rate": 24000,
+    "n_mels": null,
+    "hop_length": null,
+    "fft_size": null,
+    "window": null,
+    "normalization": null,
+    "preemphasis": null,
+    "dither": null,
+    "center": null,
+    "padding_mode": "constant",
+    "mel_filterbank_norm": null
+  },
+  "tokenizer": {
+    "type": "bpe",
+    "vocab_size": 152064,
+    "special_tokens": {
+      "endoftext": 151643,
+      "im_start": 151644,
+      "im_end": 151645
+    },
+    "has_language_tokens": false,
+    "vocab_sha256": null
+  },
+  "capabilities": {
+    "languages": [
+      "en", "zh", "es", "pt", "de", "ja", "ko", "fr", "ru", "id",
+      "sv", "it", "he", "nl", "pl", "no", "tr", "th", "ar", "hu",
+      "ca", "cs", "da", "fa", "af", "hi", "fi", "et", "aa", "el",
+      "ro", "vi", "bg", "is", "sl", "sk", "lt", "sw", "uk", "kl",
+      "lv", "hr", "ne", "sr", "tl", "yi", "ms", "ur", "mn", "hy", "jv"
+    ],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": ["segment"],
+    "streaming": false,
+    "voice_activity_detection": null,
+    "speaker_diarization": true
+  },
+  "upstream_benchmarks": [
+    {
+      "dataset": "MLC-Challenge en",
+      "language": "en",
+      "metric": "wer",
+      "score": 7.99,
+      "score_unit": "percent",
+      "source": "github.com/microsoft/VibeVoice docs/vibevoice-asr.md",
+      "notes": "English WER reported by publisher."
+    },
+    {
+      "dataset": "AMI-IHM",
+      "language": "en",
+      "metric": "wer",
+      "score": 18.81,
+      "score_unit": "percent",
+      "source": "github.com/microsoft/VibeVoice docs/vibevoice-asr.md",
+      "notes": "English WER on AMI individual-headset-microphone."
+    },
+    {
+      "dataset": "LibriSpeech test-clean",
+      "language": "en",
+      "metric": "wer",
+      "score": null,
+      "score_unit": "percent",
+      "source": "not reported by publisher",
+      "notes": "Acceptance target for this port. Publisher does not report LibriSpeech; downstream gates use the measured Oracle reference baseline, not a publisher number."
+    }
+  ],
+  "reference_framework": "author_repo_vibevoice",
+  "reference_rationale": "The canonical implementation is the microsoft/VibeVoice GitHub repo's `vibevoice` Python package. The ASR classes (VibeVoiceASRForConditionalGeneration in vibevoice.modular.modeling_vibevoice_asr, VibeVoiceASRProcessor in vibevoice.processor.vibevoice_asr_processor) live there, not in mainline transformers; the HF repo ships no modeling code, processor, tokenizer, or generation_config. Despite 'available in a Transformers release' marketing, the load path in the official demo imports from the vibevoice package and pulls the tokenizer from Qwen/Qwen2.5-7B. The author repo is the source of truth.",
+  "architecture_pattern": "audio-llm",
+  "known_risks": [
+    "Frontend is a learned VAE tokenizer, NOT a spectrogram. Raw 24 kHz waveform feeds two parallel causal-conv VAE encoders (acoustic vae_dim=64 std_dist=gaussian fix_std=0.5; semantic vae_dim=128 std_dist=none), each with cumulative 3200x downsampling (encoder_ratios [8,5,5,4,2,2], depthwise_conv mixer, RMSNorm) yielding a ~7.5 Hz token rate. No existing transcribe.cpp frontend covers this; ggml needs a whole new causal conv-stack + VAE-reparam subsystem. Highest-risk item.",
+    "Dual-tokenizer fusion is unverified. Both acoustic and semantic latents are consumed and projected into the Qwen2.5 embedding space; how the two streams combine (concat vs sum vs separate projection) and where they scatter into the LM token stream must be read from reference code before C++ work.",
+    "diffusion_head_config (DDPM, v-prediction, 20 inference steps) is present in the checkpoint. It is the VibeVoice TTS acoustic-generation head and should be unused for ASR. Converter must confirm it (and the acoustic decoder) are dead weight for the ASR path and drop them; risk of porting unused weight or missing a hidden ASR dependency.",
+    "Qwen2.5-7B LM backbone, ~9B params total, ~17.4 GB BF16. Largest port to date alongside Voxtral-small. KV cache for the advertised 64K-token / 60-minute context is a major memory constraint; shipping will depend on quantization.",
+    "Structured diarized output ('Who/When/What': speaker labels + timestamps + content). Plain-WER scoring against LibriSpeech requires a normalizer/parser that strips speaker tags and timestamps from the hypothesis. Oracle (Stage 2) and WER (Stage 7) stages need this extraction; LibriSpeech is single-speaker so diarization is trivial there but output is still structured.",
+    "No tokenizer / preprocessor / generation_config in the HF repo. Tokenizer is the stock Qwen/Qwen2.5-7B byte-level BPE (embedding vocab padded to 152064), loaded at runtime by VibeVoiceASRProcessor. Converter must fetch and embed the Qwen2.5-7B tokenizer plus the processor's prompt/chat template (with add_generation_prompt and the hotword/context fields) into the GGUF; none of it ships with the weights.",
+    "Hotwords/context biasing is a prompt-text feature, not a separate mechanism. Confirm it is purely text injected into the chat template so it round-trips through GGUF-stored template metadata; if it touches the tokenizer or model wiring the C++ surface grows.",
+    "Long-context / full-attention design: max_position_embeddings=131072, rope_theta=1e6, no sliding window, Flash-Attention assumed. First port should target short utterances (jfk / LibriSpeech segments); 60-minute long-form and 64K KV behavior are deferred and tracked separately.",
+    "dtype: config top-level dtype=float32 contradicts BF16 weights (header BF16=1177); treat BF16 as reference and watch for genuinely-F32 tensors (norms/biases) the converter must preserve.",
+    "A community ggml port exists (localai-org/vibevoice.cpp) but targets VibeVoice TTS and small Qwen2.5-0.5B variants, not the 9B ASR model. Useful as a conv/tokenizer reference only, not a drop-in."
+  ],
+  "intake_gaps": [
+    {
+      "field": "tokenizer.special_tokens",
+      "reason": "endoftext/im_start/im_end ids are the stock Qwen2.5-7B values; confirm the exact eos/pad used by VibeVoiceASRProcessor and the generation config at Stage 2."
+    },
+    {
+      "field": "frontend",
+      "reason": "VAE-tokenizer frontend has no schema fields beyond sample_rate=24000; full conv-stack / reparam spec must be lifted from reference code in Stage 2 (oracle) and Stage 4 (cpp)."
+    },
+    {
+      "field": "capabilities.voice_activity_detection",
+      "reason": "Model performs implicit segmentation via diarization but exposes no standalone VAD; left null."
+    }
+  ]
+}

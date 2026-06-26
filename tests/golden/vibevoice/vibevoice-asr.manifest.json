@@ -1,0 +1,12 @@
+{
+  "schema": "transcribe-golden-manifest-v1",
+  "family": "vibevoice",
+  "variant": "vibevoice-asr",
+  "source_model": {
+    "hf_repo": "microsoft/VibeVoice-ASR",
+    "hf_revision": "d0c9efdb8d614685062c04425d91e01b6f37d944"
+  },
+  "expected_dtype": "bfloat16",
+  "dtype_source": "weights_header",
+  "_skeleton": true
+}

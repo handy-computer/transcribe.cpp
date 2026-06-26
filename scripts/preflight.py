@@ -143,6 +143,7 @@ def load_declared_state(repo_root: Path, family: str, variant: str | None) -> di
             "hf_repo": data["hf_repo"],
             "hf_revision": data.get("hf_revision"),
             "expected_dtype": _expected_dtype_from_intake(data),
+            "dtype_source": data.get("dtype", {}).get("source"),
             "frontend": data.get("frontend", {}),
             "tokenizer": data.get("tokenizer", {}),
             "capabilities": data.get("capabilities", {}),
@@ -160,6 +161,7 @@ def load_declared_state(repo_root: Path, family: str, variant: str | None) -> di
             "hf_repo": source_model.get("hf_repo"),
             "hf_revision": source_model.get("hf_revision"),
             "expected_dtype": data.get("expected_dtype"),
+            "dtype_source": data.get("dtype_source"),
             "frontend": data.get("frontend", {}),
             "tokenizer": data.get("tokenizer_summary", {}),
             "capabilities": data.get("capabilities", {}),
@@ -399,6 +401,13 @@ def check_dtype(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
     decl_dtype = declared.get("expected_dtype")
     cfg_dtype = _config_dtype(reference.get("config"))
     nemo_authoritative = bool(reference.get("nemo_authoritative"))
+    # When the intake derived its expected dtype straight from the
+    # safetensors header, the storage dtype is authoritative and HF
+    # config.json's top-level torch_dtype is treated as training/default
+    # metadata (often a vestigial float32 autoset contradicted by all-BF16
+    # weights). Same rationale as nemo_authoritative; Gate B still hard-checks
+    # the declared dtype against the converted GGUF.
+    weights_authoritative = declared.get("dtype_source") == "weights_header"
     gguf_ftype = gguf_kvs.get("general.file_type") if gguf_kvs else None
     gguf_dtype = _gguf_file_type_to_str(gguf_ftype) if gguf_ftype is not None else None
 
@@ -406,6 +415,8 @@ def check_dtype(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
     if nemo_authoritative:
         sources["nemo_authoritative"] = True
         sources["nemo_source"] = reference.get("nemo_source")
+    if weights_authoritative:
+        sources["weights_header_authoritative"] = True
     if gguf_kvs:
         sources["gguf_file_type"] = gguf_ftype
         sources["gguf_dtype"] = gguf_dtype
@@ -415,7 +426,7 @@ def check_dtype(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
     # When NeMo is authoritative for this variant, HF config.json's torch_dtype
     # is training/optimizer metadata, not storage — skip the comparison.
     # Storage dtype is verified at Gate B against the converted GGUF.
-    n_ref = None if nemo_authoritative else (_norm_dtype(cfg_dtype) if cfg_dtype else None)
+    n_ref = None if (nemo_authoritative or weights_authoritative) else (_norm_dtype(cfg_dtype) if cfg_dtype else None)
 
     # Hard fail: declared vs GGUF disagree. The GGUF is what the C++ loader will see.
     if n_decl and n_gguf and n_decl != n_gguf:
@@ -430,6 +441,10 @@ def check_dtype(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
         detail = "no reference or GGUF dtype to cross-check declared value"
         if nemo_authoritative:
             detail += " (HF config.json torch_dtype skipped: NeMo .nemo is authoritative)"
+        elif weights_authoritative:
+            detail += (f" (HF config.json dtype='{cfg_dtype}' skipped: declared dtype came "
+                       "from the safetensors header, which is authoritative for storage; "
+                       "Gate B verifies against the GGUF)")
         return CheckResult("dtype_consistency", gate, "warn", sources, detail)
     return CheckResult("dtype_consistency", gate, "pass", sources)
 
