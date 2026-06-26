@@ -37,6 +37,28 @@ namespace transcribe {
 bool parallel_for_all(int n, int n_threads,
                       const std::function<bool(int)> & work);
 
+// Default CPU thread count for the ggml compute backends and the host
+// parallel-for, for when the caller passes n_threads <= 0. Counts the CPUs the
+// process may actually run on (the affinity mask via sched_getaffinity on Linux
+// / GetProcessAffinityMask on Windows), NOT the host's total core count, then
+// clamps to [1, cap]. This matters under a constrained scheduler (taskset, a
+// cpuset, a CI runner pinned to N vCPUs): std::thread::hardware_concurrency()
+// reports the full host, so the old `min(cap, hardware_concurrency())` default
+// oversubscribed the usable cores and ggml's spin-wait barriers then livelocked.
+// CAVEAT: the affinity mask reflects taskset/cpuset, but NOT a CFS bandwidth
+// quota (`docker --cpus=N` without --cpuset) — that case still over-counts.
+// A cap <= 0 disables the clamp (use all usable CPUs).
+int default_n_threads(int cap = 8);
+
+// Resolve a CPU thread count and apply it to every CPU/BLAS backend in `sched`
+// via the backend registry's ggml_backend_set_n_threads. `requested <= 0` means
+// "use default_n_threads()". GPU backends don't expose the setter and are
+// skipped; a null sched is a no-op. Returns the resolved thread count so callers
+// can reuse it (e.g. for the host parallel-for). This is the ONE place archs
+// configure scheduler threads — call it instead of hand-rolling the backend
+// loop, so the affinity-aware default can never be forgotten at a new site.
+int configure_sched_n_threads(ggml_backend_sched_t sched, int requested);
+
 // ---------------------------------------------------------------------------
 // Encoder-batch scaffolding (the run_batch() fast-path recipe)
 //

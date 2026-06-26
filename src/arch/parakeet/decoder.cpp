@@ -17,6 +17,7 @@
 #include "parakeet.h"
 #include "weights.h"
 
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
 
@@ -316,7 +317,7 @@ HostJoint::~HostJoint() {
 static int resolve_decode_threads(int n_threads) {
     return n_threads > 0
         ? n_threads
-        : std::min(8, std::max(1, static_cast<int>(std::thread::hardware_concurrency())));
+        : transcribe::default_n_threads();
 }
 
 transcribe_status build_host_decoder_weights(const ParakeetModel & model,

@@ -61,6 +61,8 @@
 
 #include "transcribe-mel.h"
 
+#include "transcribe-batch-util.h"
+
 #ifdef __APPLE__
 #  include <Accelerate/Accelerate.h>
 #elif TRANSCRIBE_HAS_BLAS
@@ -566,9 +568,7 @@ transcribe_status MelFrontend::compute(
 
     int stft_threads = n_threads;
     if (stft_threads <= 0) {
-        const unsigned hw = std::thread::hardware_concurrency();
-        stft_threads = hw > 0 ? static_cast<int>(hw) : 1;
-        if (stft_threads > 8) stft_threads = 8;
+        stft_threads = default_n_threads();
     }
     if (stft_threads > n_frames) {
         stft_threads = std::max(1, n_frames);

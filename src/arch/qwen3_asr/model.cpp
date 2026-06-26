@@ -816,22 +816,7 @@ transcribe_status run(
     }
 
     // Thread count.
-    {
-        int n_threads = cc->n_threads;
-        if (n_threads <= 0) {
-            n_threads = std::min(8, std::max(1, static_cast<int>(
-                std::thread::hardware_concurrency())));
-        }
-        for (int i = 0; i < ggml_backend_sched_get_n_backends(cc->sched); ++i) {
-            ggml_backend_t be  = ggml_backend_sched_get_backend(cc->sched, i);
-            ggml_backend_dev_t dev = ggml_backend_get_device(be);
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg == nullptr) continue;
-            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-            if (fn != nullptr) fn(be, n_threads);
-        }
-    }
+    transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 
     const int64_t t_enc_start = ggml_time_us();
     t_enc_build_us = t_enc_start - t_enc_build_start;
@@ -1333,20 +1318,7 @@ namespace {
 // Apply the session thread count to every backend behind the scheduler. The
 // setting persists across sched_reset, so callers only need this once.
 void apply_sched_threads(QwenAsrSession * cc) {
-    int n_threads = cc->n_threads;
-    if (n_threads <= 0) {
-        n_threads = std::min(8, std::max(1, static_cast<int>(
-            std::thread::hardware_concurrency())));
-    }
-    for (int i = 0; i < ggml_backend_sched_get_n_backends(cc->sched); ++i) {
-        ggml_backend_t be  = ggml_backend_sched_get_backend(cc->sched, i);
-        ggml_backend_dev_t dev = ggml_backend_get_device(be);
-        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-        if (reg == nullptr) continue;
-        auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-        if (fn != nullptr) fn(be, n_threads);
-    }
+    transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 }
 
 // Fresh per-utterance graph arena. Frees any prior compute_ctx and inits a
@@ -1380,8 +1352,7 @@ transcribe_status encode_all_batched(
     std::vector<int> mel_nf(n, 0);
     int n_threads = cc->n_threads;
     if (n_threads <= 0) {
-        n_threads = std::min(8, std::max(1, static_cast<int>(
-            std::thread::hardware_concurrency())));
+        n_threads = transcribe::default_n_threads();
     }
     const int64_t t_mel0 = ggml_time_us();
     transcribe::parallel_for_all(n, n_threads, [&](int b) {

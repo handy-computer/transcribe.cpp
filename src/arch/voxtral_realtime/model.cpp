@@ -19,6 +19,7 @@
 
 #include "causal_lm/causal_lm.h"
 #include "transcribe-arch.h"
+#include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
@@ -99,19 +100,7 @@ transcribe_status resolve_specials(const transcribe::Tokenizer & tok,
 }
 
 void apply_threads(ggml_backend_sched_t sched, int n_threads) {
-    if (n_threads <= 0) {
-        n_threads = std::min(8, std::max(1,
-            static_cast<int>(std::thread::hardware_concurrency())));
-    }
-    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
-        ggml_backend_t be  = ggml_backend_sched_get_backend(sched, i);
-        ggml_backend_dev_t dev = ggml_backend_get_device(be);
-        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-        if (reg == nullptr) continue;
-        auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-        if (fn != nullptr) fn(be, n_threads);
-    }
+    transcribe::configure_sched_n_threads(sched, n_threads);
 }
 
 // Read a reference enc.mel.in.f32 ([n_mels, n_frames] mel-major) for numerical
