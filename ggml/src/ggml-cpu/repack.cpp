@@ -4697,6 +4697,11 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
     } else if (cur->type == GGML_TYPE_Q8_0) {
+        if (ggml_cpu_has_avx2()) {
+            if (cur->ne[1] % 4 == 0) {
+                return &q8_0_4x8_q8_0;
+            }
+        }
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 4 == 0) {
                 return &q8_0_4x8_q8_0;
@@ -4736,9 +4741,29 @@ static void ggml_backend_cpu_repack_buffer_set_tensor(ggml_backend_buffer_t buff
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
     auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor->extra;
+    if (tensor_traits == nullptr) {
+        // Not a repackable tensor (no optimal repack type for it): store the
+        // bytes verbatim, exactly like the plain CPU buffer. This lets a
+        // consumer place a whole mixed-dtype weight set in the repack buffer —
+        // only the matmul weights with a repack type get interleaved; norms,
+        // biases, F32/F16 tensors pass through untouched.
+        memcpy((char *) tensor->data + offset, data, size);
+        return;
+    }
     auto OK            = tensor_traits->repack(tensor, data, size);
 
     GGML_ASSERT(OK == 0);
+    GGML_UNUSED(buffer);
+}
+
+static void ggml_backend_cpu_repack_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor,
+                                                       void * data, size_t offset, size_t size) {
+    // Readback is only meaningful for pass-through (non-repacked) tensors; a
+    // repacked tensor's bytes are in an interleaved layout the caller can't
+    // interpret (and during the CPU_REPACK measurement hack the decoder reads
+    // some weights back — we let it read raw interleaved bytes rather than
+    // abort, since the transcript is already declared invalid in that mode).
+    memcpy(data, (const char *) tensor->data + offset, size);
     GGML_UNUSED(buffer);
 }
 
@@ -4758,7 +4783,7 @@ static ggml_backend_buffer_t ggml_backend_cpu_repack_buffer_type_alloc_buffer(gg
     buffer->buft              = buft;
     buffer->iface.init_tensor = ggml_backend_cpu_repack_buffer_init_tensor;
     buffer->iface.set_tensor  = ggml_backend_cpu_repack_buffer_set_tensor;
-    buffer->iface.get_tensor  = nullptr;
+    buffer->iface.get_tensor  = ggml_backend_cpu_repack_buffer_get_tensor;
     buffer->iface.cpy_tensor  = nullptr;
     return buffer;
 }
