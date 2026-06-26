@@ -227,6 +227,28 @@ add_test(NAME transcribe_log_unit
     COMMAND transcribe_log_unit)
 
 # -----------------------------------------------------------------------------
+# CPU thread-count helpers (affinity-aware default + sched resolution)
+# -----------------------------------------------------------------------------
+#
+# Pins default_n_threads()/configure_sched_n_threads() in transcribe-batch-util:
+# cap+range, the null-sched resolution contract, and (Linux) that the default
+# honors the process affinity mask rather than the host core count — the
+# property whose absence caused the oversubscription livelock.
+
+add_executable(transcribe_thread_default_unit
+    thread_default_unit.cpp)
+
+target_link_libraries(transcribe_thread_default_unit PRIVATE transcribe ggml)
+
+target_include_directories(transcribe_thread_default_unit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src)
+
+transcribe_apply_warnings(transcribe_thread_default_unit)
+
+add_test(NAME transcribe_thread_default_unit
+    COMMAND transcribe_thread_default_unit)
+
+# -----------------------------------------------------------------------------
 # Threadpool barrier under CPU oversubscription (regression for the MSVC
 # non-OpenMP ggml_barrier livelock; see ggml-cpu.c ggml_thread_yield)
 # -----------------------------------------------------------------------------

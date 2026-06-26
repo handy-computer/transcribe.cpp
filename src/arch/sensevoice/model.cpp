@@ -249,20 +249,7 @@ int resolve_lid_idx(const SenseVoiceHParams & hp, const char * lang_or_null) {
 }
 
 void apply_thread_policy(SenseVoiceSession * cc) {
-    int n_threads = cc->n_threads;
-    if (n_threads <= 0) {
-        n_threads = std::min(8, std::max(1, static_cast<int>(
-            std::thread::hardware_concurrency())));
-    }
-    for (int i = 0; i < ggml_backend_sched_get_n_backends(cc->sched); ++i) {
-        ggml_backend_t be       = ggml_backend_sched_get_backend(cc->sched, i);
-        ggml_backend_dev_t dev  = ggml_backend_get_device(be);
-        ggml_backend_reg_t reg  = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-        if (reg == nullptr) continue;
-        auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-        if (fn != nullptr) fn(be, n_threads);
-    }
+    transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 }
 
 // Greedy CTC decode + public result-hierarchy build for ONE utterance's CTC

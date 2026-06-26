@@ -13,14 +13,76 @@
 #include <thread>
 #include <vector>
 
+#if defined(__linux__)
+#include <sched.h>
+#elif defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX  // else <windows.h>'s min/max macros clobber std::min/std::max
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace transcribe {
+
+// Number of CPUs the process is actually allowed to run on. Falls back to
+// hardware_concurrency() when the platform query is unavailable or fails.
+static int usable_cpu_count() {
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) == 0) {
+        const int n = CPU_COUNT(&set);
+        if (n > 0) return n;
+    }
+#elif defined(_WIN32)
+    DWORD_PTR proc_mask = 0, sys_mask = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &proc_mask, &sys_mask) &&
+        proc_mask != 0) {
+        int n = 0;
+        for (DWORD_PTR m = proc_mask; m != 0; m &= (m - 1)) ++n;  // popcount
+        if (n > 0) return n;
+    }
+#endif
+    const unsigned hw = std::thread::hardware_concurrency();
+    return hw > 0 ? static_cast<int>(hw) : 1;
+}
+
+int default_n_threads(int cap) {
+    int n = usable_cpu_count();
+    if (n < 1) n = 1;
+    if (cap > 0 && n > cap) n = cap;
+    return n;
+}
+
+
+int configure_sched_n_threads(ggml_backend_sched_t sched, int requested) {
+    const int n_threads = requested > 0 ? requested : default_n_threads();
+    if (sched == nullptr) return n_threads;
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+        ggml_backend_t     be  = ggml_backend_sched_get_backend(sched, i);
+        ggml_backend_dev_t dev = ggml_backend_get_device(be);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+        if (reg == nullptr) continue;
+        auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
+        if (fn != nullptr) {
+            fn(be, n_threads);
+        }
+    }
+    return n_threads;
+}
 
 bool parallel_for_all(int n, int n_threads,
                       const std::function<bool(int)> & work)
 {
     if (n <= 0) return true;
     if (n_threads <= 0) {
-        n_threads = static_cast<int>(std::thread::hardware_concurrency());
+        // Affinity-aware, uncapped: use every CPU the process may run on, then
+        // clamp to the batch size below. (cap <= 0 disables the per-backend cap.)
+        n_threads = default_n_threads(/*cap=*/0);
     }
     n_threads = std::max(1, std::min(n, n_threads));
 

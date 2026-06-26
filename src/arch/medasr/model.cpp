@@ -938,22 +938,7 @@ transcribe_status run_batch_encode(MedAsrSession *                         gc,
     }
 
     // Per-backend thread count (matching single-shot through the scheduler).
-    {
-        int n_threads = gc->n_threads;
-        if (n_threads <= 0) {
-            n_threads = std::min(8, std::max(1, static_cast<int>(
-                std::thread::hardware_concurrency())));
-        }
-        for (int i = 0; i < ggml_backend_sched_get_n_backends(gc->sched); ++i) {
-            ggml_backend_t be = ggml_backend_sched_get_backend(gc->sched, i);
-            ggml_backend_dev_t dev = ggml_backend_get_device(be);
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg == nullptr) continue;
-            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-            if (fn != nullptr) fn(be, n_threads);
-        }
-    }
+    transcribe::configure_sched_n_threads(gc->sched, gc->n_threads);
 
     const int64_t t_enc_start = ggml_time_us();
     if (ggml_backend_sched_graph_compute(gc->sched, eb.graph)

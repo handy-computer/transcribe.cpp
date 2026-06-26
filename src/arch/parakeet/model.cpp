@@ -1497,24 +1497,7 @@ static transcribe_status run_one_shot_inner(
     // Whisper.cpp pattern: iterate the scheduler's backends and set
     // n_threads via the registry proc address. GPU backends ignore
     // this; CPU and BLAS backends use it.
-    {
-        int n_threads = pc->n_threads;
-        if (n_threads <= 0) {
-            n_threads = std::min(8, std::max(1, static_cast<int>(
-                std::thread::hardware_concurrency())));
-        }
-        for (int i = 0; i < ggml_backend_sched_get_n_backends(pc->sched); ++i) {
-            ggml_backend_t be = ggml_backend_sched_get_backend(pc->sched, i);
-            ggml_backend_dev_t dev = ggml_backend_get_device(be);
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg == nullptr) continue;
-            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-            if (fn != nullptr) {
-                fn(be, n_threads);
-            }
-        }
-    }
+    transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
 
     // ----- Compute --------------------------------------------------
     const int64_t t_enc_start = ggml_time_us();
@@ -1911,22 +1894,7 @@ static transcribe_status run_batch_encode(
                                 0, mask_buf.size() * sizeof(float));
     }
 
-    {
-        int n_threads = pc->n_threads;
-        if (n_threads <= 0) {
-            n_threads = std::min(8, std::max(1, static_cast<int>(
-                std::thread::hardware_concurrency())));
-        }
-        for (int i = 0; i < ggml_backend_sched_get_n_backends(pc->sched); ++i) {
-            ggml_backend_t be = ggml_backend_sched_get_backend(pc->sched, i);
-            ggml_backend_dev_t dev = ggml_backend_get_device(be);
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg == nullptr) continue;
-            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-            if (fn != nullptr) fn(be, n_threads);
-        }
-    }
+    transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
 
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs =
@@ -2554,22 +2522,7 @@ transcribe_status emit_streaming_chunk(
     }
 
     // Thread count (same recipe as offline run()).
-    {
-        int n_threads = pc->n_threads;
-        if (n_threads <= 0) {
-            n_threads = std::min(8, std::max(1, static_cast<int>(
-                std::thread::hardware_concurrency())));
-        }
-        for (int i = 0; i < ggml_backend_sched_get_n_backends(pc->sched); ++i) {
-            ggml_backend_t be = ggml_backend_sched_get_backend(pc->sched, i);
-            ggml_backend_dev_t dev = ggml_backend_get_device(be);
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg == nullptr) continue;
-            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-            if (fn != nullptr) fn(be, n_threads);
-        }
-    }
+    transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
 
     if (const ggml_status gs =
             ggml_backend_sched_graph_compute(pc->sched, eb.graph);
@@ -3048,22 +3001,7 @@ transcribe_status emit_buffered_chunk(
     }
 
     // ----- Threading -----
-    {
-        int n_threads = pc->n_threads;
-        if (n_threads <= 0) {
-            n_threads = std::min(8, std::max(1, static_cast<int>(
-                std::thread::hardware_concurrency())));
-        }
-        for (int i = 0; i < ggml_backend_sched_get_n_backends(pc->sched); ++i) {
-            ggml_backend_t be = ggml_backend_sched_get_backend(pc->sched, i);
-            ggml_backend_dev_t dev = ggml_backend_get_device(be);
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg == nullptr) continue;
-            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-            if (fn != nullptr) fn(be, n_threads);
-        }
-    }
+    transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
 
     // ----- Compute -----
     const int64_t t_enc_start = ggml_time_us();

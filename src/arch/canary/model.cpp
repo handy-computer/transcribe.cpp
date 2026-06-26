@@ -902,22 +902,7 @@ transcribe_status run(
     }
 
     // Thread count.
-    {
-        int n_threads = cc->n_threads;
-        if (n_threads <= 0) {
-            n_threads = std::min(8, std::max(1, static_cast<int>(
-                std::thread::hardware_concurrency())));
-        }
-        for (int i = 0; i < ggml_backend_sched_get_n_backends(cc->sched); ++i) {
-            ggml_backend_t be = ggml_backend_sched_get_backend(cc->sched, i);
-            ggml_backend_dev_t dev = ggml_backend_get_device(be);
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg == nullptr) continue;
-            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-            if (fn != nullptr) fn(be, n_threads);
-        }
-    }
+    transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs = ggml_backend_sched_graph_compute(cc->sched, eb.graph);
@@ -1570,20 +1555,7 @@ transcribe_status encode_one_to_host(
                                 pos_buf.size() * sizeof(float));
     }
 
-    {
-        int n_threads = cc->n_threads;
-        if (n_threads <= 0) n_threads = std::min(8, std::max(1,
-            static_cast<int>(std::thread::hardware_concurrency())));
-        for (int i = 0; i < ggml_backend_sched_get_n_backends(cc->sched); ++i) {
-            ggml_backend_t be = ggml_backend_sched_get_backend(cc->sched, i);
-            ggml_backend_dev_t dev = ggml_backend_get_device(be);
-            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-            if (reg == nullptr) continue;
-            auto * fn = reinterpret_cast<ggml_backend_set_n_threads_t>(
-                ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-            if (fn != nullptr) fn(be, n_threads);
-        }
-    }
+    transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 
     const int64_t t0 = ggml_time_us();
     if (ggml_backend_sched_graph_compute(cc->sched, eb.graph) != GGML_STATUS_SUCCESS)
@@ -1672,8 +1644,7 @@ transcribe_status run_batch(
     std::vector<std::vector<float>> mel_bufs(n);
     std::vector<int> mel_nf(n, 0);
     int n_threads = cc->n_threads;
-    if (n_threads <= 0) n_threads = std::min(8, std::max(1,
-        static_cast<int>(std::thread::hardware_concurrency())));
+    if (n_threads <= 0) n_threads = transcribe::default_n_threads();
     int64_t mel_us = 0, enc_us = 0;
     const int64_t t_mel0 = ggml_time_us();
     transcribe::parallel_for_all(n, n_threads, [&](int b) {

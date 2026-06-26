@@ -757,6 +757,13 @@ transcribe_status run_whisper_encoder_on_window(
                          "whisper run: ggml_backend_sched_new failed");
             return TRANSCRIBE_ERR_GGUF;
         }
+
+        // Apply the caller's CPU thread count to the scheduler's backends once
+        // at sched creation — it persists across the reused encoder and decoder
+        // graphs, and cc->n_threads is fixed for the session. GPU backends ignore
+        // it; CPU/BLAS backends use it. Without this, whisper's graph compute ran
+        // at ggml's default thread count regardless of params.n_threads.
+        transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
     }
     ggml_backend_sched_reset(cc->sched);
     if (!ggml_backend_sched_alloc_graph(cc->sched, eb.graph)) {
@@ -3186,8 +3193,7 @@ transcribe_status whisper_run_batch(
         valid[b] = 1;
     }
     int n_threads = cc->n_threads;
-    if (n_threads <= 0) n_threads = std::min(8, std::max(1,
-        static_cast<int>(std::thread::hardware_concurrency())));
+    if (n_threads <= 0) n_threads = transcribe::default_n_threads();
     int64_t mel_us = 0, enc_us = 0, dec_us = 0;
     const int64_t t_mel0 = ggml_time_us();
     transcribe::parallel_for_all(n, n_threads, [&](int b) {
