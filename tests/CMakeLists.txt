@@ -227,6 +227,27 @@ add_test(NAME transcribe_log_unit
     COMMAND transcribe_log_unit)
 
 # -----------------------------------------------------------------------------
+# Threadpool barrier under CPU oversubscription (regression for the MSVC
+# non-OpenMP ggml_barrier livelock; see ggml-cpu.c ggml_thread_yield)
+# -----------------------------------------------------------------------------
+#
+# Pins the process to 2 logical CPUs and runs a 4-thread graph in a loop with a
+# watchdog: a barrier deadlock turns into exit 2 instead of an indefinite hang.
+# Only exercises the custom barrier on a GGML_OPENMP=OFF build (a GGML_OPENMP=ON
+# build uses `#pragma omp barrier` and passes trivially) — it is load-bearing in
+# the OpenMP-OFF lanes. Links ggml only; no transcribe/model dependency.
+
+add_executable(transcribe_threadpool_oversubscription
+    threadpool_oversubscription.c)
+
+target_link_libraries(transcribe_threadpool_oversubscription PRIVATE ggml)
+
+transcribe_apply_warnings(transcribe_threadpool_oversubscription)
+
+add_test(NAME transcribe_threadpool_oversubscription
+    COMMAND transcribe_threadpool_oversubscription)
+
+# -----------------------------------------------------------------------------
 # Synthetic GGUF fixtures (for the loader smoke test)
 # -----------------------------------------------------------------------------
 

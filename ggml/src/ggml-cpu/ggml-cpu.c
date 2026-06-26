@@ -515,6 +515,14 @@ static inline void ggml_thread_cpu_relax(void) {
 static inline void ggml_thread_cpu_relax(void) {
     _mm_pause();
 }
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+// MSVC defines _M_X64 / _M_IX86 (NOT __x86_64__), so without this branch the
+// spin-wait relax compiled to an empty no-op on MSVC — barrier waiters busy-spin
+// with no pause, starving an un-arrived worker under CPU oversubscription and
+// deadlocking ggml_barrier. YieldProcessor() emits `pause` on x86/x64.
+static inline void ggml_thread_cpu_relax(void) {
+    YieldProcessor();
+}
 #elif defined(__riscv)
 static inline void ggml_thread_cpu_relax(void) {
     #ifdef __riscv_zihintpause
@@ -527,6 +535,24 @@ static inline void ggml_thread_cpu_relax(void) {
 #else
 static inline void ggml_thread_cpu_relax(void) {;}
 #endif
+
+// Yield the current core to any other ready thread. A pure pause/relax spin does
+// NOT relinquish the core, so under CPU oversubscription (more compute threads
+// than available logical CPUs — e.g. a 2-vCPU runner) barrier waiters can starve
+// a not-yet-arrived worker indefinitely, deadlocking ggml_barrier. After a bounded
+// pause-spin the waiters fall back to a real yield so the missing worker can run.
+static inline void ggml_thread_yield(void) {
+#if defined(_WIN32)
+    SwitchToThread();
+#else
+    sched_yield();
+#endif
+}
+
+// Pause-spin iterations to burn before falling back to ggml_thread_yield(). Large
+// enough that a normally-fast barrier (all workers already arriving) never yields,
+// small enough to recover quickly when a worker is being starved.
+#define GGML_BARRIER_SPIN_BEFORE_YIELD 4096
 
 //
 // NUMA support
@@ -587,8 +613,17 @@ void ggml_barrier(struct ggml_threadpool * tp) {
     }
 
     // wait for other threads
+    int spin = 0;
     while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed) {
-        ggml_thread_cpu_relax();
+        if (++spin < GGML_BARRIER_SPIN_BEFORE_YIELD) {
+            ggml_thread_cpu_relax();
+        } else {
+            // Bounded pause-spin elapsed without release: yield so a worker that
+            // has not yet reached the barrier can be scheduled (prevents the
+            // oversubscription deadlock described at ggml_thread_yield).
+            ggml_thread_yield();
+            spin = 0;
+        }
     }
 
     // exit barrier (full seq-cst fence)
