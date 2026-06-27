@@ -1,8 +1,7 @@
 # Contributing to transcribe.cpp
 
-This repo ports speech-to-text model families to a C/C++ ggml runtime. Most
-substantial contributions add a new model family; smaller contributions fix
-bugs, improve tooling, or add backend coverage.
+This repo is an inference engine for transcription (ASR) models, built on top
+of GGML.
 
 The project is intentionally conservative. It is a library surface, a model
 runtime, and a set of package artifacts that users embed in larger processes.
@@ -20,19 +19,16 @@ follow the docs directly and still produce the same artifacts.
 ## AI-assisted contributions
 
 AI tools may be used when a human contributor is driving the design, reviewing
-the output, and prepared to debug and maintain the result. AI-generated or
-AI-assisted code is acceptable only when the contributor understands it fully
-and can explain it during review.
+the output, and prepared to debug and maintain the result.
 
 If AI meaningfully assisted with code or documentation:
 
 1. Disclose that usage in the PR.
 2. Manually review the generated or assisted changes before submission.
-3. Be prepared to explain every line of code you submit.
 
 Do not use AI to write PR descriptions, issue reports, commit messages, project
 discussions, or replies to reviewers. Do not submit automated commits or pull
-requests.
+requests. Obviously AI written PR descriptions will almost certainly be rejected.
 
 ## Proposing a new model port
 
