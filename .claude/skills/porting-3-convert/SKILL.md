@@ -41,6 +41,22 @@ Preserve source dtypes, emit the loader KV used by
 `src/arch/<family>/weights.cpp`, and surface only unresolved tensor-name
 or sharding decisions to the user.
 
+**Always build the writer via `gguf_writer()` from `lib.gguf_common`**, never
+`gguf.GGUFWriter` directly:
+
+```python
+from lib.gguf_common import gguf_writer
+writer = gguf_writer(str(out_path), "<arch>")
+```
+
+`gguf_writer()` automatically relocates the bulk tokenizer KVs
+(`tokenizer.ggml.tokens` / `scores` / `token_type` / `merges`,
+`tokenizer.chat_template`) to a trailer after all scalar metadata, so remote
+consumers can range-read the small metadata prefix without pulling the multi-MB
+tokenizer tables. It happens at write time regardless of emission order — emit
+KVs in whatever order is convenient; never hand-order them or call
+`gguf.GGUFWriter` (which would skip the trailer layout).
+
 ### Step 2: Identify reference dtype (read intake)
 
 ```bash

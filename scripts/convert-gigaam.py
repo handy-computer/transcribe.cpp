@@ -86,10 +86,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from gguf import GGMLQuantizationType, LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
@@ -597,7 +598,7 @@ def convert(variant_key: str, slug: str, out_path: Path, repo_id: str | None = N
     print(f"Total params (encoder+head): {total:,} -> size_label={size_label}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "gigaam")
+    writer = gguf_writer(str(out_path), "gigaam")
 
     # ----- general.* -----
     if profile["variant"] not in VARIANT_DISPLAY_NAMES:

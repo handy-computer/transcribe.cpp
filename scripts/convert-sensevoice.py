@@ -97,13 +97,14 @@ from pathlib import Path
 import numpy as np
 import torch
 import yaml
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from gguf import GGMLQuantizationType, LlamaFileType
 
 import sentencepiece as spm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.hf_source import download_snapshot, looks_like_repo_id  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
@@ -424,7 +425,7 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
     print(f"Total params: {total_params:,} -> size_label={size_label}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "sensevoice")
+    writer = gguf_writer(str(out_path), "sensevoice")
 
     # ----- general.* -----
     # FunASR Model Open Source License Agreement v1.1 attribution

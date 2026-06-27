@@ -79,7 +79,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from gguf import GGMLQuantizationType, LlamaFileType
 from contextlib import ExitStack
 
 from safetensors import safe_open
@@ -131,6 +131,7 @@ class _ShardedSafetensors:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.hf_source import download_snapshot, looks_like_repo_id  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     add_general_identity,
@@ -525,7 +526,7 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         print(f"Total params (deduplicated): {total:,} -> size_label={size_label}")
 
         print(f"Writing GGUF to {out_path}")
-        writer = GGUFWriter(str(out_path), "qwen3_asr")
+        writer = gguf_writer(str(out_path), "qwen3_asr")
 
         # ---- general.* ----
         add_general_identity(

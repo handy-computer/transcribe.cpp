@@ -300,12 +300,12 @@ BULK_KV_KEYS = (
 def move_bulk_metadata_last(writer) -> list[str]:
     """Move the large tokenizer KVs to the end of every split's KV section.
 
-    Call once after all add_*() calls and immediately before
-    writer.write_header_to_file(). Keeps the small, range-read-friendly scalar
-    metadata first regardless of the order the converter happened to emit KVs
-    in, so new families get the streaming-friendly layout by adding this single
-    call rather than reordering their emission. Returns the keys actually moved
-    (for logging/tests); a no-op when none of the bulk keys are present.
+    The internal mechanism behind `gguf_writer()` — converters should build
+    their writer via that factory rather than calling this directly, so the
+    streaming-friendly layout is automatic and cannot be forgotten. Keeps the
+    small, range-read-friendly scalar metadata first regardless of the order the
+    converter emitted KVs in. Returns the keys actually moved (for logging and
+    tests); a no-op when none of the bulk keys are present.
     """
     kv_data = getattr(writer, "kv_data", None)
     if not isinstance(kv_data, list) or not all(isinstance(s, dict) for s in kv_data):
@@ -321,3 +321,26 @@ def move_bulk_metadata_last(writer) -> list[str]:
                 if key not in moved:
                     moved.append(key)
     return moved
+
+
+class _BulkLastGGUFWriter(gguf.GGUFWriter):
+    """GGUFWriter that relocates the bulk tokenizer KVs to the trailer at write
+    time. Hooked at write_kv_data_to_file (not write_header_to_file): the header
+    pass calls add_shard_kv_data(), which appends split.* scalar KVs, so we must
+    reorder *after* those are present but immediately before the KV dict is
+    serialized. The header only writes the KV count, which reordering leaves
+    unchanged."""
+
+    def write_kv_data_to_file(self) -> None:
+        move_bulk_metadata_last(self)
+        super().write_kv_data_to_file()
+
+
+def gguf_writer(path, arch: str, **kwargs) -> gguf.GGUFWriter:
+    """Construct a GGUFWriter that automatically emits the bulk tokenizer KVs
+    (tokens / scores / token_type / merges / chat_template) in a trailer after
+    all scalar metadata, so remote consumers can range-read the small metadata
+    prefix without pulling the multi-MB tokenizer tables. Converters MUST build
+    their writer through this factory instead of gguf.GGUFWriter directly — that
+    is the single place the streaming layout is enforced."""
+    return _BulkLastGGUFWriter(path, arch, **kwargs)

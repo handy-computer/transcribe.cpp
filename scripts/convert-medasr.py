@@ -72,6 +72,7 @@ from safetensors.torch import safe_open
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.hf_source import resolve_model_dir  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
@@ -372,7 +373,7 @@ def main(argv: list[str]) -> int:
     out_path = outdir / f"{slug}-{REF_DTYPE}.gguf"
     print(f"Writing GGUF: {out_path}")
 
-    writer = GGUFWriter(str(out_path), ARCH_KEY)
+    writer = gguf_writer(str(out_path), ARCH_KEY)
 
     # ---- general.* ----
     add_general_identity(

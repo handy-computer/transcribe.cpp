@@ -76,10 +76,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from gguf import GGMLQuantizationType, LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     add_general_identity,
@@ -672,7 +673,7 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, repo_i
     print(f"Tokenizer: {len(tok['tokens'])} tokens, {len(tok['merges'])} merges")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "canary_qwen")
+    writer = gguf_writer(str(out_path), "canary_qwen")
 
     # ---- general.* ----
     add_general_identity(

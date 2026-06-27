@@ -69,10 +69,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from gguf import GGUFWriter, LlamaFileType
+from gguf import LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
@@ -1364,7 +1365,7 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
     print(f"Encoder use_bias: {hp['enc_use_bias']}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "parakeet")
+    writer = gguf_writer(str(out_path), "parakeet")
 
     # ----- general.* metadata -----
     add_general_identity(

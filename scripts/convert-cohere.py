@@ -78,13 +78,14 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from gguf import GGMLQuantizationType, LlamaFileType
 from safetensors import safe_open
 import sentencepiece as spm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.hf_source import download_snapshot, looks_like_repo_id  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
@@ -456,7 +457,7 @@ def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None
         print(f"Total params (deduplicated): {total_params:,} -> size_label={size_label}")
 
         print(f"Writing GGUF to {out_path}")
-        writer = GGUFWriter(str(out_path), "cohere_asr")
+        writer = gguf_writer(str(out_path), "cohere_asr")
 
         # ----- general.* metadata -----
         add_general_identity(

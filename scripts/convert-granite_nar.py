@@ -53,6 +53,7 @@ from safetensors.torch import safe_open
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.hf_source import resolve_model_dir  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     add_general_identity,
 )
 
@@ -496,7 +497,7 @@ def main(argv: list[str]) -> int:
     out_path = outdir / f"{variant}-{REF_DTYPE}.gguf"
     print(f"Writing GGUF: {out_path}")
 
-    writer = GGUFWriter(str(out_path), "granite_speech_nar")
+    writer = gguf_writer(str(out_path), "granite_speech_nar")
 
     # ---- general.* ----
     languages = ["en", "fr", "de", "es", "pt"]

@@ -61,10 +61,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from gguf import GGUFWriter, LlamaFileType
+from gguf import LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
@@ -589,7 +590,7 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
     print(f"encoder_decoder_proj: {'present' if has_proj else 'absent (dims match)'}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "canary")
+    writer = gguf_writer(str(out_path), "canary")
 
     # ----- general.* -----
     add_general_identity(
