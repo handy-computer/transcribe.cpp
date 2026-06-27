@@ -259,10 +259,12 @@ void test_supports_translate_kv_override() {
         // stt.translation.target_languages is read into the model and
         // exposed on the public caps struct (the target-side twin of
         // languages[]).
-        CHECK(caps->n_translate_target_languages == 1);
-        if (caps->n_translate_target_languages == 1 &&
+        CHECK(caps->n_translate_target_languages == 3);
+        if (caps->n_translate_target_languages == 3 &&
             caps->translate_target_languages != nullptr) {
             CHECK(std::strcmp(caps->translate_target_languages[0], "en") == 0);
+            CHECK(std::strcmp(caps->translate_target_languages[1], "de") == 0);
+            CHECK(std::strcmp(caps->translate_target_languages[2], "fr") == 0);
         }
     }
 
@@ -274,6 +276,18 @@ void test_supports_translate_kv_override() {
         transcribe_run_params rp; transcribe_run_params_init(&rp);
         rp.task            = TRANSCRIBE_TASK_TRANSLATE;
         rp.target_language = "zz";
+        const float pcm[16] = { 0.0f };
+        CHECK(transcribe_run(ctx, pcm, 16, &rp) ==
+              TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE);
+    }
+
+    // Translation-pair gate: "fr" is an advertised target, so the target
+    // gate passes, but the exact pair set only allows en>de and de>en.
+    {
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        rp.task            = TRANSCRIBE_TASK_TRANSLATE;
+        rp.language        = "de";
+        rp.target_language = "fr";
         const float pcm[16] = { 0.0f };
         CHECK(transcribe_run(ctx, pcm, 16, &rp) ==
               TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE);

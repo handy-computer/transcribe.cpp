@@ -173,6 +173,12 @@ struct transcribe_model {
     // strings in and republishes caps.translate_target_languages + count.
     void set_translate_target_languages(std::vector<std::string> langs);
 
+    // Optional translation pair contract, stored as "src>dst" strings from
+    // stt.translation.pairs. Empty means "not advertised" and leaves generic
+    // pair validation inert.
+    void set_translation_pairs(std::vector<std::string> pairs);
+    bool allows_translation_pair(const char * src, const char * dst) const;
+
 private:
     // Backing storage for the languages chain. Kept private so the only
     // way to mutate it is through set_languages(), which guarantees the
@@ -184,6 +190,9 @@ private:
     // set_translate_target_languages() for the same sync guarantee.
     std::vector<std::string>  translate_target_storage_;
     std::vector<const char *> translate_target_ptrs_;
+
+    // Backing storage for optional generic translation pair validation.
+    std::vector<std::string> translation_pair_storage_;
 };
 
 namespace transcribe {

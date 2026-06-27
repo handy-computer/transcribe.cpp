@@ -316,6 +316,18 @@ transcribe_status validate_run_params_common(
             return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
         }
     }
+    // Translation-pair gate: when a GGUF advertises exact src>dst pairs and
+    // the caller supplied both sides, reject unsupported directions before
+    // family dispatch. A missing source hint keeps this inert because most
+    // families do not perform generic language detection here.
+    if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
+        params->language != nullptr &&
+        params->target_language != nullptr &&
+        !session->model->allows_translation_pair(params->language,
+                                                 params->target_language))
+    {
+        return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    }
     return TRANSCRIBE_OK;
 }
 

@@ -56,6 +56,7 @@ export interface Timings {
 export interface Capabilities {
   nativeSampleRate: number;
   languages: string[];
+  translateTargetLanguages: string[];
   maxTimestampKind: TimestampKind;
   supportsLanguageDetect: boolean;
   supportsTranslate: boolean;

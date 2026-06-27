@@ -52,11 +52,11 @@ KV emitted (consumed by Stage 4 read_granite_hparams):
   general.architecture   = "granite_speech"
   general.basename       = "granite-speech"
   general.size_label     = "1.0B" / "2.0B" / ...
-  general.languages      = BCP-47 list (5 or 6 langs)
+  general.languages      = BCP-47 ASR source-language list (5 or 6 langs)
 
   stt.variant            = e.g. "granite-4.0-1b-speech"
   stt.capability.translate   = bool (true for 1b/2b; false for plus)
-  stt.translation.target_languages = BCP-47 list when translation is true
+  stt.translation.target_languages = BCP-47 target list when translation is true
 
   tokenizer.ggml.model   = "gpt2"        (BPE with byte-level pre-tokenizer)
   tokenizer.ggml.tokens / merges / token_type
@@ -124,6 +124,27 @@ LANG_BY_VARIANT = {
     "granite-speech-4.1-2b":      ["en", "fr", "de", "es", "pt", "ja"],
     "granite-speech-4.1-2b-plus": ["en", "fr", "de", "es", "pt"],
 }
+
+# Translation targets are not exactly the ASR language set: the base AR
+# variants also advertise English-to-Italian and English-to-Mandarin. Keep this
+# separate from general.languages so `language=it/zh` is still rejected as an
+# unsupported source language while `target_language=it/zh` is accepted.
+TRANSLATION_TARGET_LANG_BY_VARIANT = {
+    "granite-4.0-1b-speech": ["en", "fr", "de", "es", "pt", "ja", "it", "zh"],
+    "granite-speech-4.1-2b": ["en", "fr", "de", "es", "pt", "ja", "it", "zh"],
+}
+
+
+def granite_translation_pairs(asr_langs: list[str]) -> list[str]:
+    """Model-card translation directions for the base AR variants."""
+    pairs: list[str] = []
+    for lang in asr_langs:
+        if lang == "en":
+            continue
+        pairs.append(f"en>{lang}")
+        pairs.append(f"{lang}>en")
+    pairs.extend(["en>it", "en>zh"])
+    return pairs
 
 
 # ---------------------------------------------------------------------------
@@ -659,9 +680,10 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         writer.add_string("stt.variant", variant)
 
         # ---- stt.capability.* ----
-        # 1b / 2b advertise X->En and En->X translation; 2b-plus narrows
-        # to ASR only. Language detection is not exposed by Granite
-        # (the chat template selects language explicitly).
+        # 1b / 2b advertise translation to/from English for the ASR languages,
+        # plus English-to-Italian and English-to-Mandarin. 2b-plus narrows to
+        # ASR only. Language detection is not exposed by Granite (the chat
+        # template selects language explicitly).
         translation_caps = {
             "granite-4.0-1b-speech":      True,
             "granite-speech-4.1-2b":      True,
@@ -672,7 +694,10 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
                         can_translate)
         writer.add_bool("stt.capability.lang_detect", False)
         if can_translate:
-            writer.add_array("stt.translation.target_languages", languages)
+            writer.add_array("stt.translation.target_languages",
+                             TRANSLATION_TARGET_LANG_BY_VARIANT[variant])
+            writer.add_array("stt.translation.pairs",
+                             granite_translation_pairs(languages))
         # -plus is the only variant exposing word timestamps and
         # speaker diarization (per its model card).
         writer.add_bool("stt.capability.word_timestamps",

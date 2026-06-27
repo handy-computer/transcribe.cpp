@@ -422,6 +422,20 @@ transcribe_status read_languages_kv(const gguf_context * gguf,
             return TRANSCRIBE_ERR_GGUF;
     }
 
+    // Optional translation-pair contract. When present, the generic validator
+    // can reject explicitly supplied unsupported source>target pairs before
+    // family dispatch. Absent keeps old GGUFs permissive.
+    std::vector<std::string> pairs;
+    switch (read_string_array_kv(gguf, "stt.translation.pairs", pairs)) {
+        case KvResult::Absent:
+            break;
+        case KvResult::Ok:
+            model.set_translation_pairs(std::move(pairs));
+            break;
+        case KvResult::BadType:
+            return TRANSCRIBE_ERR_GGUF;
+    }
+
     return TRANSCRIBE_OK;
 }
 

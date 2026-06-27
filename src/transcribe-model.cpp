@@ -89,3 +89,24 @@ void transcribe_model::set_translate_target_languages(std::vector<std::string> l
     caps.translate_target_languages =
         translate_target_ptrs_.empty() ? nullptr : translate_target_ptrs_.data();
 }
+
+void transcribe_model::set_translation_pairs(std::vector<std::string> pairs) {
+    translation_pair_storage_ = std::move(pairs);
+}
+
+bool transcribe_model::allows_translation_pair(const char * src,
+                                               const char * dst) const {
+    if (translation_pair_storage_.empty()) {
+        return true;
+    }
+    if (src == nullptr || dst == nullptr || src[0] == '\0' || dst[0] == '\0') {
+        return false;
+    }
+    const std::string pair = std::string(src) + ">" + dst;
+    for (const auto & allowed : translation_pair_storage_) {
+        if (allowed == pair) {
+            return true;
+        }
+    }
+    return false;
+}

@@ -1434,10 +1434,8 @@ def emit_fixtures(out_dir: Path) -> None:
     # hparams, and tensor catalog — but carries stt.capability.translate
     # = true. The parakeet family default is supports_translate=false, so
     # this fixture pins that the loader reads the canonical capability KV
-    # and flips the flag on. This is the key the granite / medasr /
-    # granite_nar converters emit; before the rename they wrote a
-    # misspelled stt.capability.translation that the loader never read, so
-    # granite -plus advertised translation it should not have.
+    # and flips the flag on. It also carries target-language and pair
+    # metadata for the shared TRANSLATE validation gates.
     _write(
         out_dir / "tokenizer_minimal_translate.gguf",
         _build_full_gguf(
@@ -1446,7 +1444,14 @@ def emit_fixtures(out_dir: Path) -> None:
                 _pack_kv_string("general.architecture", "parakeet"),
                 _pack_kv_string("stt.variant", "tdt-0.6b-translate-toy"),
                 _pack_kv_bool("stt.capability.translate", True),
-                _pack_kv_array_string("stt.translation.target_languages", ["en"]),
+                _pack_kv_array_string(
+                    "stt.translation.target_languages",
+                    ["en", "de", "fr"],
+                ),
+                _pack_kv_array_string(
+                    "stt.translation.pairs",
+                    ["en>de", "de>en"],
+                ),
                 *tokenizer_kv,
                 *parakeet_hparams_kv,
             ],

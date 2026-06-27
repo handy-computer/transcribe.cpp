@@ -1276,6 +1276,7 @@ export class TranscribeModel {
     n.F.capabilitiesInit(c);
     check(n, n.F.modelGetCapabilities(this.handle, c), "reading capabilities");
     let languages: string[] = [];
+    let translateTargetLanguages: string[] = [];
     try {
       if (c.languages && c.n_languages > 0) {
         languages = n.koffi.decode(c.languages, "char *", c.n_languages);
@@ -1283,9 +1284,21 @@ export class TranscribeModel {
     } catch {
       languages = [];
     }
+    try {
+      if (c.translate_target_languages && c.n_translate_target_languages > 0) {
+        translateTargetLanguages = n.koffi.decode(
+          c.translate_target_languages,
+          "char *",
+          c.n_translate_target_languages,
+        );
+      }
+    } catch {
+      translateTargetLanguages = [];
+    }
     return {
       nativeSampleRate: c.native_sample_rate,
       languages,
+      translateTargetLanguages,
       maxTimestampKind: TIMESTAMP_NAMES[c.max_timestamp_kind] ?? "none",
       supportsLanguageDetect: c.supports_language_detect,
       supportsTranslate: c.supports_translate,
