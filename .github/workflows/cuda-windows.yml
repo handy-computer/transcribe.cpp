@@ -114,8 +114,8 @@ jobs:
         with:
           name: cuda-dist-windows-x86_64
           path: wheelhouse-cu12/*.whl
-      # The canonical CUDA native bundle for non-Python ecosystems (the npm
-      # @transcribe-cpp/win32-x64-cuda platform package): the repaired cu12
+      # The canonical CUDA native bundle for non-Python ecosystems (bring-your-own
+      # CUDA via TRANSCRIBE_LIBRARY; prebuilt-Rust later): the repaired cu12
       # wheel's _native/ dir (cuda + vulkan + cpu modules) + contract.json +
       # licenses, re-containered byte-for-byte. Like the wheel it does NOT carry
       # the CUDA runtime (cudart/cublas) — the consumer supplies it (see the TS

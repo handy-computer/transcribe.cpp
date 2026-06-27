@@ -24,12 +24,6 @@ const TUPLES = {
   "linux-x64-cpu-vulkan": { os: "linux", cpu: "x64", libc: "glibc", lib: "libtranscribe.so", backends: ["cpu", "vulkan"] },
   "linux-arm64-cpu-vulkan": { os: "linux", cpu: "arm64", libc: "glibc", lib: "libtranscribe.so", backends: ["cpu", "vulkan"] },
   "win32-x64-cpu-vulkan": { os: "win32", cpu: "x64", lib: "transcribe.dll", backends: ["cpu", "vulkan"] },
-  // Opt-in CUDA packages (superset of the default: cuda rides alongside vulkan +
-  // cpu). os/cpu match the default tuple, so npm can't auto-pick between them —
-  // these are installed explicitly and the loader prefers them when present. The
-  // CUDA runtime (cudart/cublas) is NOT bundled; see src/cuda.ts.
-  "linux-x64-cuda": { os: "linux", cpu: "x64", libc: "glibc", lib: "libtranscribe.so", backends: ["cuda", "vulkan", "cpu"] },
-  "win32-x64-cuda": { os: "win32", cpu: "x64", lib: "transcribe.dll", backends: ["cuda", "vulkan", "cpu"] },
 };
 
 function arg(name, fallback) {
