@@ -76,6 +76,7 @@ from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
     TOKEN_TYPE_UNUSED,
+    add_general_identity,
     encode_for_gguf,
     reference_dtype_for,
     slug_from_repo_id,
@@ -381,9 +382,19 @@ def main(argv: list[str]) -> int:
     writer = GGUFWriter(str(out_path), ARCH_KEY)
 
     # ---- general.* ----
-    writer.add_string("general.basename", "medasr")
-    writer.add_uint32("general.file_type", int(REFERENCE_FILE_TYPE))
-    writer.add_array("general.languages", ["en"])
+    add_general_identity(
+        writer,
+        name="MedASR",
+        basename="medasr",
+        file_type=REFERENCE_FILE_TYPE,
+        languages=["en"],
+        author="Google",
+        organization="google",
+        license="other",
+        license_name="health-ai-developer-foundations",
+        license_link="https://developers.google.com/health-ai-developer-foundations/terms",
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+    )
 
     # ---- stt.variant + capabilities ----
     writer.add_string("stt.variant", slug)

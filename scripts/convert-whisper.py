@@ -139,6 +139,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -441,11 +442,33 @@ def compute_size_label(total_params: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Display names
+# ---------------------------------------------------------------------------
+# Friendly general.name per variant slug (the variant carries the version,
+# so general.version is left unset).
+
+VARIANT_DISPLAY_NAMES: dict[str, str] = {
+    "whisper-tiny":           "Whisper Tiny",
+    "whisper-tiny.en":        "Whisper Tiny (English)",
+    "whisper-base":           "Whisper Base",
+    "whisper-base.en":        "Whisper Base (English)",
+    "whisper-small":          "Whisper Small",
+    "whisper-small.en":       "Whisper Small (English)",
+    "whisper-medium":         "Whisper Medium",
+    "whisper-medium.en":      "Whisper Medium (English)",
+    "whisper-large":          "Whisper Large",
+    "whisper-large-v2":       "Whisper Large v2",
+    "whisper-large-v3":       "Whisper Large v3",
+    "whisper-large-v3-turbo": "Whisper Large v3 Turbo",
+}
+
+
+# ---------------------------------------------------------------------------
 # Main converter
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None = None) -> None:
     config_path     = model_dir / "config.json"
     gen_config_path = model_dir / "generation_config.json"
     preproc_path    = model_dir / "preprocessor_config.json"
@@ -495,10 +518,25 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer = GGUFWriter(str(out_path), "whisper")
 
         # ---- general.* ----
-        writer.add_string("general.basename",   "whisper")
-        writer.add_string("general.size_label", size_label)
-        writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-        writer.add_array("general.languages",   hp["languages"])
+        if variant not in VARIANT_DISPLAY_NAMES:
+            raise ValueError(
+                f"unknown whisper variant slug: {variant!r}; "
+                f"add it to VARIANT_DISPLAY_NAMES"
+            )
+        add_general_identity(
+            writer,
+            name=VARIANT_DISPLAY_NAMES[variant],
+            basename="whisper",
+            size_label=size_label,
+            file_type=REFERENCE_FILE_TYPE,
+            languages=hp["languages"],
+            author="OpenAI",
+            organization="openai",
+            license="apache-2.0",
+            license_name="Apache License 2.0",
+            license_link="https://www.apache.org/licenses/LICENSE-2.0",
+            repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        )
 
         # ---- stt.variant ----
         writer.add_string("stt.variant", variant)
@@ -819,7 +857,7 @@ def main(argv: list[str]) -> int:
                     break
             variant = stripped
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, repo_id=repo_id)
     return 0
 
 

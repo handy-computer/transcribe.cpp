@@ -110,6 +110,7 @@ from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
     TOKEN_TYPE_UNUSED,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -363,7 +364,7 @@ def compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None = None) -> None:
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     config_yaml = model_dir / "config.yaml"
@@ -432,34 +433,37 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     # and author information and retain relevant model names". Bake the
     # canonical attribution into the GGUF KV so downstream consumers
     # see source + author + model names without reading external docs.
-    writer.add_string("general.name",         "SenseVoiceSmall")
-    writer.add_string("general.basename",     variant)
-    writer.add_string("general.size_label",   size_label)
-    writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",    hp["languages"])
-    writer.add_string("general.author",       "Alibaba Group / FunAudioLLM")
-    writer.add_string("general.organization", "FunAudioLLM")
-    writer.add_string("general.license",      "FunASR-Model-License-1.1")
-    writer.add_string("general.license.link",
-                      "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE")
-    writer.add_string("general.url",
-                      "https://huggingface.co/FunAudioLLM/SenseVoiceSmall")
-    writer.add_string("general.source.url",
-                      "https://github.com/modelscope/FunASR")
-    writer.add_array("general.tags", [
-        "asr",
-        "speech-recognition",
-        "encoder-ctc",
-        "SenseVoiceSmall",
-        "SenseVoiceEncoderSmall",
-    ])
-    writer.add_string("general.description",
-                      "SenseVoiceSmall (Alibaba FunAudioLLM): non-AR "
-                      "CTC ASR with multilingual + emotion/event/ITN "
-                      "label heads. Converted from FunAudioLLM/"
-                      "SenseVoiceSmall; see "
-                      "https://github.com/modelscope/FunASR/blob/main/"
-                      "MODEL_LICENSE for FunASR redistribution terms.")
+    add_general_identity(
+        writer,
+        name="SenseVoice Small",
+        basename=variant,
+        size_label=size_label,
+        file_type=int(REFERENCE_FILE_TYPE),
+        languages=hp["languages"],
+        author="Alibaba Group / FunAudioLLM",
+        organization="FunAudioLLM",
+        license="other",
+        license_name="model-license",
+        license_link="https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        url="https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+        source_url="https://github.com/modelscope/FunASR",
+        tags=[
+            "asr",
+            "speech-recognition",
+            "encoder-ctc",
+            "SenseVoiceSmall",
+            "SenseVoiceEncoderSmall",
+        ],
+        description=(
+            "SenseVoiceSmall (Alibaba FunAudioLLM): non-AR "
+            "CTC ASR with multilingual + emotion/event/ITN "
+            "label heads. Converted from FunAudioLLM/"
+            "SenseVoiceSmall; see "
+            "https://github.com/modelscope/FunASR/blob/main/"
+            "MODEL_LICENSE for FunASR redistribution terms."
+        ),
+    )
 
     # ----- stt.variant + capabilities -----
     writer.add_string("stt.variant", variant)
@@ -705,7 +709,7 @@ def main(argv: list[str]) -> int:
         out_path = REPO_ROOT / "models" / output_slug / gguf_name(output_slug, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, repo_id=repo_id)
     return 0
 
 

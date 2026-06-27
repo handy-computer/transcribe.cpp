@@ -29,6 +29,7 @@
 #include "transcribe.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,14 @@ struct transcribe_model {
     // variant is whatever the family decided (loader leaves it empty if
     // stt.variant was absent; the family supplies a default).
     std::string variant;
+
+    // All scalar-string GGUF metadata KVs (general.*, stt.variant,
+    // tokenizer.ggml.model, chat_template, ...), keyed by GGUF key. Copied
+    // from the loader right after the per-family load() returns — the loader
+    // outlives that call, so no family handler has to populate this. Exposed
+    // read-only via transcribe_model_meta_val_str(); this mirrors llama.cpp's
+    // single generic metadata accessor rather than a typed accessor per field.
+    std::map<std::string, std::string> meta;
 
     // Runtime backend currently bound to this model. Empty string means
     // "no backend bound" — both pre-binding and the model == NULL case

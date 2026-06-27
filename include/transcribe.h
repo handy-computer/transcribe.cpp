@@ -1322,6 +1322,27 @@ TRANSCRIBE_API const char * transcribe_model_arch_string(const struct transcribe
 TRANSCRIBE_API const char * transcribe_model_variant_string(const struct transcribe_model * model);
 TRANSCRIBE_API const char * transcribe_model_backend(const struct transcribe_model * model);
 
+/*
+ * Generic GGUF string-metadata getter, modeled on llama_model_meta_val_str.
+ * Looks up a scalar-string metadata key written by the converter and returns
+ * its value; this is how human-facing identity is read rather than a typed
+ * accessor per field. Common keys:
+ *
+ *   "general.name"         friendly label, e.g. "Whisper Large v3"
+ *   "general.license"      SPDX expression, e.g. "apache-2.0" (or "other")
+ *   "general.license.name" human-friendly license name
+ *   "general.license.link" URL to the license text
+ *   "general.author", "general.organization", "general.repo_url", ...
+ *
+ * Returns a model-owned string (valid until the model is freed; do not free
+ * it) or an empty string "" when model is NULL, key is NULL, or the key is
+ * absent. Only scalar-string KVs are exposed (numeric hyperparameters and
+ * arrays such as the token list are not). There is no fallback to the variant
+ * slug — for that, use transcribe_model_variant_string().
+ */
+TRANSCRIBE_API const char * transcribe_model_meta_val_str(
+    const struct transcribe_model * model, const char * key);
+
 /* ----------------------------------------------------------------------- */
 /* Lifecycle                                                               */
 /* ----------------------------------------------------------------------- */

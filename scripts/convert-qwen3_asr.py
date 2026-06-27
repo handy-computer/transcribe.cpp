@@ -134,6 +134,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -465,7 +466,7 @@ def compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None = None) -> None:
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     config_path     = model_dir / "config.json"
@@ -528,10 +529,23 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer = GGUFWriter(str(out_path), "qwen3_asr")
 
         # ---- general.* ----
-        writer.add_string("general.basename",   "qwen3-asr")
-        writer.add_string("general.size_label", size_label)
-        writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-        writer.add_array("general.languages",   hp["languages"])
+        add_general_identity(
+            writer,
+            name={
+                "qwen3-asr-0.6b": "Qwen3-ASR 0.6B",
+                "qwen3-asr-1.7b": "Qwen3-ASR 1.7B",
+            }[variant],
+            basename="qwen3-asr",
+            size_label=size_label,
+            file_type=REFERENCE_FILE_TYPE,
+            languages=hp["languages"],
+            author="Alibaba Qwen Team",
+            organization="Qwen",
+            license="apache-2.0",
+            license_name="Apache License 2.0",
+            license_link="https://www.apache.org/licenses/LICENSE-2.0",
+            repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        )
 
         # ---- stt.variant ----
         writer.add_string("stt.variant", variant)
@@ -841,7 +855,7 @@ def main(argv: list[str]) -> int:
                     break
             variant = stripped
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, repo_id=repo_id)
     return 0
 
 

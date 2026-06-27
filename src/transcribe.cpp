@@ -1524,7 +1524,17 @@ extern "C" transcribe_status transcribe_model_load_file(
     // Hand off. The handler may take ownership of the gguf_context via
     // loader.release_gguf(); if it doesn't, the Loader destructor frees
     // it normally on stack unwinding.
-    return arch->load(loader, params, out_model);
+    const transcribe_status st = arch->load(loader, params, out_model);
+
+    // Copy the string-metadata map onto the model once, centrally. The
+    // loader read it during open() and outlives arch->load(), so we set it
+    // here instead of in every per-family handler. `variant` is owned by the
+    // family (it may default it when stt.variant was absent) and stays on its
+    // own accessor; this map is the generic general.* / display surface.
+    if (st == TRANSCRIBE_OK && out_model != nullptr && *out_model != nullptr) {
+        (*out_model)->meta = loader.meta();
+    }
+    return st;
 }
 
 extern "C" void transcribe_model_free(struct transcribe_model * model) {
@@ -2647,6 +2657,19 @@ extern "C" const char * transcribe_model_variant_string(const struct transcribe_
         return "";
     }
     return model->variant.c_str();
+}
+
+extern "C" const char * transcribe_model_meta_val_str(
+    const struct transcribe_model * model, const char * key) {
+    // Generic GGUF string-metadata getter, mirroring llama_model_meta_val_str.
+    // Returns a model-owned string (valid until the model is freed) or "" when
+    // the model/key is null or the key is absent. There is no fallback to the
+    // variant slug — callers that want one read transcribe_model_variant_string.
+    if (model == nullptr || key == nullptr) {
+        return "";
+    }
+    const auto it = model->meta.find(key);
+    return it != model->meta.end() ? it->second.c_str() : "";
 }
 
 extern "C" int transcribe_tokenize(

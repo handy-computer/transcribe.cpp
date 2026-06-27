@@ -39,6 +39,103 @@ def gguf_name(slug: str, quant: str) -> str:
     return f"{slug}-{quant.upper()}.gguf"
 
 
+def add_general_identity(
+    writer: gguf.GGUFWriter,
+    *,
+    name: str,
+    basename: str,
+    size_label: str | None = None,
+    file_type: GGMLQuantizationType | int | None = None,
+    languages: list[str] | None = None,
+    author: str | None = None,
+    organization: str | None = None,
+    version: str | None = None,
+    license: str | None = None,
+    license_name: str | None = None,
+    license_link: str | None = None,
+    repo_url: str | None = None,
+    url: str | None = None,
+    source_url: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """Write the conventional `general.*` identity block for a converter.
+
+    Centralises the GGUF metadata keys llama.cpp / ggml tooling expects so
+    every transcribe.cpp GGUF carries a consistent, human-friendly identity
+    instead of a bare slug. Keys map 1:1 onto the llama.cpp `Keys.General`
+    namespace (gguf-py/gguf/constants.py), so any inspector built for
+    llama.cpp or whisper.cpp reads them without surprises.
+
+    `general.architecture` is NOT written here — the GGUFWriter constructor
+    emits it automatically from its `arch` argument.
+
+    Required (every GGUF should carry these):
+      name         friendly display name, e.g. "Parakeet TDT 0.6B v3".
+                   This is the headline string; set it explicitly per
+                   variant rather than auto-composing from basename.
+      basename     family slug, e.g. "parakeet-tdt".
+
+    Recommended / optional (write what is known; None is skipped, leaving
+    the KV absent — pass exactly what the converter already emitted so the
+    existing key footprint is preserved):
+      size_label   parameter-count class, e.g. "0.6B" (compute_size_label).
+      file_type    reference dtype enum (int(REFERENCE_FILE_TYPE)).
+      languages    BCP-47 / ISO-639 codes the model supports.
+      author        creating lab/company, e.g. "NVIDIA", "OpenAI".
+      organization  upstream HF org, e.g. "nvidia", "openai".
+      version       model version string, e.g. "v3", "2507".
+      license       SPDX expression, e.g. "apache-2.0", "cc-by-4.0".
+      license_name  human-friendly license name.
+      license_link  URL to the full license text.
+      repo_url      canonical upstream repo (HF model page is fine).
+      url           homepage / paper / release page.
+      source_url    original project homepage when converted from another
+                    format (provenance; e.g. an upstream GitHub repo).
+      description   one-paragraph free-form description.
+      tags          search/classification tags.
+    """
+    if not name:
+        raise ValueError("general.name is required")
+    if not basename:
+        raise ValueError("general.basename is required")
+
+    writer.add_string("general.name",       name)
+    writer.add_string("general.basename",   basename)
+    if version is not None:
+        writer.add_string("general.version", version)
+    if size_label is not None:
+        writer.add_string("general.size_label", size_label)
+
+    if author is not None:
+        writer.add_string("general.author",       author)
+    if organization is not None:
+        writer.add_string("general.organization", organization)
+
+    if license is not None:
+        writer.add_string("general.license",      license)
+    if license_name is not None:
+        writer.add_string("general.license.name", license_name)
+    if license_link is not None:
+        writer.add_string("general.license.link", license_link)
+
+    if repo_url is not None:
+        writer.add_string("general.repo_url",    repo_url)
+    if url is not None:
+        writer.add_string("general.url",         url)
+    if source_url is not None:
+        writer.add_string("general.source.url",  source_url)
+    if description is not None:
+        writer.add_string("general.description", description)
+
+    if file_type is not None:
+        writer.add_uint32("general.file_type", int(file_type))
+    if languages is not None:
+        writer.add_array("general.languages",  languages)
+    if tags is not None:
+        writer.add_array("general.tags",   tags)
+
+
 # llama.cpp / whisper.cpp tokenizer.ggml.token_type values. We follow
 # the same conventions so an inspector built for either project can
 # read our GGUFs without surprises.

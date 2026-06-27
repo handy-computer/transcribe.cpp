@@ -91,6 +91,7 @@ from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
     TOKEN_TYPE_UNUSED,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -404,7 +405,7 @@ def _compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path) -> None:
+def convert(model_dir: Path, out_path: Path, repo_id: str | None = None) -> None:
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     config_path      = model_dir / "config.json"
@@ -459,10 +460,21 @@ def convert(model_dir: Path, out_path: Path) -> None:
         writer = GGUFWriter(str(out_path), "cohere_asr")
 
         # ----- general.* metadata -----
-        writer.add_string("general.basename",   "cohere-transcribe")
-        writer.add_string("general.size_label", size_label)
-        writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-        writer.add_array("general.languages",   hp["languages"])
+        add_general_identity(
+            writer,
+            name="Cohere Transcribe",
+            version="03-2026",
+            basename="cohere-transcribe",
+            size_label=size_label,
+            file_type=REFERENCE_FILE_TYPE,
+            languages=hp["languages"],
+            author="Cohere",
+            organization="CohereLabs",
+            license="apache-2.0",
+            license_name="Apache License 2.0",
+            license_link="https://www.apache.org/licenses/LICENSE-2.0",
+            repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        )
 
         # ----- stt.variant -----
         writer.add_string("stt.variant", "cohere-transcribe-03-2026")
@@ -748,7 +760,7 @@ def main(argv: list[str]) -> int:
         out_path = REPO_ROOT / "models" / slug / gguf_name(slug, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert(model_dir, out_path)
+    convert(model_dir, out_path, repo_id=repo_id)
     return 0
 
 

@@ -159,6 +159,7 @@ from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -477,7 +478,8 @@ def _infer_languages(variant: str) -> list[str]:
 
 
 def convert(model_dir: Path, out_path: Path, variant: str,
-            languages: list[str] | None = None) -> None:
+            languages: list[str] | None = None,
+            repo_id: str | None = None) -> None:
     config_path     = model_dir / "config.json"
     gen_config_path = model_dir / "generation_config.json"
     preproc_path    = model_dir / "preprocessor_config.json"
@@ -538,10 +540,26 @@ def convert(model_dir: Path, out_path: Path, variant: str,
         writer = GGUFWriter(str(out_path), "moonshine")
 
         # ---- general.* ----
-        writer.add_string("general.basename",   "moonshine")
-        writer.add_string("general.size_label", size_label)
-        writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-        writer.add_array("general.languages",   languages)
+        _DISPLAY_NAMES = {
+            "moonshine-tiny": "Moonshine Tiny",
+            "moonshine-base": "Moonshine Base",
+        }
+        if variant not in _DISPLAY_NAMES:
+            raise ValueError(f"unknown moonshine variant slug: {variant!r}")
+        add_general_identity(
+            writer,
+            name=_DISPLAY_NAMES[variant],
+            basename="moonshine",
+            size_label=size_label,
+            file_type=int(REFERENCE_FILE_TYPE),
+            languages=languages,
+            author="Useful Sensors",
+            organization="UsefulSensors",
+            license="mit",
+            license_name="MIT License",
+            license_link="https://opensource.org/license/mit",
+            repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        )
 
         # ---- stt.variant ----
         writer.add_string("stt.variant", variant)
@@ -804,7 +822,7 @@ def main(argv: list[str]) -> int:
                     break
             variant = stripped
 
-    convert(model_dir, out_path, variant, languages=args.language)
+    convert(model_dir, out_path, variant, languages=args.language, repo_id=repo_id)
     return 0
 
 

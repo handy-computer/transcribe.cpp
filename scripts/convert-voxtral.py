@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -367,7 +368,7 @@ def compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None = None) -> None:
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     config = json.loads((model_dir / "config.json").read_text())
@@ -397,10 +398,28 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer = GGUFWriter(str(out_path), "voxtral")
 
         # ---- general.* ----
-        writer.add_string("general.basename", "voxtral")
-        writer.add_string("general.size_label", size_label)
-        writer.add_uint32("general.file_type", int(REFERENCE_FILE_TYPE))
-        writer.add_array("general.languages", hp["languages"])
+        _VARIANT_TABLE = {
+            "voxtral-mini-3b-2507":  ("Voxtral Mini 3B",  "2507"),
+            "voxtral-small-24b-2507": ("Voxtral Small 24B", "2507"),
+        }
+        if variant not in _VARIANT_TABLE:
+            raise ValueError(f"unknown voxtral variant slug: {variant!r}")
+        _disp_name, _disp_version = _VARIANT_TABLE[variant]
+        add_general_identity(
+            writer,
+            name=_disp_name,
+            basename="voxtral",
+            version=_disp_version,
+            size_label=size_label,
+            file_type=int(REFERENCE_FILE_TYPE),
+            languages=hp["languages"],
+            author="Mistral AI",
+            organization="mistralai",
+            license="apache-2.0",
+            license_name="Apache License 2.0",
+            license_link="https://www.apache.org/licenses/LICENSE-2.0",
+            repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        )
         writer.add_string("stt.variant", variant)
 
         # ---- stt.capability.* ----
@@ -630,7 +649,7 @@ def main(argv: list[str]) -> int:
                 variant = variant[: -len(q)]
                 break
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, repo_id=repo_id)
     return 0
 
 
