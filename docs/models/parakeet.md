@@ -15,15 +15,26 @@ see the family doc at
 
 ## Choosing a variant
 
-- **Best accuracy, English.** `parakeet-rnnt-1.1b` and
-  `parakeet-tdt-1.1b` land at the top of the family on LibriSpeech
-  test-clean. RNN-T is marginally more accurate; TDT decodes faster
-  because the duration head lets the decoder skip frames.
-- **Best accuracy/speed tradeoff, English.** `parakeet-tdt-0.6b-v2`
-  (English-only) — small, fast, near top-line accuracy.
-- **Multilingual (25 European languages).** `parakeet-tdt-0.6b-v3` is
-  the only multilingual variant; same size as v2, broader coverage at a
+Most users want one of three:
+
+- **English transcription → `parakeet-tdt-0.6b-v2`.** The default pick:
+  small, fast, near top-of-family accuracy on English.
+- **Multilingual (25 European languages) → `parakeet-tdt-0.6b-v3`.** The
+  only multilingual variant; same size as v2, broader coverage at a
   small English-WER cost.
+- **Streaming / real-time → Nemotron streaming.** Parakeet here is
+  offline-only. For low-latency streaming use the FastConformer-lineage
+  [`nemotron-3.5-asr-streaming-0.6b`](nemotron-3.5-asr-streaming-0.6b.md)
+  (multilingual) or
+  [`nemotron-speech-streaming-en-0.6b`](nemotron-speech-streaming-en-0.6b.md)
+  (English). Within Parakeet itself, `parakeet-unified-en-0.6b` is the only
+  streaming-capable variant.
+
+If you specifically need the lowest WER or a different decoder:
+
+- **Lowest WER, English.** `parakeet-tdt-1.1b` (1.38% Q8_0) is the most
+  accurate in the family, narrowly ahead of `parakeet-rnnt-1.1b` (1.46%).
+  TDT also decodes faster — the duration head lets the decoder skip frames.
 - **Fastest decode at any size.** Use a CTC variant
   (`parakeet-ctc-0.6b` / `parakeet-ctc-1.1b`). Single-pass greedy
   alignment, no transducer loop — at a ~0.2pp WER cost vs the

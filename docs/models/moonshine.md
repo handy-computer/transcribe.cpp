@@ -20,7 +20,7 @@ see the family doc at
   params) at Q8_0 is 34 MB and decodes well above realtime on commodity
   hardware. WER is on par with `whisper-tiny.en` while running on raw
   audio (no mel frontend in the load path).
-- **Higher accuracy, still small.** `moonshine-base` (62M params) at
+- **Higher accuracy, still small.** `moonshine-base` (61M params) at
   Q8_0 is 74 MB and lands inside `whisper-small.en` accuracy territory
   for English audio.
 - **Streaming workloads.** Moonshine is **not** streaming-first — the
@@ -52,7 +52,7 @@ to Q8_0 storage and would be near-duplicates.
 | Variant | Params | Q8_0 size | WER (LibriSpeech test-clean) | Doc |
 | --- | ---: | ---: | ---: | --- |
 | `moonshine-tiny` |  27M | 34 MB | 4.60% | [moonshine-tiny.md](moonshine-tiny.md) |
-| `moonshine-base` |  62M | 74 MB | 3.26% | [moonshine-base.md](moonshine-base.md) |
+| `moonshine-base` |  61M | 74 MB | 3.26% | [moonshine-base.md](moonshine-base.md) |
 
 ### Language-specific (Useful Sensors fine-tunes)
 
@@ -70,12 +70,12 @@ F32 / F16 / Q8_0 table and the reference baseline.
 | `moonshine-tiny-ko` | Korean (ko)     | 27M | 34 MB | CER |  8.98% | [handy-computer/moonshine-tiny-ko-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ko-gguf) |
 | `moonshine-tiny-ar` | Arabic (ar)     | 27M | 34 MB | WER | 26.79% | [handy-computer/moonshine-tiny-ar-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ar-gguf) |
 | `moonshine-tiny-ja` | Japanese (ja)   | 27M | 34 MB | CER | 13.36% | [handy-computer/moonshine-tiny-ja-gguf](https://huggingface.co/handy-computer/moonshine-tiny-ja-gguf) |
-| `moonshine-base-vi` | Vietnamese (vi) | 62M | 74 MB | WER |  9.79% | [handy-computer/moonshine-base-vi-gguf](https://huggingface.co/handy-computer/moonshine-base-vi-gguf) |
-| `moonshine-base-uk` | Ukrainian (uk)  | 62M | 74 MB | WER | 14.39% | [handy-computer/moonshine-base-uk-gguf](https://huggingface.co/handy-computer/moonshine-base-uk-gguf) |
-| `moonshine-base-zh` | Mandarin (zh)   | 62M | 74 MB | CER | 17.00% | [handy-computer/moonshine-base-zh-gguf](https://huggingface.co/handy-computer/moonshine-base-zh-gguf) |
-| `moonshine-base-ko` | Korean (ko)     | 62M | 74 MB | CER |  8.13% | [handy-computer/moonshine-base-ko-gguf](https://huggingface.co/handy-computer/moonshine-base-ko-gguf) |
-| `moonshine-base-ar` | Arabic (ar)     | 62M | 74 MB | WER | 24.50% | [handy-computer/moonshine-base-ar-gguf](https://huggingface.co/handy-computer/moonshine-base-ar-gguf) |
-| `moonshine-base-ja` | Japanese (ja)   | 62M | 74 MB | CER | 10.53% | [handy-computer/moonshine-base-ja-gguf](https://huggingface.co/handy-computer/moonshine-base-ja-gguf) |
+| `moonshine-base-vi` | Vietnamese (vi) | 61M | 74 MB | WER |  9.79% | [handy-computer/moonshine-base-vi-gguf](https://huggingface.co/handy-computer/moonshine-base-vi-gguf) |
+| `moonshine-base-uk` | Ukrainian (uk)  | 61M | 74 MB | WER | 14.39% | [handy-computer/moonshine-base-uk-gguf](https://huggingface.co/handy-computer/moonshine-base-uk-gguf) |
+| `moonshine-base-zh` | Mandarin (zh)   | 61M | 74 MB | CER | 17.00% | [handy-computer/moonshine-base-zh-gguf](https://huggingface.co/handy-computer/moonshine-base-zh-gguf) |
+| `moonshine-base-ko` | Korean (ko)     | 61M | 74 MB | CER |  8.13% | [handy-computer/moonshine-base-ko-gguf](https://huggingface.co/handy-computer/moonshine-base-ko-gguf) |
+| `moonshine-base-ar` | Arabic (ar)     | 61M | 74 MB | WER | 24.50% | [handy-computer/moonshine-base-ar-gguf](https://huggingface.co/handy-computer/moonshine-base-ar-gguf) |
+| `moonshine-base-ja` | Japanese (ja)   | 61M | 74 MB | CER | 10.53% | [handy-computer/moonshine-base-ja-gguf](https://huggingface.co/handy-computer/moonshine-base-ja-gguf) |
 
 Pre-built GGUFs for every variant and quant are hosted under
 [`handy-computer` on Hugging Face](https://huggingface.co/handy-computer);

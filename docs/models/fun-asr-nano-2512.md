@@ -26,6 +26,9 @@ for training data, intended use, and upstream evaluation methodology.
 
 Licensed under the **FunASR Model Open Source License Agreement v1.1**
 ([MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)).
+Ported from upstream commit
+[`a7088d6`](https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/commit/a7088d620f755dcdca575b63db184c3ad55b2865),
+pinned 2026-05-06.
 
 ## Download
 

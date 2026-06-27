@@ -15,11 +15,12 @@ see the family doc at
 ## Choosing a variant
 
 - **Cased + punctuated Russian, best accuracy.** `gigaam-v3-e2e-rnnt`
-  — RNN-T head trained end-to-end with the 1024-piece SentencePiece
+  — RNN-T head trained end-to-end with a 1024-piece SentencePiece
   vocab.
 - **Cased + punctuated Russian, fastest decode.** `gigaam-v3-e2e-ctc`
-  — same training data and tokenizer as `e2e-rnnt`, single-pass CTC
-  alignment instead of the transducer loop.
+  — same Conformer encoder and training data as `e2e-rnnt`, but a more
+  compact 256-piece SentencePiece vocab, with single-pass CTC alignment
+  instead of the transducer loop.
 - **Lowercased no-punct (charwise output).** `gigaam-v3-rnnt` and
   `gigaam-v3-ctc` — 33-entry character vocabulary (space + а–я),
   output is normalized for downstream ASR scoring pipelines that expect

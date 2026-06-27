@@ -11,7 +11,8 @@ Offline multilingual speech-to-text and translation. The model takes a
 
 - **ASR** in English, German, Spanish, and French (with explicit language
   hint).
-- **Translation** from English to German, Spanish, or French.
+- **Translation** between English and German, Spanish, or French (both
+  directions).
 
 Not a streaming model. Word and segment timestamps are upstream-experimental
 and not exposed in the v1 port (deferred — would require porting the

@@ -42,7 +42,7 @@ into a written format?\n ASSISTANT:`) is 1.42%, matching IBM's published
 Open ASR Leaderboard number exactly. Text normalizer: Whisper
 `EnglishTextNormalizer`, the same normalizer Open ASR Leaderboard uses.
 
-## Quick start
+## Quick Start
 
 ```bash
 cmake -B build
@@ -133,7 +133,7 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 | Word-level timestamps       | No (use the `-plus` variant) |
 | Speaker diarization         | No (upstream supports via prompt; not exposed in v1 of transcribe.cpp) |
 
-## Numerical validation
+## Numerical Validation
 
 Tensor-level parity with the transformers reference on `samples/jfk.wav`.
 Per-tensor `max_abs` / `mean_abs` budgets in

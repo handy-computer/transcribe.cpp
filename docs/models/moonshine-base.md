@@ -1,7 +1,7 @@
 # Moonshine base
 
 Useful Sensors' [`UsefulSensors/moonshine-base`](https://huggingface.co/UsefulSensors/moonshine-base)
-ported to transcribe.cpp. A 62M-parameter encoder-decoder transformer that
+ported to transcribe.cpp. A 61M-parameter encoder-decoder transformer that
 consumes raw 16 kHz PCM directly (no STFT, no mel filterbank) via a three-layer
 Conv1d stem. Wider and deeper than moonshine-tiny (8 encoder / 8 decoder
 layers, hidden size 416, intermediate 1664, partial RoPE 0.62).

@@ -30,10 +30,13 @@ see the family doc at
 - **Non-English audio.** Not supported on this family (English-only,
   no language detection, no translation).
 
-> **Streaming runtime status.** transcribe.cpp currently runs these
-> models as a single one-shot pass over the full encoder, mirroring the
-> upstream HF Transformers integration's present state. The chunked
-> session API is a follow-up to this port.
+> **Streaming runtime status.** Real-time streaming is implemented and
+> validated. Feed audio incrementally through the
+> `transcribe_stream_begin` / `transcribe_stream_feed` /
+> `transcribe_stream_finalize` API (CLI: `--stream-chunk-ms`), or run a
+> single one-shot pass over the full encoder for offline transcription.
+> The streaming path uses ~240 ms cumulative encoder right-context, an
+> 80 ms feed cadence, and a 20 ms natural emit unit.
 
 ## All variants
 
@@ -90,10 +93,13 @@ All Moonshine Streaming variants support:
 
 - **Transcription** of 16 kHz mono WAV input directly from raw PCM
   through the time-domain frontend.
-- **Single-utterance decode** today; chunked-feed streaming planned.
+- **Single-utterance (one-shot) decode** for offline audio.
+- **Real-time streaming** via `transcribe_stream_begin` /
+  `transcribe_stream_feed` / `transcribe_stream_finalize` (CLI:
+  `--stream-chunk-ms`) — ~240 ms cumulative encoder right-context, 80 ms
+  feed cadence, 20 ms natural emit unit.
 
 What's not supported (consistent across the family): translation,
 language detection, multilingual transcription (English only),
-timestamps, VAD, speaker diarization, and — at the runtime level for
-now — chunked / real-time streaming. See the family doc for the full
+timestamps, VAD, speaker diarization. See the family doc for the full
 runtime contract.

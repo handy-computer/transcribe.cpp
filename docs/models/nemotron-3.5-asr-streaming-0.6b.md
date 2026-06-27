@@ -36,7 +36,8 @@ latency-vs-accuracy table.
 
 Licensed under [OpenMDW-1.1](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b).
 Ported from upstream commit
-[`24b151a`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/commit/24b151a851dd15909e1fc611b11bb2da52b9fc81).
+[`24b151a`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/commit/24b151a851dd15909e1fc611b11bb2da52b9fc81),
+pinned 2026-06-08.
 
 ## Input limits
 
@@ -112,18 +113,6 @@ projection (the 13k-vocab RNN-T joint that dominates this variant's
 decode) and a thread-parallel predictor; both are the default, so these
 are out-of-the-box numbers with no tuning.
 
-### AMD Ryzen 7 4750U Pro
-
-| Backend | Sample       |          Q8_0 |        Q4_K_M |
-| ------- | ------------ | ------------: | ------------: |
-| Vulkan  | jfk (11.0s)  |  773 ms (14×) |  783 ms (14×) |
-| Vulkan  | dots (35.3s) |  2.37 s (15×) |  2.37 s (15×) |
-| CPU     | jfk (11.0s)  |  1.37 s (8×)  |  1.09 s (10×) |
-| CPU     | dots (35.3s) |  4.76 s (7×)  |  4.17 s (8×)  |
-
-Fedora 43, transcribe.cpp `ef35659`. Vulkan device: `AMD Radeon
-Graphics (RADV RENOIR)`.
-
 ### Apple M4 Max
 
 | Backend | Sample       |          Q8_0 |        Q4_K_M |
@@ -135,6 +124,18 @@ Graphics (RADV RENOIR)`.
 
 macOS 26.5 (Darwin 25.5.0), transcribe.cpp `d9708f1`. Metal device:
 Apple M4 Max (`MTLGPUFamilyApple9`).
+
+### AMD Ryzen 7 4750U Pro
+
+| Backend | Sample       |          Q8_0 |        Q4_K_M |
+| ------- | ------------ | ------------: | ------------: |
+| Vulkan  | jfk (11.0s)  |  773 ms (14×) |  783 ms (14×) |
+| Vulkan  | dots (35.3s) |  2.37 s (15×) |  2.37 s (15×) |
+| CPU     | jfk (11.0s)  |  1.37 s (8×)  |  1.09 s (10×) |
+| CPU     | dots (35.3s) |  4.76 s (7×)  |  4.17 s (8×)  |
+
+Fedora 43, transcribe.cpp `ef35659`. Vulkan device: `AMD Radeon
+Graphics (RADV RENOIR)`.
 
 Benchmark reproduction:
 

@@ -35,7 +35,8 @@ summary: |
   Offline multilingual speech-to-text and translation. An 883M-parameter
   multitask AED with a 32-layer FastConformer encoder and a 4-layer
   Transformer decoder. Supports automatic speech recognition in English,
-  German, Spanish, and French, and EN→{DE, ES, FR} translation. Takes a
+  German, Spanish, and French, and bidirectional EN↔{DE, ES, FR}
+  translation. Takes a
   16 kHz mono WAV and produces a transcript. Not a streaming model;
   word/segment timestamps are upstream-experimental and not exposed in
   the v1 port.

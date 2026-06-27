@@ -11,8 +11,9 @@ Offline English speech-to-text with greedy RNN-T decoding. Output is
 word-level timestamps are available. Not a streaming model; does not
 translate.
 
-The largest pure RNN-T variant in the family. NVIDIA reports the lowest
-LibriSpeech test-clean WER of any parakeet variant on the same split.
+The largest pure RNN-T variant in the family, and among the most accurate.
+On our LibriSpeech test-clean runs `parakeet-tdt-1.1b` edges it out (1.38% vs
+1.46% Q8_0); RNN-T trades a little accuracy for the simpler transducer head.
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/parakeet-rnnt-1.1b)
 for training data, intended use, and upstream evaluation methodology.
