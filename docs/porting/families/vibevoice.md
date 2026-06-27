@@ -1,0 +1,151 @@
+# VibeVoice
+
+Status: research
+
+## Identity
+
+- Family key: `vibevoice`
+- Upstream architecture string: `VibeVoiceForASRTraining` (model_type `vibevoice`)
+- Hugging Face repo: `microsoft/VibeVoice-ASR`
+- Hugging Face revision: `d0c9efdb8d614685062c04425d91e01b6f37d944`
+- License: MIT
+- Variants: `vibevoice-asr` (~9B params, ~17.4 GB BF16)
+
+## References
+
+- Canonical reference: `github.com/microsoft/VibeVoice` — the `vibevoice` Python package
+  (`vibevoice.modular.modeling_vibevoice_asr.VibeVoiceASRForConditionalGeneration`,
+  `vibevoice.processor.vibevoice_asr_processor.VibeVoiceASRProcessor`). The HF repo
+  ships weights + config.json only; no modeling code, processor, tokenizer, or
+  generation_config.
+- Instrumented reference: same package (`demo/vibevoice_asr_inference_from_file.py`).
+- Cross-check references: tech report arXiv:2601.18184; `github.com/localai-org/vibevoice.cpp`
+  (community ggml port — targets VibeVoice **TTS** and small Qwen2.5-0.5B variants, useful
+  as a causal-conv / tokenizer reference only, not a drop-in for the 9B ASR model).
+
+LM backbone is Qwen2.5-7B (decoder_config: hidden 3584, 28 layers, 28 heads / 4 KV,
+intermediate 18944, vocab 152064, rope_theta 1e6, max_position 131072). The tokenizer
+is the stock `Qwen/Qwen2.5-7B` byte-level BPE, loaded by the processor at runtime.
+
+Frontend is **not** a spectrogram. Raw 24 kHz waveform feeds two parallel causal-conv
+VAE encoders (acoustic vae_dim 64, semantic vae_dim 128), each with cumulative 3200x
+downsampling → ~7.5 Hz token rate.
+
+## Commands
+
+Reference run:
+
+```bash
+# from a checkout of github.com/microsoft/VibeVoice
+uv run --project scripts/envs/vibevoice \
+  python demo/vibevoice_asr_inference_from_file.py \
+  --model_path microsoft/VibeVoice-ASR --audio_files samples/jfk.wav
+```
+
+Reference dumps (Modal — the 9B model needs a >=40 GB GPU; canonical dumper is
+`scripts/dump_reference_vibevoice_author.py`, hosted by `_vibevoice_modal_dump.py`):
+
+```bash
+uv run --project scripts/envs/qwen3_asr modal run scripts/_vibevoice_modal_dump.py
+# -> build/validate/vibevoice/vibevoice-asr/jfk/ref/  (+ envelope.json, transcript.json)
+uv run scripts/build_vibevoice_oracle.py   # dump_coverage.json + provisional tolerances
+```
+
+Reference WER (Modal L40S; ~2 h for full test-clean):
+
+```bash
+uv run --project scripts/envs/qwen3_asr modal run \
+  scripts/wer/remote/modal_sweep.py::reference_sweep \
+  --variants vibevoice:vibevoice-asr --gpu L40S
+uv run scripts/wer/score.py reports/wer/vibevoice-asr-REF.librispeech-test-clean.jsonl
+```
+
+Conversion:
+
+```bash
+TODO  # porting-3-convert: scripts/convert-vibevoice.py
+```
+
+Validation:
+
+```bash
+uv run scripts/validate.py all --family vibevoice --variant vibevoice-asr
+```
+
+Benchmarks:
+
+```bash
+TODO  # porting-6-bench
+```
+
+## Capability Validation
+
+Proposed `Target` values below; non-forced rows require user sign-off at intake.
+
+| Capability | Mode | Command / test | Expected observable | Target | Status |
+|------------|------|----------------|---------------------|--------|--------|
+| Transcribe | explicit language hint | `build/bin/transcribe-cli -m models/vibevoice-asr/vibevoice-asr-BF16.gguf --language en samples/jfk.wav` | non-empty plausible English transcript | MUST PASS | TODO |
+| Transcribe | auto / no language hint | `build/bin/transcribe-cli -m models/vibevoice-asr/vibevoice-asr-BF16.gguf samples/jfk.wav` | non-empty plausible transcript on the auto-detect path | MUST PASS | TODO |
+| Translate | only if exposed | n/a | — | OUT OF SCOPE — model transcribes (incl. code-switching) but does not translate; not advertised | TODO |
+| Segment timestamps | structured Who/When/What output | `<TODO structured-output parse>` | segment-level timestamps present in parsed output | MUST PASS | TODO |
+| Word timestamps | only if exposed | n/a | — | OUT OF SCOPE — model emits segment-level, not word-level timestamps | TODO |
+| Speaker diarization | structured Who/When/What output | `<TODO diarization parse>` | speaker labels present in parsed output, DER/cpWER scored | MUST PASS | TODO |
+| Hotwords / context bias | prompt-level biasing | `<TODO hotword prompt>` | biased transcript on domain terms | OUT OF SCOPE — first port uses the default prompt; hotword prompt path deferred | TODO |
+| Streaming | non-streaming model | n/a | — | OUT OF SCOPE — model is non-streaming (60-min single pass); `capabilities.streaming: false` | TODO |
+| Batch (offline) | run_batch vs serial | `uv run scripts/batch_parity.py --model models/vibevoice-asr/vibevoice-asr-BF16.gguf --samples-dir samples/wer/librispeech-test-clean --batch-sizes 2,4,8 --backend cpu` | byte-identical hypotheses + CPU tensor parity | MUST PASS | TODO |
+
+## Notes
+
+- Acceptance dataset: LibriSpeech test-clean (English supported; publisher does not report
+  LibriSpeech, so the gate is the measured Oracle reference baseline, not a publisher score).
+  **Measured Oracle reference WER: 2.11%** (2620 utts, 0 errors, CI [1.93%, 2.28%]; mean
+  acoustic path, BF16 LM, L40S). Publisher-reported English WER on other sets: 7.99%
+  MLC-Challenge, 18.81% AMI-IHM (harder/multi-speaker — not directly comparable).
+- The model always emits structured Who/When/What output. Plain-WER scoring requires a
+  normalizer that strips speaker tags + timestamps from the hypothesis (Stage 2 / Stage 7).
+- Segment timestamps and speaker diarization are **in scope (MUST PASS)** for this port:
+  Stage 2/Stage 4 must parse the structured output and Stage 7 must score it (timestamps +
+  DER/cpWER), in addition to plain transcript WER.
+- Long-form (60-minute / 64K-token) inference is deferred; first port targets short utterances
+  (jfk / LibriSpeech segments). See intake `known_risks` for the full list, including the
+  learned-VAE frontend, dual-tokenizer fusion, the unused diffusion head, and KV-memory at
+  long context.
+
+### Conversion (Stage 3)
+
+Reference-dtype GGUF: `models/VibeVoice-ASR/VibeVoice-ASR-BF16.gguf` (slug-cased dir per the
+`find_gguf` slug-driven convention, same as `Qwen3-ASR-0.6B`). Converter
+`scripts/convert-vibevoice.py`; manifest `reports/convert/vibevoice-asr-BF16.json`. Streams
+shards one tensor at a time (never instantiates the 9B model), so it runs on a 16 GB machine.
+
+Tensor-mapping decisions (the contract Stage 4 `src/arch/vibevoice/weights.cpp` implements
+against):
+
+- **901 tensors kept, 276 dropped.** Dropped = `model.acoustic_tokenizer.decoder.*` (the
+  VibeVoice TTS acoustic-decoder path; ASR calls only `acoustic_tokenizer.encode(...).mean`).
+  The config's `diffusion_head_config` ships **no weights** in the ASR checkpoint. The
+  `semantic_tokenizer` is encoder-only.
+- **Naming:** Qwen2.5 LM → `dec.token_embd` / `dec.output_norm` / `dec.output` (untied head;
+  `lm_head.weight` ships separately, `tie_word_embeddings=false`) + `dec.blocks.{i}.{norm_attn,
+  attn.{q,k,v,o}[.bias],norm_ffn,ffn.{gate,up,down}}` (Qwen2 carries q/k/v biases, no o bias).
+  Connectors → `conn.{acoustic,semantic}.{fc1,norm,fc2}`. VAE encoders → `enc.{acoustic,
+  semantic}.<source-suffix verbatim>` (suffix preserved, incl. the `conv.conv[.conv]` SConv1d
+  nesting).
+- **Fusion is a Stage-4 runtime op, not baked in:** `enc.combined = acoustic_feat +
+  semantic_feat` (element-wise sum of the two connector outputs), then scattered into the LM
+  embedding stream at `speech_pad` positions. The converter only stores both encoders + both
+  connectors.
+- **Per-tensor dtype (BF16 reference):** norms / biases / VAE layer-scale `gamma`+`ffn_gamma`
+  → F32; all VAE causal-conv kernels → F16 (loader has no BF16 conv; F16 also out-precisions
+  BF16); linears / embed / head → BF16. Result: 306 BF16, 527 F32, 68 F16.
+- **Tokenizer** pulled from stock `Qwen/Qwen2.5-7B` (152064 tokens, 151387 merges, gpt2/qwen2
+  byte-level BPE). Speech markers reuse existing Qwen specials: `speech_start=<|object_ref_start|>`
+  (151646), `speech_end=<|object_ref_end|>` (151647), `speech_pad=<|box_start|>` (151648);
+  `eos=<|endoftext|>` (151643). Chat template, `SYSTEM_PROMPT`, the three speech-token ids,
+  `im_start`/`im_end`, and `speech_tok_compress_ratio=3200` are stored as `stt.vibevoice.*` /
+  `tokenizer.*` KV so Stage 4 can rebuild the prompt (which is otherwise assembled dynamically
+  from the audio duration and a `ceil(n_samples/3200)`-long speech-pad run).
+- **Frontend:** `stt.frontend.type=raw_waveform`, `sample_rate=24000`; no STFT/mel buffers.
+
+Preflight Gate B: **PASS** (dtype, frontend, tokenizer, architecture, capabilities). Loader-open
+smoke returns `unsupported architecture` (expected — `src/arch/vibevoice` is a Stage 4 artifact).
