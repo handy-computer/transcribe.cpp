@@ -1,0 +1,135 @@
+{
+  "_comment": [
+    "VibeVoice-ASR per-tensor tolerances for compare_tensors.py.",
+    "",
+    "CORRECTNESS REGIME",
+    "- Reference: microsoft/VibeVoice-ASR via the author `vibevoice` package",
+    "  @ 303b2833e01cff4578ec278bbfe536da54bd19fe (HF rev",
+    "  d0c9efdb8d614685062c04425d91e01b6f37d944), run on a Modal L40S GPU,",
+    "  attn_implementation=eager. Dumper: scripts/dump_reference_vibevoice_author.py.",
+    "- Audio-LLM: raw 24kHz -> acoustic+semantic causal-conv VAE tokenizers",
+    "  (loaded fp32) -> SpeechConnector -> 3584 -> element-wise SUM -> scattered",
+    "  into a Qwen2.5-7B LM (bf16) -> lm_head. C++: ggml, BF16 weights for the LM.",
+    "",
+    "DETERMINISM",
+    "- The acoustic path samples a Gaussian VAE latent (fix_std=0.5); contract",
+    "  tensors use the deterministic MEAN (mode()). Verified: transcription content",
+    "  is identical mean-vs-sampled, and the lm_head argmax is stable across 8 noisy",
+    "  passes (see <case>/ref/envelope.json for the sampled std band). The C++ port",
+    "  must use the acoustic mean, not a sample.",
+    "",
+    "ENTRY SOURCING (provisional)",
+    "- Per-tensor max_abs = max(1e-4 x p99_abs, 1e-6)",
+    "- Per-tensor mean_abs = max(1e-5 x rms, 1e-6)",
+    "- All entries carry _provisional: true. Stage 4 finalizes against observed",
+    "  C++ drift and removes the flag tensor-by-tensor.",
+    "- enc.* (VAE frontend) runs fp32 in the reference; enc.combined feeds the",
+    "  bf16 LM, so expect the largest C++ drift to localize there.",
+    "",
+    "DO NOT SHIP a model while _provisional entries remain."
+  ],
+  "dec.block.0.out": {
+    "max_abs": 0.00034918908548355114,
+    "mean_abs": 1.1825509090697178e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "dec.block.13.out": {
+    "max_abs": 0.0017155382480621368,
+    "mean_abs": 0.00025935811667857696,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "dec.block.27.out": {
+    "max_abs": 0.0004268157353401184,
+    "mean_abs": 1.416734189009224e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "dec.final_norm": {
+    "max_abs": 0.0009737013187408468,
+    "mean_abs": 2.969060860240193e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "dec.inputs_embeds": {
+    "max_abs": 0.00031161820697784426,
+    "mean_abs": 1.0546719566294443e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "dec.logits_lastpos": {
+    "max_abs": 0.0004904306406974792,
+    "mean_abs": 1.9985159967555443e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "dec.token_emb": {
+    "max_abs": 3.3935546875000002e-06,
+    "mean_abs": 1e-06,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "enc.acoustic.feat": {
+    "max_abs": 0.00028645717239379856,
+    "mean_abs": 9.20495305171677e-06,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "enc.acoustic.mean": {
+    "max_abs": 0.001432571738243104,
+    "mean_abs": 4.640234410032806e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "enc.combined": {
+    "max_abs": 0.00037147614979743913,
+    "mean_abs": 1.384288713252548e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "enc.input_waveform": {
+    "max_abs": 2.0661220669746416e-05,
+    "mean_abs": 1e-06,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "enc.semantic.feat": {
+    "max_abs": 0.00031607579660415636,
+    "mean_abs": 1.1101145839183082e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  },
+  "enc.semantic.mean": {
+    "max_abs": 0.0007712323737144473,
+    "mean_abs": 2.733901739568905e-05,
+    "_provisional": true,
+    "_seen_in": [
+      "vibevoice-asr"
+    ]
+  }
+}

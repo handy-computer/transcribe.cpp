@@ -1,0 +1,22 @@
+[project]
+name = "transcribe-vibevoice-env"
+version = "0.1.0"
+description = "Python env for VibeVoice-ASR reference dumps and conversion. The vibevoice package itself is vendored (source-only) under models/_vendor/VibeVoice and put on sys.path by the dumper; only its real runtime deps are pinned here (the upstream pyproject also drags gradio/aiortc/av/fastapi for the demo server, which we don't need)."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.2",
+    "transformers==4.51.3",
+    "accelerate>=1.6.0",
+    "diffusers>=0.30",
+    "gguf>=0.10",
+    "huggingface-hub>=0.30",
+    "safetensors>=0.4",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "ml-collections>=0.1.1",
+    "absl-py>=2.0",
+    "einops>=0.7",
+    "tqdm>=4.66",
+]

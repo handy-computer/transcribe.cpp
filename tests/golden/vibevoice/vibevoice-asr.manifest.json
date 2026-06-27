@@ -6,7 +6,45 @@
     "hf_repo": "microsoft/VibeVoice-ASR",
     "hf_revision": "d0c9efdb8d614685062c04425d91e01b6f37d944"
   },
+  "reference": {
+    "kind": "author_repo_vibevoice",
+    "source": "https://github.com/microsoft/VibeVoice",
+    "revision": "303b2833e01cff4578ec278bbfe536da54bd19fe",
+    "entrypoint": "scripts/dump_reference_vibevoice_author.py"
+  },
   "expected_dtype": "bfloat16",
   "dtype_source": "weights_header",
-  "_skeleton": true
+  "frontend": {
+    "sample_rate": 24000,
+    "frontend_kind": "learned_vae_tokenizer",
+    "n_mels": null,
+    "hop_length": null,
+    "fft_size": null,
+    "window": null,
+    "normalization": "audio_normalizer",
+    "speech_tok_compress_ratio": 3200,
+    "token_rate_hz": 7.5,
+    "note": "Not a spectrogram. Raw 24kHz waveform -> two parallel causal-conv VAE tokenizers (acoustic vae_dim=64 sampled gaussian fix_std=0.5; semantic vae_dim=128 mean), each 3200x downsample -> SpeechConnector -> 3584 -> element-wise sum -> scattered into Qwen2.5-7B LM at acoustic-token positions. Contract tensors use the deterministic acoustic mean."
+  },
+  "tokenizer_summary": {
+    "type": "bpe",
+    "vocab_size": 152064,
+    "source": "Qwen/Qwen2.5-7B",
+    "special_tokens": {
+      "endoftext": 151643,
+      "im_start": 151644,
+      "im_end": 151645
+    }
+  },
+  "capabilities": {
+    "languages": ["en", "zh", "es", "pt", "de", "ja", "ko", "fr", "ru", "id", "sv", "it", "he", "nl", "pl", "no", "tr", "th", "ar", "hu", "ca", "cs", "da", "fa", "af", "hi", "fi", "et", "aa", "el", "ro", "vi", "bg", "is", "sl", "sk", "lt", "sw", "uk", "kl", "lv", "hr", "ne", "sr", "tl", "yi", "ms", "ur", "mn", "hy", "jv"],
+    "language_detection": true,
+    "translation": false,
+    "timestamps": ["segment"],
+    "streaming": false,
+    "voice_activity_detection": null,
+    "speaker_diarization": true
+  },
+  "tolerance_file": "tests/tolerances/vibevoice.json",
+  "cases": ["jfk"]
 }

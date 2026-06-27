@@ -42,10 +42,22 @@ uv run --project scripts/envs/vibevoice \
   --model_path microsoft/VibeVoice-ASR --audio_files samples/jfk.wav
 ```
 
-Reference dumps:
+Reference dumps (Modal — the 9B model needs a >=40 GB GPU; canonical dumper is
+`scripts/dump_reference_vibevoice_author.py`, hosted by `_vibevoice_modal_dump.py`):
 
 ```bash
-TODO  # porting-2-oracle: instrument vibevoice.modular.modeling_vibevoice_asr
+uv run --project scripts/envs/qwen3_asr modal run scripts/_vibevoice_modal_dump.py
+# -> build/validate/vibevoice/vibevoice-asr/jfk/ref/  (+ envelope.json, transcript.json)
+uv run scripts/build_vibevoice_oracle.py   # dump_coverage.json + provisional tolerances
+```
+
+Reference WER (Modal L40S; ~2 h for full test-clean):
+
+```bash
+uv run --project scripts/envs/qwen3_asr modal run \
+  scripts/wer/remote/modal_sweep.py::reference_sweep \
+  --variants vibevoice:vibevoice-asr --gpu L40S
+uv run scripts/wer/score.py reports/wer/vibevoice-asr-REF.librispeech-test-clean.jsonl
 ```
 
 Conversion:
@@ -86,7 +98,9 @@ Proposed `Target` values below; non-forced rows require user sign-off at intake.
 
 - Acceptance dataset: LibriSpeech test-clean (English supported; publisher does not report
   LibriSpeech, so the gate is the measured Oracle reference baseline, not a publisher score).
-  Publisher-reported English WER: 7.99% MLC-Challenge, 18.81% AMI-IHM.
+  **Measured Oracle reference WER: 2.11%** (2620 utts, 0 errors, CI [1.93%, 2.28%]; mean
+  acoustic path, BF16 LM, L40S). Publisher-reported English WER on other sets: 7.99%
+  MLC-Challenge, 18.81% AMI-IHM (harder/multi-speaker — not directly comparable).
 - The model always emits structured Who/When/What output. Plain-WER scoring requires a
   normalizer that strips speaker tags + timestamps from the hypothesis (Stage 2 / Stage 7).
 - Segment timestamps and speaker diarization are **in scope (MUST PASS)** for this port:
