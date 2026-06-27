@@ -442,8 +442,13 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         languages=hp["languages"],
         author="Alibaba Group / FunAudioLLM",
         organization="FunAudioLLM",
-        license="other",
-        license_name="model-license",
+        # FunASR Model Open Source License Agreement v1.1. NOT an SPDX
+        # identifier and NOT Apache-2.0 — SenseVoiceSmall ships under
+        # FunASR's own model license (unlike funasr_nano, which is genuinely
+        # apache-2.0). Keep the canonical license string so downstream
+        # consumers see the real license, and retain the MODEL_LICENSE link
+        # the agreement's attribution clause (2.2) requires.
+        license="FunASR-Model-License-1.1",
         license_link="https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
         repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
         url="https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
