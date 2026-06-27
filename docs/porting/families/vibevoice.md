@@ -110,3 +110,42 @@ Proposed `Target` values below; non-forced rows require user sign-off at intake.
   (jfk / LibriSpeech segments). See intake `known_risks` for the full list, including the
   learned-VAE frontend, dual-tokenizer fusion, the unused diffusion head, and KV-memory at
   long context.
+
+### Conversion (Stage 3)
+
+Reference-dtype GGUF: `models/VibeVoice-ASR/VibeVoice-ASR-BF16.gguf` (slug-cased dir per the
+`find_gguf` slug-driven convention, same as `Qwen3-ASR-0.6B`). Converter
+`scripts/convert-vibevoice.py`; manifest `reports/convert/vibevoice-asr-BF16.json`. Streams
+shards one tensor at a time (never instantiates the 9B model), so it runs on a 16 GB machine.
+
+Tensor-mapping decisions (the contract Stage 4 `src/arch/vibevoice/weights.cpp` implements
+against):
+
+- **901 tensors kept, 276 dropped.** Dropped = `model.acoustic_tokenizer.decoder.*` (the
+  VibeVoice TTS acoustic-decoder path; ASR calls only `acoustic_tokenizer.encode(...).mean`).
+  The config's `diffusion_head_config` ships **no weights** in the ASR checkpoint. The
+  `semantic_tokenizer` is encoder-only.
+- **Naming:** Qwen2.5 LM → `dec.token_embd` / `dec.output_norm` / `dec.output` (untied head;
+  `lm_head.weight` ships separately, `tie_word_embeddings=false`) + `dec.blocks.{i}.{norm_attn,
+  attn.{q,k,v,o}[.bias],norm_ffn,ffn.{gate,up,down}}` (Qwen2 carries q/k/v biases, no o bias).
+  Connectors → `conn.{acoustic,semantic}.{fc1,norm,fc2}`. VAE encoders → `enc.{acoustic,
+  semantic}.<source-suffix verbatim>` (suffix preserved, incl. the `conv.conv[.conv]` SConv1d
+  nesting).
+- **Fusion is a Stage-4 runtime op, not baked in:** `enc.combined = acoustic_feat +
+  semantic_feat` (element-wise sum of the two connector outputs), then scattered into the LM
+  embedding stream at `speech_pad` positions. The converter only stores both encoders + both
+  connectors.
+- **Per-tensor dtype (BF16 reference):** norms / biases / VAE layer-scale `gamma`+`ffn_gamma`
+  → F32; all VAE causal-conv kernels → F16 (loader has no BF16 conv; F16 also out-precisions
+  BF16); linears / embed / head → BF16. Result: 306 BF16, 527 F32, 68 F16.
+- **Tokenizer** pulled from stock `Qwen/Qwen2.5-7B` (152064 tokens, 151387 merges, gpt2/qwen2
+  byte-level BPE). Speech markers reuse existing Qwen specials: `speech_start=<|object_ref_start|>`
+  (151646), `speech_end=<|object_ref_end|>` (151647), `speech_pad=<|box_start|>` (151648);
+  `eos=<|endoftext|>` (151643). Chat template, `SYSTEM_PROMPT`, the three speech-token ids,
+  `im_start`/`im_end`, and `speech_tok_compress_ratio=3200` are stored as `stt.vibevoice.*` /
+  `tokenizer.*` KV so Stage 4 can rebuild the prompt (which is otherwise assembled dynamically
+  from the audio duration and a `ceil(n_samples/3200)`-long speech-pad run).
+- **Frontend:** `stt.frontend.type=raw_waveform`, `sample_rate=24000`; no STFT/mel buffers.
+
+Preflight Gate B: **PASS** (dtype, frontend, tokenizer, architecture, capabilities). Loader-open
+smoke returns `unsupported architecture` (expected — `src/arch/vibevoice` is a Stage 4 artifact).
