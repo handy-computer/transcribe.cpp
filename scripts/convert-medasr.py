@@ -398,7 +398,7 @@ def main(argv: list[str]) -> int:
 
     # ---- stt.variant + capabilities ----
     writer.add_string("stt.variant", slug)
-    writer.add_bool("stt.capability.translation", False)
+    writer.add_bool("stt.capability.translate", False)
     writer.add_bool("stt.capability.lang_detect", False)
     writer.add_bool("stt.capability.word_timestamps", False)
     writer.add_bool("stt.capability.speaker_diarization", False)

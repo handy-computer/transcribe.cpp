@@ -23,7 +23,7 @@ void apply_family_invariants(transcribe_model & model) {
     // chat-template prompt. The -plus variant drops the translation
     // capability (its model card lists ASR + speaker diarization, not
     // translation). The default here is true so the loader can lower
-    // it per-variant from the GGUF KV stt.capability.translation.
+    // it per-variant from the GGUF KV stt.capability.translate.
     caps.supports_translate = true;
 
     // Cancellation is wired at the per-run level. Whisper-specific

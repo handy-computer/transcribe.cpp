@@ -705,22 +705,27 @@ def check_capabilities(declared, gguf_kvs, reference, gate: Gate) -> CheckResult
     caps = declared.get("capabilities") or {}
     declared_langs = list(caps.get("languages") or [])
     declared_lang_detect = caps.get("language_detection")
+    declared_translation = caps.get("translation")
 
     if not gguf_kvs:
         return CheckResult("capabilities", gate, "warn",
                            {"declared_languages": declared_langs,
-                            "declared_language_detection": declared_lang_detect},
+                            "declared_language_detection": declared_lang_detect,
+                            "declared_translation": declared_translation},
                            "skipped at gate A; GGUF does not exist yet")
 
     gguf_langs_raw = gguf_kvs.get("general.languages")
     gguf_langs = gguf_langs_raw if isinstance(gguf_langs_raw, list) else None
     gguf_lang_detect = gguf_kvs.get("stt.capability.lang_detect")
+    gguf_translate = gguf_kvs.get("stt.capability.translate")
 
     sources: dict[str, Any] = {
         "declared_languages": declared_langs,
         "gguf_languages": gguf_langs,
         "declared_language_detection": declared_lang_detect,
         "gguf_lang_detect": gguf_lang_detect,
+        "declared_translation": declared_translation,
+        "gguf_translate": gguf_translate,
     }
 
     mismatches: list[str] = []
@@ -744,6 +749,13 @@ def check_capabilities(declared, gguf_kvs, reference, gate: Gate) -> CheckResult
             mismatches.append(
                 f"language_detection declared={declared_lang_detect} "
                 f"but gguf stt.capability.lang_detect={gguf_lang_detect}"
+            )
+
+    if declared_translation is not None and gguf_translate is not None:
+        if bool(declared_translation) != bool(gguf_translate):
+            mismatches.append(
+                f"translation declared={declared_translation} "
+                f"but gguf stt.capability.translate={gguf_translate}"
             )
 
     if mismatches:

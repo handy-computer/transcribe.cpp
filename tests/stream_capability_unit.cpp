@@ -232,12 +232,42 @@ void test_run_after_failed_begin_does_not_get_stuck() {
     transcribe_model_free(model);
 }
 
+// Translation-capability KV override. The fixture carries
+// stt.capability.translate=true. The parakeet family default is
+// supports_translate=false, so a passing read must flip the flag to
+// true. Pins that read_capability_kv reads the canonical translate KV —
+// the key the granite / medasr / granite_nar converters now emit. The
+// original bug: those converters wrote a misspelled stt.capability.
+// translation that the loader never read, so granite -plus advertised
+// translation it should not have.
+void test_supports_translate_kv_override() {
+    struct transcribe_model *   model = nullptr;
+    struct transcribe_session * ctx   = nullptr;
+    if (!load_and_init("tokenizer_minimal_translate.gguf", &model, &ctx)) {
+        return;
+    }
+
+    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
+    const bool caps_ok =
+        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
+    CHECK(caps != nullptr);
+    if (caps != nullptr) {
+        // Canonical KV honored: family default false, KV says true.
+        CHECK(caps->supports_translate == true);
+    }
+
+    transcribe_session_free(ctx);
+    transcribe_model_free(model);
+}
+
 } // namespace
 
 int main() {
     test_supports_streaming_false();
     test_supports_streaming_true_variant_offline();
     test_run_after_failed_begin_does_not_get_stuck();
+    test_supports_translate_kv_override();
 
     if (g_failures > 0) {
         std::fprintf(stderr, "stream_capability_unit: %d failures\n",

@@ -1430,6 +1430,29 @@ def emit_fixtures(out_dir: Path) -> None:
         ),
     )
 
+    # Translation-capability KV override. Same toy parakeet vocabulary,
+    # hparams, and tensor catalog — but carries stt.capability.translate
+    # = true. The parakeet family default is supports_translate=false, so
+    # this fixture pins that the loader reads the canonical capability KV
+    # and flips the flag on. This is the key the granite / medasr /
+    # granite_nar converters emit; before the rename they wrote a
+    # misspelled stt.capability.translation that the loader never read, so
+    # granite -plus advertised translation it should not have.
+    _write(
+        out_dir / "tokenizer_minimal_translate.gguf",
+        _build_full_gguf(
+            GGUF_MAGIC,
+            [
+                _pack_kv_string("general.architecture", "parakeet"),
+                _pack_kv_string("stt.variant", "tdt-0.6b-translate-toy"),
+                _pack_kv_bool("stt.capability.translate", True),
+                *tokenizer_kv,
+                *parakeet_hparams_kv,
+            ],
+            parakeet_tensors,
+        ),
+    )
+
     # Cache-aware streaming variant (ChunkedLimited, nemotron-style).
     # Adds the att_context_style + flat (left, right) menu so the
     # parakeet stream_begin hook routes into the cache-aware path and
