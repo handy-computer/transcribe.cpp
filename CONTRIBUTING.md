@@ -4,11 +4,35 @@ This repo ports speech-to-text model families to a C/C++ ggml runtime. Most
 substantial contributions add a new model family; smaller contributions fix
 bugs, improve tooling, or add backend coverage.
 
+The project is intentionally conservative. It is a library surface, a model
+runtime, and a set of package artifacts that users embed in larger processes.
+Changes should be easy to review, portable across supported platforms, and
+maintainable after merge. Contributors who submit substantial features, model
+families, packaging changes, or backend work may be asked to help maintain those
+areas over time.
+
 The porting workflow lives in `docs/porting/`. The docs define the canonical
 stages, artifacts, and gates. When project-local porting skills exist (for
 example under `.claude/skills/porting-*`), they are the preferred UX for
 agents working in this repo. Contributors using Codex or another harness can
 follow the docs directly and still produce the same artifacts.
+
+## AI-assisted contributions
+
+AI tools may be used when a human contributor is driving the design, reviewing
+the output, and prepared to debug and maintain the result. AI-generated or
+AI-assisted code is acceptable only when the contributor understands it fully
+and can explain it during review.
+
+If AI meaningfully assisted with code or documentation:
+
+1. Disclose that usage in the PR.
+2. Manually review the generated or assisted changes before submission.
+3. Be prepared to explain every line of code you submit.
+
+Do not use AI to write PR descriptions, issue reports, commit messages, project
+discussions, or replies to reviewers. Do not submit automated commits or pull
+requests.
 
 ## Proposing a new model port
 
@@ -86,6 +110,99 @@ Do not commit:
   prompt files, or untracked harness state
 
 `--variant <v>` is required whenever a family has multiple manifests.
+
+## Coding style
+
+The style below is adapted from the current llama.cpp and whisper.cpp
+contribution guidelines and made local so contributors do not need to chase
+external documents before writing code.
+
+General rules:
+
+- Avoid adding third-party dependencies, extra files, extra headers, or new
+  build-time requirements unless they are necessary and justified.
+- Always consider compatibility with supported operating systems, compilers,
+  CPU architectures, accelerators, and package formats.
+- Prefer plain, C-like C++ for runtime code. Use basic `for` loops and simple
+  helper functions over clever STL, template, or lambda-heavy constructs.
+- Keep abstractions narrow. Add one only when it removes real duplication,
+  centralizes ownership/lifetime, or matches an established local pattern.
+- New model families and backend work should bring up CPU support first unless
+  there is a specific reason to do otherwise.
+- Do not add new ggml operators, `ggml_type` values, or backend behavior without
+  CPU validation, benchmark or accuracy evidence where relevant, and an upstream
+  plan for ggml/llama.cpp when appropriate.
+- Do not mix functional changes with broad reformatting or unrelated cleanup.
+- Keep comments concise. Explain non-obvious invariants, ABI contracts, tensor
+  layout, numerical choices, and portability traps. Do not preserve local task
+  history or design backstory in source comments.
+- Use ASCII in source files and comments unless a file or data format requires
+  otherwise.
+
+Formatting rules:
+
+- Use 4 spaces for indentation.
+- Put braces on the same line.
+- Use `void * ptr` and `int & a` pointer/reference spacing.
+- Use vertical alignment when it improves readability and batch editing.
+- Clean up trailing whitespace.
+- Use the root `.clang-format` for new files and touched hunks. It is based on
+  llama.cpp's clang-format profile. Do not reformat unrelated code as part of a
+  behavior change.
+
+Naming rules:
+
+- Use `snake_case` for functions, variables, and type names.
+- Prefer names with the longest common prefix when grouping related values:
+  `number_small`, `number_big` rather than `small_number`, `big_number`.
+- Public symbols are prefixed with `transcribe_` or `TRANSCRIBE_`.
+- Enum values are uppercase and prefixed by the enum name:
+
+```c
+enum transcribe_task {
+    TRANSCRIBE_TASK_TRANSCRIBE = 0,
+    TRANSCRIBE_TASK_TRANSLATE  = 1,
+};
+```
+
+- In public C/C++ headers, use sized integer types such as `int32_t` where ABI
+  size matters. `size_t` is appropriate for allocation sizes and byte offsets.
+- In C++ code, omit optional `struct` and `enum` keywords when they are not
+  needed:
+
+```cpp
+// OK
+transcribe_model * model;
+transcribe_task task;
+
+// Not OK in C++ implementation code
+struct transcribe_model * model;
+enum transcribe_task task;
+```
+
+- C/C++ filenames are lowercase. Prefer dashes for ordinary source files.
+  Family directories and family public headers may use the canonical family key,
+  including underscores, so API names and file paths stay aligned. Headers use
+  `.h`; source files use `.c` or `.cpp`.
+- Python library/module filenames are lowercase with underscores. Command-line
+  scripts may use dashes when following the existing converter/tool convention.
+
+API and tensor rules:
+
+- Keep `include/transcribe.h` and family public headers free of ggml includes.
+  Callers should not need to include `<ggml.h>`.
+- Public structs crossing the ABI use the documented `struct_size` convention.
+- Tensors store data in row-major order. Dimension 0 is columns, dimension 1 is
+  rows, and dimension 2 is matrices.
+- `ggml_mul_mat(ctx, A, B)` follows ggml's convention, not ordinary source-code
+  reading order: treat existing ggml/llama.cpp graph patterns as the reference
+  when adding graph code.
+
+When this repo intentionally differs from llama.cpp/whisper.cpp, keep the
+difference local and documented near the API or subsystem that needs it. The
+main accepted internal exception is that the multi-family runtime may use C++
+ownership helpers or narrow virtual bases where they centralize lifetime and
+avoid duplicating model/session teardown logic.
 
 ## Review gates
 

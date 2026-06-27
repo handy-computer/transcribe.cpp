@@ -1,5 +1,8 @@
 # transcribe.cpp Agent Conventions
 
+Read `AGENTS.md` and `CONTRIBUTING.md` first. This file only adds
+harness-specific local command conventions.
+
 ## Python (critical)
 - ALWAYS use `uv run` for every Python invocation. Never bare `python`, `python3`, or `pip`.
 - Use `uv pip` for packages, `uv sync` for envs, `uv run` for scripts.
