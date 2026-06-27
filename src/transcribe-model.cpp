@@ -72,3 +72,20 @@ void transcribe_model::set_languages(std::vector<std::string> langs) {
     caps.n_languages = static_cast<int>(language_storage_.size());
     caps.languages   = language_ptrs_.empty() ? nullptr : language_ptrs_.data();
 }
+
+void transcribe_model::set_translate_target_languages(std::vector<std::string> langs) {
+    // Same discipline as set_languages(): move strings into the model,
+    // rebuild the pointer vector, then publish count + pointer together.
+    translate_target_storage_ = std::move(langs);
+
+    translate_target_ptrs_.clear();
+    translate_target_ptrs_.reserve(translate_target_storage_.size());
+    for (const auto & s : translate_target_storage_) {
+        translate_target_ptrs_.push_back(s.c_str());
+    }
+
+    caps.n_translate_target_languages =
+        static_cast<int>(translate_target_storage_.size());
+    caps.translate_target_languages =
+        translate_target_ptrs_.empty() ? nullptr : translate_target_ptrs_.data();
+}

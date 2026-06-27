@@ -146,10 +146,12 @@ the model card, not a separate artifact.
 - `tokenizer_summary`: tokenizer type, vocab size, special token IDs. Not
   the full tokenizer — that lives in the GGUF.
 - `capabilities`: what the family claims to support (languages,
-  translation, timestamps, streaming, VAD, diarization). Mirrors intake.
-  Preflight cross-checks `capabilities.languages` against the GGUF's
-  `general.languages` array and `capabilities.language_detection` against
-  `stt.capability.lang_detect`.
+  translation, translation targets/pairs, timestamps, streaming, VAD,
+  diarization). Mirrors intake. Preflight cross-checks
+  `capabilities.languages` against the GGUF's `general.languages` array,
+  `capabilities.language_detection` against `stt.capability.lang_detect`,
+  `capabilities.translation` against `stt.capability.translate`, and
+  translation target/pair declarations against `stt.translation.*` KVs.
 - `tolerance_file`: relative path to the family's tolerance file.
 - `cases`: sample basenames under `samples/`, such as `jfk`.
 

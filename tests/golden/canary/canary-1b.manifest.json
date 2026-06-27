@@ -34,6 +34,8 @@
     "languages": ["en", "de", "es", "fr"],
     "language_detection": false,
     "translation": true,
+    "translation_target_languages": ["en", "de", "es", "fr"],
+    "translation_pairs": ["en>de", "de>en", "en>es", "es>en", "en>fr", "fr>en"],
     "timestamps": [],
     "streaming": false,
     "voice_activity_detection": false,

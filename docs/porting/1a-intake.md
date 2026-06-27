@@ -170,6 +170,8 @@ Mirrored into the golden manifest; cross-checked by preflight against GGUF
 | `capabilities.languages` | script + human | BCP-47 codes. Script auto-extracts from common config fields (`languages`, `supported_languages`, `language_list`, `text_config.languages`). Falls back to human-fill from the model card |
 | `capabilities.language_detection` | human | Auto-detects input language without a hint (Whisper-style `<|detect|>` tokens, Qwen3-ASR's detection branch) |
 | `capabilities.translation` | human | Produces output in a different language than the input audio. Most transducers don't; encoder-decoder + audio-LLM often do |
+| `capabilities.translation_target_languages` | human | Output language codes accepted for translation. Leave empty or omit when translation is false or unknown |
+| `capabilities.translation_pairs` | human | Allowed directions as `src>target`, only when support is not the simple source-language x target-language cross product |
 | `capabilities.timestamps` | human | Subset of `["none", "segment", "word", "token"]`. Parakeet has word+token, Whisper has segment optional word |
 | `capabilities.streaming` | human | Streaming / chunked real-time capable |
 | `capabilities.voice_activity_detection` | human | Model emits VAD decisions as part of output |

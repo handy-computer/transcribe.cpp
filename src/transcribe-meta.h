@@ -183,10 +183,13 @@ transcribe_status read_capability_kv(const gguf_context *      gguf,
                                      transcribe_capabilities & caps);
 
 // Read general.languages (string array of BCP-47-ish short codes) and
-// install it on the model via transcribe_model::set_languages(). On
-// Absent the model's language list is left unchanged (the caller is
-// expected to pre-populate it as zero / nullptr — see the
-// "information gap, not a claim" comment in arch/parakeet/model.cpp).
+// install it on the model via transcribe_model::set_languages(); then
+// likewise read the optional stt.translation.target_languages array into
+// transcribe_model::set_translate_target_languages() (the target-side
+// twin consumed by the TRANSLATE target gate). On Absent each list is
+// left unchanged (the caller is expected to pre-populate it as zero /
+// nullptr — see the "information gap, not a claim" comment in
+// arch/parakeet/model.cpp).
 //
 // Returns:
 //   TRANSCRIBE_OK              on success or absent.

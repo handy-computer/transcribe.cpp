@@ -34,6 +34,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 #ifndef TRANSCRIBE_TEST_FIXTURES_DIR
@@ -255,6 +256,27 @@ void test_supports_translate_kv_override() {
     if (caps != nullptr) {
         // Canonical KV honored: family default false, KV says true.
         CHECK(caps->supports_translate == true);
+        // stt.translation.target_languages is read into the model and
+        // exposed on the public caps struct (the target-side twin of
+        // languages[]).
+        CHECK(caps->n_translate_target_languages == 1);
+        if (caps->n_translate_target_languages == 1 &&
+            caps->translate_target_languages != nullptr) {
+            CHECK(std::strcmp(caps->translate_target_languages[0], "en") == 0);
+        }
+    }
+
+    // Translation-target gate: a TRANSLATE request whose target_language is
+    // absent from the advertised set is rejected up front with
+    // UNSUPPORTED_LANGUAGE ("zz" is not in {"en"}). This fires in the
+    // shared validate_run_params_common before any family compute.
+    {
+        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        rp.task            = TRANSCRIBE_TASK_TRANSLATE;
+        rp.target_language = "zz";
+        const float pcm[16] = { 0.0f };
+        CHECK(transcribe_run(ctx, pcm, 16, &rp) ==
+              TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE);
     }
 
     transcribe_session_free(ctx);

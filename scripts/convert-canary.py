@@ -104,6 +104,10 @@ VARIANT_PROFILES: dict[str, dict[str, Any]] = {
     "canary-1b-v2": {
         "display_name":   "Canary 1B v2",
         "version":        "v2",
+        # AST excludes Latvian (lv): NVIDIA's card notes seamless-m4t, used
+        # to build the AST training data, does not support Latvian — so v2
+        # translates 24 of its 25 ASR languages. lv stays ASR-only.
+        "translation_exclude": ["lv"],
         "size_label":     "1B",
         "prompt_format":  "canary2",
         "license":        "cc-by-4.0",
@@ -129,6 +133,16 @@ VARIANT_PROFILES: dict[str, dict[str, Any]] = {
         "license_link":   "https://creativecommons.org/licenses/by/4.0/",
     },
 }
+
+
+def english_pivot_pairs(languages: list[str]) -> list[str]:
+    """Canary translation is advertised only between English and X."""
+    return [
+        pair
+        for lang in languages
+        if lang != "en"
+        for pair in (f"en>{lang}", f"{lang}>en")
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -594,10 +608,17 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
         repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
     )
 
-    # ----- stt.variant + capability KV -----
+    # ----- stt.variant + capability/translation KVs -----
     writer.add_string("stt.variant", variant)
     writer.add_bool  ("stt.capability.translate",   True)
     writer.add_bool  ("stt.capability.lang_detect", False)
+    # Translation may cover a subset of the ASR languages (e.g. v2 omits
+    # Latvian). Derive the AST set from the ASR list minus the per-variant
+    # exclusion so target_languages and pairs stay accurate to the card.
+    xlat_exclude = set(profile.get("translation_exclude", ()))
+    xlat_langs = [lang for lang in languages if lang not in xlat_exclude]
+    writer.add_array ("stt.translation.target_languages", xlat_langs)
+    writer.add_array ("stt.translation.pairs", english_pivot_pairs(xlat_langs))
     # All shipping variants except canary-1b expose timestamp tokens.
     has_timestamps = "<|timestamp|>" in tok["specials"]
     writer.add_bool  ("stt.capability.timestamps",  has_timestamps)

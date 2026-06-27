@@ -291,6 +291,31 @@ transcribe_status validate_run_params_common(
             return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
         }
     }
+    // Translation-target gate: for a TRANSLATE request naming a target
+    // language, reject up front when the model advertises a target set
+    // (n > 0) that does not include it. Mirrors the source-language check
+    // above and returns the same code. An empty/unadvertised set (old
+    // GGUFs, ASR-only models) makes this inert; family-level target/pair
+    // checks (e.g. canary's pivot pairs) still apply on top.
+    if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
+        params->target_language != nullptr &&
+        session->model->caps.n_translate_target_languages > 0 &&
+        session->model->caps.translate_target_languages != nullptr)
+    {
+        bool found = false;
+        for (int i = 0; i < session->model->caps.n_translate_target_languages; ++i) {
+            const char * entry =
+                session->model->caps.translate_target_languages[i];
+            if (entry != nullptr &&
+                std::strcmp(entry, params->target_language) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+        }
+    }
     return TRANSCRIBE_OK;
 }
 

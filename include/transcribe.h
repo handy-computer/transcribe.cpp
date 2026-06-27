@@ -1207,6 +1207,26 @@ struct transcribe_capabilities {
      * docs/input-limits.md for the full contract.
      */
     int64_t                   max_audio_ms;
+
+    /*
+     * translate_target_languages / n_translate_target_languages: the set
+     * of target language codes accepted for TRANSCRIBE_TASK_TRANSLATE —
+     * the target-side twin of `languages` (which is the valid set for the
+     * transcribe-side `language` hint). supports_translate gates whether
+     * translation runs at all; this list narrows WHICH targets are valid.
+     * A TRANSLATE run whose run_params::target_language is non-NULL and
+     * absent from a non-empty list is rejected with
+     * TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE before any decode.
+     *
+     * n == 0 / NULL is "not advertised" — an information gap, not a claim
+     * of zero targets — exactly the convention an empty `languages` uses.
+     * GGUFs predating stt.translation.target_languages report 0 here even
+     * when supports_translate is true; the gate is then inert and any
+     * family-level target/pair checks (e.g. canary's pivot pairs) still
+     * apply on top.
+     */
+    int                       n_translate_target_languages;
+    const char * const *      translate_target_languages;
 };
 
 TRANSCRIBE_API void transcribe_capabilities_init(

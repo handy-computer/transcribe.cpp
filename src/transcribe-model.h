@@ -167,12 +167,23 @@ struct transcribe_model {
     // calls this once after deciding the language list.
     void set_languages(std::vector<std::string> langs);
 
+    // Replace the translation-target language list (the set valid for
+    // run_params::target_language under TRANSCRIBE_TASK_TRANSLATE). Same
+    // model-owned-storage discipline as set_languages(): copies the
+    // strings in and republishes caps.translate_target_languages + count.
+    void set_translate_target_languages(std::vector<std::string> langs);
+
 private:
     // Backing storage for the languages chain. Kept private so the only
     // way to mutate it is through set_languages(), which guarantees the
     // capability struct's pointer + count stay in sync.
     std::vector<std::string>  language_storage_;
     std::vector<const char *> language_ptrs_;
+
+    // Backing storage for the translation-target chain, mutated only via
+    // set_translate_target_languages() for the same sync guarantee.
+    std::vector<std::string>  translate_target_storage_;
+    std::vector<const char *> translate_target_ptrs_;
 };
 
 namespace transcribe {

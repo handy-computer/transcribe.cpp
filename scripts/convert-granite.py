@@ -56,6 +56,7 @@ KV emitted (consumed by Stage 4 read_granite_hparams):
 
   stt.variant            = e.g. "granite-4.0-1b-speech"
   stt.capability.translate   = bool (true for 1b/2b; false for plus)
+  stt.translation.target_languages = BCP-47 list when translation is true
 
   tokenizer.ggml.model   = "gpt2"        (BPE with byte-level pre-tokenizer)
   tokenizer.ggml.tokens / merges / token_type
@@ -666,9 +667,12 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
             "granite-speech-4.1-2b":      True,
             "granite-speech-4.1-2b-plus": False,
         }
+        can_translate = bool(translation_caps.get(variant, False))
         writer.add_bool("stt.capability.translate",
-                        bool(translation_caps.get(variant, False)))
+                        can_translate)
         writer.add_bool("stt.capability.lang_detect", False)
+        if can_translate:
+            writer.add_array("stt.translation.target_languages", languages)
         # -plus is the only variant exposing word timestamps and
         # speaker diarization (per its model card).
         writer.add_bool("stt.capability.word_timestamps",

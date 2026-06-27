@@ -550,6 +550,8 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         writer.add_bool("stt.capability.lang_detect", is_multilingual)
         writer.add_bool("stt.capability.translate",   is_multilingual)
         writer.add_bool("stt.capability.timestamps",  True)
+        if is_multilingual:
+            writer.add_array("stt.translation.target_languages", ["en"])
 
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----
         # tokenizer.ggml.pre="gpt2" selects the original GPT-2

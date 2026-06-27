@@ -396,17 +396,33 @@ transcribe_status read_languages_kv(const gguf_context * gguf,
             // Information gap, not a claim that the model has no
             // languages. Caller has already pre-populated
             // (n_languages = 0, languages = nullptr).
-            return TRANSCRIBE_OK;
+            break;
         case KvResult::Ok:
             // set_languages copies the strings into the model so
             // their c_str() pointers stay valid for the model's
             // lifetime.
             model.set_languages(std::move(langs));
-            return TRANSCRIBE_OK;
+            break;
         case KvResult::BadType:
             return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
+
+    // Translation-target set: the target-side twin of general.languages,
+    // installed the same way (model-owned storage, republished caps
+    // pointer). Absent on ASR-only models and on GGUFs predating the KV,
+    // which leaves caps.n_translate_target_languages = 0 ("not advertised").
+    std::vector<std::string> targets;
+    switch (read_string_array_kv(gguf, "stt.translation.target_languages", targets)) {
+        case KvResult::Absent:
+            break;
+        case KvResult::Ok:
+            model.set_translate_target_languages(std::move(targets));
+            break;
+        case KvResult::BadType:
+            return TRANSCRIBE_ERR_GGUF;
+    }
+
+    return TRANSCRIBE_OK;
 }
 
 } // namespace transcribe

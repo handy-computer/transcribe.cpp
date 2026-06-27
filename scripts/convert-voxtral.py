@@ -427,6 +427,7 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         # translation are both in scope for this port (user-signed).
         writer.add_bool("stt.capability.lang_detect", True)
         writer.add_bool("stt.capability.translate", True)
+        writer.add_array("stt.translation.target_languages", hp["languages"])
 
         # ---- tokenizer.ggml.* (Mistral tekken -> llama.cpp gpt2 BPE) ----
         writer.add_string("tokenizer.ggml.model", "gpt2")

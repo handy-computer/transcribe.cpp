@@ -39,6 +39,8 @@
     ],
     "language_detection": false,
     "translation": true,
+    "translation_target_languages": ["en", "de", "es", "fr"],
+    "translation_pairs": ["en>de", "de>en", "en>es", "es>en", "en>fr", "fr>en"],
     "timestamps": [
       "word",
       "segment"

@@ -1446,6 +1446,7 @@ def emit_fixtures(out_dir: Path) -> None:
                 _pack_kv_string("general.architecture", "parakeet"),
                 _pack_kv_string("stt.variant", "tdt-0.6b-translate-toy"),
                 _pack_kv_bool("stt.capability.translate", True),
+                _pack_kv_array_string("stt.translation.target_languages", ["en"]),
                 *tokenizer_kv,
                 *parakeet_hparams_kv,
             ],

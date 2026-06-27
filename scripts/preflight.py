@@ -706,18 +706,28 @@ def check_capabilities(declared, gguf_kvs, reference, gate: Gate) -> CheckResult
     declared_langs = list(caps.get("languages") or [])
     declared_lang_detect = caps.get("language_detection")
     declared_translation = caps.get("translation")
+    declared_target_langs = list(caps.get("translation_target_languages") or [])
+    declared_pairs = list(caps.get("translation_pairs") or [])
 
     if not gguf_kvs:
         return CheckResult("capabilities", gate, "warn",
                            {"declared_languages": declared_langs,
                             "declared_language_detection": declared_lang_detect,
-                            "declared_translation": declared_translation},
+                            "declared_translation": declared_translation,
+                            "declared_translation_target_languages": declared_target_langs,
+                            "declared_translation_pairs": declared_pairs},
                            "skipped at gate A; GGUF does not exist yet")
 
     gguf_langs_raw = gguf_kvs.get("general.languages")
     gguf_langs = gguf_langs_raw if isinstance(gguf_langs_raw, list) else None
     gguf_lang_detect = gguf_kvs.get("stt.capability.lang_detect")
     gguf_translate = gguf_kvs.get("stt.capability.translate")
+    gguf_target_langs_raw = gguf_kvs.get("stt.translation.target_languages")
+    gguf_target_langs = (
+        gguf_target_langs_raw if isinstance(gguf_target_langs_raw, list) else None
+    )
+    gguf_pairs_raw = gguf_kvs.get("stt.translation.pairs")
+    gguf_pairs = gguf_pairs_raw if isinstance(gguf_pairs_raw, list) else None
 
     sources: dict[str, Any] = {
         "declared_languages": declared_langs,
@@ -726,6 +736,10 @@ def check_capabilities(declared, gguf_kvs, reference, gate: Gate) -> CheckResult
         "gguf_lang_detect": gguf_lang_detect,
         "declared_translation": declared_translation,
         "gguf_translate": gguf_translate,
+        "declared_translation_target_languages": declared_target_langs,
+        "gguf_translation_target_languages": gguf_target_langs,
+        "declared_translation_pairs": declared_pairs,
+        "gguf_translation_pairs": gguf_pairs,
     }
 
     mismatches: list[str] = []
@@ -740,7 +754,7 @@ def check_capabilities(declared, gguf_kvs, reference, gate: Gate) -> CheckResult
                 diff.append(f"only in declared: {only_decl}")
             if only_gguf:
                 diff.append(f"only in gguf: {only_gguf}")
-            mismatches.append("languages differ — " + "; ".join(diff))
+            mismatches.append("languages differ - " + "; ".join(diff))
         elif declared_langs != gguf_langs:
             warnings.append("language order differs (contents match)")
 
@@ -757,6 +771,46 @@ def check_capabilities(declared, gguf_kvs, reference, gate: Gate) -> CheckResult
                 f"translation declared={declared_translation} "
                 f"but gguf stt.capability.translate={gguf_translate}"
             )
+
+    if declared_translation is True and gguf_translate is not None and bool(gguf_translate):
+        if gguf_target_langs is None:
+            mismatches.append(
+                "translation target languages missing "
+                "(expected stt.translation.target_languages)"
+            )
+        elif declared_target_langs:
+            if set(declared_target_langs) != set(gguf_target_langs):
+                only_decl = sorted(set(declared_target_langs) - set(gguf_target_langs))
+                only_gguf = sorted(set(gguf_target_langs) - set(declared_target_langs))
+                diff = []
+                if only_decl:
+                    diff.append(f"only in declared: {only_decl}")
+                if only_gguf:
+                    diff.append(f"only in gguf: {only_gguf}")
+                mismatches.append(
+                    "translation target languages differ - " + "; ".join(diff)
+                )
+            elif declared_target_langs != gguf_target_langs:
+                warnings.append(
+                    "translation target language order differs (contents match)"
+                )
+
+    if declared_pairs:
+        if gguf_pairs is None:
+            mismatches.append(
+                "translation pairs missing (expected stt.translation.pairs)"
+            )
+        elif set(declared_pairs) != set(gguf_pairs):
+            only_decl = sorted(set(declared_pairs) - set(gguf_pairs))
+            only_gguf = sorted(set(gguf_pairs) - set(declared_pairs))
+            diff = []
+            if only_decl:
+                diff.append(f"only in declared: {only_decl}")
+            if only_gguf:
+                diff.append(f"only in gguf: {only_gguf}")
+            mismatches.append("translation pairs differ - " + "; ".join(diff))
+        elif declared_pairs != gguf_pairs:
+            warnings.append("translation pair order differs (contents match)")
 
     if mismatches:
         return CheckResult("capabilities", gate, "fail", sources, "; ".join(mismatches))
