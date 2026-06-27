@@ -70,6 +70,7 @@ from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
 from safetensors.torch import safe_open
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import resolve_model_dir  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
@@ -89,14 +90,6 @@ REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
 
 
 # ---- Source resolution ----------------------------------------------------
-
-
-def hf_resolve(model_arg: str, revision: str | None) -> Path:
-    p = Path(model_arg).expanduser().resolve()
-    if p.is_dir():
-        return p
-    from huggingface_hub import snapshot_download
-    return Path(snapshot_download(model_arg, revision=revision))
 
 
 # ---- Hparam extraction ----------------------------------------------------
@@ -351,7 +344,7 @@ def main(argv: list[str]) -> int:
     repo_id = args.repo_id or args.model
     slug = slug_from_repo_id(repo_id)
 
-    model_dir = hf_resolve(args.model, args.revision)
+    model_dir = resolve_model_dir(args.model, args.revision)
     print(f"Source: {model_dir}")
 
     config = json.loads((model_dir / "config.json").read_text())

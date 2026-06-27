@@ -176,7 +176,12 @@ def load_salm(model_spec: str):
 
 def fetch_lm_tokenizer(lm_repo: str) -> Path:
     """Snapshot-download the LM tokenizer files into the standard HF
-    cache (or $TRANSCRIBE_MODELS_DIR/<slug>/) and return the local dir."""
+    cache (or $TRANSCRIBE_MODELS_DIR/<slug>/) and return the local dir.
+
+    Intentionally does not use lib.hf_source.download_snapshot: this is a
+    partial fetch (allow_patterns) of tokenizer files from the LM backbone
+    repo, not a full checkpoint snapshot of the model being converted.
+    """
     from huggingface_hub import snapshot_download
 
     slug = slug_from_repo_id(lm_repo)

@@ -51,6 +51,7 @@ from gguf import GGUFWriter, GGUFValueType
 from safetensors.torch import safe_open
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import resolve_model_dir  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
     add_general_identity,
 )
@@ -59,15 +60,6 @@ REF_DTYPE = "BF16"
 TOKEN_TYPE_NORMAL = 1
 TOKEN_TYPE_CONTROL = 3
 TOKEN_TYPE_USER_DEFINED = 4
-
-
-def hf_resolve(model_arg: str, revision: str | None):
-    """Return a local directory containing the HF model files."""
-    p = Path(model_arg).expanduser().resolve()
-    if p.is_dir():
-        return p
-    from huggingface_hub import snapshot_download
-    return Path(snapshot_download(model_arg, revision=revision))
 
 
 def read_tokenizer(model_dir: Path) -> dict:
@@ -476,7 +468,7 @@ def main(argv: list[str]) -> int:
     repo_id = args.repo_id or args.model
     variant = repo_id.split("/")[-1]
 
-    model_dir = hf_resolve(args.model, args.revision)
+    model_dir = resolve_model_dir(args.model, args.revision)
     print(f"Source: {model_dir}")
 
     config = json.loads((model_dir / "config.json").read_text())

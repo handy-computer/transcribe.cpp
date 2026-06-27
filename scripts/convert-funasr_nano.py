@@ -99,9 +99,9 @@ import numpy as np
 import torch
 import yaml
 from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
-from huggingface_hub import snapshot_download
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import download_snapshot, looks_like_repo_id  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
@@ -814,29 +814,6 @@ def convert(model_dir: Path, out_path: Path, variant: str, display_name: str, re
 # ---------------------------------------------------------------------------
 
 
-def _looks_like_repo_id(s: str) -> bool:
-    return "/" in s and not Path(s).exists()
-
-
-def _download_snapshot(repo_id: str, revision: str | None) -> Path:
-    slug = slug_from_repo_id(repo_id)
-    models_root = os.environ.get("TRANSCRIBE_MODELS_DIR")
-    local_dir = Path(models_root) / slug if models_root else None
-    if local_dir is not None:
-        local_dir.mkdir(parents=True, exist_ok=True)
-    if revision:
-        print(f"Downloading {repo_id}@{revision} from Hugging Face...")
-    else:
-        print(f"Downloading {repo_id} from Hugging Face "
-              f"(no revision pin; reproducibility depends on upstream)...")
-    resolved = snapshot_download(
-        repo_id=repo_id,
-        revision=revision,
-        local_dir=str(local_dir) if local_dir is not None else None,
-    )
-    return Path(resolved)
-
-
 SLUG_TO_VARIANT = {
     "Fun-ASR-Nano-2512": "fun-asr-nano-2512",
 }
@@ -860,9 +837,9 @@ def main(argv: list[str]) -> int:
                    help="stt.variant string (default: derived from slug)")
     args = p.parse_args(argv[1:])
 
-    if _looks_like_repo_id(args.model):
+    if looks_like_repo_id(args.model):
         repo_id = args.repo_id or args.model
-        model_dir = _download_snapshot(args.model, args.revision)
+        model_dir = download_snapshot(args.model, args.revision)
     else:
         model_dir = Path(args.model)
         if not model_dir.is_dir():

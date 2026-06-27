@@ -281,3 +281,43 @@ def canonicalize_normalize(raw) -> str:
         f"add an alias entry in scripts/lib/gguf_common.py "
         f"or update the intake schema enum."
     )
+
+
+# Large array / blob KVs, in canonical trailer order. These are relocated to the
+# end of the KV section so range-read consumers can fetch the small scalar
+# metadata (general.*, stt.*, tokenizer identity) without pulling the multi-MB
+# tokenizer tables. GGUF has no KV offset index — readers parse KVs sequentially
+# — so anything a remote consumer wants cheaply must precede these.
+BULK_KV_KEYS = (
+    "tokenizer.ggml.tokens",
+    "tokenizer.ggml.scores",
+    "tokenizer.ggml.token_type",
+    "tokenizer.ggml.merges",
+    "tokenizer.chat_template",
+)
+
+
+def move_bulk_metadata_last(writer) -> list[str]:
+    """Move the large tokenizer KVs to the end of every split's KV section.
+
+    Call once after all add_*() calls and immediately before
+    writer.write_header_to_file(). Keeps the small, range-read-friendly scalar
+    metadata first regardless of the order the converter happened to emit KVs
+    in, so new families get the streaming-friendly layout by adding this single
+    call rather than reordering their emission. Returns the keys actually moved
+    (for logging/tests); a no-op when none of the bulk keys are present.
+    """
+    kv_data = getattr(writer, "kv_data", None)
+    if not isinstance(kv_data, list) or not all(isinstance(s, dict) for s in kv_data):
+        raise RuntimeError(
+            "move_bulk_metadata_last: writer.kv_data is not the expected "
+            "list[dict] (gguf API drift?); refusing to reorder silently."
+        )
+    moved: list[str] = []
+    for shard in kv_data:
+        for key in BULK_KV_KEYS:
+            if key in shard:
+                shard[key] = shard.pop(key)  # dict preserves insertion order
+                if key not in moved:
+                    moved.append(key)
+    return moved
