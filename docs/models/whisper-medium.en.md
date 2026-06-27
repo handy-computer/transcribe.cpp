@@ -22,14 +22,14 @@ on 2026-04-26.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-medium.en-F32.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-F32.gguf) | 2.85 GB | 2.98% |
-| F16    | [whisper-medium.en-F16.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-F16.gguf) | 1.44 GB | 2.98% |
-| Q8_0   | [whisper-medium.en-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q8_0.gguf) | 793 MB | 2.97% |
-| Q6_K   | [whisper-medium.en-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q6_K.gguf) | 618 MB | 2.85% |
-| Q5_K_M | [whisper-medium.en-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q5_K_M.gguf) | 556 MB | 2.97% |
-| Q4_K_M | [whisper-medium.en-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q4_K_M.gguf) | 481 MB | 2.96% |
+| F32    | [whisper-medium.en-F32.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-F32.gguf) | 2.85 GB | 2.74% |
+| F16    | [whisper-medium.en-F16.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-F16.gguf) | 1.44 GB | 2.73% |
+| Q8_0   | [whisper-medium.en-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q8_0.gguf) | 793 MB | 2.72% |
+| Q6_K   | [whisper-medium.en-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q6_K.gguf) | 618 MB | 2.83% |
+| Q5_K_M | [whisper-medium.en-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q5_K_M.gguf) | 556 MB | 2.74% |
+| Q4_K_M | [whisper-medium.en-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-medium.en-gguf/resolve/main/whisper-medium.en-Q4_K_M.gguf) | 481 MB | 2.91% |
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with the pinned short-form recipe: greedy decode, timestamps off (`<|notimestamps|>`), and language forced to `en` — see [WER methodology](../tools/wer.md#methodology-pinned-recipe). Captured on a single CUDA (L40S) run at batch size 1; quantization, backend, and batching are all generally WER-neutral.
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with transcribe.cpp's default greedy decode and segment timestamps enabled — the same runs summarized in the [Whisper family table](whisper.md#all-variants). Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions add ~0.1pp of run-to-run variance on the noise floor, and quantization is otherwise generally WER-neutral. See the [WER methodology](../tools/wer.md) for the harness.
 
 ## Quick Start
 

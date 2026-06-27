@@ -45,7 +45,7 @@ Reference reproduction follows the model card path verbatim
 at HF revision `99a4df9`; the older snapshot's bidirectional-mask patch
 is obsolete in this snapshot.
 
-## Quick start
+## Quick Start
 
 ```bash
 cmake -B build
@@ -136,7 +136,7 @@ encoder dominates so RTF tapers slightly with sequence length.
 | Translation                 | No (not supported by the NAR family; use the AR variants) |
 | Word/segment timestamps     | No (the NAR encoder pools to per-window output; per-token timing is lost) |
 
-## Numerical validation
+## Numerical Validation
 
 Tensor-level parity with the transformers reference on `samples/jfk.wav`.
 Per-tensor `max_abs` / `mean_abs` budgets in

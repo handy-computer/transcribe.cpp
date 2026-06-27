@@ -22,14 +22,14 @@ on 2026-04-26.
 
 | Quantization | Download | Size | WER (LibriSpeech test-clean) |
 | --- | --- | ---: | ---: |
-| F32    | [whisper-small-F32.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-F32.gguf) | 924 MB | 3.39% |
-| F16    | [whisper-small-F16.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-F16.gguf) | 470 MB | 3.48% |
-| Q8_0   | [whisper-small-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q8_0.gguf) | 257 MB | 3.38% |
-| Q6_K   | [whisper-small-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q6_K.gguf) | 202 MB | 3.40% |
-| Q5_K_M | [whisper-small-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q5_K_M.gguf) | 185 MB | 3.34% |
-| Q4_K_M | [whisper-small-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q4_K_M.gguf) | 164 MB | 3.44% |
+| F32    | [whisper-small-F32.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-F32.gguf) | 924 MB | 3.33% |
+| F16    | [whisper-small-F16.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-F16.gguf) | 470 MB | 3.34% |
+| Q8_0   | [whisper-small-Q8_0.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q8_0.gguf) | 257 MB | 3.33% |
+| Q6_K   | [whisper-small-Q6_K.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q6_K.gguf) | 202 MB | 3.33% |
+| Q5_K_M | [whisper-small-Q5_K_M.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q5_K_M.gguf) | 185 MB | 3.37% |
+| Q4_K_M | [whisper-small-Q4_K_M.gguf](https://huggingface.co/handy-computer/whisper-small-gguf/resolve/main/whisper-small-Q4_K_M.gguf) | 164 MB | 3.40% |
 
-WER measured on the full LibriSpeech test-clean split (2620 utterances) with the pinned short-form recipe: greedy decode, timestamps off (`<|notimestamps|>`), and language forced to `en` — see [WER methodology](../tools/wer.md#methodology-pinned-recipe). Captured on a single CUDA (L40S) run at batch size 1; quantization, backend, and batching are all generally WER-neutral.
+WER measured on the full LibriSpeech test-clean split (2620 utterances) with transcribe.cpp's default greedy decode and segment timestamps enabled — the same runs summarized in the [Whisper family table](whisper.md#all-variants). Numbers come from a single Metal-backed run; Metal's non-deterministic parallel reductions add ~0.1pp of run-to-run variance on the noise floor, and quantization is otherwise generally WER-neutral. See the [WER methodology](../tools/wer.md) for the harness.
 
 ## Quick Start
 

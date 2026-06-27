@@ -24,7 +24,8 @@ See Mistral's [model card](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507
 for training data, intended use, and upstream evaluation.
 
 Licensed Apache-2.0. Ported from upstream commit
-[`3060fe3`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/commit/3060fe34b35ba5d44202ce9ff3c097642914f8f3).
+[`3060fe3`](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/commit/3060fe34b35ba5d44202ce9ff3c097642914f8f3),
+pinned 2026-06-06.
 
 ## Download
 
@@ -42,7 +43,7 @@ with the Whisper-style English text normalizer, batch size 8 on an NVIDIA
 L40S. The same-machine HuggingFace `transformers` reference run
 (`VoxtralForConditionalGeneration`, BF16, `attn_implementation=eager`,
 greedy) lands at **1.87%**, and the BF16 GGUF matches it (1.87% at batch
-1.
+1).
 
 ## Quick Start
 

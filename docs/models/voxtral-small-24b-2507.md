@@ -29,7 +29,8 @@ See Mistral's [model card](https://huggingface.co/mistralai/Voxtral-Small-24B-25
 for training data, intended use, and upstream evaluation.
 
 Licensed Apache-2.0. Ported from upstream commit
-[`da5b424`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507/commit/da5b42409f279fdd92febee0511a6c32828569c1).
+[`da5b424`](https://huggingface.co/mistralai/Voxtral-Small-24B-2507/commit/da5b42409f279fdd92febee0511a6c32828569c1),
+pinned 2026-06-05.
 
 ## Download
 
@@ -128,7 +129,7 @@ uv run scripts/bench/run.py \
 - BF16 and F16 require ~50 GB of memory; on an 80 GB GPU they run
   comfortably at batch ≤ 8.
 
-## Validation
+## Numerical Validation
 
 This variant is validated **end-to-end by word error rate** against the
 HuggingFace `transformers` reference, not by a separate tensor-by-tensor

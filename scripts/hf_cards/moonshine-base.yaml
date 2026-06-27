@@ -28,7 +28,7 @@ tags:
   - encoder-decoder
 
 summary: |
-  Useful Sensors Moonshine base — a 62M-parameter encoder-decoder transformer
+  Useful Sensors Moonshine base — a 61M-parameter encoder-decoder transformer
   for English speech recognition. Consumes raw 16 kHz PCM directly via a
   three-layer Conv1d stem (no STFT, no mel) and emits transcript-only output.
   Wider and deeper than moonshine-tiny (8 encoder / 8 decoder layers, hidden

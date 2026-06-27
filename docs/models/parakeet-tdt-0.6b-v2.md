@@ -42,7 +42,7 @@ cmake -B build
 cmake --build build
 
 build/bin/transcribe-cli \
-  -m models/parakeet/parakeet-tdt-0.6b-v2.f16.gguf \
+  -m models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-Q8_0.gguf \
   samples/jfk.wav
 ```
 

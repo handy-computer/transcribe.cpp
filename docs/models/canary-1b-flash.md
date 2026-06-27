@@ -11,7 +11,8 @@ Offline multilingual speech-to-text and translation. The model takes a
 
 - **ASR** in English, German, Spanish, and French (with explicit language
   hint).
-- **Translation** from English to German, Spanish, or French.
+- **Translation** between English and German, Spanish, or French (both
+  directions).
 
 See NVIDIA's [model card](https://huggingface.co/nvidia/canary-1b-flash)
 for training data, intended use, and upstream evaluation methodology.

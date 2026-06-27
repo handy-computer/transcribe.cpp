@@ -19,8 +19,8 @@ perspective they are one family of GGUFs.
 ## Choosing a variant
 
 - **Best WER, slowest decode.** `granite-speech-4.1-2b` — 4.1 generation
-  LLM head, autoregressive; 1.31% WER on LibriSpeech test-clean. Improved
-  punctuation and casing over 4.0-1b.
+  LLM head, autoregressive; 1.31% BF16 / 1.32% Q8_0 WER on LibriSpeech
+  test-clean. Improved punctuation and casing over 4.0-1b.
 - **Most features.** `granite-speech-4.1-2b-plus` — same 4.1 base plus
   word-level timestamps (`[SS:N]` centisecond markers). Encoder
   concatenates a mid-layer and the final layer (`cat_hidden_layers=[3]`),
@@ -31,9 +31,10 @@ perspective they are one family of GGUFs.
   siblings on Metal at Q8_0. No translation, no timestamps. 1.29% WER
   matches the upstream model card exactly.
 - **Smallest 4.0-generation model.** `granite-4.0-1b-speech` — the 4.0
-  baseline. Same architecture as 4.1-2b. 1.42% WER on LibriSpeech
-  test-clean; covers Japanese in addition to en/fr/de/es/pt (4.1
-  variants drop Japanese except for NAR).
+  baseline. Same architecture as 4.1-2b. 1.42% BF16 / 1.44% Q8_0 WER on
+  LibriSpeech test-clean; covers Japanese in addition to en/fr/de/es/pt —
+  as does the base `granite-speech-4.1-2b`. The `granite-speech-4.1-2b-plus`
+  and `granite-speech-4.1-2b-nar` variants drop Japanese (en/fr/de/es/pt only).
 
 ## All variants
 
@@ -46,7 +47,7 @@ quant matrix.
 | `granite-4.0-1b-speech`      | AR (audio-LLM) | ~3B† | 2.56 GB | 1.44% | en, fr, de, es, pt, ja | translate (en ↔ each)       | [granite-4.0-1b-speech.md](granite-4.0-1b-speech.md) |
 | `granite-speech-4.1-2b`      | AR (audio-LLM) | ~3B† | 2.56 GB | 1.32% | en, fr, de, es, pt, ja | translate (en ↔ each)       | [granite-speech-4.1-2b.md](granite-speech-4.1-2b.md) |
 | `granite-speech-4.1-2b-plus` | AR (audio-LLM) | ~3B† | 2.35 GB | 1.50% | en, fr, de, es, pt     | translate (en ↔ each), word timestamps | [granite-speech-4.1-2b-plus.md](granite-speech-4.1-2b-plus.md) |
-| `granite-speech-4.1-2b-nar`  | NAR (editor)   | ~3B† | 2.50 GB | 1.29% | en, fr, de, es, pt     | (ASR only)                  | [granite-speech-4.1-2b-nar.md](granite-speech-4.1-2b-nar.md) |
+| `granite-speech-4.1-2b-nar`  | NAR (editor)   | ~3B† | 2.33 GB | 1.29% | en, fr, de, es, pt     | (ASR only)                  | [granite-speech-4.1-2b-nar.md](granite-speech-4.1-2b-nar.md) |
 
 † Parameter counts include the Conformer audio encoder, the projector,
 and the Granite-4.0-1b text LM. The "1b" / "2b" in IBM's variant names

@@ -50,7 +50,7 @@ Text normalizer: Whisper `EnglishTextNormalizer`. The transcribe.cpp runtime
 hard-codes the correct chat template; the WER quoted here is what the C++
 runtime actually scores.
 
-## Quick start
+## Quick Start
 
 ```bash
 cmake -B build
@@ -157,7 +157,7 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 | Word-level timestamps       | Yes (`--timestamps word`, `[SS:N]` markers) |
 | Speaker diarization         | No (upstream supports via prompt; not exposed in v1 of transcribe.cpp) |
 
-## Numerical validation
+## Numerical Validation
 
 Tensor-level parity with the transformers reference on `samples/jfk.wav`.
 Per-tensor `max_abs` / `mean_abs` budgets in

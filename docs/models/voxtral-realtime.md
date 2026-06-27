@@ -12,7 +12,9 @@ delay-token latency conditioning emits one text token per 80 ms audio slot
 Architecturally distinct from the offline [Voxtral 2507](voxtral.md) family
 (own arch, streaming frontend with a fixed global log-mel max, causal encoder,
 additive fusion, ada-norm FFN scaling) — it shares only the projector shape
-and the tekken tokenizer. Licensed Apache-2.0.
+and the tekken tokenizer. Licensed Apache-2.0. Ported from upstream commit
+[`2769294`](https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/commit/2769294),
+pinned 2026-06-06.
 
 ## What it's for
 
@@ -142,7 +144,7 @@ time changes.
 Capability gate: `transcribe_capabilities::supports_spec_decode = true`.
 Families that do not advertise this bit silently ignore the field.
 
-## Validation
+## Numerical Validation
 
 The streaming scheduler is validated against the upstream `transformers`
 reference for true incremental equivalence: the offline and streaming paths

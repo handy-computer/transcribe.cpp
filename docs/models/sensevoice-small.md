@@ -24,6 +24,9 @@ for training data, intended use, and upstream evaluation methodology.
 Licensed under the **FunASR Model Open Source License Agreement** —
 the legacy "model-license" form
 ([MODEL_LICENSE](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)).
+Ported from upstream commit
+[`3eb3b4e`](https://huggingface.co/FunAudioLLM/SenseVoiceSmall/commit/3eb3b4eeffc2f2dde6051b853983753db33e35c3),
+pinned 2026-05-06.
 
 ## Input limits
 
