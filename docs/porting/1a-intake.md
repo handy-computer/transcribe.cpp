@@ -174,7 +174,6 @@ Mirrored into the golden manifest; cross-checked by preflight against GGUF
 | `capabilities.translation_pairs` | human | Allowed directions as `src>target`, only when support is not the simple source-language x target-language cross product |
 | `capabilities.timestamps` | human | Subset of `["none", "segment", "word", "token"]`. Parakeet has word+token, Whisper has segment optional word |
 | `capabilities.streaming` | human | Streaming / chunked real-time capable |
-| `capabilities.voice_activity_detection` | human | Model emits VAD decisions as part of output |
 | `capabilities.speaker_diarization` | human | Multi-speaker attribution |
 
 Any of the boolean flags may be `null` if unknown — a gap the maintainer

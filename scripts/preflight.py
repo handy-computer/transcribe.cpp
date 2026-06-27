@@ -697,120 +697,143 @@ def check_architecture_sanity(declared, gguf_kvs, reference, gate: Gate) -> Chec
     return CheckResult("architecture_sanity", gate, "pass", sources)
 
 
-def check_capabilities(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
-    """Cross-check declared languages + capability flags against the GGUF.
+# Boolean capability flags, declared (intake) field -> GGUF KV. Compared only
+# when BOTH sides are present: a missing GGUF capability KV means the C++ loader
+# derives the flag from family defaults (transcribe-meta.cpp apply_family_
+# invariants), which is not a mismatch. Adding a new boolean capability is one
+# row here once it has both an intake field and a GGUF KV.
+_CAP_BOOL_FLAGS = (
+    ("language_detection",  "stt.capability.lang_detect"),
+    ("translation",         "stt.capability.translate"),
+    ("streaming",           "stt.capability.streaming"),
+    ("speaker_diarization", "stt.capability.speaker_diarization"),
+)
 
-    Only runs at Gate B (GGUF exists). Gate A returns warn.
+
+def _cmp_bool(decl, gguf) -> bool:
+    """True when both sides are present and disagree."""
+    return decl is not None and gguf is not None and bool(decl) != bool(gguf)
+
+
+def _cmp_list_set(decl, gguf) -> tuple[str | None, str | None]:
+    """Compare two lists as sets. Returns (mismatch_detail, warn_detail), each
+    None when not applicable. Set-difference is a mismatch; identical contents
+    in a different order is a warning. Skips when declared is empty or the GGUF
+    side is absent."""
+    if not decl or gguf is None:
+        return None, None
+    if set(decl) != set(gguf):
+        only_decl = sorted(set(decl) - set(gguf))
+        only_gguf = sorted(set(gguf) - set(decl))
+        diff = []
+        if only_decl:
+            diff.append(f"only in declared: {only_decl}")
+        if only_gguf:
+            diff.append(f"only in gguf: {only_gguf}")
+        return "; ".join(diff), None
+    if list(decl) != list(gguf):
+        return None, "order differs (contents match)"
+    return None, None
+
+
+def check_capabilities(declared, gguf_kvs, reference, gate: Gate) -> CheckResult:
+    """Cross-check declared capabilities against the GGUF.
+
+    Only runs meaningfully at Gate B (GGUF exists); Gate A returns warn.
+    Every comparison is presence-gated: a field is checked only when the intake
+    declares it AND the GGUF carries the KV, because a missing GGUF capability
+    KV is a valid "derive from family default" signal, not a contradiction.
     """
     caps = declared.get("capabilities") or {}
-    declared_langs = list(caps.get("languages") or [])
-    declared_lang_detect = caps.get("language_detection")
-    declared_translation = caps.get("translation")
-    declared_target_langs = list(caps.get("translation_target_languages") or [])
-    declared_pairs = list(caps.get("translation_pairs") or [])
 
     if not gguf_kvs:
         return CheckResult("capabilities", gate, "warn",
-                           {"declared_languages": declared_langs,
-                            "declared_language_detection": declared_lang_detect,
-                            "declared_translation": declared_translation,
-                            "declared_translation_target_languages": declared_target_langs,
-                            "declared_translation_pairs": declared_pairs},
+                           {"declared": caps},
                            "skipped at gate A; GGUF does not exist yet")
 
-    gguf_langs_raw = gguf_kvs.get("general.languages")
-    gguf_langs = gguf_langs_raw if isinstance(gguf_langs_raw, list) else None
-    gguf_lang_detect = gguf_kvs.get("stt.capability.lang_detect")
-    gguf_translate = gguf_kvs.get("stt.capability.translate")
-    gguf_target_langs_raw = gguf_kvs.get("stt.translation.target_languages")
-    gguf_target_langs = (
-        gguf_target_langs_raw if isinstance(gguf_target_langs_raw, list) else None
-    )
-    gguf_pairs_raw = gguf_kvs.get("stt.translation.pairs")
-    gguf_pairs = gguf_pairs_raw if isinstance(gguf_pairs_raw, list) else None
-
-    sources: dict[str, Any] = {
-        "declared_languages": declared_langs,
-        "gguf_languages": gguf_langs,
-        "declared_language_detection": declared_lang_detect,
-        "gguf_lang_detect": gguf_lang_detect,
-        "declared_translation": declared_translation,
-        "gguf_translate": gguf_translate,
-        "declared_translation_target_languages": declared_target_langs,
-        "gguf_translation_target_languages": gguf_target_langs,
-        "declared_translation_pairs": declared_pairs,
-        "gguf_translation_pairs": gguf_pairs,
-    }
-
+    sources: dict[str, Any] = {}
     mismatches: list[str] = []
     warnings: list[str] = []
 
-    if declared_langs and gguf_langs is not None:
-        if set(declared_langs) != set(gguf_langs):
-            only_decl = sorted(set(declared_langs) - set(gguf_langs))
-            only_gguf = sorted(set(gguf_langs) - set(declared_langs))
-            diff = []
-            if only_decl:
-                diff.append(f"only in declared: {only_decl}")
-            if only_gguf:
-                diff.append(f"only in gguf: {only_gguf}")
-            mismatches.append("languages differ - " + "; ".join(diff))
-        elif declared_langs != gguf_langs:
-            warnings.append("language order differs (contents match)")
+    # -- languages (set) --
+    decl_langs = list(caps.get("languages") or [])
+    gguf_langs_raw = gguf_kvs.get("general.languages")
+    gguf_langs = gguf_langs_raw if isinstance(gguf_langs_raw, list) else None
+    sources["declared_languages"] = decl_langs
+    sources["gguf_languages"] = gguf_langs
+    m, w = _cmp_list_set(decl_langs, gguf_langs)
+    if m:
+        mismatches.append("languages differ - " + m)
+    if w:
+        warnings.append("language " + w)
 
-    if declared_lang_detect is not None and gguf_lang_detect is not None:
-        if bool(declared_lang_detect) != bool(gguf_lang_detect):
-            mismatches.append(
-                f"language_detection declared={declared_lang_detect} "
-                f"but gguf stt.capability.lang_detect={gguf_lang_detect}"
-            )
+    # -- boolean capability flags (declarative) --
+    for field, key in _CAP_BOOL_FLAGS:
+        decl = caps.get(field)
+        gguf = gguf_kvs.get(key)
+        sources[f"declared_{field}"] = decl
+        sources[f"gguf_{key.rsplit('.', 1)[-1]}"] = gguf
+        if _cmp_bool(decl, gguf):
+            mismatches.append(f"{field} declared={decl} but gguf {key}={gguf}")
 
-    if declared_translation is not None and gguf_translate is not None:
-        if bool(declared_translation) != bool(gguf_translate):
-            mismatches.append(
-                f"translation declared={declared_translation} "
-                f"but gguf stt.capability.translate={gguf_translate}"
-            )
+    # -- translation target languages + pairs (conditional on translation) --
+    decl_translation = caps.get("translation")
+    gguf_translate = gguf_kvs.get("stt.capability.translate")
+    decl_targets = list(caps.get("translation_target_languages") or [])
+    gguf_targets_raw = gguf_kvs.get("stt.translation.target_languages")
+    gguf_targets = gguf_targets_raw if isinstance(gguf_targets_raw, list) else None
+    decl_pairs = list(caps.get("translation_pairs") or [])
+    gguf_pairs_raw = gguf_kvs.get("stt.translation.pairs")
+    gguf_pairs = gguf_pairs_raw if isinstance(gguf_pairs_raw, list) else None
+    sources["declared_translation_target_languages"] = decl_targets
+    sources["gguf_translation_target_languages"] = gguf_targets
+    sources["declared_translation_pairs"] = decl_pairs
+    sources["gguf_translation_pairs"] = gguf_pairs
 
-    if declared_translation is True and gguf_translate is not None and bool(gguf_translate):
-        if gguf_target_langs is None:
-            mismatches.append(
-                "translation target languages missing "
-                "(expected stt.translation.target_languages)"
-            )
-        elif declared_target_langs:
-            if set(declared_target_langs) != set(gguf_target_langs):
-                only_decl = sorted(set(declared_target_langs) - set(gguf_target_langs))
-                only_gguf = sorted(set(gguf_target_langs) - set(declared_target_langs))
-                diff = []
-                if only_decl:
-                    diff.append(f"only in declared: {only_decl}")
-                if only_gguf:
-                    diff.append(f"only in gguf: {only_gguf}")
-                mismatches.append(
-                    "translation target languages differ - " + "; ".join(diff)
-                )
-            elif declared_target_langs != gguf_target_langs:
-                warnings.append(
-                    "translation target language order differs (contents match)"
-                )
+    if decl_translation is True and gguf_translate is not None and bool(gguf_translate):
+        if gguf_targets is None:
+            mismatches.append("translation target languages missing "
+                              "(expected stt.translation.target_languages)")
+        else:
+            m, w = _cmp_list_set(decl_targets, gguf_targets)
+            if m:
+                mismatches.append("translation target languages differ - " + m)
+            if w:
+                warnings.append("translation target language " + w)
 
-    if declared_pairs:
+    if decl_pairs:
         if gguf_pairs is None:
+            mismatches.append("translation pairs missing "
+                              "(expected stt.translation.pairs)")
+        else:
+            m, w = _cmp_list_set(decl_pairs, gguf_pairs)
+            if m:
+                mismatches.append("translation pairs differ - " + m)
+            if w:
+                warnings.append("translation pair " + w)
+
+    # -- timestamps: intake declares granularity as an enum array
+    #    (none/segment/word/token); the GGUF carries two booleans. Map the
+    #    array down to those booleans. Empty list = unset default -> skip,
+    #    mirroring None for the boolean flags. --
+    ts_val = caps.get("timestamps")
+    decl_ts = set(ts_val) if isinstance(ts_val, list) else set()
+    gguf_ts = gguf_kvs.get("stt.capability.timestamps")
+    gguf_word_ts = gguf_kvs.get("stt.capability.word_timestamps")
+    sources["declared_timestamps"] = sorted(decl_ts)
+    sources["gguf_timestamps"] = gguf_ts
+    sources["gguf_word_timestamps"] = gguf_word_ts
+    if decl_ts:
+        decl_any_ts = bool(decl_ts - {"none"})
+        decl_word_ts = "word" in decl_ts
+        if _cmp_bool(decl_any_ts, gguf_ts):
             mismatches.append(
-                "translation pairs missing (expected stt.translation.pairs)"
-            )
-        elif set(declared_pairs) != set(gguf_pairs):
-            only_decl = sorted(set(declared_pairs) - set(gguf_pairs))
-            only_gguf = sorted(set(gguf_pairs) - set(declared_pairs))
-            diff = []
-            if only_decl:
-                diff.append(f"only in declared: {only_decl}")
-            if only_gguf:
-                diff.append(f"only in gguf: {only_gguf}")
-            mismatches.append("translation pairs differ - " + "; ".join(diff))
-        elif declared_pairs != gguf_pairs:
-            warnings.append("translation pair order differs (contents match)")
+                f"timestamps declared={sorted(decl_ts)} (any={decl_any_ts}) "
+                f"but gguf stt.capability.timestamps={gguf_ts}")
+        if _cmp_bool(decl_word_ts, gguf_word_ts):
+            mismatches.append(
+                f"timestamps declared={sorted(decl_ts)} (word={decl_word_ts}) "
+                f"but gguf stt.capability.word_timestamps={gguf_word_ts}")
 
     if mismatches:
         return CheckResult("capabilities", gate, "fail", sources, "; ".join(mismatches))

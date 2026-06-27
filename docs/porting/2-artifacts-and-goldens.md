@@ -109,7 +109,6 @@ the model card, not a separate artifact.
     "translation": false,
     "timestamps": [],
     "streaming": false,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "tolerance_file": "tests/tolerances/cohere.json",

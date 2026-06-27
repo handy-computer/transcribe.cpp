@@ -155,7 +155,6 @@
     "translation": false,
     "timestamps": [],
     "streaming": false,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "upstream_benchmarks": [

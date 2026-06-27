@@ -28,10 +28,17 @@ What conversion does **not** do:
 
 ## Current families
 
-| Family   | Script                          | Env                          | Source format                |
-|----------|---------------------------------|------------------------------|------------------------------|
-| parakeet | `scripts/convert-parakeet.py`   | `scripts/envs/parakeet/`     | NeMo `.nemo` archive (via `ASRModel.from_pretrained`) |
-| cohere   | `scripts/convert-cohere.py`     | `scripts/envs/cohere/`       | HuggingFace safetensors (bf16) |
+The authoritative list is the set of `scripts/convert-*.py` scripts; each
+family also has a `uv` env at `scripts/envs/<family>/`. Grouped by upstream
+source format:
+
+- **NeMo `.nemo`** (via `ASRModel.from_pretrained`): `parakeet`, `canary`,
+  `canary_qwen`
+- **HuggingFace safetensors / Transformers**: `whisper`, `voxtral`,
+  `voxtral_realtime`, `granite`, `granite_nar`, `moonshine`,
+  `moonshine_streaming`, `qwen3_asr`, `medasr`, `cohere`
+- **FunASR**: `sensevoice`, `funasr_nano`
+- **Author package**: `gigaam` (the upstream `gigaam` pip package)
 
 Each converter is a single-file script with inline documentation of its
 tensor catalog, hparam map, and layout transforms. No base class. See
@@ -124,7 +131,7 @@ component bucket rules.
    point. Both are deliberately readable top-to-bottom.
 3. Write the hparam map, tensor catalog, and layout transforms inline.
 4. Import shared helpers from `scripts/lib/` (GGUF KV helpers,
-   fp encoding, manifest writing). **Do not** import a per-family
+   fp encoding). **Do not** import a per-family
    base class — there isn't one, and there shouldn't be one until we
    have 5+ families of the same shape.
 5. Update the C++ loader (`src/arch/<family>/weights.cpp`) to accept
@@ -136,10 +143,15 @@ component bucket rules.
 `scripts/lib/` holds code that every converter uses but that doesn't
 justify a class hierarchy:
 
-- `gguf_common.py` — KV writer helpers, tensor name canonicalization,
-  fp32/f16/bf16 `encode_for_gguf()`.
+- `gguf_common.py` — GGUF identity/KV helpers, output-name derivation,
+  reference-dtype routing + fp32/f16/bf16 `encode_for_gguf()`, and
+  frontend-normalize canonicalization.
 - `quant_policy.py` — preset name registry (names only, no math;
   quantization math lives in C++).
+
+Manifest writing, file hashing, HF snapshot resolution, and sharded
+safetensors reading are currently duplicated per-converter (candidates
+for extraction into `scripts/lib/`), not shared today.
 
 Import with a two-line `sys.path.insert` at the top of each converter.
 This matches `llama.cpp`'s `gguf-py` pattern: a local importable module,

@@ -236,7 +236,6 @@
           "type": ["boolean", "null"],
           "description": "Model supports streaming / chunked real-time inference."
         },
-        "voice_activity_detection": {"type": ["boolean", "null"]},
         "speaker_diarization": {"type": ["boolean", "null"]}
       }
     },
