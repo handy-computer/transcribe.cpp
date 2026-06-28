@@ -25,7 +25,7 @@ Convert progress:
 - [ ] Step 2: Identify reference dtype from intake
 - [ ] Step 3: Run the converter (reference dtype only)
 - [ ] Step 4: Write the converter manifest
-- [ ] Step 5: Run structural check (Preflight Gate B)
+- [ ] Step 5: Run structural checks (Preflight Gate B + loader smoke + quant-policy sync)
 - [ ] Step 6: Sign-off review
 ```
 
@@ -56,6 +56,20 @@ consumers can range-read the small metadata prefix without pulling the multi-MB
 tokenizer tables. It happens at write time regardless of emission order — emit
 KVs in whatever order is convenient; never hand-order them or call
 `gguf.GGUFWriter` (which would skip the trailer layout).
+
+**Per-tensor dtype bucketing.** Converters choose each tensor's storage dtype via
+`reference_dtype_for()` from `lib.gguf_common` (biases / norm scales / positional
+tables / frontend buffers → F32; conv kernels → F16 when the reference dtype is
+BF16, which the loader has no conv kernel for; everything else keeps the reference
+dtype). This is a Python mirror of the canonical bucketing in
+`tools/transcribe-quantize/policy.cpp::classify_tensor`, which the Stage 5
+quantizer uses. The two are hand-synced, so when this family needs a tensor kept
+out of the reference dtype — a new norm/conv/positional name the loader requires
+at F32/F16 — add the rule to **both** `reference_dtype_for` **and**
+`policy.cpp::classify_tensor`, then add a representative tensor name for this
+family to the corpus in `scripts/lib/test_quant_policy_sync.py`. That test
+(Step 5) is what keeps the two copies from drifting; catching it here, at convert
+time, avoids a wrong-dtype surprise when Stage 5 quantizes.
 
 ### Step 2: Identify reference dtype (read intake)
 
@@ -141,6 +155,18 @@ build/bin/transcribe-cli -m models/<variant>/<variant>-<REFDTYPE>.gguf samples/j
 
 For a brand-new family where `src/arch/<family>/` doesn't exist yet, the loader returns `TRANSCRIBE_ERR_UNSUPPORTED_ARCH`. That is acceptable at Stage 3 — note it in sign-off; Stage 4 (`porting-4-cpp`) brings up the arch. For an established family the smoke must exit 0. A per-family real-model smoke (`tests/<family>_real_smoke.cpp`) is a Stage 4 artifact, not a Stage 3 gate.
 
+Quant-policy sync: the converter-side dtype bucketing (`reference_dtype_for`) must
+stay aligned with the canonical `policy.cpp::classify_tensor` and must not have
+regressed. Fast, no model files:
+
+```bash
+uv run scripts/lib/test_quant_policy_sync.py
+```
+
+If Step 1 added or relied on a new Norm/Conv bucketing rule, this gate is also
+where you confirm the test corpus was updated to cover this family — otherwise a
+future BF16/F16-reference family reusing the name drifts silently. Must exit 0.
+
 ### Step 6: Sign-off
 
 Report:
@@ -157,6 +183,7 @@ Report:
 - `models/<variant>/<variant>-<REFDTYPE>.gguf` exists.
 - `reports/convert/<variant>-<REFDTYPE>.json` exists and records the SHA + source revision.
 - Preflight Gate B is green.
+- `scripts/lib/test_quant_policy_sync.py` exits 0 (converter-side dtype bucketing in sync with `policy.cpp`).
 - The full quant matrix is NOT generated here — that is Stage 5 (`porting-5-quants`).
 
 ## Pointers (read, not execute)
@@ -167,5 +194,6 @@ Report:
   - `scripts/convert-parakeet.py` (NeMo `.nemo`)
   - `scripts/convert-cohere.py` (Transformers)
   - `scripts/convert-qwen3_asr.py` (author-repo)
-- `scripts/lib/gguf_common.py` — shared KV-write helpers (execute only indirectly, via the converter)
+- `scripts/lib/gguf_common.py` — shared KV-write helpers + `reference_dtype_for` bucketing (execute only indirectly, via the converter)
+- `scripts/lib/test_quant_policy_sync.py` — pins `reference_dtype_for` against `policy.cpp`; the Step 5 quant-policy gate, and where you register a new family's norm/conv tensor names
 - `src/arch/<family>/weights.cpp` for any already-ported family — the loader's authoritative tensor-name and shape expectations

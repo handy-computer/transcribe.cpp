@@ -6,7 +6,7 @@ Status: research
 
 - Family key: `granite_nar`
 - Upstream architecture string: `nle` (`NLENARDecoder`)
-- Hugging Face repo: `ibm-granite/granite-speech-4.1-2b-nar` (pinned `7d20732df04d097262c4ecd8fe7f34ec2b3e6c42`)
+- Hugging Face repo: `ibm-granite/granite-speech-4.1-2b-nar` (pinned `99a4df9007ac5682f9daa093fb7008ff606e9a5d`)
 - License: Apache-2.0
 - Variants:
   - `granite-speech-4.1-2b-nar`: Non-autoregressive editor; en/fr/de/es/pt transcription only.

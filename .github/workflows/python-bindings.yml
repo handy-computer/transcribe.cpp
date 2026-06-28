@@ -25,6 +25,7 @@ on:
       - "bindings/python/**"
       - "include/**"
       - "src/**"
+      - "scripts/lib/**"
       - "tests/**"
       - "ggml/**"
       - "CMakeLists.txt"
@@ -36,6 +37,7 @@ on:
       - "bindings/python/**"
       - "include/**"
       - "src/**"
+      - "scripts/lib/**"
       - "tests/**"
       - "ggml/**"
       - "CMakeLists.txt"
@@ -76,6 +78,8 @@ jobs:
             bindings/python/_generate/generate.py --check
       - name: Version sync (header / pyproject / __init__)
         run: uv run --no-project bindings/python/_generate/check_version_sync.py
+      - name: GGUF writer layout
+        run: uv run scripts/lib/test_gguf_writer.py
 
   python-shared:
     runs-on: blacksmith-2vcpu-ubuntu-2404
