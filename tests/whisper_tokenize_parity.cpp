@@ -12,7 +12,7 @@
 // but the text-only BPE pieces tested here sit in the shared prefix
 // of both vocabs, so the expected ids match there too.
 //
-// Gated by TRANSCRIBE_WHISPER_MODEL (same env var used by
+// Gated by TRANSCRIBE_WHISPER_GGUF (same env var used by
 // whisper_e2e_smoke). Exits 77 (cmake SKIP_RETURN_CODE) when unset.
 
 #include "transcribe.h"
@@ -73,10 +73,10 @@ void check_case(const struct transcribe_model * model, const Case & c) {
 } // namespace
 
 int main() {
-    const char * env = std::getenv("TRANSCRIBE_WHISPER_MODEL");
+    const char * env = std::getenv("TRANSCRIBE_WHISPER_GGUF");
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
-                     "whisper_tokenize_parity: TRANSCRIBE_WHISPER_MODEL "
+                     "whisper_tokenize_parity: TRANSCRIBE_WHISPER_GGUF "
                      "not set; skipping.\n");
         return 77;
     }

@@ -239,6 +239,9 @@ def build(arch: str, build_dir: str, clean: bool = False) -> None:
         "-DCMAKE_BUILD_TYPE=Release",
         "-DTRANSCRIBE_CUDA=ON",
         "-DTRANSCRIBE_BUILD_TESTS=OFF",
+        # The sweep's validation/debug paths rely on the numerical-parity hooks
+        # (reference-mel injection + per-layer dumps), so compile them in here.
+        "-DTRANSCRIBE_ENABLE_VALIDATION_HOOKS=ON",
         f"-DCMAKE_CUDA_ARCHITECTURES={arch}",
         "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
         "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
@@ -258,94 +261,6 @@ def build(arch: str, build_dir: str, clean: bool = False) -> None:
 # ---------------------------------------------------------------------------
 # 2. Dataset prefetch (idempotent; cached on /data volume).
 # ---------------------------------------------------------------------------
-
-@app.function(
-    image=image, timeout=1800, gpu="L4",
-    secrets=[modal.Secret.from_name("huggingface-secret")],
-    volumes={
-        "/build": build_vol,
-        "/root/.cache/huggingface": hf_vol,
-        "/data": data_vol,
-    },
-)
-def debug_dump(model_repo: str, model_file: str) -> dict:
-    """Run transcribe-cli once on jfk.wav with TRANSCRIBE_MEDASR_DEBUG_STATS
-    set, capturing stderr (where the encoder writes per-block tensor stats).
-    Returns the model_repo, model_file, and full stderr string so the local
-    caller can grep for the first divergence point between F16 and Q4_K_M.
-    """
-    from huggingface_hub import hf_hub_download
-    prepare_work()
-    build_dir = _build_dir("L4")
-    build.remote(arch=GPU_TO_ARCH["L4"], build_dir=build_dir, clean=False)
-    # build runs in a different container that commits build_vol; our view
-    # of /build is stale until we reload the volume.
-    build_vol.reload()
-    cli_path = f"{build_dir}/bin/transcribe-cli"
-    assert os.path.exists(cli_path), f"missing CLI: {cli_path}"
-    model_path = hf_hub_download(
-        repo_id=model_repo,
-        filename=model_file,
-        token=os.environ["HF_TOKEN"],
-    )
-    audio = "/work/samples/jfk.wav"
-    if not os.path.exists(audio):
-        # samples/** is excluded from the source mount (it holds the multi-GB
-        # LibriSpeech extract), so synthesize a short 16 kHz tone — enough to
-        # exercise model load + first compute, which is where load-time CUDA
-        # crashes surface.
-        import wave, struct, math
-        audio = "/tmp/_debug_tone.wav"
-        with wave.open(audio, "w") as w:
-            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
-            w.writeframes(b"".join(
-                struct.pack("<h", int(3000 * math.sin(2 * math.pi * 220 * i / 16000)))
-                for i in range(16000 * 3)))
-    # TRANSCRIBE_DUMP_DIR pins intermediate tensors via ggml_set_output so
-    # ggml_backend_tensor_get reads each one before the scheduler reuses
-    # its buffer slot (otherwise post_* and early blocks alias to the
-    # final-compute scratch state and the stats are wrong). The dump
-    # files written into /tmp/dumps are not retrieved.
-    os.makedirs("/tmp/dumps", exist_ok=True)
-    env = {**os.environ,
-           "TRANSCRIBE_MEDASR_DEBUG_STATS": "1",
-           "TRANSCRIBE_DUMP_DIR": "/tmp/dumps"}
-    r = subprocess.run(
-        [cli_path, "-m", model_path, "--threads", "1", "-q", audio],
-        cwd="/work", env=env, capture_output=True, text=True,
-    )
-    return {
-        "model_repo": model_repo,
-        "model_file": model_file,
-        "rc": r.returncode,
-        "stdout": r.stdout,
-        "stderr": r.stderr,
-    }
-
-
-@app.local_entrypoint()
-def dump_debug(model_repo: str, model_file: str) -> None:
-    """Local entrypoint: `modal run scripts/wer/remote/modal_sweep.py::dump_debug
-    --model-repo handy-computer/medasr-gguf --model-file medasr-Q4_K_M.gguf`.
-    Prints stderr lines that contain STATS so we can diff F16 vs Q4_K_M."""
-    result = debug_dump.remote(model_repo, model_file)
-    print(f"=== {result['model_repo']} / {result['model_file']} (rc={result['rc']}) ===")
-    if result["rc"] != 0:
-        # Crash case (e.g. CUDA load/compute abort): the filtered STATS view
-        # would hide the actual error, so dump full stderr + stdout verbatim.
-        print("--- FULL STDERR (rc != 0) ---")
-        print(result["stderr"])
-        print("--- FULL STDOUT (rc != 0) ---")
-        print(result["stdout"])
-        return
-    for line in result["stderr"].splitlines():
-        if "STATS " in line or "FAIL" in line.upper() or "ERR" in line.upper():
-            print(line)
-    print(f"--- transcript from stdout ---")
-    for line in result["stdout"].splitlines():
-        if line.startswith("text:"):
-            print(line)
-
 
 @app.function(
     image=image,

@@ -178,7 +178,7 @@ bool kv_cache_init_batched(WhisperKvCache & cache,
                            ggml_type        kv_type);
 
 // Per-stage timing counters. Always-on (timestamps are negligible); printing
-// is opt-in via TRANSCRIBE_WHISPER_PROFILE=1. Reset at the top of whisper_run.
+// is opt-in via TRANSCRIBE_PERF_DEBUG. Reset at the top of whisper_run.
 struct WhisperPerfStage {
     int64_t total_us = 0;
     int     count    = 0;
@@ -220,7 +220,7 @@ struct WhisperPerf {
     WhisperPerfStage step_cpu;
 
     // CPU-section sub-counters. Always populated (the timestamps are
-    // negligible) but only printed when TRANSCRIBE_WHISPER_PROFILE
+    // negligible) but only printed when TRANSCRIBE_PERF_DEBUG
     // includes "cpu" or "all". Splits the prompt_cpu / step_cpu
     // total into the four sub-stages of post-graph processing.
     WhisperPerfStage prompt_cpu_suppress;
@@ -313,7 +313,7 @@ struct WhisperSession final : public transcribe_session {
     // at the top of each run alongside cc->clear_result().
     std::vector<transcribe_whisper_chunk_trace> chunk_traces;
 
-    // Per-stage timing counters; summary printed when TRANSCRIBE_WHISPER_PROFILE=1.
+    // Per-stage timing counters; summary printed when TRANSCRIBE_PERF_DEBUG is set.
     WhisperPerf perf;
 
     // Reusable scratch for the multinomial T>0 sampler, sized to vocab_size on

@@ -18,7 +18,7 @@ relative-position. The block is therefore hand-built in
 
 | Stage | Reference location | Output shape | Gate tensor | ggml / C++ pattern | In-tree analog |
 |-------|--------------------|--------------|-------------|--------------------|----------------|
-| log-mel | `feature_extraction_lasr.LasrFeatureExtractor.__call__` | `[T_mel=floor((n_pcm-400)/160)+1, 128]` f32 | `mel.in` | host-side `transcribe::MelFrontend`; LASR knobs require `center=false`, `pad_mode="zero"`, `pre_emphasis=0.0`, `normalize="none"`, `window=ckpt`, `filterbank=ckpt`, `log_compression="log_clamp_1e-5"`. Step 2 brings up the encoder with `TRANSCRIBE_MEDASR_MEL_FROM_REF=<ref_dir>` so Step 7 (frontend parity) is the first place the C++ mel actually runs. | `src/transcribe-mel.{h,cpp}` (extend with `center=false` knob and `log_compression` enum) |
+| log-mel | `feature_extraction_lasr.LasrFeatureExtractor.__call__` | `[T_mel=floor((n_pcm-400)/160)+1, 128]` f32 | `mel.in` | host-side `transcribe::MelFrontend`; LASR knobs require `center=false`, `pad_mode="zero"`, `pre_emphasis=0.0`, `normalize="none"`, `window=ckpt`, `filterbank=ckpt`, `log_compression="log_clamp_1e-5"`. Step 2 brings up the encoder with `TRANSCRIBE_MEL_FROM_REF=<ref_dir>` so Step 7 (frontend parity) is the first place the C++ mel actually runs. | `src/transcribe-mel.{h,cpp}` (extend with `center=false` knob and `log_compression` enum) |
 
 For jfk.wav (176 400 samples): T_mel = (176 400 − 400)/160 + 1 = 1 099 frames — reference dump rounds to 1 098 (one trailing frame dropped because LASR's manual unfold does `len // win` floor on the residual; not centered). The forward-map records the formula; bit-exact frame count is a Step 7 parity check.
 

@@ -114,8 +114,8 @@ struct CanaryQwenSession final : public transcribe_session {
     std::vector<float> enc_host;      // perception output [hidden=2048, T_enc]
 
     // Reference (NeMo SALM) ran flash off; we follow suit by default for
-    // tightest tensor parity. Override with TRANSCRIBE_FLASH_DECODER=1
-    // (or =encoder) at runtime.
+    // tightest tensor parity. Override with TRANSCRIBE_NO_FLASH /
+    // TRANSCRIBE_FORCE_FLASH (both stages) at runtime.
     bool encoder_use_flash = false;
     bool decoder_use_flash = false;
 

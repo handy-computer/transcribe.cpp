@@ -42,6 +42,28 @@ bool enabled();
 // as the dumper is enabled. Useful for tests.
 const char * dump_dir();
 
+// Validation-hook gating ------------------------------------------------------
+//
+// The reference-mel injection (TRANSCRIBE_MEL_FROM_REF) and the per-layer
+// tensor dumps (TRANSCRIBE_DUMP_ALL_BLOCKS / TRANSCRIBE_DUMP_SUB_BLOCKS) are
+// numerical-parity hooks for porting/validation. They are compiled in only when
+// the library is built with -DTRANSCRIBE_ENABLE_VALIDATION_HOOKS=ON (see the
+// CMake option). Release builds leave them out.
+
+// True if the library was compiled with validation hooks enabled.
+bool validation_hooks_enabled();
+
+// Per-layer block dump opt-in (TRANSCRIBE_DUMP_ALL_BLOCKS). Always false unless
+// the library was built with validation hooks. The env var name lives only in
+// transcribe-debug.cpp (behind the compile guard) so it is absent from the
+// strings of a release binary.
+bool dump_all_blocks_requested();
+
+// TRANSCRIBE_DUMP_SUB_BLOCKS spec (CSV of block indices to dump sub-layer
+// activations for) or nullptr. Always nullptr unless built with validation
+// hooks.
+const char * dump_sub_blocks_spec();
+
 // Push/pop a name prefix that gets prepended to every subsequent
 // dump_tensor / dump_host_f32 call. Used by buffered streaming to
 // scope per-chunk intermediate dumps (e.g. "stream.chunk.5.") so the

@@ -27,6 +27,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -716,7 +717,7 @@ transcribe_status init_context(
     // Flash defaults: encoder off (the FastConformer rel-pos path has a manual
     // rel_shift trick ggml_flash_attn_ext doesn't subsume), decoder ON (~2.4x
     // decode speedup on jfk.wav, the Qwen3 step graph is dispatch-bound on
-    // Metal). TRANSCRIBE_FLASH_DECODER=1 (or =encoder) overrides.
+    // Metal). TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH override both stages.
     cc->encoder_use_flash = false;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash,
@@ -1057,7 +1058,7 @@ transcribe_status run(transcribe_session *      context,
                                 0, mask.size() * sizeof(ggml_fp16_t));
     }
 
-    const bool profile_decode = (std::getenv("TRANSCRIBE_PROFILE_DECODE") != nullptr);
+    const bool profile_decode = transcribe::env::flag("TRANSCRIBE_PERF_DEBUG");
     int64_t t_prefill_us = 0;
     int64_t t_prefill_compute_us = 0;
     {

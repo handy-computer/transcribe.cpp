@@ -1,7 +1,7 @@
 // arch/whisper/model.cpp - Whisper ASR family handler.
 //
 // Normal inference uses the C++ mel frontend and the autoregressive decoder
-// path below; TRANSCRIBE_WHISPER_MEL_FROM_REF can inject a reference mel tensor
+// path below; TRANSCRIBE_MEL_FROM_REF can inject a reference mel tensor
 // to isolate encoder/decoder drift during numerical validation.
 
 #include "whisper.h"
@@ -13,6 +13,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -305,7 +306,7 @@ bool ensure_compute_ctx(WhisperSession * cc, size_t mem) {
 }
 
 // Print the per-stage performance summary collected during the most
-// recent whisper_run. Opt-in via TRANSCRIBE_WHISPER_PROFILE=1 — gated
+// recent whisper_run. Opt-in via TRANSCRIBE_PERF_DEBUG — gated
 // by the caller, this helper just formats the counters. Output is one
 // summary line per stage (encoder / cross / prompt / step) plus a
 // per-step average for the steady-state generation loop, which is the
@@ -372,11 +373,11 @@ void print_whisper_perf(const WhisperPerf & p) {
         avg_us(p.step_compute), avg_us(p.step_tensor_get),
         avg_us(p.step_cpu));
 
-    // CPU sub-section breakdown — opt-in via TRANSCRIBE_WHISPER_PROFILE
-    // values that contain "cpu" or "all". Keeps the default profile
-    // output unchanged for existing benchmarks while still surfacing
+    // CPU sub-section breakdown — opt-in via TRANSCRIBE_PERF_DEBUG values
+    // that contain "cpu" or "all". Keeps the default profile output
+    // unchanged for existing benchmarks while still surfacing
     // suppress/timestamp/sample/logprob splits when needed.
-    const char * profile_env = std::getenv("TRANSCRIBE_WHISPER_PROFILE");
+    const char * profile_env = transcribe::env::str("TRANSCRIBE_PERF_DEBUG");
     bool show_cpu_breakdown = false;
     if (profile_env != nullptr) {
         const std::string v = profile_env;
@@ -409,8 +410,7 @@ void print_whisper_perf(const WhisperPerf & p) {
 }
 
 bool whisper_perf_enabled() {
-    const char * s = std::getenv("TRANSCRIBE_WHISPER_PROFILE");
-    return s != nullptr && s[0] != '\0' && s[0] != '0';
+    return transcribe::env::flag("TRANSCRIBE_PERF_DEBUG");
 }
 
 // load
@@ -990,6 +990,7 @@ float logprob_of_token_hf(
     return logits[token_id] * rescale_T - log_Z;
 }
 
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 // Load 3000 * 80 f32 floats from <dir>/enc.mel.in.f32. Layout on disk
 // matches the reference dump: row-major (3000, 80) — exactly what we
 // need to upload into the ggml ne=[80, 3000] input tensor via a flat
@@ -1029,6 +1030,7 @@ transcribe_status load_mel_from_ref(const char *         ref_dir,
     }
     return TRANSCRIBE_OK;
 }
+#endif // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 
 } // namespace
 
@@ -1290,9 +1292,10 @@ transcribe_status whisper_run(
 
     // ----- Mel frontend -----
     //
-    //   1. TRANSCRIBE_WHISPER_MEL_FROM_REF=<dir> — debug knob that reads the
-    //      reference mel dump from disk so encoder drift can be isolated from
-    //      C++ mel drift. The default path exercises the production frontend.
+    //   1. TRANSCRIBE_MEL_FROM_REF=<dir> — validation hook (compiled in only
+    //      with -DTRANSCRIBE_ENABLE_VALIDATION_HOOKS) that reads the reference
+    //      mel dump from disk so encoder drift can be isolated from C++ mel
+    //      drift. The default path exercises the production frontend.
     //
     //   2. C++ MelFrontend (default):
     //      - Short-form (n_samples <= fe_n_samples): pad PCM to fe_n_samples
@@ -1312,9 +1315,9 @@ transcribe_status whisper_run(
 
     const int64_t t_mel_start = ggml_time_us();
     int total_mel_frames = 0;
-    if (const char * ref_dir = std::getenv("TRANSCRIBE_WHISPER_MEL_FROM_REF");
-        ref_dir != nullptr && ref_dir[0] != '\0')
-    {
+    bool mel_from_ref = false;
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    if (const char * ref_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF")) {
         if (const transcribe_status st = load_mel_from_ref(
                 ref_dir, n_mels, n_mel_frames_per_chunk, cc->mel_buf);
             st != TRANSCRIBE_OK)
@@ -1322,7 +1325,10 @@ transcribe_status whisper_run(
             return st;
         }
         total_mel_frames = n_mel_frames_per_chunk;
-    } else {
+        mel_from_ref = true;
+    }
+#endif
+    if (!mel_from_ref) {
         if (!cm->mel.has_value()) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: model has no MelFrontend "
@@ -3341,7 +3347,7 @@ transcribe_status whisper_run_batch(
         have_result[b] = 1;
     }
 
-    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+    if (transcribe::env::flag("TRANSCRIBE_PERF_DEBUG")) {
         int n_serial = 0; for (int b = 0; b < n; ++b) n_serial += needs_serial[b] ? 1 : 0;
         log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "whisper run_batch: n=%d batched=%d serial=%d tiers=%d want_ts=%d "

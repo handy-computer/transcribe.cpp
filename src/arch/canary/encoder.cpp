@@ -26,11 +26,9 @@ namespace conf = transcribe::conformer;
 // Direct dw on every backend for the in-block site; im2col for pre-encode
 // (canary's encoder geometry matches parakeet's at the dw site).
 bool detect_direct_dw_in_block(const char * /*backend*/) {
-    const char * env = std::getenv("TRANSCRIBE_CONV_DIRECT_DW");
-    if (env != nullptr) return true;
-    env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW");
-    if (env != nullptr) return false;
-    return true;
+    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW",
+                                     "TRANSCRIBE_CONV_NO_DIRECT_DW",
+                                     /*backend_default=*/true);
 }
 
 conf::PreEncodeView to_view(const CanaryPreEncode & pe) {

@@ -175,6 +175,6 @@ uv run scripts/validate.py all --family whisper --variant whisper-medium.en
 cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
 cmake --build build
 
-TRANSCRIBE_REAL_WHISPER_GGUF=$PWD/models/whisper-medium.en/whisper-medium.en-Q8_0.gguf \
+TRANSCRIBE_WHISPER_GGUF=$PWD/models/whisper-medium.en/whisper-medium.en-Q8_0.gguf \
   ctest --test-dir build --output-on-failure -R whisper
 ```
