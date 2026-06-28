@@ -47,7 +47,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from gguf import GGUFWriter, GGUFValueType
+from gguf import GGUFWriter, GGUFValueType, LlamaFileType
 from safetensors.torch import safe_open
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -452,6 +452,26 @@ def add_tensor(writer: GGUFWriter, name: str, t: torch.Tensor) -> None:
         add_bf16(writer, name, t)
 
 
+def compute_size_label(total_params: int) -> str:
+    if total_params >= 1_000_000_000:
+        return f"{total_params / 1_000_000_000:.1f}B"
+    if total_params >= 1_000_000:
+        return f"{total_params / 1_000_000:.0f}M"
+    return f"{total_params / 1_000:.0f}K"
+
+
+def total_safetensors_params(model_dir: Path) -> int:
+    """Element count summed across all safetensors shards — drives the coarse
+    general.size_label bucket. get_slice().get_shape() reads only the header,
+    so no tensor data is materialized."""
+    total = 0
+    for sf in sorted(model_dir.glob("*.safetensors")):
+        with safe_open(sf, framework="pt") as h:
+            for k in h.keys():
+                total += int(np.prod(h.get_slice(k).get_shape()))
+    return total
+
+
 # ----- Main -----------------------------------------------------------------
 
 
@@ -497,6 +517,9 @@ def main(argv: list[str]) -> int:
     out_path = outdir / f"{variant}-{REF_DTYPE}.gguf"
     print(f"Writing GGUF: {out_path}")
 
+    size_label = compute_size_label(total_safetensors_params(model_dir))
+    print(f"  params: ~{size_label}")
+
     writer = gguf_writer(str(out_path), "granite_speech_nar")
 
     # ---- general.* ----
@@ -505,6 +528,8 @@ def main(argv: list[str]) -> int:
         writer,
         name="Granite Speech 4.1 2B NAR",
         basename="granite-speech-nar",
+        size_label=size_label,
+        file_type=int(LlamaFileType.MOSTLY_BF16),
         languages=languages,
         author="IBM",
         organization="ibm-granite",

@@ -477,6 +477,61 @@ def _infer_languages(variant: str) -> list[str]:
     return [tail]
 
 
+# Human-friendly pieces for composing general.name from the variant slug.
+# UsefulSensors ships moonshine-<size>[-<lang>]; this offline converter handles
+# the base/tiny sizes plus the 12 language variants
+# (moonshine-{tiny,base}-{ar,ja,ko,uk,vi,zh}). Streaming variants are a separate
+# converter (convert-moonshine_streaming.py).
+_SIZE_DISPLAY = {
+    "tiny":   "Tiny",
+    "base":   "Base",
+    "small":  "Small",
+    "medium": "Medium",
+    "large":  "Large",
+}
+_LANGUAGE_DISPLAY = {
+    "ar": "Arabic",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "uk": "Ukrainian",
+    "vi": "Vietnamese",
+    "zh": "Chinese",
+    "en": "English",
+}
+
+
+def _display_name(variant: str) -> str:
+    """Compose general.name from the variant slug.
+
+        moonshine-tiny      → "Moonshine Tiny"
+        moonshine-base      → "Moonshine Base"
+        moonshine-tiny-vi   → "Moonshine Tiny (Vietnamese)"
+        moonshine-base-zh   → "Moonshine Base (Chinese)"
+
+    Raises on an unrecognized size or language suffix so a typo fails the
+    build loudly rather than shipping a wrong title.
+    """
+    parts = variant.lower().split("-")
+    if parts[0] != "moonshine" or len(parts) not in (2, 3):
+        raise ValueError(f"unrecognized moonshine variant slug: {variant!r}")
+    size = parts[1]
+    if size not in _SIZE_DISPLAY:
+        raise ValueError(
+            f"unknown moonshine size {size!r} in variant {variant!r}; "
+            f"add it to _SIZE_DISPLAY"
+        )
+    name = f"Moonshine {_SIZE_DISPLAY[size]}"
+    if len(parts) == 3:
+        lang = parts[2]
+        if lang not in _LANGUAGE_DISPLAY:
+            raise ValueError(
+                f"unknown moonshine language suffix {lang!r} in variant "
+                f"{variant!r}; add it to _LANGUAGE_DISPLAY"
+            )
+        name += f" ({_LANGUAGE_DISPLAY[lang]})"
+    return name
+
+
 def convert(model_dir: Path, out_path: Path, variant: str,
             languages: list[str] | None = None,
             repo_id: str | None = None) -> None:
@@ -540,15 +595,9 @@ def convert(model_dir: Path, out_path: Path, variant: str,
         writer = gguf_writer(str(out_path), "moonshine")
 
         # ---- general.* ----
-        _DISPLAY_NAMES = {
-            "moonshine-tiny": "Moonshine Tiny",
-            "moonshine-base": "Moonshine Base",
-        }
-        if variant not in _DISPLAY_NAMES:
-            raise ValueError(f"unknown moonshine variant slug: {variant!r}")
         add_general_identity(
             writer,
-            name=_DISPLAY_NAMES[variant],
+            name=_display_name(variant),
             basename="moonshine",
             size_label=size_label,
             file_type=int(REFERENCE_FILE_TYPE),

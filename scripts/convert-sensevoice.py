@@ -449,6 +449,7 @@ def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None =
         # consumers see the real license, and retain the MODEL_LICENSE link
         # the agreement's attribution clause (2.2) requires.
         license="FunASR-Model-License-1.1",
+        license_name="FunASR Model Open Source License Agreement v1.1",
         license_link="https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
         repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
         url="https://huggingface.co/FunAudioLLM/SenseVoiceSmall",

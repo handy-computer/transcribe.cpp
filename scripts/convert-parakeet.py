@@ -325,19 +325,22 @@ VARIANT_PROFILES: dict[str, dict] = {
         "basename": "parakeet-rnnt",
         "head_kind": "rnnt",
         "expected_vocab_size": 13087,
-        # 40 BCP-47 locales from the model card's transcription-ready
-        # tier (19) + broad-coverage tier (13) + adaptation-ready tier
-        # (8). The full prompt_dictionary read from the .nemo carries
-        # extra aliases (en, en-US, enGB ...) — those are emitted in
-        # the prompt KVs, not here.
+        # 32 BCP-47 locales the model card supports for production
+        # transcription: transcription-ready tier (19) + broad-coverage
+        # tier (13). The 8 "adaptation-ready" locales (el-GR, lt-LT,
+        # lv-LV, mt-MT, sl-SI, he-IL, th-TH, nn-NO) are recognized by the
+        # tokenizer but require fine-tuning for real transcription, so
+        # they are NOT advertised in general.languages. They remain
+        # selectable through the prompt dictionary
+        # (stt.parakeet.prompt.dictionary.*), which still carries all 40
+        # locales + aliases (en, en-US, enGB ...) + the auto slot — that
+        # is the conditioning table, not the transcription-support claim.
         "languages": [
             "en-US", "en-GB", "es-US", "es-ES", "fr-FR", "fr-CA", "it-IT",
             "pt-BR", "pt-PT", "nl-NL", "de-DE", "tr-TR", "ru-RU", "ar-AR",
             "hi-IN", "ja-JP", "ko-KR", "vi-VN", "uk-UA",
             "pl-PL", "sv-SE", "cs-CZ", "nb-NO", "da-DK", "bg-BG", "fi-FI",
             "hr-HR", "sk-SK", "zh-CN", "hu-HU", "ro-RO", "et-EE",
-            "el-GR", "lt-LT", "lv-LV", "mt-MT", "sl-SI", "he-IL", "th-TH",
-            "nn-NO",
         ],
         "lang_detect": True,
         "has_prompt": True,
@@ -1388,6 +1391,32 @@ def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None
     writer.add_string("stt.variant", profile["variant"])
     if profile["lang_detect"]:
         writer.add_bool("stt.capability.lang_detect", True)
+
+    # Streaming capability. Derived from the encoder attention geometry so
+    # the header bool can never disagree with what the C++ loader computes:
+    # this mirrors `Derive supports_streaming from hparams` in
+    # src/arch/parakeet/model.cpp exactly —
+    #   chunked_limited         + (L, R) >= 0          -> cache-aware streaming
+    #                                                      (nemotron-*-streaming)
+    #   chunked_limited_with_rc + non-empty (L, C, R)  -> buffered streaming
+    #                                                      (parakeet-unified-en-0.6b)
+    #   regular / anything else                         -> offline only
+    # Emitted unconditionally (true AND false) so a header-only reader gets the
+    # correct answer without replaying this derivation. The loader still treats
+    # the architecture as the floor and ignores a contradictory KV.
+    cache_aware_streaming = (
+        hp["enc_att_context_style"] == "chunked_limited"
+        and hp["enc_att_context_left"] >= 0
+        and hp["enc_att_context_right"] >= 0
+    )
+    buffered_streaming = (
+        hp["enc_att_context_style"] == "chunked_limited_with_rc"
+        and bool(hp.get("enc_att_chunk_left_choices"))
+        and bool(hp.get("enc_att_chunk_chunk_choices"))
+        and bool(hp.get("enc_att_chunk_right_choices"))
+    )
+    writer.add_bool("stt.capability.streaming",
+                    cache_aware_streaming or buffered_streaming)
 
     # Head discriminator. The C++ loader currently always reads TDT
     # KV (durations etc.); Stage 4 will gate predictor/joint/tdt
