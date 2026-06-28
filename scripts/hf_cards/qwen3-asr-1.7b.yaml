@@ -2,7 +2,7 @@
 # Consumed by scripts/hf_cards/generate.py.
 
 hf_repo: Qwen/Qwen3-ASR-1.7B
-target_repo: handy-computer/qwen3-asr-1.7b-gguf
+target_repo: handy-computer/Qwen3-ASR-1.7B-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/qwen3-asr-1.7b.md
 
 upstream_commit: 7278e1e70fe206f11671096ffdd38061171dd6e5
