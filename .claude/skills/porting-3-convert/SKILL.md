@@ -53,9 +53,7 @@ writer = gguf_writer(str(out_path), "<arch>")
 (`tokenizer.ggml.tokens` / `scores` / `token_type` / `merges`,
 `tokenizer.chat_template`) to a trailer after all scalar metadata, so remote
 consumers can range-read the small metadata prefix without pulling the multi-MB
-tokenizer tables. It happens at write time regardless of emission order — emit
-KVs in whatever order is convenient; never hand-order them or call
-`gguf.GGUFWriter` (which would skip the trailer layout).
+tokenizer tables.
 
 **Per-tensor dtype bucketing.** Converters choose each tensor's storage dtype via
 `reference_dtype_for()` from `lib.gguf_common` (biases / norm scales / positional
@@ -162,10 +160,6 @@ regressed. Fast, no model files:
 ```bash
 uv run scripts/lib/test_quant_policy_sync.py
 ```
-
-If Step 1 added or relied on a new Norm/Conv bucketing rule, this gate is also
-where you confirm the test corpus was updated to cover this family — otherwise a
-future BF16/F16-reference family reusing the name drifts silently. Must exit 0.
 
 ### Step 6: Sign-off
 
