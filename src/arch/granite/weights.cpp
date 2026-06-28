@@ -29,12 +29,12 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // ----- Identity -----
+    // Identity.
     if (auto st = read_optional_string_kv(
             gguf, "stt.variant", kFamilyTag, "", hp.variant);
         st != TRANSCRIBE_OK) return st;
 
-    // ----- Encoder (Conformer) -----
+    // Encoder (Conformer).
     if (auto st = read_required_u32_kv(gguf, "stt.granite.encoder.n_layers", kFamilyTag, hp.enc_n_layers); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.encoder.hidden", kFamilyTag, hp.enc_hidden); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.encoder.n_heads", kFamilyTag, hp.enc_n_heads); st != TRANSCRIBE_OK) return st;
@@ -63,7 +63,7 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
         }
     }
 
-    // ----- Projector (BLIP-2 Q-Former) -----
+    // Projector (BLIP-2 Q-Former).
     if (auto st = read_required_u32_kv(gguf, "stt.granite.projector.n_layers", kFamilyTag, hp.prj_n_layers); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.projector.hidden", kFamilyTag, hp.prj_hidden); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.projector.intermediate", kFamilyTag, hp.prj_intermediate); st != TRANSCRIBE_OK) return st;
@@ -75,7 +75,7 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
     if (auto st = read_required_u32_kv(gguf, "stt.granite.projector.max_pos_emb", kFamilyTag, hp.prj_max_pos_emb); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_string_kv(gguf, "stt.granite.projector.position_embedding_type", kFamilyTag, hp.prj_pos_embed_type); st != TRANSCRIBE_OK) return st;
 
-    // ----- Text LM (Granite-4) -----
+    // Text LM (Granite-4).
     if (auto st = read_required_u32_kv(gguf, "stt.granite.decoder.n_layers", kFamilyTag, hp.dec_n_layers); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.decoder.hidden_size", kFamilyTag, hp.dec_hidden); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.decoder.intermediate_size", kFamilyTag, hp.dec_intermediate); st != TRANSCRIBE_OK) return st;
@@ -96,12 +96,12 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
     if (auto st = read_required_f32_kv(gguf, "stt.granite.decoder.attention_multiplier", kFamilyTag, hp.dec_attention_multiplier); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_f32_kv(gguf, "stt.granite.decoder.residual_multiplier", kFamilyTag, hp.dec_residual_multiplier); st != TRANSCRIBE_OK) return st;
 
-    // ----- Audio fusion -----
+    // Audio fusion.
     if (auto st = read_required_u32_kv(gguf, "stt.granite.audio_token_id", kFamilyTag, hp.audio_token_id); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.downsample_rate", kFamilyTag, hp.downsample_rate); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite.window_size", kFamilyTag, hp.window_size); st != TRANSCRIBE_OK) return st;
 
-    // ----- Frontend (torchaudio MelSpectrogram) -----
+    // Frontend (torchaudio MelSpectrogram).
     if (auto st = read_required_string_kv(gguf, "stt.frontend.type", kFamilyTag, hp.fe_type); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels", kFamilyTag, hp.fe_num_mels); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate", kFamilyTag, hp.fe_sample_rate); st != TRANSCRIBE_OK) return st;
@@ -118,7 +118,7 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
     if (auto st = read_optional_string_kv(gguf, "stt.frontend.mel_norm", kFamilyTag, "htk", hp.fe_mel_norm); st != TRANSCRIBE_OK) return st;
     if (auto st = read_optional_bool_kv(gguf, "stt.frontend.center", kFamilyTag, true, hp.fe_center); st != TRANSCRIBE_OK) return st;
 
-    // ----- Cross-field invariants -----
+    // Cross-field invariants.
     if (hp.enc_n_layers <= 0 || hp.enc_hidden <= 0 || hp.enc_n_heads <= 0 ||
         hp.enc_head_dim <= 0 || hp.enc_input_dim <= 0 || hp.enc_output_dim <= 0 ||
         hp.enc_feedforward_mult <= 0 || hp.enc_conv_kernel_size <= 0 ||
@@ -253,9 +253,7 @@ transcribe_status read_granite_hparams(const gguf_context * gguf,
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Weights
-// ---------------------------------------------------------------------------
+// Weights.
 
 namespace {
 
@@ -301,7 +299,7 @@ transcribe_status build_granite_weights(ggml_context *         ctx_meta,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // ----- Derived dims -----
+    // Derived dims.
     const int64_t enc_h        = hp.enc_hidden;
     const int64_t enc_in       = hp.enc_input_dim;
     const int64_t enc_out      = hp.enc_output_dim;
@@ -330,7 +328,7 @@ transcribe_status build_granite_weights(ggml_context *         ctx_meta,
     const int64_t q_out     = dec_nh  * dec_hd;
     const int64_t kv_out    = dec_nkv * dec_hd;
 
-    // ----- Encoder: top-level -----
+    // Encoder: top-level.
     GET_LIN(weights.enc_top.input_linear_w, "enc.input_linear.weight", enc_in,  enc_h);
     GET_F32(weights.enc_top.input_linear_b, "enc.input_linear.bias",   enc_h);
     GET_LIN(weights.enc_top.ctc_proj_w,     "enc.ctc_proj.weight",     enc_h,   enc_out);
@@ -338,7 +336,7 @@ transcribe_status build_granite_weights(ggml_context *         ctx_meta,
     GET_LIN(weights.enc_top.ctc_bypass_w,   "enc.ctc_bypass.weight",   enc_out, enc_h);
     GET_F32(weights.enc_top.ctc_bypass_b,   "enc.ctc_bypass.bias",     enc_h);
 
-    // ----- Encoder: per-block -----
+    // Encoder: per-block.
     weights.enc_blocks.assign(hp.enc_n_layers, GraniteEncBlock{});
     for (int i = 0; i < hp.enc_n_layers; ++i) {
         auto & b = weights.enc_blocks[i];
@@ -402,7 +400,7 @@ transcribe_status build_granite_weights(ggml_context *         ctx_meta,
         GET_F32(b.norm_post_b, lname("enc.blocks.%d.norm_post.bias",   i), enc_h);
     }
 
-    // ----- Projector: top-level -----
+    // Projector: top-level.
     //
     // proj.query has shape (1, num_queries, hidden) in PyTorch, which
     // is ne[hidden, num_queries, 1] in ggml. num_queries is not in KV;
@@ -421,7 +419,7 @@ transcribe_status build_granite_weights(ggml_context *         ctx_meta,
     GET_F32(weights.proj_top.qformer_final_norm_b,
             "proj.qformer.final_norm.bias",   prj_h);
 
-    // ----- Projector: per-Q-Former-layer -----
+    // Projector: per-Q-Former-layer.
     weights.proj_blocks.assign(prj_n_layers, GraniteProjBlock{});
     for (int i = 0; i < prj_n_layers; ++i) {
         auto & b = weights.proj_blocks[i];
@@ -461,10 +459,10 @@ transcribe_status build_granite_weights(ggml_context *         ctx_meta,
         GET_F32(b.norm_ffn_b, lname("proj.qformer.blocks.%d.norm_ffn.bias",   i), prj_h);
     }
 
-    // ----- Text LM: embed -----
+    // Text LM: embed.
     GET_LIN(weights.dec_embed.token_w, "dec.token_embd.weight", dec_h, dec_vocab);
 
-    // ----- Text LM: blocks -----
+    // Text LM: blocks.
     weights.dec_blocks.assign(hp.dec_n_layers, GraniteDecBlock{});
     for (int i = 0; i < hp.dec_n_layers; ++i) {
         auto & b = weights.dec_blocks[i];
@@ -485,7 +483,7 @@ transcribe_status build_granite_weights(ggml_context *         ctx_meta,
         }
     }
 
-    // ----- Text LM: final norm + (conditional) output -----
+    // Text LM: final norm + (conditional) output.
     GET_F32(weights.dec_final.norm_w, "dec.output_norm.weight", dec_h);
     if (hp.dec_tie_word_embeddings) {
         // Tied head (granite-speech-4.1-2b-plus): no dec.output.weight

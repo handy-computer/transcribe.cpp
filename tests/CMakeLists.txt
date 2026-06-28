@@ -489,7 +489,7 @@ endif()
 #
 # Gated two ways: by the CMake option above (so the binary is not
 # built unless the developer opts in) AND by the runtime
-# TRANSCRIBE_REAL_PARAKEET_GGUF env var (so a configured-but-no-file
+# TRANSCRIBE_PARAKEET_GGUF env var (so a configured-but-no-file
 # build still skips the test cleanly via SKIP_RETURN_CODE 77 instead
 # of failing the suite).
 
@@ -524,7 +524,7 @@ endif()
 #
 # Same gating as the other real-model tests: built only when
 # TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON; skipped at run time when
-# TRANSCRIBE_REAL_PARAKEET_GGUF is unset. The reference text is
+# TRANSCRIBE_PARAKEET_GGUF is unset. The reference text is
 # baked into the test source, not a golden file on disk, so the
 # test is hermetic — it does not need a golden generation step.
 
@@ -727,7 +727,7 @@ endif()
 #
 # Same gating as the Parakeet real-model tests: built only when
 # TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON. At run time,
-# TRANSCRIBE_COHERE_MODEL must point at a Cohere ASR GGUF. Exits 77
+# TRANSCRIBE_COHERE_GGUF must point at a Cohere ASR GGUF. Exits 77
 # (CTest "skipped") when the env var is unset or the file is missing.
 
 if(TRANSCRIBE_BUILD_REAL_MODEL_TESTS)
@@ -841,7 +841,7 @@ endif()
 #
 # Gated two ways: by TRANSCRIBE_BUILD_REAL_MODEL_TESTS (so the binary
 # is not built unless the developer opts in) AND by the runtime
-# TRANSCRIBE_COHERE_MODEL env var (same var that cohere_e2e_smoke.cpp
+# TRANSCRIBE_COHERE_GGUF env var (same var that cohere_e2e_smoke.cpp
 # uses, so a single export drives both tests). Skipped via
 # SKIP_RETURN_CODE 77 when the env var is unset or the file is
 # missing.

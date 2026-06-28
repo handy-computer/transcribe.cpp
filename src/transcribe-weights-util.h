@@ -79,12 +79,9 @@ ggml_tensor * find_tensor(ggml_context *                    ctx_meta,
 // Format a per-layer tensor name. The caller passes a printf fmt
 // containing exactly one %d; the layer index is substituted. Returns
 // a pointer to a thread-local static buffer — the next call within the
-// same thread invalidates the previous pointer.
-//
-// This previously lived duplicated in every per-family weights.cpp.
-// Keeping it as const char * avoids touching every GET_* macro call
-// site (find_tensor takes const char *). The 128-byte buffer is ample
-// for any realistic layer name (longest is ~50 chars + 3-digit index).
+// same thread invalidates the previous pointer. const char * (not
+// std::string) so GET_* macro call sites pass straight to find_tensor.
+// The 128-byte buffer is ample for any realistic layer name.
 inline const char * lname(const char * fmt, int layer_idx) {
     thread_local char buf[128];
     std::snprintf(buf, sizeof(buf), fmt, layer_idx);

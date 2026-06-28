@@ -1,57 +1,21 @@
 // src/conformer/conformer.h - shared Conformer encoder helpers.
 //
-// Both Parakeet and Cohere-ASR (and any future family built on a
-// NeMo-style Conformer encoder) share the same block topology:
+// Family-agnostic helpers for the NeMo-style Conformer encoder shared by
+// Parakeet, Cohere-ASR, and future variants. Block topology:
 //
-//   pre_encode (DwStridingSubsampling: 1 standard conv + 2 depthwise
-//               -separable conv pairs, ReLU-interleaved, then a linear
-//               projection to d_model)
-//   N x conformer block {
-//     macaron FF1 (0.5x residual)
-//     rel-pos MHSA (1.0x residual)
-//     conv module (pointwise-GLU -> depthwise -> BN -> SiLU -> pointwise)
-//     macaron FF2 (0.5x residual)
-//     final per-block LayerNorm
-//   }
+//   pre_encode (DwStridingSubsampling) ->
+//   N x { macaron FF1 (0.5x) -> rel-pos MHSA -> conv module
+//         (pw-GLU -> depthwise -> BN -> SiLU -> pw) -> macaron FF2 (0.5x)
+//         -> per-block LayerNorm }
 //
-// This header exposes that machinery as a set of family-agnostic
-// helpers driven by three structs:
-//
-//   - PreEncodeView / BlockView : nullable-pointer projections over
-//     whatever per-family weight struct the family's weights.h
-//     defines. Families with biases (Cohere) fill the bias slots;
-//     bias-free families (Parakeet) leave them nullptr. Every helper
-//     that takes a bias pointer treats nullptr as "no bias" and skips
-//     the add — this is the optional-bias pattern.
-//
-//   - ConvPolicy : per-family dispatch choice for the pointwise and
-//     depthwise convs. The pointwise policy is identical across
-//     families (detect_direct_pw lives here, shared) but the
-//     depthwise policy splits between "inside the conformer block"
-//     and "inside pre_encode" because the two sites have different
-//     tensor shapes and historical backend behavior. Each family
-//     populates its own ConvPolicy; the shared helpers never read
-//     environment variables directly for dw dispatch.
-//
-//   - BlockParams : the scalar knobs the block forward needs
-//     (d_model, n_head, conv_kernel, kv_type, use_flash, policy).
-//
-// Sub-helpers (macaron_ff_residual, rel_pos_mhsa, conv_module) are
-// also exposed at namespace scope so a family that hand-builds one or
-// more blocks for debug-dump purposes (currently Parakeet's block 0)
-// can drive the same code paths without going through
-// build_conformer_block. No helper in this module ever calls
-// ggml_set_name or ggml_set_output on intermediates — naming and
-// output marking are the family's responsibility, and the one helper
-// that does name intermediates (build_pre_encode) takes an explicit
-// name prefix.
-//
-// The f32-friendly conv helpers (conv_1d_f32, conv_2d_dw_f32,
-// conv_1d_dw_f32) exist to work around ggml kernel limitations on
-// Metal — see the block comment above conv_2d_dw_f32 in conformer.cpp
-// for the full story. Callers should use these, NOT ggml's built-in
-// ggml_conv_1d / ggml_conv_2d_dw, whenever the kernel weights are
-// f32 and the compute must run on Metal.
+// Driven by three structs: PreEncodeView / BlockView (nullable-pointer
+// projections; null bias = skip the add), ConvPolicy (per-family pointwise/
+// depthwise conv dispatch), and BlockParams (scalar knobs). Sub-helpers are
+// exposed at namespace scope for families that hand-build a block for
+// debug-dump. Helpers name no intermediates except build_pre_encode (explicit
+// prefix). The f32-friendly conv helpers (conv_1d_f32, conv_2d_dw_f32,
+// conv_1d_dw_f32) work around ggml kernel limitations on Metal (see
+// conv_2d_dw_f32 in conformer.cpp); use them for f32 kernels on Metal.
 
 #pragma once
 
@@ -59,23 +23,12 @@
 
 namespace transcribe::conformer {
 
-// ===========================================================================
-// Constants
-// ===========================================================================
-
-// LayerNorm + BatchNorm epsilon. Both default to 1e-5 in NeMo and
-// are NOT stored in the GGUF. Hardcoded here to match. If a future
-// variant changes either value, plumb it through BlockParams rather
-// than bumping this constant.
+// LayerNorm + BatchNorm epsilon. Both default to 1e-5 in NeMo and are NOT
+// stored in the GGUF, so hardcode to match.
 constexpr float kLayerNormEps = 1e-5f;
 
-// ===========================================================================
-// Views over per-family weight structs
-// ===========================================================================
-
 // Nullable-pointer projection over the pre_encode weights. The family
-// (parakeet / cohere) fills this from its own weights struct at the
-// call site — see to_view() helpers in each encoder.cpp.
+// fills this from its own weights struct at the call site.
 struct PreEncodeView {
     ggml_tensor * conv0_w = nullptr; // [KW=3, KH=3, IC=1,        OC=channels]
     ggml_tensor * conv0_b = nullptr; // [channels]
@@ -93,9 +46,7 @@ struct PreEncodeView {
 };
 
 // Nullable-pointer projection over one Conformer block's weights.
-// Every `_b` (bias) slot is genuinely optional — leave nullptr for
-// families that ship without that bias. The matching helper skips the
-// add when the pointer is null.
+// Every `_b` (bias) slot is optional — null = skip the add.
 struct BlockView {
     // Macaron FF1.
     ggml_tensor * norm_ff1_w = nullptr; // [d_model]
@@ -129,14 +80,9 @@ struct BlockView {
     ggml_tensor * conv_dw_b           = nullptr; // [d_model], nullable
     ggml_tensor * conv_pw2_w          = nullptr; // [1, d_model, d_model]
     ggml_tensor * conv_pw2_b          = nullptr; // [d_model], nullable
-    // Post-depthwise normalisation. Exactly one pair is populated per
-    // block, depending on BlockParams::conv_norm_type.
-    //   BatchNorm path: conv_bn_fused_scale / conv_bn_fused_bias
-    //                   (precomputed at load from raw BN weight/bias +
-    //                   running_mean/var). Offline Conformer variants.
-    //   LayerNorm path: conv_ln_w / conv_ln_b (raw LN scale/bias; the
-    //                   per-channel mean/std is computed at inference).
-    //                   Streaming variants (nemotron-speech-streaming).
+    // Post-depthwise normalisation. Exactly one pair is populated per block
+    // per BlockParams::conv_norm_type: BatchNorm (conv_bn_fused_*, fused at
+    // load) or LayerNorm (conv_ln_*, per-channel mean/std at inference).
     ggml_tensor * conv_bn_fused_scale = nullptr; // [d_model]
     ggml_tensor * conv_bn_fused_bias  = nullptr; // [d_model]
     ggml_tensor * conv_ln_w           = nullptr; // [d_model]
@@ -155,69 +101,43 @@ struct BlockView {
     ggml_tensor * norm_out_b = nullptr;
 };
 
-// ===========================================================================
-// Policy and params
-// ===========================================================================
-
-// Per-family conv dispatch policy. direct_pw is shared
-// (detect_direct_pw produces the same answer for every family today)
-// but direct_dw splits between block-internal and pre_encode sites:
-//
-//   - direct_dw_in_block     : the conformer block's 1-D depthwise
-//                              conv (after GLU). Parakeet takes the
-//                              direct path on every backend; Cohere
-//                              takes it only on Vulkan/CUDA and uses
-//                              im2col on Metal/CPU. See each family's
-//                              detect_direct_dw() for the exact
-//                              policy.
-//
-//   - direct_dw_in_pre_encode : the pre_encode 2-D depthwise conv
-//                              (stride-2 downsample). Historically
-//                              Parakeet hardcoded the im2col path here
-//                              (direct_dw_in_pre_encode = false)
-//                              regardless of the in-block flag;
-//                              Cohere routes both sites through the
-//                              same detect_direct_dw value. Splitting
-//                              the two lets each family keep its
-//                              historical behavior exactly, no quiet
-//                              unification.
-// Defaults are deliberately conservative: direct_pw is true because
-// pointwise convs are direct mul_mat on every backend, but both
-// direct_dw_* default to false (im2col path). A future family that
-// default-initializes ConvPolicy{} and forgets to set these will get
-// the im2col path — slower than direct on Vulkan but safe on Metal,
-// where the direct 2D depthwise kernel is not implemented for all
-// shapes and the im2col + mul_mat path is the reliable fallback.
-// Parakeet and Cohere populate all three fields explicitly at the
-// call site in build_encoder_graph, so the defaults only matter for
-// new callers.
+// Per-family conv dispatch policy. direct_pw is shared (detect_direct_pw is
+// the same for every family today); direct_dw splits between the block site
+// (direct_dw_in_block: the conformer block's 1-D depthwise after GLU) and the
+// pre_encode site (direct_dw_in_pre_encode: the stride-2 2-D depthwise), since
+// the two have different shapes and per-family backend choices. Defaults are
+// conservative: direct_pw true (pointwise is direct mul_mat everywhere), both
+// direct_dw_* false (im2col), which is safe on Metal where the direct 2-D
+// depthwise kernel is not implemented for all shapes.
 struct ConvPolicy {
     bool direct_pw                = true;
     bool direct_dw_in_block       = false;
     bool direct_dw_in_pre_encode  = false;
 
-    // Causal pre_encode convolutions. NeMo's cache-aware streaming
-    // (`is_causal=true`) swaps every Conv2d in ConvSubsampling for
-    // CausalConv2D, which applies `F.pad(left=k-1, right=stride-1)` on
-    // both spatial axes before calling the underlying conv with p=0.
-    // For k=3 / s=2 that is (left=2, right=1) per axis — different
-    // total padding from the offline (k-1)/2 symmetric path, and
-    // shifts both the freq output dim (e.g. 128 → 65 → 33 → 17
-    // instead of 64 → 32 → 16) and the time output dim. False on every
-    // offline Parakeet variant; true on nemotron-speech-streaming-en.
+    // Causal pre_encode convolutions. NeMo's cache-aware streaming swaps
+    // every Conv2d in ConvSubsampling for CausalConv2D, padding
+    // (left=k-1, right=stride-1) on both spatial axes — for k=3/s=2 that
+    // is (left=2, right=1), different from the offline (k-1)/2 symmetric
+    // path, and shifts both the freq and time output dims. False on every
+    // offline variant; true on nemotron-speech-streaming-en.
     bool causal_pre_encode        = false;
 };
 
-// Pointwise conv dispatch auto-detect. Identical policy across
-// families today (Parakeet and Cohere return the same answer for
-// every backend) so this lives here rather than in each encoder.cpp.
-// Env overrides: TRANSCRIBE_CONV_NO_DIRECT_PW=1 forces im2col,
-// TRANSCRIBE_CONV_DIRECT_PW=1 forces direct.
-//
-// Policy note (Vulkan): on AMD Renoir, a controlled A/B showed the
-// im2col + mul_mat path is ~200 ms per encode faster than the direct
-// mul_mat path for f32 weights, so Vulkan defaults to im2col. Metal
-// and CPU prefer direct.
+// Resolve a conv-dispatch toggle from its env overrides. The DIRECT var forces
+// true, the NO_DIRECT var forces false (DIRECT wins if both are set); otherwise
+// `backend_default` is used. Centralizes the override parsing shared by the
+// pointwise and the per-family depthwise dispatch helpers, so the env-var read
+// has exactly one definition. `direct_env` / `no_direct_env` are env var names
+// (e.g. "TRANSCRIBE_CONV_DIRECT_DW" / "TRANSCRIBE_CONV_NO_DIRECT_DW").
+bool resolve_conv_direct(const char * direct_env,
+                         const char * no_direct_env,
+                         bool         backend_default);
+
+// Pointwise conv dispatch auto-detect (same answer for every family today).
+// Env overrides: TRANSCRIBE_CONV_NO_DIRECT_PW forces im2col,
+// TRANSCRIBE_CONV_DIRECT_PW forces direct. Vulkan defaults to im2col: on
+// AMD Renoir, im2col + mul_mat measured ~200 ms/encode faster than direct for
+// f32 weights. Metal and CPU prefer direct.
 bool detect_direct_pw(const char * backend);
 
 // Scalar knobs for the block forward. All fields required except the
@@ -277,9 +197,12 @@ struct BlockParams {
     int conv_context_left  = -1;
     int conv_context_right = -1;
 
-    // Optional post-GLU valid-frame mask for the conv module. Shape
-    // [T, 1, 1, 1], values 1.0 for valid frames and 0.0 for padded
-    // overhang. NeMo applies pad_mask after pointwise_conv1+GLU and
+    // Optional post-GLU valid-frame mask for the conv module. Values 1.0
+    // for valid frames and 0.0 for padded overhang; multiplied onto x at
+    // ne=[T, d_model, B, 1], so it broadcasts over d_model (ne[1]). Shape
+    // is [T, 1, 1, 1] for the single-utterance / buffered-streaming case
+    // and [T, 1, B, 1] for variable-length offline batching (the B axis
+    // lands in ne[2]). NeMo applies pad_mask after pointwise_conv1+GLU and
     // before the depthwise convolution; null keeps the historical path.
     ggml_tensor * conv_pad_mask = nullptr;
 
@@ -290,90 +213,49 @@ struct BlockParams {
     enum class ConvNormType { BatchNorm, LayerNorm };
     ConvNormType conv_norm_type = ConvNormType::BatchNorm;
 
-    // ---- Streaming (cache-aware) inputs/outputs ----
-    //
-    // All four pointers are nullptr in offline mode and the block
-    // runs the existing graph topology. When non-null, the block
-    // runs the streaming path:
-    //
-    //   streaming_channel_in   per-layer cache_last_channel tensor
-    //     from the previous chunk (persistent backend buffer). Shape
-    //     [d_model, T_cache, 1, 1]. Concat-prepended onto the post-
-    //     attn-LN x before Q/K/V projection ("virtual T" approach):
-    //     the block runs attention on T_virtual = T_cache + T_q_new
-    //     positions and slices the output to the last T_q_new rows.
-    //
-    //   streaming_channel_out  output tensor (allocated by the caller
-    //     in the per-call compute_ctx) that rel_pos_mhsa fills via
-    //     ggml_cpy with the tail of x_norm (size T_q_new, the new
-    //     cache slot per NeMo's q_keep_size = T_new rule with
-    //     cache_drop_size = 0). After graph_compute, the driver
-    //     rotates this into the persistent cache buffer.
-    //
-    //   streaming_time_in      per-layer cache_last_time tensor from
-    //     the previous chunk. Shape [k_minus_1, d_model, 1, 1].
-    //     Replaces the zero left-pad in the depthwise conv (the
-    //     causal pad on streaming variants is (k-1, 0); the k-1 left
-    //     frames are now the previous chunk's post-pw1+GLU tail).
-    //
-    //   streaming_time_out     output tensor (compute_ctx) that
-    //     conv_module fills with the last k_minus_1 frames of the
-    //     post-pw1+GLU input (which becomes the next chunk's left
-    //     pad).
-    //
-    // The pos_emb tensor (passed separately to rel_pos_mhsa) and the
-    // attn_chunked_mask (above) are sized for the virtual T when
-    // streaming, not the offline T_enc. The caller is responsible for
-    // building them at the correct size.
+    // Streaming (cache-aware) inputs/outputs. All null in offline mode
+    // (existing graph topology). When non-null the block runs the streaming
+    // path with a "virtual T" attention window (T_cache + T_q_new):
+    //   streaming_channel_in  [d_model, T_cache] cache_last_channel from the
+    //     previous chunk, concat-prepended before Q/K/V projection.
+    //   streaming_channel_out new cache slot (tail of x_norm, size T_q_new);
+    //     the driver rotates it into the persistent buffer after compute.
+    //   streaming_time_in     [k-1, d_model] cache_last_time replacing the
+    //     depthwise conv's zero left-pad (causal pad is (k-1, 0)).
+    //   streaming_time_out    last k-1 post-pw1+GLU frames -> next left pad.
+    // pos_emb and attn_chunked_mask must be sized for the virtual T.
     ggml_tensor * streaming_channel_in  = nullptr;
     ggml_tensor * streaming_channel_out = nullptr;
     ggml_tensor * streaming_time_in     = nullptr;
     ggml_tensor * streaming_time_out    = nullptr;
 
-    // When streaming, the number of new (post-pre-encode) encoder
-    // frames being produced this call. Used to:
-    //   - slice rel_pos_mhsa's attention output back to the new rows
-    //   - decide the source slice for streaming_channel_out / _time_out
-    // Ignored in offline mode (streaming_channel_in == nullptr).
+    // When streaming, the number of new encoder frames produced this call
+    // (slices the attention output and the cache-out source). Offline: 0.
     int streaming_T_q_new = 0;
 
-    // Optional streaming KV cache for this block (all four set
-    // together, or none): persistent [d_model, T_cache] tensors holding
-    // the previous chunks' pre-projected attention keys/values (bias
-    // included). When set, the block computes K/V projections only for
-    // the new frames, concatenates the cache in front, runs attention
-    // against the combined window, and emits the rotated cache via
-    // ggml_cpy into the *_out tensors (the driver copies them into the
-    // persistent cache after compute, exactly like streaming_channel_*).
-    // streaming_channel_in/_out are ignored in this mode — the channel
-    // cache is the recompute-K/V representation of the same state.
+    // Optional streaming KV cache (all four set together, or none):
+    // persistent [d_model, T_cache] pre-projected keys/values. When set, K/V
+    // are projected only for the new frames, the cache is prepended, and the
+    // rotated cache is emitted into the *_out tensors. streaming_channel_in/
+    // _out are ignored in this mode (same state, recompute-K/V form).
     ggml_tensor * streaming_kv_k_in  = nullptr;
     ggml_tensor * streaming_kv_v_in  = nullptr;
     ggml_tensor * streaming_kv_k_out = nullptr;
     ggml_tensor * streaming_kv_v_out = nullptr;
 
-    // Optional precomputed rel-pos projection for this block: the
-    // [head_dim, pos_len, n_head, 1] result of
-    // cont(permute(reshape(attn_pos_w @ pos_emb))) from a previous
-    // chunk with identical geometry. When non-null, rel_pos_mhsa
-    // consumes it directly and never touches pos_emb (which may then
-    // be null). Streaming-only memoization; offline paths leave this
-    // null.
+    // Optional precomputed rel-pos projection [head_dim, pos_len, n_head, 1]
+    // from a prior chunk of identical geometry; when non-null rel_pos_mhsa
+    // consumes it directly and ignores pos_emb. Streaming-only memoization.
     ggml_tensor * streaming_pos_proj_in = nullptr;
 
-    // Graph the helpers use to forward-expand their cache-write cpy
-    // nodes. The streaming cache outputs are SIDE outputs (not
-    // reachable from the encoder's `out` tensor), so they have to be
-    // added to the graph explicitly. The caller sets this to the
-    // graph it'll later run on; the helpers do
-    // ggml_build_forward_expand(streaming_graph, cpy_node) when they
-    // emit a cache write. Required when streaming_*_out is non-null.
+    // Graph the helpers forward-expand their cache-write cpy nodes onto. The
+    // streaming cache outputs are SIDE outputs (not reachable from the
+    // encoder's `out`), so they must be added explicitly. Required when
+    // streaming_*_out is non-null.
     ggml_cgraph * streaming_graph = nullptr;
 };
 
-// ===========================================================================
-// Low-level helpers (exposed for family-specific hand-built blocks)
-// ===========================================================================
+// Low-level helpers (exposed for family-specific hand-built blocks).
 
 // Attach a debug name to a tensor. Safe on nullptr.
 ggml_tensor * named(ggml_tensor * t, const char * name);
@@ -409,9 +291,8 @@ ggml_tensor * macaron_ff_residual(ggml_context * ctx,
 // matrix rotated so column k holds the score for relative offset k.
 ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x);
 
-// f32-friendly Conv1D. Use this instead of ggml_conv_1d for fp32
-// kernels — see the long comment above conv_2d_dw_f32 in
-// conformer.cpp for the Metal backstory.
+// f32-friendly Conv1D. Use instead of ggml_conv_1d for fp32 kernels on
+// Metal (see conv_2d_dw_f32 in conformer.cpp).
 ggml_tensor * conv_1d_f32(ggml_context * ctx,
                           ggml_tensor *  kernel,
                           ggml_tensor *  data,
@@ -419,10 +300,8 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
                           int            padding,
                           int            dilation);
 
-// f32-friendly 2D depthwise conv. Use this instead of
-// ggml_conv_2d_dw / ggml_conv_2d_dw_direct for fp32 kernels when the
-// compute may run on Metal — the full story is in the comment above
-// the implementation.
+// f32-friendly 2D depthwise conv. Use instead of ggml_conv_2d_dw /
+// ggml_conv_2d_dw_direct for fp32 kernels on Metal (see conformer.cpp).
 ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
                              ggml_tensor *  kernel,
                              ggml_tensor *  data,
@@ -456,9 +335,7 @@ ggml_tensor * add_conv_bias(ggml_context * ctx,
                             ggml_tensor *  conv_out,
                             ggml_tensor *  bias_1d);
 
-// ===========================================================================
-// Sub-blocks (exposed for families that hand-build a block)
-// ===========================================================================
+// Sub-blocks (exposed for families that hand-build a block).
 
 // Convolution sub-block: pointwise -> GLU -> optional valid-frame mask
 // -> depthwise -> BN/LN -> SiLU -> pointwise. Operates on post-LayerNorm
@@ -510,31 +387,14 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
                            ggml_tensor *       k_full = nullptr,
                            ggml_tensor *       v_full = nullptr);
 
-// ===========================================================================
-// Top-level block + pre-encode
-// ===========================================================================
+// Top-level block + pre-encode.
 
-// Optional per-block observer hook. `build_conformer_block` calls
-// `on_point` at the five canonical residual / post-LN points during
-// the block forward, with `tag` set to a compile-time constant
-// string:
-//
-//   "after_ff1"  — after the FF1 macaron residual merge
-//   "after_attn" — after the attention residual merge
-//   "after_conv" — after the conv module residual merge
-//   "after_ff2"  — after the FF2 macaron residual merge
-//   "out"        — after the final per-block LayerNorm (== block out)
-//
-// Callers typically use this to attach a ggml name, stash the
-// tensor in a dump-slot struct, and/or mark the tensor for graph
-// output. The observer is the supported replacement for
-// hand-building a block out of the exposed sub-helpers just to get
-// named dump points: it keeps the block implementation single-source
-// and removes the lockstep maintenance hazard.
-//
-// Pointer-of-struct + user pointer (not std::function) keeps this
-// header C-ABI-friendly and free of <functional>. Pass nullptr for
-// the observer argument to skip observation entirely.
+// Optional per-block observer hook. `build_conformer_block` calls `on_point`
+// at five canonical residual / post-LN points (compile-time `tag`):
+//   "after_ff1", "after_attn", "after_conv", "after_ff2", "out".
+// Callers attach a ggml name, stash the tensor, and/or mark it for graph
+// output. Pointer-of-struct + user pointer (not std::function) keeps the
+// header C-ABI-friendly. Pass nullptr to skip observation.
 struct BlockObserver {
     void (*on_point)(void *        user,
                      const char *  tag,
@@ -555,22 +415,15 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
                                     const BlockObserver * obs = nullptr);
 
 // Per-stage valid-frame masks for variable-length offline batching of the
-// pre_encode conv stem. Zero-padding utterances to a common length is NOT
-// transparent through this conv stack: the convs carry bias + ReLU, so the
-// padded region becomes non-zero after the first conv and then leaks into
-// each utterance's last VALID frame via the next stride-2 conv's receptive
-// field — corrupting exactly the boundary frame (it flips trailing CTC
-// tokens). The fix (NeMo's masked subsampling) is to zero each conv
-// intermediate's padded time region after every ReLU so the next conv sees
-// zeros beyond each utterance's boundary, exactly like a standalone run.
-//
-// When a non-null PreEncodeValidMasks is passed, build_pre_encode allocates
-// three time-valid mask graph inputs (one per ReLU stage) sized
-// ne=[1, H_stage, 1, B] (broadcast over freq + channels), applies them, and
-// writes the handles back here for the driver to fill (1.0 on valid frames,
-// 0.0 on padded). Only meaningful for the non-causal (offline) pre_encode;
-// the caller should skip it for causal/streaming variants whose output-length
-// formula differs.
+// pre_encode conv stem. Zero-padding to a common length is NOT transparent
+// through this stack: convs carry bias + ReLU, so the padded region becomes
+// non-zero after the first conv and then leaks into each utterance's last
+// VALID frame via the next stride-2 conv's receptive field (flips trailing
+// CTC tokens). NeMo's masked subsampling zeros each conv intermediate's
+// padded time region after every ReLU. When PreEncodeValidMasks is non-null,
+// build_pre_encode allocates three mask graph inputs ne=[1, H_stage, 1, B]
+// (one per ReLU stage), applies them, and writes the handles back for the
+// driver to fill. Offline (non-causal) pre_encode only.
 struct PreEncodeValidMasks {
     ggml_tensor * mask_s1 = nullptr;  // after relu0
     ggml_tensor * mask_s2 = nullptr;  // after relu3
@@ -579,15 +432,10 @@ struct PreEncodeValidMasks {
 
 // DwStridingSubsampling pre_encode stack. Returns the final
 // [d_model, T_enc, 1, 1] tensor or nullptr on a shape-sanity failure.
-// `name_prefix`, if non-null, is used to attach ggml_set_name() calls
-// to every intermediate (pattern: "<prefix>.conv0", "<prefix>.relu0",
-// ...). Pass nullptr to skip naming entirely.
-//
-// Uses pe.out_w->ne[0] as a final d_model sanity check. `error_tag`
-// supplies the family name used in the diagnostic on shape mismatch.
-//
-// valid_masks (optional): when non-null, enables the masked-subsampling path
-// above and is filled with the three mask input handles.
+// `name_prefix` (if non-null) names every intermediate "<prefix>.conv0"
+// etc. Uses pe.out_w->ne[0] as a d_model sanity check; `error_tag` names the
+// family in the diagnostic. valid_masks (optional) enables the
+// masked-subsampling path above and is filled with the mask input handles.
 ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                const PreEncodeView & pe,
                                ggml_tensor *         mel_in,

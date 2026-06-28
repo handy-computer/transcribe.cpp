@@ -1,5 +1,4 @@
-// stream_capability_unit.cpp - Phase 3: capability gating against a
-// real loaded model.
+// stream_capability_unit.cpp - capability gating against a real loaded model.
 //
 // The model-less context tests in stream_dispatch_unit.cpp exercise
 // the streaming dispatcher's state machine and accessor sentinels.

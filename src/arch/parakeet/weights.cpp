@@ -1,18 +1,10 @@
-// arch/parakeet/weights.cpp - implementation of read_parakeet_hparams
-// and build_parakeet_weights.
+// arch/parakeet/weights.cpp - read_parakeet_hparams and
+// build_parakeet_weights.
 //
-// Pattern follows llama.cpp's per-arch load_tensors function:
-//   - read every required hparam from KV explicitly
-//   - then build the tensor catalog as a sequence of get_tensor()
-//     calls with explicit expected shapes
-//   - missing tensor or shape mismatch -> TRANSCRIBE_ERR_GGUF with a
-//     log naming the offending tensor
-//
-// The shape contract documented in weights.h is enforced here. The
-// converter has to write tensors in these shapes; the synthetic
-// fixture in tests/fixtures/make_gguf_fixtures.py emits them in
-// these shapes; phase 4's encoder builder will read them in these
-// shapes.
+// Read every required hparam from KV explicitly, then build the tensor
+// catalog as get_tensor() calls with explicit expected shapes; a missing
+// tensor or shape mismatch returns TRANSCRIBE_ERR_GGUF naming the tensor.
+// The shape contract documented in weights.h is enforced here.
 
 #include "weights.h"
 
@@ -57,31 +49,21 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.subsampling_channels", kFamilyTag, hp.enc_subsampling_channels); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.parakeet.encoder.pos_emb_max_len", kFamilyTag,   hp.enc_pos_emb_max_len);   st != TRANSCRIBE_OK) return st;
 
-    // Optional. NeMo Parakeet v2/v3 ship with use_bias=false; the
-    // 1.1B and rnnt/ctc variants ship with use_bias=true (11 biases per
-    // block). Default matches v2/v3 so legacy GGUFs without the KV stay
-    // on the bias-free path.
+    // use_bias: false for v2/v3, true for 1.1B and rnnt/ctc (11 biases
+    // per block). Default false for legacy GGUFs without the KV.
     if (auto st = read_optional_bool_kv(gguf, "stt.parakeet.encoder.use_bias", kFamilyTag, false, hp.enc_use_bias); st != TRANSCRIBE_OK) return st;
 
-    // xscaling: NeMo's RelPositionalEncoding multiplies x by
-    // sqrt(d_model) before generating the pos_emb when this is true.
-    // v2/v3/tdt-* are False; ctc-*/rnnt-*/unified-en are True.
-    // Default to false so legacy GGUFs (which don't ship this KV)
-    // continue to work without scaling - they're all xscaling=False
-    // models in the current set.
+    // xscaling (see weights.h). Default false for legacy GGUFs.
     if (auto st = read_optional_bool_kv(gguf, "stt.parakeet.encoder.xscaling", kFamilyTag, false, hp.enc_xscaling); st != TRANSCRIBE_OK) return st;
 
-    // Local attention window. Default -1/-1 = full attention; matches
-    // every variant except parakeet-tdt_ctc-1.1b ([128, 128] regular
-    // local) and nemotron-speech-streaming-en-0.6b ([70, 13] chunked).
+    // Local attention window. Default -1/-1 = full attention.
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_left",  kFamilyTag, -1, hp.enc_att_context_left);  st != TRANSCRIBE_OK) return st;
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.att_context_right", kFamilyTag, -1, hp.enc_att_context_right); st != TRANSCRIBE_OK) return st;
 
-    // Multi-lookahead training menu (cache-aware streaming models). Flat
-    // int32 array [L0,R0,L1,R1,...]; index 0 must equal (att_context_left,
-    // att_context_right). Optional — absent for offline GGUFs, in which
-    // case we synthesize a one-element list from the scalar fields so
-    // call sites read uniformly.
+    // Multi-lookahead training menu (cache-aware streaming). Flat int32
+    // [L0,R0,L1,R1,...]; index 0 must equal (att_context_left,
+    // att_context_right). Absent for offline GGUFs → synthesize a
+    // one-element list from the scalar fields.
     {
         std::vector<int32_t> flat;
         switch (read_int32_array_kv(gguf, "stt.parakeet.encoder.att_context_size_choices", flat)) {
@@ -126,11 +108,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         }
     }
 
-    // Chunked-limited-with-rc training menu (buffered streaming variants).
-    // Three independent int32 arrays carrying the L / C / R choices the
-    // model was trained against. Absent for non-buffered-streaming GGUFs;
-    // when present they're a structured triple read into the hparams
-    // and the runtime picks one entry from each at stream_begin time.
+    // Chunked-limited-with-rc training menu (buffered streaming). Three
+    // independent int32 L / C / R arrays; absent for non-buffered GGUFs.
     {
         auto read_menu = [&](const char * key, std::vector<int32_t> & out) -> transcribe_status {
             std::vector<int32_t> raw;
@@ -160,9 +139,7 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
             st != TRANSCRIBE_OK) return st;
     }
 
-    // Attention context style. Optional with default "regular" so legacy
-    // GGUFs (every variant before nemotron-speech-streaming-en-0.6b)
-    // stay on the existing local/full path.
+    // Attention context style. Optional, default "regular" for legacy GGUFs.
     {
         std::string style;
         if (auto st = read_optional_string_kv(gguf, "stt.parakeet.encoder.att_context_style",
@@ -199,10 +176,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         }
     }
 
-    // Conv module: per-side depthwise padding and norm type. Both are
-    // optional with defaults that match the offline-Conformer config —
-    // -1 means "centred (k-1)/2"; "batch_norm" means the historic
-    // fused BN path with running_mean / running_var.
+    // Conv module: per-side depthwise padding and norm type. Optional;
+    // defaults -1 (centred (k-1)/2) and "batch_norm" (fused BN with
+    // running_mean / running_var).
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.conv_context_left",  kFamilyTag, -1, hp.enc_conv_context_left);  st != TRANSCRIBE_OK) return st;
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.conv_context_right", kFamilyTag, -1, hp.enc_conv_context_right); st != TRANSCRIBE_OK) return st;
     {
@@ -226,9 +202,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         }
     }
 
-    // Cache-aware streaming pre-encode constants. Optional — both KVs
-    // are emitted only by streaming-trained variants. Default 0 (means
-    // "non-streaming"); the streaming code paths gate on both > 0.
+    // Cache-aware streaming pre-encode constants. Optional, default 0
+    // (non-streaming); the streaming paths gate on both > 0.
     if (auto st = read_optional_int32_kv(gguf, "stt.parakeet.encoder.streaming.pre_encode_cache_size",
                                          kFamilyTag, 0, hp.enc_stream_pre_encode_cache_size);
         st != TRANSCRIBE_OK)
@@ -248,9 +223,7 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         return st;
     }
 
-    // Head kind dispatch. Optional KV with default "tdt" so legacy
-    // v2/v3 GGUFs (predate the KV) resolve to TDT, which is what they
-    // are. The 8 new variants all ship the KV explicitly.
+    // Head kind dispatch. Optional KV, default "tdt" for legacy v2/v3.
     {
         std::string head_kind_str;
         if (auto st = read_optional_string_kv(gguf, "stt.parakeet.head_kind",
@@ -287,11 +260,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     }
 
     if (hp.head_kind == HeadKind::TDT) {
-        // TDT decoding parameters. `durations` is required (the decoder
-        // can't run without it); `max_symbols` is optional with a default
-        // matching every published v2/v3 config we've seen. RNNT does
-        // NOT carry these — its joint emits `vocab+1` (no extras) and
-        // the decode loop has no duration choice.
+        // TDT decoding parameters. durations required; max_symbols
+        // optional (default 10). RNNT carries neither.
         switch (read_int32_array_kv(gguf, "stt.parakeet.tdt.durations", hp.tdt_durations)) {
             case KvResult::Ok:
                 break;
@@ -317,10 +287,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
             }
         }
     } else if (hp.head_kind == HeadKind::RNNT) {
-        // RNNT shares the predictor + joint code paths with TDT, but has
-        // no durations and the joint emits exactly `vocab+1` logits.
-        // Reuse `tdt_max_symbols` as the decode loop's per-frame stuck
-        // cap (NeMo's RNNTGreedyDecodeBatched uses the same constant).
+        // RNNT: no durations, joint emits exactly vocab+1. tdt_max_symbols
+        // is reused as the per-frame stuck cap.
         hp.tdt_durations.clear();
         hp.tdt_max_symbols = 10;
     } else {
@@ -329,15 +297,10 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         hp.tdt_max_symbols = 0;
     }
 
-    // Frontend. The full stt.frontend.* block PLAN.md declares as the
-    // complete contract between converter and loader. Reading every
-    // field at load time, even though phase 3's C++ frontend hasn't
-    // landed yet, makes the loader the gate that catches a future
-    // converter that drops a field. Required keys: type, num_mels,
-    // sample_rate, n_fft, win_length, hop_length, window, normalize,
-    // dither, pre_emphasis, f_min, f_max. CMVN/LFR fields are
-    // intentionally not read here — Parakeet doesn't use them and
-    // the converter doesn't emit them.
+    // Frontend. The complete stt.frontend.* contract between converter
+    // and loader; reading every field makes the loader the gate that
+    // catches a converter that drops one. CMVN/LFR fields are not read
+    // (Parakeet doesn't use them).
     if (auto st = read_required_string_kv(gguf, "stt.frontend.type", kFamilyTag, hp.fe_type);         st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels", kFamilyTag, hp.fe_num_mels);     st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate", kFamilyTag, hp.fe_sample_rate);  st != TRANSCRIBE_OK) return st;
@@ -351,11 +314,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
     if (auto st = read_required_f32_kv(gguf, "stt.frontend.f_min", kFamilyTag, hp.fe_f_min);        st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_f32_kv(gguf, "stt.frontend.f_max", kFamilyTag, hp.fe_f_max);        st != TRANSCRIBE_OK) return st;
 
-    // Prompt MLP. Optional — multilingual variants only
-    // (nemotron-3.5-asr-streaming-0.6b today). Presence of
-    // stt.parakeet.prompt.num_prompts (a uint32 KV) is the gate; when
-    // absent every prompt_* field is left zero/empty and the encoder
-    // skips the prompt path entirely.
+    // Prompt MLP. Optional (multilingual variants only). Presence of
+    // stt.parakeet.prompt.num_prompts is the gate; absent leaves every
+    // prompt_* field zero/empty and the encoder skips the prompt path.
     if (gguf_find_key(gguf, "stt.parakeet.prompt.num_prompts") >= 0) {
         if (auto st = read_required_u32_kv(gguf, "stt.parakeet.prompt.num_prompts",
                                            kFamilyTag, hp.prompt_num_prompts);
@@ -419,10 +380,7 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                 hp.prompt_auto_id = -1;
             }
 
-            // Activation allow-list. The C++ prompt MLP today
-            // implements ReLU only (matching NeMo's
-            // EncDecRNNTBPEModelWithPrompt). Other activations are a
-            // future-variant concern.
+            // The C++ prompt MLP implements ReLU only.
             if (hp.prompt_activation != "relu") {
                 log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                              "parakeet: unsupported prompt activation \"%s\" "
@@ -455,9 +413,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         }
     }
 
-    // Cross-field invariants. These have to hold or the model is
-    // unbuildable; we catch them here rather than letting them
-    // surface as confusing shape mismatches downstream.
+    // Cross-field invariants — caught here rather than surfacing as
+    // confusing shape mismatches downstream.
     if (hp.enc_n_layers <= 0 || hp.enc_d_model <= 0 || hp.enc_n_heads <= 0 ||
         hp.enc_d_ff <= 0 || hp.enc_conv_kernel <= 0 ||
         hp.enc_subsampling_factor <= 0 || hp.enc_subsampling_channels <= 0)
@@ -480,11 +437,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: joint hparams invalid");
             return TRANSCRIBE_ERR_GGUF;
         }
-        // Joint activation allow-list. The C++ joint forward implements
-        // the same three the reference JointNetwork accepts; anything
-        // else is a converter mistake or a future model we haven't
-        // ported yet, and producing wrong logits silently is worse than
-        // failing loudly here.
+        // Joint activation allow-list (the C++ joint forward implements
+        // these three).
         if (hp.joint_activation != "relu" &&
             hp.joint_activation != "sigmoid" &&
             hp.joint_activation != "tanh")
@@ -497,12 +451,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         }
     }
     if (hp.head_kind == HeadKind::TDT) {
-        // TDT durations: must be non-empty, must match num_extra_outputs
-        // (each duration logit corresponds to one durations[i] choice),
-        // and every entry must be non-negative (negative jumps would
-        // walk backwards in time and break the decode loop's invariant).
-        // Zero is allowed and is the standard "stay on this frame, just
-        // emit a token without advancing" duration.
+        // TDT durations: non-empty, length == num_extra_outputs, all
+        // non-negative (negative jumps would walk backwards in time).
         if (hp.tdt_durations.empty()) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "parakeet: stt.parakeet.tdt.durations must be non-empty (head_kind=tdt)");
@@ -563,29 +513,18 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         return TRANSCRIBE_ERR_GGUF;
     }
     if (hp.fe_type != "mel") {
-        // Recognized-but-unsupported frontend type. Surfaces as
-        // ERR_GGUF for now; if we add a non-mel STT family later,
-        // this turns into a NOT_IMPLEMENTED branch.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet: unsupported frontend type \"%s\" (only \"mel\")",
                      hp.fe_type.c_str());
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Frontend value-domain checks. The loader reads several string
-    // and integer fields that the C++ MelFrontend implementation
-    // (src/transcribe-mel.cpp) does not actually parameterize on. If
-    // a GGUF carries a value the implementation cannot honor, fail
-    // here loud and early — letting it through would silently
-    // substitute the hard-coded behavior at runtime and produce
-    // wrong features without any error.
-    //
-    // When the C++ frontend grows support for more variants (e.g.
-    // hamming/blackman windows or all_features normalize), the
-    // corresponding check below should be loosened.
+    // Frontend value-domain checks: the loader reads fields the C++
+    // MelFrontend doesn't parameterize on, so fail loud if a GGUF asks
+    // for a value the implementation can't honor rather than silently
+    // substituting the hard-coded behavior.
 
-    // Window: only symmetric Hann is implemented
-    // (build_hann_window_symmetric_padded in transcribe-mel.cpp).
+    // Window: only symmetric Hann is implemented.
     if (hp.fe_window != "hann") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet: unsupported frontend window \"%s\" "
@@ -594,14 +533,9 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Normalize: NeMo's "per_feature" (unbiased per-mel-bin mean/std)
-    // for offline Parakeet variants, and "none" for streaming variants
-    // (nemotron-speech-streaming-en-0.6b) whose feature normalisation
-    // is baked into training rather than applied at inference. NeMo
-    // also supports "all_features" and CMVN ("fixed_mean"/"fixed_std")
-    // but no published Parakeet variant uses them, and silently
-    // substituting per-feature on a GGUF that asked for something else
-    // would be a confusing bug.
+    // Normalize: "per_feature" (offline variants) or "none" (streaming,
+    // normalisation baked into training). NeMo's all_features / CMVN are
+    // not implemented.
     if (hp.fe_normalize != "per_feature" && hp.fe_normalize != "none") {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet: unsupported frontend normalize \"%s\" "
@@ -610,12 +544,8 @@ transcribe_status read_parakeet_hparams(const gguf_context * gguf,
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // n_fft must be a power of two: the FFT in transcribe-mel.cpp is
-    // a radix-2 Cooley-Tukey, and its bit-reversal loop produces
-    // garbage for non-power-of-two sizes rather than failing
-    // cleanly. Catch it here so a future converter that emits e.g.
-    // n_fft=400 fails at load instead of producing nonsense mels.
-    // (fe_n_fft > 0 was already enforced above.)
+    // n_fft must be a power of two: the FFT is a radix-2 Cooley-Tukey
+    // whose bit-reversal produces garbage for non-power-of-two sizes.
     if ((hp.fe_n_fft & (hp.fe_n_fft - 1)) != 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet: frontend n_fft (%d) must be a power of 2 "
@@ -635,38 +565,20 @@ namespace {
 
 using transcribe::weights::lname;
 
-// The canonical find_tensor() + lname() helpers live in
-// src/transcribe-weights-util.{h,cpp}; see that header for rationale.
-// They are shared between every per-family weights.cpp. The GET_*
-// macros below still live here because their type allowlists encode
-// a per-family quantization policy, not a shared convention.
+// find_tensor() + lname() live in src/transcribe-weights-util.{h,cpp};
+// the GET_* macros below live here because their type allowlists encode
+// a per-family quantization policy. Three buckets, each with a fixed
+// type allowlist:
+//   GET_F32  - norms, biases, BN running stats, attn pos_bias (tiny +
+//              precision-sensitive; fp32 across every preset).
+//   GET_CONV - conv kernels (TRANSCRIBE_QUANT_CONV_TYPES = F32/F16;
+//              quantized kernels would need a quantized im2col path
+//              ggml lacks).
+//   GET_LIN  - mul_mat linear weights (TRANSCRIBE_QUANT_LINEAR_TYPES;
+//              every family accepts the same set so a quantize preset
+//              never produces a tensor the loader refuses).
 constexpr const char * kTag = kFamilyTag;
 
-// Sugar for the GET_OR_FAIL pattern. Variadic so the caller can pass
-// the expected dims as a comma-separated list rather than wrapping
-// them in extra braces (which would otherwise turn into a GNU
-// statement expression when piped through a function-like macro).
-//
-// Three macros, one per tensor bucket. Each bucket has a fixed
-// allowlist of acceptable ggml types; the bucket choice at the call
-// site is part of the catalog and never changes per-converter:
-//
-//   GET_F32  - norms, biases, BatchNorm running stats, attn pos_bias.
-//              These are precision-sensitive and tiny, so they stay
-//              fp32 across every quant preset the converter ships.
-//
-//   GET_CONV - conv kernels (pre_encode + per-block conv module).
-//              Uses the project-wide TRANSCRIBE_QUANT_CONV_TYPES
-//              allowlist (F32 / F16). Quantized kernels would require a
-//              quantized im2col path that ggml does not provide.
-//
-//   GET_LIN  - linear weights consumed by ggml_mul_mat (encoder FF +
-//              attention projections, predictor LSTM gate matrices,
-//              joint enc/pred/out projections, predictor embed table).
-//              Uses the project-wide TRANSCRIBE_QUANT_LINEAR_TYPES
-//              allowlist. Every family must accept the same set so a
-//              tools/transcribe-quantize preset never produces a
-//              tensor the loader refuses.
 #define GET_F32(slot, name, ...) \
     do { \
         ggml_tensor * _t = transcribe::weights::find_tensor( \
@@ -717,28 +629,13 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
     const int64_t joint_h  = hp.joint_hidden;      // 0 for CTC
     const int64_t joint_n  = hp.joint_n_classes(); // meaningless for CTC; we read CTC head shape instead
 
-    // The flattened "freq" axis going into pre_encode.out is
-    // (subsampling_channels * F') where F' is the freq dim after the
-    // three stride-2 convs. The pre-encode convs are k=3, s=2 (NeMo's
-    // dw_striding stack); their padding tracks NeMo's
-    // `encoder.causal_downsampling` flag, NOT the conformer's
-    // conv_context_size (which is the kernel-9 conv-module's context
-    // and lives in hp.enc_conv_context_{left,right}). The two are
-    // unrelated.
-    //
-    //   causal_downsampling=false (every offline variant and the
-    //     buffered-streaming parakeet-unified-en-0.6b): symmetric
-    //     (k-1)/2 padding on both sides. 128 → 64 → 32 → 16; 256*16
-    //     = 4096.
-    //   causal_downsampling=true  (cache-aware streaming variants,
-    //     i.e. nemotron-speech-streaming-en-0.6b): CausalConv2D with
-    //     (left=k-1, right=stride-1) on both axes. 128 → 65 → 33 →
-    //     17; 256*17 = 4352.
-    //
-    // We don't currently emit the boolean to GGUF; we infer it from
-    // the attention style. Only ChunkedLimited (2-tuple, cache-aware)
-    // implies causal pre-encode. Regular (offline full / local) and
-    // ChunkedLimitedWithRc (3-tuple buffered) both use non-causal.
+    // The flattened "freq" axis into pre_encode.out is
+    // (subsampling_channels * F'), where F' is the freq dim after three
+    // k=3 s=2 convs. Padding tracks NeMo's causal_downsampling (inferred
+    // from the attention style — only ChunkedLimited is causal), NOT the
+    // conformer conv_context_size:
+    //   non-causal: symmetric (k-1)/2 both sides. 128→64→32→16; 256*16=4096.
+    //   causal:     (left=k-1, right=stride-1). 128→65→33→17; 256*17=4352.
     auto pre_encode_F_prime = [&]() {
         const bool causal =
             (hp.enc_att_context_style ==
@@ -785,11 +682,8 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_LIN(b.ff1_lin1_w, lname("enc.blocks.%d.ff1.linear1.weight", i), d_model, d_ff);
         GET_LIN(b.ff1_lin2_w, lname("enc.blocks.%d.ff1.linear2.weight", i), d_ff,    d_model);
 
-        // Self-attention with relative position. Linears can carry
-        // biases when `enc.use_bias=true` (1.1B / rnnt / ctc variants);
-        // v2/v3 ship without (Q/K/V/out + pos = bias-free). The
-        // per-head pos_bias_u/v live alongside regardless. NeMo's
-        // `linear_pos` is bias-free even when use_bias=true.
+        // Self-attention with relative position. Q/K/V/out biases only
+        // when use_bias=true; linear_pos is bias-free even then.
         GET_F32(b.norm_attn_w, lname("enc.blocks.%d.norm_attn.weight", i), d_model);
         GET_F32(b.norm_attn_b, lname("enc.blocks.%d.norm_attn.bias",   i), d_model);
         GET_LIN(b.attn_q_w,    lname("enc.blocks.%d.attn.linear_q.weight",   i), d_model, d_model);
@@ -828,11 +722,8 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_F32(b.norm_out_w, lname("enc.blocks.%d.norm_out.weight", i), d_model);
         GET_F32(b.norm_out_b, lname("enc.blocks.%d.norm_out.bias",   i), d_model);
 
-        // Optional encoder linear/conv biases. Loaded only when
-        // hp.enc_use_bias=true (1.1B FastConformer-XL, rnnt-*, ctc-*).
-        // The 11 names mirror the converter's ENCODER_BLOCK_BIAS_TABLE
-        // exactly. NeMo's `linear_pos` is bias-free even when
-        // use_bias=true so attn_pos has no bias slot.
+        // Optional encoder linear/conv biases (use_bias=true only;
+        // linear_pos has no bias slot).
         if (hp.enc_use_bias) {
             GET_F32(b.ff1_lin1_b,  lname("enc.blocks.%d.ff1.linear1.bias",      i), d_ff);
             GET_F32(b.ff1_lin2_b,  lname("enc.blocks.%d.ff1.linear2.bias",      i), d_model);
@@ -849,20 +740,11 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
     }
 
     if (hp.head_kind == HeadKind::CTC) {
-        // ----- CTC head -----
-        //
-        // Single 1×1 Conv1d projecting d_model -> vocab+1. NeMo's
-        // ConvASRDecoder stores it as `decoder.decoder_layers.0`; the
-        // converter flattens to `head.ctc.weight` /
-        // `head.ctc.bias`.
-        //
-        // Tensor shape in PyTorch is [vocab+1, d_model, 1]
-        // (out_channels, in_channels, kernel). In ggml ne (fast-to-slow)
-        // that's [1, d_model, vocab+1]. We don't know `vocab+1` from the
-        // hparams (CTC GGUFs ship neither predictor.vocab nor
-        // joint_n_classes), so peek at the raw tensor to capture the
-        // trailing dim, then run the standard find_tensor with a fully
-        // specified expected shape so the type+rank checks still fire.
+        // CTC head: single 1×1 Conv1d projecting d_model -> vocab+1.
+        // PyTorch shape [vocab+1, d_model, 1] → ggml ne [1, d_model,
+        // vocab+1]. vocab+1 isn't in the hparams (CTC GGUFs ship neither
+        // predictor.vocab nor joint_n_classes), so peek at the raw tensor
+        // for the trailing dim, then run find_tensor with the full shape.
         ggml_tensor * ctc_peek = ggml_get_tensor(ctx_meta, "head.ctc.weight");
         if (ctc_peek == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet: missing tensor \"head.ctc.weight\"");
@@ -877,28 +759,19 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         }
         GET_LIN(weights.ctc_head.weight, "head.ctc.weight", 1, d_model, n_classes);
         GET_F32(weights.ctc_head.bias,   "head.ctc.bias",   n_classes);
-        // Stash the resolved vocab+1 into hp for downstream consumers.
-        // We're given a const &; we relax that on the way out via a
-        // const_cast — safe because read_parakeet_hparams /
-        // build_parakeet_weights are the single producer of hp and its
-        // only contract is "writable while loading".
+        // Stash the resolved vocab+1 into hp. const_cast is safe: the
+        // loader is the single producer of hp, writable while loading.
         const_cast<ParakeetHParams &>(hp).head_ctc_n_classes =
             static_cast<int32_t>(n_classes);
     } else {
         // ----- predictor (TDT, RNNT) -----
-        // The predictor + joint run on host CPU via decoder.cpp's
-        // hand-rolled fp32 linear(); the host weight mirror dequantizes
-        // through ggml_get_type_traits()->to_float on load, so any of the
-        // GET_LIN-allowed types are safe here.
         GET_LIN(weights.predictor.embed_w, "pred.embed.weight", pred_h, pred_v);
 
         weights.predictor.lstm.assign(hp.pred_n_layers, ParakeetPredictor::LstmLayer{});
         for (int i = 0; i < hp.pred_n_layers; ++i) {
             auto & l = weights.predictor.lstm[i];
-            // Both Wx and Wh project from pred_hidden (NeMo's prednet uses
-            // a learned embedding of size pred_hidden; the embed table
-            // shape is [pred_vocab, pred_hidden]). The 4*hidden output
-            // dim is the concatenated (i, f, g, o) gates.
+            // Wx/Wh both project from pred_hidden; 4*hidden output =
+            // concatenated (i, f, g, o) gates.
             const int64_t gates = 4 * pred_h;
             GET_LIN(l.Wx, lname("pred.lstm.%d.Wx",   i), pred_h, gates);
             GET_LIN(l.Wh, lname("pred.lstm.%d.Wh",   i), pred_h, gates);
@@ -914,11 +787,8 @@ transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
         GET_F32(weights.joint.out_b,  "joint.out.bias", joint_n);
     }
 
-    // ----- prompt MLP (multilingual variants) -----
-    //
-    // Loaded only when hp.has_prompt is true. The PyTorch nn.Sequential
-    // indexing is preserved as the canonical name (`.0` input linear,
-    // `.2` output linear; `.1` is the parameter-free activation).
+    // ----- prompt MLP (multilingual variants, has_prompt only) -----
+    // PyTorch nn.Sequential indexing preserved (.0 input, .2 output).
     if (hp.has_prompt) {
         const int64_t prompt_h = hp.prompt_hidden;
         const int64_t in_dim   = static_cast<int64_t>(d_model) +

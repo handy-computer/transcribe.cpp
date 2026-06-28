@@ -60,10 +60,7 @@ struct StepBuild {
     ggml_tensor * kv_idx_in   = nullptr;  // [1] i64
     ggml_tensor * mask_in     = nullptr;  // [max_n_kv, 1] f16
     ggml_tensor * out         = nullptr;  // [1] i32 — argmax
-    // Pre-argmax logits, exposed for tensor-validation dumps. The
-    // graph keeps both alive; reading `logits` requires
-    // ggml_backend_tensor_get since it lives on the device.
-    ggml_tensor * logits      = nullptr;  // [vocab] f32
+    ggml_tensor * logits      = nullptr;  // [vocab] f32 — pre-argmax, for dumps
     ggml_cgraph * graph       = nullptr;
 
     int max_n_kv = 0;

@@ -1,17 +1,11 @@
 // arch/gigaam/gigaam.h - GigaAM-family internal model and context types.
 //
-// INTERNAL to src/arch/gigaam/. The public C ABI in include/transcribe.h
-// knows nothing about Arch; dispatch happens through find_arch() in
-// transcribe-arch.cpp.
-//
-// GigaAM-v3 ships four ported variants (e2e_rnnt, e2e_ctc, rnnt, ctc).
-// All four share a 16-layer Conformer encoder with rotary attention.
-// The e2e variants use a SentencePiece tokenizer with punctuation +
-// Cyrillic casing; the non-e2e (rnnt, ctc) variants use a charwise
-// 33-entry vocab. The upstream `v3_ssl` (HuBERT-CTC pretraining
-// checkpoint) is intentionally out of scope: encoder-only, no head, no
-// transcribe path, and transcribe.cpp has no encoder-output emission
-// CLI.
+// INTERNAL to src/arch/gigaam/. GigaAM-v3 ships four ported variants
+// (e2e_rnnt, e2e_ctc, rnnt, ctc), all sharing a 16-layer Conformer encoder
+// with rotary attention. The e2e variants use a SentencePiece tokenizer
+// (punctuation + Cyrillic casing); the non-e2e variants use a charwise
+// 33-entry vocab. The upstream `v3_ssl` SSL checkpoint is out of scope
+// (encoder-only, no head).
 
 #pragma once
 
@@ -44,9 +38,7 @@ namespace transcribe::gigaam {
 void apply_family_invariants(transcribe_model & model);
 
 // Concrete model. Owns the ggml_context that holds every weight tensor's
-// data buffer, and any per-family precomputed buffers we may add later
-// (Stage 4 milestones will introduce a host decoder mirror analogous to
-// parakeet's `host_decoder` for the RNN-T greedy decode loop).
+// data buffer plus the host decoder mirror for the RNN-T/CTC greedy loop.
 struct GigaamModel final : public transcribe_model {
     Tokenizer       tok;
     GigaamHParams   hparams;
@@ -61,7 +53,7 @@ struct GigaamModel final : public transcribe_model {
     GigaamMelFrontend mel;
 
     // Host mirror of predictor + joint (RNN-T variants) or CTC head
-    // (CTC variants). Populated in M3/M4. Empty for now.
+    // (CTC variants). Populated at load() time.
     HostDecoderWeights host_decoder;
 
     GigaamModel() = default;
@@ -81,9 +73,6 @@ struct GigaamSession final : public transcribe_session {
     std::vector<float>   mel_buf;
     std::vector<float>   pos_buf;          // cos/sin rotary PE bank, host scratch
     std::vector<float>   enc_host;
-    // RNN-T greedy decoder scratch goes here when M3 lands; CTC greedy
-    // scratch lands at M4.
-
 
     GigaamSession() = default;
     ~GigaamSession() override;

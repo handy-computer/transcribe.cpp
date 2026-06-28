@@ -57,7 +57,7 @@ struct EncoderBuild {
     ggml_tensor * cat_out          = nullptr;  // [num_enc_layers * hidden, T_enc]
                                                //  the projector input
     ggml_tensor * ctc_logits       = nullptr;  // [enc_out_dim=348, T_enc]
-    ggml_tensor * ctc_bpe_logits   = nullptr;  // [bpe_out_dim=100353, T_enc]
+    ggml_tensor * ctc_bpe_logits   = nullptr;  // [bpe_output_dim, T_enc]
                                                //  raw frame-level (no pool)
     ggml_tensor * mid_blank_probs  = nullptr;  // [T_enc] — softmax(mid_ctc)[blank].
                                                //  Used host-side as the BPE pool's
@@ -75,7 +75,7 @@ struct EncoderBuild {
                                                    // (== `enc.block.8.out`)
         ggml_tensor * block_last_out   = nullptr;  // block (N-1)
         ggml_tensor * ctc_logits       = nullptr;  // == ctc_logits, named
-        // Block-0 sub-step taps for bf16-cascade drift localization.
+        // Block-0 sub-step taps.
         ggml_tensor * block_0_post_ff1  = nullptr;
         ggml_tensor * block_0_post_attn = nullptr;
         ggml_tensor * block_0_post_conv = nullptr;
@@ -103,26 +103,26 @@ std::vector<float>   precompute_last_block_mask(int context_size, int t_enc_rema
 //                         as per-frame pool weights. Must come from the
 //                         *middle* (self-conditioning) CTC head's softmax,
 //                         not the final head — see modeling_ctc.py.
-//   ctc_bpe      [T_enc, 100353] host-row-major (frame-level BPE logits)
+//   ctc_bpe      [T_enc, n_bpe_vocab] host-row-major (frame-level BPE
+//                logits). n_bpe_vocab is bpe_output_dim: 100353
+//                (vocab_size + 1) for the old scheme, 100352 (vocab_size)
+//                for the new scheme.
 //   pool_window  4 in this family
-//   blank_id     0
+//   blank_id     selects the decode scheme (see weights.h enc_bpe_blank_id):
+//                  - 0   (old): channel 0 is a synthetic blank, channels
+//                        1..N hold LLM ids; emitted id = argmax - 1.
+//                  - 100257 (new, BOS): channels ARE the LLM ids directly,
+//                        blank is the BOS id; emitted id = argmax (no shift).
 // Output:
 //   token_ids    initial-hypothesis BPE token ids after greedy + collapse +
 //                blank removal. Used as the text portion of the NLE LLM
 //                forward (each token gets an eos slot inserted around it).
 //
-// Reference: NLE NARDecoder.compute_text_ctc_preds: argmax over the
-// CTC head per frame, only frames where the argmax is non-blank are
-// "valid" — those frames are then bucketed into windows of pool_window=4
-// and the BPE logits over each window are weighted by the (softmaxed)
-// CTC blank-vs-non-blank posterior. We approximate the same path:
-//
-//   per-frame: blank_prob = softmax(ctc_logits)[blank_id]
-//              non_blank_prob = 1 - blank_prob
-//   pool: for each window of pool_window consecutive frames whose
-//         non_blank_prob > 0.5, sum non_blank_prob[k] * ctc_bpe[k]
-//         normalised by sum non_blank_prob[k] -> [bpe_dim]
-//   greedy: argmax per pooled window, then collapse repeats + drop blanks
+// Reference: NLE NARDecoder.compute_text_ctc_preds. Per-frame non-blank
+// frames are bucketed into windows of pool_window, the BPE logits over each
+// window are weighted by the (softmaxed) CTC non-blank posterior, then a
+// greedy argmax + collapse-repeats + drop-blanks yields the hypothesis. See
+// the implementation in encoder.cpp.
 void compute_bpe_ctc_initial_hypothesis(
     const std::vector<float> & importance_non_blank,
     const std::vector<float> & ctc_bpe_logits,

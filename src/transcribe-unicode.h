@@ -58,10 +58,9 @@ struct CptFlags {
 
 // UTF-8 codec. Mirrors the narrow subset of llama.cpp's unicode.cpp
 // helpers that the pretokenizer needs. Invalid UTF-8 throws
-// std::invalid_argument; callers should only pass text that made it
-// through the GGUF tokenizer / Python reference already, so in
-// practice we never see malformed input -- the throw is a
-// programming-bug backstop, not a user-facing error path.
+// std::invalid_argument; callers only pass text that already made it
+// through the GGUF tokenizer / Python reference, so the throw guards a
+// programming bug rather than a user-facing error path.
 std::string           cpt_to_utf8   (uint32_t cpt);
 uint32_t              cpt_from_utf8 (const std::string & utf8, size_t & offset);
 std::vector<uint32_t> cpts_from_utf8(const std::string & utf8);

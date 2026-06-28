@@ -1,15 +1,11 @@
 // arch/voxtral/voxtral.h - Voxtral (2507) model and context types.
 //
-// INTERNAL to src/arch/voxtral/. Declares the concrete classes that
-// derive from transcribe_model / transcribe_session for the Voxtral
-// audio-LLM family (Whisper-large-v3 encoder + 4x frame-group projector
-// + Llama/Ministral causal LM with audio-token injection).
-//
-// First port targets non-streaming ASR transcription plus a chat
-// instruction path (translation / free-text prompting): translation and
-// audio understanding both go through the mistral-common instruct
-// template, which is structurally distinct from the transcription-
-// request template. Both share the same encoder/projector/decoder.
+// INTERNAL to src/arch/voxtral/. Concrete transcribe_model /
+// transcribe_session classes for the Voxtral audio-LLM family (Whisper-large-v3
+// encoder + 4x frame-group projector + Llama/Ministral causal LM with
+// audio-token injection). Two prompt modes — ASR transcription and a
+// mistral-common instruct path (translation / free-text) — share the same
+// encoder/projector/decoder.
 
 #pragma once
 
@@ -42,9 +38,8 @@ namespace transcribe::voxtral {
 
 void apply_family_invariants(transcribe_model & model);
 
-// mistral-common transcription/instruct control tokens, resolved through
-// the loaded tokenizer at load time so a vocab reorder fails loudly here
-// rather than silently corrupting the prompt.
+// mistral-common transcription/instruct control tokens, resolved through the
+// loaded tokenizer at load time (a vocab reorder fails loudly here).
 //
 // Transcription template:
 //   [BOS] [INST] [BEGIN_AUDIO] [AUDIO]*N [/INST] (lang:<l>)? [TRANSCRIBE]
@@ -94,7 +89,6 @@ struct VoxtralSession final : public transcribe_session {
 
     std::vector<float> mel_buf;
     std::vector<float> enc_host;  // projector output (audio embeds), all chunks
-
 
     bool encoder_use_flash = false;
     bool decoder_use_flash = true;

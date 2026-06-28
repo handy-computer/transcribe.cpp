@@ -252,8 +252,27 @@ def find_cli(repo: Path) -> Path:
             return candidate
     raise SystemExit(
         "error: transcribe-cli not found in build/bin/\n"
-        "  Run: cmake --build build --target transcribe-cli"
+        "  Run: cmake --build build --target transcribe-cli\n"
+        "  For --mel-from-ref and per-layer dumps, configure with\n"
+        "  -DTRANSCRIBE_ENABLE_VALIDATION_HOOKS=ON (or: cmake --preset validation)."
     )
+
+
+def validation_hooks_enabled(repo: Path) -> bool:
+    """True if build/ was configured with the validation hooks compiled in.
+
+    Reads build/CMakeCache.txt next to the CLI that find_cli() runs. Used to
+    hard-fail --mel-from-ref against a build that would otherwise silently
+    ignore it (the hook code is compiled out unless the flag is ON).
+    """
+    cache = repo / "build" / "CMakeCache.txt"
+    try:
+        for line in cache.read_text().splitlines():
+            if line.startswith("TRANSCRIBE_ENABLE_VALIDATION_HOOKS:"):
+                return line.rstrip().endswith("=ON")
+    except OSError:
+        pass
+    return False
 
 
 def run_cmd(cmd: list[str], repo: Path, label: str) -> None:
@@ -420,8 +439,16 @@ def cmd_cpp(args: argparse.Namespace) -> int:
         # to ref-mel hid a base.en regression once (the mel-precision
         # change in 4613129); we don't want that blind spot back.
         if args.family == "whisper" and getattr(args, "mel_from_ref", False):
+            if not validation_hooks_enabled(repo):
+                raise SystemExit(
+                    "error: --mel-from-ref requires validation hooks compiled "
+                    "in, but build/ has TRANSCRIBE_ENABLE_VALIDATION_HOOKS=OFF "
+                    "(the hook is compiled out and would be silently ignored).\n"
+                    "  Reconfigure: cmake --preset validation && "
+                    "cmake --build build --target transcribe-cli"
+                )
             ref_dir = repo / "build" / "validate" / args.family / variant / case_name / "ref"
-            env["TRANSCRIBE_WHISPER_MEL_FROM_REF"] = str(ref_dir)
+            env["TRANSCRIBE_MEL_FROM_REF"] = str(ref_dir)
 
         cmd = [
             str(cli),
@@ -650,7 +677,7 @@ def cmd_mel(args: argparse.Namespace) -> int:
 
         env = os.environ.copy()
         env["TRANSCRIBE_DUMP_DIR"] = str(out_dir)
-        env.pop("TRANSCRIBE_WHISPER_MEL_FROM_REF", None)
+        env.pop("TRANSCRIBE_MEL_FROM_REF", None)
 
         cmd = [
             str(cli),
@@ -872,10 +899,11 @@ def main() -> int:
     )
     sp_cpp.add_argument(
         "--mel-from-ref", action="store_true",
-        help="Whisper-only debug knob: inject the reference mel via "
-             "TRANSCRIBE_WHISPER_MEL_FROM_REF so enc.mel.in is bit-"
+        help="Whisper-only validation hook: inject the reference mel via "
+             "TRANSCRIBE_MEL_FROM_REF so enc.mel.in is bit-"
              "identical to HF's WhisperFeatureExtractor. Use to isolate "
              "graph drift from frontend drift when a regression fires. "
+             "Requires a build with -DTRANSCRIBE_ENABLE_VALIDATION_HOOKS=ON. "
              "Default is the production C++ MelFrontend.",
     )
     sp_cpp.set_defaults(func=cmd_cpp)
@@ -912,9 +940,10 @@ def main() -> int:
     )
     sp_all.add_argument(
         "--mel-from-ref", action="store_true",
-        help="Whisper-only debug knob: inject the reference mel via "
-             "TRANSCRIBE_WHISPER_MEL_FROM_REF for the cpp dump. Default "
-             "is the production C++ MelFrontend.",
+        help="Whisper-only validation hook: inject the reference mel via "
+             "TRANSCRIBE_MEL_FROM_REF for the cpp dump. Requires a build with "
+             "-DTRANSCRIBE_ENABLE_VALIDATION_HOOKS=ON. Default is the "
+             "production C++ MelFrontend.",
     )
     sp_all.set_defaults(func=cmd_all)
 

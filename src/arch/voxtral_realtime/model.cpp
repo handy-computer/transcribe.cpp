@@ -1,14 +1,10 @@
 // arch/voxtral_realtime/model.cpp - Voxtral Realtime (2602) family handler.
 //
-// Streaming audio-LLM. Stage 4 implements the OFFLINE whole-clip forward (the
-// per-tensor `decode` oracle contract): causal RoPE sliding-window encoder ->
-// projector -> Ministral LM with ADDITIVE audio fusion and delay-conditioned
-// adaptive-norm. The prompt is [BOS] + [STREAMING_PAD]*(n_left_pad+num_delay);
-// the projector audio embeddings are ADDED onto every sequence position. Greedy
-// decode is clamped to ceil(mel_frames / audio_length_per_tok) positions.
-//
-// The incremental streaming scheduler (conv cache + dual KV + chunk loop +
-// stream hooks) lands in a later step; this file ships the offline baseline.
+// Streaming audio-LLM: causal RoPE sliding-window encoder -> projector ->
+// Ministral LM with ADDITIVE audio fusion and delay-conditioned adaptive-norm.
+// The prompt is [BOS] + [STREAMING_PAD]*(n_left_pad+num_delay); the projector
+// audio embeddings are ADDED onto every sequence position. Greedy decode is
+// clamped to ceil(mel_frames / audio_length_per_tok) positions.
 
 #include "voxtral_realtime.h"
 #include "transcribe/voxtral_realtime.h"  // public stream-ext surface
@@ -21,6 +17,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -103,6 +100,7 @@ void apply_threads(ggml_backend_sched_t sched, int n_threads) {
     transcribe::configure_sched_n_threads(sched, n_threads);
 }
 
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 // Read a reference enc.mel.in.f32 ([n_mels, n_frames] mel-major) for numerical
 // isolation. Returns true and fills mel_buf (mel-major) + n_frames on success.
 bool read_ref_mel(const std::string & dir, int n_mels,
@@ -122,60 +120,26 @@ bool read_ref_mel(const std::string & dir, int n_mels,
     n_frames = static_cast<int>(n / n_mels);
     return true;
 }
+#endif // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 
-// ---------------------------------------------------------------------------
-// Input-length contract (see docs/input-limits.md). Voxtral Realtime is the
-// honest edge case among the audio-LLM families: BOTH ends are effectively
-// unbounded.
-//
-//   - Encoder: causal + sliding-window (750 frames). The streaming scheduler
-//     advances it frame-by-frame against a constant-memory ring, so input
-//     length is bounded only by wall-clock, not by an architectural wall.
-//   - Decoder: a Ministral LM whose KV is itself a sliding-window ring
-//     (dec_sliding_window = 8192) keeping the last `swin` tokens. RoPE stays
-//     valid up to dec_max_position (131072), so the only hard cap is that the
-//     decoder position cannot exceed dec_max_position.
-//
-// dec_max_position = 131072 positions at the 12.5 Hz audio-token grid
-// (audio_length_per_tok = 8 mel frames/token, hop 1280 samples/token @ 16 kHz
-// => 80 ms/token) is 131072 * 80 ms ~= 2.9 hours of audio before the absolute
-// position cap is reached. That is far past the ~1 hour threshold in
-// docs/input-limits.md AND the family is genuinely stream-unbounded (the
-// decoder KV slides, it does not clamp short of dec_max_position), so the
-// honest published value is 0 (unbounded). We do NOT advertise a finite
-// max_audio_ms: the real limit a streaming caller hits first is memory/latency,
-// not tokens, and a finite advisory number would imply a reject at an everyday
-// threshold we don't enforce. There IS a genuine hard wall — the absolute
-// dec_max_position cap (~2.9 h), past which RoPE positions alias — and the
-// offline paths DO reject beyond it: one-shot run() and run_batch return
-// INPUT_TOO_LONG, while streaming surfaces it after the fact via
-// transcribe_was_truncated() + a WARN (a stream is never forced to FAILED).
-// But that wall is hours out, far past any practical clip, so 0 (unbounded)
-// stays the honest capability and n_ctx does not lower it.
-// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Chunked/unbounded family:
+// the encoder is causal + sliding-window (750 frames) advanced on a
+// constant-memory ring, and the decoder KV is itself a sliding-window ring
+// (dec_sliding_window = 8192). The only hard wall is the dec_max_position
+// (131072) RoPE cap; at the 80 ms/token grid (audio_length_per_tok=8 mel
+// frames, hop 1280 @ 16 kHz) that is ~2.9 h. n_ctx does not lower it.
 
-// Absolute decoder position cap, in tokens: the model's maximum RoPE position
-// (dec_max_position). Past this the decoder's RoPE positions alias and the
-// decode is invalid, so every decode path (one-shot / batch / streaming)
-// hard-stops here. This is the model's true wall and is deliberately NOT
-// lowered by the session n_ctx knob: voxtral_realtime is a chunked/unbounded
-// (bucket-1) family whose decoder KV slides, so n_ctx neither bounds its (ring)
-// memory nor changes this cap. Like whisper and parakeet, the family ignores
-// n_ctx entirely — transcribe_session_get_limits() reports it unbounded and a
-// lowered n_ctx is a documented no-op. See the contract block above and
-// docs/input-limits.md.
+// Absolute decoder position cap, in tokens (dec_max_position). Past this the
+// decoder's RoPE positions alias, so every decode path hard-stops here. Not
+// lowered by the session n_ctx knob (chunked/unbounded family; the decoder KV
+// slides). See docs/input-limits.md.
 int voxtral_realtime_abs_position_cap(const HParams & hp) {
     return hp.dec_max_position;
 }
 
 // Advisory transcribe_capabilities::max_audio_ms. Returns 0 (unbounded): the
-// decoder KV is a sliding-window ring (input length is bounded only by the
-// dec_max_position absolute-position cap, ~2.9 h at the 80 ms/token grid) and
-// the encoder is causal/streaming, so this family is in the chunked/unbounded
-// bucket. The honest number for "no practical limit" is 0; a finite advertised
-// value would imply an everyday caller-facing limit. The only reject is the
-// model's true absolute position wall, which is hours out and handled as a
-// safety cap. See the contract block above and docs/input-limits.md.
+// decoder KV slides and the encoder is causal/streaming, so the only reject is
+// the model's absolute position wall (~2.9 h), handled as a safety cap.
 int64_t voxtral_realtime_max_audio_ms(const HParams & hp) {
     (void) hp;
     return 0;
@@ -204,10 +168,8 @@ transcribe_status load(Loader & loader,
     if (auto st = read_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK) return st;
 
     // Publish the input-length ceiling now that the decoder context window is
-    // known (apply_family_invariants ran before the hparams were read, so it
-    // could not set this). Voxtral Realtime is chunked/unbounded: 0 = no
-    // practical limit (sliding-window KV + streaming encoder). See
-    // docs/input-limits.md and the contract block in the anon namespace.
+    // known (apply_family_invariants ran before hparams). Chunked/unbounded:
+    // 0 = no practical limit. See docs/input-limits.md.
     m->caps.max_audio_ms = voxtral_realtime_max_audio_ms(m->hparams);
 
     m->hparams.vocab_size   = m->tok.n_tokens();
@@ -320,19 +282,14 @@ transcribe_status init_context(transcribe_model * model,
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
-    // Captured for base-class uniformity only: voxtral_realtime is a
-    // chunked/unbounded family and deliberately ignores n_ctx (its decoder KV
-    // ring is constant-memory; the decode wall is the absolute dec_max_position,
-    // not a lowerable ceiling). See docs/input-limits.md.
+    // Captured for base-class uniformity only: this family ignores n_ctx (the
+    // decoder KV ring is constant-memory; the wall is dec_max_position).
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
     auto * cm = static_cast<Model *>(model);
 
-    // Encoder + decoder flash attention ON by default on every backend (Stage 6
-    // #3 — measured ~14-37% faster encode on Metal, ~17-47% on CPU, byte-identical
-    // transcript). Flash is now the numerical source-of-truth for the encoder;
-    // tests/tolerances/voxtral_realtime.json is gated against it. Override with
-    // TRANSCRIBE_NO_FLASH=1.
+    // Encoder + decoder flash attention ON by default on every backend. Flash is
+    // the numerical source-of-truth for the encoder. Override TRANSCRIBE_NO_FLASH=1.
     cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
@@ -443,10 +400,10 @@ transcribe_status compute_ada_scales(Session * cc, Model * cm, int num_delay) {
     ggml_backend_tensor_get(acc, ada.data(), 0, ada.size() * sizeof(float));
     ggml_free(ctx);
     for (auto & v : ada) v += 1.0f;  // s_l = 1 + ada
-    // Stage 6 #2: fold the per-layer FFN-norm weight into the ada scale and store
-    // (s_l ⊙ norm_ffn_w) here. The decode block passes this as the FFN-norm weight
-    // (ffn_scale = null), so the fused rms_norm(·weight) kernel applies the ada
-    // scale with NO separate per-layer ggml_mul. Exact: s⊙(w⊙x̂) == (s⊙w)⊙x̂.
+    // Fold the per-layer FFN-norm weight into the ada scale and store
+    // (s_l ⊙ norm_ffn_w): the decode block passes this as the FFN-norm weight so
+    // the fused rms_norm(·weight) kernel applies the ada scale with no separate
+    // ggml_mul. Exact: s⊙(w⊙x̂) == (s⊙w)⊙x̂.
     {
         std::vector<float> wbuf(static_cast<size_t>(hidden));
         for (int il = 0; il < n_layer; ++il) {
@@ -480,20 +437,23 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
     // ----- Mel (or reference-injected mel for numerical isolation) -----
     const int n_mels = cm->hparams.enc_num_mel_bins;
     int mel_n_frames = 0;
-    const char * ref_mel_dir = std::getenv("TRANSCRIBE_VOXTRAL_REALTIME_MEL_FROM_REF");
+    bool mel_from_ref = false;
     const int64_t t_mel_start = ggml_time_us();
-    if (ref_mel_dir != nullptr && ref_mel_dir[0] != '\0') {
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    if (const char * ref_mel_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF")) {
         if (!read_ref_mel(ref_mel_dir, n_mels, cc->mel_buf, mel_n_frames)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: failed to read ref mel from %s", ref_mel_dir);
             return TRANSCRIBE_ERR_GGUF;
         }
-    } else {
+        mel_from_ref = true;
+    }
+#endif
+    if (!mel_from_ref) {
         // Streaming offline audio padding (mistral-common encode_transcription,
         // StreamingMode.OFFLINE): pad the audio into the 12.5 Hz token grid as
         //   [n_left_pad zeros] + [raw rounded up to raw_per_tok] + [n_right zeros]
         // raw_per_tok = audio_length_per_tok * hop = 1280 (= sr / frame_rate);
         // n_right = num_delay + 1 (BOS) + OFFLINE_STREAMING_BUFFER_TOKENS(10).
-        // This reproduces the reference input_features exactly (max|d|=0).
         const int raw_per_tok = cm->hparams.audio_length_per_tok * cm->hparams.fe_hop_length;
         const int n_left_tok   = cm->specials.n_left_pad;
         const int n_right_tok  = num_delay + 1 + 10;
@@ -624,12 +584,9 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Absolute-position consistency check (parity with the batch path): the
-    // decoder's RoPE is valid only up to dec_max_position, and a clip needs one
-    // KV slot per audio token, so a horizon past the cap cannot be decoded.
-    // Reject up front with INPUT_TOO_LONG. This family ignores the session
-    // n_ctx knob, so the cap is always the model's true wall (~2.9 h); a clip
-    // that long OOMs the grow-to-fit KV first, so this is a defensive guard.
+    // RoPE is valid only up to dec_max_position and a clip needs one KV slot per
+    // audio token, so a horizon past the cap cannot be decoded — reject up front
+    // with INPUT_TOO_LONG (defensive: ~2.9 h of audio OOMs the KV first).
     const int abs_cap = voxtral_realtime_abs_position_cap(cm->hparams);
     if (n_audio + 1 > abs_cap) {
         transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -716,22 +673,11 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
         generated_ids.push_back(argmax(logits));
     }
 
-    // Steps: 1-gram-lookup speculative decode (when k_drafts > 0) or plain
-    // autoregression (k_drafts == 0).
-    //
-    // Spec path: each iter feeds [next_tok, draft[0..K-1]] at positions
-    // [cur_pos..cur_pos+K] through a multi-position verify graph. predicted[0]
-    // is always the model's true next-token decision; predicted[c] (c>0) is
-    // only valid if draft[0..c-1] all matched the model's argmax at columns
-    // 0..c-1. n_accept = longest matched prefix; we commit predicted[0..n_accept].
-    // Rejected drafts' KV writes get overwritten on the next iter (subsequent
-    // verify pass at cur_pos + n_accept + 1 writes through those slots).
-    //
-    // For both paths the attention read window is shrunk from kv_cache.n_ctx
-    // (allocation stride) to n_audio (the actual clip horizon). The dropped
-    // slots [n_audio, n_ctx) were always -inf-masked, so the shrink is bit-
-    // identical and saves ~11× KV bandwidth on short clips where n_ctx floors
-    // at 2048. Streaming path keeps the full window because positions wrap.
+    // Steps: 1-gram-lookup speculative decode (k_drafts > 0; mechanism in
+    // build_verify_graph) or plain autoregression (k_drafts == 0). For both, the
+    // attention read window is shrunk from kv_cache.n_ctx to n_audio (the actual
+    // clip horizon): the dropped slots [n_audio, n_ctx) were always -inf-masked,
+    // so the shrink is bit-identical and saves KV bandwidth on short clips.
     {
         const int max_n_kv = n_audio;
 
@@ -1050,18 +996,12 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
 
     // params->spec_k_drafts: -1 = family default (=1), 0 = disabled,
     // 1..VOXTRAL_REALTIME_SPEC_K_MAX = explicit. Clamp into range so a
-    // misconfigured caller doesn't ask for an unbounded verify graph.
-    //
-    // Default K=1: the robust setting across backends. A metal Q4_K_M sweep
-    // (decode_ms vs K, jfk + dots) showed K=1 never regresses — best on
-    // short utterances (~1.12x) and break-even on long ones — while K>=2
-    // costs long-form decode because 1-gram draft acceptance is too low to
-    // amortize the T=K+1 verify graph (K=2 dots ~ -16%, K>=4 far worse).
-    // The win concentrates on bandwidth-bound hardware, where one extra
-    // drafted position rides along on weights already loaded for the
-    // verify step. See docs/models/voxtral-realtime.md.
+    // misconfigured caller doesn't ask for an unbounded verify graph. Default
+    // K=1 is the robust setting across backends (K>=2 costs long-form decode;
+    // 1-gram acceptance is too low to amortize the T=K+1 verify graph). See
+    // docs/models/voxtral-realtime.md.
     constexpr int VOXTRAL_REALTIME_SPEC_K_MAX = 8;
-    int k_drafts = 1;  // family default
+    int k_drafts = 1;
     if (params != nullptr && params->struct_size >=
         offsetof(transcribe_run_params, spec_k_drafts) + sizeof(params->spec_k_drafts)) {
         const int requested = params->spec_k_drafts;
@@ -1088,16 +1028,12 @@ transcribe_status run(transcribe_session * session, const float * pcm, int n_sam
 }
 
 // ---- Streaming -------------------------------------------------------------
-// Voxtral Realtime's encoder is causal + sliding-window and its mel uses a
-// FIXED global normalization, so the projector audio embeddings are append-only
-// and stable: a forward over the accumulated audio yields embeddings identical
-// to the offline whole-clip forward. stream_finalize therefore runs the exact
-// offline forward on the full buffer => byte-identical to transcribe_run and the
-// `stream` oracle. stream_feed emits throttled tentative hypotheses by running
-// the same forward on the audio-so-far. (Constant-per-chunk-cost incremental
-// encode — conv padding cache + encoder StaticCache + decoder sliding-KV — is a
-// documented Stage-5+ perf optimization with identical numerics; see
-// reports/porting/voxtral_realtime/streaming-plan.md.)
+// The encoder is causal + sliding-window and the mel uses a FIXED global
+// normalization, so the projector audio embeddings are append-only and stable:
+// a forward over the accumulated audio yields embeddings identical to the
+// offline whole-clip forward. The incremental scheduler below (conv padding
+// cache + encoder StaticCache ring + decoder sliding-KV) is therefore numerically
+// identical to the offline path; stream_finalize matches transcribe_run.
 
 constexpr int k_default_min_decode_interval_ms = 1000;
 
@@ -1117,11 +1053,9 @@ transcribe_status resolve_stream_ext(const transcribe_stream_params * sp,
     if (fam != nullptr) {
         const auto * vx =
             reinterpret_cast<const transcribe_voxtral_realtime_stream_ext *>(fam);
-        // num_delay_tokens: -1 = model default (6 = 480 ms). Otherwise it must be
-        // a publisher-supported transcription delay. mistral-common requires a
-        // positive multiple of 80 ms (audio.py:124-127); the model card narrows
-        // the validated set to a multiple of 80 ms in [80, 1200] (tokens 1..15)
-        // OR the standalone 2400 ms (token 30). One token = 80 ms (12.5 Hz grid).
+        // num_delay_tokens: -1 = model default (6 = 480 ms). Otherwise a
+        // publisher-validated delay: tokens 1..15 (80..1200 ms) or 30 (2400 ms).
+        // One token = 80 ms (12.5 Hz grid).
         const int32_t nt = vx->num_delay_tokens;
         if (nt != -1 && !((nt >= 1 && nt <= 15) || nt == 30))
             return TRANSCRIBE_ERR_INVALID_ARG;
@@ -1197,13 +1131,11 @@ bool stream_run_graph(Session * cc, Model * cm, ggml_cgraph * gf,
     return ok;
 }
 
-// Encoder KV ring geometry. The reference keeps the last `sliding_window`(750)
-// frames (StaticSlidingWindowLayer). We hold a contiguous cache of k_enc_ring_ctx
-// slots, append new frames at the write head, and periodically COMPACT (copy the
-// last 750 frames to the front) so the ring never overflows — constant memory,
-// unbounded stream length, numerically identical to the whole-clip encoder.
-// k_enc_max_batch bounds frames per chunk so a single huge feed can't overflow
-// (must be <= ring - sliding_window and a multiple of proj_downsample).
+// Encoder KV ring geometry. Keep the last `sliding_window`(750) frames: hold a
+// contiguous cache of k_enc_ring_ctx slots, append at the write head, and
+// periodically COMPACT (copy the last 750 frames to the front) so the ring never
+// overflows. k_enc_max_batch bounds frames per chunk (must be <= ring -
+// sliding_window and a multiple of proj_downsample).
 constexpr int k_enc_ring_ctx  = 1536;
 constexpr int k_enc_max_batch = 512;
 // (decoder sliding-window ring size is read from the GGUF: hp.dec_sliding_window)
@@ -1260,10 +1192,9 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
     //         needs: absolute samples [ws_sample, total_abs). ws_sample backs off
     //         GUARD frames before the first uncommitted mel frame; center=True
     //         reflects at the window start, so the first ceil(pad/hop)=2 window
-    //         frames are discarded (GUARD=4). The window is the SAME samples the
-    //         whole-buffer mel saw -> bit-identical. PCM older than the window is
-    //         dropped (below), so memory is bounded. `mel_off` = absolute frame of
-    //         window-frame 0; `mel_n` = window frame count (stride into mel_buf). ----
+    //         frames are discarded (GUARD=4). Same samples the whole-buffer mel
+    //         saw -> bit-identical. `mel_off` = absolute frame of window-frame 0;
+    //         `mel_n` = window frame count (stride into mel_buf). ----
     constexpr int GUARD       = 4;
     const size_t  left        = static_cast<size_t>(n_left_tok) * raw_per_tok;
     const int     mel_off     = std::max(0, cc->stream_n_mel_committed - GUARD);
@@ -1321,10 +1252,9 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
     if (is_final) cc->stream_n_audio_clamp = T_emb_ready / down;
 
     // ---- 3. Conv stem with the streaming PADDING CACHE: feed only the NEW mel
-    //         frames (token-aligned, a multiple of 2*down=8) through the conv stem
-    //         against the carried conv caches -> M_emb = M/2 new embedder frames.
-    //         Bit-identical to the whole-buffer left-pad conv, but O(new) per feed
-    //         (reference VoxtralRealtimeConv1dCacheLayer). ----
+    //         frames (token-aligned, a multiple of 2*down=8) against the carried
+    //         conv caches -> M_emb = M/2 new embedder frames. Bit-identical to the
+    //         whole-buffer left-pad conv, but O(new) per feed. ----
     const int ed = hp.enc_d_model;
     const int M  = ((n_mel_ready - cc->stream_n_mel_committed) / (2 * down)) * (2 * down);
     if (M > 0) {
@@ -1535,23 +1465,17 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
 
         const int swin    = hp.dec_sliding_window;   // 8192
         const int kv_ring = max_n_kv;                 // ring size == n_ctx (== swin here)
-        // Hard absolute-position cap = dec_max_position (131072). This family
-        // ignores the session n_ctx knob (bucket-1 / unbounded), so the cap is
-        // always the model's true wall — a streaming caller hits memory/latency
-        // long before it (~2.9 h of continuous audio).
+        // Hard absolute-position cap = dec_max_position; a streaming caller hits
+        // memory/latency long before it (~2.9 h).
         const int max_pos = voxtral_realtime_abs_position_cap(hp);
         const ggml_fp16_t mz = ggml_fp32_to_fp16(0.0f), mn = ggml_fp32_to_fp16(-INFINITY);
         std::vector<ggml_fp16_t> step_mask(max_n_kv, mn);
         int cap = (is_final && cc->stream_n_audio_clamp >= 0)
                 ? std::min(cc->stream_n_tok_ready, cc->stream_n_audio_clamp)
                 : cc->stream_n_tok_ready;
-        // The decoder KV is a sliding-window ring (keeps the last `swin` tokens,
-        // matching the reference DynamicSlidingWindowLayer), so length is bounded
-        // only by the model's max position — clips past the window slide, not clamp.
         // `hit_pos_cap`: this chunk's decode was limited by the hard position cap
-        // (NOT by stream_n_tok_ready / the finalize clamp), i.e. the stream is at
-        // the absolute context wall. Distinguish it from a normal per-chunk stop
-        // so the truncation WARN below fires only at the genuine hard cap, once.
+        // (not by stream_n_tok_ready / the finalize clamp), so the truncation WARN
+        // below fires only at the genuine hard cap.
         const bool hit_pos_cap = (max_pos < cap);
         cap = std::min(cap, max_pos);
         while (!cc->stream_eos && cc->stream_dec_pos < cap) {
@@ -1590,15 +1514,9 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
             cc->stream_generated.push_back(tok);
         }
 
-        // Non-silent truncation at the hard context cap. The decode loop above
-        // clamps stream_dec_pos to dec_max_position (max_pos); when the stream
-        // reaches that wall WITHOUT an EOS, the transcript is incomplete. Flag it
-        // via transcribe_was_truncated() + a single WARN rather than letting the
-        // clamp drop tokens silently. Guarded by !was_truncated so it fires at
-        // most once even though stream_process is re-entered per feed/finalize.
-        // The clamp/stopping behavior itself is unchanged. (Normal per-chunk
-        // stops — dec_pos reaching stream_n_tok_ready or the finalize clamp —
-        // never set hit_pos_cap, so they do not warn.)
+        // Truncation at the hard context cap without an EOS: flag via
+        // transcribe_was_truncated() + a single WARN (guarded by !was_truncated
+        // so it fires at most once across the per-feed/finalize re-entries).
         if (hit_pos_cap && !cc->stream_eos && cc->stream_dec_pos >= cap &&
             !cc->was_truncated) {
             cc->was_truncated = true;
@@ -1613,9 +1531,8 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
     cc->stream_t_dec_us += ggml_time_us() - t_dec0;
 
     // Release consumed audio embeds [audio_base, dec_pos) — the decoder never
-    // re-reads past positions, so memory stays bounded (matches the reference,
-    // which consumes each embed at its step). Skipped while dumping so the
-    // finalize proj.out dump keeps the full [0, n_tok_ready) history.
+    // re-reads past positions, so memory stays bounded. Skipped while dumping so
+    // the finalize proj.out dump keeps the full [0, n_tok_ready) history.
     if (!dumps_on && cc->stream_dec_pos > cc->stream_audio_base) {
         const size_t drop_n = static_cast<size_t>(cc->stream_dec_pos - cc->stream_audio_base) * dec_h;
         cc->stream_audio_embeds.erase(cc->stream_audio_embeds.begin(),
@@ -1624,7 +1541,7 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
     }
 
     // Per-component timing (diagnostic): printed once at finalize.
-    if (is_final && std::getenv("TRANSCRIBE_VOXTRAL_REALTIME_STREAM_TIMING") != nullptr) {
+    if (is_final && transcribe::env::flag("TRANSCRIBE_VOXTRAL_REALTIME_STREAM_TIMING")) {
         const double mel = cc->stream_t_mel_us / 1000.0, conv = cc->stream_t_conv_us / 1000.0;
         const double enc = cc->stream_t_enc_us / 1000.0, dec = cc->stream_t_dec_us / 1000.0;
         const double enc_c = cc->stream_t_enc_compute_us / 1000.0;  // pure graph_compute
@@ -1644,8 +1561,7 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
 
     // ---- 6. Numerical-validation dumps (finalize only). ----
     if (dumps_on && is_final) {
-        // stream proj.out = the incremental-encoder audio embeds [dec_h, n_tok];
-        // diff vs offline proj.out proves the StaticCache encoder is bit-exact.
+        // stream proj.out = the incremental-encoder audio embeds [dec_h, n_tok].
         if (cc->stream_n_tok_ready > 0) {
             const long long shp[2] = { dec_h, cc->stream_n_tok_ready };
             transcribe::debug::dump_host_f32("proj.out", cc->stream_audio_embeds.data(),
@@ -1687,7 +1603,6 @@ transcribe_status stream_begin(transcribe_session * session,
     cc->stream_n_enc_committed = 0;
     cc->stream_enc_slot     = 0;
     cc->stream_enc_abs_base = 0;
-    // Conv-stem padding cache: zeros == whole-buffer left-pad on the first chunk.
     cc->stream_conv0_cache.assign(static_cast<size_t>(cm->hparams.enc_num_mel_bins) * 2, 0.0f);
     cc->stream_conv1_cache.assign(static_cast<size_t>(cm->hparams.enc_d_model), 0.0f);
     cc->stream_n_mel_committed = 0;
@@ -1719,15 +1634,12 @@ transcribe_status stream_begin(transcribe_session * session,
     if (cc->enc_kv.buffer != nullptr) ggml_backend_buffer_clear(cc->enc_kv.buffer, 0);
 
     // Decoder KV: a sliding-window RING sized to the model's own `sliding_window`
-    // (read from the GGUF, NOT hardcoded — 8192 for this variant). The step loop
-    // writes token `cur` at slot `cur % n_ctx`, so the cache holds the last `swin`
-    // tokens for any stream length in constant memory — matching the reference
-    // DynamicSlidingWindowLayer (keep last swin-1 + new). `sliding_window` is a
-    // trained-in architectural constant, not an inference knob: shrinking it feeds
-    // the model an attention span it never saw; growing it does nothing (the model
-    // only attends `swin` back). Sized once per session; never shrinks a larger
-    // ctx an offline run may have left.
-    const int dec_ring = cm->hparams.dec_sliding_window;   // == reference text_config.sliding_window
+    // (from the GGUF, 8192 here). The step loop writes token `cur` at slot
+    // `cur % n_ctx`, so the cache holds the last `swin` tokens for any stream
+    // length in constant memory. `sliding_window` is a trained-in constant, not
+    // an inference knob. Sized once per session; never shrinks a larger ctx a
+    // prior offline run may have left.
+    const int dec_ring = cm->hparams.dec_sliding_window;
     if (cc->kv_cache.n_ctx < dec_ring) {
         const ggml_type kt = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
         cc->kv_cache.free();
@@ -1839,14 +1751,12 @@ bool accepts_ext_kind(const transcribe_model * model, transcribe_ext_slot slot,
 // Offline batched decode (transcribe_run_batch)
 // ---------------------------------------------------------------------------
 //
-// Mirrors the reference's batched audio tower: every clip's mel is right-padded
-// to the batch max and stacked on ne[2]; the causal encoder isolates each row's
-// real frames (no per-row mask). Batched additive fusion + a lockstep batched
-// decoder follow. The realtime specifics vs voxtral's run_batch: a single
-// whole-clip encoder (not 30 s chunks), TIED head, the ada ffn_scale, ADDITIVE
-// audio injected at EVERY prefill position AND at every decode step, and a
-// per-row n_audio clamp. Falls back to serial for n==1, dump mode, or no decoder
-// flash (the batched causal_lm blocks are flash-only).
+// Batched audio tower: every clip's mel is right-padded to the batch max and
+// stacked on ne[2]; the causal encoder isolates each row's real frames (no
+// per-row mask). vs voxtral's run_batch: a single whole-clip encoder (not 30 s
+// chunks), TIED head, the ada ffn_scale, ADDITIVE audio at every prefill position
+// AND every decode step, and a per-row n_audio clamp. Falls back to serial for
+// n==1, dump mode, or no decoder flash (the batched blocks are flash-only).
 
 transcribe_status run_batch_serial(Session * cc, const float * const * pcm,
                                    const int * n_samples, int n,
@@ -2085,15 +1995,10 @@ transcribe_status run_batch(transcribe_session * session, const float * const * 
     for (int i = 0; i < sp.n_left_pad + num_delay; ++i) prompt_ids.push_back(sp.streaming_pad);
     const int T_prompt = static_cast<int>(prompt_ids.size());
 
-    // model_max = dec_max_position (131072), the model's absolute RoPE wall.
-    // This family ignores the session n_ctx knob (bucket-1 / unbounded), so the
-    // cap is always the model's true max — n_ctx never narrows it. The realtime
-    // decoder needs one KV slot per audio token, so a clip whose audio horizon
-    // exceeds model_max CANNOT be partially decoded by clamping the cache below
-    // it (that corrupts the decode). Reject it up front with INPUT_TOO_LONG —
-    // the same contract as the offline run() path. (Reaching this wall needs
-    // ~2.9 h of audio; a clip that long OOMs the linear batch KV first.) See
-    // docs/input-limits.md.
+    // model_max = dec_max_position, the absolute RoPE wall (n_ctx never narrows
+    // it). One KV slot per audio token, so a clip whose horizon exceeds model_max
+    // can't be partially decoded by clamping the cache — reject up front with
+    // INPUT_TOO_LONG, same contract as run().
     const int model_max = voxtral_realtime_abs_position_cap(cm->hparams);
     int max_audio = 0;
     for (int b = 0; b < n; ++b) {
@@ -2119,9 +2024,9 @@ transcribe_status run_batch(transcribe_session * session, const float * const * 
     // pow2 width is safely clamped to the ceiling without cutting any decode.
     int max_n_kv = 1024; while (max_n_kv < max_audio + 1) max_n_kv *= 2;
     if (model_max > 0 && max_n_kv > model_max) max_n_kv = model_max;
-    // Step attention reads only the valid window (Stage 6 #4): the batch's actual
-    // max audio length, not the power-of-2 allocation. min() preserves the full
-    // window if the alloc was capped. Bit-identical (extra slots are masked).
+    // Step attention reads only the valid window: the batch's actual max audio
+    // length, not the power-of-2 allocation. min() preserves the full window if
+    // the alloc was capped. Bit-identical (extra slots are masked).
     const int read_n_kv = std::min(max_audio, max_n_kv);
     const ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) ? GGML_TYPE_F32 : GGML_TYPE_F16;
     if (cc->kv_cache_batch.self_k == nullptr || cc->kv_batch_cap != n ||
@@ -2301,6 +2206,6 @@ extern "C" void transcribe_voxtral_realtime_stream_ext_init(
     std::memset(p, 0, sizeof(*p));
     p->ext.size               = sizeof(*p);
     p->ext.kind               = TRANSCRIBE_EXT_KIND_VOXTRAL_REALTIME_STREAM;
-    p->num_delay_tokens       = -1;  // model default
-    p->min_decode_interval_ms = -1;  // family default
+    p->num_delay_tokens       = -1;
+    p->min_decode_interval_ms = -1;
 }

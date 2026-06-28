@@ -58,16 +58,14 @@ EncoderBuild build_encoder_graph(ggml_context * ctx,
 // Batched offline encoder (transcribe_run_batch fast path)
 // ---------------------------------------------------------------------------
 //
-// Mirrors the reference, which runs the audio tower batched over [B, T, C] with
-// NO audio attention_mask: every clip's mel is RIGHT-padded to the batch-max
-// `n_mel_frames` and stacked on ne[2]=B. Because the conv stem is causal
-// (left-pad) and attention is causal + sliding-window, a real frame at position
-// t only attends to <= t, so the right-padding of shorter clips never
-// contaminates their real [0, T_enc_b) outputs. A SINGLE `positions [T_enc]`
-// and sw-causal `mask [T_enc, T_enc]` therefore serve every row; the caller
-// slices each row's real n_audio_b out of out[:, :, b]. `use_flash` selects the
-// flash vs manual-softmax attention (honor the session's encoder_use_flash, so
-// the default CPU source-of-truth non-flash path batches too).
+// Runs the audio tower batched over [B, T, C] with NO audio attention_mask:
+// every clip's mel is RIGHT-padded to the batch-max `n_mel_frames` and stacked on
+// ne[2]=B. The conv stem is causal (left-pad) and attention is causal +
+// sliding-window, so a real frame at t only attends to <= t — the right-padding
+// of shorter clips never contaminates their real [0, T_enc_b) outputs. A SINGLE
+// `positions [T_enc]` and sw-causal `mask [T_enc, T_enc]` serve every row; the
+// caller slices each row's real n_audio_b out of out[:, :, b]. `use_flash`
+// honors the session's encoder_use_flash (so the non-flash CPU path batches too).
 struct EncoderBuildBatched {
     ggml_tensor * mel_in       = nullptr;  // [n_mels, n_mel_frames, B] input
     ggml_tensor * positions_in = nullptr;  // [T_enc] i32 RoPE positions (shared)
@@ -91,22 +89,16 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context * ctx,
 // Incremental streaming encoder (matches the reference StaticCache mechanism)
 // ---------------------------------------------------------------------------
 //
-// The reference runs the encoder transformer INCREMENTALLY: each decode step
-// feeds `downsample_factor` new embedder frames through the 32 transformer
-// layers against an encoder StaticCache (sliding_window=750), producing one
-// audio token. We split that into two graphs:
+// The encoder transformer runs INCREMENTALLY against an encoder StaticCache
+// (sliding_window=750). Split into two graphs:
 //
 //   build_embedder_graph    — conv stem only: mel -> embedder frames
 //                             [d_model, T_enc]. Causal convs (left-pad), so the
-//                             frames are append-only/stable (a whole-buffer
-//                             recompute equals the reference per-chunk conv +
-//                             padding cache, frame-for-frame).
-//   build_encoder_chunk_graph — the expensive part, INCREMENTAL: `n_new`
-//                             embedder frames as queries attend to the encoder
-//                             KV cache (prior frames' K/V) under a sliding-
-//                             window-causal mask; their K/V are appended at
-//                             cache offset `n_kv_before`. Final RMSNorm +
-//                             projector group-of-4 -> audio embeds.
+//                             frames are append-only/stable.
+//   build_encoder_chunk_graph — INCREMENTAL: `n_new` embedder frames as queries
+//                             attend to the encoder KV cache under a sliding-
+//                             window-causal mask; their K/V are appended at the
+//                             cache offset. Final RMSNorm + projector group-of-4.
 
 struct EmbedderBuild {
     ggml_tensor * mel_in = nullptr;  // [n_mels, n_mel_frames] input
@@ -121,14 +113,12 @@ EmbedderBuild build_embedder_graph(ggml_context * ctx,
                                    const HParams & hp,
                                    int             n_mel_frames);
 
-// Conv stem with the streaming PADDING CACHE (reference VoxtralRealtimeConv1dCacheLayer).
-// Feeds only `n_new_mel` NEW mel frames; the conv left-context comes from the host-
-// carried caches instead of zero left-pad: conv1 (k3 s1, left_pad 2) ← last 2 mel
-// frames; conv2 (k3 s2, left_pad 1) ← last 1 conv1-output frame. Both zero on the
-// first chunk, which makes the cached path bit-identical to the whole-buffer left-pad
-// conv. Emits M_emb = n_new_mel/2 new embedder frames (n_new_mel must be even) plus
-// `cache2_out` = the chunk's last conv1-output frame for the next call. The conv1
-// cache (last 2 mel frames) is trivially the input tail, carried host-side.
+// Conv stem with the streaming PADDING CACHE. Feeds only `n_new_mel` NEW mel
+// frames; the conv left-context comes from host-carried caches instead of zero
+// left-pad: conv1 (k3 s1, left_pad 2) ← last 2 mel frames; conv2 (k3 s2, left_pad
+// 1) ← last 1 conv1-output frame. Both zero on the first chunk == whole-buffer
+// left-pad. Emits M_emb = n_new_mel/2 new embedder frames (n_new_mel must be even)
+// plus `cache2_out` = the chunk's last conv1-output frame for the next call.
 struct EmbedderChunkBuild {
     ggml_tensor * mel_in     = nullptr;  // [n_mels, n_new_mel] new mel frames
     ggml_tensor * cache1_in  = nullptr;  // [n_mels, 2] prev 2 mel frames (conv1 left ctx)

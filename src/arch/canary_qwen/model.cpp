@@ -14,11 +14,8 @@
 //     -> Qwen3-1.7B causal LM (28 blocks)
 //     -> tied lm_head -> greedy autoregressive loop until EOS or max_new.
 //
-// BF16 weight promotion: the canary-1b-flash perception encoder was
-// validated F32-only; the SALM checkpoint stores its weights as BF16.
-// On CPU primary backend we promote ALL BF16 linear weights (encoder
-// and decoder) to F32 at load time so ggml's CPU matmul hits the F32
-// path. This matches the reference's `model_dtype = f32` regime.
+// On CPU primary backend all BF16 linear weights are promoted to F32 at load
+// (matches the reference's f32 regime); see promote_linears_bf16_to_f32_on_cpu.
 
 #include "canary_qwen.h"
 
@@ -30,6 +27,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -61,10 +59,6 @@ extern const Arch arch;
 
 static_assert(std::is_base_of_v<transcribe_model,   CanaryQwenModel>);
 static_assert(std::is_base_of_v<transcribe_session, CanaryQwenSession>);
-
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
 
 CanaryQwenSession::~CanaryQwenSession() {
     kv_cache.free();
@@ -128,20 +122,15 @@ namespace {
 constexpr const char k_default_variant[] = "canary-qwen-2.5b";
 constexpr float kBnEps = 1e-5f;
 
-// ---------------------------------------------------------------------------
 // Input-length contract (see docs/input-limits.md). canary_qwen is a
 // hard-context-cap family: audio tokens + chat prompt + generation share the
-// Qwen3 decoder's context window (decoder.max_position_embeddings). The KV
-// cache grows to fit the prompt, clamped to that ceiling (replacing the
-// earlier fixed 2048 wall that ignored the model's real context). Over-length
-// input is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript
-// that fills the per-run generation budget before end-of-stream is flagged via
-// transcribe_was_truncated().
-// ---------------------------------------------------------------------------
+// Qwen3 decoder's context window (decoder.max_position_embeddings), clamped to
+// that ceiling. Over-length input is rejected with
+// TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that fills the generation budget
+// before end-of-stream is flagged via transcribe_was_truncated().
 
-// Per-run generation budget. Matches the `max_new` literal used in both the
-// single-utterance step loop and the batched step loop below; keep all three
-// in sync.
+// Per-run generation budget. Keep in sync with the single-utterance and
+// batched step loops below.
 constexpr int k_max_new = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum
@@ -186,25 +175,13 @@ int64_t canary_qwen_max_audio_ms(const CanaryQwenHParams & hp) {
     return mel_frames * hp.fe_hop_length * 1000 / hp.fe_sample_rate;
 }
 
-// ---------------------------------------------------------------------------
-// Chat-template prompt construction
-// ---------------------------------------------------------------------------
-//
-// Per the reference SALM trace, HF's chat template renders the JFK
-// request as the literal token sequence:
-//   <|im_start|>  user  \n  Trans  cribe   the   following  :   <space>
-//   <|audioplaceholder|>
-//   <|im_end|>  \n  <|im_start|>  assistant  \n
-//
-// Verified empirically: tok.encode("user\nTranscribe the following: ")
-// -> [872, 198, 3167, 3114, 279, 2701, 25, 220].
-//
-// We pre-encode the prefix ("<|im_start|>" + "user\nTranscribe the
-// following: ") and suffix ("<|im_end|>\n<|im_start|>assistant\n") at
-// load time. The audio_locator id is replicated T_enc times between
-// them at run time.
-//
-// The ChatTokens struct holds the few special-token ids we need.
+// Chat-template prompt construction. HF's chat template renders the request as:
+//   <|im_start|> user \n Transcribe the following: <|audioplaceholder|>
+//   <|im_end|> \n <|im_start|> assistant \n
+// Verified: tok.encode("user\nTranscribe the following: ")
+//   -> [872, 198, 3167, 3114, 279, 2701, 25, 220]. We pre-encode prefix and
+// suffix at load; the audio_locator id is replicated T_enc times between them
+// at run time.
 
 transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
                                       ChatTokens &                  out)
@@ -271,11 +248,8 @@ transcribe_status build_static_prompt_segments(CanaryQwenModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// BatchNorm fusion (same math as canary). Pre-fused (scale, bias) fall
-// out of (running_mean, running_var, weight, bias, eps).
-// ---------------------------------------------------------------------------
-
+// BatchNorm fusion (same math as canary): pre-fused (scale, bias) fall out of
+// (running_mean, running_var, weight, bias, eps).
 transcribe_status fuse_batch_norm(CanaryQwenModel & m) {
     const size_t n_blocks = m.weights.blocks.size();
     if (n_blocks == 0) return TRANSCRIBE_OK;
@@ -321,31 +295,14 @@ transcribe_status fuse_batch_norm(CanaryQwenModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
 // F16 → F32 promotion for pointwise AND depthwise conv kernels (any backend).
-//
-// canary-1b-flash (the closest sibling) ships F32 conv kernels because its
-// reference dtype is F32. canary-qwen-2.5b is BF16-reference, so the
-// converter stores conv kernels at F16 (the loader rejects BF16 conv).
-//
-// `ggml_conv_2d_dw_direct` silently produces wildly wrong output for F16
-// kernels (verified on both CPU and Metal): the conv module's output
-// magnitude blows up by ~1500x on the first block, destroying every
-// downstream value (decoder collapses to a single `!` token). Promoting
-// the depthwise kernel to F32 at load time bypasses that path's dtype
-// handling and matches NeMo to single-percent drift.
-//
-// The pointwise kernels were originally promoted only on CPU (a perf fix
-// — the F16 path is slow there because of dequant inside matmul) but
-// promoting them on Metal too is harmless and simplifies the policy.
-//
-// We do NOT call `load_common::promote_conv_pw_f16_to_f32_on_cpu` because
-// that helper has a hard `if (primary_kind != Cpu) return OK` early-out.
-// Refactoring the shared helper to accept a force-flag is the right
-// long-term move; for now we duplicate the logic here so the canary_qwen
-// fix does not depend on cross-family churn.
-// ---------------------------------------------------------------------------
-
+// The converter stores conv kernels at F16 (canary-qwen-2.5b is BF16-reference;
+// the loader rejects BF16 conv). `ggml_conv_2d_dw_direct` silently produces
+// wildly wrong output for F16 kernels (verified CPU + Metal): the conv output
+// blows up ~1500x on the first block, collapsing the decoder to a single `!`.
+// Promoting to F32 bypasses that and matches NeMo to single-percent drift.
+// (load_common::promote_conv_pw_f16_to_f32_on_cpu can't be used — it early-outs
+// on non-CPU backends.)
 transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
     if (m.plan.primary == nullptr) return TRANSCRIBE_OK;
 
@@ -433,24 +390,10 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(CanaryQwenModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// CPU-only BF16 → F32 promotion of all linear weights.
-//
-// The reference (NeMo SALM dumper) loads the model in F32 and runs F32
-// inference. The canary-1b-flash encoder (whose weights canary_qwen
-// reuses) was validated F32-only when ported; the BF16 matmul path
-// through ggml's CPU backend is unverified for this graph topology.
-//
-// We promote ALL BF16 linear weights to F32 once at load time. This
-// stays inside the existing F32 weight buffer (separate from
-// backend_buffer, so we can free it independently). The graph builders
-// don't need to change — they read whatever dtype each tensor pointer
-// reports.
-//
-// On non-CPU primary backend (Metal, Vulkan), we skip — those backends
-// have their own well-tested BF16 paths.
-// ---------------------------------------------------------------------------
-
+// CPU-only BF16 → F32 promotion of all linear weights, matching the reference's
+// F32 inference regime. Replacements live in a dedicated buffer (freed
+// independently); graph builders read whatever dtype each tensor reports.
+// Non-CPU backends (Metal, Vulkan) keep their own BF16 paths.
 transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
     if (m.plan.primary_kind != transcribe::BackendKind::Cpu ||
         m.plan.primary == nullptr)
@@ -565,20 +508,13 @@ transcribe_status promote_linears_bf16_to_f32_on_cpu(CanaryQwenModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
 // Loader entry points (forward-declared so we can register `arch` after).
-// ---------------------------------------------------------------------------
-
 extern transcribe_status load        (Loader &, const transcribe_model_load_params *,
                                       transcribe_model **);
 extern transcribe_status init_context(transcribe_model *, const transcribe_session_params *,
                                       transcribe_session **);
 extern transcribe_status run         (transcribe_session *, const float *, int,
                                       const transcribe_run_params *);
-
-// ---------------------------------------------------------------------------
-// load
-// ---------------------------------------------------------------------------
 
 transcribe_status load(
     Loader &                          loader,
@@ -606,12 +542,11 @@ transcribe_status load(
         st != TRANSCRIBE_OK) return st;
 
     // Publish the input-length ceiling now that the decoder context window
-    // and frontend rate are known. See docs/input-limits.md.
+    // and frontend rate are known.
     m->caps.max_audio_ms = canary_qwen_max_audio_ms(m->hparams);
 
-    // Basis for the session-level limits query (transcribe_session_get_limits):
-    // the same constants canary_qwen_max_audio_ms uses, kept so the effective
-    // limit can be recomputed at a lowered session n_ctx.
+    // Basis for transcribe_session_get_limits: the same constants
+    // canary_qwen_max_audio_ms uses, so the limit recomputes at a lowered n_ctx.
     if (m->hparams.dec_max_position > 0 &&
         m->hparams.enc_subsampling_factor > 0 &&
         m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
@@ -648,7 +583,7 @@ transcribe_status load(
     if (auto st = resolve_chat_tokens(m->tok, m->chat_tokens);   st != TRANSCRIBE_OK) return st;
     if (auto st = build_static_prompt_segments(*m);              st != TRANSCRIBE_OK) return st;
 
-    // ---- Mel frontend ----
+    // Mel frontend.
     {
         transcribe::MelConfig cfg {};
         cfg.sample_rate  = m->hparams.fe_sample_rate;
@@ -689,7 +624,7 @@ transcribe_status load(
         m->mel.emplace(cfg);
     }
 
-    // ---- Reopen GGUF with no_alloc to bind the tensor catalog ----
+    // Reopen GGUF with no_alloc to bind the tensor catalog.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -704,7 +639,7 @@ transcribe_status load(
         return st;
     }
 
-    // ---- Backend plan + alloc + stream tensor data ----
+    // Backend plan + alloc + stream tensor data.
     const transcribe_backend_request backend_req =
         (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
     if (auto st = load_common::init_backends(backend_req, (params != nullptr) ? params->gpu_device : 0, "canary_qwen", m->plan);
@@ -736,14 +671,9 @@ transcribe_status load(
     }
     gguf_free(gguf_data);
 
-    // ---- Post-load weight transformations ----
+    // Post-load weight transformations.
     if (auto st = fuse_batch_norm(*m); st != TRANSCRIBE_OK) return st;
-
-    // F16 conv pointwise → F32 (CPU only). Same as canary.
     if (auto st = promote_conv_pw_to_f32_on_cpu(*m); st != TRANSCRIBE_OK) return st;
-
-    // BF16 linears → F32 (CPU only). Mitigates the canary-1b-flash
-    // F32-only validation gap for this BF16 GGUF.
     if (auto st = promote_linears_bf16_to_f32_on_cpu(*m); st != TRANSCRIBE_OK) return st;
 
     // Pack gate + up into one tensor per layer (one mul_mat instead of two).
@@ -771,10 +701,6 @@ transcribe_status load(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// init_context
-// ---------------------------------------------------------------------------
-
 transcribe_status init_context(
     transcribe_model *                model,
     const transcribe_session_params * params,
@@ -788,13 +714,10 @@ transcribe_status init_context(
     cc->kv_type   = params->kv_type;
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
-    // Reference runs without flash; default to off for tightest tensor
-    // parity. TRANSCRIBE_FLASH_DECODER=1 (or =encoder) overrides.
-    // Flash defaults: encoder off (the FastConformer rel-pos path has a
-    // manual rel_shift trick that ggml_flash_attn_ext doesn't subsume),
-    // decoder ON (the Qwen3 LM step graph is dispatch-bound on Metal —
-    // turning flash on takes per-step kernel count from ~22 ops/layer to
-    // ~14 and yields ~2.4x decode speedup measured on jfk.wav).
+    // Flash defaults: encoder off (the FastConformer rel-pos path has a manual
+    // rel_shift trick ggml_flash_attn_ext doesn't subsume), decoder ON (~2.4x
+    // decode speedup on jfk.wav, the Qwen3 step graph is dispatch-bound on
+    // Metal). TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH override both stages.
     cc->encoder_use_flash = false;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash,
@@ -824,10 +747,6 @@ transcribe_status init_context(
     *out_ctx = cc.release();
     return TRANSCRIBE_OK;
 }
-
-// ---------------------------------------------------------------------------
-// run
-// ---------------------------------------------------------------------------
 
 void apply_thread_policy(CanaryQwenSession * cc) {
     transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
@@ -903,7 +822,7 @@ transcribe_status run(transcribe_session *      context,
     }
     cc->t_mel_us = ggml_time_us() - t_mel_start;
 
-    // ---- Encoder ----
+    // Encoder.
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
@@ -944,7 +863,6 @@ transcribe_status run(transcribe_session *      context,
         return TRANSCRIBE_ERR_OOM;
     }
 
-    // Upload mel.
     ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(),
                             0, cc->mel_buf.size() * sizeof(float));
     if (transcribe::debug::enabled()) {
@@ -1001,7 +919,7 @@ transcribe_status run(transcribe_session *      context,
     try_dump("enc.final",           eb.dumps.final_out,      "encoder.final");
     try_dump("perception.proj.out", eb.dumps.perception_out, "perception.proj.out");
 
-    // ---- Read perception output to host ----
+    // Read perception output to host.
     const int hidden = static_cast<int>(eb.out->ne[0]);
     const int T_enc  = static_cast<int>(eb.out->ne[1]);
     cc->enc_host.resize(static_cast<size_t>(hidden) *
@@ -1009,7 +927,7 @@ transcribe_status run(transcribe_session *      context,
     ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0,
                             cc->enc_host.size() * sizeof(float));
 
-    // ---- Build prompt token-id list ----
+    // Build prompt token-id list.
     std::vector<int32_t> prompt_ids;
     prompt_ids.reserve(cm->prompt_prefix_ids.size() + T_enc +
                        cm->prompt_suffix_ids.size());
@@ -1026,11 +944,8 @@ transcribe_status run(transcribe_session *      context,
     const int T_prompt   = static_cast<int>(prompt_ids.size());
     const int suffix_len = T_prompt - prefix_len - T_enc;
 
-    // ---- Input-length gate (see docs/input-limits.md) ----
-    // audio tokens + prompt + generation must fit the decoder context window
-    // (optionally lowered by the caller's n_ctx). The audio-token count is
-    // fixed by the input length, so reject an over-length clip here, before
-    // prefill/decode, instead of walling at a fixed size.
+    // Input-length gate: audio + prompt + generation must fit the decoder
+    // context window. Reject an over-length clip here, before prefill/decode.
     const int ceiling = canary_qwen_context_ceiling(cc->n_ctx, hp);
     if (T_prompt + k_max_new > ceiling) {
         transcribe::log_msg(
@@ -1043,13 +958,10 @@ transcribe_status run(transcribe_session *      context,
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // ---- KV cache init (grow-to-fit, clamped to the context ceiling) ----
-    // Size to hold the prompt plus the generation budget, rounded up to a
-    // power of two (the step graph's attention width wants pow2 for the fast
-    // flash-attn path). The cache grows across runs as audio length demands;
-    // a pre-allocated smaller cache is freed and re-allocated. For typical
-    // short clips this is the same 1024/2048 width as before, so the decode is
-    // unchanged — only previously-walled long clips now fit.
+    // KV cache init (grow-to-fit, clamped to the context ceiling). Size to
+    // hold prompt + generation budget, rounded up to a power of two (the step
+    // graph's flash-attn path wants pow2 attention width). A pre-allocated
+    // smaller cache is freed and re-allocated.
     int want_n_ctx = 1024;
     while (want_n_ctx < T_prompt + k_max_new) want_n_ctx *= 2;
     if (want_n_ctx > ceiling) want_n_ctx = ceiling;
@@ -1146,7 +1058,7 @@ transcribe_status run(transcribe_session *      context,
                                 0, mask.size() * sizeof(ggml_fp16_t));
     }
 
-    const bool profile_decode = (std::getenv("TRANSCRIBE_PROFILE_DECODE") != nullptr);
+    const bool profile_decode = transcribe::env::flag("TRANSCRIBE_PERF_DEBUG");
     int64_t t_prefill_us = 0;
     int64_t t_prefill_compute_us = 0;
     {
@@ -1202,7 +1114,7 @@ transcribe_status run(transcribe_session *      context,
     int32_t next_tok = argmax(logits);
     generated_ids.push_back(next_tok);
 
-    // ---- Step loop ----
+    // Step loop.
     const int32_t eos_id = hp.eos_token_id;
     const int max_new = k_max_new;
     int cur_past = T_prompt;
@@ -1264,10 +1176,9 @@ transcribe_status run(transcribe_session *      context,
     const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
     std::vector<ggml_fp16_t> step_mask(max_n_kv, mask_neg_inf);
 
-    // Mid-generation tensor coverage: `dec.logits_raw.gen8` is the
-    // logits for the 9th lm_head call (= step iter 7 of our step loop;
-    // prefill = 1st call, iter K = (K+2)th call). Same semantics as
-    // funasr_nano's gen_dump_step.
+    // Mid-generation tensor coverage: `dec.logits_raw.gen8` is the logits for
+    // the 9th lm_head call (= step iter 7; prefill = 1st call, iter K =
+    // (K+2)th call).
     constexpr int gen_dump_step = 7;
     int n_steps = 0;
 
@@ -1330,10 +1241,8 @@ transcribe_status run(transcribe_session *      context,
         n_steps  += 1;
     }
 
-    // The decode stopped at EOS (complete) or at the generation budget /
-    // context width (truncated). Surface the latter via
-    // transcribe_was_truncated() and a WARN rather than returning a silently
-    // shortened transcript. See docs/input-limits.md.
+    // Decode stopped at EOS (complete) or the generation budget / context width
+    // (truncated). Surface the latter via transcribe_was_truncated() + WARN.
     if (next_tok != eos_id) {
         cc->was_truncated = true;
         transcribe::log_msg(
@@ -1399,9 +1308,8 @@ transcribe_status run(transcribe_session *      context,
               / static_cast<int64_t>(hp.fe_sample_rate);
     cc->segments.push_back(std::move(seg));
 
-    // The partial transcript is fully populated above; a truncated decode
-    // returns the hard OUTPUT_TRUNCATED status (the result stays readable,
-    // like an aborted run). See docs/input-limits.md.
+    // A truncated decode returns OUTPUT_TRUNCATED; the partial transcript above
+    // stays readable (like an aborted run).
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
                              : TRANSCRIBE_OK;
 }
@@ -1412,9 +1320,9 @@ transcribe_status run(transcribe_session *      context,
 // Offline batched decode (transcribe_run_batch)
 // ===========================================================================
 // Serial mel + conformer encoder (incl. perception projection) per utterance
-// produce each one's audio embedding [hidden, T_enc]; then the prefill and the
-// autoregressive step loop are batched via the shared causal_lm primitives —
-// the same recipe as arch/qwen3_asr and arch/funasr_nano.
+// produce each one's audio embedding [hidden, T_enc]; the prefill and
+// autoregressive step loop are then batched via the shared causal_lm
+// primitives.
 
 namespace {
 
@@ -1431,9 +1339,8 @@ transcribe_status reset_ctx(CanaryQwenSession * cc, int mb) {
     return cc->compute_ctx != nullptr ? TRANSCRIBE_OK : TRANSCRIBE_ERR_GGUF;
 }
 
-// mel + conformer encoder + perception for one utterance → [hidden, T_enc].
-// Encoder (+ perception) for one utterance from a PRECOMPUTED mel buffer
-// (the mel is computed in parallel by the caller) → [hidden, T_enc].
+// Conformer encoder (+ perception) for one utterance from a PRECOMPUTED mel
+// buffer (the mel is computed in parallel by the caller) → [hidden, T_enc].
 transcribe_status encode_one(
     CanaryQwenSession * cc, CanaryQwenModel * cm,
     const std::vector<float> & mel_buf, int mel_n_frames,
@@ -1522,17 +1429,13 @@ transcribe_status run_batch(
     transcribe::debug::init();
     const auto & hp = cm->hparams;
 
-    // Decoder context ceiling for the input-length gate (see
-    // docs/input-limits.md). Same value the single-utterance run() enforces;
-    // an over-length utterance is rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG
-    // rather than walling at a fixed KV size.
+    // Decoder context ceiling for the input-length gate. Same value the
+    // single-utterance run() enforces.
     const int ceiling = canary_qwen_context_ceiling(cc->n_ctx, hp);
 
-    // ---- Pass 1: per-utterance mel + encoder (serial) ----
     std::vector<char> valid(n, 0);
-    // Per-utterance failure status for the result capture below. Defaults to
-    // INVALID_ARG (bad pcm / mel / encode); the input-length gate upgrades it
-    // to INPUT_TOO_LONG for over-length clips.
+    // Per-utterance failure status. Defaults to INVALID_ARG (bad pcm/mel/
+    // encode); the input-length gate upgrades it to INPUT_TOO_LONG.
     std::vector<transcribe_status> fail_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<float>> enc_hosts(n);
     std::vector<int> T_enc(n, 0);
@@ -1541,7 +1444,7 @@ transcribe_status run_batch(
     int prefix_len = static_cast<int>(cm->prompt_prefix_ids.size());
     int64_t mel_us = 0, enc_us = 0;
 
-    // ---- Pass 0: parallel mel (MelFrontend::compute is thread-safe) ----
+    // Pass 0: parallel mel (MelFrontend::compute is thread-safe).
     std::vector<std::vector<float>> mel_bufs(n);
     std::vector<int> mel_nf(n, 0);
     int n_mel_threads = cc->n_threads;
@@ -1558,7 +1461,7 @@ transcribe_status run_batch(
     });
     mel_us += ggml_time_us() - t_mel0;
 
-    // ---- Pass 1: per-utterance encoder (serial) ----
+    // Pass 1: per-utterance encoder (serial).
     for (int b = 0; b < n; ++b) {
         if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
         if (mel_nf[b] <= 0) continue;
@@ -1574,9 +1477,8 @@ transcribe_status run_batch(
                              cm->prompt_suffix_ids.end());
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
 
-        // Input-length gate (see docs/input-limits.md). audio tokens +
-        // prompt + generation must fit the decoder context window; reject an
-        // over-length utterance here instead of walling at a fixed KV size.
+        // Input-length gate (same as single-shot run()); reject this utterance,
+        // the rest of the batch still runs.
         if (T_prompt[b] + k_max_new > ceiling) {
             transcribe::log_msg(
                 TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -1608,12 +1510,11 @@ transcribe_status run_batch(
     const int max_new = k_max_new;
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
-    // Clamp to the context ceiling. The per-utterance gate above guarantees
-    // max_T_prompt + max_new <= ceiling for every valid utterance, so this
-    // never truncates an in-spec workload — it only bounds the pow2 round-up.
+    // Clamp the pow2 round-up to the ceiling (the per-utterance gate guarantees
+    // every valid row still fits).
     if (max_n_kv > ceiling) max_n_kv = ceiling;
 
-    // ---- Allocate batched KV cache ----
+    // Allocate batched KV cache.
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
                       ? GGML_TYPE_F32 : GGML_TYPE_F16;
     if (cc->kv_cache_batch.self_k == nullptr ||
@@ -1634,7 +1535,7 @@ transcribe_status run_batch(
         ggml_backend_buffer_clear(cc->kv_cache_batch.buffer, 0);
     }
 
-    // ---- Pass 2: batched prefill ----
+    // Pass 2: batched prefill.
     std::vector<int32_t> next_tok(n, 0);
     std::vector<int> n_past(n, 0);
     std::vector<std::vector<int32_t>> generated(n);
@@ -1649,9 +1550,9 @@ transcribe_status run_batch(
 
         const int hidden = hp.dec_hidden;
         std::vector<int32_t> ids(static_cast<size_t>(max_T_prompt) * n, 0);
-        // Audio injection by elementwise blend: audio_dense holds each
-        // utterance's audio embeds scattered into their prompt positions (zero
-        // elsewhere), keep is 0 there and 1 elsewhere. x = x*keep + audio_dense.
+        // Audio injection by elementwise blend (see decoder.h): audio_dense
+        // holds each utterance's audio embeds scattered into their prompt
+        // positions, keep is 0 there and 1 elsewhere.
         std::vector<float> audio_dense(static_cast<size_t>(hidden) * max_T_prompt * n, 0.0f);
         std::vector<float> keep(static_cast<size_t>(max_T_prompt) * n, 1.0f);
         std::vector<int64_t> kidx(static_cast<size_t>(max_T_prompt) * n);
@@ -1709,7 +1610,7 @@ transcribe_status run_batch(
         }
     }
 
-    // ---- Pass 3: batched step loop (shared causal_lm driver) ----
+    // Pass 3: batched step loop (shared causal_lm driver).
     const int32_t eos_id = cm->hparams.eos_token_id;
 
     if (reset_ctx(cc, 16) != TRANSCRIBE_OK) return TRANSCRIBE_ERR_GGUF;
@@ -1742,7 +1643,7 @@ transcribe_status run_batch(
     }
     const int64_t step_us = step_stats.step_us;
 
-    // ---- Capture results ----
+    // Capture results.
     const int valid_count = std::max(1, static_cast<int>(
         std::count(valid.begin(), valid.end(), char(1))));
     for (int b = 0; b < n; ++b) {
@@ -1763,10 +1664,8 @@ transcribe_status run_batch(
         seg.t1_ms = static_cast<int64_t>(n_samples[b]) * 1000
                   / static_cast<int64_t>(hp.fe_sample_rate);
         rs.segments.push_back(std::move(seg));
-        // Per-utterance truncation parity with single-shot run(): a row cut at
-        // the generation budget / KV window before eos reports
-        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
-        // override a TRANSCRIBE_OK status, never a worse one.
+        // Per-utterance truncation parity with single-shot run(). Only override
+        // a TRANSCRIBE_OK status, never a worse one.
         if (b < static_cast<int>(truncated.size()) && truncated[b] &&
             rs.status == TRANSCRIBE_OK) {
             cc->was_truncated = true;

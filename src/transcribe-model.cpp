@@ -1,25 +1,13 @@
 // transcribe-model.cpp - out-of-line definitions for the model and
-// context base classes.
-//
-// Why an out-of-line .cpp at all when both bases are short:
-//
-//   1. Anchors the virtual destructors in one TU. Otherwise every TU
-//      that includes transcribe-model.h would emit a vtable + RTTI
-//      copy, which clang and gcc both warn about (-Wweak-vtables).
-//   2. Holds set_languages(), which is non-trivial enough that inlining
-//      it in the header would force the <vector>/<string> includes on
-//      every consumer for no benefit.
+// context base classes. Anchors the virtual destructors in one TU
+// (avoids -Wweak-vtables) and holds set_languages().
 
 #include "transcribe-model.h"
 #include "transcribe-session.h"
 
 #include <utility>
 
-// Anchor for the model base vtable. The default destructor is correct;
-// we just need it defined in exactly one TU.
 transcribe_model::~transcribe_model() = default;
-
-// Same anchoring trick for the context base.
 transcribe_session::~transcribe_session() = default;
 
 void transcribe_session::clear_result() {
@@ -51,11 +39,9 @@ void transcribe_session::clear_result() {
 }
 
 void transcribe_model::set_languages(std::vector<std::string> langs) {
-    // Move the strings into the model so their c_str() pointers stay
-    // valid for the model's lifetime. Anything that previously lived in
-    // language_storage_ is dropped (and the corresponding entries in
-    // language_ptrs_ become dangling, which is why we rebuild the
-    // pointer vector below before exposing it through caps).
+    // Move the strings into the model so their c_str() pointers stay valid
+    // for the model's lifetime. The pointer vector is rebuilt below because
+    // the previous entries dangle after the storage is replaced.
     language_storage_ = std::move(langs);
 
     language_ptrs_.clear();
@@ -64,11 +50,8 @@ void transcribe_model::set_languages(std::vector<std::string> langs) {
         language_ptrs_.push_back(s.c_str());
     }
 
-    // Publish to the capability struct atomically from the caller's
-    // perspective: count and pointer match the same backing storage.
-    // An empty vector exposes (0, nullptr) instead of (0, &empty[0])
-    // because some callers reasonably treat a non-null pointer as a
-    // claim that there is at least one element.
+    // Publish count and pointer from the same backing storage. An empty
+    // vector exposes (0, nullptr) rather than (0, &empty[0]).
     caps.n_languages = static_cast<int>(language_storage_.size());
     caps.languages   = language_ptrs_.empty() ? nullptr : language_ptrs_.data();
 }

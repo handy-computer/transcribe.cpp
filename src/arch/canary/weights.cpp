@@ -1,16 +1,7 @@
 // arch/canary/weights.cpp - read_canary_hparams + build_canary_weights.
 //
-// Pattern follows parakeet/cohere weights.cpp. Differences:
-//   - encoder shape mirrors parakeet's FastConformer, but every linear
-//     (Q/K/V/out, both macaron FFs, attention-pos projection, conv
-//     pointwise pair) carries a bias. Parakeet is bias-free; canary is
-//     NOT. See the encoder-block loader below for the full bias set.
-//   - decoder tensor names use canary's scheme: dec.layer.{i}.norm{1,2,3}
-//     and dec.layer.{i}.{self_attn,cross_attn,ffn}.{q,k,v,o,up,down}
-//   - LM head is UNTIED: read dec.head.weight + dec.head.bias as
-//     standalone tensors, NOT a tied view of the token embedding
-//   - 180m-flash uniquely has enc.proj.{weight,bias} for the
-//     encoder->decoder dimension projection
+// FastConformer encoder (biases on every linear) + autoregressive decoder
+// (untied dec.head.{weight,bias}); 180m-flash adds enc.proj.{weight,bias}.
 
 #include "weights.h"
 
@@ -47,7 +38,6 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Encoder.
     if (auto st = read_required_u32_kv(gguf, "stt.canary.encoder.n_layers",            kFamilyTag, hp.enc_n_layers);             st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.canary.encoder.d_model",             kFamilyTag, hp.enc_d_model);              st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.canary.encoder.n_heads",             kFamilyTag, hp.enc_n_heads);              st != TRANSCRIBE_OK) return st;
@@ -58,7 +48,6 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
     if (auto st = read_required_u32_kv(gguf, "stt.canary.encoder.pos_emb_max_len",     kFamilyTag, hp.enc_pos_emb_max_len);      st != TRANSCRIBE_OK) return st;
     if (auto st = read_optional_bool_kv(gguf, "stt.canary.encoder.use_bias",           kFamilyTag, false, hp.enc_use_bias);      st != TRANSCRIBE_OK) return st;
 
-    // Decoder.
     if (auto st = read_required_u32_kv(gguf, "stt.canary.decoder.n_layers",       kFamilyTag, hp.dec_n_layers);    st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.canary.decoder.d_model",        kFamilyTag, hp.dec_d_model);     st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.canary.decoder.n_heads",        kFamilyTag, hp.dec_n_heads);     st != TRANSCRIBE_OK) return st;
@@ -112,22 +101,13 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
     if (auto st = opt_special("stt.canary.special.transcribe_id",     hp.transcribe_id);     st != TRANSCRIBE_OK) return st;
     if (auto st = opt_special("stt.canary.special.translate_id",      hp.translate_id);      st != TRANSCRIBE_OK) return st;
 
-    // Language list -> language token id table.
-    //
-    // Two converter shapes for the routing keys:
-    //   - canary-1 / 1b-flash / 180m-flash (CanaryTokenizer aggregate):
-    //     stt.canary.tokenizer.lang_codes is ["en","de","es","fr",
-    //     "spl_tokens"] (the per-language SP routing keys; "spl_tokens"
-    //     is the special-vocab routing entry with no language id).
-    //   - canary-1b-v2 (CanaryBPETokenizer): stt.canary.tokenizer.lang_codes
-    //     is just ["all"] because there is a single SP — the actual
-    //     language codes live only in general.languages.
-    //
-    // Either way the per-language token ids are written under
-    // stt.canary.special.lang.<code>_id. We walk both sources (lang_codes
-    // and general.languages), dedupe, and keep only codes whose _id KV
-    // resolves. This matches the runtime language list advertised by
-    // read_languages_kv but lets the hparam reader stand alone.
+    // Language list -> language token id table. Two converter shapes for the
+    // routing keys: aggregate tokenizers put per-language codes in
+    // stt.canary.tokenizer.lang_codes (+ a "spl_tokens" entry with no id);
+    // single-SP (canary-1b-v2) puts ["all"] there and the real codes in
+    // general.languages. Either way the ids live under
+    // stt.canary.special.lang.<code>_id, so walk both sources, dedupe, and
+    // keep only codes whose _id KV resolves.
     {
         std::vector<std::string> all_codes;
         std::vector<std::string> tmp;
@@ -175,7 +155,6 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
         }
     }
 
-    // Frontend.
     if (auto st = read_required_string_kv(gguf, "stt.frontend.type",       kFamilyTag, hp.fe_type);        st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels",      kFamilyTag, hp.fe_num_mels);    st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate",   kFamilyTag, hp.fe_sample_rate); st != TRANSCRIBE_OK) return st;
@@ -328,7 +307,7 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
     const int64_t pre_encode_freq = channels * (hp.fe_num_mels / hp.enc_subsampling_factor);
     const int64_t pre_encode_in   = pre_encode_freq;
 
-    // ----- pre_encode -----
+    // pre_encode
     GET_CONV(weights.pre_encode.conv0_w, "enc.pre_encode.conv.0.weight", 3, 3, 1,        channels);
     GET_F32 (weights.pre_encode.conv0_b, "enc.pre_encode.conv.0.bias", channels);
     GET_CONV(weights.pre_encode.conv2_w, "enc.pre_encode.conv.2.weight", 3, 3, 1,        channels);
@@ -342,18 +321,13 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
     GET_LIN (weights.pre_encode.out_w,   "enc.pre_encode.out.weight", pre_encode_in, d_enc);
     GET_F32 (weights.pre_encode.out_b,   "enc.pre_encode.out.bias", d_enc);
 
-    // ----- encoder blocks -----
-    // Every linear in the canary encoder block carries a bias term —
-    // both macaron FFs, Q/K/V/out, attention-pos projection, and the
-    // conv pointwise pair. This differs from parakeet (bias-free
-    // linears) and is load-bearing: a previous comment claimed
-    // "bias-free" and that mismatch hid a real loader drift; do NOT
-    // re-introduce that wording without checking the GGUF.
+    // Encoder blocks. Every linear carries a bias term — both macaron FFs,
+    // Q/K/V/out, attention-pos projection, and the conv pointwise pair
+    // (unlike parakeet, which is bias-free).
     weights.blocks.assign(hp.enc_n_layers, CanaryBlock{});
     for (int i = 0; i < hp.enc_n_layers; ++i) {
         auto & b = weights.blocks[i];
 
-        // Macaron FF1 — canary always has biases on the linears.
         GET_F32(b.norm_ff1_w, lname("enc.blocks.%d.norm_ff1.weight", i), d_enc);
         GET_F32(b.norm_ff1_b, lname("enc.blocks.%d.norm_ff1.bias",   i), d_enc);
         GET_LIN(b.ff1_lin1_w, lname("enc.blocks.%d.ff1.linear1.weight", i), d_enc, d_ff_e);
@@ -361,7 +335,6 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
         GET_LIN(b.ff1_lin2_w, lname("enc.blocks.%d.ff1.linear2.weight", i), d_ff_e, d_enc);
         GET_F32(b.ff1_lin2_b, lname("enc.blocks.%d.ff1.linear2.bias",   i), d_enc);
 
-        // Self-attention with relative position — Q/K/V/out also have biases.
         GET_F32(b.norm_attn_w, lname("enc.blocks.%d.norm_attn.weight", i), d_enc);
         GET_F32(b.norm_attn_b, lname("enc.blocks.%d.norm_attn.bias",   i), d_enc);
         GET_LIN(b.attn_q_w,    lname("enc.blocks.%d.attn.linear_q.weight",   i), d_enc, d_enc);
@@ -376,7 +349,6 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
         GET_F32(b.attn_pos_u,  lname("enc.blocks.%d.attn.pos_bias_u",        i), head_dim, n_heads);
         GET_F32(b.attn_pos_v,  lname("enc.blocks.%d.attn.pos_bias_v",        i), head_dim, n_heads);
 
-        // Conv module — pointwise/depthwise carry biases per the GGUF.
         GET_F32 (b.norm_conv_w, lname("enc.blocks.%d.norm_conv.weight", i), d_enc);
         GET_F32 (b.norm_conv_b, lname("enc.blocks.%d.norm_conv.bias",   i), d_enc);
         GET_CONV(b.conv_pw1_w,  lname("enc.blocks.%d.conv.pointwise1.weight", i), 1, d_enc, 2 * d_enc);
@@ -390,7 +362,6 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
         GET_F32 (b.conv_bn_rm,  lname("enc.blocks.%d.conv.bn.running_mean", i), d_enc);
         GET_F32 (b.conv_bn_rv,  lname("enc.blocks.%d.conv.bn.running_var",  i), d_enc);
 
-        // Macaron FF2 — biases present (same as FF1).
         GET_F32(b.norm_ff2_w, lname("enc.blocks.%d.norm_ff2.weight", i), d_enc);
         GET_F32(b.norm_ff2_b, lname("enc.blocks.%d.norm_ff2.bias",   i), d_enc);
         GET_LIN(b.ff2_lin1_w, lname("enc.blocks.%d.ff2.linear1.weight", i), d_enc, d_ff_e);
@@ -398,18 +369,17 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
         GET_LIN(b.ff2_lin2_w, lname("enc.blocks.%d.ff2.linear2.weight", i), d_ff_e, d_enc);
         GET_F32(b.ff2_lin2_b, lname("enc.blocks.%d.ff2.linear2.bias",   i), d_enc);
 
-        // Final per-block layer norm.
         GET_F32(b.norm_out_w, lname("enc.blocks.%d.norm_out.weight", i), d_enc);
         GET_F32(b.norm_out_b, lname("enc.blocks.%d.norm_out.bias",   i), d_enc);
     }
 
-    // ----- optional encoder->decoder projection (180m-flash only) -----
+    // Optional encoder->decoder projection (180m-flash only).
     if (hp.dec_has_encoder_decoder_proj) {
         GET_LIN(weights.enc_proj.weight, "enc.proj.weight", d_enc, d_dec);
         GET_F32(weights.enc_proj.bias,   "enc.proj.bias",   d_dec);
     }
 
-    // ----- decoder embedding -----
+    // Decoder embedding.
     {
         ggml_tensor * tw = ggml_get_tensor(ctx_meta, "dec.embed.token.weight");
         if (tw == nullptr) {
@@ -429,12 +399,11 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
     GET_F32(weights.dec_embed.norm_w,  "dec.embed.norm.weight", d_dec);
     GET_F32(weights.dec_embed.norm_b,  "dec.embed.norm.bias",   d_dec);
 
-    // ----- decoder blocks (canary tensor naming) -----
+    // Decoder blocks (canary tensor naming).
     weights.dec_blocks.assign(hp.dec_n_layers, CanaryDecBlock{});
     for (int i = 0; i < hp.dec_n_layers; ++i) {
         auto & db = weights.dec_blocks[i];
 
-        // norm1 + self-attention.
         GET_F32(db.norm1_w,  lname("dec.layer.%d.norm1.weight", i), d_dec);
         GET_F32(db.norm1_b,  lname("dec.layer.%d.norm1.bias",   i), d_dec);
         GET_LIN(db.self_q_w, lname("dec.layer.%d.self_attn.q.weight", i), d_dec, d_dec);
@@ -446,7 +415,6 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
         GET_LIN(db.self_o_w, lname("dec.layer.%d.self_attn.o.weight", i), d_dec, d_dec);
         GET_F32(db.self_o_b, lname("dec.layer.%d.self_attn.o.bias",   i), d_dec);
 
-        // norm2 + cross-attention.
         GET_F32(db.norm2_w,   lname("dec.layer.%d.norm2.weight", i), d_dec);
         GET_F32(db.norm2_b,   lname("dec.layer.%d.norm2.bias",   i), d_dec);
         GET_LIN(db.cross_q_w, lname("dec.layer.%d.cross_attn.q.weight", i), d_dec, d_dec);
@@ -458,7 +426,6 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
         GET_LIN(db.cross_o_w, lname("dec.layer.%d.cross_attn.o.weight", i), d_dec, d_dec);
         GET_F32(db.cross_o_b, lname("dec.layer.%d.cross_attn.o.bias",   i), d_dec);
 
-        // norm3 + FFN.
         GET_F32(db.norm3_w,    lname("dec.layer.%d.norm3.weight", i), d_dec);
         GET_F32(db.norm3_b,    lname("dec.layer.%d.norm3.bias",   i), d_dec);
         GET_LIN(db.ffn_up_w,   lname("dec.layer.%d.ffn.up.weight",   i), d_dec, d_ff_d);
@@ -467,11 +434,11 @@ transcribe_status build_canary_weights(ggml_context *         ctx_meta,
         GET_F32(db.ffn_down_b, lname("dec.layer.%d.ffn.down.bias",   i), d_dec);
     }
 
-    // ----- decoder final norm -----
+    // Decoder final norm.
     GET_F32(weights.dec_final.norm_w, "dec.norm.weight", d_dec);
     GET_F32(weights.dec_final.norm_b, "dec.norm.bias",   d_dec);
 
-    // ----- LM head (untied) -----
+    // LM head (untied).
     GET_LIN(weights.head.weight, "dec.head.weight", d_dec, vocab);
     GET_F32(weights.head.bias,   "dec.head.bias",   vocab);
 

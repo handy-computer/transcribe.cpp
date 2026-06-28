@@ -32,9 +32,9 @@ namespace {
 namespace conf = transcribe::conformer;
 
 bool detect_direct_dw_in_block(const char * /*backend*/) {
-    if (std::getenv("TRANSCRIBE_CONV_DIRECT_DW")    != nullptr) return true;
-    if (std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW") != nullptr) return false;
-    return true;
+    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW",
+                                     "TRANSCRIBE_CONV_NO_DIRECT_DW",
+                                     /*backend_default=*/true);
 }
 
 conf::PreEncodeView to_view(const PreEncodeSlots & pe) {

@@ -1,9 +1,8 @@
 // arch/whisper/model.cpp - Whisper ASR family handler.
 //
-// Stage-4 Whisper runtime. Numerical validation can still inject the
-// reference mel tensor with TRANSCRIBE_WHISPER_MEL_FROM_REF to isolate
-// encoder/decoder drift, but normal inference uses the C++ mel frontend
-// and the autoregressive decoder path below.
+// Normal inference uses the C++ mel frontend and the autoregressive decoder
+// path below; TRANSCRIBE_MEL_FROM_REF can inject a reference mel tensor
+// to isolate encoder/decoder drift during numerical validation.
 
 #include "whisper.h"
 
@@ -14,6 +13,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -279,17 +279,9 @@ namespace {
 
 constexpr const char k_default_variant[] = "whisper";
 
-// Prepare cc->compute_ctx for a graph build of capacity at most
-// `mem`. If a context already exists and is at least that large,
-// ggml_reset clears the tensor metadata in-place (cheap). Only when
-// the existing context is too small do we ggml_free + ggml_init.
-//
-// Replaces the previous "free + init per graph build" pattern that
-// allocated a fresh compute context for the encoder, cross-KV graph,
-// every tier's prompt prefill, and every step in the generation
-// loop. The free + malloc churn was visible in the per-step build
-// timer (~30 us per step on tiny F16) plus allocator pressure on
-// very long inputs.
+// Prepare cc->compute_ctx for a graph build of capacity at most `mem`. If a
+// context already exists and is large enough, ggml_reset clears its metadata
+// in-place (cheap); only a too-small context triggers ggml_free + ggml_init.
 bool ensure_compute_ctx(WhisperSession * cc, size_t mem) {
     if (cc->compute_ctx != nullptr) {
         if (cc->compute_ctx_size >= mem) {
@@ -314,7 +306,7 @@ bool ensure_compute_ctx(WhisperSession * cc, size_t mem) {
 }
 
 // Print the per-stage performance summary collected during the most
-// recent whisper_run. Opt-in via TRANSCRIBE_WHISPER_PROFILE=1 — gated
+// recent whisper_run. Opt-in via TRANSCRIBE_PERF_DEBUG — gated
 // by the caller, this helper just formats the counters. Output is one
 // summary line per stage (encoder / cross / prompt / step) plus a
 // per-step average for the steady-state generation loop, which is the
@@ -381,11 +373,11 @@ void print_whisper_perf(const WhisperPerf & p) {
         avg_us(p.step_compute), avg_us(p.step_tensor_get),
         avg_us(p.step_cpu));
 
-    // CPU sub-section breakdown — opt-in via TRANSCRIBE_WHISPER_PROFILE
-    // values that contain "cpu" or "all". Keeps the default profile
-    // output unchanged for existing benchmarks while still surfacing
+    // CPU sub-section breakdown — opt-in via TRANSCRIBE_PERF_DEBUG values
+    // that contain "cpu" or "all". Keeps the default profile output
+    // unchanged for existing benchmarks while still surfacing
     // suppress/timestamp/sample/logprob splits when needed.
-    const char * profile_env = std::getenv("TRANSCRIBE_WHISPER_PROFILE");
+    const char * profile_env = transcribe::env::str("TRANSCRIBE_PERF_DEBUG");
     bool show_cpu_breakdown = false;
     if (profile_env != nullptr) {
         const std::string v = profile_env;
@@ -418,14 +410,10 @@ void print_whisper_perf(const WhisperPerf & p) {
 }
 
 bool whisper_perf_enabled() {
-    const char * s = std::getenv("TRANSCRIBE_WHISPER_PROFILE");
-    return s != nullptr && s[0] != '\0' && s[0] != '0';
+    return transcribe::env::flag("TRANSCRIBE_PERF_DEBUG");
 }
 
-// ---------------------------------------------------------------------------
 // load
-// ---------------------------------------------------------------------------
-
 transcribe_status whisper_load(
     Loader &                          loader,
     const transcribe_model_load_params *   params,
@@ -447,13 +435,11 @@ transcribe_status whisper_load(
         return st;
     }
 
-    // Tokenizer. Whisper GGUFs carry a "gpt2"-family tokenizer (HF
-    // byte-level BPE). Vocab_size stays whatever the GGUF declared —
-    // DO NOT overwrite from the tokenizer. Whisper's decoder vocab
-    // (51865 for multilingual) is larger than tokenizer.tokens
-    // (50258) because language / timestamp / task special tokens are
-    // emitted by the model but not listed in the tokens array. That
-    // gap is by design for this family.
+    // Tokenizer. Whisper GGUFs carry a "gpt2"-family (HF byte-level BPE)
+    // tokenizer. DO NOT overwrite vocab_size from the tokenizer: the decoder
+    // vocab (51865 multilingual) exceeds tokenizer.tokens (50258) because
+    // language/timestamp/task specials are model-emitted but not in the tokens
+    // array. That gap is by design.
     if (const transcribe_status st = m->tok.load(loader.gguf());
         st != TRANSCRIBE_OK)
     {
@@ -512,7 +498,7 @@ transcribe_status whisper_load(
         }
     }
 
-    // Stage 2: reopen with no_alloc to build the tensor catalog.
+    // Reopen with no_alloc to build the tensor catalog.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -582,23 +568,14 @@ transcribe_status whisper_load(
         return st;
     }
 
-    // Resolve per-language token ids. The decoder's forced-language
-    // step needs <|{code}|> id per supported language. We hydrate the
-    // mapping here so a vocab drift surfaces at load, not mid-run.
+    // Resolve per-language token ids and keep an owned copy of the language
+    // list (decoder code reads m->lang_codes directly rather than walking the
+    // capability chain). Hydrating here surfaces a vocab drift at load.
     //
-    // We also keep our own owned copy of the language list so callers
-    // that go through m->lang_codes don't depend on the capabilities
-    // storage lifetime (set_languages owns the string backing for
-    // caps.languages[], but accessing it requires walking the capability
-    // chain — a direct owned vector here is simpler for decoder code).
-    //
-    // Non-multilingual (.en) models advertise a single-language list
-    // ["en"] but their vocab does NOT contain a "<|en|>" token: the
-    // .en decoder prefix is just <|sot|>, with no language or task
-    // tokens. So for .en we keep lang_codes (so the run path can
-    // accept params.language == "en") but leave lang_token_ids empty.
-    // The run path branches on supports_language_detect to skip the
-    // <|lang|>/<|task|> emission for .en.
+    // .en models advertise ["en"] but their vocab has no "<|en|>" token (the
+    // .en prefix is bare <|sot|>), so keep lang_codes (to accept
+    // params.language == "en") but leave lang_token_ids empty; the run path
+    // gates <|lang|>/<|task|> emission on supports_language_detect.
     m->lang_codes.clear();
     m->lang_token_ids.clear();
     const bool is_multilingual = m->caps.supports_language_detect;
@@ -632,10 +609,7 @@ transcribe_status whisper_load(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
 // init_context
-// ---------------------------------------------------------------------------
-
 transcribe_status whisper_init_context(
     transcribe_model *                model,
     const transcribe_session_params * params,
@@ -650,9 +624,7 @@ transcribe_status whisper_init_context(
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
 
-    // Whisper defaults: both encoder and decoder flash-on. Head dim for
-    // whisper-tiny is 64 (d_model=384, 6 heads); supported on every
-    // backend we ship. See WhisperSession for the rationale.
+    // Whisper defaults: both flash-on (see WhisperSession). Env overrides below.
     cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(
@@ -662,31 +634,22 @@ transcribe_status whisper_init_context(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
 // run
 
 namespace {
 
-// Run the encoder on one mel window and leave the output in the
-// backend-resident persistent tensor cc->enc_out.tensor (d_enc * T_enc
-// floats, F32). Downstream graphs (cross-KV precompute, KV-cached
-// decoder) read from that tensor directly via ggml views — no host
-// roundtrip. cc->enc_host is only populated on demand for language
-// detection's prefill graph, which still needs a host-side
-// encoder_out_in input. Also publishes T_enc on the context. The
-// compute_ctx is reset inside this helper; the scheduler is created
-// lazily on first call.
+// Run the encoder on one mel window, leaving the output in the backend-resident
+// cc->enc_out.tensor (F32 [d_enc, T_enc]) that downstream graphs read via views
+// (no host roundtrip). cc->enc_host is populated on demand only for language
+// detection's prefill graph. Publishes T_enc on the context.
 //
-// mel_data is in encoder layout [n_mels, n_mel_frames] with n_mels
-// innermost, matching the ggml ne=[n_mels, n_mel_frames] input tensor.
-// For the shipped Whisper variants n_mel_frames is 3000; long-form
-// windows shorter than 3000 must be zero-padded on the right before
-// calling this helper.
+// mel_data is in encoder layout [n_mels, n_mel_frames] (n_mels innermost).
+// Shipped variants use n_mel_frames=3000; shorter long-form windows must be
+// zero-padded on the right before calling.
 //
-// allow_dumps controls whether encoder intermediates are emitted via
-// transcribe::debug. Set true for validate.py runs (one chunk only in
-// short-form) and for the first chunk in long-form; false otherwise
-// so the long-form loop does not overwrite dumps from the first chunk.
+// allow_dumps gates encoder-intermediate emission: true for the first chunk
+// (and short-form), false afterwards so the long-form loop doesn't overwrite
+// the first chunk's dumps.
 transcribe_status run_whisper_encoder_on_window(
     WhisperSession * cc,
     WhisperModel *   cm,
@@ -696,9 +659,6 @@ transcribe_status run_whisper_encoder_on_window(
     bool             allow_dumps,
     int &            out_T_enc)
 {
-    // Reset per-call compute state. ensure_compute_ctx reuses the
-    // context across encoder / cross-KV / prompt / step builds —
-    // ggml_reset between calls instead of free + reinit.
     const int64_t t_enc_build_start = ggml_time_us();
     if (!ensure_compute_ctx(cc, 8 * 1024 * 1024)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -713,13 +673,10 @@ transcribe_status run_whisper_encoder_on_window(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Backend-resident encoder output. Allocate the persistent
-    // F32 tensor once (or re-allocate if T_enc / d_model changed).
-    // After build_encoder_graph, append a final ggml_cpy from eb.out
-    // into a view of cc->enc_out.tensor — both live on the primary
-    // backend, so this is a single intra-backend memcpy that stays
-    // off the host. Subsequent graphs (cross-KV, lang-det) read
-    // from cc->enc_out.tensor directly.
+    // Backend-resident encoder output: allocate the persistent F32 tensor once
+    // (re-allocate on T_enc / d_model change), then append a ggml_cpy from
+    // eb.out into a view of it — a single intra-backend memcpy that stays off
+    // the host. Subsequent graphs read cc->enc_out.tensor directly.
     {
         const int d_enc_g = static_cast<int>(eb.out->ne[0]);
         const int T_enc_g = static_cast<int>(eb.out->ne[1]);
@@ -758,11 +715,10 @@ transcribe_status run_whisper_encoder_on_window(
             return TRANSCRIBE_ERR_GGUF;
         }
 
-        // Apply the caller's CPU thread count to the scheduler's backends once
-        // at sched creation — it persists across the reused encoder and decoder
-        // graphs, and cc->n_threads is fixed for the session. GPU backends ignore
-        // it; CPU/BLAS backends use it. Without this, whisper's graph compute ran
-        // at ggml's default thread count regardless of params.n_threads.
+        // Apply the caller's CPU thread count once at sched creation; it
+        // persists across the reused encoder/decoder graphs. GPU backends
+        // ignore it, CPU/BLAS use it. Without this, compute ran at ggml's
+        // default count regardless of params.n_threads.
         transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
     }
     ggml_backend_sched_reset(cc->sched);
@@ -793,8 +749,8 @@ transcribe_status run_whisper_encoder_on_window(
     }
     cc->perf.enc_compute.add(ggml_time_us() - t_enc_compute_start);
 
-    // Dumps. Only the first (or only) chunk emits intermediates so
-    // validate.py against a reference dump directory sees stable output.
+    // Dumps. Only the first (or only) chunk emits intermediates so the
+    // reference comparison sees stable output.
     if (allow_dumps) {
         auto try_dump = [](const char * name, ggml_tensor * t,
                            const char * stage)
@@ -817,11 +773,8 @@ transcribe_status run_whisper_encoder_on_window(
         try_dump("enc.final", eb.dumps.final_out, "encoder.final");
     }
 
-    // The persistent enc_out tensor is now populated. Cross-KV
-    // reads from it directly — no host materialization needed for
-    // the hot path. Lang-detect (one-shot, first chunk) still uses
-    // a tensor-set into a graph input; we lazily materialize to
-    // enc_host there (see chunk loop below).
+    // enc_out is now populated; cross-KV reads it directly. Lang-detect
+    // materializes to enc_host lazily (see chunk loop).
     const int d_enc = static_cast<int>(eb.out->ne[0]);
     out_T_enc       = static_cast<int>(eb.out->ne[1]);
     cc->enc_T       = out_T_enc;
@@ -886,9 +839,8 @@ float compute_compression_ratio_hf(
 //
 // -INFINITY logits (from suppress/timestamp rules) contribute 0 mass.
 //
-// `scratch` is reused across calls to avoid the per-step double[vocab]
-// alloc on the T>0 hot path. Sized lazily; iteration order matches the
-// previous code so the multinomial draw is bit-identical.
+// `scratch` is reused across calls to avoid the per-step double[vocab] alloc on
+// the T>0 hot path; sized lazily.
 int sample_from_logits(
     const std::vector<float> & logits,
     float                      temperature,
@@ -1038,6 +990,7 @@ float logprob_of_token_hf(
     return logits[token_id] * rescale_T - log_Z;
 }
 
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 // Load 3000 * 80 f32 floats from <dir>/enc.mel.in.f32. Layout on disk
 // matches the reference dump: row-major (3000, 80) — exactly what we
 // need to upload into the ggml ne=[80, 3000] input tensor via a flat
@@ -1077,16 +1030,16 @@ transcribe_status load_mel_from_ref(const char *         ref_dir,
     }
     return TRANSCRIBE_OK;
 }
+#endif // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 
 } // namespace
 
 namespace {
 
-// Whisper timestamp logits processor — shared by the serial whisper_run and
-// the batched whisper_run_batch so the per-step masking is identical by
-// construction. Mirrors transformers' WhisperTimeStampLogitsProcessor; see
-// the rule-by-rule rationale at the (former) lambda site. Mutates `logits`
-// in place; no-op when want_segment_timestamps is false.
+// Whisper timestamp logits processor, shared by whisper_run and
+// whisper_run_batch so per-step masking is identical. Mirrors transformers'
+// WhisperTimeStampLogitsProcessor. Mutates `logits` in place; no-op when
+// want_segment_timestamps is false.
 void apply_whisper_timestamp_rules(
     std::vector<float> &         logits,
     const std::vector<int32_t> & generated_ids,
@@ -1185,9 +1138,8 @@ struct WhisperSegmentResult {
 
 // Port of HF generation_whisper.py:_retrieve_segment, shared by serial +
 // batched decode. Pure: reads generated_ids + the tokenizer, returns the
-// segments/slices/offset instead of mutating session state. See the call
-// sites for the rule rationale. (For short-form callers time_offset_ms is 0
-// and only `.segments` is consumed.)
+// segments/slices/offset instead of mutating session state. (Short-form
+// callers pass time_offset_ms 0 and consume only `.segments`.)
 WhisperSegmentResult whisper_retrieve_segment(
     const std::vector<int32_t> &  generated_ids,
     const transcribe::Tokenizer & tok,
@@ -1336,53 +1288,36 @@ transcribe_status whisper_run(
 
     transcribe::debug::init();
 
-    // Reset per-stage timing counters; the summary printed at end-of-run
-    // is opt-in via TRANSCRIBE_WHISPER_PROFILE=1 but the counters
-    // themselves are always populated (the timestamps are negligible).
     cc->perf.reset();
 
-    // ----- Mel frontend ------------------------------------------------
+    // ----- Mel frontend -----
     //
-    //   1. TRANSCRIBE_WHISPER_MEL_FROM_REF=<dir>  — debug-only knob.
-    //      Reads the reference mel dump from disk so the encoder can be
-    //      diffed against the reference WITHOUT introducing C++ mel
-    //      drift into the comparison. Use this when a per-tensor
-    //      compare regression fires and you want to isolate whether
-    //      the drift originates in the C++ mel frontend or downstream
-    //      in the encoder/decoder graph. validate.py exposes it via
-    //      `--mel-from-ref`; the default validation path exercises the
-    //      production C++ MelFrontend below so frontend regressions
-    //      (e.g. precision changes that pass tolerance under ref-mel
-    //      injection but break WER on borderline utterances) cannot
-    //      slip through.
+    //   1. TRANSCRIBE_MEL_FROM_REF=<dir> — validation hook (compiled in only
+    //      with -DTRANSCRIBE_ENABLE_VALIDATION_HOOKS) that reads the reference
+    //      mel dump from disk so encoder drift can be isolated from C++ mel
+    //      drift. The default path exercises the production frontend.
     //
-    //   2. C++ MelFrontend (default). Dual behavior:
-    //      - Short-form (n_samples <= fe_n_samples): pad PCM to
-    //        fe_n_samples (480000) and compute → exactly
-    //        fe_nb_max_frames (3000) mel frames. Bit-identical to
-    //        pre-Stage-2 behavior; tolerance + smoke tests exercise
-    //        this branch.
-    //      - Long-form (> fe_n_samples): compute mel on the raw audio
-    //        (HF matches this — only short-form pads PCM to 30 s). The
-    //        seek loop slices 3000-frame windows from the transposed
-    //        buffer and zero-pads the trailing short window.
+    //   2. C++ MelFrontend (default):
+    //      - Short-form (n_samples <= fe_n_samples): pad PCM to fe_n_samples
+    //        (480000) -> exactly fe_nb_max_frames (3000) mel frames.
+    //      - Long-form (> fe_n_samples): compute mel on raw audio (HF does the
+    //        same — only short-form pads to 30s). The seek loop slices
+    //        3000-frame windows and zero-pads the trailing short window.
     const int n_mels                 = cm->hparams.enc_num_mel_bins;
     const int n_mel_frames_per_chunk = cm->hparams.fe_nb_max_frames > 0
                                            ? cm->hparams.fe_nb_max_frames : 3000;
     const int n_samples_per_chunk    = cm->hparams.fe_n_samples > 0
                                            ? cm->hparams.fe_n_samples : 480000;
-    // Short-form = fits in a single 30 s window; bypass the dynamic
-    // stride + no-speech fallback machinery. This is a numeric AND
-    // behavioral parity gate: HF's generate() takes a different code
-    // path for is_shortform, and our Stage 1 tolerance tests were all
-    // captured in short-form.
+    // Short-form = fits a single 30s window; bypasses the dynamic-stride
+    // machinery. HF's generate() takes a different code path for is_shortform,
+    // so this is a numeric + behavioral parity gate (not just an optimization).
     const bool is_short_form = (n_samples <= n_samples_per_chunk);
 
     const int64_t t_mel_start = ggml_time_us();
     int total_mel_frames = 0;
-    if (const char * ref_dir = std::getenv("TRANSCRIBE_WHISPER_MEL_FROM_REF");
-        ref_dir != nullptr && ref_dir[0] != '\0')
-    {
+    bool mel_from_ref = false;
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    if (const char * ref_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF")) {
         if (const transcribe_status st = load_mel_from_ref(
                 ref_dir, n_mels, n_mel_frames_per_chunk, cc->mel_buf);
             st != TRANSCRIBE_OK)
@@ -1390,7 +1325,10 @@ transcribe_status whisper_run(
             return st;
         }
         total_mel_frames = n_mel_frames_per_chunk;
-    } else {
+        mel_from_ref = true;
+    }
+#endif
+    if (!mel_from_ref) {
         if (!cm->mel.has_value()) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: model has no MelFrontend "
@@ -1454,7 +1392,7 @@ transcribe_status whisper_run(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // ----- Run-scoped constants --------------------------------------
+    // ----- Run-scoped constants -----
     const int64_t n_ctx_decoder = cm->hparams.dec_max_target_positions;
     const int64_t vocab_size    = cm->hparams.dec_vocab_size;
     const int     eos_id        = cm->tok.eos_id() >= 0 ? cm->tok.eos_id() : 50257;
@@ -1470,13 +1408,9 @@ transcribe_status whisper_run(
         requested_timestamps == TRANSCRIBE_TIMESTAMPS_AUTO ||
         requested_timestamps == TRANSCRIBE_TIMESTAMPS_SEGMENT;
 
-    // Multilingual whisper variants emit <|lang|> + <|task|> tokens in
-    // the decoder prefix; English-only (.en) variants do not — their
-    // prefix is just <|sot|>. The two also differ at runtime: .en
-    // models do NOT carry <|translate|> / <|transcribe|> task tokens
-    // and have no per-language tokens to detect against. The
-    // supports_language_detect capability is the canonical signal; .en
-    // load sets it to false.
+    // Multilingual variants emit <|lang|> + <|task|> in the decoder prefix;
+    // .en variants have just <|sot|> and no translate/transcribe/language
+    // tokens. supports_language_detect is the canonical signal (.en = false).
     const bool is_multilingual = cm->caps.supports_language_detect;
 
     int32_t task_token = -1;
@@ -1544,7 +1478,7 @@ transcribe_status whisper_run(
         return id >= timestamp_begin && id < static_cast<int>(vocab_size);
     };
 
-    // ----- Chunk loop ------------------------------------------------
+    // ----- Chunk loop -----
     cc->clear_result();
     cc->chunk_traces.clear();
     std::vector<int32_t> all_text_ids;
@@ -1554,19 +1488,11 @@ transcribe_status whisper_run(
     int64_t t_decode_start = 0;
     bool    t_decode_started = false;
 
-    // Finalize the context's result state from whatever accumulated so
-    // far. Called at normal completion AND at every mid-run abort exit
-    // (honoring the public contract in include/transcribe.h that
-    // partial segments/text accumulated before TRANSCRIBE_ERR_ABORTED
-    // must be readable via the normal accessors, distinguishable from
-    // "no result" by transcribe_was_aborted()).
-    //
-    // Matches end-of-run finalization: decodes all_text_ids to UTF-8,
-    // strips leading/trailing whitespace, pushes the text-only segment
-    // for TIMESTAMPS_NONE mode, and flips has_result. Safe to call
-    // from any point once the chunk loop has run at least zero times
-    // — an empty all_text_ids yields an empty text + an empty NONE-mode
-    // segment, which are the accessor sentinels anyway.
+    // Finalize the context's result state. Called at normal completion and at
+    // every mid-run abort exit (the public contract requires partial
+    // segments/text before TRANSCRIBE_ERR_ABORTED to stay readable via the
+    // normal accessors). Decodes all_text_ids to UTF-8, strips whitespace,
+    // pushes the text-only segment for TIMESTAMPS_NONE mode, flips has_result.
     auto commit_result = [&]() {
         cc->t_decode_us = t_decode_started
                               ? ggml_time_us() - t_decode_start
@@ -1613,38 +1539,18 @@ transcribe_status whisper_run(
 
     // Run-scoped Whisper run-ext pointer + RNG.
     //
-    // The whisper-specific knobs (initial prompt, prompt-token
-    // conditioning, temperature tuple, threshold checks,
-    // max_initial_timestamp cap) live on a kind-tagged family
-    // extension reached via transcribe_run_params::family. NULL selects
-    // transcribe_whisper_run_ext_init() — Whisper's own shipping recipe.
-    // The local `default_wp` must outlive the chunk loop because `wp`
-    // aliases it.
+    // The whisper knobs live on a kind-tagged family extension reached via
+    // transcribe_run_params::family; NULL selects the shipping defaults from
+    // transcribe_whisper_run_ext_init(). `default_wp` must outlive the chunk
+    // loop because `wp` aliases it. transcribe_ext_check repeats the
+    // dispatcher's validation as defense in depth before casting. Pointer
+    // fields (initial_prompt, prompt_tokens) are copied into context state
+    // here, so the caller may free them right after the call.
     //
-    // The dispatcher has already validated that, if params->family is
-    // non-null, its header size+kind pass transcribe_model_accepts_ext_kind
-    // AND that the per-family minimum size passes whisper_run_validate
-    // (the pre-clear hook). We repeat transcribe_ext_check here as defense
-    // in depth right before casting the pointer; by this point it can only
-    // succeed, but keeping it makes the cast locally self-guarding.
-    //
-    // Pointer-field lifetimes (initial_prompt, prompt_tokens) are
-    // documented in include/transcribe/whisper.h: the library copies
-    // the referenced data into context state before transcribe_run
-    // returns; the caller may free the underlying buffers immediately
-    // after the call. Whisper realizes that contract by tokenizing
-    // initial_prompt into prev_ids below and by reading prompt_tokens
-    // into the same vector — neither pointer is retained.
-    //
-    // RNG must be run-scoped, not chunk-scoped. HF does not reset its
-    // sampler between chunks (generation_whisper.py threads a single
-    // torch.Generator through the whole seek loop), so constructing
-    // std::mt19937 per chunk with the caller's seed would replay the
-    // same Mersenne-twister prefix at the start of each 30-second
-    // window — destroying determinism in exactly the case a fixed seed
-    // is meant to achieve (reproducible long-form transcripts). When
-    // seed == 0 we draw an OS entropy sample once and then let the
-    // single rng advance monotonically across chunks and tiers.
+    // RNG is run-scoped, not chunk-scoped: HF threads a single generator
+    // through the whole seek loop, so reseeding per chunk would replay the
+    // same prefix each window and destroy long-form determinism. seed == 0
+    // draws OS entropy once, then the rng advances across chunks and tiers.
     if (const transcribe_status st = transcribe_ext_check(
             params != nullptr ? params->family : nullptr,
             TRANSCRIBE_EXT_KIND_WHISPER_RUN,
@@ -1660,12 +1566,9 @@ transcribe_status whisper_run(
             : &default_wp;
     std::mt19937 rng(wp->seed != 0 ? wp->seed : std::random_device{}());
 
-    // ===== Stage 3: prompt + condition_on_prev_tokens setup =============
-    //
-    // HF generation_whisper.py:1743-1745 raises ValueError when
-    // prompt_condition_type=="all-segments" without
-    // condition_on_prev_tokens=True. Mirror as INVALID_ARG before any
-    // compute runs.
+    // Prompt + condition_on_prev_tokens setup. HF raises ValueError when
+    // prompt_condition_type=="all-segments" without condition_on_prev_tokens;
+    // mirror as INVALID_ARG before any compute runs.
     if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_ALL_SEGMENTS &&
         !wp->condition_on_prev_tokens)
     {
@@ -1694,30 +1597,18 @@ transcribe_status whisper_run(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Resolve initial prompt → text-only token ids (no <|startofprev|>;
-    // the library prepends it). Two input paths:
-    //
-    //   prompt_tokens: caller-owned bytes used verbatim. Caller must
-    //     supply only the text-side tokens — we add <|startofprev|>.
-    //
-    //   initial_prompt (string): tokenize HF's get_prompt_ids form
-    //     ("<|startofprev|>" + " " + initial_prompt.strip()) and reject
-    //     any special token (id >= eos_id) that appears in the text
-    //     tokens, mirroring tokenization_whisper.py:716. We feed the
-    //     leading-space-stripped form through the GPT-2 BPE encoder
-    //     (which doesn't itself emit specials), so only special tokens
-    //     present literally in user text would surface here.
+    // Resolve initial prompt -> text-only token ids (library prepends
+    // <|startofprev|>). Two paths: prompt_tokens (caller-owned, verbatim,
+    // text-side only); or initial_prompt string, tokenized as HF's
+    // get_prompt_ids form ("<|startofprev|> " + strip) with any special token
+    // (id >= eos_id) in the text rejected (tokenization_whisper.py).
     const int max_prev_cap = wp->max_prev_context_tokens > 0
                                  ? wp->max_prev_context_tokens
                                  : (cm->hparams.dec_max_target_positions / 2 - 1);
     std::vector<int32_t> prompt_text_ids;
     if (wp->prompt_tokens != nullptr && wp->n_prompt_tokens > 0) {
-        // Caller-owned bytes used verbatim. The library prepends
-        // <|startofprev|>, so a leading prev_sot id from the caller
-        // would double-prepend — surface as INVALID_ARG so the
-        // mistake is caught immediately rather than silently producing
-        // a malformed prefix. (Header documents this contract;
-        // runtime check makes it observable.)
+        // The library prepends <|startofprev|>; a leading prev_sot id from the
+        // caller would double-prepend, so reject it as INVALID_ARG.
         if (prev_sot_id >= 0 && wp->prompt_tokens[0] == prev_sot_id) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: prompt_tokens must not include "
@@ -1795,12 +1686,9 @@ transcribe_status whisper_run(
                               prompt_text_ids.end() - max_prev_cap);
     }
 
-    // HF current_segments[0]. Store history as segment token slices,
-    // not one flattened vector, because _pad_to_max_length applies
-    // skip_ending_double_timestamps to each segment independently.
-    // For "first-segment" the prompt sits at the head of the history;
-    // for "all-segments" the history starts empty and the prompt is
-    // prepended per-chunk as the BOS.
+    // History stored as segment token slices (not one flat vector) because
+    // skip_ending_double_timestamps applies per-segment. FIRST_SEGMENT puts the
+    // prompt at the head; ALL_SEGMENTS starts empty and re-prepends per chunk.
     std::vector<std::vector<int32_t>> prev_history_segments;
     if (wp->prompt_condition == TRANSCRIBE_WHISPER_PROMPT_FIRST_SEGMENT &&
         !prompt_text_ids.empty())
@@ -1808,9 +1696,8 @@ transcribe_status whisper_run(
         prev_history_segments.push_back(prompt_text_ids);
     }
 
-    // Per-chunk decision; HF auto-disables on the previous chunk's hot
-    // accepted temperature (>= 0.5) per generation_whisper.py:1090-1093.
-    // Initialize to the user knob; flip per accepted tier at chunk end.
+    // Per-chunk; HF auto-disables when the previous chunk's accepted
+    // temperature was hot (>= 0.5). Init to the user knob; flipped at chunk end.
     bool do_condition_on_prev_tokens = wp->condition_on_prev_tokens;
 
     int seek = 0;
@@ -1824,11 +1711,9 @@ transcribe_status whisper_run(
         const bool is_first_chunk = (seek == 0);
         const int64_t time_offset_ms = static_cast<int64_t>(seek) * 10;
 
-        // Slice + zero-pad the mel window to n_mel_frames_per_chunk.
-        // Zero-pad is ordered after the real frames, matching HF's
-        // F.pad(..., (0, num_segment_frames - cur_frames)). seek_num_frames
-        // is the count of real (unpadded) frames in this chunk — also the
-        // upper bound on how far `seek` can advance in one iteration.
+        // Slice + zero-pad the mel window to n_mel_frames_per_chunk (pad after
+        // the real frames, matching HF's F.pad). seek_num_frames is the real
+        // (unpadded) frame count and the max `seek` can advance per iteration.
         std::vector<float> chunk_mel(
             static_cast<size_t>(n_mels) *
                 static_cast<size_t>(n_mel_frames_per_chunk),
@@ -1858,19 +1743,14 @@ transcribe_status whisper_run(
             t_decode_started = true;
         }
 
-        // Language detection — once, on first chunk, only if no hint
-        // and the model actually has language tokens. Non-multilingual
-        // (.en) models have no lang_token_ids so detection is skipped
-        // automatically; lang_token stays -1 and the prefix below omits
-        // the <|lang|> slot entirely.
+        // Language detection: once, first chunk, only if no hint and the model
+        // has language tokens (.en has none, so it's skipped automatically).
         if (is_first_chunk && is_multilingual &&
             lang_token < 0 && !cm->lang_token_ids.empty())
         {
-            // Lazily materialize encoder output to host for the
-            // prefill graph's encoder_out_in input. The hot path
-            // (cross-KV) reads cc->enc_out.tensor directly; this
-            // copy is one-shot per run when language detection
-            // is needed.
+            // Lazily materialize encoder output to host for the prefill
+            // graph's encoder_out_in input (one-shot per run; the hot path
+            // reads cc->enc_out.tensor directly).
             const int d_enc_lang = cc->enc_out.d_model;
             const int T_enc_lang = cc->enc_out.T_enc;
             cc->enc_host.resize(static_cast<size_t>(d_enc_lang) *
@@ -1925,10 +1805,8 @@ transcribe_status whisper_run(
                     }
                 }
             }
-            // Publish the detected ISO code only here, not in the
-            // user-hint branch above: this field's contract is "what the
-            // model told us when we asked it to pick," not "what the
-            // caller already knew."
+            // Publish the detected ISO code only here, not in the user-hint
+            // branch: the field means "what the model picked", not the hint.
             if (best_index >= 0 &&
                 static_cast<size_t>(best_index) < cm->lang_codes.size())
             {
@@ -1942,28 +1820,16 @@ transcribe_status whisper_run(
             return TRANSCRIBE_ERR_GGUF;
         }
 
-        // ===== Stage 3: per-chunk prefix assembly =====================
-        //
-        // Mirrors HF generation_whisper.py:_prepare_decoder_input_ids
-        // (1853-1918). The decoder input is prev_tokens + init_tokens:
-        //
-        //   if do_condition_on_prev_tokens AND history non-empty:
-        //     prev_tokens = bos + history[-cut_off:]
-        //       bos = [<|startofprev|>, prompt_text_ids...] for ALL_SEGMENTS
-        //       bos = [<|startofprev|>] for FIRST_SEGMENT
-        //     skip_ending_double_timestamps: if history's last two ids are
-        //     both timestamps, drop the last one (PR #34537 / #35750).
-        //   elif initial prompt is set:
-        //     prev_tokens = [<|startofprev|>, prompt_text_ids...]
-        //       ALL_SEGMENTS:   every chunk
-        //       FIRST_SEGMENT:  first chunk only
-        //   else:
-        //     prev_tokens = empty (Stage 2 behavior)
-        //
-        // HF (_prepare_decoder_input_ids) re-applies the prompt on
-        // EVERY chunk here regardless of prompt_condition. We deliberately
-        // diverge for FIRST_SEGMENT (the default) to match whisper.cpp /
-        // OpenAI, which prime only the first window.
+        // Per-chunk prefix assembly. Mirrors HF
+        // _prepare_decoder_input_ids: decoder input is prev_tokens + init.
+        //   condition_on_prev + history: bos + history[-cut_off:], where bos is
+        //     [<|startofprev|>(, prompt for ALL_SEGMENTS)]; drop a trailing
+        //     double-timestamp per skip_ending_double_timestamps.
+        //   else if initial prompt: [<|startofprev|>, prompt_text_ids...]
+        //     (ALL_SEGMENTS every chunk; FIRST_SEGMENT first chunk only).
+        //   else: empty.
+        // We diverge from HF for FIRST_SEGMENT (the default): prime only the
+        // first window, matching whisper.cpp / OpenAI.
         std::vector<int32_t> prev_tokens;
         if (do_condition_on_prev_tokens && !prev_history_segments.empty() &&
             prev_sot_id >= 0)
@@ -1980,10 +1846,8 @@ transcribe_status whisper_run(
             for (const auto & seg : prev_history_segments) {
                 size_t n = seg.size();
                 if (n > 2 && token_is_timestamp(seg[n - 2])) {
-                    // HF _pad_to_max_length(...,
-                    // skip_ending_double_timestamps=True) drops the
-                    // last token from any segment whose penultimate
-                    // token is a timestamp.
+                    // skip_ending_double_timestamps: drop the last token of any
+                    // segment whose penultimate token is a timestamp.
                     --n;
                 }
                 hist.insert(hist.end(), seg.begin(), seg.begin() + n);
@@ -2005,9 +1869,8 @@ transcribe_status whisper_run(
         // Prefix for this chunk:
         //   multilingual: prev_tokens + [SOT, lang, task, notimestamps?]
         //   .en:          prev_tokens + [SOT,             notimestamps?]
-        // Non-multilingual models have neither <|lang|> nor <|task|>
-        // tokens in their vocab; emitting either would land on a
-        // garbage id.
+        // .en vocab has no <|lang|>/<|task|> tokens; emitting them would land
+        // on a garbage id.
         std::vector<int32_t> prompt_ids;
         prompt_ids.reserve(prev_tokens.size() + 4);
         prompt_ids.insert(prompt_ids.end(),
@@ -2027,11 +1890,8 @@ transcribe_status whisper_run(
         // begin_index - start_of_trans_offset == len(prev_tokens)).
         const int sot_index = static_cast<int>(prev_tokens.size());
 
-        // Guard: prefix + 1 generated token must fit in the decoder
-        // self-attention window. With max_target_positions=448 and a
-        // maxed prev (224) + init (4) prefix this is 228 — plenty. A
-        // pathological caller passing prompt_tokens > 444 would land
-        // here.
+        // Guard: prefix + 1 generated token must fit the decoder self-attention
+        // window (only a pathological prompt_tokens > 444 trips this).
         if (seq_len + 1 > static_cast<int>(n_ctx_decoder)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "whisper run: prefix length %d exceeds decoder "
@@ -2053,17 +1913,10 @@ transcribe_status whisper_run(
             }
         };
 
-        // max_initial_timestamp_index: HF WhisperTimeStampLogitsProcessor
-        // (generation/logits_process.py:2036-2042) masks timestamps above
-        // `timestamp_begin + max_initial_timestamp_index` on the first
-        // generated token only. The default max_initial_timestamp is
-        // 1.0 s, which at Whisper's fixed 20 ms per timestamp token
-        // resolves to index 50 — i.e. the first emitted timestamp can
-        // mark a cut at most 1.0 s into the chunk. Prevents the decoder
-        // from skipping over an entire window's worth of audio on the
-        // opening cut.
-        //
-        // Negative / non-finite max_initial_timestamp disables the cap.
+        // max_initial_timestamp_index: HF WhisperTimeStampLogitsProcessor masks
+        // timestamps above timestamp_begin + this index on the first generated
+        // token only. Default 1.0s / 20ms-per-token = index 50, so the opening
+        // cut lands at most 1.0s in. Negative/non-finite disables the cap.
         const int max_initial_timestamp_index =
             (std::isfinite(wp->max_initial_timestamp) &&
              wp->max_initial_timestamp >= 0.0f)
@@ -2093,18 +1946,10 @@ transcribe_status whisper_run(
 
         int next_id = 0;
 
-        // ===== Stage 2.4: temperature fallback setup ===================
-        //
-        // Per-chunk temperature tuple = [t0, t0+dt, t0+2*dt, ...] up to
-        // and including 1.0. Default [0.0, 0.2, 0.4, 0.6, 0.8, 1.0] —
-        // OpenAI whisper's shipping recipe. A tier is accepted when its
-        // compression_ratio < compression_ratio_thold AND its
-        // avg_logprob > logprob_thold. If all tiers fail, keep the last
-        // tier's output (HF does the same to avoid infinite loops).
-        //
-        // Thresholds use INF sentinels to mean "disabled"; see
-        // transcribe_whisper_run_ext_init() and the header's DISABLED
-        // constants. `wp` and `rng` are hoisted to run scope above.
+        // Temperature fallback setup. Per-chunk tuple [t0, t0+dt, ...] up to
+        // 1.0; default [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]. A tier is accepted when
+        // compression_ratio < thold AND avg_logprob > thold; if all fail, keep
+        // the last tier's output. Thresholds use INF sentinels to mean disabled.
         std::vector<float> temperatures;
         temperatures.push_back(wp->temperature);
         if (wp->temperature_inc > 0.0f) {
@@ -2125,38 +1970,23 @@ transcribe_status whisper_run(
         float accepted_avg_logprob   = 0.0f;
         int   accepted_n_fallbacks   = 0;
 
-        // Stage 2.5 no-speech: probability captured from the SOT-position
-        // row of the prompt-pass logits (tier 0 only, matching HF's
-        // WhisperNoSpeechDetection which reruns on the full decoder
-        // prefix and reads logits[:, begin_index - start_of_trans_offset]
-        // — row 0 for our no-prev-context Stage 2 prefix). The token id
-        // is positional: no_speech = notimestamps - 1 (multilingual:
-        // 50362; .en: 50361).
-        //
-        // Post-decode, HF's _need_fallback
-        // (generation_whisper.py:1275-1286) sets should_skip=True when
-        //   avg_logprob < logprob_thold  AND
-        //   no_speech_prob > no_speech_thold
-        // — both conditions required, not one alone. When should_skip
-        // fires, the chunk's output is discarded and seek advances by a
-        // full window (no fallback is attempted, which matches setting
-        // needs_fallback=False in HF).
+        // No-speech: probability captured from the SOT-position row of the
+        // prompt-pass logits (tier 0 only), matching HF WhisperNoSpeechDetection
+        // which reads logits[:, begin_index - start_of_trans_offset]. The token
+        // id is positional: no_speech = notimestamps - 1 (multilingual 50362,
+        // .en 50361). When the no-speech skip fires, the chunk's output is
+        // discarded and seek advances a full window (no fallback attempted).
         const int no_speech_token_id =
             cm->hparams.no_timestamps_token_id - 1;
         float no_speech_prob = 0.0f;
         bool  no_speech_prob_captured  = false;
         bool  no_speech_fired_this_chunk = false;
 
-        // Port of HF _retrieve_compression_ratio's input convention
-        // (generation_whisper.py:1074-1086). The ratio is computed over
-        // the full generated tail including timestamp tokens, <|...|>
-        // specials, and EOS when present — fallback decides before EOS
-        // is stripped from seek_sequence. We mirror that here by
-        // assembling the metric input as: generated_ids + (EOS if the
-        // step loop terminated because it sampled eos_id). If the loop
-        // hit k_max_new_tokens before EOS, no EOS marker is appended —
-        // matching HF, whose seek_sequence in that case simply lacks an
-        // EOS.
+        // HF _retrieve_compression_ratio convention: the ratio is computed over
+        // the full generated tail including timestamps, specials, and EOS when
+        // present (fallback decides before EOS is stripped). We assemble the
+        // metric input as generated_ids + EOS-if-sampled; no EOS marker when
+        // the loop hit k_max_new_tokens first.
         bool tier_hit_eos = false;
 
         // KV cache allocation is tier-independent — done once per chunk
@@ -2170,12 +2000,8 @@ transcribe_status whisper_run(
             cc->kv_cache.T_enc != T_enc_local;
         if (need_init) {
             cc->kv_cache.free();
-            // AUTO: match cache dtype to the model's weight dtype. For
-            // F32 GGUFs that's F32 (zero-loss cache, no precision loss
-            // on the round-trip); for F16 and every quant preset it's
-            // F16 (the production default — weight+activation already
-            // pay F16 downcast costs, so the cache doesn't add new
-            // precision loss). Explicit --kv-type overrides.
+            // AUTO: match cache dtype to the weight dtype (F32 GGUF -> F32
+            // zero-loss cache; F16 and quants -> F16). Explicit --kv-type wins.
             ggml_type kv_type_g;
             if (cc->kv_type == TRANSCRIBE_KV_TYPE_F32) {
                 kv_type_g = GGML_TYPE_F32;
@@ -2198,13 +2024,10 @@ transcribe_status whisper_run(
             }
         }
 
-        // ---- Cross-attention K/V precompute (chunk-scoped) ------------
-        //
-        // Cross-K/V depends only on encoder output and the cross-attn
-        // weights — both are tier-invariant. Compute once per chunk and
-        // reuse across every fallback tier. Previously this lived inside
-        // the tier loop and re-ran every tier, paying n_layers × T_enc ×
-        // d_model² of redundant matmul per tier on fallback chunks.
+        // ---- Cross-attention K/V precompute (chunk-scoped) ----
+        // Cross-K/V depends only on the encoder output and cross-attn weights
+        // (both tier-invariant), so compute once per chunk and reuse across
+        // fallback tiers.
         {
             const int64_t t_cross_build_start = ggml_time_us();
             if (!new_compute_ctx(8 * 1024 * 1024)) {
@@ -2246,7 +2069,7 @@ transcribe_status whisper_run(
             cc->kv_cache.cross_populated = true;
         }
 
-        // ===== Tier loop (temperature fallback) ========================
+        // ----- Tier loop (temperature fallback) -----
         for (size_t ti = 0; ti < temperatures.size(); ++ti) {
             const float tier_T = temperatures[ti];
 
@@ -2261,9 +2084,8 @@ transcribe_status whisper_run(
             double sum_logprob       = 0.0;
             int    n_logprob_samples = 0;
 
-            // Dump gate. Tolerance references were captured at T=0
-            // (tier 0 at defaults); only tier 0 of the first chunk
-            // emits intermediates.
+            // Dump gate: references were captured at T=0, so only tier 0 of the
+            // first chunk emits intermediates.
             const bool emit_tier_dumps = is_first_chunk && (ti == 0);
             auto tier_try_dump = [&](const char * name, ggml_tensor * t,
                                      const char * stage)
@@ -2374,25 +2196,13 @@ transcribe_status whisper_run(
 
                 const size_t row_bytes = static_cast<size_t>(vocab_size) * sizeof(float);
 
-                // Capture no_speech_prob from the RAW SOT-position row,
-                // matching HF WhisperNoSpeechDetection semantics
-                // (transformers generation/logits_process.py:2095-2115):
-                // on the first generated-token step, when
-                // start_of_trans_offset > 1 — which is always our case
-                // (prefix always carries SOT + lang + task [+
-                // notimestamps]) — HF reruns the model on the full
-                // decoder prefix and indexes
-                //   logits[:, begin_index - start_of_trans_offset]
-                // which collapses to logits[:, sot_index] where sot_index
-                // is the position of <|startoftranscript|> within the
-                // prefix. With Stage 3 prev tokens this is len(prev_tokens);
-                // with no prev tokens it's 0 (matches the Stage 2 capture).
-                //
-                // Tier 0 only — matches HF's one-shot capture. Read the
-                // raw SOT row into a temporary buffer so suppress /
-                // begin_suppress / timestamp rules applied below to
-                // last_logits (the seq_len-1 row used to sample the first
-                // generated token) do not contaminate the measurement.
+                // Capture no_speech_prob from the RAW SOT-position row, matching
+                // HF WhisperNoSpeechDetection: logits[:, begin_index -
+                // start_of_trans_offset] collapses to logits[:, sot_index]
+                // (sot_index = position of <|startoftranscript|> in the prefix =
+                // len(prev_tokens), 0 with no prev tokens). Tier 0 only. Read
+                // into a temp buffer so the suppress / timestamp rules applied
+                // to last_logits below don't contaminate the measurement.
                 if (ti == 0 && !no_speech_prob_captured &&
                     no_speech_token_id >= 0 &&
                     no_speech_token_id < static_cast<int>(vocab_size))
@@ -2457,9 +2267,7 @@ transcribe_status whisper_run(
                     ggml_time_us() - t_prompt_ts_start);
 
                 if (tier_T <= 0.0f) {
-                    // T==0: fused argmax + log-softmax. The whole call
-                    // is recorded under sample; logprob bucket stays 0
-                    // for this path (it is computed for free here).
+                    // T==0: fused argmax + log-softmax (logprob computed free).
                     const int64_t t_prompt_sample_start = ggml_time_us();
                     float lp = 0.0f;
                     next_id = sample_argmax_and_logprob(last_logits, &lp);
@@ -2483,16 +2291,12 @@ transcribe_status whisper_run(
                 cc->perf.prompt_cpu.add(ggml_time_us() - t_prompt_cpu_start);
             }
 
-            // ---- Step loop (n_tokens=1) -------------------------------
-            //
+            // ---- Step loop (n_tokens=1) ----
             // Two variants:
-            //   GPU (Vulkan/Metal/CUDA/SYCL): build_step_graph — one
-            //     static-topology graph per tier. KV writes via
-            //     ggml_set_rows at runtime kv_idx; flash-attn reads a
-            //     fixed max_n_kv window with a runtime mask. Removes
-            //     per-step graph_build + sched_alloc.
-            //   CPU (or debug, which needs the gen20 dump path): per-
-            //     step build_decoder_graph_kv with a dynamic n_kv.
+            //   GPU: build_step_graph — one static-topology graph per tier (KV
+            //     writes via ggml_set_rows at runtime kv_idx, FA reads a fixed
+            //     max_n_kv window with a runtime mask).
+            //   CPU/debug: per-step build_decoder_graph_kv with dynamic n_kv.
             int n_past = seq_len;
             const bool primary_is_gpu =
                 cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
@@ -2501,18 +2305,15 @@ transcribe_status whisper_run(
             const bool use_step_graph = primary_is_gpu &&
                                         !transcribe::debug::enabled();
 
-            // Sized to fit prompt + max generated tail, padded to next
-            // pow2. For whisper this is typically 256 or 512 (cap is
-            // n_ctx_decoder=448).
+            // Sized to fit prompt + max generated tail, padded to next pow2,
+            // capped at n_ctx_decoder (448).
             int max_n_kv = 256;
             while (max_n_kv < seq_len + k_max_new_tokens) max_n_kv *= 2;
             if (max_n_kv > static_cast<int>(n_ctx_decoder)) {
                 max_n_kv = static_cast<int>(n_ctx_decoder);
             }
 
-            // Step graph + persistent host buffers, only valid on
-            // use_step_graph path. Built lazily inside the loop on
-            // first use to keep the dynamic-graph fallback unaffected.
+            // Step graph + persistent host buffers (use_step_graph path only).
             StepBuild sb {};
             std::vector<ggml_fp16_t> step_mask;
             std::vector<float>       step_cross_mask;
@@ -2638,10 +2439,8 @@ transcribe_status whisper_run(
                     ggml_tensor * pos_in = ggml_graph_get_tensor(step_db.graph, "dec.pos_ids");
                     ggml_backend_tensor_set(pos_in, &pos, 0, sizeof(int32_t));
 
-                    // Padded step: build the trailing-padding mask. The
-                    // valid range [0, n_past+1) is 0; trailing slots are
-                    // -inf so the FA op ignores stale K/V values left in
-                    // the cache from previous tiers / chunks.
+                    // Padded step: [0, n_past+1) is 0, trailing slots -inf so
+                    // FA ignores stale K/V from previous tiers/chunks.
                     if (step_db.causal_mask_in != nullptr) {
                         const int n_kv_mask =
                             static_cast<int>(step_db.causal_mask_in->ne[0]);
@@ -2732,19 +2531,12 @@ transcribe_status whisper_run(
                 cc->perf.step_cpu.add(ggml_time_us() - t_step_cpu_start);
             }
 
-            // ---- Compute tier metrics ---------------------------------
-            //
-            // Compression ratio runs over the full generated tail — all
-            // generated ids including timestamps / specials / EOS, with
-            // decoder_input_ids (the prompt header) stripped. This
-            // matches HF's _retrieve_compression_ratio input
-            // (generation_whisper.py:1074-1086 calls
-            // _retrieve_compression_ratio(seek_sequence, vocab_size)
-            // before EOS is stripped at :1085). An earlier iteration
-            // passed generated_text_ids here, which filtered out
-            // timestamps and specials and diverged from HF's metric by
-            // several percent on typical 20-50-token chunks — enough to
-            // flip accept/escalate on the fallback boundary.
+            // ---- Compute tier metrics ----
+            // Compression ratio runs over the full generated tail (all ids
+            // including timestamps/specials/EOS, prompt header stripped),
+            // matching HF's _retrieve_compression_ratio. Using filtered
+            // text-only ids here would diverge enough to flip the fallback
+            // accept/escalate boundary.
             std::vector<int32_t> comp_tail;
             comp_tail.reserve(generated_ids.size() + 1);
             comp_tail.insert(comp_tail.end(),
@@ -2759,46 +2551,27 @@ transcribe_status whisper_run(
                     ? static_cast<float>(sum_logprob / n_logprob_samples)
                     : -std::numeric_limits<float>::infinity();
 
-            // Thresholds.
-            //
-            // HF _need_fallback (generation_whisper.py:1243-1287) falls
-            // back strictly on `comp_ratio > thold` or `avg_logprob <
-            // thold`; equality does NOT trigger fallback. So a tier is
-            // accepted (lp_ok/comp_ok) under `<= / >=`. The INF
-            // sentinels still work: tier_comp_ratio <= +INF is always
-            // true, tier_avg_logprob >= -INF is always true — disabled
-            // thresholds trivially satisfy the check.
+            // Thresholds. HF _need_fallback falls back strictly on
+            // `comp_ratio > thold` or `avg_logprob < thold`; equality does NOT
+            // trigger, so a tier is accepted under `<= / >=`. INF sentinels work
+            // (<= +INF and >= -INF are always true: disabled thresholds pass).
             const bool comp_ok =
                 tier_comp_ratio <= wp->compression_ratio_thold;
             const bool lp_ok =
                 tier_avg_logprob >= wp->logprob_thold;
 
-            // HF _need_fallback (generation_whisper.py:1275-1286) sets
-            //   should_skip = True, needs_fallback = False
-            // when BOTH
-            //   avg_logprob < logprob_threshold  AND
-            //   no_speech_prob > no_speech_threshold
-            // fire at the current tier. The skip halts fallback — HF
-            // explicitly flips needs_fallback to False so the outer
-            // generate_with_fallback loop terminates without trying
-            // hotter temperatures. no_speech_prob is a tier-0 capture
-            // (see above) so this is checked against the tier-0 value
-            // for every tier, but the logprob is per-tier.
-            //
-            // Disable sentinels: no_speech_thold = +INF makes the first
-            // comparison always false; logprob_thold = -INF makes the
-            // second always false. Either one disabled → no skip.
+            // HF _need_fallback sets should_skip (and halts fallback) when BOTH
+            // no_speech_prob > no_speech_thold AND avg_logprob < logprob_thold.
+            // no_speech_prob is the tier-0 capture (checked for every tier);
+            // logprob is per-tier. Sentinels: no_speech_thold=+INF or
+            // logprob_thold=-INF disables the skip.
             const bool no_speech_should_skip =
                 no_speech_prob > wp->no_speech_thold &&
                 tier_avg_logprob < wp->logprob_thold;
 
-            // Commit the tier's output unconditionally. If no tier
-            // passes comp_ok/lp_ok AND no_speech_should_skip never
-            // fires, the last-tried tier wins (matches HF
-            // generate_with_fallback's behavior of keeping the final
-            // hypothesis when all tiers missed the thresholds). If
-            // no_speech_should_skip fires, we discard the tier output
-            // after recording the trace-visible metrics, below.
+            // Commit the tier's output unconditionally so the last-tried tier
+            // wins when no tier passes (matches HF generate_with_fallback). A
+            // no_speech_should_skip is discarded below after recording metrics.
             accepted_generated_ids      = generated_ids;
             accepted_generated_text_ids = generated_text_ids;
             accepted_T                  = tier_T;
@@ -2815,10 +2588,8 @@ transcribe_status whisper_run(
             }
         }
 
-        // Tier loop accepted something — hand off to segment emission.
-        // When no-speech fired, the tier produced output but we throw
-        // it away: seek still advances by a full window (per the
-        // _retrieve_segment branch in the seek-advance block below).
+        // Hand off the accepted tier to segment emission. A no-speech-fired
+        // chunk discards its output but still advances seek a full window.
         generated_ids      = accepted_generated_ids;
         generated_text_ids = accepted_generated_text_ids;
         if (no_speech_fired_this_chunk) {
@@ -2826,11 +2597,8 @@ transcribe_status whisper_run(
             generated_text_ids.clear();
         }
 
-        // Stage 2.6 — commit per-chunk trace. Global window is
-        // [time_offset_ms, time_offset_ms + seek_num_frames*10ms). The
-        // trace captures what the fallback loop decided and what the
-        // no-speech gate saw; callers tracing a hallucination can map
-        // an output segment back to the tier/metric that produced it.
+        // Commit per-chunk trace over [time_offset_ms, +seek_num_frames*10ms):
+        // what the fallback loop decided and what the no-speech gate saw.
         {
             transcribe_whisper_chunk_trace trace; transcribe_whisper_chunk_trace_init(&trace);
             trace.t0_ms               = time_offset_ms;
@@ -2845,42 +2613,23 @@ transcribe_status whisper_run(
             cc->chunk_traces.push_back(trace);
         }
 
-        // Stage 3 — condition_on_prev_tokens gate for the NEXT chunk.
-        //
-        // HF generation_whisper.py:1090-1093 sets:
-        //   is_low_temperature = temperature is None or temperature < 0.5
-        //   do_condition[i] = condition_on_prev_tokens AND is_low_temperature
-        // Hot tiers (>= 0.5) are presumed to have hallucinated, so the
-        // next chunk forgoes the prev-context window to avoid immediate
-        // propagation. The history itself is updated after
-        // _retrieve_segment below, because HF carries only the segment
-        // tokens that survive that slicing step.
+        // condition_on_prev_tokens gate for the NEXT chunk: HF disables it when
+        // the accepted temperature was hot (>= 0.5, presumed hallucinated) to
+        // avoid propagating into the next chunk. History is updated after
+        // _retrieve_segment (HF carries only the surviving segment tokens).
         do_condition_on_prev_tokens =
             wp->condition_on_prev_tokens && (accepted_T < 0.5f);
 
-        // ----- _retrieve_segment ---------------------------------------
-        //
-        // Port of HF generation_whisper.py:_retrieve_segment
-        // (1976-2073). Splits generated_ids on consecutive-timestamp
-        // pairs (each pair `<|t_a|><|t_b|>` marks "text between
-        // timestamps spans local time a..b"). Emits one SegmentEntry
-        // per pair. Returns segment_offset_frames — how far to advance
-        // `seek`:
-        //
-        //   - Chunk ended with a single ts (pair not yet closed): no
-        //     speech after last ts → advance past entire chunk
-        //     (seek_num_frames). Preserves the tail for the next
-        //     chunk's decoder.
-        //   - Chunk has at least one closed pair but not single-ended:
-        //     discard unfinished tail, advance by the last *closed* ts
-        //     position × input_stride(2) mel frames.
-        //   - No pairs at all: emit one segment covering the full
-        //     chunk; advance by seek_num_frames.
-        //
-        // For TIMESTAMPS_NONE mode the prompt includes <|notimestamps|>
-        // so generated_ids carries no ts tokens → "no pairs" branch,
-        // full-chunk advance, no per-chunk segment emission (we gate
-        // on want_segment_timestamps).
+        // _retrieve_segment (port of HF). Splits generated_ids on consecutive-
+        // timestamp pairs (one SegmentEntry per pair) and returns
+        // segment_offset_frames (seek advance):
+        //   - single trailing ts (pair not closed): advance the full chunk,
+        //     preserving the tail for the next decoder.
+        //   - >=1 closed pair, not single-ended: discard the unfinished tail,
+        //     advance by the last closed ts position * input_stride(2) frames.
+        //   - no pairs: emit one full-chunk segment, advance seek_num_frames.
+        // TIMESTAMPS_NONE includes <|notimestamps|>, so no ts tokens -> "no
+        // pairs" branch, full-chunk advance, no per-chunk segment emission.
         WhisperSegmentResult seg_res = whisper_retrieve_segment(
             generated_ids, cm->tok, time_offset_ms, seek_num_frames,
             want_segment_timestamps, timestamp_begin, vocab_size);
@@ -2891,15 +2640,9 @@ transcribe_status whisper_run(
         std::vector<std::vector<int32_t>> & prev_chunk_segments =
             seg_res.prev_chunk_segments;
 
-        // Stage 3 — update prev-context history for later chunks.
-        //
-        // HF appends the `segments` returned by _retrieve_segment to
-        // current_segments, then _prepare_decoder_input_ids builds the
-        // prev window from those segment tokens. In the closed-pair
-        // branch, _retrieve_segment intentionally discards unfinished
-        // tail tokens after the last completed timestamp pair; carrying
-        // accepted_generated_ids directly would leak that discarded
-        // tail into the next prompt and diverge from HF.
+        // Update prev-context history from the _retrieve_segment slices, not
+        // accepted_generated_ids directly: the closed-pair branch discards the
+        // unfinished tail, and carrying it would leak into the next prompt.
         if (!no_speech_fired_this_chunk && !prev_chunk_segments.empty()) {
             prev_history_segments.insert(prev_history_segments.end(),
                                          prev_chunk_segments.begin(),
@@ -2911,25 +2654,13 @@ transcribe_status whisper_run(
                             generated_text_ids.end());
 
         // Seek advance.
-        //
-        // Short-form: fixed full-chunk advance. Because we padded PCM
-        // to exactly n_samples_per_chunk, the chunk's tail after the
-        // real audio is clamped-silence; the decoder would hallucinate
-        // "you you you" on it if we re-entered. HF's generate() avoids
-        // this by taking a separate is_shortform path that doesn't
-        // loop at all — we match by single-passing (a second iteration
-        // has nothing useful to decode).
-        //
-        // Long-form: dynamic advance per HF _retrieve_segment. The
-        // chunk's real content may not reach the 3000-frame window
-        // end; segment_offset_frames stops at the last closed
-        // timestamp pair so the next chunk picks up from there.
-        // Guarded against 0-advance infinite loops (fall back to full
-        // chunk).
-        //
-        // No-speech override (Stage 2.5): when both thresholds fire,
-        // the chunk is declared empty; skip the whole window so the
-        // next chunk decodes fresh encoder content.
+        //   Short-form: full-chunk advance. PCM is padded to exactly
+        //     n_samples_per_chunk, so the silent tail would hallucinate
+        //     "you you you" if re-entered; single-pass it (matches HF's
+        //     separate is_shortform path).
+        //   Long-form: dynamic advance via segment_offset_frames (last closed
+        //     timestamp pair), guarded against 0-advance infinite loops.
+        //   No-speech fired: declared empty, skip the whole window.
         if (is_short_form) {
             seek += seek_num_frames;
         } else if (no_speech_fired_this_chunk) {
@@ -2942,44 +2673,25 @@ transcribe_status whisper_run(
         }
     }
 
-    // Finalize: decode all_text_ids → UTF-8, strip whitespace, push the
-    // single text-only segment for TIMESTAMPS_NONE mode, flip
-    // has_result. Shared with the abort exit paths above so partial
-    // output is readable via the same accessors after
-    // TRANSCRIBE_ERR_ABORTED.
     commit_result();
 
     return TRANSCRIBE_OK;
 }
 
-// ===========================================================================
-// Offline batched decode (transcribe_run_batch)
-// ===========================================================================
+// Offline batched decode (transcribe_run_batch).
 //
-// Whisper is encoder-decoder with self + cross attention (the cohere /
-// canary / moonshine pattern), so it batches the same way: the encoder
-// stays SERIAL per utterance (compute-bound — the granite lesson) while the
-// memory-bandwidth-bound autoregressive DECODE is batched across B
-// utterances in lockstep, amortizing the per-step weight reads.
+// Encoder stays SERIAL per utterance (compute-bound) while the bandwidth-bound
+// autoregressive DECODE is batched across B utterances in lockstep. The batched
+// fast path covers only the common, parity-exact case and peels everything else
+// to the serial whisper_run():
+//   batched: short-form (<= 30s) at tier 0 (T=0 greedy), TIMESTAMPS_NONE, no
+//            initial_prompt.
+//   serial : long-form, segment-timestamps, T > 0, prompt/prompt_tokens,
+//            invalid inputs, and any utterance whose tier-0 output fails the
+//            fallback thresholds (so the temperature ladder runs exactly).
 //
-// Whisper's decode loop is far richer than its siblings (temperature
-// fallback, timestamp rules, no-speech skip, long-form seek), so the
-// batched fast path covers only the common, parity-exact case and PEELS
-// everything else to the proven serial whisper_run():
-//
-//   batched  : short-form (<= 30 s) utterances at tier 0 (temperature 0 =
-//              greedy argmax), TIMESTAMPS_NONE, no initial_prompt.
-//   serial   : long-form, segment-timestamps, temperature > 0, prompt /
-//              prompt_tokens, invalid inputs, AND any batched utterance
-//              whose tier-0 output fails the fallback thresholds
-//              (compression-ratio / avg-logprob / no-speech-skip) — those
-//              re-run through whisper_run so the temperature ladder is
-//              applied exactly as in serial.
-//
-// For a clip that passes tier 0 (the overwhelming common case for clean
-// speech) the batched greedy argmax is bit-for-bit the serial tier-0
-// result, so batch_parity holds; anything that would diverge is run
-// serially and therefore trivially matches.
+// A clip that passes tier 0 (the common case) is bit-for-bit the serial tier-0
+// result, so batch_parity holds; anything that would diverge runs serially.
 
 // Serial fallback: run each utterance through whisper_run and snapshot it.
 transcribe_status whisper_run_batch_serial(
@@ -3635,7 +3347,7 @@ transcribe_status whisper_run_batch(
         have_result[b] = 1;
     }
 
-    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+    if (transcribe::env::flag("TRANSCRIBE_PERF_DEBUG")) {
         int n_serial = 0; for (int b = 0; b < n; ++b) n_serial += needs_serial[b] ? 1 : 0;
         log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "whisper run_batch: n=%d batched=%d serial=%d tiers=%d want_ts=%d "
@@ -3664,28 +3376,17 @@ static bool whisper_accepts_ext_kind(
     return kind == TRANSCRIBE_EXT_KIND_WHISPER_RUN;
 }
 
-// Pre-clear validation for the _RUN slot (see Arch::run_validate). Pure:
-// it only inspects params->family. The dispatcher has already confirmed
-// the ext header size and that WHISPER_RUN is accepted; here we enforce
-// the per-kind minimum (the full transcribe_whisper_run_ext) before the
-// previous result snapshot is cleared, so a too-small run ext is rejected
-// without destroying the prior transcript. whisper_run repeats this check
-// (defense in depth) right before it casts the pointer.
+// Pre-clear validation for the _RUN slot (see Arch::run_validate). Enforces the
+// per-kind minimum (full transcribe_whisper_run_ext) before the prior result
+// snapshot is cleared, so a too-small run ext is rejected without destroying
+// the prior transcript. whisper_run repeats this (defense in depth) before the
+// cast.
 //
-// Scope: this validates ext SHAPE only. Whisper's run-ext VALUE checks —
-// prompt_condition=ALL_SEGMENTS without condition_on_prev_tokens, a
-// prompt_tokens list that re-includes <|startofprev|>, and an
-// initial_prompt carrying disallowed special tokens — live in whisper_run()
-// and reject AFTER the snapshot is cleared, so a semantically-malformed (but
-// correctly-sized) whisper run ext does clear the prior transcript.
-//
-// This is an intentional, accepted gap, not pending work. A malformed run
-// ext is a caller programming error surfaced as INVALID_ARG; the run() path
-// is one-shot (each call yields a fresh complete result the caller has
-// already consumed), so unlike the streaming families there is no
-// accumulating transcript to protect. The cost/benefit of hoisting the
-// value checks here does not justify it. See docs/follow-ups.md for the
-// full rationale should this ever need revisiting.
+// Validates SHAPE only. The run-ext VALUE checks (ALL_SEGMENTS without
+// condition_on_prev_tokens, prompt_tokens re-including <|startofprev|>,
+// disallowed specials in initial_prompt) live in whisper_run() and reject after
+// the snapshot is cleared — an accepted gap, since run() is one-shot with no
+// accumulating transcript to protect.
 static transcribe_status whisper_run_validate(
     const transcribe_session *   ctx,
     const transcribe_run_params * params)

@@ -25,11 +25,10 @@ inline transcribe_status check_struct_size(uint64_t got, uint64_t want) {
     return TRANSCRIBE_OK;
 }
 
-// Kept as an alias for call-site readability ("this is an input params
-// struct"). Behavior is identical to check_struct_size: in pre-1.0 the
-// `0 means defaults` relaxation has been removed so that uninitialized
-// stack memory with a coincidentally-zero struct_size byte stops being
-// silently accepted as a defaults shortcut. Defaults come from NULL.
+// Alias for call-site readability ("this is an input params struct").
+// Behavior is identical to check_struct_size: struct_size == 0 is rejected
+// (so coincidentally-zero stack memory is not taken as a defaults
+// shortcut); defaults come from NULL.
 inline transcribe_status check_input_struct_size(uint64_t got, uint64_t want) {
     return check_struct_size(got, want);
 }

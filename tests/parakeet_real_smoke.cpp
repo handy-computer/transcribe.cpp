@@ -10,7 +10,7 @@
 //   - The CMake option TRANSCRIBE_BUILD_REAL_MODEL_TESTS (default OFF)
 //     controls whether this binary is even built.
 //   - At runtime, the GGUF path comes from the
-//     TRANSCRIBE_REAL_PARAKEET_GGUF environment variable. If unset,
+//     TRANSCRIBE_PARAKEET_GGUF environment variable. If unset,
 //     the test exits 77 (CTest "skipped") with a regeneration hint.
 //
 // CI never builds this — it's a developer-local manual gate. The
@@ -117,14 +117,14 @@ parakeet_view(const struct transcribe_model * m) {
 } // namespace
 
 int main() {
-    const char * env = std::getenv("TRANSCRIBE_REAL_PARAKEET_GGUF");
+    const char * env = std::getenv("TRANSCRIBE_PARAKEET_GGUF");
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
-                     "parakeet_real_smoke: TRANSCRIBE_REAL_PARAKEET_GGUF not "
+                     "parakeet_real_smoke: TRANSCRIBE_PARAKEET_GGUF not "
                      "set; skipping. Convert a real model with:\n"
                      "  uv run scripts/convert-parakeet.py "
                      "<model-dir> /tmp/parakeet.gguf\n"
-                     "and re-run with TRANSCRIBE_REAL_PARAKEET_GGUF=/tmp/parakeet.gguf\n");
+                     "and re-run with TRANSCRIBE_PARAKEET_GGUF=/tmp/parakeet.gguf\n");
         return 77;
     }
     const std::string fixture = env;
@@ -152,7 +152,7 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    // Public ABI sanity. After phase 4 step 1, backend is one of
+    // Public ABI sanity. After load, backend is one of
     // "metal" (Apple Silicon, default) or "cpu" (fallback). The
     // exact label depends on the build platform; we just assert
     // it's non-empty and one of the expected values.

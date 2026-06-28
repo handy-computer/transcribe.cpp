@@ -2,20 +2,12 @@
 //
 // Reference: Qwen3ASRThinkerTextModel in modeling_qwen3_asr.py.
 //
-// The per-block math (pre-LN RMSNorm, GQA with per-head Q/K-RMSNorm,
-// NeoX RoPE @ θ=1e6, KV write/read, SwiGLU on packed gate_up) is
-// shared with arch/funasr_nano via `src/causal_lm/`. This file owns:
-//   - graph allocation
-//   - prompt + audio injection (3-way concat: prefix | enc_out | suffix)
-//   - tensor naming and dump-point preservation for validate.py parity
-//   - final RMSNorm + tied lm_head head
-//   - block_prefill / block_step driver loops
-//
-// MRoPE reduction: for text-only ASR every position has a single
-// (T, H, W) coordinate so the interleaved MRoPE collapses to NeoX
-// RoPE on the temporal axis. The shared block helpers use NEOX RoPE.
-// If a future variant breaks this assumption we'll switch to
-// ggml_rope_multi.
+// The per-block math (pre-LN RMSNorm, GQA with per-head Q/K-RMSNorm, NeoX
+// RoPE @ θ=1e6, KV write/read, SwiGLU on packed gate_up) is shared with
+// arch/funasr_nano via `src/causal_lm/`. This file owns graph allocation,
+// prompt + audio injection (3-way concat: prefix | enc_out | suffix), tensor
+// naming + dump points, the final RMSNorm + tied lm_head, and the
+// block_prefill / block_step driver loops. MRoPE reduction: see decoder.h.
 
 #include "decoder.h"
 
@@ -121,7 +113,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     const auto block_params = to_block_params(hp);
     const float rms_eps = hp.dec_rms_norm_eps;
 
-    // ---------- Graph inputs ----------
+    // Graph inputs.
     pb.input_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_prompt);
     named(pb.input_ids_in, "dec.input_ids");
     ggml_set_input(pb.input_ids_in);
@@ -148,14 +140,14 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     }
     pb.graph = gf;
 
-    // ---------- Token embedding (all positions, for the dump) ----------
+    // Token embedding (all positions, for the dump).
     ggml_tensor * token_emb_all = ggml_get_rows(
         ctx, weights.dec_embed.token_w, pb.input_ids_in);
     named(token_emb_all, "dec.token_emb");
     pb.dumps.token_emb = token_emb_all;
     transcribe::debug::mark_tensor_for_dump(token_emb_all);
 
-    // ---------- Audio injection via 3-way concat ----------
+    // Audio injection via 3-way concat.
     // Single contiguous audio block at positions [prefix_len, prefix_len+T_enc).
     const size_t emb_elem = ggml_element_size(token_emb_all);
     ggml_tensor * x_prefix = nullptr;
@@ -186,7 +178,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     pb.dumps.audio_injected = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // ---------- Block stack ----------
+    // Block stack.
     for (int il = 0; il < n_layer; ++il) {
         causal_lm::BlockOpts opts {};
         opts.use_flash             = use_flash;
@@ -218,7 +210,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
         }
     }
 
-    // ---------- Final RMSNorm + tied lm_head ----------
+    // Final RMSNorm + tied lm_head.
     x = ggml_mul(ctx, ggml_rms_norm(ctx, x, rms_eps),
                  weights.dec_final.norm_w);
     named(x, "dec.out_before_head");
@@ -259,9 +251,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     return pb;
 }
 
-// ---------------------------------------------------------------------------
 // Step graph (single-token decode)
-// ---------------------------------------------------------------------------
 
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const QwenAsrWeights &          weights,
@@ -295,7 +285,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 
     const auto block_params = to_block_params(hp);
 
-    // ---------- Graph inputs (persist across steps) ----------
+    // Graph inputs (persist across steps).
     sb.input_id_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
     ggml_set_name(sb.input_id_in, "step.input_id");
     ggml_set_input(sb.input_id_in);
@@ -323,11 +313,11 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     }
     sb.graph = gf;
 
-    // ---------- Token embedding ----------
+    // Token embedding.
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w,
                                     sb.input_id_in);  // [hidden, 1]
 
-    // ---------- Block stack ----------
+    // Block stack.
     for (int il = 0; il < n_layer; ++il) {
         x = causal_lm::block_step(
             ctx, gf, x,
@@ -342,7 +332,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
             use_flash);
     }
 
-    // ---------- Final RMSNorm + tied lm_head ----------
+    // Final RMSNorm + tied lm_head.
     x = ggml_mul(ctx, ggml_rms_norm(ctx, x, rms_eps),
                  weights.dec_final.norm_w);
     ggml_tensor * logits = ggml_mul_mat(ctx, weights.dec_embed.token_w, x);
@@ -416,10 +406,7 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_set_name(pb.input_ids_in, "prefill.input_ids");
     ggml_set_input(pb.input_ids_in);
 
-    // Audio injection is an elementwise blend over the flat token axis (no
-    // set_rows): a k-quant token_embd get_rows is unsupported on CUDA and runs
-    // on CPU; a set_rows consuming that CPU tensor straddles the CPU/CUDA split
-    // and faults. x*keep_mask + audio_dense crosses the split cleanly.
+    // Audio injection via elementwise blend (no set_rows); see decoder.h.
     pb.audio_dense_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden,
                                            static_cast<int64_t>(T_prompt_max) * B);
     ggml_set_name(pb.audio_dense_in, "prefill.audio_dense");
@@ -460,10 +447,8 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_tensor * ids_flat =
         ggml_reshape_1d(ctx, pb.input_ids_in,
                         static_cast<int64_t>(T_prompt_max) * B);
-    // x is 2D [hidden, T_prompt_max*B] (contiguous). Audio injection: blend the
-    // enc_out embeds in elementwise, x = x*keep_mask + audio_dense, where
-    // keep_mask broadcasts over hidden (ne[0]). Then reshape to 3D for the
-    // batched block stack.
+    // x = x*keep_mask + audio_dense (keep_mask broadcasts over hidden), then
+    // reshape to 3D for the batched block stack.
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, ids_flat);
     x = ggml_add(ctx, ggml_mul(ctx, x, pb.keep_mask_in), pb.audio_dense_in);
     x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);
@@ -553,7 +538,7 @@ StepBuildBatched build_step_graph_batched(
 
     const auto block_params = to_block_params(hp);
 
-    // ---------- Graph inputs (persist across steps) ----------
+    // Graph inputs (persist across steps).
     sb.input_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, B);
     ggml_set_name(sb.input_ids_in, "step.input_ids");
     ggml_set_input(sb.input_ids_in);
@@ -578,11 +563,11 @@ StepBuildBatched build_step_graph_batched(
     }
     sb.graph = gf;
 
-    // ---------- Token embedding ----------
+    // Token embedding.
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w,
                                     sb.input_ids_in);  // [hidden, B]
 
-    // ---------- Block stack ----------
+    // Block stack.
     for (int il = 0; il < n_layer; ++il) {
         x = causal_lm::block_step_batched(
             ctx, gf, x,
@@ -604,7 +589,7 @@ StepBuildBatched build_step_graph_batched(
         }
     }
 
-    // ---------- Final RMSNorm + tied lm_head ----------
+    // Final RMSNorm + tied lm_head.
     x = ggml_mul(ctx, ggml_rms_norm(ctx, x, rms_eps),
                  weights.dec_final.norm_w);            // [hidden, B]
     ggml_tensor * logits = ggml_mul_mat(ctx, weights.dec_embed.token_w, x);

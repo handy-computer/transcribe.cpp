@@ -1,7 +1,6 @@
 // src/granite_conformer/shaw_attn.cpp - shared Shaw block-local attention.
 //
-// See shaw_attn.h for the contract. Both Granite families' encoders
-// inline this op identically; this file is the single source of truth.
+// See shaw_attn.h for the contract.
 
 #include "shaw_attn.h"
 #include "transcribe-log.h"
@@ -42,13 +41,10 @@ ggml_tensor * shaw_block_attn(ggml_context *           ctx,
     const int64_t T_pad     = static_cast<int64_t>(context_size) * num_blocks;
     const float   scale     = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
-    // Offline batch: x ne=[d_model, T_enc, B]. The block-local attention
-    // treats each (time-block) independently, so B utterances fold into the
-    // block axis: num_blocks_eff = num_blocks * B. Memory order is
-    // [.., T_pad(=ctx*num_blocks), B], so a single reshape splits the time
-    // axis into (ctx, num_blocks) with B outermost == (ctx, num_blocks*B).
-    // B == 1 (AR granite, single-shot) keeps num_blocks_eff == num_blocks and
-    // is byte-identical to the pre-batch graph. The caller tiles the per-block
+    // Offline batch: x ne=[d_model, T_enc, B]. Block-local attention treats
+    // each time-block independently, so B utterances fold into the block
+    // axis: num_blocks_eff = num_blocks * B (memory order [.., T_pad, B]
+    // splits cleanly into (ctx, num_blocks*B)). The caller tiles the per-block
     // pad mask across B and sizes zero_pad with the batch.
     const int64_t B              = x->ne[2];
     const int64_t num_blocks_eff = static_cast<int64_t>(num_blocks) * B;
@@ -101,11 +97,10 @@ ggml_tensor * shaw_block_attn(ggml_context *           ctx,
     k = reshape_qkv(k);
     v = reshape_qkv(v);
 
-    // ----- Shaw positional bias -----
-    // rel_pos_emb is [head_dim, 2*max_pos_emb+1]. attention_dists is
-    // [context_size, context_size] int32. Materialise the per-(c, r)
-    // lookup as a [head_dim, context_size*context_size] tensor, then
-    // reshape to [head_dim, r=context_size, c=context_size].
+    // Shaw positional bias. rel_pos_emb [head_dim, 2*max_pos_emb+1], dists
+    // [context_size, context_size] int32. Materialise the per-(c, r) lookup
+    // as [head_dim, context_size*context_size], then reshape to
+    // [head_dim, r=context_size, c=context_size].
     ggml_tensor * dists_flat = ggml_reshape_1d(
         ctx, dists, static_cast<int64_t>(context_size) * context_size);
     ggml_tensor * rel_lookup = ggml_get_rows(ctx, w.attn_rel_pos_emb,
@@ -119,10 +114,8 @@ ggml_tensor * shaw_block_attn(ggml_context *           ctx,
     ggml_tensor * q_perm   = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
     ggml_tensor * pos_attn = ggml_mul_mat(ctx, rel_lookup, q_perm);
 
-    // ----- QK^T -----
-    // ggml_mul_mat(K, Q) with K, Q both [head_dim, context_size,
-    // n_heads, num_blocks] -> [context_size=k, context_size=q,
-    // n_heads, num_blocks].
+    // QK^T: ggml_mul_mat(K, Q), both [head_dim, context_size, n_heads,
+    // num_blocks] -> [k=context_size, q=context_size, n_heads, num_blocks].
     ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
 
     // Align pos_attn's axis order to kq's before the add.
@@ -147,8 +140,7 @@ ggml_tensor * shaw_block_attn(ggml_context *           ctx,
     ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
     ggml_tensor * out = ggml_mul_mat(ctx, v_t, attn);
 
-    // Reshape back to [inner_dim, T_pad, B] (B==1 collapses to the
-    // pre-batch [inner_dim, T_pad]).
+    // Reshape back to [inner_dim, T_pad, B].
     out = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));
     out = ggml_reshape_3d(ctx, out, inner_dim, T_pad, B);
 

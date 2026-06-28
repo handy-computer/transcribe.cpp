@@ -111,6 +111,16 @@ endif()
 option(TRANSCRIBE_BUILD_TESTS    "Build unit / smoke tests" ON)
 option(TRANSCRIBE_BUILD_EXAMPLES "Build example CLI"        ON)
 option(TRANSCRIBE_BUILD_TOOLS    "Build inspect / quantize" OFF)  # post pass 2
+# Numerical-parity validation hooks: reference-mel injection (TRANSCRIBE_MEL_FROM_REF)
+# and per-layer tensor dumps (TRANSCRIBE_DUMP_ALL_BLOCKS / _SUB_BLOCKS). OFF for
+# release so the hook code is not compiled into shipped binaries — the env-var
+# reads, ref-mel loaders, and dump scaffolding all live behind this guard, so
+# their names do not even appear in a release binary's strings. The validation
+# pipeline (scripts/validate.py, the Modal sweep image) builds with this ON;
+# validate.py hard-fails --mel-from-ref against an OFF build rather than
+# silently ignoring it.
+option(TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+                                 "Compile in numerical-parity validation hooks" OFF)
 option(TRANSCRIBE_METAL          "Enable Metal backend"     ${TRANSCRIBE_IS_APPLE_SILICON})
 option(TRANSCRIBE_VULKAN         "Enable Vulkan backend"    OFF)  # post-v1
 option(TRANSCRIBE_CUDA           "Enable CUDA backend"      OFF)  # opt-in; Linux + nvcc
@@ -182,7 +192,7 @@ option(TRANSCRIBE_INSTALL
 
 # Real-model gated tests. OFF by default because the tests need a
 # converted Parakeet GGUF on disk (~2.4 GB) and CI can't ship one.
-# When ON, the test reads TRANSCRIBE_REAL_PARAKEET_GGUF from the
+# When ON, the test reads TRANSCRIBE_PARAKEET_GGUF from the
 # environment at run time. See tests/parakeet_real_smoke.cpp.
 option(TRANSCRIBE_BUILD_REAL_MODEL_TESTS
     "Build tests that load real (multi-GB) model files via env var" OFF)

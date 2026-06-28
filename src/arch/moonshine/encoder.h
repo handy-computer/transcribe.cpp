@@ -1,21 +1,14 @@
 // arch/moonshine/encoder.h - Moonshine encoder graph builder.
 //
-// The encoder is a 3-layer Conv1d stem on raw 16 kHz PCM (kernels
-// 127/7/3, strides 64/3/2; conv0 has no bias, conv1/conv2 do; conv0
-// is followed by tanh + GroupNorm(num_groups=1, eps=1e-5); conv1/conv2
-// each followed by GELU). After the stem, the encoder runs `n_layers`
-// pre-LN transformer blocks with partial-RoPE self-attention (no
-// causal mask — bidirectional) and GELU MLP. A final bias-less
-// LayerNorm closes the encoder.
+// 3-conv stem on raw 16 kHz PCM (see encoder.cpp / weights.h) + n_layers
+// pre-LN bidirectional partial-RoPE transformer blocks + final bias-less LN.
 //
-// Dump points (must match `build/validate/moonshine/<v>/dump_coverage.json`):
+// Dump points:
 //   enc.audio.in       raw PCM input
 //   enc.conv1.out      after tanh(conv0)            (BEFORE GroupNorm)
 //   enc.groupnorm.out  after GroupNorm
 //   enc.conv2.out      after gelu(conv1)
 //   enc.conv3.out      after gelu(conv2) + permute  (this is the block input)
-//   enc.rope.cos       partial-RoPE cosine table  [T_enc, head_dim_rot]
-//   enc.rope.sin       partial-RoPE sine   table  [T_enc, head_dim_rot]
 //   enc.block.{i}.out  per-block residual stream
 //   enc.final          after final LN
 

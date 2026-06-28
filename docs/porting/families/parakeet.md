@@ -96,7 +96,7 @@ Real-model smokes:
 cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
 cmake --build build
 
-TRANSCRIBE_REAL_PARAKEET_GGUF=models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \
+TRANSCRIBE_PARAKEET_GGUF=models/parakeet-tdt-0.6b-v2/parakeet-tdt-0.6b-v2-F32.gguf \
   ctest --test-dir build --output-on-failure -R 'parakeet|encoder|decoder'
 ```
 

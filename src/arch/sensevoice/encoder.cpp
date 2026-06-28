@@ -1,26 +1,11 @@
 // arch/sensevoice/encoder.cpp - SenseVoice SAN-M encoder graph builder.
 //
-// Forward shape (single-utterance, batch=1, channel-innermost ggml ne):
-//
-//   frontend.in       [d_input=560, T_lfr]
-//     -> prefix prepend (lid + event_emo + textnorm via ggml_get_rows)
-//                       [d_input, 4 + T_lfr]              = enc.input.with_prefix
-//     -> scale by sqrt(d_model=512)
-//     -> add sinusoidal PE (depth = current width = d_input = 560,
-//                           1-based positions)
-//                       [d_input, 4 + T_lfr]              = enc.embed.out
-//     -> encoders0[0]  (SAN-M block, projection 560 -> 512, no attn-residual)
-//                       [d_model, 4 + T_lfr]              = enc.encoders0.0.out
-//     -> encoders[0..n-2] x49 (SAN-M block, in==out==d_model)
-//                       [d_model, 4 + T_lfr]              = enc.encoders.{0,24,48}.out
-//     -> after_norm (LayerNorm eps=1e-12)
-//                       [d_model, 4 + T_lfr]              = enc.after_norm.out
-//     -> tp_encoders[0..tp-1] x20 (SAN-M block)
-//                       [d_model, 4 + T_lfr]              = enc.tp_encoders.{0,10,19}.out
-//     -> tp_norm (LayerNorm eps=1e-12)
-//                       [d_model, 4 + T_lfr]              = enc.tp_norm.out
-//     -> ctc.head linear [d_model, vocab] + bias [vocab]
-//                       [vocab, 4 + T_lfr]                = ctc.logits.raw
+// Forward (single-utterance, channel-innermost ggml ne; T = 4 + T_lfr after
+// the prefix prepend):
+//   frontend.in [d_input=560, T_lfr] -> prefix prepend (lid + event_emo +
+//   textnorm) -> scale by sqrt(d_model=512) + sinusoidal PE ->
+//   encoders0[0] (SAN-M projection 560->512) -> encoders x49 ->
+//   after_norm -> tp_encoders x20 -> tp_norm -> ctc.head [vocab, T].
 //
 // SAN-M block topology lives in src/sanm/sanm.h (shared with funasr_nano).
 // This file owns the surrounding shape — prefix prepend, sinusoidal PE
@@ -69,9 +54,8 @@ sanm::SanmBlockView to_sanm_view(const SenseVoiceBlock & b) {
     return v;
 }
 
-// Mark a tensor as live for the post-compute dump pass and stash the
-// pointer in the dumps slot. The mark is a no-op when
-// TRANSCRIBE_DUMP_DIR is unset.
+// Name a tensor, mark it for the post-compute dump pass (no-op when
+// TRANSCRIBE_DUMP_DIR is unset), and stash the pointer in the dumps slot.
 void mark_dump(ggml_tensor *& slot, ggml_tensor * t, const char * name) {
     named(t, name);
     transcribe::debug::mark_tensor_for_dump(t);

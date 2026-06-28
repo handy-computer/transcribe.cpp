@@ -11,9 +11,7 @@
 //     not dec.token_embd.weight.
 //   - Decoder LayerNorms are vanilla `nn.LayerNorm(bias=False)` — no
 //     unit_offset folding.
-//   - RoPE rotation mode: same as moonshine — GPT-J / interleaved
-//     (rotate_half slices `x[..., 0::2]` / `x[..., 1::2]`) →
-//     GGML_ROPE_TYPE_NORMAL, NOT NEOX.
+//   - RoPE: GPT-J / interleaved (= GGML_ROPE_TYPE_NORMAL, not NEOX), as moonshine.
 
 #include "decoder.h"
 
@@ -73,14 +71,8 @@ ggml_tensor * apply_partial_rope(ggml_context *                    ctx,
         /*beta_slow=*/1.0f);
 }
 
-// SwiGLU MLP: fc1 outputs `2·ffn_dim`, chunk into [hidden_states, gate],
-// out = silu(gate) * hidden_states, fc2.
-//
-// HF reference:
-//   hidden_states = self.fc1(hidden_states)
-//   hidden_states, gate = hidden_states.chunk(2, dim=-1)
-//   hidden_states = self.activation_fn(gate) * hidden_states
-//   hidden_states = self.fc2(hidden_states)
+// SwiGLU MLP: fc1 -> 2·ffn_dim, chunk(2, dim=-1) into [x_proj, gate]
+// (innermost dim = ggml ne[0]), out = silu(gate) * x_proj, fc2.
 ggml_tensor * ffn_decoder_swiglu(ggml_context * ctx,
                                  ggml_tensor *  x,
                                  ggml_tensor *  fc1_w, ggml_tensor * fc1_b,
@@ -143,9 +135,8 @@ ggml_tensor * mha_self_cached(ggml_context *                    ctx,
     ggml_tensor * K_rope = apply_partial_rope(ctx, Kcur, pos_ids, hp, head_dim_rot);
 
     // Q needs [head_dim, n_tokens, n_heads, 1] for attention. K/V are
-    // already [head_dim, n_heads, n_tokens, 1] contiguous after RoPE
-    // (or reshape, for V) — same memory order as the cache slot. Skip
-    // the round-trip permute+cont before writing.
+    // already in cache memory order [head_dim, n_heads, n_tokens, 1] after
+    // RoPE (or reshape, for V), so they're written straight to the cache.
     ggml_tensor * Q_unpad = ggml_cont(ctx, ggml_permute(ctx, Q_rope, 0, 2, 1, 3));
 
     {
@@ -288,10 +279,7 @@ ggml_tensor * mha_cross_cached(ggml_context *                    ctx,
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Adapter graph
-// ---------------------------------------------------------------------------
-
+// Adapter graph.
 AdapterBuild build_adapter_graph(ggml_context *                       ctx,
                                  const MoonshineStreamingWeights &    w,
                                  const MoonshineStreamingHParams &    hp,
@@ -351,10 +339,7 @@ AdapterBuild build_adapter_graph(ggml_context *                       ctx,
     return ab;
 }
 
-// ---------------------------------------------------------------------------
-// Cross-KV precompute graph
-// ---------------------------------------------------------------------------
-
+// Cross-KV precompute graph.
 DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
                                   const MoonshineStreamingWeights &    w,
                                   const MoonshineStreamingHParams &    hp,
@@ -412,10 +397,7 @@ DecoderBuild build_cross_kv_graph(ggml_context *                       ctx,
     return db;
 }
 
-// ---------------------------------------------------------------------------
-// Cross-KV projection (incremental streaming)
-// ---------------------------------------------------------------------------
-
+// Cross-KV projection (incremental streaming).
 CrossKVProjectionBuild build_cross_kv_projection_graph(
     ggml_context *                       ctx,
     const MoonshineStreamingWeights &    w,
@@ -472,10 +454,7 @@ CrossKVProjectionBuild build_cross_kv_projection_graph(
     return pb;
 }
 
-// ---------------------------------------------------------------------------
-// Cross-KV commit (host buffers → persistent cache)
-// ---------------------------------------------------------------------------
-
+// Cross-KV commit (host buffers → persistent cache).
 CrossKVCommitBuild build_cross_kv_commit_graph(
     ggml_context *                       ctx,
     const MoonshineStreamingHParams &    hp,
@@ -542,10 +521,7 @@ CrossKVCommitBuild build_cross_kv_commit_graph(
     return cb;
 }
 
-// ---------------------------------------------------------------------------
-// KV-cached decoder graph (prompt + step)
-// ---------------------------------------------------------------------------
-
+// KV-cached decoder graph (prompt + step).
 DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
                                     const MoonshineStreamingWeights &    w,
                                     const MoonshineStreamingHParams &    hp,
@@ -624,7 +600,6 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
     for (int i = 0; i < n_blocks; ++i) {
         const auto & b = w.dec_blocks[i];
 
-        // Self-attn (pre-LN, partial RoPE, causal).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_self_w, /*beta=*/nullptr);
             y = mha_self_cached(
@@ -634,7 +609,6 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
                 i, n_past, n_tokens, n_kv, use_flash);
             x = ggml_add(ctx, x, y);
         }
-        // Cross-attn (pre-LN, no RoPE).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, /*beta=*/nullptr);
             y = mha_cross_cached(
@@ -643,7 +617,6 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
                 hp, n_heads, d_model, i, T_enc, use_flash);
             x = ggml_add(ctx, x, y);
         }
-        // SwiGLU MLP (pre-LN).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, /*beta=*/nullptr);
             y = ffn_decoder_swiglu(ctx, y,
@@ -655,8 +628,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
 
         if (n_past == 0) {
             // Track every block so model.cpp can index by layer; only mark
-            // the auto_blocks subset for set_output so the scheduler keeps
-            // matching tensors as the reference dumper.
+            // the auto_blocks subset for dump (see dump_block_index).
             db.dumps.block_outs.push_back(x);
             if (dump_block_index(i, n_blocks)) {
                 char bname[64];
@@ -674,8 +646,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
         db.dumps.out_before_head = x;
     }
 
-    // Untied lm_head: project against `dec.lm_head.weight` (NOT the
-    // token embedding). Reference: `MoonshineStreamingForConditionalGeneration.proj_out`.
+    // Untied lm_head: project against dec.lm_head.weight, NOT the token embed.
     ggml_tensor * logits_raw = ggml_mul_mat(ctx, w.dec_top.lm_head_w, x);
     named(logits_raw, "dec.logits_raw");
     if (n_past == 0) {
@@ -697,9 +668,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
     ggml_set_output(db.out);
 
     // Backend argmax over the last position when skipping log_softmax —
-    // every step pass downloads a single int32 instead of full vocab
-    // logits. Mirrors cohere/decoder.cpp:756-771 and the moonshine
-    // sibling change.
+    // every step pass downloads a single int32 instead of full vocab logits.
     if (skip_log_softmax) {
         ggml_tensor * last_logits = logits;
         if (n_tokens > 1) {
@@ -723,10 +692,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *                       ctx,
     return db;
 }
 
-// ===========================================================================
-// Offline batched decode (B utterances)
-// ===========================================================================
-
+// Offline batched decode (B utterances).
 namespace {
 
 ggml_tensor * unpad_head_dim_4d(ggml_context * ctx, ggml_tensor * t,

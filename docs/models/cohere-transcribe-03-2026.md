@@ -179,6 +179,6 @@ uv run scripts/validate.py all --family cohere
 cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
 cmake --build build
 
-TRANSCRIBE_COHERE_MODEL=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf \
+TRANSCRIBE_COHERE_GGUF=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf \
   ctest --test-dir build --output-on-failure -R 'cohere'
 ```

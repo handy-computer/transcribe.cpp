@@ -1,38 +1,19 @@
 // transcribe-meta.h - shared GGUF KV reading helpers + post-load
 // metadata reads (capabilities, languages).
 //
-// This header is INTERNAL. The public C ABI in include/transcribe.h
-// knows nothing about gguf_context; the helpers here are how loader
-// code and family handlers talk to a gguf_context once it's open.
+// INTERNAL. The public C ABI knows nothing about gguf_context; these
+// helpers are how loader code and family handlers read a gguf_context once
+// it's open.
 //
-// What lives here:
-//
-//   - KvResult: a tri-state {Absent, Ok, BadType} return type for
-//     low-level KV readers. The whole point is to distinguish "the
-//     converter didn't write this key" (Absent — usually fine for
-//     optional keys) from "the converter wrote it with the wrong
-//     type" (BadType — always a converter bug, surface as
-//     TRANSCRIBE_ERR_GGUF). The original 2B implementation collapsed
-//     these two into a single boolean and silently treated bad-type
-//     optional KV as missing, which papered over real converter
-//     mistakes.
-//
-//   - read_*_kv low-level helpers: one per scalar / string / string-
-//     array KV type. Each returns KvResult and writes the parsed
-//     value into an out parameter on Ok. On Absent or BadType the
-//     out parameter is left untouched.
-//
-//   - read_capability_kv / read_languages_kv: post-load helpers that
-//     family handlers call after applying their own family defaults.
-//     Capabilities and languages are family-agnostic in the sense
-//     that any family handler reads the same keys via the same
-//     helpers; per-family code only fills in defaults for keys the
-//     converter chose to omit.
-//
-// Why this is its own header instead of squatting on transcribe-loader.h:
-// the loader is the "open a GGUF and identify it" object. These helpers
-// are the "now that the GGUF is open, here is how shared metadata is
-// read." Different jobs.
+//   - KvResult: a tri-state {Absent, Ok, BadType} that distinguishes "key
+//     not written" (Absent, usually fine for optional keys) from "written
+//     with the wrong type" (BadType, a converter bug -> TRANSCRIBE_ERR_GGUF).
+//   - read_*_kv low-level helpers: one per scalar / string / array KV type,
+//     writing the parsed value on Ok and leaving the out param untouched
+//     on Absent / BadType.
+//   - read_capability_kv / read_languages_kv: post-load helpers family
+//     handlers call after applying their own defaults; the schema is
+//     shared across families.
 
 #pragma once
 
@@ -47,10 +28,8 @@ struct transcribe_model;
 
 namespace transcribe {
 
-// Tri-state result for a single GGUF KV read. The strict-now intent is
-// that any consumer of these helpers explicitly handles BadType — the
-// type system makes "I forgot about wrong type" a compile-time
-// observation rather than a silent runtime fallback.
+// Tri-state result for a single GGUF KV read. Consumers must handle
+// BadType explicitly rather than fall back silently.
 enum class KvResult {
     Absent,    // Key not present in the gguf.
     Ok,        // Key present, type matches expectation, value extracted.
@@ -109,10 +88,7 @@ KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
 // ---------------------------------------------------------------------------
 //
 // These sit on top of the low-level readers and fold
-// KvResult → transcribe_status, logging diagnostics with a
-// caller-supplied family tag. Every per-family weights.cpp was
-// carrying its own copy of these; the only difference was the log
-// prefix string.
+// KvResult → transcribe_status, logging with a caller-supplied family tag.
 //
 // "Required" helpers: Absent and BadType both surface as
 // TRANSCRIBE_ERR_GGUF. "Optional" helpers: Absent silently applies
@@ -155,24 +131,13 @@ transcribe_status read_optional_int32_kv(const gguf_context * gguf,
 // Post-load shared metadata
 // ---------------------------------------------------------------------------
 //
-// These are the "every family handler does this" pieces of post-load
-// state population. They live here rather than in each family's
-// arch/<family>/ directory because the schema (stt.capability.*,
+// Post-load shared metadata population. The schema (stt.capability.*,
 // general.languages) is shared across families by design.
 
-// Read all currently-recognized stt.capability.* boolean keys into
-// caps, leaving fields untouched for absent keys. Callers should call
-// this AFTER their own family-default population (apply_family_invariants
-// or equivalent), so KV present overrides the family default and KV
-// absent leaves the family default in place. This matches PLAN.md's
-// "GGUF KV is authoritative; if a key is absent, the architecture
-// supplies a default" rule.
-//
-// In 2B the recognized keys are stt.capability.translate,
-// stt.capability.lang_detect, and stt.capability.streaming. The
-// timestamp granularity capability fields are deliberately deferred
-// until the public-header semantics are sharpened — see RESUME.md
-// open question 4.
+// Read all recognized stt.capability.* boolean keys into caps, leaving
+// fields untouched for absent keys. Call this AFTER family-default
+// population so KV present overrides the default and KV absent keeps it.
+// Recognized keys: stt.capability.{translate,lang_detect,streaming}.
 //
 // Returns:
 //   TRANSCRIBE_OK              on success or "all keys absent".

@@ -34,16 +34,9 @@ namespace transcribe::cohere {
 
 void apply_family_invariants(transcribe_model & model);
 
-// ---------------------------------------------------------------------------
-// KV cache for the autoregressive decoder.
-//
-// Follows the whisper.cpp pattern: flat 1D tensors for K and V, with
-// views used during graph construction to read/write per-layer slices.
-//
-// Self-attention cache: grows with each decode step.
-// Cross-attention cache: computed once from encoder output, then reused.
-// ---------------------------------------------------------------------------
-
+// KV cache for the autoregressive decoder. Flat 1D K/V tensors (whisper.cpp
+// pattern), per-layer slices via views. Self cache grows per step;
+// cross cache is computed once from encoder output, then reused.
 struct CohereKvCache {
     // Self-attention KV cache.
     // Flat tensors of size [n_state * n_layer * n_ctx].
@@ -137,11 +130,8 @@ struct CohereModel final : public transcribe_model {
     CohereWeights   weights;
     ggml_context *  ctx_meta = nullptr;
 
-    // Runtime backend plan — see transcribe-backend.h. Replaces the
-    // old `std::vector<backends>` field: the plan's scheduler_list
-    // holds the same handles, plus a classified primary kind so
-    // helpers don't have to re-derive it via ggml_backend_name
-    // string matching.
+    // Runtime backend plan — see transcribe-backend.h. scheduler_list
+    // holds the backend handles plus a classified primary kind.
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
 
@@ -150,10 +140,8 @@ struct CohereModel final : public transcribe_model {
     ggml_backend_buffer_t   bn_fused_buffer = nullptr;
 
     // On CPU primary backend, the conformer 1×1 pointwise conv weights
-    // are dequantized from their on-disk F16 form to F32 at load time
-    // — Zen 2 class CPUs pay an F16→F32 upconvert on every matmul that
-    // erases the bandwidth win. Tensors live in this ctx, and the
-    // CohereBlock slots point here instead of the main weight buffer.
+    // are dequantized F16->F32 at load time (Zen 2 has no native F16
+    // compute). Tensors live here; CohereBlock slots point at them.
     ggml_context *          conv_pw_f32_ctx    = nullptr;
     ggml_backend_buffer_t   conv_pw_f32_buffer = nullptr;
 
@@ -179,21 +167,10 @@ struct CohereSession final : public transcribe_session {
     std::vector<float> enc_host;
 
 
-    // Flash-attention is controlled per-stage because the encoder and
-    // decoder have different head dimensions and therefore different
-    // backend support profiles:
-    //
-    //   - encoder head_dim = 160 -> upstream ggml's Metal backend has
-    //     no flash_attn_ext kernel for this dk, so we default it OFF
-    //     on Metal. Manual mul_mat + softmax + mul_mat ties or beats
-    //     flash at encoder sequence lengths anyway.
-    //   - decoder head_dim = 128 -> works with flash_attn_ext on
-    //     every backend we ship today, so we default it ON.
-    //
-    // The TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH env vars apply
-    // to both stages at once (the user's intent is "no flash kernels
-    // anywhere" or "flash kernels everywhere"). Backend-specific auto
-    // disable is per-stage.
+    // Flash-attn is per-stage: encoder dk=160 has no Metal flash_attn_ext
+    // kernel (default OFF on Metal; manual path ties anyway); decoder
+    // dk=128 works everywhere (default ON). TRANSCRIBE_NO_FLASH /
+    // TRANSCRIBE_FORCE_FLASH apply to both stages at once.
     bool               encoder_use_flash = true;
     bool               decoder_use_flash = true;
 

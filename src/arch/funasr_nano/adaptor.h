@@ -1,14 +1,9 @@
 // arch/funasr_nano/adaptor.h - audio adaptor graph builder.
 //
 // 2-layer transformer adaptor (FunASR's "Transformer" adaptor class):
-//
-//   x_in  [encoder_dim=512, T_lfr]
-//     -> linear1 [encoder_dim, pre_ffn_dim=2048] + bias  = adaptor.linear1.out
-//     -> ReLU
-//     -> linear2 [pre_ffn_dim, llm_dim=1024]    + bias   = adaptor.linear2.out
-//     -> blocks[0..1]: pre-LN MHA (LayerNorm eps=1e-12) + bottleneck FFN
-//                      (1024 → 256 → 1024, ReLU, biases)  = adaptor.blocks.0.out
-//                                                            adaptor.out
+// x_in [encoder_dim=512, T_lfr] -> linear1 (512->2048) -> ReLU ->
+// linear2 (2048->llm_dim=1024) -> blocks[0..1] (pre-LN MHA + bottleneck FFN
+// 1024->256->1024) -> [llm_dim, T_lfr].
 //
 // downsample_rate=1 means linear1 input is encoder_dim (no fold). Only
 // retained as a configuration knob for sibling variants that may set k>1.

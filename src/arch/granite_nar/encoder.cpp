@@ -4,7 +4,7 @@
 // self-attention, GLU conv module with conv_expansion=2, macaron FFN,
 // mid-layer self-conditioned CTC bypass). NLE additions:
 //
-//   - A second CTC head over a BPE vocab (1024 → 100353). We emit
+//   - A second CTC head over a BPE vocab. We emit
 //     frame-level logits as `enc.ctc_bpe_logits` here; the
 //     posterior-weighted window pool + greedy decode runs host-side at
 //     run() time.
@@ -64,9 +64,7 @@ ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x,
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Host-side mel + 2-frame stack
-// ---------------------------------------------------------------------------
+// Host-side mel + 2-frame stack.
 
 transcribe_status compute_mel_encoder_input(
     const transcribe::MelFrontend & mel,
@@ -121,9 +119,7 @@ transcribe_status compute_mel_encoder_input(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Shaw bookkeeping (matches AR granite)
-// ---------------------------------------------------------------------------
+// Shaw bookkeeping (matches AR granite).
 
 std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_emb)
 {
@@ -155,10 +151,8 @@ std::vector<float> precompute_last_block_mask(int context_size, int t_enc_remain
     return mask;
 }
 
-// ---------------------------------------------------------------------------
 // Per-block builders (identical to AR granite, parameterised over the
 // granite_nar weight struct).
-// ---------------------------------------------------------------------------
 
 namespace {
 
@@ -297,9 +291,7 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
         const auto & b = weights.enc_blocks[i];
 
         x = macaron(ctx, x, b, /*is_ff1=*/true);
-        // Sub-step dump: post-FF1 residual on block 0. Used by
-        // validate.py to localize bf16-cascade drift within the
-        // first conformer block.
+        // Sub-step dump: post-FF1 residual on block 0.
         if (i == 0) {
             named(x, "enc.block.0.post_ff1");
             eb.dumps.block_0_post_ff1 = x;
@@ -472,9 +464,7 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     return eb;
 }
 
-// ---------------------------------------------------------------------------
-// Host-side BPE CTC pool + greedy decode
-// ---------------------------------------------------------------------------
+// Host-side BPE CTC pool + greedy decode.
 
 void compute_bpe_ctc_initial_hypothesis(
     const std::vector<float> & importance_non_blank,
@@ -536,16 +526,12 @@ void compute_bpe_ctc_initial_hypothesis(
             }
         }
         if (argmax != blank_id && argmax != prev) {
-            // Two BPE-CTC schemes are in flight depending on the GGUF's
-            // source snapshot:
-            //   - Old (bpe_output_dim = vocab_size + 1, blank_id = 0):
-            //     channel 0 is a synthetic blank, channels 1..N hold the
-            //     LLM token ids — we recover the LLM id with `argmax - 1`.
-            //   - New (bpe_output_dim = vocab_size, blank_id = BOS=100257):
-            //     channels ARE the LLM ids directly; the blank channel IS
-            //     one of them (the BOS id). No shift needed.
-            // The two are distinguished by blank_id alone: id 0 means the
-            // old scheme, anything else means the new direct-id scheme.
+            // Two BPE-CTC schemes, distinguished by blank_id alone:
+            //   - blank_id == 0 (bpe_output_dim = vocab_size + 1): channel 0
+            //     is a synthetic blank, channels 1..N hold the LLM token ids —
+            //     recover the LLM id with `argmax - 1`.
+            //   - blank_id != 0 (bpe_output_dim = vocab_size): channels ARE
+            //     the LLM ids directly (blank is the BOS id). No shift.
             const int shift = (blank_id == 0) ? 1 : 0;
             out_token_ids.push_back(argmax - shift);
         }

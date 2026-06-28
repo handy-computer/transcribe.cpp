@@ -61,28 +61,20 @@ struct CanaryQwenModel final : public transcribe_model {
     transcribe::BackendPlan       plan;
     ggml_backend_buffer_t         backend_buffer = nullptr;
 
-    // BatchNorm fusion in the conformer conv module — same as canary.
-    // Each block stores fused (scale, bias) computed at load time;
-    // running_mean/running_var are NOT used at inference.
+    // BatchNorm fusion in the conformer conv module: fused (scale, bias)
+    // computed at load time; running_mean/var unused at inference.
     ggml_context *               bn_fused_ctx    = nullptr;
     ggml_backend_buffer_t        bn_fused_buffer = nullptr;
 
-    // F16/BF16 conv pointwise weights promoted to F32 on CPU backend so
-    // ggml's CPU kernels hit the F32 matmul path (avoids unhealthy
-    // fp16/bf16 round-tripping inside the inner loop).
+    // F16 conv pointwise/depthwise weights promoted to F32 (see model.cpp).
     ggml_context *               conv_pw_f32_ctx    = nullptr;
     ggml_backend_buffer_t        conv_pw_f32_buffer = nullptr;
 
-    // BF16 encoder + decoder linear weights promoted to F32 on CPU
-    // backend. canary-1b-flash (the source of these encoder weights)
-    // shipped F32 GGUF and was validated F32-only; ggml's CPU BF16
-    // matmul path was never exercised. Promotion is conservative and
-    // matches the reference's F32 inference regime.
+    // BF16 encoder + decoder linear weights promoted to F32 on CPU (see
+    // model.cpp; matches the reference's F32 inference regime).
     ggml_context *               linear_f32_ctx    = nullptr;
     ggml_backend_buffer_t        linear_f32_buffer = nullptr;
 
-    // Qwen3 packed gate+up MLP weights — same as funasr_nano /
-    // qwen3_asr.
     transcribe::causal_lm::PackedGateUpHandles packed_gate_up;
 
     // C++ mel frontend (constructed once at load).
@@ -122,8 +114,8 @@ struct CanaryQwenSession final : public transcribe_session {
     std::vector<float> enc_host;      // perception output [hidden=2048, T_enc]
 
     // Reference (NeMo SALM) ran flash off; we follow suit by default for
-    // tightest tensor parity. Override with TRANSCRIBE_FLASH_DECODER=1
-    // (or =encoder) at runtime.
+    // tightest tensor parity. Override with TRANSCRIBE_NO_FLASH /
+    // TRANSCRIBE_FORCE_FLASH (both stages) at runtime.
     bool encoder_use_flash = false;
     bool decoder_use_flash = false;
 

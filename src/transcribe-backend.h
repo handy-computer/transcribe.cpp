@@ -1,31 +1,15 @@
 // transcribe-backend.h - internal backend selection types.
 //
-// INTERNAL. C++17. Consumed only from other .cpp files inside src/.
-// Not part of the public include/transcribe.h ABI.
+// INTERNAL, C++17. Not part of the public ABI.
 //
-// Rationale
-// ---------
-// The public API exposes a small `transcribe_backend_request` enum
-// (auto|cpu|cpu_accel|metal|vulkan|cuda). Internally the library needs two related
-// things that don't belong in the public header:
-//
-//   1. A typed classification of whatever ggml backend we actually
-//      landed on — `BackendKind`. This replaces string-matching on
-//      `ggml_backend_name()` scattered across model code (flash-attn
-//      policy, primary-backend-is-CPU policy, etc).
-//
-//   2. A small "backend plan" struct — `BackendPlan` — that holds the
-//      original request, the primary backend handle, its classified
-//      kind, and the full scheduler list in priority order. Every
-//      per-family load() resolves one of these, stores it on the
-//      model, and hands it to helpers that need to key off the
-//      primary backend (F16→F32 conv pointwise promotion, flash-attn
-//      default decisions).
-//
-// Keeping these out of transcribe-load-common.h means
-// transcribe-flash-policy can include this header without dragging
-// in the whole load scaffolding, and future consumers can ask
-// "which backend is this?" without going through the loader.
+// The public API exposes a small transcribe_backend_request enum.
+// Internally the library needs two things that don't belong in the public
+// header: a typed classification of the ggml backend it landed on
+// (BackendKind, replacing string-matching on ggml_backend_name()), and a
+// BackendPlan holding the request, primary backend handle, its kind, and
+// the scheduler list in priority order. Every per-family load() resolves a
+// plan and hands it to helpers that key off the primary backend (F16→F32
+// conv promotion, flash-attn defaults).
 
 #pragma once
 
@@ -42,11 +26,9 @@ typedef struct ggml_backend_device * ggml_backend_dev_t;
 
 namespace transcribe {
 
-// Classified backend kind. This is a library-internal classification
-// based on the ggml backend device type plus backend registry name.
-//
-// Only the kinds the library actually needs to branch on are listed;
-// anything else is Unknown.
+// Library-internal classification from the ggml backend device type plus
+// registry name. Only the kinds the library branches on are listed; anything
+// else is Unknown.
 enum class BackendKind {
     Unknown = 0,
     Cpu,       // ggml CPU backend (strict system memory)

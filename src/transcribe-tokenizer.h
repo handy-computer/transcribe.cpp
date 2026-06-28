@@ -1,39 +1,25 @@
 // transcribe-tokenizer.h - internal tokenizer (decode + encode).
 //
-// This header is INTERNAL. The public C ABI does not expose tokenizer
-// details directly; per-family models hold a Tokenizer instance and
-// the decode driver plus the chat-template prompt builders read /
-// write through it.
+// INTERNAL. The public C ABI does not expose tokenizer details; per-
+// family models hold a Tokenizer instance that the decode driver and
+// chat-template prompt builders read/write through.
 //
 // Supported GGUF tokenizer models (tokenizer.ggml.model):
 //   "unigram"  - SentencePiece unigram (NeMo Parakeet, Cohere ASR)
 //   "bpe"      - SentencePiece BPE (same ▁ decode convention)
 //   "gpt2"     - llama.cpp's tag for Hugging Face byte-level BPE
 //                (Qwen2/Qwen3 family). Loads merges at init and
-//                supports encode() for arbitrary UTF-8 text via the
-//                Qwen2 pretokenizer + byte-level BPE merge loop.
+//                supports encode() via the pretokenizer + BPE merge loop.
 //
 // What this class does:
-//
-//   - load(): read a fixed set of tokenizer.ggml.* keys from a
-//     gguf_context. The set is intentionally the llama.cpp /
-//     whisper.cpp intersection so converters and bindings can reuse
-//     existing tooling.
-//   - id <-> piece lookup. find() is O(1) via a hash built at load.
-//   - decode(): join a token-id sequence into a string. SentencePiece
-//     flavors substitute U+2581 ("▁") with ASCII space; "gpt2" inverts
-//     the byte-level mapping to recover raw UTF-8 bytes.
-//   - encode(): UTF-8 text -> token ids. Implemented for "gpt2" only
-//     in 2B (other flavors return NOT_IMPLEMENTED). The encoder runs
-//     the Qwen2 pretokenizer, byte-level encodes each pretoken, and
-//     greedily applies BPE merges in rank order.
-//
-// The encoder only exists to render the Qwen3-ASR chat-template
-// assistant prefix ("language {Name}<asr_text>") at decode prep time.
-// If that's the *only* live consumer, a converter-side pre-
-// tokenization would also work; we chose runtime encode so that
-// forthcoming features (non-empty system prompt, streaming prefix
-// rollback, forced-aligner text input) can reuse the same path.
+//   - load(): read a fixed set of tokenizer.ggml.* keys (the llama.cpp /
+//     whisper.cpp intersection, so converters can reuse existing tooling).
+//   - id <-> piece lookup; find() is O(1) via a hash built at load.
+//   - decode(): SentencePiece flavors substitute U+2581 ("▁") with ASCII
+//     space; "gpt2" inverts the byte-level mapping to recover UTF-8 bytes.
+//   - encode(): UTF-8 text -> token ids ("gpt2" only; others return
+//     NOT_IMPLEMENTED). Runs the pretokenizer, byte-level encodes each
+//     pretoken, then greedily applies BPE merges in rank order.
 
 #pragma once
 
@@ -54,47 +40,28 @@ public:
 
     // Read tokenizer.ggml.* keys from a gguf_context.
     //
-    // Required keys:
-    //   tokenizer.ggml.model   (string) - "unigram", "bpe", or "gpt2".
-    //                           Other model strings are rejected with
-    //                           TRANSCRIBE_ERR_NOT_IMPLEMENTED.
-    //   tokenizer.ggml.tokens  (array of string) - the vocabulary.
-    //                           Must be non-empty.
+    // Required:
+    //   tokenizer.ggml.model   (string) - "unigram"/"bpe"/"gpt2".
+    //   tokenizer.ggml.tokens  (array string) - vocab, must be non-empty.
     //
-    // Optional keys (parsed if present, ignored otherwise):
-    //   tokenizer.ggml.pre            (string) - pretokenizer flavor used
-    //                                 by encode() when model == "gpt2".
-    //                                 Recognized values: "qwen2" (default
-    //                                 when absent, for historical
-    //                                 compatibility with Qwen3-ASR
-    //                                 GGUFs) and "gpt2" (required for
-    //                                 Whisper parity — the two split
-    //                                 digit / contraction / whitespace
-    //                                 runs differently). Per-family
-    //                                 loaders MAY override the absent
-    //                                 default after load() via
-    //                                 set_pretokenizer().
-    //   tokenizer.ggml.scores         (array of float32)
-    //   tokenizer.ggml.token_type     (array of int32)
-    //   tokenizer.ggml.merges         (array of string) - "left right"
-    //                                 merge pairs in rank order.
-    //                                 Required for encode() when
-    //                                 model == "gpt2".
-    //   tokenizer.ggml.unknown_token_id (uint32 / int32)
-    //   tokenizer.ggml.bos_token_id     (uint32 / int32)
-    //   tokenizer.ggml.eos_token_id     (uint32 / int32)
-    //   tokenizer.ggml.blank_token_id   (uint32 / int32) - the CTC /
-    //       transducer blank id.
+    // Optional (parsed if present):
+    //   tokenizer.ggml.pre            (string) - pretokenizer flavor for
+    //                                 encode() when model == "gpt2".
+    //                                 "qwen2" (default when absent) or
+    //                                 "gpt2" (Whisper parity; the two split
+    //                                 digit/contraction/whitespace runs
+    //                                 differently). Per-family loaders MAY
+    //                                 override via set_pretokenizer().
+    //   tokenizer.ggml.scores         (array float32)
+    //   tokenizer.ggml.token_type     (array int32)
+    //   tokenizer.ggml.merges         (array string) - "left right" pairs
+    //                                 in rank order; required for "gpt2"
+    //                                 encode().
+    //   tokenizer.ggml.{unknown,bos,eos,blank}_token_id (uint32 / int32)
     //
-    // Returns:
-    //   TRANSCRIBE_OK                  on success.
-    //   TRANSCRIBE_ERR_INVALID_ARG     if gguf is null.
-    //   TRANSCRIBE_ERR_GGUF            if a required key is missing,
-    //                                  has the wrong type, or arrays
-    //                                  are length-inconsistent.
-    //   TRANSCRIBE_ERR_NOT_IMPLEMENTED if the tokenizer model string
-    //                                  is recognized but not yet
-    //                                  supported (e.g. "wordpiece").
+    // Returns: TRANSCRIBE_OK; INVALID_ARG (null gguf); GGUF (required key
+    // missing / wrong type / length-inconsistent arrays); NOT_IMPLEMENTED
+    // (model string recognized but unsupported, e.g. "wordpiece").
     transcribe_status load(const gguf_context * gguf);
 
     // Optional special-token ids for the decode-only constructors. The

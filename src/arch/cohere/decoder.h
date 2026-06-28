@@ -52,15 +52,11 @@ struct DecoderBuild {
     ggml_cgraph * graph = nullptr;
 };
 
-// Build a decoder prompt-pass graph. No KV cache -- processes the full
+// Build a decoder prompt-pass graph (no KV cache): processes the full
 // prompt sequence at once with a causal self-attention mask.
-//
-// seq_len:   number of prompt tokens.
-// T_enc:     number of encoder frames (after enc-dec projection).
-// use_flash: true -> fused ggml_flash_attn_ext path;
-//            false -> manual mul_mat + soft_max_ext + mul_mat path.
-//            Defaults true because dk=128 has flash kernels on every
-//            backend we ship.
+//   seq_len:   number of prompt tokens.
+//   T_enc:     number of encoder frames (after enc-dec projection).
+//   use_flash: fused ggml_flash_attn_ext vs manual mul_mat path.
 DecoderBuild build_decoder_graph(ggml_context *         compute_ctx,
                                  const CohereWeights &  weights,
                                  const CohereHParams &  hp,
@@ -68,37 +64,21 @@ DecoderBuild build_decoder_graph(ggml_context *         compute_ctx,
                                  int                    T_enc,
                                  bool                   use_flash = true);
 
-// Build a graph that computes cross-attention K/V for all decoder
-// layers from the encoder output, writing them into the cross-attn
-// KV cache. This is run once per utterance.
-//
-// The graph reads from encoder_out (which must be set as an input)
-// and writes into kv_cache.cross_k / kv_cache.cross_v via ggml_cpy.
-//
-// Returns: a DecoderBuild with only .encoder_out_in and .graph set.
+// Compute cross-attention K/V for all decoder layers from encoder_out
+// (an input) into kv_cache.cross_k / cross_v via ggml_cpy. Run once per
+// utterance. Returns a DecoderBuild with only .encoder_out_in and .graph set.
 DecoderBuild build_cross_kv_graph(ggml_context *         compute_ctx,
                                   const CohereWeights &  weights,
                                   const CohereHParams &  hp,
                                   CohereKvCache &        kv_cache,
                                   int                    T_enc);
 
-// Build a decoder graph that uses the KV cache. Works for both
-// prompt pass (n_tokens > 1) and step pass (n_tokens = 1).
-//
-// n_tokens: number of new tokens to process.
-// n_past:   number of tokens already in the self-attention KV cache.
-//           For prompt pass this is 0; for step passes it's the
-//           running total of previously processed tokens.
-// T_enc:    number of encoder frames (for cross-attention cache shape).
-//
-// The graph:
-//   - Computes Q/K/V for self-attention from the new tokens only.
-//   - Writes new K/V into the self-attention cache at position n_past
-//     via ggml_cpy.
-//   - Reads the full self-attention cache [0..n_past+n_tokens) for
-//     attention computation.
-//   - Reads cross-attention K/V from the pre-populated cache.
-//   - Outputs logits for the new tokens only.
+// KV-cached decoder graph for both prompt pass (n_tokens > 1) and step
+// pass (n_tokens = 1). Writes new self-K/V at position n_past via ggml_cpy,
+// reads the full cache [0..n_past+n_tokens) plus the pre-populated cross
+// K/V, outputs logits for the new tokens only.
+//   n_past: tokens already in the self-attention KV cache (0 for prompt).
+//   T_enc:  number of encoder frames (cross-attention cache shape).
 DecoderBuild build_decoder_graph_kv(ggml_context *         compute_ctx,
                                     const CohereWeights &  weights,
                                     const CohereHParams &  hp,
@@ -109,17 +89,11 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         compute_ctx,
                                     bool                   skip_log_softmax = false,
                                     bool                   use_flash        = true);
 
-// Static-topology single-token decoder graph. Built once per utterance
-// after the prompt pass and reused for every step in the autoregressive
-// loop. Compared to build_decoder_graph_kv with n_tokens=1, this graph
-// is independent of n_past:
-//   - KV cache writes go through ggml_set_rows with kv_idx_in as the
-//     runtime row index (instead of ggml_cpy at a build-time-baked
-//     view offset).
-//   - Self-attn K/V reads span the full [0, max_n_kv) window; mask_in
-//     gates which positions are valid each step.
-// Caller pre-allocates the graph + sched once and only updates the
-// runtime inputs (token_id_in, pos_id_in, kv_idx_in, mask_in) per step.
+// Static-topology single-token decoder graph, built once per utterance and
+// reused for every step. Independent of n_past: KV writes go via
+// ggml_set_rows at runtime row index kv_idx_in; self-K/V reads span the full
+// [0, max_n_kv) window with mask_in gating valid positions. Caller only
+// updates the runtime inputs (token_id_in, pos_id_in, kv_idx_in, mask_in).
 struct StepBuild {
     ggml_tensor * token_id_in = nullptr;  // i32 [1]
     ggml_tensor * pos_id_in   = nullptr;  // i32 [1]
@@ -143,9 +117,9 @@ StepBuild build_step_graph(ggml_context *         compute_ctx,
 // ---------------------------------------------------------------------------
 
 // Batched cross-attention K/V. encoder_out_in is [hidden, T_enc_max, B]
-// (each utterance right-padded to T_enc_max); per-layer K/V are written
-// into the batched cross cache slab (layer, b). Padded encoder frames
-// produce bias-only K/V that the cross-pad mask discards at attention time.
+// (each utterance right-padded to T_enc_max); per-layer K/V written into
+// the batched cross cache slab (layer, b). Padded frames produce bias-only
+// K/V that the cross-pad mask discards at attention time.
 DecoderBuild build_cross_kv_graph_batched(ggml_context *         compute_ctx,
                                           const CohereWeights &  weights,
                                           const CohereHParams &  hp,
@@ -153,11 +127,10 @@ DecoderBuild build_cross_kv_graph_batched(ggml_context *         compute_ctx,
                                           int                    T_enc_max,
                                           int                    n_batch);
 
-// Static-topology batched single-step graph for B utterances. Reused for
-// BOTH the (short, uniform) prompt feed and autoregressive generation:
-// each invocation consumes one token per utterance, writes self-KV at
-// kv_idx[b], and reads self-KV [0,max_n_kv) (self_mask gates valid slots)
-// + cross-KV [0,T_enc_max) (cross_mask gates each utterance's real frames).
+// Static-topology batched single-step graph for B utterances, reused for
+// both the prompt feed and generation: each call consumes one token per
+// utterance, writes self-KV at kv_idx[b], reads self-KV [0,max_n_kv)
+// (self_mask) + cross-KV [0,T_enc_max) (cross_mask).
 struct StepBuildBatched {
     ggml_tensor * token_ids_in = nullptr;  // i32 [B]
     ggml_tensor * pos_ids_in   = nullptr;  // i32 [B]

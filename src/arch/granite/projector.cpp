@@ -3,41 +3,6 @@
 // Reference: GraniteSpeechEncoderProjector +
 // Blip2QFormerLayer/Encoder/Model in transformers/models/blip_2/.
 //
-// One graph end-to-end:
-//
-//   enc_in [hidden_enc, T_enc] + enc_pad [hidden_enc, pad_n]
-//     → ggml_concat along ne[1] → [hidden_enc, T_pad]
-//     → ggml_reshape_3d → [hidden_enc, window_size, nblocks]
-//   query [hidden, num_queries, 1, 1]
-//     → ggml_repeat_4d → [hidden, num_queries, nblocks, 1]
-//   for layer in 0..prj_n_layers:
-//     # Self-attention sublayer (post-LN BERT/BLIP-2 style):
-//     attn_in  = query
-//     q,k,v    = linear(self_attn.{q,k,v}, attn_in) + bias
-//     attn     = softmax(QK^T / sqrt(head_dim)) @ V
-//     post     = linear(self_attn.out, attn) + bias
-//     query    = LN(post + attn_in, norm_self_attn)
-//
-//     # Cross-attention sublayer (cross_attention_frequency=1 ⇒ every layer):
-//     cross_in = query
-//     q        = linear(cross_attn.q, cross_in) + bias        [hidden, num_queries, nblocks]
-//     k        = linear(cross_attn.k, enc_window) + bias      [hidden, window_size, nblocks]
-//     v        = linear(cross_attn.v, enc_window) + bias      [hidden, window_size, nblocks]
-//     attn     = softmax(QK^T / sqrt(head_dim)) @ V           per (head, block)
-//     post     = linear(cross_attn.out, attn) + bias
-//     query    = LN(post + cross_in, norm_cross_attn)
-//
-//     # FFN sublayer:
-//     ffn_in   = query
-//     mid      = GELU(linear(ffn.up, ffn_in) + bias)
-//     out      = linear(ffn.down, mid) + bias
-//     query    = LN(out + ffn_in, norm_ffn)
-//
-//   query  = LN(query, qformer.final_norm)        # proj.qformer.out  [hidden, num_queries, nblocks]
-//   tokens = reshape(query, hidden, num_queries*nblocks)
-//   out    = linear(proj.linear, tokens) + proj.linear.bias
-//                                                  # proj.out  [text_hidden, num_queries*nblocks]
-//
 // Conventions:
 //   * BLIP-2 layer uses "post-LN" (residual + LN AFTER each output
 //     projection), unlike the granite encoder's pre-LN macaron / pre-LN
@@ -98,14 +63,9 @@ ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x,
     return y;
 }
 
-// Compute scaled-dot-product attention with input projections already
-// applied. Operates on the Q-Former's standard layout where
-//   q, k, v all have ne = [hidden, n_seq, batch]
-// and the attention runs per `batch` (= nblocks for cross-attn).
-//
-// Reshape into head form (head_dim = hidden / n_heads), permute so
-// `n_seq` ends up at ne[1] for kq via mul_mat(k, q), then softmax over
-// k axis, multiply by V^T, and collapse back to ne[hidden, q_seq, batch].
+// Scaled-dot-product attention with input projections already applied.
+// q, k, v all have ne = [hidden, n_seq, batch]; attention runs per `batch`
+// (= nblocks for cross-attn). head_dim = hidden / n_heads.
 ggml_tensor * qformer_attn(ggml_context * ctx,
                            ggml_tensor *  q_in,   // [hidden, q_seq, batch]
                            ggml_tensor *  k_in,   // [hidden, k_seq, batch]
@@ -232,7 +192,7 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     pb.t_enc_pad      = T_pad - T_enc;
     pb.n_audio_tokens = pb.nblocks * num_queries;
 
-    // ----- Graph inputs -----
+    // Graph inputs.
     pb.enc_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, enc_hidden, T_enc);
     named(pb.enc_in, "proj.enc_in");
     ggml_set_input(pb.enc_in);
@@ -244,7 +204,7 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
         ggml_set_input(pb.enc_pad);
     }
 
-    // ----- Build window tensor -----
+    // Build window tensor.
     // enc_full: [hidden_enc, T_pad] (concat of enc_in and enc_pad).
     ggml_tensor * enc_full = pb.enc_in;
     if (pb.enc_pad != nullptr) {
@@ -260,7 +220,7 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
                                                enc_hidden, window_size,
                                                pb.nblocks);
 
-    // ----- Build query tensor -----
+    // Build query tensor.
     // weights.proj_top.query is stored at the GGUF's reference dtype
     // (BF16 for granite). The QFormer layer adds it into the F32
     // post-attention activation and feeds the result into LayerNorm;
@@ -269,17 +229,11 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     ggml_tensor * query = ggml_cast(ctx, weights.proj_top.query, GGML_TYPE_F32);
 
     // Apply the Q-Former INPUT layernorm. Despite the GGUF tensor name
-    // "proj.qformer.final_norm" (a converter-side misnomer carried over
-    // from the dump naming), this layernorm corresponds to
+    // "proj.qformer.final_norm" (a converter-side misnomer), this is
     // Blip2QFormerModel.layernorm and runs BEFORE the encoder stack:
-    //
-    //   query_embeds = query_embeds.to(self.layernorm.weight.dtype)
     //   embedding_output = self.layernorm(query_embeds)
-    //
-    // Applying it after the layers (as if it were a final norm) silently
-    // produces wildly drifting output — the layers operate on
-    // unnormalised queries and the first cross-attention dominates the
-    // downstream FFN/residual path.
+    // Applying it after the layers instead silently corrupts the output —
+    // the layers would operate on unnormalised queries.
     query = qformer_layer_norm(ctx, query,
                                weights.proj_top.qformer_final_norm_w,
                                weights.proj_top.qformer_final_norm_b,
@@ -291,24 +245,21 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     // ggml_repeat_4d emits a fresh contiguous tensor; we can pass it
     // directly into subsequent ops.
 
-    // ----- Q-Former layers -----
+    // Q-Former layers.
     for (int i = 0; i < hp.prj_n_layers; ++i) {
         query = qformer_layer(ctx, query, enc_window,
                               weights.proj_blocks[i],
                               n_heads, head_dim, ln_eps);
     }
 
-    // ----- proj.qformer.out tap -----
-    // The stage-2 dump hooks `proj.qformer` (= Blip2QFormerModel) and
-    // captures `BaseModelOutputWithPoolingAndCrossAttentions.last_hidden_state`,
-    // which is the output of the encoder stack — no additional layernorm
-    // after the layers. Our Q-Former input norm (above) is the only
-    // wrapper layernorm in the model.
+    // proj.qformer.out = Blip2QFormerModel.last_hidden_state, the encoder
+    // stack output — there is no layernorm after the layers (the input norm
+    // above is the only wrapper layernorm).
     named(query, "proj.qformer.out");
     pb.dumps.qformer_out = query;
     transcribe::debug::mark_tensor_for_dump(query);
 
-    // ----- Reshape to [hidden, num_queries*nblocks] and linear lift -----
+    // Reshape to [hidden, num_queries*nblocks] and linear lift.
     // The reference's .view(batch_size, nblocks*num_queries, hidden) is
     // a flat reshape over (block_idx, query_idx). In ggml ne layout
     // (hidden, num_queries, nblocks) the natural reshape to

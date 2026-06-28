@@ -1,19 +1,14 @@
 // src/conformer/conformer.cpp - shared Conformer encoder helpers.
 //
-// Extracted from parakeet/encoder.cpp and cohere/encoder.cpp. The two
-// files had grown to ~70% overlap, and the per-op helpers (layer_norm,
-// feed_forward, the f32-friendly conv helpers, rel_shift, conv_module,
-// rel_pos_mhsa, build_conformer_block, build_pre_encode) were byte-
-// identical or trivially parameterizable. This module owns the
-// canonical implementation; each family's encoder.cpp keeps only the
-// glue that binds the shared helpers to its own weights / hparams /
-// graph-driver contract.
-//
-// Per-family policy knobs (ConvPolicy, BlockParams) are passed in by
-// the family — no environment variables are read here except by the
-// shared detect_direct_pw, which is identical across families.
+// See conformer.h for the API contract. Each family's encoder.cpp keeps
+// only the glue binding these helpers to its weights / hparams / graph
+// driver; per-family policy knobs (ConvPolicy, BlockParams) are passed in.
+// Conv-dispatch env vars (TRANSCRIBE_CONV_DIRECT_PW/DW and their NO_ variants)
+// are read only via resolve_conv_direct here, which detect_direct_pw and every
+// family's depthwise detect delegate to — one place owns the parsing.
 
 #include "conformer/conformer.h"
+#include "transcribe-env.h"
 #include "transcribe-log.h"
 
 #include "ggml.h"
@@ -25,10 +20,6 @@
 
 namespace transcribe::conformer {
 
-// ===========================================================================
-// Low-level helpers
-// ===========================================================================
-
 ggml_tensor * named(ggml_tensor * t, const char * name) {
     if (t != nullptr) {
         ggml_set_name(t, name);
@@ -37,16 +28,9 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
 }
 
 // LayerNorm with affine: y = gamma * (x - mean) / sqrt(var + eps) + beta.
-//
-// ggml_norm normalizes along ne[0], which for our [d_model, T, B]
-// encoder activation is the d_model axis — exactly what LayerNorm
-// wants. The affine multiply + add use ggml's broadcasting: gamma /
-// beta have ne=[d_model, 1, 1, 1], which broadcasts naturally across
-// the T and B axes of the activation.
-//
-// `gamma` is required; `beta` may be null for bias-free LN. Both
-// Parakeet and Cohere ship with affine (gamma + beta) on every LN,
-// but the helper supports no-bias for future families.
+// ggml_norm normalizes along ne[0] (the d_model axis of [d_model, T, B]);
+// gamma/beta [d_model] broadcast over T and B. `gamma` required; `beta`
+// may be null for bias-free LN.
 ggml_tensor * layer_norm(ggml_context * ctx,
                          ggml_tensor *  x,
                          ggml_tensor *  gamma,
@@ -60,17 +44,9 @@ ggml_tensor * layer_norm(ggml_context * ctx,
     return y;
 }
 
-// FeedForward: y = Linear2(SiLU(Linear1(x)))
-//
-// ggml_mul_mat(W, x) reads W ne[0] as the input dim, so with
-// W ne=[d_in, d_out], x ne=[d_in, T, B] -> result ne=[d_out, T, B].
-// Both converters store ff*_lin1_w as ne=[d_model, d_ff] and
-// ff*_lin2_w as ne=[d_ff, d_model] to match this convention. Bias
-// tensors, when present, are [d_out] and broadcast along T and B.
-//
-// Either or both biases may be null — the optional-bias pattern is
-// what lets Parakeet (bias-free) and Cohere (all biases) share the
-// same code.
+// FeedForward: y = Linear2(SiLU(Linear1(x))). Weights stored
+// ff*_lin1_w ne=[d_model, d_ff], ff*_lin2_w ne=[d_ff, d_model]. Biases
+// [d_out] broadcast along T and B; either or both may be null.
 ggml_tensor * feed_forward(ggml_context * ctx,
                            ggml_tensor *  x,
                            ggml_tensor *  lin1_w,
@@ -90,10 +66,8 @@ ggml_tensor * feed_forward(ggml_context * ctx,
     return y;
 }
 
-// Macaron half-residual feed-forward: x + 0.5 * FF(LN(x)).
-// Used at the start (FF1) and end (FF2) of each conformer block.
-// The 0.5 scale is the macaron weighting; the alternative residual
-// (full 1.0) is used for the MHSA and conv sub-blocks.
+// Macaron half-residual feed-forward: x + 0.5 * FF(LN(x)). The 0.5 scale
+// is the macaron weighting (FF1/FF2); MHSA and conv use a full residual.
 ggml_tensor * macaron_ff_residual(ggml_context * ctx,
                                   ggml_tensor *  x,
                                   ggml_tensor *  norm_w,
@@ -109,10 +83,8 @@ ggml_tensor * macaron_ff_residual(ggml_context * ctx,
     return ggml_add(ctx, x, y);
 }
 
-// Shaw / Transformer-XL relative-position skew. Transforms the
-// position scoring matrix from [pos_len, T_q, H, 1] to the same shape
-// but with each row rotated so that column k holds the score for
-// relative offset k.
+// Shaw / Transformer-XL relative-position skew. Rotates each row of the
+// [pos_len, T_q, H, 1] score matrix so column k holds relative offset k.
 ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
     const int64_t pos_len = x->ne[0];
     const int64_t T_q     = x->ne[1];
@@ -148,11 +120,9 @@ ggml_tensor * rel_shift(ggml_context * ctx, ggml_tensor * x) {
     return y;
 }
 
-// f32-friendly Conv1D (mirrors ggml_conv_1d but passes the kernel's
-// real type to im2col instead of forcing f16). The vendored ggml's
-// ggml_conv_1d hardcodes GGML_TYPE_F16 for the im2col output, which
-// triggers a runtime assertion when fed an f32 kernel — and both the
-// Parakeet and Cohere weight catalogs are fp32 for these convs.
+// f32-friendly Conv1D (mirrors ggml_conv_1d but passes the kernel's real
+// type to im2col instead of forcing f16). Vendored ggml's ggml_conv_1d
+// hardcodes GGML_TYPE_F16 for the im2col output and asserts on an f32 kernel.
 ggml_tensor * conv_1d_f32(ggml_context * ctx,
                           ggml_tensor *  kernel,
                           ggml_tensor *  data,
@@ -176,15 +146,13 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
                                               kernel->ne[0] * kernel->ne[1],
                                               kernel->ne[2]);  // [IC*K, OC]
 
-    // F32 accumulation when the kernel is F16. The same CUDA cuBLAS
-    // COMPUTE_16F saturation that hits the in-block pointwise convs also
-    // hits this im2col + mul_mat for the subsampling conv stem when the
-    // converter routes those kernels to F16 (medasr / cohere / parakeet).
+    // F32 accumulation when the kernel is F16 (see mul_mat_f32acc in
+    // causal_lm.cpp for the CUDA COMPUTE_16F saturation rationale).
     const bool kernel_needs_f32_acc = (kernel->type == GGML_TYPE_F16);
 
     if (N == 1) {
-        // Single-shot path (bit-identical to the pre-batch code): flatten
-        // OW*N (== OW) and reshape the [OW, OC] result back to [OW, OC, 1].
+        // Single-shot path: flatten OW*N (== OW) and reshape the [OW, OC]
+        // result back to [OW, OC, 1].
         ggml_tensor * result = ggml_mul_mat(ctx,
             ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[1]),
             kernel_2d);  // [OW, OC]
@@ -200,9 +168,7 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
     // (ow_n = b*OW + ow), so a [OW*N, OC] -> [OW, OC, N] reshape would
     // mislabel memory. Instead mul_mat the 3-D im2col directly: the kernel
     // (ne[2]=1) broadcasts across the batch, giving [OC, OW, N], then
-    // permute to the [OW, OC, N] = [time, channels, batch] convention. The
-    // per-element dot products match the N==1 path exactly (same reduction
-    // over IC*K), so each utterance is bit-identical to single-shot.
+    // permute to the [OW, OC, N] = [time, channels, batch] convention.
     ggml_tensor * result = ggml_mul_mat(ctx, kernel_2d, im2col);  // [OC, OW, N]
     if (kernel_needs_f32_acc) {
         ggml_mul_mat_set_prec(result, GGML_PREC_F32);
@@ -211,20 +177,13 @@ ggml_tensor * conv_1d_f32(ggml_context * ctx,
     return result;  // [OW, OC, N]
 }
 
-// f32-friendly 2D depthwise conv. Mirrors ggml_conv_2d_dw exactly
-// but passes the kernel's real type to im2col instead of forcing
-// f16. The vendored ggml's ggml_conv_2d_dw hardcodes
-// GGML_TYPE_F16 for the im2col output, which then makes the
-// downstream matmul try to use a `kernel_mul_mv_f32_f16_short`
-// Metal kernel that isn't compiled into this ggml's Metal
-// library. Forcing f32 lands the matmul on
-// `kernel_mul_mv_f32_f32_short` which IS available, unblocking
-// the Metal path.
-//
-// The alternative `ggml_conv_2d_dw_direct` hits an even harder
-// wall: its CONV_2D_DW op is reported as unsupported by
-// ggml_metal_op_encode_impl, so it can't run on Metal at all in
-// this version. The im2col + mul_mat path here is what works.
+// f32-friendly 2D depthwise conv (mirrors ggml_conv_2d_dw but passes the
+// kernel's real type to im2col). CANONICAL Metal conv-quirk note: vendored
+// ggml's ggml_conv_2d_dw hardcodes F16 im2col, which routes the matmul to
+// a `kernel_mul_mv_f32_f16_short` Metal kernel that isn't compiled in;
+// forcing f32 lands on the available `kernel_mul_mv_f32_f32_short`. The
+// alternative ggml_conv_2d_dw_direct can't help: its CONV_2D_DW op is
+// unsupported on Metal, so the im2col + mul_mat path here is what works.
 ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
                              ggml_tensor *  kernel,  // [KW, KH, 1, C]
                              ggml_tensor *  data,    // [W, H, C, N]
@@ -283,15 +242,13 @@ ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,
     // Offline batch: data ne=[W, C, B] with B>1. The im2col path below
     // collapses the batch axis (its final reshape hardcodes ne[2]=1), so
     // route B>1 through the direct depthwise-2D op (W, H=1, C, N=B), which
-    // threads the utterance batch at ne[3]. This keeps the B==1 path —
-    // every current caller (parakeet/cohere single-shot, AR granite) —
-    // byte-identical to the pre-batch code.
+    // threads the utterance batch at ne[3].
     const int64_t B = data->ne[2];
     if (B > 1) {
         const int64_t k = kernel->ne[0];
         const int64_t C = data->ne[1];
-        // ggml_conv_2d_dw_direct misbehaves for non-f32 kernels (see the
-        // canary_qwen note); the depthwise kernel is tiny, so cast to f32.
+        // ggml_conv_2d_dw_direct misbehaves for non-f32 kernels; the
+        // depthwise kernel is tiny, so cast to f32.
         ggml_tensor * knl = kernel;
         if (knl->type != GGML_TYPE_F32) {
             knl = ggml_cast(ctx, knl, GGML_TYPE_F32);
@@ -355,36 +312,30 @@ ggml_tensor * add_conv_bias(ggml_context * ctx,
     return ggml_add(ctx, conv_out, bias_4d);
 }
 
-// ===========================================================================
-// Policy detection
-// ===========================================================================
-
-bool detect_direct_pw(const char * backend) {
-    const char * env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_PW");
-    if (env != nullptr) return false; // user override
-    env = std::getenv("TRANSCRIBE_CONV_DIRECT_PW");
-    if (env != nullptr) return true;  // user override
-    // Vulkan: controlled A/B on AMD Renoir showed the im2col + mul_mat
-    // path is ~200 ms per encode faster than the direct mul_mat path
-    // for f32 weights, so keep im2col as the default. Metal and CPU
-    // benefit from the direct path.
-    if (backend != nullptr && std::strstr(backend, "Vulkan") != nullptr) {
-        return false;
-    }
-    return true;
+bool resolve_conv_direct(const char * direct_env,
+                         const char * no_direct_env,
+                         bool         backend_default) {
+    if (transcribe::env::flag(direct_env))    return true;  // user override
+    if (transcribe::env::flag(no_direct_env)) return false; // user override
+    return backend_default;
 }
 
-// ===========================================================================
-// Conv module (pointwise -> GLU -> depthwise -> BN -> SiLU -> pointwise)
-// ===========================================================================
+bool detect_direct_pw(const char * backend) {
+    // Vulkan defaults to im2col: on AMD Renoir, im2col + mul_mat measured
+    // ~200 ms/encode faster than direct for f32 weights. Metal/CPU prefer
+    // direct.
+    const bool backend_default =
+        !(backend != nullptr && std::strstr(backend, "Vulkan") != nullptr);
+    return resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_PW",
+                               "TRANSCRIBE_CONV_NO_DIRECT_PW",
+                               backend_default);
+}
 
-// Operates on the post-LayerNorm activation; the LN is applied OUTSIDE
-// this helper by the block forward. By default, pointwise convs (k=1)
-// are direct mul_mats in [d_model, T] layout, avoiding im2col overhead.
-// Set TRANSCRIBE_CONV_NO_DIRECT_PW=1 to fall back to the im2col path.
-// BatchNorm uses precomputed fused scale + bias (2 ops instead of 4);
-// LayerNorm uses an unfused on-the-fly per-channel normalize plus
-// affine, with weights from BlockView::conv_ln_*.
+// Conv module (pointwise -> GLU -> depthwise -> BN/LN -> SiLU -> pointwise).
+// Operates on the post-LayerNorm activation (LN applied by the caller).
+// Pointwise convs (k=1) are direct mul_mats in [d_model, T] layout by
+// default; TRANSCRIBE_CONV_NO_DIRECT_PW=1 forces the im2col path. BatchNorm
+// uses fused scale + bias; LayerNorm normalizes per-channel on the fly.
 ggml_tensor * conv_module(ggml_context *      ctx,
                           ggml_tensor *       x,
                           const BlockView &   b,
@@ -405,21 +356,14 @@ ggml_tensor * conv_module(ggml_context *      ctx,
 
     const int64_t d_model = x->ne[0];
     // Utterance batch lives at ne[2] of the [d_model, T, B] activation.
-    // B == 1 for single-shot (parakeet / cohere today); the offline
-    // batched encoder passes B > 1. Every view/reshape below threads B so
-    // the B == 1 path is bit-identical to the pre-batch code.
+    // B == 1 for single-shot; the offline batched encoder passes B > 1.
     const int64_t B = x->ne[2];
 
     if (policy.direct_pw) {
         // Pointwise conv 1 as direct mul_mat in [d_model, T, B] layout.
         // Kernel ne=[1, d_model, 2*d_model] → reshape to [d_model, 2*d_model].
-        // F32 accumulation when the weight is F16: on CUDA, F16 weights take
-        // the cuBLAS COMPUTE_16F path whose accumulator saturates at ~6.5e4.
-        // Families with large activation magnitudes (e.g. medasr's scaled
-        // residuals push intermediates to ~2e6) overflow to NaN. set_prec
-        // forces F32 accumulation; no-op on CPU/Metal, slight perf cost on
-        // CUDA. Skip for non-F16 weights (BF16 already COMPUTE_32F; quant
-        // dispatches MMQ).
+        // Force F32 accumulation for F16 weights (see mul_mat_f32acc in
+        // causal_lm.cpp for the CUDA COMPUTE_16F saturation rationale).
         {
             ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pw1_w,
                                                 d_model, 2 * d_model);
@@ -576,15 +520,10 @@ ggml_tensor * conv_module(ggml_context *      ctx,
         x = ggml_add(ctx, x, bias_r);
     }
 
-    // Post-depthwise normalisation: BN (fused mul + add) or LN
-    // (per-channel mean/std normalize + affine). Both produce the same
-    // [T, d_model] shape; the SiLU below is identical.
-    //
-    // At this point x has ne = [T, d_model, 1, 1]. NeMo's LayerNorm
-    // normalises over the feature axis (d_model), matching the
-    // `layer_norm` helper exactly when applied to a [T, d_model]
-    // tensor — but `layer_norm` reads ne[0] as the feature axis, so we
-    // permute to [d_model, T] first, apply, and permute back.
+    // Post-depthwise normalisation: BN (fused mul + add) or LN (per-channel
+    // mean/std + affine). x is [T, d_model, 1, 1] here; `layer_norm` reads
+    // ne[0] as the feature axis, so for LN we permute to [d_model, T], apply,
+    // and permute back.
     if (params.conv_norm_type == BlockParams::ConvNormType::LayerNorm) {
         x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
         x = layer_norm(ctx, x, b.conv_ln_w, b.conv_ln_b);
@@ -594,7 +533,6 @@ ggml_tensor * conv_module(ggml_context *      ctx,
                              b.conv_bn_fused_scale, b.conv_bn_fused_bias);
     }
 
-    // SiLU activation.
     x = ggml_silu(ctx, x);
 
     if (policy.direct_pw) {
@@ -626,10 +564,8 @@ ggml_tensor * conv_module(ggml_context *      ctx,
     return x;
 }
 
-// ===========================================================================
-// Relative-position multi-head self-attention
-// ===========================================================================
-
+// Relative-position multi-head self-attention.
+//
 // use_flash = true  -> ggml_flash_attn_ext (fused GPU kernel, needs
 //                      a dk template in the Metal backend)
 // use_flash = false -> manual mul_mat + soft_max_ext + mul_mat (works
@@ -664,12 +600,10 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     const int     att_context_right = params.att_context_right;
     const int     head_dim = d_model / n_head;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    // Query/key-value split (see the x_q / k_full contracts in
-    // conformer.h). kv_cached: K/V arrive pre-projected and x is the
-    // query-only activation. q_sliced: queries from x_q, K/V projected
-    // from x. rect covers both — the score geometry is rectangular
-    // [T_kv, T_q]. Neither set keeps T_q == T_kv and the historical
-    // topology bit-for-bit.
+    // Query/key-value split (see the x_q / k_full contracts in conformer.h).
+    // kv_cached: K/V arrive pre-projected, x is the query-only activation.
+    // q_sliced: queries from x_q, K/V projected from x. rect covers both —
+    // the score geometry is rectangular [T_kv, T_q].
     const bool    kv_cached = (k_full != nullptr && v_full != nullptr);
     const bool    q_sliced  = !kv_cached && (x_q != nullptr && x_q != x);
     const bool    rect      = kv_cached || q_sliced;
@@ -687,25 +621,13 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
                      (long long)pos_len, (long long)(T_q + T_kv - 1));
         return nullptr;
     }
-    // Utterance batch at ne[2] of the [d_model, T, B] activation. After the
-    // head split below the batch moves to ne[3] (heads take ne[2]). When
-    // batched we force the manual attention path: ggml_flash_attn_ext's
-    // additive mask (matrix_bd, which is content-dependent and therefore
-    // differs per utterance) is not validated for a per-batch ne[3] here,
-    // whereas the manual mul_mat + soft_max path broadcasts over the batch
-    // cleanly. Single-shot (B == 1) keeps its existing flash path exactly.
+    // Utterance batch at ne[2] (moves to ne[3] after the head split). Flash
+    // works batched (ggml_flash_attn_ext accepts the per-utterance rel-pos
+    // mask at ne[3] == B). Rectangular geometry forces manual: flash requires
+    // the mask's ne[1] padded to GGML_KQ_MASK_PAD, which the [T_kv, T_q]
+    // streaming mask does not satisfy. (TRANSCRIBE_NO_FLASH=1 also forces
+    // manual, for the bit-exact CPU tensor gate.)
     const int64_t B         = x->ne[2];
-    // Flash attention works batched: ggml_flash_attn_ext accepts the
-    // per-utterance rel-pos mask at ne[3] == B, and the batched encoder
-    // output is bit-identical to single-shot flash (verified on CPU and
-    // Metal). So the batch axis does not change the attention path.
-    // TRANSCRIBE_NO_FLASH=1 forces the manual mul_mat + soft_max path for
-    // both single-shot and batched (used by the bit-exact CPU tensor gate,
-    // since flash casts the rel-pos mask to F16 while manual stays F32).
-    // Rectangular geometry also forces manual: ggml_flash_attn_ext
-    // requires the mask's ne[1] padded to GGML_KQ_MASK_PAD, which the
-    // rectangular [T_kv, T_q] streaming mask does not satisfy — and at
-    // streaming geometry the manual path is faster anyway on CPU.
     const bool    flash     = use_flash && !rect;
 
     // Local-attention bookkeeping. With both window sides non-negative
@@ -720,9 +642,8 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
     const int  W_left  = is_local ? att_context_left  : 0;
     const int  W_right = is_local ? att_context_right : 0;
 
-    // ----- Q, K, V, P projections ---------------------------------
-    // Q, K, V may have bias (Cohere) or not (Parakeet). Pos projection
-    // (attn_pos_w) never has a bias in either family.
+    // Q, K, V, P projections. Q/K/V may have bias (Cohere) or not
+    // (Parakeet); the pos projection (attn_pos_w) never has a bias.
     ggml_tensor * q = ggml_mul_mat(ctx, b.attn_q_w, q_sliced ? x_q : x);
     if (b.attn_q_b != nullptr) q = ggml_add(ctx, q, b.attn_q_b);
     // KV-cache mode: keys/values arrive pre-projected (bias included).
@@ -738,10 +659,8 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         ? ggml_mul_mat(ctx, b.attn_pos_w, pos_emb)
         : nullptr;
 
-    // ----- Split heads --------------------------------------------
-    // pos_bias_u/v broadcast onto [head_dim, n_head, T, 1] BEFORE
-    // the permute that moves T past n_head.
-    // Head split carries the batch axis at ne[3]: [head_dim, n_head, T, B].
+    // Split heads: [head_dim, n_head, T, B] (batch at ne[3]). pos_bias_u/v
+    // broadcast onto this BEFORE the permute that moves T past n_head.
     q = ggml_reshape_4d(ctx, q, head_dim, n_head, T_q, B);
     ggml_tensor * q_u = ggml_add(ctx, q, b.attn_pos_u);
     ggml_tensor * q_v = ggml_add(ctx, q, b.attn_pos_v);
@@ -770,8 +689,7 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         p = pos_proj;
     }
 
-    // ----- Position mask / bias -----------------------------------
-    // matrix_bd = rel_shift(q_v @ p^T), truncated to [T_q, T_q].
+    // Position mask / bias: matrix_bd = rel_shift(q_v @ p^T), truncated.
     ggml_tensor * matrix_bd = ggml_mul_mat(ctx, p, q_v);
 
     // Local-attention pad/slice. The standard rel_shift trick assumes
@@ -897,32 +815,26 @@ ggml_tensor * rel_pos_mhsa(ggml_context *      ctx,
         // [T_q, T_q, n_head, 1] attention scores.
         ggml_tensor * kq = ggml_mul_mat(ctx, k, q_u);
 
-        // Add relative position bias, then scale inside soft_max_ext.
+        // Add relative position bias; soft_max_ext fuses the scale.
         kq = ggml_add(ctx, kq, matrix_bd);
-
-        // ggml_soft_max_ext fuses the scale into softmax.
         ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, /*mask=*/nullptr,
                                                   scale, /*max_bias=*/0.0f);
 
-        // V needs to be transposed for the value matmul.
-        // V is [head_dim, T_q, n_head, 1]. We need [T_q, head_dim, n_head, 1].
+        // V transposed for the value matmul: [T_q, head_dim, n_head, 1].
         ggml_tensor * v_t = ggml_cont(ctx,
                                       ggml_permute(ctx, v, 1, 0, 2, 3));
 
         // attn_weights @ V: [head_dim, T_q, n_head, 1]
         o = ggml_mul_mat(ctx, v_t, kq_soft);
 
-        // Merge heads: permute [head_dim, T_q, n_head] -> [head_dim,
-        // n_head, T_q] then reshape to [d_model, T_q]. The permute
-        // makes heads contiguous for the reshape.
+        // Merge heads: permute -> [head_dim, n_head, T_q] (contiguous for
+        // the reshape) then reshape to [d_model, T_q].
         o = ggml_permute(ctx, o, 0, 2, 1, 3);
         o = ggml_cont(ctx, o);
     }
     // Collapse heads back to d_model, keeping the batch at ne[2].
-    // reshape_3d with B == 1 is equivalent to the prior reshape_2d.
     o = ggml_reshape_3d(ctx, o, d_model, T_q, B);
 
-    // ----- Output linear -----------------------------------------
     o = ggml_mul_mat(ctx, b.attn_out_w, o);
     if (b.attn_out_b != nullptr) o = ggml_add(ctx, o, b.attn_out_b);
     return o;
@@ -939,9 +851,7 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
                                     const BlockParams &   params,
                                     const BlockObserver * obs)
 {
-    // Observer dispatch helper. Inlines to nothing when `obs` is null
-    // or its callback is null, so blocks without instrumentation pay
-    // zero overhead. Tags are compile-time string literals.
+    // Observer dispatch helper (no-op when obs / its callback is null).
     const auto notify = [&](const char * tag, ggml_tensor * t) {
         if (obs != nullptr && obs->on_point != nullptr) {
             obs->on_point(obs->user, tag, t);
@@ -958,23 +868,15 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
     // Self-attention with relative position. Full residual.
     //
     // Streaming carry (params.streaming_channel_in != nullptr):
-    //   1. Compute the new cache as
-    //        new_cache = concat(prev_cache[T_q_new:], x_norm)
-    //      and cpy it into streaming_channel_out (per NeMo:
-    //      q_keep_size = T_q_new with cache_drop_size = 0; the cache
-    //      stays at size T_cache). KV-cache mode rotates last_k/last_v
-    //      instead (see kv_mode below).
-    //   2. Virtualize x_norm for the K/V side:
-    //        x_norm_virtual = concat(prev_cache, x_norm)
-    //      so rel_pos_mhsa attends over T_virtual = T_cache + T_q_new
-    //      keys. Queries are sliced to the T_q_new new frames (x_q_new),
-    //      so the attention output already has T_q_new rows — no output
-    //      slice needed. The pos_emb / chunked_mask are sized for that
+    //   1. new_cache = concat(prev_cache[T_q_new:], x_norm), cpy'd into
+    //      streaming_channel_out (NeMo q_keep_size = T_q_new, cache stays at
+    //      T_cache). KV-cache mode rotates last_k/last_v instead (kv_mode).
+    //   2. Virtualize x_norm for K/V: concat(prev_cache, x_norm) so
+    //      rel_pos_mhsa attends over T_virtual = T_cache + T_q_new keys.
+    //      Queries are sliced to T_q_new (x_q_new), so the output already
+    //      has T_q_new rows; pos_emb / chunked_mask are sized for the
     //      rectangular [T_virtual, T_q_new] geometry.
-    //
-    // T_q_new is taken from the running x's ne[1] (x is the post-pre-
-    // encode + post-FF1 running tensor; its time dim hasn't changed
-    // yet at this point).
+    // T_q_new comes from the running x's ne[1].
     {
         const bool streaming = (params.streaming_channel_in != nullptr);
         // KV-cache streaming: keys/values are cached pre-projected, so
@@ -1015,16 +917,10 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
         };
 
         if (streaming && !kv_mode) {
-            // Emit the new cache slot before we virtualize x_norm
-            // for attention. Source: prev_cache tail (T_cache - T_q_new
-            // rows) concatenated with this chunk's x_norm (T_q_new
-            // rows) — total T_cache rows along ne[1].
-            //
-            // For T_q_new < T_cache (the common case; nemotron has
-            // T_q_new=12, T_cache=70), prev_cache_tail is a [d_model,
-            // T_cache - T_q_new] view. For T_q_new >= T_cache the
-            // new cache is just the last T_cache rows of x_norm — not
-            // exercised today but the guard is cheap.
+            // Emit the new cache slot (T_cache rows) before virtualizing
+            // x_norm: prev_cache tail (T_cache - T_q_new rows) concatenated
+            // with this chunk's x_norm, or x_norm's last T_cache rows when
+            // T_q_new >= T_cache.
             if (params.streaming_channel_out != nullptr &&
                 params.streaming_graph != nullptr)
             {
@@ -1040,8 +936,7 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
                     new_cache = ggml_concat(ctx, prev_tail, x_norm,
                                             /*dim=*/1);
                 } else {
-                    // x_norm holds at least T_cache rows — take its
-                    // last T_cache.
+                    // x_norm's last T_cache rows.
                     new_cache = ggml_view_2d(
                         ctx, x_norm,
                         x_norm->ne[0], T_cache,
@@ -1117,21 +1012,18 @@ ggml_tensor * build_conformer_block(ggml_context *        ctx,
                             b.ff2_lin2_w, b.ff2_lin2_b);
     notify("after_ff2", x);
 
-    // Final per-block LayerNorm (the block's output transform).
+    // Final per-block LayerNorm.
     x = layer_norm(ctx, x, b.norm_out_w, b.norm_out_b);
     notify("out", x);
     return x;
 }
 
-// ===========================================================================
-// Pre-encode (DwStridingSubsampling)
-// ===========================================================================
+// Pre-encode (DwStridingSubsampling).
 
 namespace {
 
-// Name a tensor as `<prefix>.<suffix>` if prefix is non-null. Returns
-// t unchanged. Used below to reproduce Parakeet's dump-point naming
-// inside the shared helper without branching on family.
+// Name a tensor as `<prefix>.<suffix>` if prefix is non-null. Returns t
+// unchanged.
 ggml_tensor * name_prefixed(ggml_tensor * t, const char * prefix,
                             const char * suffix)
 {
@@ -1144,8 +1036,8 @@ ggml_tensor * name_prefixed(ggml_tensor * t, const char * prefix,
 
 } // namespace
 
-// Pre-encode subsampling stack. See conformer.py:206-328
-// (DwStridingSubsampling). The op order matches NeMo:
+// Pre-encode subsampling stack. Op order matches NeMo's
+// DwStridingSubsampling (conformer.py:206-328):
 //
 //   conv0 (standard, 1->C, k=3 s=2 p=1)  -> bias -> ReLU
 //   conv2 (depthwise, C->C, groups=C)    -> bias -> conv3 (pointwise, C->C) -> bias -> ReLU
@@ -1154,16 +1046,8 @@ ggml_tensor * name_prefixed(ggml_tensor * t, const char * prefix,
 //   feature axis matching `pre_encode_in = channels * (n_mels / 8)`
 //   linear (out_w, out_b) -> [d_model, T_enc, 1, 1]
 //
-// In NeMo's torch.nn.Sequential, the bias is fused into each conv.
-// We replicate that here with an explicit ggml_add per conv
-// (add_conv_bias is a no-op when the bias slot is null).
-//
-// The 2-D depthwise convs (conv2, conv5) honor
-// policy.direct_dw_in_pre_encode. Parakeet keeps this false (uses the
-// f32-friendly im2col helper on every backend, including ones where
-// the direct path would work); Cohere follows its detect_direct_dw
-// result. See the policy comment in conformer.h for why the two
-// families historically disagree on this.
+// Each conv's fused bias is an explicit ggml_add (no-op when null). The 2-D
+// depthwise convs (conv2, conv5) honor policy.direct_dw_in_pre_encode.
 ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                const PreEncodeView & pe,
                                ggml_tensor *         mel_in,
@@ -1172,11 +1056,10 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
                                const char *          error_tag,
                                PreEncodeValidMasks * valid_masks)
 {
-    // Utterance batch and a helper that, in the masked-subsampling path,
-    // zeros each conv intermediate's padded time region after a ReLU. The
-    // mask is a graph input ne=[1, H_stage, 1, B] broadcasting over freq
-    // (ne[0]) and channels (ne[2]); the driver fills it per utterance. `slot`
-    // receives the allocated handle. No-op when valid_masks is null.
+    // Masked-subsampling helper: zeros each conv intermediate's padded time
+    // region after a ReLU. The mask is a graph input ne=[1, H_stage, 1, B]
+    // (broadcasts over freq and channels); `slot` receives the handle for
+    // the driver to fill. No-op when valid_masks is null.
     const int64_t pe_batch = mel_in->ne[3];
     auto apply_valid_mask = [&](ggml_tensor * x, ggml_tensor ** slot,
                                 const char * mname) -> ggml_tensor * {
@@ -1189,34 +1072,24 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
         return ggml_mul(ctx, x, m);
     };
 
-    // Transpose the mel input from its natural [T_mel, n_mels, 1, 1]
-    // layout (matching the C++ row-major MelFrontend buffer) to
-    // [n_mels, T_mel, 1, 1] = [W=F, H=T, IC, N] which is what
-    // ggml_conv_2d expects under the NHWC `[B, H=T, W=F, C]`
-    // convention. The conv kernel is not spatially symmetric, so the
-    // axis order matters — if F and T are swapped the conv math
-    // diverges. ggml_permute returns a non-contiguous view; the
-    // ggml_cont materializes it for the conv.
+    // Transpose the mel input from [T_mel, n_mels, 1, 1] to
+    // [n_mels, T_mel, 1, 1] = [W=F, H=T, IC, N], the NHWC order
+    // ggml_conv_2d expects. The kernel is not spatially symmetric, so F/T
+    // order matters — swapping them diverges the conv math.
     ggml_tensor * x = ggml_permute(ctx, mel_in,
                                    /*axis0=*/1, /*axis1=*/0,
                                    /*axis2=*/2, /*axis3=*/3);
     x = ggml_cont(ctx, x);
     x = name_prefixed(x, name_prefix, "mel_t");
 
-    // Causal pre_encode: NeMo's CausalConv2D applies F.pad(left=k-1,
-    // right=stride-1, left=k-1, right=stride-1) on both spatial axes
-    // before the underlying conv (kernel=3, stride=2, padding=0). We
-    // replicate that with explicit zero pads on dim 0 (W = freq) and
-    // dim 1 (H = time), then call the conv with p=0. The op-side
-    // (k-1)/2 symmetric padding path is what every offline variant
-    // takes.
+    // Causal pre_encode: NeMo's CausalConv2D pads (left=k-1, right=stride-1)
+    // on both spatial axes before the conv (p=0). Offline variants take the
+    // op-side (k-1)/2 symmetric padding instead.
     const bool causal_pe = policy.causal_pre_encode;
     const int  pe_p_op   = causal_pe ? 0 : 1;
     auto pad_causal = [&](ggml_tensor * t) {
         if (!causal_pe) return t;
-        // For k=3 / s=2: left=2, right=1 on both axes. Pad as zero
-        // F32 leaves; ggml_fill writes the constant after compute-
-        // buffer alloc, identical to how rel_pos_mhsa zero-pads.
+        // For k=3 / s=2: left=2, right=1 on both axes (zero F32 pads).
         const int left = 2, right = 1;
         auto make_pad = [&](int width_w, int width_h) {
             ggml_tensor * p = ggml_new_tensor_4d(
@@ -1256,9 +1129,8 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = apply_valid_mask(x, valid_masks ? &valid_masks->mask_s1 : nullptr,
                          "pre_encode.valid_mask.s1");
 
-    // conv2 (depthwise: channels -> channels, groups=channels, k=3 s=2)
-    // See conv_2d_dw_f32 above for the Metal backstory on why the
-    // im2col path is used when direct_dw_in_pre_encode is false.
+    // conv2 (depthwise: channels -> channels, groups=channels, k=3 s=2).
+    // im2col path (conv_2d_dw_f32) when direct_dw_in_pre_encode is false.
     x = pad_causal(x);
     if (policy.direct_dw_in_pre_encode) {
         x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv2_w), x,
@@ -1314,34 +1186,21 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
                          "pre_encode.valid_mask.s3");
 
     // At this point ne = [F'=16, T_enc, channels=256, 1] where
-    // T_enc = floor(T_mel / 8) (with the per-conv floor formula).
-    // We need to flatten (F', C) into a single feature axis matching
-    // pre_encode_in = channels * (n_mels / subsampling_factor).
-    //
-    // The reference flattens with C as the slower sub-axis and F'
-    // as the faster, giving flat index = c*F' + f'. In ggml
-    // fast-to-slow ne, that's the layout you get by permuting to put
-    // F' on axis 0 (already there) and C on axis 1 (currently axis
-    // 2), then collapsing axes 0 and 1.
-    //
+    // T_enc = floor(T_mel / 8). Flatten (F', C) into one feature axis
+    // matching pre_encode_in = channels * (n_mels / subsampling_factor).
+    // The reference uses flat index = c*F' + f' (C slow, F' fast), which in
+    // ggml ne is: permute F' to axis 0, C to axis 1, then collapse 0 and 1:
     //   permute (0, 2, 1, 3): [F', T, C, 1] -> [F', C, T, 1]
-    //   ggml_cont:            (reshape requires a contiguous tensor)
-    //   reshape_2d to         [F'*C, T, 1, 1] = [pre_encode_in, T_enc, 1, 1]
+    //   ggml_cont; reshape -> [F'*C, T] = [pre_encode_in, T_enc]
     const int64_t F_prime = x->ne[0];
     const int64_t T_enc   = x->ne[1];
     const int64_t C       = x->ne[2];
-    // Utterance batch rides the conv "N" axis (ne[3]) through the whole
-    // stem; after the flatten + linear below it lands on the activation's
-    // ne[2] == B convention the conformer blocks expect. B == 1 for
-    // single-shot, so the 3-D reshape collapses to the prior 2-D shape.
+    // Utterance batch rides the conv "N" axis (ne[3]) through the stem; the
+    // flatten + linear below land it on ne[2] == B for the conformer blocks.
     const int64_t B       = x->ne[3];
     const int64_t pre_encode_in = F_prime * C;
 
-    // Sanity check against the catalog: the linear layer expects
-    // exactly this many input features. If the math drifts (e.g. a
-    // future converter changes the subsampling layout), surface it
-    // here as a clear assertion rather than letting mul_mat fail
-    // with a confusing shape mismatch.
+    // Sanity check: the linear layer expects exactly pre_encode_in features.
     if (pe.out_w != nullptr && pre_encode_in != pe.out_w->ne[0]) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "%s encoder: pre_encode_in mismatch: "
@@ -1361,16 +1220,11 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     x = ggml_reshape_3d(ctx, x, pre_encode_in, T_enc, B);
     x = name_prefixed(x, name_prefix, "flat");
 
-    // Linear projection to d_model. ggml_mul_mat(W, x):
-    //   W ne=[in, out],  x ne=[in, T]  ->  out ne=[out, T]
-    // The catalog stores out_w as ne=[pre_encode_in, d_model] which
-    // matches this convention exactly.
+    // Linear projection to d_model (out_w ne=[pre_encode_in, d_model]).
     x = ggml_mul_mat(ctx, pe.out_w, x);
     x = name_prefixed(x, name_prefix, "linear");
 
-    // Add bias [d_model] -> broadcast to [d_model, T_enc, 1, 1].
-    // Same trick as the conv biases above: reshape to a 4-D view
-    // with the channel axis in position 0 and size-1 dims elsewhere.
+    // Add bias [d_model], broadcast to [d_model, T_enc, 1, 1].
     if (pe.out_b != nullptr) {
         const int64_t d_model = pe.out_b->ne[0];
         ggml_tensor * bias_4d = ggml_reshape_4d(ctx, pe.out_b,

@@ -1,9 +1,5 @@
 // arch/funasr_nano/weights.cpp - read_funasr_nano_hparams +
 // build_funasr_nano_weights.
-//
-// Pattern mirrors src/arch/qwen3_asr/weights.cpp (audio-llm) and
-// src/arch/sensevoice/weights.cpp (the encoder catalog is a pruned fork
-// of sensevoice — no prefix-embedding table, no CMVN, no CTC head).
 
 #include "weights.h"
 

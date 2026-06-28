@@ -61,10 +61,8 @@ ggml_tensor * unpad_head_dim(ggml_context * ctx, ggml_tensor * t,
                         t->nb[1], t->nb[2], 0);
 }
 
-// Moonshine uses GPT-J / interleaved RoPE (pairs (0,1), (2,3), ...);
-// that is GGML_ROPE_TYPE_NORMAL, not NEOX. See encoder.cpp's
-// apply_partial_rope for the full reference (HF rotate_half uses
-// `x[..., 0::2]` / `x[..., 1::2]`).
+// GPT-J / interleaved RoPE (rotate_half slices x[..., 0::2] / x[..., 1::2])
+// = GGML_ROPE_TYPE_NORMAL, not NEOX. See encoder.cpp apply_partial_rope.
 ggml_tensor * apply_partial_rope(ggml_context *           ctx,
                                  ggml_tensor *            x,
                                  ggml_tensor *            positions,
@@ -84,19 +82,10 @@ ggml_tensor * apply_partial_rope(ggml_context *           ctx,
         /*beta_slow=*/1.0f);
 }
 
-// SwiGLU MLP for the decoder: fc1 hidden->2·intermediate, split into
-// [x_proj, gate], y = silu(gate) * x_proj, fc2 intermediate->hidden.
-//
-// HF reference (modeling_moonshine.py:81-88):
-//   hidden_states = self.fc1(hidden_states)
-//   hidden_states, gate = hidden_states.chunk(2, dim=-1)
-//   hidden_states = self.activation_fn(gate) * hidden_states
-//   hidden_states = self.fc2(hidden_states)
-//
-// `chunk(2, dim=-1)` splits the last dim of [..., 2·inter] into
-// [first inter, second inter]. The first chunk is x_proj, the second is
-// gate. In ggml ne the last dim is ne[0] (innermost), so the split is
-// the first ne[0]/2 elements (x_proj) and the second ne[0]/2 (gate).
+// SwiGLU MLP: fc1 hidden->2·intermediate, split into [x_proj, gate],
+// y = silu(gate) * x_proj, fc2 intermediate->hidden. HF chunk(2, dim=-1)
+// (modeling_moonshine.py) is the innermost dim = ggml ne[0]: first
+// ne[0]/2 is x_proj, second is gate.
 ggml_tensor * ffn_decoder_swiglu(ggml_context * ctx,
                                  ggml_tensor *  x,
                                  ggml_tensor *  fc1_w, ggml_tensor * fc1_b,
@@ -159,11 +148,10 @@ ggml_tensor * mha_self_cached(ggml_context *           ctx,
     const int   head_dim_rot = hp.dec_head_dim_rot();
     const int   pad          = head_dim_pad - head_dim;
     const int   n_ctx        = kv_cache.n_ctx;
-    // Unpadded scale: HF uses self.head_dim ** -0.5; padded slots are
-    // zero-extension and don't change the dot product magnitude.
+    // Unpadded scale: HF uses head_dim**-0.5; padded slots are
+    // zero-extension and don't change the dot product.
     const float scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
-    // Q, K, V projections (bias-less).
     ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
     ggml_tensor * Kcur = ggml_mul_mat(ctx, k_w, x);
     ggml_tensor * Vcur = ggml_mul_mat(ctx, v_w, x);
@@ -178,11 +166,9 @@ ggml_tensor * mha_self_cached(ggml_context *           ctx,
     ggml_tensor * Q_rope = apply_partial_rope(ctx, Qcur, pos_ids, hp, head_dim_rot);
     ggml_tensor * K_rope = apply_partial_rope(ctx, Kcur, pos_ids, hp, head_dim_rot);
 
-    // Q needs [head_dim, n_tokens, n_heads, 1] for the attention path.
-    // K and V do NOT — they're cached in [head_dim, n_heads, n_tokens]
-    // memory order, which is exactly what K_rope / Vcur already have
-    // after reshape_4d + (optional) RoPE. Skip the round-trip permute
-    // + cont that the previous code did before writing to the cache.
+    // Q needs [head_dim, n_tokens, n_heads, 1] for attention. K/V are
+    // already in [head_dim, n_heads, n_tokens] cache memory order after
+    // reshape + (optional) RoPE, so they're written straight to the cache.
     ggml_tensor * Q_unpad = ggml_cont(ctx, ggml_permute(ctx, Q_rope, 0, 2, 1, 3));
 
     // Write K_rope / Vcur into the cache. The cache stores
@@ -260,7 +246,6 @@ ggml_tensor * mha_self_cached(ggml_context *           ctx,
     o = ggml_cont(ctx, o);
     o = ggml_reshape_2d(ctx, o, d_model, n_tokens);
 
-    // Output projection (bias-less).
     o = ggml_mul_mat(ctx, out_w, o);
     return o;
 }
@@ -298,7 +283,6 @@ ggml_tensor * mha_self_step(ggml_context *           ctx,
     const int   n_ctx        = kv_cache.n_ctx;
     const float scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
-    // Q, K, V projections (bias-less).
     ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
     ggml_tensor * Kcur = ggml_mul_mat(ctx, k_w, x);
     ggml_tensor * Vcur = ggml_mul_mat(ctx, v_w, x);
@@ -467,10 +451,7 @@ ggml_tensor * mha_cross_cached(ggml_context *           ctx,
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Cross-KV precompute graph
-// ---------------------------------------------------------------------------
-
+// Cross-KV precompute graph.
 DecoderBuild build_cross_kv_graph(ggml_context *           ctx,
                                   const MoonshineWeights & w,
                                   const MoonshineHParams & hp,
@@ -531,10 +512,7 @@ DecoderBuild build_cross_kv_graph(ggml_context *           ctx,
     return db;
 }
 
-// ---------------------------------------------------------------------------
-// KV-cached decoder graph (prompt + step)
-// ---------------------------------------------------------------------------
-
+// KV-cached decoder graph (prompt + step).
 DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
                                     const MoonshineWeights & w,
                                     const MoonshineHParams & hp,
@@ -597,14 +575,10 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
     }
 
     // Moonshine has no additive positional embedding; embed_sum is
-    // identical to token_emb. We still emit it under the "embed_sum"
-    // name so the validate.py harness sees the same tensor stream as
-    // whisper / cohere.
+    // identical to token_emb, still emitted under "embed_sum" for dump
+    // parity with whisper / cohere.
     ggml_tensor * x = tok_emb;
     {
-        // ggml_set_name lives on the same tensor; we re-use named() to
-        // tag it. Note: the tensor identity is the same so dumping
-        // either name reads the same memory.
         ggml_tensor * embed_sum = ggml_scale(ctx, tok_emb, 1.0f);
         named(embed_sum, "dec.embed_sum");
         if (n_past == 0) {
@@ -626,7 +600,6 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
     for (int i = 0; i < n_blocks; ++i) {
         const auto & b = w.dec_blocks[i];
 
-        // Self-attn (pre-LN, partial RoPE, causal via mask when n_tokens>1).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_self_w, /*beta=*/nullptr);
             y = mha_self_cached(
@@ -636,7 +609,6 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
                 i, n_past, n_tokens, n_kv, use_flash);
             x = ggml_add(ctx, x, y);
         }
-        // Cross-attn (pre-LN, no RoPE).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, /*beta=*/nullptr);
             y = mha_cross_cached(
@@ -645,7 +617,6 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
                 hp, n_heads, d_model, i, T_enc, use_flash);
             x = ggml_add(ctx, x, y);
         }
-        // SwiGLU MLP (pre-LN).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, /*beta=*/nullptr);
             y = ffn_decoder_swiglu(ctx, y,
@@ -672,9 +643,8 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
         db.dumps.out_before_head = x;
     }
 
-    // Tied lm_head: proj_out reuses dec.token_embd.weight. mul_mat
-    // expects W ne=[d_model, vocab], x ne=[d_model, n_tokens]; result
-    // ne=[vocab, n_tokens].
+    // Tied lm_head (reuses dec.token_embd.weight): W ne=[d_model, vocab],
+    // x ne=[d_model, n_tokens] -> logits ne=[vocab, n_tokens].
     ggml_tensor * logits_raw = ggml_mul_mat(ctx, w.dec_top.token_embd_w, x);
     named(logits_raw, "dec.logits_raw");
     if (n_past == 0) {
@@ -695,10 +665,9 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
     db.out = logits;
     ggml_set_output(db.out);
 
-    // When skipping log_softmax (every step pass — every call after the
-    // dump-emitting prompt pass), append argmax over the last position so
-    // we only download a single int32 instead of the full vocab logits.
-    // Mirrors cohere/decoder.cpp:756-771.
+    // When skipping log_softmax (every step pass after the dump-emitting
+    // prompt pass), append argmax over the last position so we download a
+    // single int32 instead of the full vocab logits.
     if (skip_log_softmax) {
         ggml_tensor * last_logits = logits;
         if (n_tokens > 1) {
@@ -722,10 +691,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *           ctx,
     return db;
 }
 
-// ---------------------------------------------------------------------------
 // Static-topology single-token step graph (GPU dispatch path).
-// ---------------------------------------------------------------------------
-
 StepBuild build_step_graph(ggml_context *           ctx,
                            const MoonshineWeights & w,
                            const MoonshineHParams & hp,
@@ -782,7 +748,6 @@ StepBuild build_step_graph(ggml_context *           ctx,
     for (int i = 0; i < n_blocks; ++i) {
         const auto & b = w.dec_blocks[i];
 
-        // Self-attn (pre-LN, partial RoPE, set_rows-based KV write).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_self_w, /*beta=*/nullptr);
             y = mha_self_step(
@@ -792,7 +757,6 @@ StepBuild build_step_graph(ggml_context *           ctx,
                 i, max_n_kv, use_flash);
             x = ggml_add(ctx, x, y);
         }
-        // Cross-attn (pre-LN, no RoPE, reads pre-populated cache).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_cross_w, /*beta=*/nullptr);
             y = mha_cross_cached(
@@ -801,7 +765,6 @@ StepBuild build_step_graph(ggml_context *           ctx,
                 hp, n_heads, d_model, i, T_enc, use_flash);
             x = ggml_add(ctx, x, y);
         }
-        // SwiGLU MLP (pre-LN).
         {
             ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, /*beta=*/nullptr);
             y = ffn_decoder_swiglu(ctx, y,
@@ -825,10 +788,7 @@ StepBuild build_step_graph(ggml_context *           ctx,
     return sb;
 }
 
-// ===========================================================================
-// Offline batched decode (B utterances)
-// ===========================================================================
-
+// Offline batched decode (B utterances).
 namespace {
 
 // Slice off head-dim padding on a 4D tensor [head_dim_pad, a, b, c] → keep B.

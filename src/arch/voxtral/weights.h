@@ -1,17 +1,9 @@
 // arch/voxtral/weights.h - Voxtral (2507) tensor catalog and hparams.
 //
-// INTERNAL to src/arch/voxtral/. Defines:
-//
-//   - VoxtralHParams: architecture KV that drives tensor shapes. Read
-//     from stt.voxtral.* and stt.frontend.* at load time, before any
-//     tensors are allocated.
-//
-//   - VoxtralWeights: named borrowed ggml_tensor* slots. The tensors
-//     themselves live in the model's ctx_meta / backend buffer.
-//
-// Architecture pattern: audio-llm (Whisper-large-v3 encoder + 4x frame
-// -group projector + Llama/Ministral causal LM with audio-token
-// injection). Three-sided weight layout:
+// INTERNAL to src/arch/voxtral/. VoxtralHParams: architecture KV (from
+// stt.voxtral.* / stt.frontend.*, read before any tensor is allocated).
+// VoxtralWeights: named borrowed ggml_tensor* slots (the tensors live in the
+// model's ctx_meta / backend buffer). Three-sided weight layout:
 //
 //   enc.*   audio encoder  (2x Conv1d stem + 32 bidirectional pre-LN
 //                           transformer layers, LayerNorm-with-bias,

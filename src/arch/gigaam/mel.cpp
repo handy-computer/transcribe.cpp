@@ -1,13 +1,9 @@
 // arch/gigaam/mel.cpp - GigaAM log-mel feature extractor.
 //
-// Reference: gigaam.preprocess.FeatureExtractor (torchaudio
-// MelSpectrogram with mel_scale=htk, n_mels=64, n_fft=win_length=320,
-// hop=160, center=False, power=2, periodic Hann), followed by
-// SpecScaler = log(clamp(x, 1e-9, 1e9)).
-//
-// Self-contained: a 320-point FFT for n_fft=320 = 2^6 * 5 uses a
-// mixed-radix Cooley-Tukey (radix-2 down to N=5, naive DFT leaf at
-// N=5). The same shape transcribe-mel.cpp uses for whisper's n_fft=400.
+// Reference: gigaam.preprocess.FeatureExtractor (torchaudio MelSpectrogram,
+// htk, n_mels=64, n_fft=win_length=320, hop=160, center=False, power=2,
+// periodic Hann) followed by log(clamp(x, 1e-9, 1e9)). n_fft=320 = 2^6 * 5
+// uses a mixed-radix Cooley-Tukey FFT (radix-2 down to a naive DFT leaf at N=5).
 
 #include "mel.h"
 

@@ -1,16 +1,11 @@
-// arch/gigaam/decoder.cpp - GigaAM RNN-T greedy decode on host.
+// arch/gigaam/decoder.cpp - GigaAM RNN-T / CTC greedy decode on host.
 //
-// The decoder is tiny (1 LSTM layer of 320, single joint linear) so the
-// per-step compute fits cleanly in CPU cache; running it on host avoids
-// backend dispatch overhead for the inner symbol-loop. Mirrors
-// parakeet's host-decode pattern.
-//
-// PyTorch nn.LSTM stores its gate weights as a single concatenated
-// [4*hidden, hidden] tensor in (i, f, g, o) gate order. The converter
-// emits Wx and Wh in that layout (ggml ne=[hidden, 4*hidden]) and
-// collapses bias_ih + bias_hh into a single [4*hidden] bias. The host
-// LSTM step here reads them in numpy-row-major [4*hidden, hidden]
-// orientation, which matches the byte layout directly.
+// The decoder is tiny (1 LSTM layer of 320, single joint linear) so per-step
+// compute fits in CPU cache; running on host avoids backend dispatch overhead
+// for the inner symbol-loop. PyTorch nn.LSTM stores gate weights concatenated
+// [4*hidden, hidden] in (i, f, g, o) order; the converter emits Wx/Wh in that
+// layout and collapses bias_ih + bias_hh into one [4*hidden] bias, which the
+// host LSTM step reads directly.
 
 #include "decoder.h"
 
@@ -40,15 +35,10 @@ namespace transcribe::gigaam {
 
 namespace {
 
-// Copy a ggml tensor's data into a host f32 vector, dequantizing if
-// needed. F32 takes the fast path (single backend_tensor_get). F16,
-// BF16, and every Q* / IQ* preset register a to_float in ggml's
-// type-traits table; we stage the raw bytes off the backend and walk
-// to_float to produce fp32. Mirrors parakeet's read_tensor_to_f32.
-//
-// The host RNN-T / CTC greedy decoders compute in fp32 only, so this
-// runs exactly once at load time per quantized GGUF and the per-step
-// hot path pays nothing.
+// Copy a ggml tensor's data into a host f32 vector, dequantizing if needed.
+// F32 takes the fast path; F16/BF16/Q*/IQ* stage raw bytes off the backend and
+// walk ggml's to_float trait. Runs once at load time, so the per-step hot path
+// pays nothing.
 void readback_f32(const ggml_tensor * t, std::vector<float> & out) {
     if (t == nullptr) {
         out.clear();
@@ -164,7 +154,6 @@ static void lstm_step(const float * x,
         scratch_gates[i] = acc;
     }
 
-    // Split gates: i = 0..H, f = H..2H, g = 2H..3H, o = 3H..4H.
     const float * gi = scratch_gates;
     const float * gf = scratch_gates + H;
     const float * gg = scratch_gates + 2 * H;
@@ -388,8 +377,7 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & host,
                    frame, n_classes, d_model, row);
     }
 
-    // Dump raw logits before log_softmax (matches reference dump
-    // `ctc.logits.raw`). Shape: [T_enc, n_classes] row-major.
+    // Raw logits before log_softmax, [T_enc, n_classes] row-major.
     if (transcribe::debug::enabled()) {
         const long long shape[2] = { T_enc, n_classes };
         transcribe::debug::dump_host_f32(

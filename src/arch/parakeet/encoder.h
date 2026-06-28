@@ -1,27 +1,9 @@
 // arch/parakeet/encoder.h - Parakeet Conformer encoder graph builder.
 //
-// Phase 4 step 3 of the encoder port. The .cpp file builds a
-// ggml_cgraph that mirrors NeMo's Conformer encoder forward. The C++
-// encoder reads dims from ParakeetHParams and tensor pointers from
-// ParakeetWeights; both are populated by the loader.
-//
-// Sub-stages of step 3:
-//
-//   3a: pre_encode subsampling stack only. Validates layout + conv2d
-//       wiring + linear projection + the compute-context lifetime
-//       against the reference enc.pre_encode.out on samples/jfk.wav.
-//   3b: macaron FF1 on block 0.
-//   3c: relative-position MHSA on block 0.
-//   3d: conv module on block 0.
-//   3e: FF2 + final norm on block 0.
-//   3f: loop over 24 blocks, validate against block 1, 12, 23, final.
-//
-// Each sub-stage adds named dump points consumed by
-// scripts/compare_tensors.py. The first-divergent-block-wins debug
-// strategy is the entire dev loop.
-//
-// This header is INTERNAL to src/arch/parakeet/. The public C ABI
-// only sees Parakeet::run, which builds and runs the graph below.
+// The .cpp builds a ggml_cgraph mirroring NeMo's Conformer encoder
+// forward, reading dims from ParakeetHParams and tensor pointers from
+// ParakeetWeights (both populated by the loader). Internal to
+// src/arch/parakeet/; the public C ABI only sees Parakeet::run.
 
 #pragma once
 
@@ -40,52 +22,38 @@ namespace transcribe::parakeet {
 struct ParakeetHParams;
 struct ParakeetWeights;
 
-// Result of building one pass of the encoder graph. The caller is
-// responsible for:
+// Result of building one pass of the encoder graph. The caller
+// allocates a backend buffer for compute_ctx, uploads mel into `mel_in`,
+// runs the cgraph, then reads/dumps `out`.
 //
-//   1. allocating a backend buffer for the compute_ctx (typically via
-//      ggml_backend_alloc_ctx_tensors against the model's backend),
-//   2. uploading the mel data into `mel_in` via ggml_backend_tensor_set,
-//   3. running the cgraph via ggml_backend_graph_compute,
-//   4. reading or dumping `out` via ggml_backend_tensor_get / the
-//      transcribe::debug dumper.
-//
-// Layout convention (see RESUME.md "Where we are" for the long form):
-//   - The reference uses [B, T, C] (channels-last). ggml ne is
-//     fast-to-slow, so the natural encoder activation lives at
+// Layout convention:
+//   - The reference uses [B, T, C] (channels-last); ggml ne is
+//     fast-to-slow, so the natural encoder activation is
 //     ne=[d_model, T, B=1, 1].
-//   - For pre_encode (Conv2d), we treat T_mel as W (ggml ne[0]) and
-//     n_mels as H (ne[1]); this matches the row-major layout the
-//     C++ MelFrontend already produces, so the input tensor receives
-//     the mel buffer with no transpose.
-//   - After three stride-2 convs, the encoder activation enters the
-//     conformer blocks at ne=[d_model, T_enc, 1, 1] where T_enc =
-//     floor(T_mel / 8) (with the per-conv padding/kernel formula
-//     applied three times — see encoder.cpp).
-// Named intermediate dump points the encoder graph builder
-// publishes. The driver in Parakeet::run iterates this set after
-// graph_compute and feeds each tensor to transcribe::debug::dump_tensor
-// (gated on TRANSCRIBE_DUMP_DIR; zero-cost when unset). Any tensor
-// stored here must also be passed to transcribe::debug::mark_tensor_for_dump()
-// while building the graph; otherwise the scheduler may reuse its
-// buffer before the post-compute dump pass reads it. Adding a new
-// sub-stage means appending to this struct + populating/preserving it
-// in build_encoder_graph; Parakeet::run doesn't need to know the names.
+//   - For pre_encode (Conv2d), T_mel is W (ne[0]) and n_mels is H
+//     (ne[1]); this matches the C++ MelFrontend's row-major layout, so
+//     the input tensor receives the mel buffer with no transpose.
+//   - After three stride-2 convs, the activation enters the conformer
+//     blocks at ne=[d_model, T_enc, 1, 1] where T_enc = floor(T_mel / 8)
+//     (per-conv padding/kernel formula applied three times).
+// Named intermediate dump points the encoder graph builder publishes.
+// Parakeet::run iterates this after graph_compute and feeds each tensor
+// to transcribe::debug::dump_tensor (gated on TRANSCRIBE_DUMP_DIR). Any
+// tensor stored here must also be passed to mark_tensor_for_dump() while
+// building, or the scheduler may reuse its buffer before the dump pass.
 struct EncoderDumps {
-    // Pre-encode (3a). ne=[d_model, T_enc, 1, 1].
+    // Pre-encode. ne=[d_model, T_enc, 1, 1].
     ggml_tensor * pre_encode_out = nullptr;
-    // Block 0 sub-step outputs (3b-3e). Each ne=[d_model, T_enc, 1, 1].
+    // Block 0 sub-step outputs. Each ne=[d_model, T_enc, 1, 1].
     ggml_tensor * block0_after_ff1  = nullptr;
     ggml_tensor * block0_after_attn = nullptr;
     ggml_tensor * block0_after_conv = nullptr;
     ggml_tensor * block0_after_ff2  = nullptr;
     ggml_tensor * block0_out        = nullptr;
-    // Spot-check blocks (3f). Mid- and last-layer outputs.
-    // Note: `last_block_out == final_out` — they alias the same tensor.
-    // Layer indices (mid_layer, last_layer) are needed to synthesize
-    // file names like "enc.block.21.out" because conf::named renames
-    // the tensor in place and the trailing "enc.final" rename
-    // overwrites the spot-check name.
+    // Mid- and last-layer spot-check outputs. last_block_out aliases
+    // final_out. Layer indices synthesize file names like
+    // "enc.block.21.out" because conf::named renames in place and the
+    // trailing "enc.final" rename overwrites the spot-check name.
     ggml_tensor * mid_block_out  = nullptr;
     ggml_tensor * last_block_out = nullptr;
     int           mid_block_idx  = -1;
@@ -124,10 +92,8 @@ struct EncoderBuild {
     ggml_tensor * mel_in = nullptr;
 
     // Sinusoidal positional embedding handle, ne=[d_model, 2*T_enc-1, 1, 1].
-    // Sub-stages 3c+ need this; the driver computes the buffer
-    // host-side from T_enc (which is read from `out->ne[1]` after
-    // build) and uploads via ggml_backend_tensor_set. Null in 3a/3b
-    // because the FF1 sub-stage doesn't reference it.
+    // The driver computes the buffer host-side from T_enc (read from
+    // out->ne[1] after build) and uploads via ggml_backend_tensor_set.
     ggml_tensor * pos_emb_in = nullptr;
 
     // ChunkedLimited attention mask, ne=[T_enc, T_enc, 1, 1] f32. Null
@@ -191,27 +157,20 @@ struct EncoderBuild {
 // mel input (the second dim of the row-major [n_mels, n_frames]
 // MelFrontend output) and shapes the input handle accordingly.
 //
-// Returns an EncoderBuild with all three tensor handles populated.
-// On any failure (insufficient mem_size, weights/hparams mismatch,
-// degenerate frame count) the returned struct has nullptr fields and
-// a diagnostic is logged via stderr; the caller must check.
-// kv_type: GGML type for K/V activations in flash attention.
+// Returns an EncoderBuild with all tensor handles populated. On failure
+// (insufficient mem_size, weights/hparams mismatch, degenerate frame
+// count) the struct has nullptr fields and a diagnostic is logged.
+// kv_type: GGML type for K/V activations in flash attention;
 // GGML_TYPE_COUNT means "auto" (f16 for quantized weights, f32 for f32).
-// backend_name: primary backend name (e.g. "MTL0", "Vulkan0", "CPU") for
-// auto-detecting optimal conv strategy. Env vars override if set.
-// Runtime override for chunked_limited_with_rc streaming. When the
-// model declares enc_att_context_style=ChunkedLimitedWithRc and the
-// caller wants to engage the chunked mask (i.e. buffered streaming on
-// parakeet-unified-en-0.6b), pass a non-null pointer to a
-// BufferedStreamMaskOverride with (L, C, R) in encoder frames. The
-// builder then allocates a chunked_mask_in input tensor (the same
-// shape the ChunkedLimited path uses) and routes the block params
-// through the ChunkedLimited code path so rel_pos_mhsa picks up the
-// precomputed mask. The caller fills the mask host-side via
-// fill_chunked_limited_with_rc_mask after the compute buffer is
-// allocated. Leaving this argument null keeps the offline behavior:
-// the unified encoder runs with full attention (att_context_size
-// [-1, -1] from the GGUF) and no mask.
+// backend_name: primary backend name ("MTL0", "Vulkan0", "CPU") for
+// auto-detecting conv strategy; env vars override.
+//
+// Runtime override for chunked_limited_with_rc streaming: pass a
+// non-null BufferedStreamMaskOverride with (L, C, R) in encoder frames
+// (buffered streaming on parakeet-unified-en-0.6b) to allocate a
+// chunked_mask_in tensor and route blocks through the ChunkedLimited
+// path; the caller fills the mask host-side. Null keeps offline full
+// attention (att_context_size [-1, -1]).
 struct BufferedStreamMaskOverride {
     int left_frames;
     int chunk_frames;
@@ -256,28 +215,24 @@ struct StreamingEncoderCacheIO {
     std::vector<ggml_tensor *> channel_out;
     std::vector<ggml_tensor *> time_out;
 
-    // Optional KV cache (driver-owned persistent tensors, one per
-    // layer, [d_model, T_cache] each): pre-projected attention
-    // keys/values replacing the last_channel recompute. When all four
-    // vectors are sized to n_layers and the builder enables the KV
-    // path (i.e. no dump harness active, since the numerical gate
-    // compares last_channel), blocks consume k_in/v_in, emit
-    // k_out/v_out rotation tensors, and leave channel_out null.
+    // Optional KV cache (driver-owned persistent tensors, one per layer,
+    // [d_model, T_cache] each): pre-projected attention keys/values
+    // replacing the last_channel recompute. When all four vectors are
+    // sized to n_layers and the builder enables the KV path, blocks
+    // consume k_in/v_in, emit k_out/v_out, and leave channel_out null.
     std::vector<ggml_tensor *> k_in;
     std::vector<ggml_tensor *> v_in;
     std::vector<ggml_tensor *> k_out;
     std::vector<ggml_tensor *> v_out;
 
     // Optional rel-pos projection memoization (driver-owned persistent
-    // tensors, one per layer, shape [head_dim, pos_len, n_head, 1]).
-    // pos_emb is a pure function of the chunk geometry, so
-    // attn_pos_w @ pos_emb is identical for every chunk with the same
-    // pos_len. When pos_proj_len matches the pos_len this build
-    // derives, the blocks consume pos_proj[i] directly and the graph
-    // references no pos_emb input at all (the builder leaves
-    // eb.pos_emb_in null). On mismatch the blocks compute the
-    // projection inline as before; the driver then refills the cache
-    // for the new geometry (see ensure_pos_proj_cache in model.cpp).
+    // tensors, one per layer, [head_dim, pos_len, n_head, 1]). pos_emb is
+    // a pure function of chunk geometry, so attn_pos_w @ pos_emb is
+    // identical for every chunk with the same pos_len. When pos_proj_len
+    // matches this build's pos_len, blocks consume pos_proj[i] directly
+    // and the graph references no pos_emb input (eb.pos_emb_in null); on
+    // mismatch blocks compute the projection inline and the driver
+    // refills the cache (see ensure_pos_proj_cache in model.cpp).
     std::vector<ggml_tensor *> pos_proj;
     int                        pos_proj_len = -1;
 };

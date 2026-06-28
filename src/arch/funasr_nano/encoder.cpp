@@ -1,19 +1,9 @@
 // arch/funasr_nano/encoder.cpp - SAN-M encoder graph (no prefix prepend,
 // no CTC head).
 //
-// Forward shape (single-utterance, batch=1):
-//
-//   frontend.in    [d_input=560, T_lfr]
-//     -> scale by sqrt(d_model=512)
-//     -> add sinusoidal PE (depth = d_input, 1-based positions)
-//                                                       = enc.embed.out
-//     -> encoders0[0] (SAN-M block, projection 560 -> 512, no attn-residual)
-//                                                       = enc.encoders0.0.out
-//     -> encoders[0..n-2] x49 (residual SAN-M blocks)
-//                                                       = enc.encoders.{0,24,48}.out
-//     -> after_norm (LayerNorm eps=1e-12)               = enc.after_norm.out
-//     -> tp_encoders[0..tp-1] x20 (residual SAN-M)      = enc.tp_encoders.{0,10,19}.out
-//     -> tp_norm (LayerNorm eps=1e-12)                  = enc.tp_norm.out
+// frontend.in [d_input=560, T_lfr] -> scale by sqrt(d_model=512) + sinusoidal
+// PE -> encoders0[0] (SAN-M projection 560->512) -> encoders x49 (residual
+// SAN-M) -> after_norm -> tp_encoders x20 -> tp_norm [d_model, T_lfr].
 //
 // SAN-M block topology lives in src/sanm/sanm.h (shared with sensevoice).
 // This file owns the surrounding shape — embedding scale + PE add,

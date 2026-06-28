@@ -1,17 +1,8 @@
 // arch/gigaam/model.cpp - GigaAM family handler.
 //
-// M1 (this turn): load() reads hparams, validates the tensor catalog,
-// streams weight bytes into a backend buffer, ingests the tokenizer
-// and languages KV. init_context() works. run() returns NOT_IMPLEMENTED
-// gracefully — the encoder/decoder forward lands in M2/M3.
-//
-// Stage 4 follow-ups:
-//   M2: encoder.cpp build_encoder_graph + run() wires it up.
-//   M3: per-family mel frontend (center=false, htk, log-clamp) and
-//       RNN-T predictor + joint + greedy decode on host. host_decoder
-//       populated here at load() time.
-//   M4: CTC head + greedy collapse. Charwise tokenizer extension lands
-//       on the shared Tokenizer (not in this file).
+// load() reads hparams, validates the tensor catalog, streams weights into a
+// backend buffer, and builds the mel frontend + host decoder mirror. run()
+// drives the mel -> encoder graph -> host RNN-T/CTC greedy decode pipeline.
 
 #include "gigaam.h"
 
@@ -22,6 +13,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
@@ -87,23 +79,16 @@ namespace {
 
 constexpr const char k_default_variant[] = "gigaam-v3-e2e-rnnt";
 
-// ---------------------------------------------------------------------------
 // Input-length contract (see docs/input-limits.md). GigaAM is a SOFT-WINDOW
-// family: the Conformer encoder has no hard architectural cap (the rotary
-// positional table is recomputed per run), but every published variant was
-// trained on utterances up to ~25 s. Beyond that, accuracy degrades rather
-// than failing. Upstream gigaam rejects over-length audio outright ("Too long
-// wav file"); transcribe.cpp deliberately WARNS-and-PROCEEDS instead so the
-// caller keeps control of the degradation. No input gate, no decode/encode
-// numeric change — we only warn once past the window.
-// ---------------------------------------------------------------------------
-
-// Advisory training window. No hparam encodes it (the GGUF has no
-// max-utterance KV), so we hardcode the upstream "Too long wav file" limit of
-// 25 s. k_safe_audio_ms is reported via transcribe_capabilities::max_audio_ms
-// and is the threshold for the run() soft-window WARN; the run() check derives
-// the clip's duration in ms from n_samples and the frontend sample rate.
-// k_safe_s is the same value in seconds, used only in the WARN text.
+// family: the Conformer encoder has no hard architectural cap, but every
+// published variant was trained on utterances up to ~25 s, beyond which
+// accuracy degrades. Upstream rejects over-length audio outright; we
+// WARN-and-PROCEED so the caller keeps control of the degradation.
+//
+// No hparam encodes the window, so hardcode the upstream 25 s limit.
+// k_safe_audio_ms is reported via transcribe_capabilities::max_audio_ms and is
+// the run() soft-window WARN threshold; k_safe_s is the same value in seconds,
+// used only in the WARN text.
 constexpr int     k_safe_s        = 25;
 constexpr int64_t k_safe_audio_ms = 25000;
 
@@ -139,7 +124,7 @@ transcribe_status load(Loader &                         loader,
     // than rejecting; see docs/input-limits.md.
     m->caps.max_audio_ms = k_safe_audio_ms;
 
-    // Stage 2: reopen for tensor metadata.
+    // Reopen for tensor metadata.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -187,10 +172,6 @@ transcribe_status load(Loader &                         loader,
     }
     gguf_free(gguf_data);
 
-    // MelFrontend construction: deferred to M3. GigaAM's center=false +
-    // htk + log-clamp combination doesn't fit the existing MelConfig
-    // shape; the per-family path lands with the encoder bring-up.
-
     // Build host mirror of the predictor + joint (RNN-T) or CTC head (CTC).
     if (auto st = build_host_decoder_weights(m->weights, m->hparams,
                                              m->host_decoder);
@@ -229,6 +210,7 @@ namespace {
 // ne=[T_mel, n_mels] (fast=T_mel, slow=n_mels), and ggml's
 // fast-to-slow layout maps byte i to ne_index (t=i%T_mel, m=i/T_mel).
 // Both byte orders are identical — just a memcpy is needed.
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 transcribe_status load_ref_mel(const std::string & dir,
                                int                 n_mels,
                                int &               n_mel_frames,
@@ -267,6 +249,7 @@ transcribe_status load_ref_mel(const std::string & dir,
     }
     return TRANSCRIBE_OK;
 }
+#endif // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 
 // Host-side RNN-T / CTC greedy decode of one utterance's encoder slice,
 // publishing the transcript into the session scratch slot (full_text /
@@ -316,7 +299,6 @@ transcribe_status decode_and_populate(GigaamSession * gc,
     }
     gc->t_decode_us = ggml_time_us() - t_dec_start;
 
-    // Detokenize via the family-agnostic Tokenizer.
     std::string text = gm->tok.decode(tokens.data(),
                                       static_cast<int>(tokens.size()));
     // SentencePiece convention: the first token's leading ▁ is stripped on
@@ -366,11 +348,9 @@ transcribe_status run(transcribe_session *      session,
 
     transcribe::debug::init();
 
-    // ----- Soft-window advisory (see docs/input-limits.md) ---------------
-    // GigaAM has no hard cap, but accuracy degrades past the ~25 s window it
-    // was trained on. Warn once and proceed unchanged — never reject, never
-    // alter the numerics. The duration is known here from n_samples and the
-    // frontend sample rate, before any heavy compute.
+    // Soft-window advisory: warn once past the ~25 s training window and
+    // proceed unchanged (never reject, never alter numerics). See
+    // docs/input-limits.md.
     {
         const int sr = gm->hparams.fe_sample_rate;
         if (sr > 0) {
@@ -389,19 +369,21 @@ transcribe_status run(transcribe_session *      session,
         }
     }
 
-    // ----- Mel acquisition -----------------------------------------------
-    // Production path: the family mel (HTK + power=2 + log-clamp +
-    // center=False + periodic Hann). The env-var injection stays as a
-    // debug knob for tensor-parity isolation.
+    // Mel acquisition: the family mel (HTK + power=2 + log-clamp +
+    // center=False + periodic Hann). The env-var injection is a debug knob
+    // for tensor-parity isolation.
     int mel_n_frames = 0;
+    bool mel_from_ref = false;
     const int64_t t_mel_start = ggml_time_us();
-    if (const char * ref_dir = std::getenv("TRANSCRIBE_GIGAAM_MEL_FROM_REF");
-        ref_dir != nullptr && ref_dir[0] != '\0')
-    {
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    if (const char * ref_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF")) {
         if (auto st = load_ref_mel(ref_dir, gm->hparams.fe_num_mels,
                                    mel_n_frames, gc->mel_buf);
             st != TRANSCRIBE_OK) return st;
-    } else {
+        mel_from_ref = true;
+    }
+#endif
+    if (!mel_from_ref) {
         if (auto st = gm->mel.compute(pcm, static_cast<size_t>(n_samples),
                                        gc->mel_buf, mel_n_frames);
             st != TRANSCRIBE_OK) return st;
@@ -419,7 +401,7 @@ transcribe_status run(transcribe_session *      session,
 
     if (mel_n_frames <= 0) return TRANSCRIBE_ERR_GGUF;
 
-    // ----- Reset per-call compute state ---------------------------------
+    // Reset per-call compute state.
     if (gc->compute_ctx != nullptr) {
         ggml_free(gc->compute_ctx);
         gc->compute_ctx = nullptr;
@@ -441,7 +423,7 @@ transcribe_status run(transcribe_session *      session,
         }
     }
 
-    // ----- Build encoder graph ------------------------------------------
+    // Build encoder graph.
     EncoderBuild eb = build_encoder_graph(gc->compute_ctx,
                                           gm->weights, gm->hparams,
                                           mel_n_frames,
@@ -451,7 +433,7 @@ transcribe_status run(transcribe_session *      session,
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // ----- Scheduler ----------------------------------------------------
+    // Scheduler.
     if (gc->sched == nullptr) {
         gc->sched = ggml_backend_sched_new(
             gm->plan.scheduler_list.data(), nullptr,
@@ -474,7 +456,6 @@ transcribe_status run(transcribe_session *      session,
         return TRANSCRIBE_ERR_OOM;
     }
 
-    // Upload mel.
     ggml_backend_tensor_set(eb.mel_in, gc->mel_buf.data(),
                             0, gc->mel_buf.size() * sizeof(float));
     transcribe::debug::dump_tensor("enc.mel.in", eb.mel_in, "encoder.mel");
@@ -488,7 +469,7 @@ transcribe_status run(transcribe_session *      session,
                                 pos.size() * sizeof(int32_t));
     }
 
-    // ----- Compute -------------------------------------------------------
+    // Compute.
     const int64_t t_enc_start = ggml_time_us();
     if (ggml_backend_sched_graph_compute(gc->sched, eb.graph) != GGML_STATUS_SUCCESS) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "gigaam: graph_compute failed");
@@ -496,7 +477,7 @@ transcribe_status run(transcribe_session *      session,
     }
     gc->t_encode_us = ggml_time_us() - t_enc_start;
 
-    // ----- Dump intermediates -------------------------------------------
+    // Dump intermediates.
     if (eb.dumps.pre_encode_out)
         transcribe::debug::dump_tensor("enc.subsample.out",
                                        eb.dumps.pre_encode_out, "encoder.subsample");
@@ -527,13 +508,10 @@ transcribe_status run(transcribe_session *      session,
 
     gc->encoder_out = eb.out;
 
-    // ----- Decoder (RNN-T or CTC greedy) -------------------------------
-    // Both heads consume the pre-final-transpose encoder tensor
-    // (ne=[d_model, T_enc, 1]), which is named `rnnt.encoded` on the
-    // graph for historical reasons. For CTC variants we read it back
-    // but skip the `rnnt.encoded` debug dump (the reference dumper does
-    // not emit it for CTC variants, so emitting one on the C++ side
-    // would surface as a MISSING-right gate failure in compare_tensors).
+    // Decoder (RNN-T or CTC greedy). Both heads consume the
+    // pre-final-transpose encoder tensor (ne=[d_model, T_enc, 1]), named
+    // `rnnt.encoded` on the graph. CTC variants skip the `rnnt.encoded` dump
+    // (the reference dumper does not emit it for CTC).
     {
         ggml_tensor * enc_t = eb.dumps.rnnt_encoded;
         if (enc_t == nullptr) {
@@ -546,8 +524,6 @@ transcribe_status run(transcribe_session *      session,
         ggml_backend_tensor_get(enc_t, gc->enc_host.data(), 0,
                                 gc->enc_host.size() * sizeof(float));
 
-        // Reference `rnnt.encoded` dump (RNNT variants only; the reference
-        // dumper does not emit it for CTC). validate.py gates on this.
         if (gm->hparams.head_kind == HeadKind::RNNT) {
             const long long enc_shape[2] = {T_enc, D};
             transcribe::debug::dump_host_f32(
@@ -564,20 +540,12 @@ transcribe_status run(transcribe_session *      session,
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Offline batch (transcribe_run_batch)
-// ---------------------------------------------------------------------------
-//
-// Batches B utterances through ONE Conformer encoder dispatch (the batch
-// rides the activation's ne[2] axis — see encoder.cpp), then host-decodes
-// each utterance's RNN-T / CTC slice. The mel front-end and decode are
-// identical to single-shot; only the encoder is fused. GigaAM's RNN-T/CTC
-// decode is host-side and cheap (small vocab, no BPE-head bottleneck), so —
-// unlike granite_nar — encoder batching is the win. Same-length batches run
-// mask-free (bit-identical to single-shot per utterance); variable-length
-// batches pad to T_max and apply per-utterance masks. Mirrors parakeet's
-// run_batch recipe (full-read encoder output + host-slice — NOT per-utt
-// offset reads, which are unreliable across backends).
+// Offline batch (transcribe_run_batch): B utterances through ONE Conformer
+// encoder dispatch (batch on the activation's ne[2] axis), then host-decode
+// each utterance's RNN-T / CTC slice. Same-length batches run mask-free
+// (bit-identical to single-shot per utterance); variable-length batches pad
+// to T_max and apply per-utterance masks. Full-read encoder output +
+// host-slice (NOT per-utt offset reads, which are unreliable across backends).
 
 // One stride-2 conv with symmetric (k-1)/2 padding (matches encoder.cpp).
 static int batch_pre_encode_t_out(int in) { return (in - 1) / 2 + 1; }
@@ -710,10 +678,9 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
     }
     gc->t_encode_us = ggml_time_us() - t_enc_start;
 
-    // Bisect dump (debug only): full [d, T, n] intermediates so a batched-vs-
-    // single divergence can be localized per stage. Gated on the env var.
+    // Debug-only full [d, T, n] intermediates, gated on the env var.
     if (transcribe::debug::enabled() &&
-        std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr)
+        transcribe::debug::dump_all_blocks_requested())
     {
         if (eb.dumps.pre_encode_out != nullptr) {
             transcribe::debug::dump_tensor("enc.subsample.out",
@@ -736,7 +703,7 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
     }
 
     // Full-read the encoder output, then host-slice per utterance (non-zero
-    // offset reads are unreliable across backends — see batching-plan.md).
+    // offset reads are unreliable across backends).
     const size_t utt_elems = static_cast<size_t>(d_enc) * static_cast<size_t>(T_enc);
     gc->enc_host.assign(utt_elems * static_cast<size_t>(n), 0.0f);
     ggml_backend_tensor_get(enc_t, gc->enc_host.data(), 0,
@@ -790,10 +757,8 @@ transcribe_status run_batch(transcribe_session *          session,
     const int64_t total_mel_us = ggml_time_us() - t_mel_start;
 
     if (all_ok) {
-        // ----- Soft-window advisory (see docs/input-limits.md) -----------
-        // Same warn-and-proceed contract as single-shot run(), applied per
-        // utterance before the shared fast-path encode. The per-utterance
-        // fallback below re-enters run(), which warns there, so each
+        // Per-utterance soft-window advisory before the shared encode; the
+        // fallback path re-enters run(), which warns there, so each
         // over-length clip is warned about exactly once.
         const int sr = gm->hparams.fe_sample_rate;
         if (sr > 0) {

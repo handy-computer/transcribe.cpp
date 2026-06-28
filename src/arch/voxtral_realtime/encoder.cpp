@@ -106,9 +106,8 @@ ggml_tensor * mha(ggml_context * ctx, ggml_tensor * x,
 
 // Batched full-MHA self-attention: x:[d_model, T, B]. `positions [T]` and the
 // sw-causal `mask [T, T]` are SHARED across the batch (the encoder is causal, so
-// right-pad rows are numerically isolated and need no per-row mask). Flash-only.
-// Mirrors `mha` with the batch riding ne[2] of x (and ne[3] of the per-head
-// tensors), exactly like causal_lm::block_prefill_batched on the decoder side.
+// right-pad rows are numerically isolated and need no per-row mask). Mirrors
+// `mha` with the batch riding ne[2] of x (ne[3] of the per-head tensors).
 ggml_tensor * mha_batched(ggml_context * ctx, ggml_tensor * x,
                           const EncBlock & b, ggml_tensor * positions, ggml_tensor * mask,
                           int n_heads, int head_dim, int /*d_model*/, float rope_theta,

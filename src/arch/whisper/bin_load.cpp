@@ -1,10 +1,7 @@
-// arch/whisper/bin_load.cpp - legacy whisper.cpp .bin adapter.
-//
-// See bin_load.h for the contract. This file synthesizes everything
-// the canonical Whisper runtime needs from a parsed WhisperBinModel:
-// hparams, capabilities, language list, special token ids, tokenizer,
-// frontend buffers, and a ctx_meta populated with canonical-named
-// ggml_tensors that the byte-streaming step then fills.
+// arch/whisper/bin_load.cpp - legacy whisper.cpp .bin adapter (see bin_load.h
+// for the contract). Synthesizes hparams, capabilities, language list, special
+// token ids, tokenizer, and frontend buffers from a parsed WhisperBinModel,
+// then populates a canonical-named ctx_meta the byte-streaming step fills.
 
 #include "bin_load.h"
 
@@ -40,10 +37,8 @@ namespace {
 
 constexpr const char * kTag = "whisper-bin";
 
-// Cosmetic variant string from .bin geometry. Keeps parity with the
-// stt.variant a GGUF would carry (whisper-tiny, whisper-medium, etc.)
-// for diagnostic logging. Doesn't gate any runtime behavior — that's
-// driven by hparams + caps.
+// Cosmetic variant string from .bin geometry, for diagnostic logging only
+// (parity with the stt.variant a GGUF would carry). Doesn't gate runtime.
 std::string detect_variant(const transcribe::bin_loader::WhisperBinModel & bm) {
     const auto & h = bm.hp;
     std::string base;
@@ -69,13 +64,8 @@ std::string detect_variant(const transcribe::bin_loader::WhisperBinModel & bm) {
     return base;
 }
 
-// ---------------------------------------------------------------------------
-// Canonical Whisper language table (lifted verbatim from whisper.cpp:
-// src/whisper.cpp:280-381). Index = whisper language id; for
-// is_multilingual variants we install the first `num_languages`
-// entries into general.languages-equivalent state.
-// ---------------------------------------------------------------------------
-
+// Canonical Whisper language table (verbatim from whisper.cpp). Index =
+// whisper language id; multilingual variants install the first num_languages.
 const char * const k_whisper_lang_codes[] = {
     "en","zh","de","es","ru","ko","fr","ja","pt","tr",
     "pl","ca","nl","ar","sv","it","id","hi","fi","vi",
@@ -91,15 +81,9 @@ const char * const k_whisper_lang_codes[] = {
 constexpr int k_whisper_n_lang_codes =
     static_cast<int>(sizeof(k_whisper_lang_codes) / sizeof(k_whisper_lang_codes[0]));
 
-// ---------------------------------------------------------------------------
-// Special token computation. Mirrors whisper.cpp:1625-1639 verbatim:
-// the static defaults below are the multilingual-base layout, then
-// for is_multilingual the eot/sot offsets shift by +1 and the
-// downstream tokens shift by `num_languages - 98`. .en variants use
-// the static defaults unchanged (they sit one slot lower because no
-// language tokens occupy the band between sot and translate).
-// ---------------------------------------------------------------------------
-
+// Special token computation (mirrors whisper.cpp). Defaults are the .en /
+// multilingual-base layout; for is_multilingual eot/sot shift +1 and the
+// downstream tokens shift by num_languages - 98.
 struct WhisperSpecials {
     int eot        = 50256;
     int sot        = 50257;
@@ -131,19 +115,10 @@ WhisperSpecials compute_specials(int n_vocab) {
     return s;
 }
 
-// ---------------------------------------------------------------------------
-// Suppression token list. The HF generation_config.suppress_tokens
-// for whisper is a fixed set of ~88 token ids that should never be
-// emitted in transcripts (special tokens, stray punctuation IDs).
-// We hardcode it here so .bin-loaded models match transcript quality
-// of GGUFs converted via convert-whisper.py without us having to
-// re-derive it from the .bin (it isn't stored there).
-//
-// Source: HF generation_config.json for openai/whisper-tiny (the list
-// is identical across multilingual variants; only the trailing
-// special-token ids would differ for .en, where no <|translate|> /
-// <|notimestamps|> exist, but suppressing already-absent ids is a
-// no-op).
+// HF generation_config.suppress_tokens for whisper (~88 ids never emitted in
+// transcripts). Hardcoded here because the .bin doesn't store it; source is HF
+// generation_config.json (identical across variants; suppressing ids absent in
+// the smaller .en vocab is a no-op).
 const int32_t k_whisper_suppress_tokens[] = {
     1,2,7,8,9,10,14,25,26,27,28,29,31,58,59,60,61,62,63,90,91,92,93,
     359,503,522,542,873,893,902,918,922,931,1350,1853,1982,2460,
@@ -156,15 +131,9 @@ const int32_t k_whisper_suppress_tokens[] = {
 constexpr int k_whisper_n_suppress =
     static_cast<int>(sizeof(k_whisper_suppress_tokens) / sizeof(k_whisper_suppress_tokens[0]));
 
-// ---------------------------------------------------------------------------
-// Tensor rename rules. Each entry maps a legacy whisper.cpp tensor
-// name to the canonical transcribe.cpp name. The optional
-// `squeeze_trailing` flag drops the size-1 trailing dim that
-// whisper.cpp uses for conv biases (`[d_model, 1]` → `[d_model]`).
-// Layered tensors (encoder.blocks.{i}.* / decoder.blocks.{i}.*) are
-// expanded against n_audio_layer / n_text_layer at runtime.
-// ---------------------------------------------------------------------------
-
+// Tensor rename rules: legacy whisper.cpp name -> canonical transcribe.cpp
+// name. collapse_to_1d drops the size-1 dim whisper.cpp uses for conv biases.
+// Layered block tensors are expanded against n_audio_layer / n_text_layer.
 struct StaticRename {
     const char * legacy;
     const char * canonical;
@@ -196,8 +165,7 @@ const LayeredRename k_enc_block_renames[] = {
     {"encoder.blocks.%d.attn_ln.bias",        "enc.blocks.%d.norm_attn.bias"  },
     {"encoder.blocks.%d.attn.query.weight",   "enc.blocks.%d.attn.q.weight"   },
     {"encoder.blocks.%d.attn.query.bias",     "enc.blocks.%d.attn.q.bias"     },
-    {"encoder.blocks.%d.attn.key.weight",     "enc.blocks.%d.attn.k.weight"   },
-    // No key bias on either side of attention.
+    {"encoder.blocks.%d.attn.key.weight",     "enc.blocks.%d.attn.k.weight"   },  // no bias
     {"encoder.blocks.%d.attn.value.weight",   "enc.blocks.%d.attn.v.weight"   },
     {"encoder.blocks.%d.attn.value.bias",     "enc.blocks.%d.attn.v.bias"     },
     {"encoder.blocks.%d.attn.out.weight",     "enc.blocks.%d.attn.out.weight" },
@@ -243,16 +211,9 @@ std::string fmt1(const char * fmt, int idx) {
     return std::string(buf);
 }
 
-// ---------------------------------------------------------------------------
-// Compute periodic Hann window of length n_fft. Matches the
-// "hann_periodic" flavor MelFrontend expects: w[k] = 0.5 * (1 - cos(
-// 2*pi*k / N)) for k = 0..N-1 (no division by N-1).
-//
-// .bin files don't carry the window — whisper.cpp computes it at
-// load. We do the same here so install_mel_from_buffers can run with
-// both buffers populated.
-// ---------------------------------------------------------------------------
-
+// Periodic Hann window of length n_fft: w[k] = 0.5*(1 - cos(2*pi*k/N)),
+// k=0..N-1 (no division by N-1). .bin files don't carry the window, so compute
+// it here (as whisper.cpp does) for install_mel_from_buffers.
 std::vector<float> hann_periodic(int n_fft) {
     std::vector<float> w(static_cast<size_t>(n_fft));
     const double two_pi_over_n = 2.0 * M_PI / static_cast<double>(n_fft);
@@ -263,12 +224,8 @@ std::vector<float> hann_periodic(int n_fft) {
     return w;
 }
 
-// ---------------------------------------------------------------------------
-// Synthesize a WhisperHParams from the parsed bin model. Every field
-// on WhisperHParams that the GGUF path reads from KVs gets a
-// hardcoded value here matching the shipped Whisper variants.
-// ---------------------------------------------------------------------------
-
+// Synthesize a WhisperHParams from the parsed bin model. Every field the GGUF
+// path reads from KVs gets a hardcoded value matching the shipped variants.
 void fill_whisper_hparams(const transcribe::bin_loader::WhisperBinModel & bm,
                           WhisperHParams &                                  hp)
 {
@@ -337,17 +294,11 @@ void fill_whisper_hparams(const transcribe::bin_loader::WhisperBinModel & bm,
     hp.cap_timestamps  = true;
 }
 
-// ---------------------------------------------------------------------------
-// Resolve every canonical tensor slot from the parsed bin model:
-// looks up each legacy name in `bm.tensors`, creates a ggml_tensor in
-// `ctx_meta` with the canonical name + canonical (post-squeeze) ne +
-// the source's ggml_type, and records (target, src_offset, src_nbytes)
-// into `out_slots` for the byte-streaming step.
-//
-// Validates that every required canonical slot has a source tensor
-// and that no source tensor is left unconsumed.
-// ---------------------------------------------------------------------------
-
+// Resolve every canonical tensor slot from the parsed bin model: look up each
+// legacy name, create a ggml_tensor in ctx_meta with the canonical name + ne +
+// source type, and record (target, src_offset, src_nbytes) into out_slots for
+// the byte-streaming step. Validates that every slot is filled and no source
+// tensor is left unconsumed.
 ggml_tensor * create_canonical_tensor(
     ggml_context *                                       ctx_meta,
     const std::string &                                  canonical_name,
@@ -360,12 +311,8 @@ ggml_tensor * create_canonical_tensor(
     for (int i = 0; i < n_dims; ++i) ne[i] = src.ne[i];
 
     if (collapse_to_1d) {
-        // Whisper.cpp stores conv biases as numpy shape [d_model, 1],
-        // which the convert script writes reversed to file dims
-        // [1, d_model] → ne [1, d_model, 1, 1]. The byte payload is
-        // still just d_model floats laid out contiguously, so we
-        // collapse to canonical 1D ne [d_model] by finding the single
-        // dim with size > 1 and using it as ne[0].
+        // whisper.cpp conv biases arrive as ne [1, d_model, 1, 1]; the byte
+        // payload is d_model contiguous floats, so collapse to 1D ne [d_model].
         int64_t total = 1;
         for (int i = 0; i < n_dims; ++i) total *= ne[i];
         for (int i = 0; i < GGML_MAX_DIMS; ++i) ne[i] = 1;
@@ -405,14 +352,10 @@ transcribe_status resolve_tensors(
     std::unordered_set<std::string> consumed;
     consumed.reserve(by_name.size() * 2);
 
-    // The canonical Whisper weights catalog includes two frontend
-    // tensor slots (frontend.mel_filterbank, frontend.window) that
-    // aren't carried as tensors in legacy `.bin` files — the
-    // filterbank is a separate header field, the window is computed
-    // at runtime. We still need to satisfy build_whisper_weights'
-    // lookup, so we create empty F32 tensors with the canonical
-    // shapes here. Their bytes are populated post-backend-alloc by
-    // populate_frontend_tensors() below.
+    // frontend.mel_filterbank / frontend.window aren't .bin tensors (the
+    // filterbank is a header field, the window is computed at load). Create
+    // empty F32 slots to satisfy build_whisper_weights; bytes are filled
+    // post-backend-alloc below.
     {
         const int64_t n_fft_half =
             static_cast<int64_t>(hp.fe_n_fft / 2 + 1);
@@ -473,11 +416,9 @@ transcribe_status resolve_tensors(
         }
     }
 
-    // Stray-tensor check: every entry in the .bin should have been
-    // consumed by some canonical slot. A stray entry usually means the
-    // .bin carries an extension (e.g. tinydiarize's solm head) that
-    // our runtime does not yet support — surface it as a hard error
-    // rather than silently dropping load-bearing weights.
+    // Stray-tensor check: every .bin entry must be consumed. A stray entry
+    // usually means an unsupported extension (e.g. tinydiarize's solm head);
+    // hard-error rather than silently drop load-bearing weights.
     if (consumed.size() != bm.tensors.size()) {
         for (const auto & e : bm.tensors) {
             if (consumed.find(e.name) == consumed.end()) {
@@ -493,18 +434,10 @@ transcribe_status resolve_tensors(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Capabilities + language list synthesis. Mirrors what
-// apply_family_invariants + read_capability_kv + read_languages_kv
-// do for the GGUF path — except we don't have GGUF KVs to read from,
-// so we set them from inferred values.
-//
-// Storage: caps.languages must point at memory whose lifetime matches
-// the WhisperModel. We back it with two parallel std::vectors on the
-// model: lang_codes (string storage, owned) and a pointer table held
-// in a separate vector that caps.languages references.
-// ---------------------------------------------------------------------------
-
+// Capabilities + language list synthesis. Mirrors apply_family_invariants +
+// read_capability_kv + read_languages_kv for the GGUF path, but from inferred
+// values since there are no GGUF KVs. lang_codes (owned on the model) backs the
+// caps.languages pointer table; its lifetime matches the WhisperModel.
 void apply_caps_and_languages(WhisperModel &                                  m,
                               const transcribe::bin_loader::WhisperBinModel & bm)
 {
@@ -528,12 +461,9 @@ void apply_caps_and_languages(WhisperModel &                                  m,
     } else {
         m.lang_codes.emplace_back("en");
     }
-    // PR2: lang_token_ids stays empty for non-multilingual models;
-    // for multilingual, populate by ID arithmetic. Whisper packs
-    // language tokens contiguously after <|sot|>: lang_id i has
-    // token id sot + 1 + i. The .bin vocab does NOT carry the
-    // "<|en|>" strings — whisper.cpp synthesizes them at load — so
-    // we cannot use tokenizer.find() and must compute the ids.
+    // lang_token_ids by ID arithmetic: whisper packs language tokens
+    // contiguously after <|sot|> (lang_id i -> sot + 1 + i). The .bin vocab
+    // doesn't carry the "<|en|>" strings, so tokenizer.find() can't be used.
     m.lang_token_ids.clear();
     if (bm.is_multilingual) {
         const WhisperSpecials sp = compute_specials(bm.hp.n_vocab);
@@ -544,32 +474,19 @@ void apply_caps_and_languages(WhisperModel &                                  m,
         }
     }
 
-    // Install lang_codes into the public capability surface via the
-    // shared model::set_languages() helper. This makes
-    // transcribe_get_model_capabilities()->languages /
-    // ->n_languages observable for .bin-loaded models, matching what
-    // GGUF whisper produces from general.languages.
+    // Publish to the capability surface so transcribe_get_model_capabilities()
+    // ->languages/->n_languages matches the GGUF path.
     m.set_languages(m.lang_codes);
 }
 
-// ---------------------------------------------------------------------------
-// Build the Tokenizer via the in-memory raw-bytes loader. The .bin
-// vocab is tiktoken-style (raw UTF-8 byte sequences, no GPT-2 byte-
-// to-unicode remap), so the raw-bytes decode mode is the right
-// strategy. has_encoder() returns true: the tiktoken-style encoder
-// uses piece_to_id_ as its rank table directly.
+// Build the Tokenizer via the raw-bytes loader (the .bin vocab is
+// tiktoken-style: raw UTF-8, no GPT-2 byte-to-unicode remap).
 //
-// We then synthesize the canonical Whisper special-token literals
-// ("<|en|>", "<|notimestamps|>", "<|0.00|>", …) into the tokenizer's
-// special-piece map so find() can resolve them. The .bin file itself
-// only stores the ~50256 base vocab pieces; whisper.cpp synthesizes
-// the special strings at load time too. Without these entries the
-// run path's initial_prompt rejection check would miss literals like
-// "<|en|>" embedded in user text — leading to the literal getting
-// byte-encoded as raw context noise instead of being rejected
-// symmetrically with the GGUF path.
-// ---------------------------------------------------------------------------
-
+// The .bin stores only the ~50256 base pieces, so synthesize the canonical
+// special-token literals ("<|en|>", "<|notimestamps|>", "<|0.00|>", ...) into
+// the special-piece map (as whisper.cpp does). Without them the run path's
+// initial_prompt rejection check would miss such literals in user text and
+// byte-encode them as context noise instead of rejecting symmetrically.
 transcribe_status install_tokenizer(WhisperModel &                                  m,
                                     const transcribe::bin_loader::WhisperBinModel & bm)
 {
@@ -600,10 +517,8 @@ transcribe_status install_tokenizer(WhisperModel &                              
         }
     }
 
-    // 1501 timestamp tokens at <|0.00|>, <|0.02|>, …, <|30.00|>.
-    // ids beg + 0 .. beg + 1500. Format matches HF Whisper's
-    // tokenizer added_tokens convention exactly so a literal
-    // "<|0.00|>" or "<|30.00|>" in user text is detected.
+    // 1501 timestamp tokens <|0.00|>..<|30.00|> at ids beg+0..beg+1500. Format
+    // matches HF's added_tokens convention so such literals are detected.
     char tsbuf[16];
     for (int i = 0; i <= 1500; ++i) {
         std::snprintf(tsbuf, sizeof(tsbuf), "<|%.2f|>",
@@ -713,18 +628,14 @@ transcribe_status load_from_bin(const char *                           path,
         return st;
     }
 
-    // ---- Frontend: populate vestigial ggml tensors and install
-    //                MelFrontend with the buffers. ----
+    // ---- Frontend: fill the catalog tensors and install MelFrontend ----
     {
         std::vector<float> filterbank = bm.mel_filterbank;     // copy
         std::vector<float> window     = hann_periodic(m->hparams.fe_n_fft);
 
-        // Vestigial: weights.frontend.* slots are populated for catalog
-        // completeness. The runtime mel pipeline reads from m->mel.
-        // The parser already enforces n_fft_filters == 201 and
-        // n_mel_filters == hp.n_mels, so the byte counts match by
-        // construction; the asserts here are defense in depth so a
-        // future parser regression can't turn into a backend OOB write.
+        // weights.frontend.* are populated for catalog completeness only (the
+        // runtime mel pipeline reads from m->mel). The size checks are defense
+        // in depth against a future parser regression causing a backend OOB.
         if (m->weights.frontend.mel_filterbank != nullptr) {
             const size_t want = ggml_nbytes(m->weights.frontend.mel_filterbank);
             const size_t have = filterbank.size() * sizeof(float);

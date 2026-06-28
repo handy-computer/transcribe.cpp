@@ -1,23 +1,9 @@
 // transcribe-cli - example CLI driver for transcribe.cpp
 //
-// Pass 2 stub: this CLI exercises the public ABI end-to-end with the
-// stub library. It loads a WAV file (must be 16 kHz mono float32 source
-// or downmixable to mono), prints duration / sample count, optionally
-// asks the library to load a model (which will return NOT_IMPLEMENTED
-// in pass 2), and prints the resulting status string.
-//
-// Once the loader and decoder land, this same CLI will run real
-// transcription. Argument parsing, log sink wiring, and result printing
-// will grow in place rather than being rewritten.
-//
-// Usage:
-//   transcribe-cli [options] audio.wav
-// Options:
-//   -m, --model PATH   GGUF model file (optional in pass 2)
-//   -l, --language ISO BCP-47-ish language hint (e.g. en, de)
-//   -t, --translate    set task to TRANSLATE
-//   -q, --quiet        suppress library log output
-//   -h, --help         show this help
+// Loads a 16 kHz mono float32 WAV (or downmixable to mono), loads a GGUF
+// model, and transcribes it through the public ABI. Supports single-file
+// and batch modes, offline and streaming paths, and per-family knobs.
+// Run with --help for the full option list.
 
 #include "transcribe.h"
 #include "transcribe/parakeet.h"
@@ -555,18 +541,16 @@ int main(int argc, char ** argv) {
         transcribe_log_set(log_cb, nullptr);
     }
 
-    // ---- Batch mode: --batch reads a file list, one wav path per
-    // line. Loads the model ONCE and reuses the context across all
-    // files. Outputs one JSONL line per file to stdout when
-    // --batch-jsonl is set, otherwise the same human-readable format
-    // as single-file mode. ------------------------------------------------
+    // Batch mode: --batch reads a file list, one wav path per line. Loads
+    // the model ONCE and reuses the context across all files. Outputs one
+    // JSONL line per file to stdout when --batch-jsonl is set, otherwise
+    // the same human-readable format as single-file mode.
     if (!args.batch_file.empty()) {
         if (args.model_path.empty()) {
             std::fprintf(stderr, "error: --batch requires --model\n");
             return EXIT_FAILURE;
         }
 
-        // Read the file list.
         std::vector<std::string> wav_paths;
         {
             std::ifstream fin(args.batch_file);
@@ -577,7 +561,6 @@ int main(int argc, char ** argv) {
             }
             std::string line;
             while (std::getline(fin, line)) {
-                // Trim trailing whitespace / carriage return.
                 while (!line.empty() &&
                        (line.back() == '\n' || line.back() == '\r' ||
                         line.back() == ' '  || line.back() == '\t'))
@@ -597,7 +580,6 @@ int main(int argc, char ** argv) {
             std::fprintf(stderr, "batch: %zu files\n", wav_paths.size());
         }
 
-        // Load model once.
         struct transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
         mp.backend = args.backend;
         mp.gpu_device = args.gpu_device;
@@ -610,7 +592,6 @@ int main(int argc, char ** argv) {
             return EXIT_FAILURE;
         }
 
-        // Init context once (reused across all files via run()).
         struct transcribe_session_params cp; transcribe_session_params_init(&cp);
         cp.n_threads = args.n_threads;
         cp.n_ctx     = args.n_ctx;
@@ -801,7 +782,6 @@ int main(int argc, char ** argv) {
         for (size_t i = 0; i < wav_paths.size(); ++i) {
             const std::string & wav = wav_paths[i];
 
-            // Load wav.
             std::vector<float> pcm;
             std::string        wav_err;
             if (!transcribe_cli::load_wav_mono_16k(wav, pcm, wav_err)) {
@@ -931,7 +911,7 @@ int main(int argc, char ** argv) {
             }
             std::fflush(stdout);
         }
-        } // end serial else
+        }
 
         if (!args.batch_jsonl) {
             std::fprintf(stderr, "batch: %d ok, %d failed out of %zu\n",
@@ -943,7 +923,7 @@ int main(int argc, char ** argv) {
         return n_fail > 0 ? EXIT_FAILURE : EXIT_SUCCESS;
     }
 
-    // ---- Single-file mode (original path). -----------------------------
+    // Single-file mode.
     std::vector<float> pcm;
     std::string        load_err;
     if (!transcribe_cli::load_wav_mono_16k(args.wav_path, pcm, load_err)) {

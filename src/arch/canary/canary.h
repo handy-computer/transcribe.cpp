@@ -1,21 +1,8 @@
 // arch/canary/canary.h - Canary multitask AED model and context types.
 //
-// This header is INTERNAL to src/arch/canary/. It defines the concrete
-// classes that derive from transcribe_model / transcribe_session for
-// the NVIDIA Canary family (FastConformer encoder + Transformer decoder
-// with 4-slot or 5-slot multitask prompt).
-//
-// Modeled on src/arch/cohere/cohere.h. Differences from cohere:
-//   - encoder shape mirrors parakeet's FastConformer, but every linear
-//     (Q/K/V/out, both macaron FFs, attention-pos projection, conv
-//     pointwise pair) carries a bias term. Parakeet is bias-free;
-//     canary is NOT. See weights.cpp for the full bias catalog.
-//   - decoder is structurally identical to cohere's but tensor names
-//     differ (dec.layer.{i}.norm{1,2,3} / {self_attn,cross_attn,ffn}.{q,k,v,o,up,down})
-//   - LM head is UNTIED (explicit dec.head.{weight,bias})
-//   - 180m-flash variant has an encoder->decoder projection
-//     (enc_d_model=512 -> dec_d_model=1024); other variants share
-//     d_model and skip the projection
+// NVIDIA Canary: FastConformer encoder (parakeet shape but with biases on
+// every linear) + autoregressive Transformer decoder (untied LM head;
+// 180m-flash adds an enc->dec projection) with a 4/5-slot multitask prompt.
 
 #pragma once
 
@@ -149,12 +136,9 @@ struct CanarySession final : public transcribe_session {
     std::vector<float> enc_host;
 
 
-    // Per-stage flash-attention controls. Same rationale as cohere:
-    // encoder rel-pos MHSA dk depends on enc_d_model/n_heads (96 for
-    // 180m-flash, 128 for the larger variants); decoder dk=128
-    // uniformly. ggml's Metal flash kernel currently lacks a path for
-    // some encoder dk values, so we default encoder flash off on
-    // Metal. The decoder defaults flash on.
+    // Per-stage flash-attention controls. ggml's Metal flash kernel lacks a
+    // path for some encoder rel-pos MHSA dk values (96 for 180m-flash, 128
+    // otherwise), so encoder flash defaults off on Metal; decoder defaults on.
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 

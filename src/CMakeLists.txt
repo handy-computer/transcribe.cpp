@@ -22,6 +22,7 @@ add_library(transcribe
     transcribe-unicode.cpp
     transcribe-unicode-data.cpp
     transcribe-debug.cpp
+    transcribe-env.cpp
     transcribe-flash-policy.cpp
     transcribe-backend.cpp
     transcribe-load-common.cpp
@@ -148,6 +149,10 @@ if(TRANSCRIBE_GGML_BACKEND_DL)
     if(CMAKE_DL_LIBS)
         target_link_libraries(transcribe PRIVATE ${CMAKE_DL_LIBS})
     endif()
+endif()
+
+if(TRANSCRIBE_ENABLE_VALIDATION_HOOKS)
+    target_compile_definitions(transcribe PRIVATE TRANSCRIBE_ENABLE_VALIDATION_HOOKS)
 endif()
 
 # Static posture: tell transcribe.h to drop the Windows __declspec(dllimport/

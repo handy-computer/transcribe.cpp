@@ -2,16 +2,14 @@
 //
 // Loads a model + session ONCE, then times transcribe_run_batch over a
 // sweep of batch sizes, reporting per-utterance latency and wall time per
-// batch. This is the committed replacement for the throwaway harness that
-// produced reports/perf/l40s/parakeet-batch/*.json — it measures only the
-// compute (model load is excluded), so per_utt_ms is directly comparable
+// batch. Model load is excluded, so per_utt_ms is directly comparable
 // across batch sizes.
 //
 // The batch is built by repeating a single input clip N times, which
 // isolates the device-occupancy effect of batching from input-length
 // variance. (Real workloads vary; this is a controlled throughput probe,
 // not a WER measurement.) Output is a JSON array on stdout, one object per
-// batch size, matching the historical schema so existing plots keep working.
+// batch size.
 //
 // Usage:
 //   transcribe-batch-bench -m model.gguf clip.wav \

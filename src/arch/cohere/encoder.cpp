@@ -1,18 +1,9 @@
 // arch/cohere/encoder.cpp - Cohere ASR Conformer encoder graph builder.
 //
-// Thin glue over the shared Conformer helpers in src/conformer/. The
-// per-op helpers (layer_norm, f32-friendly conv helpers, rel_shift,
-// conv_module, rel_pos_mhsa, build_conformer_block, build_pre_encode)
-// now live in transcribe::conformer. This file owns only Cohere-
-// specific glue:
-//
-//   - detect_direct_dw (different policy from Parakeet: Cohere uses
-//     the im2col path on Metal and CPU, direct only on Vulkan/CUDA)
-//   - to_view() helpers that project CoherePreEncode / CohereBlock
-//     onto the shared nullable-pointer views (FFN, attention, and
-//     conv biases are all present in Cohere)
-//   - build_encoder_graph orchestration, including the post-encoder
-//     enc_dec_proj projection and debug dump-preservation calls
+// Thin glue over the shared Conformer helpers in transcribe::conformer.
+// Cohere-specific bits: detect_direct_dw (depthwise dispatch policy),
+// to_view() projections of CoherePreEncode / CohereBlock onto the shared
+// views, and build_encoder_graph (including the enc_dec_proj projection).
 
 #include "encoder.h"
 
@@ -34,24 +25,16 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
-// ----- Per-family depthwise dispatch policy -----------------------
-//
-// Cohere uses the direct ggml_conv_2d_dw_direct path on Vulkan and
-// CUDA (both have native kernels), and the im2col + mul_mat path on
-// Metal and CPU. This is the opposite of Parakeet on Metal/CPU — the
-// divergence is preserved as-is during the extraction to avoid any
-// quiet behavior changes. See the ConvPolicy comment in conformer.h
-// for why the two sites (in-block dw and pre_encode dw) share the
-// same detect result in Cohere.
+// Depthwise dispatch policy: direct ggml_conv_2d_dw_direct on Vulkan/CUDA
+// (native kernels), im2col + mul_mat on Metal/CPU. See the ConvPolicy
+// comment in conformer.h for why the two dw sites share one detect result.
 bool detect_direct_dw(const char * backend) {
-    const char * env = std::getenv("TRANSCRIBE_CONV_DIRECT_DW");
-    if (env != nullptr) return true;
-    env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW");
-    if (env != nullptr) return false;
-    if (backend == nullptr) return false;
-    if (std::strstr(backend, "Vulkan") != nullptr) return true;
-    if (std::strstr(backend, "CUDA")   != nullptr) return true;
-    return false;
+    const bool backend_default = backend != nullptr &&
+        (std::strstr(backend, "Vulkan") != nullptr ||
+         std::strstr(backend, "CUDA")   != nullptr);
+    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW",
+                                     "TRANSCRIBE_CONV_NO_DIRECT_DW",
+                                     backend_default);
 }
 
 // ----- Views ------------------------------------------------------
@@ -192,8 +175,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
         for (size_t i = 1; i < w.blocks.size(); ++i) {
             x = conf::build_conformer_block(ctx, x, eb.pos_emb_in,
                                             to_view(w.blocks[i]), bparams);
-            // Spot-check at the middle block (n_layers/2 - 1 to match
-            // the reference dump naming).
+            // Spot-check at the middle block (n_layers/2 - 1).
             if (i == static_cast<size_t>(hp.enc_n_layers / 2 - 1)) {
                 char bname[64];
                 std::snprintf(bname, sizeof(bname), "enc.block.%zu.out", i);
@@ -216,8 +198,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
     x = conf::named(x, "enc.final");
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // Encoder-decoder projection. Cohere-specific — not part of the
-    // shared Conformer block, so it stays here.
+    // Encoder-decoder projection (Cohere-specific, not in the shared block).
     {
         ggml_tensor * proj = ggml_mul_mat(ctx, w.enc_dec_proj.weight, x);
         proj = ggml_add(ctx, proj, w.enc_dec_proj.bias);

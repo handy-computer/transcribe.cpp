@@ -3,7 +3,7 @@
 // Loads a RIFF WAV file as mono float32 PCM at 16 kHz, which is the only
 // input format the v1 transcribe runtime accepts. The WAV loader does NOT
 // resample. Files at any other sample rate are rejected with a message
-// pointing the user at sox/ffmpeg, per PLAN.md "Sample Rate Policy".
+// pointing the user at sox/ffmpeg.
 //
 // This file lives under examples/common/ on purpose: dr_wav and the WAV
 // loader are not part of the runtime library. The core library never

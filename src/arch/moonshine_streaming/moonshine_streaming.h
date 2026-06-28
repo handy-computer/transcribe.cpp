@@ -5,13 +5,8 @@
 // src/arch/moonshine/moonshine.h since the encoder-decoder + cross-attn
 // KV cache shape is shared across both. Differences:
 //
-//   - `enc_host_for_adapter` holds the post-adapter encoder hidden
-//     (instead of the raw encoder output) so the adapter add+proj is
-//     applied exactly once per session, mirroring the reference dumper's
-//     `apply_adapter()` helper. Cross-KV precompute reads from this
-//     buffer, not the encoder output directly.
-//   - Phase 4a exposes the streaming ABI as stream-of-whole:
-//     feed buffers PCM and finalize runs the one-shot inference path.
+//   - The adapter add+proj is applied exactly once per session into a host
+//     buffer; cross-KV precompute reads that buffer, not the encoder output.
 
 #pragma once
 
@@ -140,59 +135,31 @@ struct MoonshineStreamingSession final : public transcribe_session {
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
-    // ---- incremental streaming state (Phase 4b-encoder + adapter/xkv) ----
+    // ---- incremental streaming state ----
     //
-    // Each feed extends three host-side committed buffers in lockstep:
+    // Each feed extends host-side committed buffers in lockstep:
+    //   stream_adapter_committed  - post-adapter encoder hidden
+    //                               [dec_d_model, T_emitted].
+    //   stream_cross_k/v_committed - per decoder layer, [dec_d_model,
+    //                               T_emitted]; uploaded into the persistent
+    //                               kv_cache on each partial decode (per-feed,
+    //                               when the throttle allows) and again at
+    //                               the finalize decode.
     //
-    //   stream_adapter_committed  - post-adapter encoder hidden, sized
-    //                               [dec_d_model, T_emitted]. Built per
-    //                               feed by re-running the encoder over
-    //                               a sliding window and immediately
-    //                               applying the adapter (pos_emb +
-    //                               optional proj) at absolute frame
-    //                               positions.
+    // Per-feed slicing is numerically equivalent to a one-shot pass because
+    // the encoder is ergodic (no positional encoding) with per-layer
+    // sliding-window attention + causal-conv frontend (output frame t depends
+    // only on conv-stack frames [t - L_total, t + R_total]), the adapter
+    // pos_emb is an absolute-frame get_rows, and the cross-KV projection is
+    // per-frame linear.
     //
-    //   stream_cross_k_committed  - one host vector per decoder layer,
-    //   stream_cross_v_committed    each sized [dec_d_model, T_emitted].
-    //                               Populated by the cross-KV projection
-    //                               graph (k_proj / v_proj) on the
-    //                               adapter slice. NOT written to the
-    //                               persistent kv_cache yet — that's a
-    //                               single bulk upload at finalize.
+    // PCM trimming: stream_pcm_buffer drops samples older than
+    // (T_emitted - L_total - frontend_pad) encoder frames (the left context
+    // any future window still needs). stream_pcm_start_sample tracks the
+    // absolute index of stream_pcm_buffer[0].
     //
-    // Trimming: stream_pcm_buffer is trimmed each feed to drop PCM
-    // older than (T_emitted - L_total - frontend_pad) encoder frames.
-    // The 1.8 s of left-context history that the encoder needs to
-    // produce numerically-identical frames is preserved; everything
-    // before is no longer reachable. stream_pcm_start_sample tracks
-    // the absolute sample index of stream_pcm_buffer[0] so the
-    // streaming driver can translate absolute frame indices back to
-    // buffer-relative offsets.
-    //
-    // The design relies on the encoder being ergodic (no positional
-    // encoding on encoder self-attn) plus per-layer sliding-window
-    // attention plus causal-conv frontend, so output frame t is a
-    // function only of conv-stack output frames in
-    // [t - L_total, t + R_total]; the adapter is a positional
-    // embedding add indexed by absolute frame so it's free to apply
-    // per-feed; and the cross-KV projection is per-frame linear so
-    // accumulating its output across feeds and uploading once at
-    // finalize is numerically equivalent to a single batched call.
-    //
-    // Lifecycle:
-    //   stream_begin:    derive geometry, clear scratch + counters.
-    //   stream_feed:     append PCM, slide-window encode, apply adapter,
-    //                    project cross K/V, append to host buffers,
-    //                    trim PCM.
-    //   stream_finalize: encode tail (no R_total margin needed),
-    //                    apply adapter + project K/V on the tail,
-    //                    allocate kv_cache, upload host K/V buffers,
-    //                    run AR decoder only.
-    //   stream_reset:    clear scratch (keep capacity).
-    //
-    // These fields are NOT touched by clear_result; the dispatcher
-    // wipes lifecycle-agnostic snapshot state there, and the family
-    // owns its per-utterance audio + encoder scratch.
+    // These fields are NOT touched by clear_result — the family owns its
+    // per-utterance audio + encoder scratch.
     std::vector<float>                stream_pcm_buffer;
     int64_t                           stream_pcm_start_sample = 0;
     std::vector<float>                stream_adapter_committed;
@@ -212,11 +179,8 @@ struct MoonshineStreamingSession final : public transcribe_session {
     int32_t                           stream_R_total_frames        = 0;
     int32_t                           stream_frontend_pad_frames   = 0;
     int32_t                           stream_samples_per_enc_frame = 0;
-    // Minimum gap, in encoder frames, between successive per-feed AR
-    // decoder runs. Resolved at stream_begin from the Moonshine-
-    // Streaming family extension.
-    // 0 means "decode on every encoder-frame advance". The finalize
-    // path always runs one last decode regardless of this throttle.
+    // Minimum gap (encoder frames) between per-feed AR decode runs, from the
+    // family extension. 0 = decode every advance; finalize always decodes once.
     int32_t                           stream_min_decode_frames     = 0;
     transcribe_run_params                 stream_run_params {};
 

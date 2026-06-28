@@ -20,7 +20,7 @@
 //
 //   - The CMake option TRANSCRIBE_BUILD_REAL_MODEL_TESTS (default OFF)
 //     controls whether this binary is built.
-//   - At runtime, the GGUF path comes from TRANSCRIBE_COHERE_MODEL
+//   - At runtime, the GGUF path comes from TRANSCRIBE_COHERE_GGUF
 //     env var. If unset, the test exits 77 (CTest "skipped").
 //     Numerical accuracy validation lives in validate.py; this
 //     test covers API behavior and structural correctness only.
@@ -140,10 +140,10 @@ int main() {
     // ---- Resolve model path ------------------------------------------
     std::string model_path;
     {
-        const char * env = std::getenv("TRANSCRIBE_COHERE_MODEL");
+        const char * env = std::getenv("TRANSCRIBE_COHERE_GGUF");
         if (env == nullptr || env[0] == '\0') {
             std::fprintf(stderr,
-                         "cohere_e2e_smoke: TRANSCRIBE_COHERE_MODEL not set. "
+                         "cohere_e2e_smoke: TRANSCRIBE_COHERE_GGUF not set. "
                          "Skipping.\n");
             return 77; // CTest "skipped"
         }
@@ -153,7 +153,7 @@ int main() {
     if (!file_exists(model_path)) {
         std::fprintf(stderr,
                      "cohere_e2e_smoke: model not found: %s\n"
-                     "Set TRANSCRIBE_COHERE_MODEL to a valid GGUF path. "
+                     "Set TRANSCRIBE_COHERE_GGUF to a valid GGUF path. "
                      "Skipping.\n",
                      model_path.c_str());
         return 77; // CTest "skipped"

@@ -1,34 +1,24 @@
 // arch/moonshine_streaming/model.cpp - Moonshine-Streaming family handler.
 //
-// Lifecycle:
+// Lifecycle: load -> init_context -> run (encoder -> adapter -> cross_kv
+// precompute -> autoregressive decode).
 //
-//   1. load              — read GGUF, populate hparams, wire weight slots.
-//   2. init_context      — allocate scheduler / context.
-//   3. run               — encoder → adapter → cross_kv precompute →
-//                          autoregressive decode.
+// One-shot path: the adapter (pos_emb add + optional proj) runs once per
+// session in a separate compute_ctx, its output is read back to host, and
+// the cross_kv precompute graph projects K/V into the persistent kv_cache.
 //
-// One-shot path: the adapter (pos_emb add + optional proj) runs once
-// per session in a separate compute_ctx, its output is read back to
-// host, and the cross_kv precompute graph uploads that buffer to
-// project K/V projections directly into the persistent kv_cache.
-//
-// Streaming path: encoder, adapter, and cross-KV K/V projection all
-// run incrementally per stream_feed. The encoder is ergodic (no
-// positional encoding on encoder self-attn), the adapter's pos_emb is
-// a get_rows indexed by absolute frame, and the cross-KV K/V
-// projections are per-frame linear, so each stage can run on a slice
-// and the slice outputs concatenate across feeds to produce the same
-// values a one-shot pass would. Per-feed work is bounded by the slice
-// size; the only thing that runs at finalize is one bulk upload of
-// the accumulated host K/V buffers into the kv_cache plus the AR
-// decoder loop. PCM trimming bounds memory: anything older than
-// (T_emitted - L_total - frontend_pad) encoder frames is no longer
-// reachable by any future encoder window and is dropped from the
-// per-utterance buffer.
-//
-// AR decoding still happens once at finalize because the model is
-// not trained for partial cross-attention; partial transcripts
-// mid-stream (re-decode per feed) is a Phase 4b-full follow-up.
+// Streaming path: encoder, adapter, and cross-KV projection run incrementally
+// per stream_feed, appending each stable slice to host K/V buffers. The
+// encoder is ergodic (no positional encoding on encoder self-attn), the
+// adapter pos_emb is a get_rows by absolute frame, and the cross-KV
+// projection is per-frame linear, so per-feed slice outputs concatenate to
+// the one-shot result. A feed can also run a throttled partial AR decode:
+// each such decode uploads the accumulated host K/V into the kv_cache and
+// decodes from BOS for a live transcript. Finalize tops up the trailing tail
+// and runs a final AR decode only if frames advanced past the last partial
+// (otherwise it commits the last partial as-is). PCM older than
+// (T_emitted - L_total - frontend_pad) encoder frames is unreachable and
+// dropped to bound memory.
 
 #include "moonshine_streaming.h"
 
@@ -41,6 +31,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -102,25 +93,15 @@ MoonshineStreamingModel::~MoonshineStreamingModel() {
     plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
-// ---------------------------------------------------------------------------
-// Input-length contract (see docs/input-limits.md). Like moonshine, the wall
-// here is on *output*, not input: the encoder accepts any PCM length, and the
-// greedy decode loop stops when it reaches the decoder's position cap
-// (dec_max_position_embeddings — larger than base moonshine, e.g. 4096) before
-// emitting EOS, silently truncating the transcript. We do not gate on audio
-// length — a dense clip can exhaust the output budget — so there is no upfront
-// INPUT_TOO_LONG rejection. Instead, when a decode loop exits on the cap
-// rather than on EOS, we set transcribe_was_truncated() and emit a WARN, same
-// convention as qwen3_asr's generation-budget guard.
-// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md): like moonshine, the wall
+// is on *output*, not input. The encoder takes any PCM length; the decode loop
+// stops at the decoder position cap (dec_max_position_embeddings, e.g. 4096)
+// before EOS, silently truncating. On a cap-exit we set
+// transcribe_was_truncated() and WARN (same as qwen3_asr).
 
-// Advisory transcribe_capabilities::max_audio_ms. The limit is output-bound
-// and content-dependent (decode tokens, not audio frames), so there is no
-// exact audio ceiling. We report a conservative advisory: the audio duration
-// the output budget (dec_max_position_embeddings tokens) can cover at a
-// typical ~4 output tokens/sec speaking rate. Returns 0 ("unknown / unbounded")
-// if the cap is missing. Crossing this advisory does not reject the clip; it
-// only makes a mid-decode truncation (transcribe_was_truncated) more likely.
+// Advisory transcribe_capabilities::max_audio_ms: the audio the output budget
+// (dec_max_position_embeddings tokens) covers at ~4 output tokens/sec. 0 means
+// unknown/unbounded. Advisory only — does not reject.
 constexpr int k_tokens_per_sec = 4;  // rough speech-rate estimate; advisory only
 int64_t moonshine_streaming_max_audio_ms(const MoonshineStreamingHParams & hp) {
     if (hp.dec_max_position_embeddings <= 0) {
@@ -267,9 +248,8 @@ transcribe_status load(
     if (auto st = m->tok.load(loader.gguf());                              st != TRANSCRIBE_OK) return st;
     if (auto st = read_moonshine_streaming_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK) return st;
 
-    // Publish the advisory input-length window now that the decoder position
-    // cap is known. apply_family_invariants() ran above (before hparams), so
-    // this is the first point the cap is available. See docs/input-limits.md.
+    // Publish the advisory window now that the decoder position cap is known
+    // (first point it's available after hparams).
     m->caps.max_audio_ms = moonshine_streaming_max_audio_ms(m->hparams);
 
     gguf_init_params init_params {};
@@ -460,18 +440,9 @@ int samples_per_encoder_frame(const MoonshineStreamingHParams & hp) {
     return 4 * hp.enc_frame_len;
 }
 
-// Greedy-decode generation budget, in tokens. Some inputs never trigger EOS
-// — a repeated-digit "double nine ... double nine" phone-number clip makes
-// the model emit one token forever, identical to the HF reference — so the
-// greedy loop needs a bound tighter than the architectural position cap
-// (dec_max_position_embeddings, thousands of tokens) to avoid a long,
-// pointless compute loop. The upstream model card recommends
-// max_new_tokens ~= audio_seconds * 6.5; we follow that, plus a small floor
-// so very short clips keep ample headroom, and let the caller take min()
-// with the position cap (so this only ever tightens, never loosens, the
-// existing wall). Audio length is derived from T_enc: one encoder frame
-// spans samples_per_encoder_frame(hp) PCM samples at the 16 kHz native rate.
-// Returns 0 when the frame geometry is unknown, meaning "no duration bound".
+// Bound greedy decode by duration as well as the decoder position cap.
+// Some inputs never emit EOS; upstream recommends about 6.5 tokens/sec.
+// Returns 0 when frame geometry is unknown.
 int decode_generation_budget(const MoonshineStreamingHParams & hp, int T_enc) {
     if (hp.enc_frame_len <= 0 || T_enc <= 0) {
         return 0;
@@ -487,13 +458,10 @@ int decode_generation_budget(const MoonshineStreamingHParams & hp, int T_enc) {
         + k_budget_floor);
 }
 
-// Encoder helper: build the encoder graph for `n_samples` PCM,
-// upload PCM + per-layer sliding-window masks, compute, and read the
-// final-LN output into the caller-provided host vector. Updates
-// cc->t_encode_us (additive). When emit_dumps is true the standard
-// encoder.* dump points fire; the streaming feed path passes false so
-// per-feed runs don't clobber the reference-dump artifacts that
-// validate.py compares.
+// Encoder helper: build the graph for `n_samples` PCM, upload PCM + masks,
+// compute, and read final-LN output into the caller's host vector. Updates
+// cc->t_encode_us. emit_dumps fires encoder.* dump points; streaming feed
+// passes false so per-feed runs do not clobber reference dump artifacts.
 //
 // n_samples must be > 0 and a multiple of hp.enc_frame_len.
 transcribe_status encode_window_to_host(
@@ -1066,14 +1034,8 @@ transcribe_status decode_from_kv_cache(
         }
     }
 
-    // The greedy loop exits either because next_token == eos (complete) or
-    // because n_past reached gen_cap — the tighter of the duration-based
-    // generation budget and the hard position cap (max_pos). When the last
-    // token was not eos the transcript hit the cap before end-of-stream and
-    // is incomplete: flag it via transcribe_was_truncated() and emit one WARN,
-    // mirroring qwen3_asr. Reaching the duration budget (gen_cap < max_pos)
-    // typically means a hallucination loop the model never ends — bounding it
-    // here avoids a long, pointless decode. See docs/input-limits.md.
+    // Non-EOS after the loop means gen_cap stopped decode before EOS. gen_cap
+    // is either the position cap or the tighter duration budget.
     if (next_token != eos) {
         cc->was_truncated = true;
         const bool hit_duration_budget = (gen_cap < max_pos) || (max_pos <= 0);
@@ -1279,56 +1241,30 @@ transcribe_status run(
     if (st != TRANSCRIBE_OK) {
         return st;
     }
-    // Output truncation is a hard status on the OFFLINE single-utterance
-    // path only (see docs/input-limits.md). decode_from_kv_cache sets
-    // was_truncated but returns TRANSCRIBE_OK because it is shared with the
-    // streaming finalize path, which has its own terminal-state machine and
-    // must NOT surface OUTPUT_TRUNCATED. Scope the remap to this
-    // transcribe_run entry; the partial transcript stays readable.
+    // Remap truncation to a hard status only at this offline entry:
+    // decode_from_kv_cache returns OK (it's shared with the streaming finalize
+    // path, which must NOT surface OUTPUT_TRUNCATED). Partial text stays readable.
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
                              : TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Streaming hooks
-// ---------------------------------------------------------------------------
+// Streaming hooks.
 //
-// Per-feed: encode a sliding window, apply adapter on the new emit
-// slice, project K/V for every decoder layer, append everything to
-// the per-utterance host buffers, then trim PCM that no future
-// encoder window will read. Then upload the accumulated host K/V to
-// the kv_cache and re-decode from BOS over the current cross-KV so
-// the caller sees a live partial transcript.
+// Per-feed: encode a sliding window, apply adapter + project K/V on the new
+// slice, append to host buffers, trim unreachable PCM, then re-decode from BOS
+// over the growing cross-KV for a live partial transcript. Finalize tops up
+// the tail and runs one last AR decode.
 //
-// At finalize: top up the tail (no R_total margin needed since audio
-// is done), optionally re-decode if frames advanced since the last
-// feed's decode, then mark everything committed. Finalize cost
-// bounded by transcript length (just an AR decoder run).
+// PCM trimming retains samples back to (T_emitted - L_total - frontend_pad)
+// encoder frames — the longest reach of any future encoder slice (finalize).
+// Tiny: L_total = 90 enc frames = 1.8 s.
 //
-// PCM trimming retains samples back to
-// (T_emitted - L_total - frontend_pad) encoder frames. That window
-// covers every future encoder-graph slice (the longest reach is at
-// finalize, where the encoder slice may extend back by L_total +
-// frontend_pad to seed the conv frontend and self-attn masks). For
-// the tiny variant L_total = 90 enc frames = 1.8 s of audio.
-//
-// Commit semantics:
-//
-//   The per-feed decode runs from BOS each time over the growing
-//   cross-KV. Tokens emitted on feed N may shift on feed N+1 as more
-//   audio arrives (the model isn't trained for partial cross-attn).
-//   We mark as committed the longest token-id prefix that's IDENTICAL
-//   across the last stable_prefix_agreement_n partial decodes (default
-//   3). That's the substring the model has now produced consistently
-//   across multiple cross-KV sizes and is unlikely to revise. Tokens
-//   past the divergence point are tentative; consumers should treat
-//   them as preview-only.
-//
-//   n_committed_tokens advances monotonically. n_committed_words /
-//   n_committed_segments stay at 0 mid-stream (we don't track
-//   per-word boundaries, and there's exactly one segment per decode).
-//   At finalize, the full transcript is committed: n_committed_* are
-//   set to the full counts.
+// Commit semantics: per-feed decodes restart from BOS, so feed N's tokens may
+// shift on feed N+1 (the model isn't trained for partial cross-attn). The
+// committed prefix is the longest token-id prefix IDENTICAL across the last
+// stable_prefix_agreement_n decodes (default 3); past that is preview-only.
+// n_committed_tokens advances monotonically; n_committed_words/segments stay 0
+// mid-stream and are set to full counts at finalize.
 
 constexpr int64_t k_sample_rate_hz = 16000;
 
@@ -1465,22 +1401,13 @@ int stable_token_prefix_from_history(
     return prefix;
 }
 
-// Default decode-interval when the caller passes -1 (or omits the
-// moonshine_streaming stream params block entirely). Chosen to match
-// one cumulative right-context window (R_total = 12 frames × 20 ms),
-// giving ~4 partial-transcript updates per second after the initial
-// warmup. Compute cost at this setting is roughly 2–3× one-shot on
-// the tiny variant; smaller values (e.g. 80 ms) push it to 5×+.
+// Default decode-interval (caller passes -1 / omits the stream params block).
+// One cumulative right-context window (R_total = 12 frames × 20 ms) = ~4
+// updates/sec; ~2-3× one-shot cost on tiny, smaller values push it to 5×+.
 constexpr int k_default_min_decode_interval_ms = 240;
 
-// Pure resolver for the Moonshine-Streaming decode-throttle knob.
-// Validates the stream_params->family extension's universal shape and
-// the min_decode_interval_ms sentinel rule, then resolves the effective
-// milliseconds value (family default when -1 / absent). Reads only the
-// caller-owned stream_params; mutates nothing. Shared by stream_validate
-// (pre-flight, before the dispatcher clears the snapshot) and stream_begin
-// (defense in depth, where the resolved value configures session state).
-//
+// Resolve the decode-throttle knob from the caller-owned stream_params (family
+// default when -1 / absent); validates the extension shape. Mutates nothing.
 //   ext NULL / -1   -> family default (k_default_min_decode_interval_ms)
 //   < -1            -> TRANSCRIBE_ERR_INVALID_ARG
 //   >= 0            -> the requested value (0 = decode every advance)
@@ -2004,13 +1931,9 @@ bool accepts_ext_kind(const transcribe_model * model,
     return kind == TRANSCRIBE_EXT_KIND_MOONSHINE_STREAMING_STREAM;
 }
 
-// ===========================================================================
-// Offline batched decode (transcribe_run_batch). Encoder + adapter serial
-// per utterance (compute-bound; no mel frontend to parallelize); decode
-// (self+cross attn, partial RoPE) batched. Always uses flash (the moonshine
-// flash-for-batch decision). See docs/batching-autoregressive-plan.md.
-// ===========================================================================
-
+// Offline batched decode (transcribe_run_batch). Encoder + adapter serial per
+// utterance (no mel to parallelize); decode (self+cross attn, partial RoPE)
+// batched. Always uses flash (the moonshine flash-for-batch decision).
 transcribe_status run_batch_serial(MoonshineStreamingSession * cc,
                                    const float * const * pcm,
                                    const int * n_samples, int n,
@@ -2266,12 +2189,9 @@ transcribe_status run_batch(
     }
     const int64_t dec_us = ggml_time_us() - t_dec0;
 
-    // Batched truncation flag. A valid row that never reached eos exhausted
-    // the output budget (n_ctx_cap, the position cap clamped to the cache
-    // capacity) before end-of-stream, so its transcript is incomplete. Mirror
-    // the serial path: set transcribe_was_truncated() and emit one WARN. This
-    // only observes the per-row finished[] state; the decode is unchanged.
-    // See docs/input-limits.md.
+    // Batched truncation: a valid row that never reached eos exhausted the
+    // output budget (n_ctx_cap = position cap clamped to cache capacity).
+    // Mirror the serial path (WARN + flag).
     {
         int n_truncated = 0;
         for (int b = 0; b < n; ++b) {
@@ -2304,10 +2224,7 @@ transcribe_status run_batch(
         rs.full_text = full;
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result = true;
-        // Per-utterance truncation parity (offline run_batch, not streaming): a
-        // valid row that never finished hit the position cap before EOS, so it
-        // reports OUTPUT_TRUNCATED (partial text retained). See
-        // docs/input-limits.md.
+        // Per-utterance truncation parity (offline run_batch, not streaming).
         rs.status = !finished[b] ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
                                  : TRANSCRIBE_OK;
         rs.t_mel_us = 0;
@@ -2316,7 +2233,7 @@ transcribe_status run_batch(
         cc->batch_results.push_back(std::move(rs));
     }
 
-    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+    if (transcribe::env::flag("TRANSCRIBE_PERF_DEBUG")) {
         log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "moonshine_streaming run_batch: n=%d T_enc_max=%d kv_window=%d (cap %d)\n"
             "  enc+adapter=%.1fms (serial x%d)  decode=%.1fms (batched)",

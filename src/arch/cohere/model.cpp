@@ -14,6 +14,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -60,10 +61,6 @@ CohereSession::~CohereSession() {
     }
     encoder_out = nullptr;
 }
-
-// ---------------------------------------------------------------------------
-// KV cache initialization.
-// ---------------------------------------------------------------------------
 
 bool kv_cache_init(CohereKvCache & cache,
                    ggml_backend_t  backend,
@@ -115,7 +112,6 @@ bool kv_cache_init(CohereKvCache & cache,
         return false;
     }
 
-    // Zero out the buffers.
     ggml_backend_buffer_clear(cache.buffer, 0);
 
     cache.n_ctx  = n_ctx;
@@ -233,48 +229,32 @@ namespace {
 
 constexpr float kBnEps = 1e-5f;
 
-// ---------------------------------------------------------------------------
-// Input-length contract (see docs/input-limits.md). Cohere ASR is a
-// hard-context-cap family with TWO distinct limits:
-//
-//   (a) INPUT limit — the encoder's relative positional encoding table
-//       (enc_pos_emb_max_len, 5000 encoder frames for the shipped
-//       checkpoint). The conformer encoder is *not* unbounded like
-//       parakeet: encode_positions() is applied at the subsampled
-//       sequence length T_enc, so T_enc must stay within the trained
-//       pos-emb span or the runtime-generated table aliases past the
-//       trained range. This is the binding INPUT bound; it is gated up
-//       front, before the encoder graph is built.
-//
-//   (b) DECODER self-KV — dec_max_seq (1024) and a 512 max-new-tokens
-//       cap. These bound the *output*: a transcript that runs long
-//       enough to exhaust the budget is kept as a partial result and
-//       flagged via transcribe_was_truncated(), not rejected.
-//
-// The encoder is the input limit, so transcribe_capabilities::max_audio_ms
-// is derived from (a).
-// ---------------------------------------------------------------------------
+// Input-length contract (canonical reference; see docs/input-limits.md).
+// Cohere ASR has TWO distinct limits:
+//   (a) INPUT — the encoder's relative positional-encoding table
+//       (enc_pos_emb_max_len). T_enc must stay within the trained pos-emb
+//       span or the runtime table aliases past the trained range. Binding
+//       input bound, gated up front; drives caps.max_audio_ms.
+//   (b) DECODER self-KV — dec_max_seq and a 512 max-new-tokens cap. Bound
+//       the *output*: an over-budget transcript is kept as a partial result
+//       and flagged via transcribe_was_truncated(), not rejected.
 
 // Predicted encoder frame count T_enc for a given mel frame count. The
-// FastConformer pre-encode (build_pre_encode in src/conformer/conformer.cpp)
-// downsamples time by enc_subsampling_factor via three stride-2, kernel-3,
-// pad-(k-1)/2 convs; each one maps T_in -> floor((T_in - 1) / 2) + 1. We
-// fold that exact per-conv recurrence here so the prediction matches the
-// graph's T_enc (conformer.cpp documents the net result as floor(T_mel/8)).
-// This is a pure host-side count; it touches no graph math.
+// FastConformer pre-encode downsamples time via three stride-2, kernel-3,
+// pad-(k-1)/2 convs, each mapping T_in -> floor((T_in - 1)/2) + 1. We fold
+// that exact recurrence here so the prediction matches the graph's T_enc
+// (net result floor(T_mel/8)). Pure host-side count; no graph math.
 int cohere_predict_t_enc(int mel_n_frames, int subsampling_factor) {
     if (mel_n_frames <= 0 || subsampling_factor <= 0) {
         return 0;
     }
-    // subsampling_factor 8 == three stride-2 stages. Derive the stage
-    // count from the factor (log2) so a future geometry change stays
-    // honest; fall back to the documented 8x if it is not a power of two.
+    // Derive the stride-2 stage count from the factor (log2); fall back to
+    // floor(T_mel / factor) if it is not a power of two.
     int stages = 0;
     for (int f = subsampling_factor; f > 1; f >>= 1) {
         ++stages;
     }
     if ((1 << stages) != subsampling_factor) {
-        // Non-pow2 factor: use the documented floor(T_mel / factor).
         return mel_n_frames / subsampling_factor;
     }
     int t = mel_n_frames;
@@ -287,17 +267,11 @@ int cohere_predict_t_enc(int mel_n_frames, int subsampling_factor) {
     return t;
 }
 
-// Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
-// encoder frame count T_enc still fits the trained positional-encoding span
-// enc_pos_emb_max_len. Inverts the rate:
-//   T_enc          = mel_frames / subsampling_factor
-//   mel_frames     = ms * sample_rate / (hop_length * 1000)
-//   => ms          = T_enc * subsampling_factor * hop_length * 1000 / sr
-// at T_enc == enc_pos_emb_max_len. Returns 0 ("unknown / unbounded") if any
-// rate hparam is missing, so a misconfigured model is never advertised with
-// a wrong finite number. The decoder self-KV / max-new cap bounds the
-// OUTPUT, not the input, so it does not enter this figure (a long-but-fitting
-// clip may still truncate its transcript — see transcribe_was_truncated).
+// transcribe_capabilities::max_audio_ms: longest audio whose T_enc still
+// fits the trained pos-emb span enc_pos_emb_max_len. Inverts the rate:
+//   ms = T_enc * subsampling_factor * hop_length * 1000 / sr
+// at T_enc == enc_pos_emb_max_len. Returns 0 (unknown) if any rate hparam
+// is missing, so a misconfigured model is never advertised with a wrong value.
 int64_t cohere_max_audio_ms(const CohereHParams & hp) {
     if (hp.enc_pos_emb_max_len <= 0 || hp.enc_subsampling_factor <= 0 ||
         hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0) {
@@ -364,14 +338,12 @@ transcribe_status fuse_batch_norm(CohereModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// Fold each encoder layer's Q bias into its pos_bias_u / pos_bias_v
-// tensors at load time. In rel_pos_mhsa the math is
+// Fold each encoder layer's Q bias into its pos_bias_u / pos_bias_v at
+// load time. In rel_pos_mhsa:
 //   q_u = (W_q x + q_b) + pos_u = W_q x + (q_b + pos_u)
 //   q_v = (W_q x + q_b) + pos_v = W_q x + (q_b + pos_v)
-// so pre-adding q_b into pos_u/pos_v is mathematically identical and
-// drops the explicit `q = q + q_b` graph op (48 fewer ops per encoder).
-// After fusion we null out attn_q_b so the graph builder naturally
-// skips the add via its existing `if (attn_q_b != nullptr)` guard.
+// so pre-adding q_b into pos_u/pos_v is identical and drops the explicit
+// `q = q + q_b` graph op. We null attn_q_b after so the builder skips the add.
 transcribe_status fuse_encoder_q_bias(CohereModel & m) {
     const size_t n_blocks = m.weights.blocks.size();
     if (n_blocks == 0) return TRANSCRIBE_OK;
@@ -405,10 +377,8 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
         ggml_backend_tensor_get(b.attn_pos_u, pos_u.data(),  0, nbytes);
         ggml_backend_tensor_get(b.attn_pos_v, pos_v.data(),  0, nbytes);
 
-        // pos_u/v are [head_dim, n_heads] with ne[0]=head_dim.
-        // q_b is [d_model] = [head_dim*n_heads]. In memory the two
-        // share the same element layout (same linear offsets), so
-        // a flat element-wise add is correct.
+        // pos_u/v [head_dim, n_heads] and q_b [d_model=head_dim*n_heads]
+        // share the same linear element layout, so a flat add is correct.
         for (int64_t j = 0; j < d_model; ++j) {
             pos_u[j] += q_bias[j];
             pos_v[j] += q_bias[j];
@@ -431,26 +401,10 @@ transcribe_status fuse_encoder_q_bias(CohereModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// On a CPU primary backend, dequantize the conformer 1×1 pointwise
-// conv weights (pw1, pw2) from F16 back to F32. Step 3 moved them to
-// F16 in the GGUF to halve the Vulkan/Metal matmul cost, but Zen 2
-// (and anything else without native F16 compute) pays an F16→F32
-// upconvert per-element that outweighs the bandwidth win — a ~600 ms
-// regression on a 9.3 s q4_k_m CPU encode.
-//
-// The cleanest fix without shipping two GGUFs is to hoist the
-// conversion to load time: dequantize into a separate backend buffer
-// and point the weight slots at the F32 copies. Vulkan/Metal/CUDA
-// primary backends skip this step and keep the F16 weights. The
-// original F16 tensors stay allocated in the main weight buffer
-// (unused) — dropping them individually isn't supported by ggml's
-// backend buffer model, and the ~235 MB cost is acceptable for the
-// CPU-only path.
-//
-// Weight collection is the only family-specific bit: we walk
-// m.weights.blocks and hand the shared helper a list of (slot, src)
-// pairs. The helper does the backend check, allocation, dequantize,
-// and repoint.
+// On a CPU primary backend, dequantize the conformer 1×1 pointwise conv
+// weights (pw1, pw2) from F16 back to F32: Zen 2 (and anything else without
+// native F16 compute) pays an F16->F32 upconvert per matmul that outweighs
+// the bandwidth win. GPU backends skip this and keep the F16 weights.
 transcribe_status promote_conv_pw_to_f32_on_cpu(CohereModel & m) {
     std::vector<load_common::ConvPwF32Slot> slots;
     slots.reserve(m.weights.blocks.size() * 2);
@@ -513,79 +467,53 @@ transcribe_status load(
         return st;
     }
 
-    // Tokenizer.
     if (const transcribe_status st = m->tok.load(loader.gguf()); st != TRANSCRIBE_OK) {
         return st;
     }
 
-    // Hparams.
     if (const transcribe_status st = read_cohere_hparams(loader.gguf(), m->hparams);
         st != TRANSCRIBE_OK)
     {
         return st;
     }
 
-    // Publish the input-length ceiling now that the encoder positional-
-    // encoding span and frontend rate are known (apply_family_invariants
-    // ran before the hparams were read). The encoder is the binding INPUT
-    // limit for cohere — see cohere_max_audio_ms above and
-    // docs/input-limits.md.
+    // Publish the input-length ceiling now that the encoder pos-emb span
+    // and frontend rate are known (the encoder is the binding INPUT limit).
     m->caps.max_audio_ms = cohere_max_audio_ms(m->hparams);
 
     // Basis for the session-level limits query (transcribe_session_get_limits).
-    //
-    // DISCREPANCY (intentional, flagged per docs/input-limits.md): cohere has
-    // TWO distinct ceilings. The INPUT bound is the encoder pos-emb table
-    // (enc_pos_emb_max_len, ~400 s of audio) — that is what caps.max_audio_ms
-    // reports. The session n_ctx knob and the KV-byte estimate, however, key off
-    // the DECODER self-KV ceiling (dec_max_seq, 1024): that is the value cc->n_ctx
-    // lowers (cohere_dec_ctx_ceiling) and the self-KV cache is sized to. Because
-    // the LimitsBasis is a single context cap, it is filled from the DECODER side
-    // so effective_n_ctx and max_kv_bytes are exact. The consequence is that the
-    // query's effective_max_audio_ms (= (eff - overhead - gen_reserve) *
-    // ms_per_audio_token) is computed off the *decoder* ceiling and so will NOT
-    // match caps.max_audio_ms (the encoder bound) — for cohere the decoder context
-    // bounds the OUTPUT transcript, not the audio input, so that derived figure is
-    // advisory only. caps.max_audio_ms remains the authoritative input bound.
+    // The LimitsBasis is a single context cap, filled from the DECODER side
+    // (dec_max_seq) so effective_n_ctx and max_kv_bytes are exact. Its derived
+    // effective_max_audio_ms therefore keys off the decoder ceiling and will
+    // NOT match caps.max_audio_ms (the encoder input bound) — for cohere the
+    // decoder context bounds the OUTPUT transcript, so that figure is advisory.
     if (m->hparams.dec_max_seq > 0 &&
         m->hparams.enc_subsampling_factor > 0 &&
         m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
         m->limits.has_context_cap = true;
         // Audio bound is the encoder table (caps.max_audio_ms), not the
-        // decoder context, so effective_max_audio_ms must not shrink with
-        // n_ctx; effective_n_ctx / max_kv_bytes still reflect the decoder.
+        // decoder context, so effective_max_audio_ms must not shrink with n_ctx.
         m->limits.audio_from_caps = true;
         m->limits.model_max_ctx   = m->hparams.dec_max_seq;
-        // Fixed control-token preamble that precedes the transcript in the
-        // decoder self-context (▁/soc/sot/emo/lang×2/pnc/noitn/notimestamp/
-        // nodiarize — see run()'s prompt_pieces). Audio is in cross-KV, never in
-        // the self-context, so there is no audio-token overhead here.
+        // Fixed control-token preamble (see run()'s prompt_pieces). Audio is
+        // in cross-KV, so there is no audio-token overhead here.
         m->limits.prompt_overhead = 10;
         m->limits.gen_reserve     = 512;  // max-new-tokens cap in run()
-        // ms-per-audio-token = subsampling_factor * hop_length * 1000 / sr
-        // (the same inversion cohere_max_audio_ms applies at T_enc).
+        // ms-per-audio-token = subsampling_factor * hop_length * 1000 / sr.
         m->limits.ms_per_audio_token =
             static_cast<double>(m->hparams.enc_subsampling_factor) *
             m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
-        // Self-KV: the cache stores dec_hidden (n_state) per layer, two tensors
-        // (K and V); cohere has no GQA split, so n_state == dec_hidden.
+        // Self-KV stores dec_hidden per layer, two tensors (K, V); no GQA.
         m->limits.kv_elems_per_ctx_token =
             (int64_t) m->hparams.dec_hidden * m->hparams.dec_n_layers * 2;
     }
 
-    // Set vocab_size from tokenizer.
     m->hparams.vocab_size = m->tok.n_tokens();
-    // Set special token IDs from tokenizer.
     m->hparams.bos_token_id = m->tok.bos_id();
     m->hparams.eos_token_id = m->tok.eos_id();
 
-    // Hard-fail at load time if the tokenizer did not supply an EOS
-    // token id. Previously this was papered over at decode time with a
-    // fallback to token id 3 plus a stderr warning; that is worse than
-    // refusing the model because (a) id 3 is a random guess that only
-    // happens to match this family's current checkpoint, and (b) a
-    // missing EOS is a GGUF-builder bug that should surface during
-    // conversion, not hide behind a runtime fallback in production.
+    // Hard-fail at load time if the tokenizer supplied no EOS token id —
+    // a missing EOS is a GGUF-builder bug that should surface at conversion.
     if (m->hparams.eos_token_id < 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "cohere: GGUF tokenizer has no eos_token_id -- "
@@ -606,15 +534,9 @@ transcribe_status load(
         cfg.f_max        = m->hparams.fe_f_max;
         cfg.pad_mode     = m->hparams.fe_pad_mode;
 
-        // Load checkpoint filterbank/window from GGUF if present.
-        // These small tensors are read directly from the file using
-        // the gguf index — avoids recomputing from scratch and
-        // matches the exact values the model was trained with.
-        //
-        // read_f32_tensor_checked validates type (must be F32), byte
-        // alignment, expected element count, and read completeness.
-        // Absent → compute from hparams (the non-GGUF path).
-        // BadType/BadSize/ReadErr → hard fail with TRANSCRIBE_ERR_GGUF.
+        // Load checkpoint filterbank/window from GGUF if present (exact
+        // trained values). read_f32_tensor_checked: Absent -> compute from
+        // hparams; BadType/BadSize/ReadErr -> hard fail.
         {
             using R = load_common::ReadF32Result;
 
@@ -641,7 +563,7 @@ transcribe_status load(
         m->mel.emplace(cfg);
     }
 
-    // Stage 2: reopen with no_alloc.
+    // Reopen with no_alloc.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -660,13 +582,10 @@ transcribe_status load(
         return st;
     }
 
-    // Resolve the backend plan from the caller request. See
-    // transcribe-backend.h + transcribe-load-common.h for the
-    // semantics (AUTO / CPU / METAL / VULKAN). The important case
-    // for cohere is strict CPU: the F16→F32 conv pointwise
-    // promotion below depends on `plan.primary_kind ==
-    // BackendKind::Cpu`, which only a TRANSCRIBE_BACKEND_CPU
-    // request reliably produces.
+    // Resolve the backend plan (see transcribe-load-common.h). The conv
+    // pointwise F16->F32 promotion below depends on a strict-CPU plan
+    // (primary_kind == BackendKind::Cpu), which only TRANSCRIBE_BACKEND_CPU
+    // reliably produces.
     const transcribe_backend_request backend_req =
         (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
 
@@ -705,7 +624,6 @@ transcribe_status load(
 
     gguf_free(gguf_data);
 
-    // Fuse BatchNorm.
     if (const transcribe_status st = fuse_batch_norm(*m);
         st != TRANSCRIBE_OK)
     {
@@ -719,10 +637,7 @@ transcribe_status load(
         return st;
     }
 
-    // On CPU backend, dequantize conv pointwise weights back to F32 —
-    // Zen 2 class CPUs don't have native F16 compute and the upconvert
-    // cost per matmul outweighs the bandwidth savings from the smaller
-    // weight. No-op on GPU backends.
+    // CPU only: dequantize conv pointwise weights to F32 (see function doc).
     if (const transcribe_status st = promote_conv_pw_to_f32_on_cpu(*m);
         st != TRANSCRIBE_OK)
     {
@@ -747,22 +662,12 @@ transcribe_status init_context(
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
-    // Cache the caller's n_ctx knob. For cohere this lowers the DECODER
-    // self-KV ceiling (dec_max_seq); it does not affect the encoder input
-    // limit. See cohere_dec_ctx_ceiling and docs/input-limits.md.
+    // Cache the caller's n_ctx knob; for cohere it lowers the DECODER
+    // self-KV ceiling only (see cohere_dec_ctx_ceiling).
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
-    // Flash-attention policy -- see CohereSession (cohere.h) for why
-    // this is split into encoder vs decoder. The short version:
-    // encoder dk=160 is unsupported by upstream ggml Metal flash, so
-    // the encoder auto-disables on Metal; decoder dk=128 works on
-    // every backend we ship, so the decoder defaults on. The env-var
-    // overrides (TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH) are
-    // applied globally in transcribe::flash::apply_env_overrides.
-    //
-    // We check the classified primary BackendKind here instead of
-    // string-matching on ggml_backend_name — the plan already has
-    // the kind ready.
+    // Flash-attention policy — see CohereSession (cohere.h). Encoder
+    // auto-disables on Metal; decoder defaults on; env overrides apply globally.
     auto * cm = static_cast<CohereModel *>(model);
     const bool is_metal =
         (cm->plan.primary_kind == transcribe::BackendKind::Metal);
@@ -793,8 +698,7 @@ transcribe_status run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Pre-run abort check. Cohere ASR is single-chunk today; this is
-    // the single observation point.
+    // Pre-run abort check (cohere is single-chunk today).
     if (cc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
@@ -822,16 +726,11 @@ transcribe_status run(
     }
     cc->t_mel_us = ggml_time_us() - t_mel_start;
 
-    // ----- Input-length gate (see docs/input-limits.md) ------------
-    // The encoder's relative positional-encoding table is the binding
-    // INPUT limit: encode_positions() is generated at the subsampled
-    // sequence length T_enc, so T_enc must stay within the trained span
-    // enc_pos_emb_max_len or the runtime pos table aliases past the
-    // trained range (a silent out-of-bounds before this gate existed).
-    // T_enc is a deterministic function of mel_n_frames, so reject an
-    // over-length clip here — before the encoder graph is even built —
-    // rather than paying for a compute pass that cannot fit. The
-    // rejection goes through the log callback, not raw stderr.
+    // ----- Input-length gate -----
+    // T_enc must stay within the trained pos-emb span enc_pos_emb_max_len
+    // or the runtime pos table aliases past the trained range. T_enc is a
+    // deterministic function of mel_n_frames, so reject an over-length clip
+    // here, before building the encoder graph.
     if (cm->hparams.enc_pos_emb_max_len > 0) {
         const int t_enc_pred = cohere_predict_t_enc(
             mel_n_frames, cm->hparams.enc_subsampling_factor);
@@ -1015,15 +914,9 @@ transcribe_status run(
     //
     const char * lang = (params && params->language) ? params->language : "en";
 
-    // Language validation lives in the central dispatcher
-    // (transcribe_run), which rejects unsupported caller-provided
-    // languages with TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE before
-    // reaching this handler. The NULL → "en" default above applies
-    // only when the caller did not specify a language; "en" is
-    // always in the model's list for every published Cohere ASR
-    // checkpoint. If that ever ceases to hold, the dispatcher's
-    // check still covers non-NULL cases and we'd revisit the
-    // default here.
+    // The dispatcher (transcribe_run) rejects unsupported caller languages
+    // before this handler; the NULL -> "en" default applies only when the
+    // caller specified none.
 
     const std::string lang_token = std::string("<|") + lang + "|>";
     const std::vector<std::string> prompt_pieces = {
@@ -1053,7 +946,7 @@ transcribe_status run(
     }
     const int prompt_len = static_cast<int>(prompt_ids.size());
 
-    // --- Step 1: Initialize KV cache --------------------------------
+    // ----- Initialize KV cache -----
     {
         // Free any existing cache if T_enc changed.
         if (cc->kv_cache.buffer != nullptr &&
@@ -1090,15 +983,9 @@ transcribe_status run(
         }
     }
 
-    // Helper to create a fresh compute context.
-    //
-    // Any ggml_tensor pointer we hold that was allocated inside the
-    // previous compute_ctx becomes dangling the instant we ggml_free
-    // it below, so null them out here. Today cc->encoder_out is the
-    // only such pointer -- its *data* was already copied to
-    // cc->enc_host above, and cross-attn graphs below re-declare a
-    // fresh encoder_out input tensor -- but keeping a stale pointer
-    // around invites a future edit to use-after-free it.
+    // Fresh compute context. Null cc->encoder_out first: it was allocated in
+    // the context being freed (its data is already in cc->enc_host), so the
+    // stale pointer must not outlive the ggml_free.
     auto new_compute_ctx = [&](size_t mem_size) -> bool {
         if (cc->compute_ctx != nullptr) {
             ggml_free(cc->compute_ctx);
@@ -1128,7 +1015,7 @@ transcribe_status run(
         return nullptr;
     };
 
-    // --- Step 2: Compute cross-attention K/V -------------------------
+    // ----- Compute cross-attention K/V -----
     const int64_t t_dec_start = ggml_time_us();
     {
         if (!new_compute_ctx(4 * 1024 * 1024)) {
@@ -1170,7 +1057,7 @@ transcribe_status run(
         cc->kv_cache.cross_populated = true;
     }
 
-    // --- Step 3: Prompt pass with KV cache ---------------------------
+    // ----- Prompt pass with KV cache -----
     {
         if (!new_compute_ctx(4 * 1024 * 1024)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -1178,9 +1065,8 @@ transcribe_status run(
             return TRANSCRIBE_ERR_OOM;
         }
 
-        // Prompt pass: skip log_softmax and emit a GPU argmax over the
-        // last position. Debug dumps still need the pre-head hidden
-        // state; when dumping is enabled we take the slower path.
+        // Skip log_softmax and emit a GPU argmax over the last position.
+        // Debug dumps need the pre-head state, so they take the slower path.
         const bool prompt_skip_softmax = !transcribe::debug::enabled();
         DecoderBuild db = build_decoder_graph_kv(
             cc->compute_ctx, cm->weights, cm->hparams,
@@ -1332,25 +1218,15 @@ transcribe_status run(
             cc->has_result  = true;
         };
 
-        // --- Step 4: Autoregressive step passes ----------------------
-        //
-        // Two decoder loop variants; pick by primary backend kind.
-        //
-        //   GPU (Vulkan/Metal/CUDA/SYCL): build_step_graph — one static-
-        //     topology graph for the whole utterance. KV writes go via
-        //     ggml_set_rows at runtime kv_idx; flash-attn reads a fixed
-        //     max_n_kv window with a runtime mask. Removes per-step
-        //     graph_build + sched_alloc, which dominate dispatch overhead
-        //     on GPUs.
-        //
-        //   CPU (incl. accelerator host-memory backends): build_decoder_
-        //     graph_kv per step — n_kv grows with n_past, attention only
-        //     reads the populated prefix. CPU has no dispatch overhead
-        //     to amortize, so the static-graph bandwidth tax (reading
-        //     max_n_kv KV slots when avg n_past is small) is a net loss.
-        //
-        // The prompt pass uses build_decoder_graph_kv on both paths
-        // (already executed above) — only the per-token loop branches.
+        // ----- Autoregressive step passes -----
+        // Two loop variants by primary backend kind:
+        //   GPU: build_step_graph — one static-topology graph; KV writes via
+        //     ggml_set_rows at runtime kv_idx, flash-attn over a fixed
+        //     max_n_kv window. Avoids per-step graph_build + sched_alloc,
+        //     which dominate GPU dispatch overhead.
+        //   CPU: build_decoder_graph_kv per step — n_kv grows with n_past
+        //     (reads only the populated prefix). CPU has no dispatch overhead
+        //     to amortize, so the static-graph bandwidth tax is a net loss.
         int n_past = prompt_len;
 
         const bool primary_is_gpu =
@@ -1360,10 +1236,9 @@ transcribe_status run(
 
         if (primary_is_gpu) {
             // ---------- Static-graph step path (GPU) ----------
-            // max_n_kv: pad to next power of two with a 1024 floor.
-            // Vulkan/Metal flash-attn dispatches faster on pow2 ne[1];
-            // the slight bandwidth cost is amortized by removing
-            // per-step graph_build + sched_alloc.
+            // max_n_kv: next power of two (1024 floor) — Vulkan/Metal flash
+            // dispatches faster on pow2 ne[1], and the static graph amortizes
+            // the slight bandwidth cost.
             int max_n_kv = 1024;
             while (max_n_kv < prompt_len + max_tokens) max_n_kv *= 2;
             if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
@@ -1408,9 +1283,8 @@ transcribe_status run(
                     return TRANSCRIBE_ERR_ABORTED;
                 }
                 if (n_past + 1 > max_n_kv) {
-                    // Output ran into the self-KV window before EOS. Keep
-                    // the partial transcript, flag truncation, warn — never
-                    // discard a usable result. See docs/input-limits.md.
+                    // Hit the self-KV window before EOS: keep the partial
+                    // transcript, flag truncation, warn — never discard it.
                     cc->was_truncated = true;
                     transcribe::log_msg(
                         TRANSCRIBE_LOG_LEVEL_WARN,
@@ -1456,9 +1330,8 @@ transcribe_status run(
             }
         } else {
             // ---------- Dynamic-graph step path (CPU) ----------
-            // Reserve scheduler buffers with a worst-case single-token
-            // graph (maximum n_past = n_ctx - 1). This ensures that
-            // alloc_graph during the loop never triggers reallocation.
+            // Reserve scheduler buffers with a worst-case single-token graph
+            // (n_past = n_ctx - 1) so alloc_graph never reallocates in-loop.
             if (new_compute_ctx(4 * 1024 * 1024)) {
                 const int worst_n_past = cc->kv_cache.n_ctx - 1;
                 DecoderBuild db_reserve = build_decoder_graph_kv(
@@ -1481,9 +1354,8 @@ transcribe_status run(
                 }
 
                 if (n_past + 1 > cc->kv_cache.n_ctx) {
-                    // Output filled the self-KV cache before EOS. Keep the
-                    // partial transcript, flag truncation, warn — never
-                    // discard a usable result. See docs/input-limits.md.
+                    // Filled the self-KV cache before EOS: keep the partial
+                    // transcript, flag truncation, warn — never discard it.
                     cc->was_truncated = true;
                     transcribe::log_msg(
                         TRANSCRIBE_LOG_LEVEL_WARN,
@@ -1538,14 +1410,10 @@ transcribe_status run(
             }
         }
 
-        // A complete decode stops because the model emitted EOS
-        // (next_token == eos_id). If instead the loop ran out of budget —
-        // it reached the 512 max-new cap (step == max_tokens) with a
-        // non-EOS token still pending — the transcript is truncated. The
-        // two break sites above already flag the self-KV-full case; this
-        // mirror covers the normal-exit-at-budget case. A clean EOS decode
-        // leaves next_token == eos_id and never sets the flag. See
-        // docs/input-limits.md.
+        // A clean decode stops at EOS. If the loop instead ran out of budget
+        // (max-new cap) with a non-EOS token pending, the transcript is
+        // truncated. The break sites flag the self-KV-full case; this covers
+        // the normal-exit-at-budget case.
         if (!cc->was_truncated && next_token != eos_id) {
             cc->was_truncated = true;
             transcribe::log_msg(
@@ -1556,35 +1424,15 @@ transcribe_status run(
                 static_cast<int>(generated_ids.size()));
         }
 
-        // Build result hierarchy. Cohere advertises
-        // max_timestamp_kind == NONE: "text but no alignment data".
-        // That means no per-token, per-word, or per-segment timing
-        // surface at all — not even a zero-timed placeholder. The
-        // honest output shape is:
-        //
-        //   full_text   - the whole transcript
-        //   segments[0] - single segment whose text == full_text,
-        //                 with zeroed timings and zero first/n
-        //                 counts (the caller asked for NONE, so
-        //                 they should not see a token or word
-        //                 structure)
-        //   tokens      - empty
-        //   words       - empty
-        //
-        // The previous implementation populated cc->tokens with
-        // zero-timed entries and set seg.n_tokens to the token
-        // count, which made transcribe_n_tokens > 0 and let a
-        // caller enumerate token_text / token_t0_ms for a model
-        // that is not supposed to expose alignment data. That
-        // undercut the NONE contract. Drop them.
+        // Build the result. max_timestamp_kind == NONE means text but no
+        // alignment data: full_text plus one segment (text == full_text,
+        // zeroed timings and counts), with empty tokens/words.
         commit_result();
-    } // end Step 3 block
+    }
 
-    // Output truncation is a hard status: when the single-shot decode stopped
-    // before EOS (either break site above, or the post-loop budget check) it
-    // set cc->was_truncated. The partial transcript is already committed and
-    // stays readable (like an aborted run); surface the truncation to the
-    // caller rather than reporting a clean OK. See docs/input-limits.md.
+    // Output truncation is a hard status: the partial transcript is committed
+    // and stays readable (like an aborted run), but we surface the truncation
+    // rather than reporting a clean OK.
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
 }
 
@@ -1592,18 +1440,15 @@ transcribe_status run(
 // Offline batched decode (transcribe_run_batch)
 // ===========================================================================
 //
-// The encoder is compute-bound and stays SERIAL per utterance (the granite
-// lesson: batching a heavy conformer is a wash and regresses on mixed
-// lengths). Only the host-side mel is parallelized and the autoregressive
-// DECODE is batched — decode at one-token-per-step is memory-bandwidth-
-// bound, so batching B utterances amortizes the per-step weight reads.
+// The compute-bound encoder stays SERIAL per utterance (batching a heavy
+// conformer regresses on mixed lengths). The host-side mel is parallelized
+// and the bandwidth-bound autoregressive DECODE is batched, so B utterances
+// amortize the per-step weight reads.
 //
-// Cross-attention is the cohere-specific wrinkle vs the causal_lm families:
-// each utterance has its own encoder output (variable T_enc), so the cross
-// KV cache carries a batch dim and a per-utterance cross-pad mask discards
-// the frames past T_enc[b]. The short, uniform prompt is fed through the
-// same batched step graph (prompt_len sequential steps) rather than a
-// separate prompt graph.
+// Cohere-specific wrinkle: each utterance has its own encoder output
+// (variable T_enc), so the cross KV cache carries a batch dim and a
+// per-utterance cross-pad mask discards frames past T_enc[b]. The uniform
+// prompt feeds through the same batched step graph (prompt_len steps).
 
 // Encoder for one utterance from a precomputed mel buffer → host [hidden, T_enc].
 transcribe_status encode_one_to_host(
@@ -1772,10 +1617,9 @@ transcribe_status run_batch(
     mel_us += ggml_time_us() - t_mel0;
 
     // ----- Pass 1: serial per-utterance encoder -----
-    // Per-utterance input-length gate (same binding limit as run(): the encoder
-    // positional-encoding span enc_pos_emb_max_len). An over-length utterance is
-    // marked invalid with INPUT_TOO_LONG so the rest of the batch still decodes,
-    // mirroring how an encode failure drops one row. See docs/input-limits.md.
+    // Per-utterance input-length gate (same enc_pos_emb_max_len limit as
+    // run()). An over-length utterance is marked invalid with INPUT_TOO_LONG
+    // so the rest of the batch still decodes.
     std::vector<transcribe_status> reject_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<float>> enc_hosts(n);
     std::vector<int> T_enc(n, 0);
@@ -1884,12 +1728,10 @@ transcribe_status run_batch(
     }
 
     // ----- Batched step graph with a GROWING self-attention window -----
-    // The self-KV holds only the short text prompt + transcript (audio is in
-    // cross-KV), so the static n_ctx-wide read is mostly empty for short
-    // clips. Start the read window at 64 and double it as n_past advances
-    // (rebuild graph + widen mask, O(log) rebuilds; the KV cache persists),
-    // keeping per-step self-KV bandwidth within 2× of the real n_past. The
-    // cache capacity (max_n_kv) is unchanged.
+    // Self-KV holds only the short prompt + transcript (audio is in cross-KV),
+    // so a static n_ctx-wide read is mostly empty for short clips. Start the
+    // read window at 64 and double it as n_past advances (O(log) rebuilds; the
+    // KV cache persists), keeping per-step self-KV bandwidth within 2x of real.
     const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
     const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-INFINITY);
     const int32_t eos_id = hp.eos_token_id;
@@ -1952,10 +1794,8 @@ transcribe_status run_batch(
         rs.full_text = full;
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result = true; rs.status = TRANSCRIBE_OK;
-        // Per-utterance truncation parity with the single-shot path: a valid row
-        // that hit the generation budget / context window before eos reports
-        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
-        // override an otherwise-OK status — never a worse one.
+        // Truncation parity with the single-shot path; only override an
+        // otherwise-OK status, never a worse one.
         if (rs.status == TRANSCRIBE_OK &&
             b < static_cast<int>(truncated.size()) && truncated[b]) {
             cc->was_truncated = true;
@@ -1967,7 +1807,7 @@ transcribe_status run_batch(
         cc->batch_results.push_back(std::move(rs));
     }
 
-    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+    if (transcribe::env::flag("TRANSCRIBE_PERF_DEBUG")) {
         log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "cohere run_batch: n=%d T_enc_max=%d kv_cap=%d prompt=%d\n"
             "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)",

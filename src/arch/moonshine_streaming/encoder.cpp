@@ -1,33 +1,15 @@
 // arch/moonshine_streaming/encoder.cpp - Moonshine-Streaming encoder
 // graph builder.
 //
-// Forward shape (streaming-tiny):
+// Time-domain frontend: frame reshape [frame_len, T_frames] -> CMVN
+// (ggml_norm eps=1e-6, no affine) -> asinh(exp(log_k)·x) -> linear + SiLU ->
+// 2× causal Conv1d (left-pad k-1, stride 2; conv1 +bias +SiLU, conv2 +bias
+// only). Then n_layers transformer blocks (per-layer sliding-window mask, no
+// RoPE) and a final bias-less LN.
 //
-//   audio  [n_samples=176000]
-//     -> reshape [frame_len=80, T_frames=2200]   (frame_len innermost = ne0)
-//     -> CMVN per-frame (ggml_norm with eps=1e-6, no affine)
-//     -> dump enc.embedder.cmvn.out                                [80, 2200]
-//     -> asinh(exp(log_k) * x)
-//        Implemented as: z = x · exp(log_k); y = log(z + sqrt(z² + 1))
-//     -> dump enc.embedder.comp.out                                [80, 2200]
-//     -> linear (ne=[80, 320] in ggml) → [320, 2200]
-//     -> SiLU
-//     -> dump enc.embedder.linear.out                              [320, 2200]
-//     -> transpose to [T_frames, hidden] = [2200, 320] for conv_1d
-//     -> left-pad ne0 by k-1=4 (causal); conv1d stride=2 → [1100, 640]
-//     -> + bias + SiLU; reshape to [hidden=640, T1=1100]
-//     -> dump enc.embedder.conv1.out                               [640, 1100]
-//     -> transpose to [T1, 640], left-pad 4, conv1d stride=2 → [550, 320]
-//     -> + bias (NO SiLU); reshape to [hidden=320, T_enc=550]
-//     -> dump enc.embedder.conv2.out                               [320, 550]
-//     -> 6 × transformer block (per-layer sliding-window mask, no RoPE)
-//     -> final layer_norm (no bias; scale already includes +1.0)
-//     -> dump enc.final                                            [320, 550]
-//
-// Encoder LayerNorm note: every `MoonshineStreamingLayerNorm` has
-// `unit_offset=True` (effective gain = γ + 1.0). The converter pre-folds
-// the +1.0 into the GGUF tensor so we can use the regular `ggml_norm * scale`
-// pattern.
+// Encoder LayerNorm note: every MoonshineStreamingLayerNorm has
+// unit_offset=True (effective gain = γ + 1.0). The converter pre-folds the
+// +1.0 into the tensor so we use the plain `ggml_norm * scale` pattern.
 
 #include "encoder.h"
 
@@ -285,8 +267,8 @@ EncoderBuild build_encoder_graph(ggml_context *                       ctx,
 
     // Audio must be a multiple of frame_len so the reshape is well-defined.
     // Reference processor right-pads to multiples of 80 with attention_mask
-    // marking the pad slots. For Stage 4 jfk we use the trimmed length
-    // and require an exact multiple.
+    // marking the pad slots; here we require the caller to pass an exact
+    // multiple (callers right-pad before calling).
     if (n_samples % frame_len != 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "moonshine_streaming encoder: n_samples=%d not a multiple of "

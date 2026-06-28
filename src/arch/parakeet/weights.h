@@ -1,51 +1,27 @@
 // arch/parakeet/weights.h - canonical Parakeet tensor catalog and
-// per-instance weight slots.
+// per-instance weight slots. Internal to src/arch/parakeet/.
 //
-// This header is INTERNAL to src/arch/parakeet/. It defines:
+//   - ParakeetHParams: architecture KV read from stt.parakeet.* /
+//     stt.frontend.* before allocating tensors. Every shape-driving dim
+//     lives here.
+//   - ParakeetWeights: named borrowed ggml_tensor* slots, one per
+//     logical weight. Storage is owned by the model's ggml_context; the
+//     slots must not outlive it.
 //
-//   - ParakeetHParams: the architecture KV the loader reads from
-//     stt.parakeet.* / stt.frontend.* before allocating any tensors.
-//     Every dim that drives a tensor shape lives here.
+// The source file walks the canonical name list and validates each
+// tensor (presence + shape) against the hparams.
 //
-//   - ParakeetWeights: a struct of named borrowed ggml_tensor* slots,
-//     one per logical weight in a Parakeet model. The actual storage
-//     is owned by the model's ggml_context (allocated by
-//     gguf_init_from_file with no_alloc=false). The slots are
-//     borrowed pointers and must not outlive the ggml_context.
-//
-// The corresponding source file walks the canonical tensor name list
-// and validates each tensor (presence + shape) against the hparams,
-// following llama.cpp's `create_tensor`-with-explicit-shape pattern.
-// Required by default; the few honestly-optional tensors are wrapped
-// in a NOT_REQUIRED flag.
-//
-// Naming conventions baked in here (and matched by the converter):
-//
-//   - Linear weight tensors are stored in PyTorch order [out, in].
-//     ggml_mul_mat(W, x) takes the activation row vector x and reads
-//     ne0 of W as the input dim — so PyTorch [out, in] is what we
-//     want.
-//   - Conv2d weight tensors are stored in PyTorch OIHW
-//     [out_channels, in_channels, kH, kW], matching NeMo's native
-//     layout. Phase 4 figures out whether to feed this directly to
-//     ggml_conv_2d or transpose again at runtime — that's not 2C's
-//     problem.
-//   - Conv1d weight tensors (the depthwise/pointwise convs inside
-//     the Conformer block) are stored as PyTorch
-//     [out_channels, in_channels, kernel] for the pointwise convs and
-//     [out_channels, kernel, 1] for the depthwise (kernel * groups,
-//     where groups=out_channels=in_channels for depthwise).
-//   - LSTM gate matrices (Wx, Wh) are stored as a single concatenated
-//     [4*hidden, input] tensor in PyTorch order (i, f, g, o gates
-//     stacked along the row dimension). Bias is concatenated [4*hidden].
-//     This matches NeMo's safetensors layout exactly so the converter
-//     does not transpose.
-//   - LayerNorm and RMSNorm have separate weight + bias tensors of
-//     shape [d_model].
-//   - BatchNorm carries running_mean and running_var alongside
-//     weight + bias. We keep all four; folding into the surrounding
-//     conv happens at compute time in phase 4 (encoder is in eval
-//     mode at inference and BN reduces to an affine transform).
+// Tensor layout conventions (matched by the converter):
+//   - Linear weights: PyTorch [out, in] (ggml_mul_mat reads ne0 = in).
+//   - Conv2d weights: PyTorch OIHW [out_channels, in_channels, kH, kW].
+//   - Conv1d weights: PyTorch [out_channels, in_channels, kernel] for
+//     pointwise; [out_channels, kernel, 1] for depthwise (groups =
+//     out_channels = in_channels).
+//   - LSTM gates (Wx, Wh): single concatenated [4*hidden, input] in
+//     PyTorch (i, f, g, o) order; bias concatenated [4*hidden].
+//   - LayerNorm/RMSNorm: separate weight + bias, shape [d_model].
+//   - BatchNorm: weight + bias + running_mean + running_var; all four
+//     kept (folded into the conv at compute time, eval mode → affine).
 
 #pragma once
 
@@ -62,20 +38,13 @@ struct ggml_tensor;
 
 namespace transcribe::parakeet {
 
-// ---------------------------------------------------------------------------
-// Hyperparameters
-// ---------------------------------------------------------------------------
-//
-// Read from stt.parakeet.* / stt.frontend.* via read_parakeet_hparams().
-// Every field that controls a tensor shape MUST live here so the
-// loader can validate weight shapes deterministically against KV
-// (rather than against tensor sizes the converter happened to write).
+// Hyperparameters, read from stt.parakeet.* / stt.frontend.* via
+// read_parakeet_hparams(). Every shape-driving field lives here so the
+// loader validates weight shapes against KV, not against tensor sizes.
 
-// Decoder head dispatch. Resolved from stt.parakeet.head_kind (string KV).
-// Legacy v2/v3 GGUFs predate the KV; absent KV defaults to TDT, which is
-// what those GGUFs are. Drives conditional KV reads in
-// read_parakeet_hparams (predictor/joint/tdt only when applicable) and
-// the per-head decoder dispatch in model.cpp run().
+// Decoder head dispatch (stt.parakeet.head_kind string KV; absent
+// defaults to TDT for legacy v2/v3). Drives conditional KV reads and the
+// per-head decoder dispatch in run().
 enum class HeadKind { TDT, RNNT, CTC };
 
 struct ParakeetHParams {
@@ -92,129 +61,84 @@ struct ParakeetHParams {
     int32_t enc_pos_emb_max_len   = 0;
     bool    enc_use_bias          = false;
     // NeMo's RelPositionalEncoding multiplies x by sqrt(d_model) when
-    // `xscaling=True` is set in the encoder cfg. This pre-block scaling
-    // is structurally different from how v2/v3/tdt-* (xscaling=False)
-    // feed the pre_encode output into block 0. Default to false so
-    // legacy GGUFs without this KV (v2/v3 etc.) keep working unchanged.
+    // xscaling=True. Default false so legacy GGUFs (v2/v3, xscaling=False)
+    // keep working unchanged.
     bool    enc_xscaling          = false;
-    // Local attention window. -1 / -1 = full attention (the default for
-    // most variants). When non-negative, each query attends only to keys
-    // within an [left, right]-bounded set whose exact semantics depend
-    // on enc_att_context_style below.
-    //
-    // The two styles in use today:
-    //
-    //   AttContextStyle::Regular         — every other variant. When
-    //     both left/right are >= 0 (parakeet-tdt_ctc-1.1b sets
-    //     [128, 128]), pos_emb is shortened to (left+right+1) and the
-    //     band mask sits in matrix_bd via the existing pad/slice path,
-    //     matching NeMo's LocalAttRelPositionalEncoding.
-    //
-    //   AttContextStyle::ChunkedLimited  — nemotron-speech-streaming-en-0.6b
-    //     ([70, 13]). Full RelPositionalEncoding (pos_emb stays at
-    //     2T-1); a separate chunked mask is built host-side and added
-    //     to matrix_bd. chunk_size = right+1, left_chunks = left/chunk_size.
+    // Local attention window. -1/-1 = full attention (most variants).
+    // When non-negative, each query attends to keys within [left, right]
+    // per enc_att_context_style below:
+    //   Regular        — pos_emb shortened to (left+right+1) and the band
+    //     mask in matrix_bd (NeMo LocalAttRelPositionalEncoding);
+    //     parakeet-tdt_ctc-1.1b sets [128, 128].
+    //   ChunkedLimited — full RelPositionalEncoding (pos_emb 2T-1) plus a
+    //     host-side chunked mask; chunk_size = right+1, left_chunks =
+    //     left/chunk_size. nemotron-speech-streaming-en-0.6b ([70, 13]).
     int32_t enc_att_context_left  = -1;
     int32_t enc_att_context_right = -1;
 
-    // Multi-lookahead training menu for cache-aware streaming models.
-    // nemotron-speech-streaming-en-0.6b is trained on four (L, R) pairs
-    // simultaneously (att_context_probs = [0.25, 0.25, 0.25, 0.25] over
-    // [[70,13],[70,6],[70,1],[70,0]]) and the caller picks at inference
-    // time via transcribe_parakeet_stream_ext::att_context_right.
-    //
-    // Encoded as a flat GGUF int32 array [L0,R0,L1,R1,...] under the KV
-    // stt.parakeet.encoder.att_context_size_choices. Index 0 is the
-    // default (max-context / max-accuracy) setting, matching NeMo's
-    // att_context_size[0] convention; it always equals
-    // (enc_att_context_left, enc_att_context_right). Empty for offline
-    // variants — the loader synthesizes a single-element list from the
-    // scalar fields above when no choices KV is present, so call sites
-    // can read uniformly.
+    // Multi-lookahead training menu for cache-aware streaming models. A
+    // flat GGUF int32 array [L0,R0,L1,R1,...]; index 0 is the default
+    // (max-context) setting and always equals (enc_att_context_left,
+    // enc_att_context_right). The caller picks via
+    // transcribe_parakeet_stream_ext::att_context_right. Empty for offline
+    // variants; the loader synthesizes a one-element list from the scalar
+    // fields so call sites read uniformly. nemotron-speech-streaming-en
+    // is trained on [[70,13],[70,6],[70,1],[70,0]].
     std::vector<std::pair<int32_t, int32_t>> enc_att_context_size_choices;
 
-    // Chunked-limited-with-rc training menu (buffered streaming variants,
-    // i.e. parakeet-unified-en-0.6b). NeMo stores the 3-tuple [L, C, R]
-    // training menu as three independent lists in
-    // `att_chunk_context_size` — the cartesian product of the three is
-    // the full set of (L, C, R) combinations the model was trained
-    // against. At inference the runtime picks one entry from each list
-    // to form the active (L, C, R) tuple driving the chunked attention
-    // mask. Empty for variants that do not declare
-    // enc_att_context_style == ChunkedLimitedWithRc.
-    //
-    // For parakeet-unified-en-0.6b: L ∈ {70}, C ∈ {1, 2, 7, 13},
-    // R ∈ {0, 1, 2, 3, 4, 7, 13} (encoder frames at the 80ms rate).
-    // The "best accuracy" default is (70, 13, 13) = 5.6s / 1.04s / 1.04s.
+    // Chunked-limited-with-rc training menu (buffered streaming, i.e.
+    // parakeet-unified-en-0.6b): three independent L / C / R lists whose
+    // cartesian product is the set of (L, C, R) tuples the model trained
+    // against; the runtime picks one entry from each at inference. Empty
+    // unless enc_att_context_style == ChunkedLimitedWithRc. For
+    // parakeet-unified-en-0.6b: L ∈ {70}, C ∈ {1,2,7,13},
+    // R ∈ {0,1,2,3,4,7,13}; default (70, 13, 13).
     std::vector<int32_t> enc_att_chunk_left_choices;
     std::vector<int32_t> enc_att_chunk_chunk_choices;
     std::vector<int32_t> enc_att_chunk_right_choices;
 
-    // Self-attention context style (introduced by streaming variants).
-    // Resolved from stt.parakeet.encoder.att_context_style (string KV);
-    // optional, defaults to "regular" so every legacy GGUF stays on the
-    // existing path.
-    //
-    //   Regular              — full attention (when L=R=-1) or local
-    //     sliding window. Every offline parakeet variant ships this.
-    //
-    //   ChunkedLimited       — cache-aware streaming with a 2-tuple
-    //     (L, R) chunk mask. nemotron-speech-streaming-en-0.6b.
-    //
-    //   ChunkedLimitedWithRc — buffered streaming with a 3-tuple
-    //     (L, C, R) chunk mask. parakeet-unified-en-0.6b. The training
-    //     menu lives in enc_att_chunk_*_choices above; the active
-    //     tuple is picked at stream_begin time. Note the offline path
-    //     stays on full attention even when the style is
-    //     ChunkedLimitedWithRc — the cfg's `att_context_size` is
-    //     [-1, -1] for this variant; the streaming mask is engaged
+    // Self-attention context style (stt.parakeet.encoder.att_context_style
+    // string KV; optional, default "regular").
+    //   Regular              — full attention (L=R=-1) or local window;
+    //     every offline variant.
+    //   ChunkedLimited       — cache-aware streaming, 2-tuple (L, R) mask;
+    //     nemotron-speech-streaming-en-0.6b.
+    //   ChunkedLimitedWithRc — buffered streaming, 3-tuple (L, C, R) mask;
+    //     parakeet-unified-en-0.6b. The offline path stays on full
+    //     attention (cfg att_context_size [-1, -1]); the mask is engaged
     //     only by the buffered driver.
     enum class AttContextStyle { Regular, ChunkedLimited, ChunkedLimitedWithRc };
     AttContextStyle enc_att_context_style = AttContextStyle::Regular;
 
-    // Depthwise convolution context window inside the Conformer block.
-    // -1 / -1 = symmetric (kernel-1)/2 on both sides (every offline
-    // variant). NeMo's `conv_context_size = "causal"` emits
-    // [kernel-1, 0] (nemotron-speech-streaming-en-0.6b uses kernel=9,
-    // so [8, 0]) so the depthwise conv only consumes left-context.
+    // Depthwise conv context window inside the Conformer block. -1/-1 =
+    // symmetric (kernel-1)/2 (every offline variant). NeMo's causal
+    // conv_context_size emits [kernel-1, 0] (left-context only).
     int32_t enc_conv_context_left  = -1;
     int32_t enc_conv_context_right = -1;
 
-    // Conv-module normalisation choice. NeMo's offline default is
-    // BatchNorm; streaming variants use LayerNorm to avoid stat
-    // brittleness across chunks. With LayerNorm the GGUF carries the
-    // same `conv.bn.weight` / `conv.bn.bias` tensor names but omits
-    // running_mean / running_var, and the conformer applies an
-    // unfused LayerNorm (compute per-channel mean/std at inference,
-    // then affine-transform with bn_w / bn_b).
+    // Conv-module normalisation. Offline default BatchNorm; streaming
+    // variants use LayerNorm. With LayerNorm the GGUF carries the same
+    // conv.bn.weight / conv.bn.bias names but omits running_mean/var, and
+    // the conformer applies an unfused LayerNorm (per-channel mean/std
+    // then affine with bn_w / bn_b).
     enum class ConvNormType { BatchNorm, LayerNorm };
     ConvNormType enc_conv_norm_type = ConvNormType::BatchNorm;
 
-    // Cache-aware streaming pre-encode constants. Populated from the
-    // optional KVs:
-    //   stt.parakeet.encoder.streaming.pre_encode_cache_size  (int32)
-    //   stt.parakeet.encoder.streaming.drop_extra_pre_encoded (int32)
-    // Both are properties of the ConvSubsampling stack — independent of
-    // the chosen att_context_size — so they're read once and reused
-    // across all latency settings.
-    //
-    // enc_stream_pre_encode_cache_size: number of mel-history frames the
-    //   streaming encoder must prepend to each non-first chunk to fill
-    //   the conv-subsample receptive field (9 on nemotron).
-    // enc_stream_drop_extra_pre_encoded: number of encoder frames
-    //   discarded after the subsample stack on each non-first chunk to
-    //   align with the cache boundary (2 on nemotron).
-    //
-    // Zero when absent from the GGUF (offline variants); the streaming
-    // code paths gate on both > 0.
+    // Cache-aware streaming pre-encode constants (optional KVs under
+    // stt.parakeet.encoder.streaming.*; both 0 for offline variants, on
+    // which the streaming paths gate).
+    //   pre_encode_cache_size: mel-history frames prepended to each
+    //     non-first chunk to fill the conv-subsample receptive field
+    //     (9 on nemotron).
+    //   drop_extra_pre_encoded: encoder frames discarded after the
+    //     subsample stack per non-first chunk to align with the cache
+    //     boundary (2 on nemotron).
     int32_t enc_stream_pre_encode_cache_size  = 0;
     int32_t enc_stream_drop_extra_pre_encoded = 0;
-    // ConvSubsampling's "first-chunk output frames" — used to compute
+    // ConvSubsampling's first-chunk output frames; used for
     // chunk_size_first = sampling_frames_first + subsampling_factor * R.
-    // FastConformer's 2-stride-2 stack ships sampling_frames=[1, 8];
-    // we capture the first entry (1). Defaults to subsampling_factor
-    // when absent (matches the steady-state value, i.e. legacy GGUFs
-    // collapse to "no first-chunk special case").
+    // FastConformer ships sampling_frames=[1, 8] (first entry 1). Defaults
+    // to subsampling_factor when absent (no first-chunk special case).
     int32_t enc_stream_sampling_frames_first  = 0;
 
     // Predictor (RNN-T prediction network). TDT and RNNT only; zero for CTC.
@@ -226,44 +150,28 @@ struct ParakeetHParams {
     // Joint network. TDT and RNNT only; zero for CTC.
     int32_t joint_hidden            = 0;
     int32_t joint_num_extra_outputs = 0; // TDT durations count; 0 for RNNT
-    // Joint output activation. NeMo Parakeet 0.6B v2/v3 ship "relu"
-    // (verified against config.json on both variants); the rnnt.py
-    // reference defaults to "tanh" but no published Parakeet variant
-    // we know about uses tanh. Read from stt.parakeet.joint.activation
-    // and validated against the small allow-list the C++ joint forward
-    // implements. Without this read at load time the C++ side would
-    // hard-code an activation choice and silently produce wrong logits
-    // on a model that asked for a different one.
+    // Joint output activation (stt.parakeet.joint.activation), validated
+    // against the C++ joint forward's allow-list at load. v2/v3 ship
+    // "relu". Read so the C++ side doesn't hard-code an activation and
+    // silently produce wrong logits on a model that asked for another.
     std::string joint_activation;
 
-    // TDT decoding parameters.
-    //
-    // tdt_durations: the duration values the joint network's "extra
-    // outputs" axis predicts (e.g. [0,1,2,3,4] for the published 0.6B
-    // variants). The argmax over duration logits selects an index into
-    // this list; the chosen integer is how many encoder frames the TDT
-    // decode driver advances after emitting a token. PLAN.md fixes the
-    // KV name as `stt.parakeet.tdt.durations` (i32 array). Length must
-    // equal joint_num_extra_outputs (we cross-validate at load time).
+    // TDT durations: the values the joint's "extra outputs" axis predicts
+    // (e.g. [0,1,2,3,4]); argmax over duration logits indexes this list,
+    // and the chosen integer is how many encoder frames the decoder
+    // advances after a token. KV stt.parakeet.tdt.durations; length must
+    // equal joint_num_extra_outputs (cross-validated at load).
     std::vector<int32_t> tdt_durations;
 
-    // tdt_max_symbols: the per-encoder-frame "stuck" cap from NeMo's
-    // greedy_batch decoder. Optional KV with a documented default of 10
-    // (matches both published v2 and v3 configs). When the decoder has
-    // emitted N consecutive zero-duration tokens for the same frame
-    // without advancing time, it forces a +1 advance to break the
-    // loop. Set to 0 to disable.
+    // tdt_max_symbols: per-frame "stuck" cap (NeMo greedy_batch). Optional
+    // KV, default 10. After N consecutive zero-duration tokens on the same
+    // frame, forces a +1 advance. 0 disables.
     int32_t tdt_max_symbols = 10;
 
-    // Frontend (mel feature extractor). The full set of stt.frontend.*
-    // KV the converter emits and the phase 3 C++ frontend reads. PLAN.md
-    // declares this list as the *complete* set the converter and loader
-    // must agree on, so the loader is the gate that catches any future
-    // converter that drops a field. Fields irrelevant to Parakeet
-    // (LFR window/shift, CMVN mean/inv_stddev) are not in this struct
-    // because no published Parakeet variant uses them — when SenseVoice
-    // or another LFR/CMVN family lands, those fields move to a
-    // family-agnostic FrontendParams struct.
+    // Frontend (mel feature extractor). The complete stt.frontend.* set
+    // the converter emits and the C++ frontend reads; the loader gates on
+    // it. CMVN/LFR fields are omitted (no published Parakeet variant uses
+    // them).
     std::string fe_type;          // "mel" for parakeet
     int32_t     fe_num_mels    = 0;
     int32_t     fe_sample_rate = 0;
@@ -283,20 +191,15 @@ struct ParakeetHParams {
     // Zero for TDT/RNNT.
     int32_t head_ctc_n_classes = 0;
 
-    // Language-conditioning prompt MLP (NeMo's
-    // EncDecRNNTBPEModelWithPrompt). Multilingual variants prepend a
-    // 2-layer MLP that mixes a one-hot prompt vector into the encoder
-    // output before the RNN-T joint sees it:
-    //
-    //     x = concat(enc[d_model], one_hot(prompt_id)[num_prompts])
-    //     h = relu(W0 @ x + b0)        // W0: [prompt_hidden, d_model+P]
-    //     y = W2 @ h + b2              // W2: [d_model, prompt_hidden]
-    //     enc_out := y
-    //
-    // Gated on `has_prompt` (true iff stt.parakeet.prompt.num_prompts
-    // is present in the GGUF). Today: nemotron-3.5-asr-streaming-0.6b.
-    // Loader reads stt.parakeet.prompt.{num_prompts, hidden, field,
-    // activation, dictionary.locales, dictionary.indices, auto_id}.
+    // Language-conditioning prompt MLP (NeMo
+    // EncDecRNNTBPEModelWithPrompt). Multilingual variants mix a one-hot
+    // prompt vector into the encoder output before the RNN-T joint:
+    //   x = concat(enc[d_model], one_hot(prompt_id)[num_prompts])
+    //   h = relu(W0 @ x + b0)        // W0: [prompt_hidden, d_model+P]
+    //   y = W2 @ h + b2              // W2: [d_model, prompt_hidden]
+    //   enc_out := y
+    // Gated on has_prompt (stt.parakeet.prompt.num_prompts present).
+    // Today: nemotron-3.5-asr-streaming-0.6b.
     bool                       has_prompt              = false;
     int32_t                    prompt_num_prompts      = 0;
     int32_t                    prompt_hidden           = 0;
@@ -312,29 +215,18 @@ struct ParakeetHParams {
 };
 
 // Read every required stt.parakeet.* / stt.frontend.* KV into hp.
-// Returns:
-//   TRANSCRIBE_OK              on success.
-//   TRANSCRIBE_ERR_INVALID_ARG if gguf is null.
-//   TRANSCRIBE_ERR_GGUF        if a required key is missing or has the
-//                              wrong type, or if cross-field invariants
-//                              don't hold (e.g. d_model not divisible
-//                              by n_heads).
+// Returns INVALID_ARG if gguf is null, ERR_GGUF on a missing/wrong-type
+// key or a cross-field invariant failure (e.g. d_model % n_heads != 0).
 transcribe_status read_parakeet_hparams(const gguf_context * gguf,
                                         ParakeetHParams &    hp);
 
-// ---------------------------------------------------------------------------
-// Weight slots
-// ---------------------------------------------------------------------------
-//
-// Every ggml_tensor pointer below is a borrowed pointer into the
-// model's ggml_context (the one that owns the data buffer). They are
-// invalidated when the model is freed.
+// Weight slots. Every ggml_tensor* below is borrowed into the model's
+// ggml_context and is invalidated when the model is freed.
 
 struct ParakeetPreEncode {
     // dw_striding subsampling: 1 standard conv + 2 depthwise-separable
-    // conv pairs = 8x downsampling on the time axis. The numeric
-    // indices in the names below come from NeMo's torch.nn.Sequential
-    // layout (1 and 4 are activation modules, hence skipped).
+    // conv pairs = 8x time downsampling. Indices follow NeMo's
+    // torch.nn.Sequential (1 and 4 are activation modules, skipped).
     ggml_tensor * conv0_w = nullptr; // [out=channels,        in=1,        kh=3, kw=3]
     ggml_tensor * conv0_b = nullptr; // [channels]
     ggml_tensor * conv2_w = nullptr; // [out=channels,        in=1 (dw),   kh=3, kw=3]
@@ -350,12 +242,9 @@ struct ParakeetPreEncode {
     ggml_tensor * out_b   = nullptr;
 };
 
-// One Conformer block. Same shape contract for every block; the loader
-// builds n_layers of these. The bias slots (`*_b` on the linear/conv
-// layers, NOT on the layer norms / BN / pos_bias) are populated only
-// when `enc_use_bias=true` — left null for the v2/v3 baseline. The
-// shared `transcribe::conformer::BlockView` already accepts nullable
-// biases on every linear/conv slot.
+// One Conformer block (same shape contract for every block). The bias
+// slots (*_b on linear/conv layers, NOT on norms / BN / pos_bias) are
+// populated only when enc_use_bias=true; null for the v2/v3 baseline.
 struct ParakeetBlock {
     // Macaron feed-forward 1.
     ggml_tensor * norm_ff1_w = nullptr; // [d_model]
@@ -415,12 +304,11 @@ struct ParakeetBlock {
 };
 
 struct ParakeetPredictor {
-    // Token embedding. The +1 row is the "start of sequence / no
-    // previous token" embedding NeMo prepends to vocab_size.
+    // Token embedding; the +1 row is NeMo's "start of sequence" embedding.
     ggml_tensor * embed_w = nullptr; // [pred_vocab, pred_hidden]
 
-    // 2-layer LSTM by default for v2/v3 0.6b. Concatenated gate
-    // weights in PyTorch (i, f, g, o) order, 4*pred_hidden rows.
+    // 2-layer LSTM (v2/v3 0.6b). Concatenated gate weights in PyTorch
+    // (i, f, g, o) order, 4*pred_hidden rows.
     struct LstmLayer {
         ggml_tensor * Wx = nullptr; // [4*pred_hidden, pred_hidden]   (input-to-hidden, layer 0 input dim is pred_hidden because of the embed)
         ggml_tensor * Wh = nullptr; // [4*pred_hidden, pred_hidden]   (hidden-to-hidden)
@@ -466,21 +354,12 @@ struct ParakeetWeights {
     ParakeetPromptMlp          prompt;    // populated when hp.has_prompt
 };
 
-// Walk the canonical tensor list, look up each tensor by name in the
-// gguf, validate its shape against hp, and store the borrowed pointer
-// in the matching slot of weights. The ggml_tensor objects must
-// already exist in ctx_meta — typically because the caller invoked
-// gguf_init_from_file with no_alloc=false and ctx=&ctx_meta, which
-// both creates ggml_tensors AND reads the data section.
-//
-// Follows llama.cpp's load_tensors pattern: every required tensor
-// must be present with the exact expected shape; missing or
-// shape-mismatched tensors return TRANSCRIBE_ERR_GGUF with a log
-// message naming the offending tensor.
-//
-// On failure the partially-built `weights` is left in an
-// indeterminate state — the caller is expected to throw the whole
-// model away.
+// Walk the canonical tensor list, look up each tensor by name, validate
+// its shape against hp, and store the borrowed pointer in the matching
+// slot. The ggml_tensors must already exist in ctx_meta. Every required
+// tensor must be present with the exact shape; missing/mismatched returns
+// TRANSCRIBE_ERR_GGUF naming the tensor. On failure `weights` is left
+// indeterminate (the caller throws the model away).
 transcribe_status build_parakeet_weights(ggml_context *          ctx_meta,
                                          const ParakeetHParams & hp,
                                          ParakeetWeights &       weights);

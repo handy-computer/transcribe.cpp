@@ -190,7 +190,6 @@ transcribe_status build_block(ggml_context *        ctx_meta,
     const int dff = hp.enc_d_ff;
     const int dw_k = hp.enc_conv_kernel;
 
-    // Macaron FF1.
     GET_LN  (b.norm_ff1_w, lname("enc.blocks.%d.norm_ff1.weight", i));
     GET_LN  (b.norm_ff1_b, lname("enc.blocks.%d.norm_ff1.bias",   i));
     GET_LIN_W(b.ff1_lin1_w, lname("enc.blocks.%d.ff1.linear1.weight", i), d,   dff);
@@ -198,7 +197,6 @@ transcribe_status build_block(ggml_context *        ctx_meta,
     GET_LIN_W(b.ff1_lin2_w, lname("enc.blocks.%d.ff1.linear2.weight", i), dff, d);
     GET_LIN_B(b.ff1_lin2_b, lname("enc.blocks.%d.ff1.linear2.bias",   i), d);
 
-    // Conv module.
     GET_LN  (b.norm_conv_w, lname("enc.blocks.%d.norm_conv.weight", i));
     GET_LN  (b.norm_conv_b, lname("enc.blocks.%d.norm_conv.bias",   i));
     GET_CONV_W(b.conv_pw1_w, lname("enc.blocks.%d.conv.pointwise1.weight", i), 1, d, 2 * d);
@@ -222,7 +220,6 @@ transcribe_status build_block(ggml_context *        ctx_meta,
     GET_LIN_W(b.attn_out_w, lname("enc.blocks.%d.attn.linear_out.weight", i), d, d);
     GET_LIN_B(b.attn_out_b, lname("enc.blocks.%d.attn.linear_out.bias",   i), d);
 
-    // Macaron FF2.
     GET_LN  (b.norm_ff2_w, lname("enc.blocks.%d.norm_ff2.weight", i));
     GET_LN  (b.norm_ff2_b, lname("enc.blocks.%d.norm_ff2.bias",   i));
     GET_LIN_W(b.ff2_lin1_w, lname("enc.blocks.%d.ff2.linear1.weight", i), d,   dff);

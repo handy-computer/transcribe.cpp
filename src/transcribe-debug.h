@@ -1,46 +1,24 @@
 // transcribe-debug.h - per-stage tensor dumping for the numerical
 // accuracy harness.
 //
-// Phase 4 step 2 of the encoder port. Provides a single internal API
-// the encoder graph builder can call to write a named tensor's
-// contents to disk in the same on-disk format that
-// scripts/dump_reference_*.py emits, so scripts/compare_tensors.py can
-// diff a C++ dump dir against a Python reference dump dir without
-// translation.
+// Writes a named tensor to disk in the format scripts/dump_reference_*.py
+// emits, so scripts/compare_tensors.py can diff C++ vs Python dump dirs
+// directly.
 //
-// On-disk format (matches scripts/dump_reference_*.py::write_dump):
-//
+// On-disk format (matches dump_reference_*.py::write_dump):
 //   <dump_dir>/<name>.f32   raw little-endian fp32, row-major (C order)
-//   <dump_dir>/<name>.json  sidecar metadata
+//   <dump_dir>/<name>.json  sidecar: { name, stage?, shape (slow-to-fast),
+//                           dtype, layout, min, max, mean, source }
 //
-// The JSON sidecar carries:
+// Critical layout note: ggml ne[] is fast-to-slow (ne[0] = innermost).
+// Numpy / the Python dumpers use slow-to-fast. The dumper reverses ne[]
+// and drops trailing 1s, so ggml ne=[1024, 275, 1, 1] ([d_model, T, B=1])
+// lands on disk as shape=[275, 1024] — the reference's [T, d_model] after
+// squeezing the batch dim.
 //
-//   { "name": "...",
-//     "stage": "...",          // optional provenance label
-//     "shape": [d0, d1, ...],  // numpy/row-major (slow-to-fast)
-//     "dtype": "f32",
-//     "layout": "row-major",
-//     "min": <float>, "max": <float>, "mean": <float>,
-//     "source": { "kind": "cpp" } }
-//
-// Critical layout note: ggml ne[] is fast-to-slow (ne[0] = innermost,
-// most-contiguous dim). Numpy / the Python dumpers use slow-to-fast
-// (last axis varies fastest). The dumper converts by reversing ne[]
-// and dropping trailing 1s, so a ggml tensor with ne=[1024, 275, 1, 1]
-// (typical encoder activation [d_model, T, B=1]) lands on disk as
-// shape=[275, 1024] — same as the reference's [T, d_model] tensor
-// after squeezing the batch dim.
-//
-// Activation: dumping is gated on the TRANSCRIBE_DUMP_DIR environment
-// variable. When unset, init() is a no-op and every dump_tensor call
-// returns immediately. The encoder graph builder can sprinkle
-// dump_tensor() calls freely without affecting normal-build cost.
-//
-// Thread safety: the dump dir is captured once at init() and the
-// per-call file writes are not synchronized. The harness assumes
-// single-threaded use during numerical accuracy bringup. Concurrent
-// dumps would race on file creation and produce truncated output —
-// not a goal for v1.
+// Gated on TRANSCRIBE_DUMP_DIR: unset → init() is a no-op and dumps return
+// immediately. Not thread-safe (file writes are unsynchronized); single-
+// threaded use only.
 
 #pragma once
 
@@ -63,6 +41,28 @@ bool enabled();
 // Lifetime is the process; the returned pointer stays valid as long
 // as the dumper is enabled. Useful for tests.
 const char * dump_dir();
+
+// Validation-hook gating ------------------------------------------------------
+//
+// The reference-mel injection (TRANSCRIBE_MEL_FROM_REF) and the per-layer
+// tensor dumps (TRANSCRIBE_DUMP_ALL_BLOCKS / TRANSCRIBE_DUMP_SUB_BLOCKS) are
+// numerical-parity hooks for porting/validation. They are compiled in only when
+// the library is built with -DTRANSCRIBE_ENABLE_VALIDATION_HOOKS=ON (see the
+// CMake option). Release builds leave them out.
+
+// True if the library was compiled with validation hooks enabled.
+bool validation_hooks_enabled();
+
+// Per-layer block dump opt-in (TRANSCRIBE_DUMP_ALL_BLOCKS). Always false unless
+// the library was built with validation hooks. The env var name lives only in
+// transcribe-debug.cpp (behind the compile guard) so it is absent from the
+// strings of a release binary.
+bool dump_all_blocks_requested();
+
+// TRANSCRIBE_DUMP_SUB_BLOCKS spec (CSV of block indices to dump sub-layer
+// activations for) or nullptr. Always nullptr unless built with validation
+// hooks.
+const char * dump_sub_blocks_spec();
 
 // Push/pop a name prefix that gets prepended to every subsequent
 // dump_tensor / dump_host_f32 call. Used by buffered streaming to
@@ -108,10 +108,8 @@ void dump_tensor(const char *               name,
 
 // Dump a host-side fp32 buffer to <dump_dir>/<name>.{f32,json}.
 //
-// Used by code paths that don't run on a ggml backend — phase 5's
-// decoder runs the LSTM + joint + TDT loop directly on host floats
-// because the per-step compute is small and a backend graph would
-// add lifetime complexity for no perf win.
+// Used by code paths that don't run on a ggml backend — e.g. a decoder
+// that runs the LSTM + joint + TDT loop directly on host floats.
 //
 // `data` points at `n_elem` contiguous fp32 values. `shape` is the
 // numpy/row-major (slow-to-fast) shape and must satisfy

@@ -1,12 +1,7 @@
 // arch/canary/encoder.cpp - Canary FastConformer encoder graph builder.
 //
-// Glue over transcribe::conformer. Encoder shape mirrors parakeet's
-// FastConformer, but every linear (Q/K/V/out, both macaron FFs, the
-// attention-pos projection, conv pointwise pair) carries a bias. Each
-// BlockView bias slot is threaded through from the loader — see the
-// per-block wiring below. The optional encoder->decoder projection is
-// canary-specific and only fires for variants where
-// stt.canary.decoder.encoder_decoder_proj=true (180m-flash today).
+// Glue over transcribe::conformer: threads each BlockView bias slot through
+// from the loader, plus the optional 180m-flash encoder->decoder projection.
 
 #include "encoder.h"
 
@@ -28,15 +23,12 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
-// Match parakeet: direct dw on every backend for the in-block site;
-// im2col for pre-encode (preserves parakeet's historical behavior since
-// canary's encoder geometry is identical to parakeet's at the dw site).
+// Direct dw on every backend for the in-block site; im2col for pre-encode
+// (canary's encoder geometry matches parakeet's at the dw site).
 bool detect_direct_dw_in_block(const char * /*backend*/) {
-    const char * env = std::getenv("TRANSCRIBE_CONV_DIRECT_DW");
-    if (env != nullptr) return true;
-    env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW");
-    if (env != nullptr) return false;
-    return true;
+    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW",
+                                     "TRANSCRIBE_CONV_NO_DIRECT_DW",
+                                     /*backend_default=*/true);
 }
 
 conf::PreEncodeView to_view(const CanaryPreEncode & pe) {
@@ -53,13 +45,11 @@ conf::PreEncodeView to_view(const CanaryPreEncode & pe) {
 conf::BlockView to_view(const CanaryBlock & b) {
     conf::BlockView v;
 
-    // FF1 — every canary variant ships biases on the FFN linears.
     v.norm_ff1_w = b.norm_ff1_w;
     v.norm_ff1_b = b.norm_ff1_b;
     v.ff1_lin1_w = b.ff1_lin1_w; v.ff1_lin1_b = b.ff1_lin1_b;
     v.ff1_lin2_w = b.ff1_lin2_w; v.ff1_lin2_b = b.ff1_lin2_b;
 
-    // Self-attention with relative position — Q/K/V/out all have biases.
     v.norm_attn_w = b.norm_attn_w;
     v.norm_attn_b = b.norm_attn_b;
     v.attn_q_w    = b.attn_q_w;   v.attn_q_b   = b.attn_q_b;
@@ -70,7 +60,6 @@ conf::BlockView to_view(const CanaryBlock & b) {
     v.attn_pos_u  = b.attn_pos_u;
     v.attn_pos_v  = b.attn_pos_v;
 
-    // Conv module (biases on pw1/dw/pw2 — present in canary GGUF).
     v.norm_conv_w         = b.norm_conv_w;
     v.norm_conv_b         = b.norm_conv_b;
     v.conv_pw1_w          = b.conv_pw1_w; v.conv_pw1_b = b.conv_pw1_b;
@@ -79,7 +68,6 @@ conf::BlockView to_view(const CanaryBlock & b) {
     v.conv_bn_fused_scale = b.conv_bn_fused_scale;
     v.conv_bn_fused_bias  = b.conv_bn_fused_bias;
 
-    // FF2 — same bias pattern as FF1.
     v.norm_ff2_w = b.norm_ff2_w;
     v.norm_ff2_b = b.norm_ff2_b;
     v.ff2_lin1_w = b.ff2_lin1_w; v.ff2_lin1_b = b.ff2_lin1_b;
@@ -168,8 +156,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
             transcribe::debug::mark_tensor_for_dump(x);
         }
 
-        // Mid block (indexed n_layers/2 to match the reference dumper's
-        // _block_indices convention {0, n//2, n-1}).
+        // Dump blocks {0, n/2, n-1}.
         const int mid_idx = hp.enc_n_layers / 2;
 
         // Blocks 1..N-1.
@@ -193,9 +180,7 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
         }
     }
 
-    // Native encoder output (pre-projection). Reference dumper emits
-    // this as enc.native — for variants without a projection it is
-    // numerically equal to enc.final.
+    // Native (pre-projection) output; equals enc.final when there is no proj.
     eb.dumps.native_out = x;
     {
         ggml_tensor * named_native = conf::named(x, "enc.native");

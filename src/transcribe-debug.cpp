@@ -8,6 +8,8 @@
 
 #include "transcribe-debug.h"
 
+#include "transcribe-env.h"
+
 #include "ggml.h"
 #include "ggml-backend.h"
 
@@ -134,6 +136,30 @@ bool enabled() {
 
 const char * dump_dir() {
     return enabled() ? g_dump_dir.c_str() : nullptr;
+}
+
+bool validation_hooks_enabled() {
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool dump_all_blocks_requested() {
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    return transcribe::env::flag("TRANSCRIBE_DUMP_ALL_BLOCKS");
+#else
+    return false;
+#endif
+}
+
+const char * dump_sub_blocks_spec() {
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    return transcribe::env::str("TRANSCRIBE_DUMP_SUB_BLOCKS");
+#else
+    return nullptr;
+#endif
 }
 
 void push_name_prefix(const char * prefix) {

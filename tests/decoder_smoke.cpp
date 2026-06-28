@@ -1,9 +1,8 @@
 // decoder_smoke.cpp - real-model gated end-to-end decoder accuracy test.
 //
-// Phase 5 + phase 6 acceptance gate. Loads a real Parakeet v2 GGUF,
-// runs the full pipeline (load → mel → encoder → predictor + joint
-// + TDT decode → result accessor population) on samples/jfk.wav, and
-// asserts:
+// Loads a real Parakeet v2 GGUF, runs the full pipeline (load → mel →
+// encoder → predictor + joint + TDT decode → result accessor population)
+// on samples/jfk.wav, and asserts:
 //
 //   1. transcribe_run completes OK on the canonical sample.
 //   2. transcribe_full_text matches the canonical JFK reference text
@@ -27,7 +26,7 @@
 // validation.
 //
 // Gating: built only when TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON; at run
-// time TRANSCRIBE_REAL_PARAKEET_GGUF must point at a v2 GGUF. The test
+// time TRANSCRIBE_PARAKEET_GGUF must point at a v2 GGUF. The test
 // exits 77 (CTest "skipped") when the model path is unset or missing.
 //
 // The reference text was validated against v2; v3's encoder weights are
@@ -119,10 +118,10 @@ constexpr int k_max_edit_distance = 3;
 
 int main() {
     // ---- Resolve env -----------------------------------------------
-    const char * gguf_env = std::getenv("TRANSCRIBE_REAL_PARAKEET_GGUF");
+    const char * gguf_env = std::getenv("TRANSCRIBE_PARAKEET_GGUF");
     if (gguf_env == nullptr || gguf_env[0] == '\0') {
         std::fprintf(stderr,
-                     "decoder_smoke: TRANSCRIBE_REAL_PARAKEET_GGUF not set; "
+                     "decoder_smoke: TRANSCRIBE_PARAKEET_GGUF not set; "
                      "skipping\n");
         return 77;
     }

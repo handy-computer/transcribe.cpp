@@ -1,30 +1,19 @@
 // transcribe-mel.h - native C++ log-mel feature extractor.
 //
-// PRIVATE header. Lives under src/ and is not exported. The public C
-// ABI in include/transcribe.h does not surface this; the family
-// handlers (currently only Parakeet) construct one and call it from
-// inside transcribe_run when phase 4 lands.
+// PRIVATE header (src/, not exported). Pure CPU, no ggml dependency:
+// audio in, std::vector<float> mel out; the family encoder builder
+// copies the result into a ggml_tensor at the backend boundary.
 //
-// Phase 3 scope: pure CPU, no ggml dependency. Audio in, mel out,
-// std::vector<float> for the buffer. The encoder builder in phase 4
-// is responsible for copying the result into a ggml_tensor at the
-// backend boundary.
+// Matches NeMo's AudioToMelSpectrogramPreprocessor / FilterbankFeatures
+// as exported in nemo128.onnx. The per-NeMo numerical constants
+// (log_eps = 2^-24, unbiased variance, reflect padding, fp64 STFT,
+// mag_power = 2.0) are hardcoded in the .cpp rather than in the GGUF
+// schema; they become per-family knobs only when a second family needs
+// different values.
 //
-// Algorithm pinned by phase 3 preflight (see RESUME.md "Parakeet
-// frontend spec"). The implementation matches NeMo's
-// AudioToMelSpectrogramPreprocessor / FilterbankFeatures pipeline as
-// exported in nemo128.onnx, verified against the upstream NeMo
-// features.py source and a standalone PyTorch reproduction. The
-// per-NeMo numerical constants (log_eps = 2^-24, unbiased variance,
-// reflect padding, fp64 STFT, mag_power = 2.0) are hardcoded in the
-// .cpp file rather than added to the GGUF schema; see PLAN.md
-// "complete contract" rule. They become per-family knobs only when a
-// second family wants different values.
-//
-// Construction is one-shot: the constructor precomputes the periodic
-// hann window (zero-padded from win_length to n_fft) and the
-// Slaney-normalized mel filterbank. compute() is then a function of
-// (config, audio) only.
+// Construction is one-shot: the constructor precomputes the hann window
+// (zero-padded from win_length to n_fft) and the Slaney-normalized mel
+// filterbank. compute() is then a function of (config, audio) only.
 
 #pragma once
 

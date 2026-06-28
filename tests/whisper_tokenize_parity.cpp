@@ -1,7 +1,7 @@
 // whisper_tokenize_parity.cpp - real-model gated test that
 // transcribe_tokenize() produces HF-identical token sequences on
 // Whisper's GPT-2 byte-level BPE, including the digit / contraction
-// cases that forced the GPT-2 pretokenizer branch in Stage 1.
+// cases that exercise the GPT-2 pretokenizer branch.
 //
 // The expected token ids were computed with HuggingFace's
 // openai/whisper-tiny tokenizer, add_special_tokens=False. That
@@ -12,7 +12,7 @@
 // but the text-only BPE pieces tested here sit in the shared prefix
 // of both vocabs, so the expected ids match there too.
 //
-// Gated by TRANSCRIBE_WHISPER_MODEL (same env var used by
+// Gated by TRANSCRIBE_WHISPER_GGUF (same env var used by
 // whisper_e2e_smoke). Exits 77 (cmake SKIP_RETURN_CODE) when unset.
 
 #include "transcribe.h"
@@ -73,10 +73,10 @@ void check_case(const struct transcribe_model * model, const Case & c) {
 } // namespace
 
 int main() {
-    const char * env = std::getenv("TRANSCRIBE_WHISPER_MODEL");
+    const char * env = std::getenv("TRANSCRIBE_WHISPER_GGUF");
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
-                     "whisper_tokenize_parity: TRANSCRIBE_WHISPER_MODEL "
+                     "whisper_tokenize_parity: TRANSCRIBE_WHISPER_GGUF "
                      "not set; skipping.\n");
         return 77;
     }

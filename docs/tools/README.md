@@ -62,6 +62,10 @@ This split mirrors `llama.cpp`'s `convert_hf_to_gguf.py` →
 
 ## Other
 
+- [**environment-variables.md**](../environment-variables.md) — the single
+  reference for every env var the library, tests, and tooling recognize, split
+  into Tier 1 runtime config, Tier 2 validation hooks (build-gated), and
+  test/tooling.
 - `scripts/envs/<family>/pyproject.toml` — per-family `uv` env. Each
   converter and reference dumper has its own env because NeMo and
   Transformers have conflicting dependency graphs.
