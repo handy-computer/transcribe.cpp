@@ -40,9 +40,17 @@
     "languages": ["en", "fr", "de", "es", "pt", "ja"],
     "language_detection": false,
     "translation": true,
+    "translation_target_languages": ["en", "fr", "de", "es", "pt", "ja", "it", "zh"],
+    "translation_pairs": [
+      "en>fr", "fr>en",
+      "en>de", "de>en",
+      "en>es", "es>en",
+      "en>pt", "pt>en",
+      "en>ja", "ja>en",
+      "en>it", "en>zh"
+    ],
     "timestamps": [],
     "streaming": false,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "tolerance_file": "tests/tolerances/granite.json",

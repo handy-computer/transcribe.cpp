@@ -1181,6 +1181,26 @@ struct transcribe_capabilities {
      * docs/input-limits.md for the full contract.
      */
     int64_t                   max_audio_ms;
+
+    /*
+     * translate_target_languages / n_translate_target_languages: the set
+     * of target language codes accepted for TRANSCRIBE_TASK_TRANSLATE —
+     * the target-side twin of `languages` (which is the valid set for the
+     * transcribe-side `language` hint). supports_translate gates whether
+     * translation runs at all; this list narrows WHICH targets are valid.
+     * A TRANSLATE run whose run_params::target_language is non-NULL and
+     * absent from a non-empty list is rejected with
+     * TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE before any decode.
+     *
+     * n == 0 / NULL is "not advertised" — an information gap, not a claim
+     * of zero targets — exactly the convention an empty `languages` uses.
+     * GGUFs predating stt.translation.target_languages report 0 here even
+     * when supports_translate is true; the gate is then inert and any
+     * family-level target/pair checks (e.g. canary's pivot pairs) still
+     * apply on top.
+     */
+    int                       n_translate_target_languages;
+    const char * const *      translate_target_languages;
 };
 
 TRANSCRIBE_API void transcribe_capabilities_init(
@@ -1295,6 +1315,27 @@ TRANSCRIBE_API bool transcribe_model_supports(
 TRANSCRIBE_API const char * transcribe_model_arch_string(const struct transcribe_model * model);
 TRANSCRIBE_API const char * transcribe_model_variant_string(const struct transcribe_model * model);
 TRANSCRIBE_API const char * transcribe_model_backend(const struct transcribe_model * model);
+
+/*
+ * Generic GGUF string-metadata getter, modeled on llama_model_meta_val_str.
+ * Looks up a scalar-string metadata key written by the converter and returns
+ * its value; this is how human-facing identity is read rather than a typed
+ * accessor per field. Common keys:
+ *
+ *   "general.name"         friendly label, e.g. "Whisper Large v3"
+ *   "general.license"      SPDX expression, e.g. "apache-2.0" (or "other")
+ *   "general.license.name" human-friendly license name
+ *   "general.license.link" URL to the license text
+ *   "general.author", "general.organization", "general.repo_url", ...
+ *
+ * Returns a model-owned string (valid until the model is freed; do not free
+ * it) or an empty string "" when model is NULL, key is NULL, or the key is
+ * absent. Only scalar-string KVs are exposed (numeric hyperparameters and
+ * arrays such as the token list are not). There is no fallback to the variant
+ * slug — for that, use transcribe_model_variant_string().
+ */
+TRANSCRIBE_API const char * transcribe_model_meta_val_str(
+    const struct transcribe_model * model, const char * key);
 
 /* ----------------------------------------------------------------------- */
 /* Lifecycle                                                               */

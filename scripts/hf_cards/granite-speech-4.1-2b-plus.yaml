@@ -44,9 +44,8 @@ summary: |
   the lm_head. Takes a 16 kHz mono WAV and produces a transcript, optionally
   interleaved with `[SS:N]` word-timestamp markers. Transcribes English,
   French, German, Spanish, and Portuguese (no Japanese on this variant).
-  Translates between English and each of those four other languages in
-  either direction (en ↔ fr, en ↔ de, en ↔ es, en ↔ pt) — always via
-  English, no direct fr↔de etc.
+  This variant is transcription-only: unlike the base granite-speech-4.1-2b,
+  it does not perform speech translation.
 
 default_quant_index: 2  # Q8_0
 

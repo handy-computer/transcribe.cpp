@@ -88,6 +88,8 @@ public struct Capabilities: Sendable, Equatable {
     public let nativeSampleRate: Int32
     /// Supported language codes; empty when the model is language-agnostic.
     public let languages: [String]
+    /// Supported translation target language codes; empty when not advertised.
+    public let translateTargetLanguages: [String]
     public let maxTimestampKind: TimestampKind
     public let supportsLanguageDetect: Bool
     public let supportsTranslate: Bool
@@ -105,6 +107,13 @@ public struct Capabilities: Sendable, Equatable {
             }
         }
         languages = langs
+        var targetLangs: [String] = []
+        if let arr = c.translate_target_languages {
+            for i in 0..<Int(c.n_translate_target_languages) {
+                if let s = arr[i] { targetLangs.append(String(cString: s)) }
+            }
+        }
+        translateTargetLanguages = targetLangs
         maxTimestampKind = TimestampKind(c.max_timestamp_kind)
         supportsLanguageDetect = c.supports_language_detect
         supportsTranslate = c.supports_translate

@@ -439,11 +439,28 @@ int samples_per_encoder_frame(const MoonshineStreamingHParams & hp) {
     return 4 * hp.enc_frame_len;
 }
 
-// Encoder helper: build the encoder graph for `n_samples` PCM, upload PCM +
-// per-layer sliding-window masks, compute, and read the final-LN output into
-// the caller's host vector. Updates cc->t_encode_us (additive). emit_dumps
-// fires the encoder.* dump points; the streaming feed path passes false so
-// per-feed runs don't clobber the reference-dump artifacts.
+// Bound greedy decode by duration as well as the decoder position cap.
+// Some inputs never emit EOS; upstream recommends about 6.5 tokens/sec.
+// Returns 0 when frame geometry is unknown.
+int decode_generation_budget(const MoonshineStreamingHParams & hp, int T_enc) {
+    if (hp.enc_frame_len <= 0 || T_enc <= 0) {
+        return 0;
+    }
+    constexpr int64_t k_native_sr_hz   = 16000;
+    constexpr int64_t k_budget_num     = 13;  // 6.5 tokens/sec, numerator
+    constexpr int64_t k_budget_den     = 2;   //                 denominator
+    constexpr int64_t k_budget_floor   = 24;  // headroom for very short clips
+    const int64_t audio_samples =
+        static_cast<int64_t>(T_enc) * samples_per_encoder_frame(hp);
+    return static_cast<int>(
+        audio_samples * k_budget_num / (k_budget_den * k_native_sr_hz)
+        + k_budget_floor);
+}
+
+// Encoder helper: build the graph for `n_samples` PCM, upload PCM + masks,
+// compute, and read final-LN output into the caller's host vector. Updates
+// cc->t_encode_us. emit_dumps fires encoder.* dump points; streaming feed
+// passes false so per-feed runs do not clobber reference dump artifacts.
 //
 // n_samples must be > 0 and a multiple of hp.enc_frame_len.
 transcribe_status encode_window_to_host(
@@ -862,6 +879,15 @@ transcribe_status decode_from_kv_cache(
     const int eos           = hp.eos_token_id;             // 2
     const int max_pos       = hp.dec_max_position_embeddings;
 
+    // Effective stop bound for the greedy loop: the duration-based generation
+    // budget AND the hard decoder position cap, whichever is tighter. The
+    // duration budget bounds runaway loops (inputs the model never ends) to a
+    // few dozen tokens; the position cap remains the absolute backstop. A
+    // budget of 0 (unknown frame geometry) falls back to the position cap.
+    const int dur_budget = decode_generation_budget(hp, T_enc);
+    const int gen_cap    = (dur_budget > 0 && (max_pos <= 0 || dur_budget < max_pos))
+                         ? dur_budget : max_pos;
+
     std::vector<int32_t> generated_ids;
     int next_token = -1;
     int n_past     = 0;
@@ -988,7 +1014,7 @@ transcribe_status decode_from_kv_cache(
     // dec.logits_raw.gen20 dumps the logits that predict the 20th
     // emitted token (n_past == 20 at that step). Matches moonshine.
     constexpr int k_mid_gen_step = 20;
-    while (next_token != eos && n_past < max_pos) {
+    while (next_token != eos && n_past < gen_cap) {
         if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
 
         const bool is_mid_gen = (n_past == k_mid_gen_step);
@@ -1007,18 +1033,19 @@ transcribe_status decode_from_kv_cache(
         }
     }
 
-    // A non-eos last token means the decode hit the position cap before
-    // end-of-stream (see the input-length contract above): flag truncation
-    // and WARN.
+    // Non-EOS after the loop means gen_cap stopped decode before EOS. gen_cap
+    // is either the position cap or the tighter duration budget.
     if (next_token != eos) {
         cc->was_truncated = true;
+        const bool hit_duration_budget = (gen_cap < max_pos) || (max_pos <= 0);
         transcribe::log_msg(
             TRANSCRIBE_LOG_LEVEL_WARN,
             "moonshine run: output truncated at %d tokens — decode reached the "
-            "position cap (%d) before end-of-stream; the transcript may be "
-            "incomplete. This model is intended for short utterances. See "
-            "transcribe_capabilities.max_audio_ms.",
-            static_cast<int>(generated_ids.size()), max_pos);
+            "%s (%d) before end-of-stream; the transcript may be incomplete. "
+            "See transcribe_capabilities.max_audio_ms.",
+            static_cast<int>(generated_ids.size()),
+            hit_duration_budget ? "generation budget" : "position cap",
+            gen_cap);
     }
 
     cc->t_decode_us += ggml_time_us() - t_decode_start;

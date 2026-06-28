@@ -140,6 +140,21 @@ transcribe_status read_canary_hparams(const gguf_context * gguf,
         }
     }
 
+    {
+        std::vector<std::string> pairs;
+        switch (read_string_array_kv(gguf, "stt.translation.pairs", pairs)) {
+            case KvResult::Absent:
+                break;
+            case KvResult::Ok:
+                hp.translation_pairs = pairs;
+                break;
+            case KvResult::BadType:
+                log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                             "%s: stt.translation.pairs wrong type", kFamilyTag);
+                return TRANSCRIBE_ERR_GGUF;
+        }
+    }
+
     if (auto st = read_required_string_kv(gguf, "stt.frontend.type",       kFamilyTag, hp.fe_type);        st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.frontend.num_mels",      kFamilyTag, hp.fe_num_mels);    st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.frontend.sample_rate",   kFamilyTag, hp.fe_sample_rate); st != TRANSCRIBE_OK) return st;

@@ -45,19 +45,20 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
-from huggingface_hub import snapshot_download
+from gguf import GGMLQuantizationType, LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import download_snapshot, looks_like_repo_id  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -317,7 +318,7 @@ def compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None = None) -> None:
     from transformers import VoxtralRealtimeForConditionalGeneration
 
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
@@ -354,13 +355,24 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     print(f"Total params: {total:,} -> size_label={size_label}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "voxtral_realtime")
+    writer = gguf_writer(str(out_path), "voxtral_realtime")
 
     # ---- general.* ----
-    writer.add_string("general.basename", "voxtral_realtime")
-    writer.add_string("general.size_label", size_label)
-    writer.add_uint32("general.file_type", int(REFERENCE_FILE_TYPE))
-    writer.add_array("general.languages", hp["languages"])
+    add_general_identity(
+        writer,
+        name="Voxtral Mini 4B Realtime",
+        basename="voxtral_realtime",
+        version="2602",
+        size_label=size_label,
+        file_type=int(REFERENCE_FILE_TYPE),
+        languages=hp["languages"],
+        author="Mistral AI",
+        organization="mistralai",
+        license="apache-2.0",
+        license_name="Apache License 2.0",
+        license_link="https://www.apache.org/licenses/LICENSE-2.0",
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+    )
     writer.add_string("stt.variant", variant)
 
     # ---- stt.capability.* ----
@@ -534,23 +546,6 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _looks_like_repo_id(s: str) -> bool:
-    return "/" in s and not Path(s).exists()
-
-
-def _download_snapshot(repo_id: str, revision: str | None) -> Path:
-    slug = slug_from_repo_id(repo_id)
-    models_root = os.environ.get("TRANSCRIBE_MODELS_DIR")
-    local_dir = Path(models_root) / slug if models_root else None
-    if local_dir is not None:
-        local_dir.mkdir(parents=True, exist_ok=True)
-    resolved = snapshot_download(
-        repo_id=repo_id, revision=revision,
-        local_dir=str(local_dir) if local_dir is not None else None,
-    )
-    return Path(resolved)
-
-
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         description="Convert a Voxtral Realtime (2602) checkpoint to a BF16 reference GGUF.")
@@ -565,9 +560,9 @@ def main(argv: list[str]) -> int:
                    help="stt.variant string (default: derived from slug)")
     args = p.parse_args(argv[1:])
 
-    if _looks_like_repo_id(args.model):
+    if looks_like_repo_id(args.model):
         repo_id = args.repo_id or args.model
-        model_dir = _download_snapshot(args.model, args.revision)
+        model_dir = download_snapshot(args.model, args.revision)
     else:
         model_dir = Path(args.model)
         if not model_dir.is_dir():
@@ -595,7 +590,7 @@ def main(argv: list[str]) -> int:
                 variant = variant[: -len(q)]
                 break
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, repo_id=repo_id)
     return 0
 
 

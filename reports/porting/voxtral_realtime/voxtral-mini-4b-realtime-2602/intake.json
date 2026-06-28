@@ -163,7 +163,6 @@
       "none"
     ],
     "streaming": true,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "upstream_benchmarks": [

@@ -211,6 +211,22 @@ ggml_tensor * conv_2d_dw_f32(ggml_context * ctx,
     return result;
 }
 
+// ggml_conv_2d_dw_direct requires an F32 kernel on CUDA (a hard GGML_ASSERT
+// in conv2d-dw.cu) and silently misbehaves for F16 kernels on other backends
+// — see conv_1d_dw_f32's batch path below and the canary_qwen note. A
+// BF16-reference conformer (e.g. cohere) ships its depthwise kernels at F16,
+// so promote to F32 in-graph before any direct depthwise op. The depthwise
+// kernel is tiny, so the cast is negligible; F32 kernels pass through
+// untouched. Only the direct_dw path (CUDA/Vulkan) routes here — the im2col
+// fallback used on Metal/CPU takes the kernel's real type and is unaffected.
+static ggml_tensor * dw_kernel_for_direct(ggml_context * ctx,
+                                          ggml_tensor *  kernel) {
+    if (kernel == nullptr || kernel->type == GGML_TYPE_F32) {
+        return kernel;
+    }
+    return ggml_cast(ctx, kernel, GGML_TYPE_F32);
+}
+
 // f32-friendly depthwise Conv1D (mirrors ggml_conv_1d_dw but
 // passes the kernel's real type to im2col). Same fix as above.
 ggml_tensor * conv_1d_dw_f32(ggml_context * ctx,
@@ -473,7 +489,8 @@ ggml_tensor * conv_module(ggml_context *      ctx,
         // from the transpose above. Reshape to 4D [T, 1, d_model, B] for
         // ggml_conv_2d_dw_direct which expects [W, H, C, N] (N == B, the
         // utterance batch). Kernel [k, 1, d_model] → [k, 1, 1, d_model].
-        ggml_tensor * knl = ggml_reshape_4d(ctx, b.conv_dw_w,
+        ggml_tensor * knl = ggml_reshape_4d(ctx,
+                                            dw_kernel_for_direct(ctx, b.conv_dw_w),
                                             conv_kernel, 1, 1, d_model);
         ggml_tensor * data = ggml_reshape_4d(ctx, x,
                                              x->ne[0], 1, x->ne[1], B);
@@ -1108,7 +1125,7 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     // im2col path (conv_2d_dw_f32) when direct_dw_in_pre_encode is false.
     x = pad_causal(x);
     if (policy.direct_dw_in_pre_encode) {
-        x = ggml_conv_2d_dw_direct(ctx, pe.conv2_w, x,
+        x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv2_w), x,
                                    /*s0=*/2, /*s1=*/2,
                                    /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                                    /*d0=*/1, /*d1=*/1);
@@ -1136,7 +1153,7 @@ ggml_tensor * build_pre_encode(ggml_context *        ctx,
     // conv5 (depthwise) -> conv6 (pointwise) -> ReLU
     x = pad_causal(x);
     if (policy.direct_dw_in_pre_encode) {
-        x = ggml_conv_2d_dw_direct(ctx, pe.conv5_w, x,
+        x = ggml_conv_2d_dw_direct(ctx, dw_kernel_for_direct(ctx, pe.conv5_w), x,
                                    /*s0=*/2, /*s1=*/2,
                                    /*p0=*/pe_p_op, /*p1=*/pe_p_op,
                                    /*d0=*/1, /*d1=*/1);

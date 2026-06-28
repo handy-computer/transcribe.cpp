@@ -13,10 +13,10 @@ Spanish, Portuguese, and Japanese. Takes a 16 kHz mono WAV and produces a
 transcript.
 
 Translation pairs: English ↔ French, English ↔ German, English ↔ Spanish,
-English ↔ Portuguese, English ↔ Japanese. Always via English — there is no
-direct fr↔de, fr↔es, etc. Pass the target language as a BCP-47 code via
-`--translate --target-language <code>`; the source language is inferred
-from the audio.
+English ↔ Portuguese, English ↔ Japanese, plus English-to-Italian and
+English-to-Mandarin. Always via English — there is no direct fr↔de, fr↔es,
+etc. Pass the target language as a BCP-47 code via `--translate
+--target-language <code>`; the source language is inferred from the audio.
 
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b)
 for training data, intended use, and upstream evaluation methodology.
@@ -130,7 +130,7 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 |-----------------------------|--------|
 | Transcribe (English)        | Yes    |
 | Transcribe (fr/de/es/pt/ja) | Yes    |
-| Translate (X→En, En→X)      | Yes (`--translate --target-language <bcp47>`) |
+| Translate (en↔ASR, en→it/zh) | Yes (`--translate --target-language <bcp47>`) |
 | Word-level timestamps       | No (use the `-plus` variant) |
 | Keyword biasing             | No (upstream supports via prompt; not exposed in v1 of transcribe.cpp) |
 

@@ -85,6 +85,10 @@ struct CanaryHParams {
     std::vector<std::string> languages;        // e.g. {"en","de","es","fr"}
     std::vector<int32_t>     language_ids;     // parallel: id of "<|en|>" etc.
 
+    // Optional GGUF contract: allowed translation pairs as "src>target".
+    // Old GGUFs do not carry this KV; an empty list preserves legacy behavior.
+    std::vector<std::string> translation_pairs;
+
     // Frontend (mel feature extractor).
     std::string fe_type;
     int32_t     fe_num_mels    = 0;

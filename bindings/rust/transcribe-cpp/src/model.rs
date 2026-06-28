@@ -51,6 +51,8 @@ pub struct Capabilities {
     pub native_sample_rate: i32,
     /// Supported language codes (empty if the model is language-agnostic).
     pub languages: Vec<String>,
+    /// Supported translation target language codes (empty if not advertised).
+    pub translate_target_languages: Vec<String>,
     /// The finest timestamp granularity the model can produce.
     pub max_timestamp_kind: TimestampKind,
     pub supports_language_detect: bool,
@@ -159,10 +161,23 @@ impl Model {
                 languages.push(owned_str(lang));
             }
         }
+        let mut translate_target_languages = Vec::new();
+        if !caps.translate_target_languages.is_null() && caps.n_translate_target_languages > 0 {
+            let slice = unsafe {
+                std::slice::from_raw_parts(
+                    caps.translate_target_languages,
+                    caps.n_translate_target_languages as usize,
+                )
+            };
+            for &lang in slice {
+                translate_target_languages.push(owned_str(lang));
+            }
+        }
 
         Capabilities {
             native_sample_rate: caps.native_sample_rate,
             languages,
+            translate_target_languages,
             max_timestamp_kind: TimestampKind::from_raw(caps.max_timestamp_kind),
             supports_language_detect: caps.supports_language_detect,
             supports_translate: caps.supports_translate,

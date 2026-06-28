@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -76,6 +77,25 @@ from dataset_specs import (  # noqa: E402
     local_manifest_path_for,
     parse_dataset_spec,
 )
+
+
+def read_stderr_tail(path: str, max_lines: int = 50, max_bytes: int = 65536) -> str:
+    """Return the last ``max_lines`` lines of a captured stderr file.
+
+    Bounded read (only the trailing ``max_bytes``) so a chatty run can't blow
+    up memory. Used to surface a native crash (e.g. a CUDA ``GGML_ASSERT``) on
+    a non-zero CLI exit — see the capture in ``run_one``.
+    """
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            data = f.read()
+    except OSError:
+        return ""
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    return "\n".join(lines[-max_lines:]).strip()
 
 
 def find_repo_root(start: Path) -> Path:
@@ -332,15 +352,25 @@ def main() -> int:
     print(f"  $ {' '.join(cmd[:6])} ...")
 
     t_start = time.monotonic()
+    # Capture the CLI's stderr to a temp file (always on) so a non-zero exit —
+    # a native crash like a CUDA GGML_ASSERT, an OOM, or a truncation WARN — is
+    # diagnosable straight from this run's log instead of being discarded.
+    # Surfaced only on failure (see below), so successful runs stay quiet. A
+    # file (not a PIPE) can't deadlock against the stdout read loop below.
+    stderr_cap = tempfile.NamedTemporaryFile(
+        mode="w+b", suffix=".stderr", delete=False
+    )
     try:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=stderr_cap,
             text=True,
             errors="replace",
         )
     except Exception as e:
+        stderr_cap.close()
+        Path(stderr_cap.name).unlink(missing_ok=True)
         print(f"error: failed to start transcribe-cli: {e}", file=sys.stderr)
         return 1
 
@@ -422,6 +452,7 @@ def main() -> int:
                       f"errors={n_errors}")
 
     proc.wait()
+    stderr_cap.close()
     wall = time.monotonic() - t_start
 
     # Clean up temp file.
@@ -440,6 +471,18 @@ def main() -> int:
               f"(encode {100*sum_encode/stage_total:.0f}% / "
               f"decode {100*sum_decode/stage_total:.0f}%)")
     print(f"report: {out_path}")
+
+    # Always-on, failure-only diagnostics: on a non-zero CLI exit, surface a
+    # bounded tail of its stderr so the failure is diagnosable from this log
+    # alone (and so modal_sweep's "stderr tail" carries the real error — e.g. a
+    # CUDA GGML_ASSERT — instead of an empty string). Quiet on success.
+    if proc.returncode != 0:
+        tail = read_stderr_tail(stderr_cap.name)
+        if tail:
+            print(f"--- transcribe-cli stderr (tail, exit {proc.returncode}) ---",
+                  file=sys.stderr)
+            print(tail, file=sys.stderr)
+    Path(stderr_cap.name).unlink(missing_ok=True)
     return 0 if proc.returncode == 0 else 1
 
 

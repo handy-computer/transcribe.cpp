@@ -311,7 +311,6 @@ def extract_capabilities(config, tok_cfg, gen_cfg) -> dict[str, Any]:
         "translation": None,
         "timestamps": [],
         "streaming": None,
-        "voice_activity_detection": None,
         "speaker_diarization": None,
     }
 

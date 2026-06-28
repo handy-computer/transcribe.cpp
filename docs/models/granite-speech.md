@@ -44,9 +44,9 @@ quant matrix.
 
 | Variant | Decode mode | Params | Q8_0 size | WER (Q8_0) | Languages | Extras | Doc |
 | --- | --- | ---: | ---: | ---: | --- | --- | --- |
-| `granite-4.0-1b-speech`      | AR (audio-LLM) | ~3B† | 2.56 GB | 1.44% | en, fr, de, es, pt, ja | translate (en ↔ each)       | [granite-4.0-1b-speech.md](granite-4.0-1b-speech.md) |
-| `granite-speech-4.1-2b`      | AR (audio-LLM) | ~3B† | 2.56 GB | 1.32% | en, fr, de, es, pt, ja | translate (en ↔ each)       | [granite-speech-4.1-2b.md](granite-speech-4.1-2b.md) |
-| `granite-speech-4.1-2b-plus` | AR (audio-LLM) | ~3B† | 2.35 GB | 1.50% | en, fr, de, es, pt     | translate (en ↔ each), word timestamps | [granite-speech-4.1-2b-plus.md](granite-speech-4.1-2b-plus.md) |
+| `granite-4.0-1b-speech`      | AR (audio-LLM) | ~3B† | 2.56 GB | 1.44% | en, fr, de, es, pt, ja | translate (en ↔ ASR langs; en → it/zh) | [granite-4.0-1b-speech.md](granite-4.0-1b-speech.md) |
+| `granite-speech-4.1-2b`      | AR (audio-LLM) | ~3B† | 2.56 GB | 1.32% | en, fr, de, es, pt, ja | translate (en ↔ ASR langs; en → it/zh) | [granite-speech-4.1-2b.md](granite-speech-4.1-2b.md) |
+| `granite-speech-4.1-2b-plus` | AR (audio-LLM) | ~3B† | 2.35 GB | 1.50% | en, fr, de, es, pt     | word timestamps (ASR only)  | [granite-speech-4.1-2b-plus.md](granite-speech-4.1-2b-plus.md) |
 | `granite-speech-4.1-2b-nar`  | NAR (editor)   | ~3B† | 2.33 GB | 1.29% | en, fr, de, es, pt     | (ASR only)                  | [granite-speech-4.1-2b-nar.md](granite-speech-4.1-2b-nar.md) |
 
 † Parameter counts include the Conformer audio encoder, the projector,
@@ -92,14 +92,13 @@ All variants:
 - **Transcription** of 16 kHz mono WAV input across the variant's
   supported languages.
 
-AR variants (`granite-4.0-1b-speech`, `granite-speech-4.1-2b`,
-`granite-speech-4.1-2b-plus`):
-- **Translation** between English and each of the variant's other
-  languages, in either direction (en ↔ fr, en ↔ de, en ↔ es, en ↔ pt,
-  and en ↔ ja for 4.0-1b and 4.1-2b). There is no direct fr↔de etc. —
-  translation always involves English on one side. Use
-  `--translate --target-language <bcp47>`; the source language is
-  inferred from the audio.
+Translation (`granite-4.0-1b-speech`, `granite-speech-4.1-2b`):
+- **Translation** between English and each ASR language in either direction
+  (en ↔ fr, en ↔ de, en ↔ es, en ↔ pt, en ↔ ja), plus English-to-Italian
+  and English-to-Mandarin (`--target-language it` / `zh`). There is no direct
+  fr↔de etc. — translation always involves English on one side. Use
+  `--translate --target-language <bcp47>`; the source language is inferred
+  from the audio. The `-plus` variant is ASR-only and does not translate.
 
 Plus only (`granite-speech-4.1-2b-plus`):
 - **Word-level timestamps** as `[SS:N]` centisecond markers interleaved

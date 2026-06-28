@@ -91,25 +91,26 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 import yaml
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
-from huggingface_hub import snapshot_download
+from gguf import GGMLQuantizationType, LlamaFileType
 
 import sentencepiece as spm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import download_snapshot, looks_like_repo_id  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
     TOKEN_TYPE_UNUSED,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -363,7 +364,7 @@ def compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None = None) -> None:
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     config_yaml = model_dir / "config.yaml"
@@ -424,7 +425,7 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     print(f"Total params: {total_params:,} -> size_label={size_label}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "sensevoice")
+    writer = gguf_writer(str(out_path), "sensevoice")
 
     # ----- general.* -----
     # FunASR Model Open Source License Agreement v1.1 attribution
@@ -432,34 +433,42 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     # and author information and retain relevant model names". Bake the
     # canonical attribution into the GGUF KV so downstream consumers
     # see source + author + model names without reading external docs.
-    writer.add_string("general.name",         "SenseVoiceSmall")
-    writer.add_string("general.basename",     variant)
-    writer.add_string("general.size_label",   size_label)
-    writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",    hp["languages"])
-    writer.add_string("general.author",       "Alibaba Group / FunAudioLLM")
-    writer.add_string("general.organization", "FunAudioLLM")
-    writer.add_string("general.license",      "FunASR-Model-License-1.1")
-    writer.add_string("general.license.link",
-                      "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE")
-    writer.add_string("general.url",
-                      "https://huggingface.co/FunAudioLLM/SenseVoiceSmall")
-    writer.add_string("general.source.url",
-                      "https://github.com/modelscope/FunASR")
-    writer.add_array("general.tags", [
-        "asr",
-        "speech-recognition",
-        "encoder-ctc",
-        "SenseVoiceSmall",
-        "SenseVoiceEncoderSmall",
-    ])
-    writer.add_string("general.description",
-                      "SenseVoiceSmall (Alibaba FunAudioLLM): non-AR "
-                      "CTC ASR with multilingual + emotion/event/ITN "
-                      "label heads. Converted from FunAudioLLM/"
-                      "SenseVoiceSmall; see "
-                      "https://github.com/modelscope/FunASR/blob/main/"
-                      "MODEL_LICENSE for FunASR redistribution terms.")
+    add_general_identity(
+        writer,
+        name="SenseVoice Small",
+        basename=variant,
+        size_label=size_label,
+        file_type=int(REFERENCE_FILE_TYPE),
+        languages=hp["languages"],
+        author="Alibaba Group / FunAudioLLM",
+        organization="FunAudioLLM",
+        # FunASR Model Open Source License Agreement v1.1. NOT an SPDX
+        # identifier and NOT Apache-2.0 — SenseVoiceSmall ships under
+        # FunASR's own model license (unlike funasr_nano, which is genuinely
+        # apache-2.0). Keep the canonical license string so downstream
+        # consumers see the real license, and retain the MODEL_LICENSE link
+        # the agreement's attribution clause (2.2) requires.
+        license="FunASR-Model-License-1.1",
+        license_link="https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        url="https://huggingface.co/FunAudioLLM/SenseVoiceSmall",
+        source_url="https://github.com/modelscope/FunASR",
+        tags=[
+            "asr",
+            "speech-recognition",
+            "encoder-ctc",
+            "SenseVoiceSmall",
+            "SenseVoiceEncoderSmall",
+        ],
+        description=(
+            "SenseVoiceSmall (Alibaba FunAudioLLM): non-AR "
+            "CTC ASR with multilingual + emotion/event/ITN "
+            "label heads. Converted from FunAudioLLM/"
+            "SenseVoiceSmall; see "
+            "https://github.com/modelscope/FunASR/blob/main/"
+            "MODEL_LICENSE for FunASR redistribution terms."
+        ),
+    )
 
     # ----- stt.variant + capabilities -----
     writer.add_string("stt.variant", variant)
@@ -624,29 +633,6 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _looks_like_repo_id(s: str) -> bool:
-    return "/" in s and not Path(s).exists()
-
-
-def _download_snapshot(repo_id: str, revision: str | None) -> Path:
-    slug = slug_from_repo_id(repo_id)
-    models_root = os.environ.get("TRANSCRIBE_MODELS_DIR")
-    local_dir = Path(models_root) / slug if models_root else None
-    if local_dir is not None:
-        local_dir.mkdir(parents=True, exist_ok=True)
-    if revision:
-        print(f"Downloading {repo_id}@{revision} from Hugging Face...")
-    else:
-        print(f"Downloading {repo_id} from Hugging Face "
-              f"(no revision pin; reproducibility depends on upstream)...")
-    resolved = snapshot_download(
-        repo_id=repo_id,
-        revision=revision,
-        local_dir=str(local_dir) if local_dir is not None else None,
-    )
-    return Path(resolved)
-
-
 # Map the upstream HF slug to the canonical kebab-case variant the rest
 # of the porting framework uses (manifest, build/validate dir, family
 # doc). Keep this explicit rather than camelCase-splitting — there is
@@ -673,9 +659,9 @@ def main(argv: list[str]) -> int:
                    help="stt.variant string (default: derived from slug)")
     args = p.parse_args(argv[1:])
 
-    if _looks_like_repo_id(args.model):
+    if looks_like_repo_id(args.model):
         repo_id = args.repo_id or args.model
-        model_dir = _download_snapshot(args.model, args.revision)
+        model_dir = download_snapshot(args.model, args.revision)
     else:
         model_dir = Path(args.model)
         if not model_dir.is_dir():
@@ -705,7 +691,7 @@ def main(argv: list[str]) -> int:
         out_path = REPO_ROOT / "models" / output_slug / gguf_name(output_slug, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, repo_id=repo_id)
     return 0
 
 

@@ -474,6 +474,7 @@ class Capabilities:
     supports_streaming: bool
     supports_spec_decode: bool
     max_audio_ms: int
+    translate_target_languages: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -847,6 +848,10 @@ class Model:
         if caps.languages and caps.n_languages > 0:
             for i in range(caps.n_languages):
                 languages.append(_decode(caps.languages[i]))
+        translate_targets = []
+        if caps.translate_target_languages and caps.n_translate_target_languages > 0:
+            for i in range(caps.n_translate_target_languages):
+                translate_targets.append(_decode(caps.translate_target_languages[i]))
         return Capabilities(
             native_sample_rate=caps.native_sample_rate,
             languages=tuple(languages),
@@ -856,6 +861,7 @@ class Model:
             supports_streaming=bool(caps.supports_streaming),
             supports_spec_decode=bool(caps.supports_spec_decode),
             max_audio_ms=caps.max_audio_ms,
+            translate_target_languages=tuple(translate_targets),
         )
 
     def supports(self, feature: Feature) -> bool:

@@ -683,6 +683,24 @@ int find_language_id(const CanaryHParams & hp, const char * lang) {
     return -1;
 }
 
+bool translation_pair_allowed(const CanaryHParams & hp,
+                              const char *          src,
+                              const char *          dst) {
+    if (hp.translation_pairs.empty()) {
+        return true;
+    }
+    if (src == nullptr || dst == nullptr || src[0] == '\0' || dst[0] == '\0') {
+        return false;
+    }
+    const std::string pair = std::string(src) + ">" + dst;
+    for (const auto & allowed : hp.translation_pairs) {
+        if (allowed == pair) {
+            return true;
+        }
+    }
+    return false;
+}
+
 transcribe_status run(
     transcribe_session *      session,
     const float *             pcm,
@@ -902,6 +920,13 @@ transcribe_status run(
                      "canary run: target language '%s' has no token id "
                      "(model supports %zu langs)",
                      tgt_lang, cm->hparams.languages.size());
+        return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    }
+    if (is_translate &&
+        !translation_pair_allowed(cm->hparams, lang, tgt_lang)) {
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
+                     "canary run: translation pair '%s>%s' is not advertised",
+                     lang, tgt_lang);
         return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
     }
 
@@ -1530,6 +1555,9 @@ transcribe_status run_batch(
     const int src_id = find_language_id(hp, lang);
     const int tgt_id = find_language_id(hp, tgt_lang);
     if (src_id < 0 || tgt_id < 0) return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    if (is_translate && !translation_pair_allowed(hp, lang, tgt_lang)) {
+        return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    }
     bool pnc = true;
     if (params != nullptr && params->pnc == TRANSCRIBE_PNC_MODE_OFF) pnc = false;
     std::vector<int32_t> prompt_ids;

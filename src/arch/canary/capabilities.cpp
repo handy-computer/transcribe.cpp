@@ -9,11 +9,10 @@ void apply_family_invariants(transcribe_model & model) {
 
     caps.native_sample_rate = 16000;
 
-    // Canary is a multitask AED — every variant supports en->de/es/fr
-    // translation plus en/de/es/fr ASR, except canary-1b which is
-    // English-ASR-only. The runtime advertises translate=true at the
-    // family default; the GGUF's stt.capability.translate value (read
-    // by read_capability_kv after this call) overrides per-variant.
+    // Canary is a multitask AED. The runtime advertises translate=true at the
+    // family default; the GGUF's stt.capability.translate value (read by
+    // read_capability_kv after this call) overrides per-variant. Exact
+    // directions are an optional GGUF contract in stt.translation.pairs.
     caps.supports_translate = true;
 
     // Timestamps out of scope. Advertise NONE; the GGUF KV

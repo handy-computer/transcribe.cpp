@@ -125,20 +125,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
-from huggingface_hub import snapshot_download
+from gguf import GGMLQuantizationType, LlamaFileType
 from safetensors import safe_open
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import download_snapshot, looks_like_repo_id  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -441,11 +442,33 @@ def compute_size_label(total_params: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Display names
+# ---------------------------------------------------------------------------
+# Friendly general.name per variant slug (the variant carries the version,
+# so general.version is left unset).
+
+VARIANT_DISPLAY_NAMES: dict[str, str] = {
+    "whisper-tiny":           "Whisper Tiny",
+    "whisper-tiny.en":        "Whisper Tiny (English)",
+    "whisper-base":           "Whisper Base",
+    "whisper-base.en":        "Whisper Base (English)",
+    "whisper-small":          "Whisper Small",
+    "whisper-small.en":       "Whisper Small (English)",
+    "whisper-medium":         "Whisper Medium",
+    "whisper-medium.en":      "Whisper Medium (English)",
+    "whisper-large":          "Whisper Large",
+    "whisper-large-v2":       "Whisper Large v2",
+    "whisper-large-v3":       "Whisper Large v3",
+    "whisper-large-v3-turbo": "Whisper Large v3 Turbo",
+}
+
+
+# ---------------------------------------------------------------------------
 # Main converter
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, repo_id: str | None = None) -> None:
     config_path     = model_dir / "config.json"
     gen_config_path = model_dir / "generation_config.json"
     preproc_path    = model_dir / "preprocessor_config.json"
@@ -492,13 +515,28 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         print(f"Total params: {total:,} -> size_label={size_label}")
 
         print(f"Writing GGUF to {out_path}")
-        writer = GGUFWriter(str(out_path), "whisper")
+        writer = gguf_writer(str(out_path), "whisper")
 
         # ---- general.* ----
-        writer.add_string("general.basename",   "whisper")
-        writer.add_string("general.size_label", size_label)
-        writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-        writer.add_array("general.languages",   hp["languages"])
+        if variant not in VARIANT_DISPLAY_NAMES:
+            raise ValueError(
+                f"unknown whisper variant slug: {variant!r}; "
+                f"add it to VARIANT_DISPLAY_NAMES"
+            )
+        add_general_identity(
+            writer,
+            name=VARIANT_DISPLAY_NAMES[variant],
+            basename="whisper",
+            size_label=size_label,
+            file_type=REFERENCE_FILE_TYPE,
+            languages=hp["languages"],
+            author="OpenAI",
+            organization="openai",
+            license="apache-2.0",
+            license_name="Apache License 2.0",
+            license_link="https://www.apache.org/licenses/LICENSE-2.0",
+            repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        )
 
         # ---- stt.variant ----
         writer.add_string("stt.variant", variant)
@@ -512,6 +550,8 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
         writer.add_bool("stt.capability.lang_detect", is_multilingual)
         writer.add_bool("stt.capability.translate",   is_multilingual)
         writer.add_bool("stt.capability.timestamps",  True)
+        if is_multilingual:
+            writer.add_array("stt.translation.target_languages", ["en"])
 
         # ---- tokenizer.ggml.* (llama.cpp "gpt2" byte-level BPE) ----
         # tokenizer.ggml.pre="gpt2" selects the original GPT-2
@@ -736,29 +776,6 @@ def convert(model_dir: Path, out_path: Path, variant: str) -> None:
     print(f"Done. Wrote {out_path} ({out_path.stat().st_size / (1024 * 1024):.1f} MB)")
 
 
-def _looks_like_repo_id(s: str) -> bool:
-    return "/" in s and not Path(s).exists()
-
-
-def _download_snapshot(repo_id: str, revision: str | None) -> Path:
-    slug = slug_from_repo_id(repo_id)
-    models_root = os.environ.get("TRANSCRIBE_MODELS_DIR")
-    local_dir = Path(models_root) / slug if models_root else None
-    if local_dir is not None:
-        local_dir.mkdir(parents=True, exist_ok=True)
-    if revision:
-        print(f"Downloading {repo_id}@{revision} from Hugging Face...")
-    else:
-        print(f"Downloading {repo_id} from Hugging Face "
-              f"(no revision pin; reproducibility depends on upstream)...")
-    resolved = snapshot_download(
-        repo_id=repo_id,
-        revision=revision,
-        local_dir=str(local_dir) if local_dir is not None else None,
-    )
-    return Path(resolved)
-
-
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         description="Convert a Whisper checkpoint to an F32 reference GGUF.",
@@ -778,9 +795,9 @@ def main(argv: list[str]) -> int:
                    help="stt.variant string (default: derived from slug)")
     args = p.parse_args(argv[1:])
 
-    if _looks_like_repo_id(args.model):
+    if looks_like_repo_id(args.model):
         repo_id = args.repo_id or args.model
-        model_dir = _download_snapshot(args.model, args.revision)
+        model_dir = download_snapshot(args.model, args.revision)
     else:
         model_dir = Path(args.model)
         if not model_dir.is_dir():
@@ -819,7 +836,7 @@ def main(argv: list[str]) -> int:
                     break
             variant = stripped
 
-    convert(model_dir, out_path, variant)
+    convert(model_dir, out_path, variant, repo_id=repo_id)
     return 0
 
 

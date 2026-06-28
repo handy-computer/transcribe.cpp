@@ -51,7 +51,6 @@
       "word"
     ],
     "streaming": true,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "tolerance_file": "tests/tolerances/nemotron-3.5-asr-streaming-0.6b.json",

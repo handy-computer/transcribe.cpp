@@ -69,15 +69,17 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from gguf import GGUFWriter, LlamaFileType
+from gguf import LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
     TOKEN_TYPE_UNUSED,
+    add_general_identity,
     canonicalize_normalize,
     gguf_name,
     safe_id,
@@ -122,37 +124,50 @@ VARIANT_PROFILES: dict[str, dict] = {
     # v2: 0.6B English-only TDT.
     "parakeet-tdt-0.6b-v2": {
         "variant": "tdt-0.6b-v2",
+        "display_name": "Parakeet TDT 0.6B v2",
         "version": "v2",
         "size_label": "0.6B",
         "head_kind": "tdt",
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # v3: 0.6B multilingual TDT.
     "parakeet-tdt-0.6b-v3": {
         "variant": "tdt-0.6b-v3",
+        "display_name": "Parakeet TDT 0.6B v3",
         "version": "v3",
         "size_label": "0.6B",
         "head_kind": "tdt",
         "expected_vocab_size": 8192,
         "languages": V3_LANGUAGES,
         "lang_detect": True,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # 1.1B English-only TDT. Predates the v2/v3 split; the upstream
     # repo carries no version suffix, so general.version is "v1".
     "parakeet-tdt-1.1b": {
         "variant": "tdt-1.1b",
+        "display_name": "Parakeet TDT 1.1B",
         "version": "v1",
         "size_label": "1.1B",
         "head_kind": "tdt",
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # 0.6B English RNNT. Pure transducer, no TDT durations head.
     "parakeet-rnnt-0.6b": {
         "variant": "rnnt-0.6b",
+        "display_name": "Parakeet RNN-T 0.6B",
         "version": "v1",
         "size_label": "0.6B",
         "basename": "parakeet-rnnt",
@@ -160,10 +175,14 @@ VARIANT_PROFILES: dict[str, dict] = {
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # 1.1B English RNNT.
     "parakeet-rnnt-1.1b": {
         "variant": "rnnt-1.1b",
+        "display_name": "Parakeet RNN-T 1.1B",
         "version": "v1",
         "size_label": "1.1B",
         "basename": "parakeet-rnnt",
@@ -171,6 +190,9 @@ VARIANT_PROFILES: dict[str, dict] = {
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # 0.6B English unified offline+streaming RNNT. Same FastConformer
     # encoder weights serve both modes — offline runs with full
@@ -181,6 +203,7 @@ VARIANT_PROFILES: dict[str, dict] = {
     # default and the streaming menu.
     "parakeet-unified-en-0.6b": {
         "variant": "unified-en-0.6b",
+        "display_name": "Parakeet Unified EN 0.6B",
         "version": "v1",
         "size_label": "0.6B",
         "basename": "parakeet-rnnt",
@@ -188,12 +211,16 @@ VARIANT_PROFILES: dict[str, dict] = {
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "other",
+        "license_name": "nvidia-open-model-license",
+        "license_link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
     },
     # 0.6B English CTC. No predictor, no joint — encoder feeds a
     # single 1x1 conv (decoder.decoder_layers.0) projecting d_model
     # to vocab+1.
     "parakeet-ctc-0.6b": {
         "variant": "ctc-0.6b",
+        "display_name": "Parakeet CTC 0.6B",
         "version": "v1",
         "size_label": "0.6B",
         "basename": "parakeet-ctc",
@@ -201,10 +228,14 @@ VARIANT_PROFILES: dict[str, dict] = {
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # 1.1B English CTC.
     "parakeet-ctc-1.1b": {
         "variant": "ctc-1.1b",
+        "display_name": "Parakeet CTC 1.1B",
         "version": "v1",
         "size_label": "1.1B",
         "basename": "parakeet-ctc",
@@ -212,6 +243,9 @@ VARIANT_PROFILES: dict[str, dict] = {
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # 110M English hybrid TDT+CTC. Shipped as TDT-only at runtime
     # per the family-level Open-decisions #1 ("the pure ctc-* variants
@@ -221,12 +255,16 @@ VARIANT_PROFILES: dict[str, dict] = {
     # the existing (Stage 4) TDT codepath.
     "parakeet-tdt_ctc-110m": {
         "variant": "tdt_ctc-110m",
+        "display_name": "Parakeet TDT-CTC 110M",
         "version": "v1",
         "size_label": "110M",
         "head_kind": "tdt",
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # 1.1B English hybrid TDT+CTC. Same TDT-only shipping decision.
     # Marked `prefer_direct_load=True` so the converter bypasses
@@ -234,6 +272,7 @@ VARIANT_PROFILES: dict[str, dict] = {
     # reads the cached .nemo archive in place.
     "parakeet-tdt_ctc-1.1b": {
         "variant": "tdt_ctc-1.1b",
+        "display_name": "Parakeet TDT-CTC 1.1B",
         "version": "v1",
         "size_label": "1.1B",
         "head_kind": "tdt",
@@ -241,6 +280,9 @@ VARIANT_PROFILES: dict[str, dict] = {
         "languages": ["en"],
         "lang_detect": False,
         "prefer_direct_load": True,
+        "license": "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
+        "license_link": "https://creativecommons.org/licenses/by/4.0/",
     },
     # 0.6B English cache-aware streaming RNNT. FastConformer encoder
     # with att_context_style='chunked_limited' and causal depthwise
@@ -252,6 +294,7 @@ VARIANT_PROFILES: dict[str, dict] = {
     # the existing predictor/joint code path applies.
     "nemotron-speech-streaming-en-0.6b": {
         "variant": "nemotron-speech-streaming-en-0.6b",
+        "display_name": "Nemotron Speech Streaming EN",
         "version": "v1",
         "size_label": "0.6B",
         "basename": "parakeet-rnnt",
@@ -259,6 +302,9 @@ VARIANT_PROFILES: dict[str, dict] = {
         "expected_vocab_size": 1024,
         "languages": ["en"],
         "lang_detect": False,
+        "license": "other",
+        "license_name": "nvidia-open-model-license",
+        "license_link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
     },
     # 0.6B multilingual cache-aware streaming RNN-T. Same FastConformer
     # encoder as the English predecessor (24L / d_model=1024 / 8h /
@@ -273,6 +319,7 @@ VARIANT_PROFILES: dict[str, dict] = {
     # holds.
     "nemotron-3.5-asr-streaming-0.6b": {
         "variant": "nemotron-3.5-asr-streaming-0.6b",
+        "display_name": "Nemotron Streaming 3.5",
         "version": "v1",
         "size_label": "0.6B",
         "basename": "parakeet-rnnt",
@@ -294,6 +341,9 @@ VARIANT_PROFILES: dict[str, dict] = {
         ],
         "lang_detect": True,
         "has_prompt": True,
+        "license": "other",
+        "license_name": "openmdw-1.1",
+        "license_link": "https://openmdw.ai/license/1-1/",
     },
 }
 
@@ -1172,7 +1222,7 @@ def tensor_to_fp32_numpy(t) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_spec: str, out_path: Path) -> None:
+def convert(model_spec: str, out_path: Path, repo_id: str | None = None) -> None:
     from omegaconf import OmegaConf
 
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
@@ -1315,14 +1365,24 @@ def convert(model_spec: str, out_path: Path) -> None:
     print(f"Encoder use_bias: {hp['enc_use_bias']}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "parakeet")
+    writer = gguf_writer(str(out_path), "parakeet")
 
     # ----- general.* metadata -----
-    writer.add_string("general.basename",   profile.get("basename", "parakeet-tdt"))
-    writer.add_string("general.size_label", profile["size_label"])
-    writer.add_string("general.version",    profile["version"])
-    writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",  profile["languages"])
+    add_general_identity(
+        writer,
+        name=profile["display_name"],
+        basename=profile.get("basename", "parakeet-tdt"),
+        size_label=profile["size_label"],
+        version=profile["version"],
+        file_type=REFERENCE_FILE_TYPE,
+        languages=profile["languages"],
+        author="NVIDIA",
+        organization="nvidia",
+        license=profile["license"],
+        license_name=profile["license_name"],
+        license_link=profile["license_link"],
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+    )
 
     # ----- stt.variant + capability KV -----
     writer.add_string("stt.variant", profile["variant"])
@@ -1701,7 +1761,10 @@ def main(argv: list[str]) -> int:
         out_path = REPO_ROOT / "models" / slug / gguf_name(slug, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert(args.model, out_path)
+    repo_id = args.repo_id
+    if repo_id is None and "/" in args.model and not Path(args.model).exists():
+        repo_id = args.model
+    convert(args.model, out_path, repo_id=repo_id)
     return 0
 
 

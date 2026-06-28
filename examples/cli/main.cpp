@@ -951,6 +951,12 @@ int main(int argc, char ** argv) {
             return EXIT_FAILURE;
         }
         std::printf("  backend:    %s\n", transcribe_model_backend(model));
+        if (const char * dn = transcribe_model_meta_val_str(model, "general.name"); dn[0]) {
+            std::printf("  name:       %s\n", dn);
+        }
+        if (const char * lic = transcribe_model_meta_val_str(model, "general.license"); lic[0]) {
+            std::printf("  license:    %s\n", lic);
+        }
 
         struct transcribe_session_params cp; transcribe_session_params_init(&cp);
         cp.n_threads = args.n_threads;
