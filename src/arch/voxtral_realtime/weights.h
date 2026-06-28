@@ -1,7 +1,7 @@
 // arch/voxtral_realtime/weights.h - Voxtral Realtime (2602) catalog + hparams.
 //
-// INTERNAL to src/arch/voxtral_realtime/. Streaming audio-LLM, distinct
-// from the 2507 `voxtral` family. Three-sided weight layout:
+// INTERNAL to src/arch/voxtral_realtime/. Streaming audio-LLM, distinct from the
+// 2507 `voxtral` family. Three-sided weight layout:
 //
 //   enc.*   causal RoPE audio encoder (2x left-pad causal Conv1d stem +
 //           32 pre-norm RMSNorm transformer layers; NEOX RoPE theta 1e6

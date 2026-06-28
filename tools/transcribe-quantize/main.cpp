@@ -7,16 +7,9 @@
 // llama-quantize uses), so the output is bit-compatible with anything
 // that consumes standard GGUF blocks.
 //
-// Why a separate C++ tool instead of doing this in convert-<family>.py:
-//
-//   gguf-py 0.18 ships pure-Python implementations of F32, F16, BF16,
-//   Q8_0, Q4_0, Q4_1, Q5_0, Q5_1 — but every K-quant (Q4_K, Q5_K, Q6_K,
-//   Q8_K) and every IQ-quant raises NotImplementedError. Bridging
-//   ggml's C quantizers from Python via ctypes works but is fragile.
-//   Following whisper.cpp / llama.cpp's pattern, the conversion path
-//   is Python (one-shot checkpoint → source/reference-dtype GGUF), and
-//   every derived quant is produced by a small C++ binary that links
-//   libggml directly.
+// Quants live in C++ rather than the Python converters because gguf-py
+// has no K-quant / IQ-quant support: conversion stays Python (checkpoint →
+// reference-dtype GGUF), every derived quant is produced here against libggml.
 //
 // The tool is intentionally family-aware in exactly one place:
 // classify_tensor(). If you change a family tensor catalog, keep this
@@ -170,7 +163,7 @@ int main(int argc, char ** argv) {
     std::printf("transcribe-quantize: %s -> %s (preset %s)\n",
                 in_path, out_path, preset->name);
 
-    // ---- Load input gguf with tensor data into a ggml_context ----
+    // Load input gguf with tensor data into a ggml_context.
     //
     // no_alloc=false + ctx=&ctx_in lets ggml allocate one big buffer
     // and load every tensor's bytes into it. After this returns, every
@@ -189,7 +182,7 @@ int main(int argc, char ** argv) {
     const int64_t n_tensors = gguf_get_n_tensors(gguf_in);
     std::printf("input: %lld tensors\n", (long long)n_tensors);
 
-    // ---- Plan: per-tensor target type + total output buffer size ----
+    // Plan: per-tensor target type + total output buffer size.
     //
     // We need a fresh ggml_context for the output tensors that owns
     // their (possibly newly-quantized) data. The size is the sum of
@@ -268,7 +261,7 @@ int main(int argc, char ** argv) {
     print_stats(out_stats, "output");
     std::printf("\n");
 
-    // ---- Allocate the output ggml_context + gguf_context ----
+    // Allocate the output ggml_context + gguf_context.
     ggml_init_params out_init{};
     out_init.mem_size   = mem_size;
     out_init.mem_buffer = nullptr; // ggml will malloc internally
@@ -298,7 +291,7 @@ int main(int argc, char ** argv) {
     // gguf-dump display it.
     gguf_set_val_u32(gguf_out, "general.file_type", preset->file_type);
 
-    // ---- Per-tensor: dequant → fp32 → requant → add to ctx_out ----
+    // Per-tensor: dequant → fp32 → requant → add to ctx_out.
     std::vector<float> fp32_scratch;
     int64_t requantized = 0;
     int64_t copied      = 0;
@@ -375,7 +368,7 @@ int main(int argc, char ** argv) {
     std::printf("processed: %lld requantized, %lld copied\n",
                 (long long)requantized, (long long)copied);
 
-    // ---- Write the output gguf ----
+    // Write the output gguf.
     if (!gguf_write_to_file(gguf_out, out_path, /*only_meta=*/false)) {
         std::fprintf(stderr, "transcribe-quantize: gguf_write_to_file failed\n");
         ggml_free(ctx_out);

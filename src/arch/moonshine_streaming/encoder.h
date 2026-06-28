@@ -4,7 +4,7 @@
 // SiLU → 2× causal Conv1d) with N transformer blocks that use
 // per-layer sliding-window attention masks (no RoPE on the encoder).
 //
-// Dump points (must match `build/validate/moonshine_streaming/<v>/dump_coverage.json`):
+// Dump points:
 //   enc.audio.in              raw PCM input
 //   enc.embedder.cmvn.out     CMVN per-frame (eps=1e-6)
 //   enc.embedder.comp.out     asinh(exp(log_k) * cmvn_out)
@@ -70,11 +70,9 @@ struct EncoderBuild {
 // Returns 0 if the input is too short.
 int encoder_t_enc(const MoonshineStreamingHParams & hp, int n_samples);
 
-// Mirror dump_reference_moonshine_streaming_transformers.py::auto_blocks.
-// Used by encoder + decoder graph builders to emit debug dumps for the
-// same per-layer subset the reference dumper does, so validate.py compares
-// matching tensors on both sides instead of generating MISSING-right
-// reports for blocks the reference skips.
+// Which per-layer blocks the encoder/decoder builders emit as debug dumps.
+// Mirrors dump_reference_moonshine_streaming_transformers.py::auto_blocks
+// so both sides dump the same subset.
 bool dump_block_index(int i, int n_layers);
 
 // Build the encoder forward graph in compute_ctx.

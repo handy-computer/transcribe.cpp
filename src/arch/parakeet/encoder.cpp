@@ -1,44 +1,24 @@
 // arch/parakeet/encoder.cpp - Parakeet Conformer encoder graph builder.
 //
-// Thin glue over the shared Conformer helpers in src/conformer/. The
-// per-op helpers (layer_norm, f32-friendly conv helpers, rel_shift,
-// conv_module, rel_pos_mhsa, build_conformer_block, build_pre_encode)
-// now live in transcribe::conformer — see src/conformer/conformer.{h,cpp}
-// for the full implementations and the Metal backstory on the
-// conv_*_f32 helpers.
-//
-// Parakeet-specific pieces kept in this file:
-//   - detect_direct_dw (different policy than Cohere)
-//   - to_view() helpers that project ParakeetPreEncode / ParakeetBlock
-//     onto the shared nullable-pointer views. Parakeet's conformer
-//     blocks ship without biases on the FFN/attention/conv-module
-//     linear layers, so those slots in BlockView stay nullptr — but
-//     pre_encode has real conv biases (conv0_b..conv6_b, out_b) and
-//     those ARE copied through by to_view(ParakeetPreEncode).
+// Thin glue over the shared Conformer helpers in transcribe::conformer
+// (src/conformer/conformer.{h,cpp}). Parakeet-specific pieces kept here:
+//   - detect_direct_dw (different policy than Cohere).
+//   - to_view() helpers projecting ParakeetPreEncode / ParakeetBlock onto
+//     the shared nullable-pointer views (block linear layers ship without
+//     biases; pre_encode convs carry biases that ARE copied through).
 //   - build_encoder_graph orchestration — every block goes through
-//     conf::build_conformer_block; block 0 passes a BlockObserver
-//     that names intermediates and stashes them in the EncoderDumps
-//     struct so the 3b-3e bring-up harness can diff every sub-step
+//     conf::build_conformer_block; block 0 passes a dump observer.
 //
 // Layout cheat sheet:
-//
-//   MelFrontend output  : row-major [n_mels=128, n_frames=T_mel] f32
-//   ggml mel_in tensor  : ne=[T_mel, 128, 1, 1] f32  (matches the
-//                         row-major buffer byte-for-byte)
-//   conv input form     : [W=F, H=T, IC, N] per ggml_conv_2d. The
-//                         catalog kernels are stored in PyTorch OIHW
-//                         order which translates to ggml ne
-//                         [KW, KH, IC, OC] where KW is aligned with
-//                         the FREQ axis and KH with the TIME axis
-//                         (NHWC convention: H=T, W=F). The 3x3 conv
-//                         kernel is not spatially symmetric so the
-//                         data must be presented with W=F, H=T.
-//
-// After 3 stride-2 convs (kernel=3, padding=1), W and H shrink by
-// floor((d + 2 - 3)/2) + 1 per layer:
-//   F (ggml W) =  128 ->  64 ->  32 -> 16
-//   T (ggml H) = 1101 -> 551 -> 276 -> 138    (jfk.wav, 11 s)
-// So the post-conv tensor has ne = [F'=16, T_enc=138, channels=256, 1].
+//   MelFrontend output : row-major [n_mels, T_mel] f32
+//   ggml mel_in        : ne=[T_mel, n_mels, 1, 1] f32 (byte-identical)
+//   conv input         : [W=F, H=T, IC, N] per ggml_conv_2d; OIHW catalog
+//                        kernels map to ggml ne [KW, KH, IC, OC] with KW
+//                        on the FREQ axis and KH on the TIME axis (the 3x3
+//                        kernel isn't symmetric, so W=F, H=T is required).
+// After 3 stride-2 k=3 pad=1 convs, W and H shrink floor((d+2-3)/2)+1
+// per layer (n_mels=128: F 128→64→32→16); post-conv ne =
+// [F', T_enc, channels, 1].
 
 #include "encoder.h"
 
@@ -63,38 +43,25 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
-// ----- Per-family depthwise dispatch policy -----------------------
+// ----- Per-family depthwise dispatch policy -----
 //
-// Parakeet uses the direct conv_2d_dw path on every backend for the
-// in-block depthwise conv (Vulkan: native kernel; Metal/CPU: the
-// direct path is faster than the 31x im2col expansion). The
-// pre_encode site historically hardcoded the im2col f32 helper
-// regardless of the in-block flag, so direct_dw_in_pre_encode stays
-// false here to preserve that behavior exactly. Env vars map onto
-// both sites because Parakeet has no history of splitting them.
+// In-block depthwise conv uses the direct conv_2d_dw path on every
+// backend (faster than the 31x im2col expansion). Env vars override
+// both sites.
 bool detect_direct_dw_in_block(const char * backend) {
     const char * env = std::getenv("TRANSCRIBE_CONV_DIRECT_DW");
     if (env != nullptr) return true;  // user override
     env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW");
     if (env != nullptr) return false; // user override
-    // Vulkan and CPU have native CONV_2D_DW; Metal does too via the
-    // direct path in this version. CPU also benefits from direct dw
-    // (avoids the 31x im2col expansion).
     (void)backend;
     return true;
 }
 
-// Pre-encode (subsampling) depthwise dispatch. Same direct path as the
-// in-block site EXCEPT on Metal, where ggml_conv_2d_dw_direct's CONV_2D_DW
-// op is unsupported in this vendored ggml (see conv_2d_dw_f32's comment in
-// conformer.cpp) so the im2col helper must be used. CPU and Vulkan have a
-// native CONV_2D_DW: the direct path avoids both the ~31x im2col expansion
-// AND the degenerate per-channel [1 x K] batched matmul the im2col path
-// emits (m=1, batch=channels) — a large, GPU-/CPU-idle pre-encode cost
-// (~40-50ms here). Historically this was hardcoded to the im2col helper to
-// preserve Metal behavior; making it backend-aware keeps Metal correct
-// while letting CPU/Vulkan take the fast path. Env vars match the in-block
-// overrides.
+// Pre-encode depthwise dispatch: direct path EXCEPT on Metal, where
+// CONV_2D_DW is unsupported in this vendored ggml (see conv_2d_dw_f32 in
+// conformer.cpp) so the im2col helper is used. CPU/Vulkan have native
+// CONV_2D_DW; the direct path avoids the ~31x im2col expansion and the
+// degenerate per-channel [1 x K] matmul (~40-50ms here).
 bool detect_direct_dw_in_pre_encode(const char * backend) {
     if (std::getenv("TRANSCRIBE_CONV_DIRECT_DW")    != nullptr) return true;
     if (std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW") != nullptr) return false;
@@ -129,9 +96,8 @@ conf::BlockView to_view(const ParakeetBlock & b) {
     v.ff1_lin2_w = b.ff1_lin2_w;
     v.ff1_lin2_b = b.ff1_lin2_b;
 
-    // Self-attention. Q/K/V/out can carry biases when use_bias=true
-    // (1.1B / rnnt / ctc variants); v2/v3 ship without. linear_pos is
-    // bias-free in NeMo regardless.
+    // Self-attention. Q/K/V/out biases only when use_bias=true; linear_pos
+    // is bias-free in NeMo regardless.
     v.norm_attn_w = b.norm_attn_w;
     v.norm_attn_b = b.norm_attn_b;
     v.attn_q_w    = b.attn_q_w;   v.attn_q_b   = b.attn_q_b;
@@ -153,12 +119,9 @@ conf::BlockView to_view(const ParakeetBlock & b) {
     v.conv_pw2_b          = b.conv_pw2_b;
     v.conv_bn_fused_scale = b.conv_bn_fused_scale;
     v.conv_bn_fused_bias  = b.conv_bn_fused_bias;
-    // For the LayerNorm path (streaming variants) the GGUF stores the
-    // affine scale/bias under the same conv.bn.weight/bias tensor names
-    // (NeMo keeps the Python attribute named `batch_norm` even when the
-    // module is swapped to LayerNorm). Point conv_ln_* at the raw
-    // tensors; the conformer block only reads them when
-    // params.conv_norm_type == LayerNorm.
+    // LayerNorm path (streaming variants): the GGUF stores the affine
+    // scale/bias under the same conv.bn.weight/bias names. The conformer
+    // block reads these only when conv_norm_type == LayerNorm.
     v.conv_ln_w           = b.conv_bn_w;
     v.conv_ln_b           = b.conv_bn_b;
 
@@ -175,20 +138,13 @@ conf::BlockView to_view(const ParakeetBlock & b) {
     return v;
 }
 
-// ----- Block 0 observer -------------------------------------------
+// ----- Block 0 observer -----
 //
-// Drives the 3b-3e bring-up harness. For each of the five canonical
-// points build_conformer_block fires on, we name the tensor
-// `enc.block.0.<tag>` (matching the old hand-built block's naming
-// exactly, so existing graph-inspection workflows keep working) and
-// stash the pointer in the right EncoderDumps slot so Parakeet::run's
-// try_dump loop finds it.
-//
-// NOTE: the dump FILE names in model.cpp's try_dump table
-// (`enc.block.0.ff1`, etc.) are independent of the ggml names here
-// (`enc.block.0.after_ff1`, etc.). That pre-dates the observer —
-// both names existed on the hand-built block as well. Preserved
-// as-is to avoid any behavioral change during the refactor.
+// For each canonical point build_conformer_block fires on, names the
+// tensor `enc.block.0.<tag>` and stashes it in the matching EncoderDumps
+// slot for Parakeet::run's try_dump loop. The dump FILE names in
+// model.cpp (enc.block.0.ff1, ...) are independent of these ggml names
+// (enc.block.0.after_ff1, ...).
 struct Block0DumpSink {
     EncoderDumps * dumps;
 };
@@ -222,11 +178,10 @@ void parakeet_block0_observer_cb(void *        user,
     }
 }
 
-// Generalized sub-block observer for blocks 1..N-1, gated by
-// TRANSCRIBE_DUMP_SUB_BLOCKS=<comma-separated indices>. Names tensors
-// `enc.block.<i>.{ff1,attn,conv,ff2,out}` (mapping the helper's "after_*"
-// tags to short names matching the reference dumper). The "out" tag
-// here corresponds to the post-norm-out tensor — i.e. block.<i>.out.
+// Sub-block observer for blocks 1..N-1, gated by
+// TRANSCRIBE_DUMP_SUB_BLOCKS. Names tensors
+// `enc.block.<i>.{ff1,attn,conv,ff2}` (the helper's "out" tag is already
+// covered by the mid/last/all-block paths).
 struct SubBlockSink {
     int            block_idx;
     EncoderDumps * dumps;
@@ -245,9 +200,7 @@ void parakeet_subblock_observer_cb(void *        user,
     else if (std::strcmp(tag, "after_conv") == 0) short_tag = "conv";
     else if (std::strcmp(tag, "after_ff2") == 0)  short_tag = "ff2";
     else if (std::strcmp(tag, "out") == 0) {
-        // Skip "out" — block.<i>.out is already covered by the
-        // mid_block_out / last_block_out / all_block_outs paths.
-        return;
+        return; // block.<i>.out covered elsewhere
     }
 
     char name_buf[64];
@@ -297,24 +250,14 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
 {
     if (n_batch < 1) n_batch = 1;
     const bool var_len_masks = batch_var_len && n_batch > 1;
-    // Per-family dispatch policy. Parakeet keeps the historical split
-    // where the in-block depthwise uses the direct path on every
-    // backend but the pre_encode depthwise uses the f32-friendly
-    // im2col helper unconditionally. See detect_direct_dw_in_block
-    // above and the ConvPolicy comment in conformer.h.
     conf::ConvPolicy policy {};
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
     policy.direct_dw_in_pre_encode = detect_direct_dw_in_pre_encode(backend_name);
-    // Cache-aware streaming variants (NeMo `causal_downsampling=true`)
-    // use CausalConv2D for the pre-encode subsample stack (left=k-1,
-    // right=stride-1 pad on both spatial axes). We infer this from the
-    // attention style: ChunkedLimited (cache-aware) implies causal
-    // subsample; Regular (offline) and ChunkedLimitedWithRc (buffered
-    // streaming) both use the standard non-causal symmetric pad. The
-    // pre-encode kernel (k=3) and the conformer conv-module kernel
-    // (k=9) are independent — hp.enc_conv_context_{left,right} are
-    // for the latter and don't say anything about the former.
+    // Cache-aware streaming (NeMo causal_downsampling=true) uses
+    // CausalConv2D for the pre-encode subsample (left=k-1, right=stride-1).
+    // Inferred from the attention style — only ChunkedLimited is causal.
+    // Independent of the conformer conv-module's conv_context.
     policy.causal_pre_encode =
         (hp.enc_att_context_style ==
              ParakeetHParams::AttContextStyle::ChunkedLimited);
@@ -329,12 +272,8 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         return eb;
     }
 
-    // We support subsampling_factor=8 (every published Parakeet variant)
-    // and any n_mels divisible by the subsampling factor on the freq axis
-    // (3 stride-2 convs, kernel=3, padding=1). All current variants ship
-    // n_mels=80 or 128; both pass cleanly. If a future variant ships a
-    // factor != 8, build_pre_encode would need a structural rework, so
-    // we fail loudly here.
+    // Only subsampling_factor=8 (every published variant) is implemented;
+    // a different factor would need a build_pre_encode rework.
     if (hp.enc_subsampling_factor != 8) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet encoder: unsupported subsampling_factor=%d "
@@ -350,12 +289,9 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         return eb;
     }
 
-    // Mel input handle. ne=[T_mel, n_mels, 1, n_batch] matches the C++
-    // MelFrontend's row-major [n_mels, n_frames] storage byte for byte
-    // (see the layout cheat sheet at the top of the file); utterance b is
-    // the contiguous [n_mel_frames * n_mels] slab at offset
-    // b * n_mel_frames * n_mels. For n_batch == 1 this is identical to the
-    // prior 2-D [T_mel, n_mels] tensor.
+    // Mel input handle. ne=[T_mel, n_mels, 1, n_batch] matches the
+    // MelFrontend's row-major [n_mels, n_frames] byte for byte; utterance
+    // b is the contiguous slab at offset b * n_mel_frames * n_mels.
     eb.mel_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
                                    n_mel_frames, hp.fe_num_mels, 1, n_batch);
     if (eb.mel_in == nullptr) {
@@ -365,19 +301,13 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     }
     ggml_set_name(eb.mel_in, "mel.in");
     ggml_set_input(eb.mel_in);
-    // Debug-only: pin the mel_in buffer so the scheduler doesn't reuse
-    // its slot for a later activation before dump_tensor() reads it
-    // back. Without this, streaming dumps of enc.mel.in show garbage
-    // because n_mel_frames is small and the slot is the first to be
-    // freed. No-op in normal builds.
+    // Pin mel_in so the scheduler doesn't reuse its slot before the dump
+    // pass reads it (no-op in normal builds).
     transcribe::debug::mark_tensor_for_dump(eb.mel_in);
 
-    // Build the pre_encode subgraph. For variable-length offline batching we
-    // enable masked subsampling (zero each conv intermediate's padded time
-    // region so an utterance's boundary frame matches a standalone run). Only
-    // the non-causal pre-encode is masked here — the causal/streaming stem
-    // has a different per-stage length formula and its boundary frame does
-    // not flip decoded tokens in practice.
+    // Build the pre_encode subgraph. Variable-length offline batching
+    // enables masked subsampling (zero each conv intermediate's padded
+    // time region). Only the non-causal pre-encode is masked.
     conf::PreEncodeValidMasks pe_masks;
     const bool mask_pre_encode = var_len_masks && !policy.causal_pre_encode;
     ggml_tensor * x = conf::build_pre_encode(ctx, to_view(w.pre_encode),
@@ -397,67 +327,36 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     eb.dumps.pre_encode_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // ----- xscaling ---------------------------------------------------
+    // ----- xscaling -----
     //
-    // NeMo's RelPositionalEncoding.forward applies x = x * sqrt(d_model)
-    // when its `xscaling` flag is true. This multiplication happens AFTER
-    // pre_encode and BEFORE the first conformer block — i.e. it
-    // operates on the running residual, not just on the pos_emb input.
-    // ctc-0.6b/1.1b, rnnt-0.6b/1.1b, and unified-en-0.6b ship with
-    // xscaling=True; v2/v3 and the TDT/TDT_CTC variants ship with
-    // xscaling=False.
-    //
-    // The same shape comes out (the scale factor is applied uniformly
-    // along d_model). LayerNorms in every sub-block normalize the
-    // scale away when computing FF/attn/conv outputs, so the only
-    // place the scale matters is the residual carried between
-    // sub-blocks and the running residual into norm_out at the end of
-    // each block. Without this multiplication on a True-flagged model
-    // the residual is sqrt(d_model)x smaller, the corrections are the
-    // same magnitude (because they go through LN first), and the
-    // residual+correction mix is structurally different — the
-    // accumulated drift past 24 blocks is enough to produce empty
-    // transcripts on unified-en-0.6b and ~0.04% WER drift on ctc-0.6b
-    // / rnnt-0.6b before this fix landed.
+    // NeMo's RelPositionalEncoding applies x = x * sqrt(d_model) when
+    // xscaling=True, on the running residual after pre_encode and before
+    // block 0 (ctc/rnnt/unified-en are True; v2/v3/tdt are False).
+    // Sub-block LayerNorms normalize the scale away, so it only matters
+    // for the residual mix. Omitting it on a True model accumulates drift
+    // past 24 blocks — empty transcripts on unified-en, ~0.04% WER drift
+    // on ctc/rnnt.
     if (hp.enc_xscaling) {
         const float scale = std::sqrt(static_cast<float>(hp.enc_d_model));
         x = ggml_scale(ctx, x, scale);
         x = conf::named(x, "enc.pre_encode.xscaled");
     }
 
-    // ----- Conformer blocks -----------------------------------------
+    // ----- Conformer blocks -----
     //
-    // Every block goes through conf::build_conformer_block — there is
-    // no hand-built path anymore. Block 0 passes a BlockObserver that
-    // names intermediates and stashes them in eb.dumps so the 3b-3e
-    // bring-up harness can diff every sub-step. Blocks 12 and 23 get
-    // their final-LN outputs named after return; the loop is plain
-    // otherwise so the dump dir doesn't fill with all 24 outputs.
-
+    // Every block goes through conf::build_conformer_block. Block 0 passes
+    // a dump observer; mid/last blocks get their outputs named after
+    // return (the loop is otherwise plain so the dump dir doesn't fill).
     if (!w.blocks.empty()) {
-        // After pre_encode, x ne = [d_model, T_enc, 1, 1]. T_enc is
-        // needed by the positional embedding (whose pos_len =
-        // 2*T_enc - 1) and by the encoder accuracy harness for shape
-        // sanity.
+        // After pre_encode, x ne = [d_model, T_enc, 1, 1].
         const int64_t T_enc = x->ne[1];
 
-        // Create the pos_emb input tensor here, once we know T_enc.
-        // The driver fills it via ggml_backend_tensor_set after the
-        // compute buffer is allocated. ne = [d_model, pos_len, 1, 1]
-        // — slow-to-fast shape (numpy) is (pos_len, d_model),
-        // matching the reference `enc.pos_emb` dump.
-        //
-        // Local attention (Regular style with both att_context_{left,right}
-        // >= 0) shortens pos_emb to (left+right+1) so the buffer covers
-        // exactly the attended relative-position range — matches NeMo's
-        // LocalAttRelPositionalEncoding. ChunkedLimited style keeps pos_emb
-        // at the full 2T-1 and uses a separate attention-position mask
-        // (built below).
-        // ChunkedLimited (2-tuple cache-aware) always engages the mask.
-        // ChunkedLimitedWithRc (3-tuple buffered streaming) only engages
-        // when the caller passes a non-null buf_mask override — offline
-        // load of a unified-en GGUF runs the encoder with full attention
-        // even though the style declares chunked_limited_with_rc.
+        // pos_emb input, ne = [d_model, pos_len, 1, 1] (numpy
+        // (pos_len, d_model)), filled by the driver. Local attention
+        // (Regular, both contexts >= 0) shortens pos_len to (left+right+1)
+        // (NeMo LocalAttRelPositionalEncoding); ChunkedLimited keeps the
+        // full 2T-1 and uses a separate mask. ChunkedLimitedWithRc engages
+        // the mask only when buf_mask is non-null (offline runs full attn).
         const bool is_chunked =
             (hp.enc_att_context_style ==
                  ParakeetHParams::AttContextStyle::ChunkedLimited) ||
@@ -552,9 +451,7 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
             ? conf::BlockParams::ConvNormType::LayerNorm
             : conf::BlockParams::ConvNormType::BatchNorm;
 
-        // Block 0: run through the shared helper with the dump
-        // observer. The observer writes into eb.dumps; no sub-step
-        // references are lost vs. the old hand-built path.
+        // Block 0: shared helper + the dump observer.
         {
             Block0DumpSink sink { &eb.dumps };
             conf::BlockObserver obs {};
@@ -565,16 +462,10 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
                                             bparams, &obs);
         }
 
-        // Blocks 1..N-1: no observer. Mark the mid- and last-layer
-        // outputs for dump so the harness can spot-check them; every
-        // other block stays anonymous. Mid + last indices scale with
-        // n_layers so the dump points match the per-variant oracle
-        // (0/n_half/n-1). For 24-layer v2/v3 that's 0/12/23; for
-        // 42-layer 1.1B it's 0/21/41; for 17-layer tdt_ctc-110m it's
-        // 0/8/16. We only mark for dump here — the actual file name
-        // is synthesized in model.cpp from the saved layer index,
-        // because conf::named's trailing "enc.final" rename would
-        // otherwise clobber the last-block name in place.
+        // Blocks 1..N-1. Mark the mid (n/2) and last (n-1) outputs for
+        // dump (0/12/23 on 24-layer v2/v3); the file name is synthesized
+        // in model.cpp from the saved index because conf::named's trailing
+        // "enc.final" rename would otherwise clobber the last-block name.
         const int n_layers   = static_cast<int>(w.blocks.size());
         const int mid_layer  = n_layers / 2;
         const int last_layer = n_layers - 1;
@@ -582,29 +473,20 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         eb.dumps.last_block_idx = last_layer;
         eb.dumps.all_block_outs.assign(n_layers, nullptr);
         eb.dumps.all_block_outs[0] = eb.dumps.block0_out;
-        // Per-block dump opt-in for the layer-by-layer divergence
-        // bisect. The reference dumper supports `--blocks 0,1,...,N-1`;
-        // setting TRANSCRIBE_DUMP_ALL_BLOCKS=1 makes the C++ side
-        // dump every block to enable a 1:1 frame-by-frame compare.
+        // Per-block dump opt-in for the divergence bisect
+        // (TRANSCRIBE_DUMP_ALL_BLOCKS).
         const bool dump_all_blocks =
             std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr;
         if (dump_all_blocks && eb.dumps.block0_out != nullptr) {
             transcribe::debug::mark_tensor_for_dump(eb.dumps.block0_out);
         }
-        // Sub-block observation gate. TRANSCRIBE_DUMP_SUB_BLOCKS=
-        // "12,22,23" installs the sub-block observer on each listed
-        // index >= 1 (block 0 already has its dedicated observer above).
-        // Stored in a local set for O(1) lookup in the loop.
+        // Sub-block observation gate (TRANSCRIBE_DUMP_SUB_BLOCKS). Sinks
+        // are kept alive for the build (the observer captures their addr).
         const std::vector<int> sub_blocks = parse_sub_block_env(n_layers);
-        // Persistent sinks — one per requested block, kept alive for the
-        // duration of the encoder build. The observer pointer captures
-        // their address.
         std::vector<SubBlockSink> sub_sinks;
         sub_sinks.reserve(sub_blocks.size());
         for (int idx : sub_blocks) sub_sinks.push_back(SubBlockSink{idx, &eb.dumps});
         for (int i = 1; i < n_layers; ++i) {
-            // If this block is requested for sub-block dumping, install
-            // the generalized observer; otherwise run plain.
             const auto it = std::lower_bound(sub_blocks.begin(),
                                              sub_blocks.end(), i);
             const bool with_obs =
@@ -637,48 +519,31 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         }
     }
 
-    // Final encoder output. With all 24 blocks wired, this is now
-    // the true encoder exit point (= block 23's norm_out output) and
-    // the comparator's `enc.final` row will compare against the
-    // reference's true encoder output.
+    // Final encoder output (= last block's norm_out).
     eb.dumps.final_out = x;
     x = conf::named(x, "enc.final");
     transcribe::debug::mark_tensor_for_dump(x);
-    // Force final_out to remain an output so the host can read it back
-    // separately from the prompted output below. Without this the
-    // scheduler may free the buffer once eb.out (= prompted) is
-    // realised and the host-side "dec.enc_out" dump would race the
-    // reuse. ggml_set_output also lets ggml_backend_tensor_get attach
-    // to the materialised slot.
+    // Keep final_out as an output so the host can read it back separately
+    // from the prompted output (else the scheduler may free it once eb.out
+    // is realised, racing the "dec.enc_out" dump).
     if (hp.has_prompt) {
         ggml_set_output(x);
     }
 
-    // Prompt MLP (multilingual variants only — today
-    // nemotron-3.5-asr-streaming-0.6b). Mirrors NeMo's
+    // Prompt MLP (multilingual variants). Mirrors NeMo's
     // EncDecRNNTBPEModelWithPrompt.forward():
-    //
-    //   x_cat  = concat(enc[d_model], one_hot(prompt_id)[num_prompts])
-    //   h      = relu(W0 @ x_cat + b0)        // W0: [prompt_hidden, d_model+P]
-    //   y      = W2 @ h + b2                   // W2: [d_model, prompt_hidden]
-    //   enc_out := y
-    //
-    // The one-hot vector is replicated across the T_enc axis on the
-    // host (small buffer, num_prompts × T_enc × n_batch floats per
-    // call) so the in-graph step is plain concat + two matmuls + a
-    // ReLU. After the MLP the post-prompt output replaces eb.out so
-    // the decoder consumes the prompt-conditioned tensor unchanged
-    // from the non-prompt code path.
+    //   x_cat = concat(enc[d_model], one_hot(prompt_id)[num_prompts])
+    //   h     = relu(W0 @ x_cat + b0)   // W0: [prompt_hidden, d_model+P]
+    //   y     = W2 @ h + b2             // W2: [d_model, prompt_hidden]
+    // The one-hot is replicated across T_enc on the host so the in-graph
+    // step is concat + two matmuls + ReLU; y replaces eb.out.
     if (hp.has_prompt) {
         const int T_enc_val = static_cast<int>(x->ne[1]);
         const int P         = hp.prompt_num_prompts;
         const int B         = n_batch;
 
-        // Input: per-utterance one-hot replicated across T frames.
-        // ne = [num_prompts, T_enc, n_batch, 1] — batch rides ne[2] to
-        // match the Conformer block output layout
-        // ([d_model, T_enc, B, 1]; see conformer.cpp reshape_3d). Memory
-        // layout is identical to [P, T_enc, 1, B] for the host filler.
+        // Per-utterance one-hot, ne = [num_prompts, T_enc, n_batch, 1]
+        // (batch on ne[2] to match the block output layout).
         ggml_tensor * one_hot = ggml_new_tensor_4d(
             ctx, GGML_TYPE_F32, P, T_enc_val, B, 1);
         if (one_hot == nullptr) {
@@ -691,16 +556,10 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         ggml_set_input(one_hot);
         eb.prompt_one_hot_in = one_hot;
 
-        // Concat along the feature axis (ne[0]) →
-        // [d_model + P, T_enc, 1, B]
         ggml_tensor * cat = ggml_concat(ctx, x, one_hot, /*dim=*/0);
-
-        // Linear mlp.0: W0 @ cat + b0  →  [prompt_hidden, T_enc, 1, B]
         ggml_tensor * h = ggml_mul_mat(ctx, w.prompt.mlp0_w, cat);
         h = ggml_add(ctx, h, w.prompt.mlp0_b);
         h = ggml_relu(ctx, h);
-
-        // Linear mlp.2: W2 @ h + b2    →  [d_model, T_enc, 1, B]
         ggml_tensor * y = ggml_mul_mat(ctx, w.prompt.mlp2_w, h);
         y = ggml_add(ctx, y, w.prompt.mlp2_b);
 
@@ -714,13 +573,8 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
     eb.out = x;
     ggml_set_output(eb.out);
 
-    // Build the forward cgraph. ggml_new_graph_custom allocates the
-    // cgraph out of the same compute_ctx, so it has to be sized for
-    // it. The default GGML_DEFAULT_GRAPH_SIZE (2048 nodes) is too
-    // small for the full encoder: each conformer block contributes
-    // ~90 ops (FF + attn + conv + FF + LN, including all the
-    // permute/cont overhead) and 24 blocks pushes the count past
-    // 2200. Use 8192 to leave headroom.
+    // 8192-node cgraph: the default 2048 is too small (each conformer
+    // block contributes ~90 ops, 24 blocks > 2200).
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -728,11 +582,9 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
-    // When the prompt MLP is present, `eb.out` already feeds into the
-    // prompted output, but `eb.dumps.final_out` is an unconnected node
-    // from the cgraph's POV. Adding it as a forward root keeps the
-    // un-prompted tensor materialised so the host can read it back for
-    // the "dec.enc_out" dump.
+    // With the prompt MLP present, final_out is otherwise an unconnected
+    // node; add it as a forward root so it stays materialised for the
+    // "dec.enc_out" dump.
     if (hp.has_prompt && eb.dumps.final_out != nullptr) {
         ggml_build_forward_expand(eb.graph, eb.dumps.final_out);
     }
@@ -744,27 +596,22 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
 // Streaming encoder graph (cache-aware, per-chunk feed)
 // ---------------------------------------------------------------------------
 //
-// Mirrors build_encoder_graph but:
-//   - Operates on a mel chunk (n_mel_chunk_frames), not the whole audio.
-//   - Slices off `drop_extra_pre_encoded` post-subsample frames.
-//   - Threads per-layer cache_last_channel + cache_last_time tensors
-//     through BlockParams, and emits per-layer cache outputs into
-//     fresh compute_ctx tensors that the driver reads back.
-//   - Sizes pos_emb and chunked_mask for T_virtual = T_cache + T_q_new
-//     (the per-block attention runs on the cache+new union).
+// Like build_encoder_graph but: operates on a mel chunk; slices off
+// drop_extra_pre_encoded post-subsample frames; threads per-layer
+// cache_last_channel/time through BlockParams and emits fresh cache
+// outputs the driver reads back; sizes pos_emb and chunked_mask for
+// T_virtual = T_cache + T_q_new.
 //
 // Shapes:
-//   eb.mel_in           [n_mel_chunk_frames, n_mels, 1, 1]
-//   eb.pos_emb_in       [d_model, 2*T_virtual - 1, 1, 1]
-//   eb.chunked_mask_in  [T_virtual, T_virtual, 1, 1]
-//   eb.out              [d_model, T_q_new, 1, 1]
-//   cache_io.channel_out[i]   [d_model, T_cache, 1, 1]   (fresh)
-//   cache_io.time_out[i]      [k_minus_1, d_model, 1, 1] (fresh)
+//   eb.mel_in            [n_mel_chunk_frames, n_mels, 1, 1]
+//   eb.pos_emb_in        [d_model, 2*T_virtual - 1, 1, 1]
+//   eb.chunked_mask_in   [T_virtual, T_virtual, 1, 1]
+//   eb.out               [d_model, T_q_new, 1, 1]
+//   cache_io.channel_out[i]  [d_model, T_cache, 1, 1]   (fresh)
+//   cache_io.time_out[i]     [k_minus_1, d_model, 1, 1] (fresh)
 //
-// All cache input tensors (cache_io.channel_in / time_in) must come
-// from the persistent ParakeetStreamingCaches buffer and have the
-// shapes above. The graph DOES treat them as inputs (the scheduler
-// walks back from cpy ops and eb.out to find them).
+// cache_io.channel_in / time_in must come from the persistent cache
+// buffer with the shapes above (the scheduler treats them as inputs).
 EncoderBuild build_encoder_graph_streaming(
     ggml_context *          ctx,
     const ParakeetWeights & w,
@@ -779,8 +626,7 @@ EncoderBuild build_encoder_graph_streaming(
     policy.direct_pw               = conf::detect_direct_pw(backend_name);
     policy.direct_dw_in_block      = detect_direct_dw_in_block(backend_name);
     policy.direct_dw_in_pre_encode = detect_direct_dw_in_pre_encode(backend_name);
-    // See the offline analog in build_encoder_graph: causal pre-encode
-    // is the cache-aware streaming convention only.
+    // Causal pre-encode is the cache-aware streaming convention only.
     policy.causal_pre_encode =
         (hp.enc_att_context_style ==
              ParakeetHParams::AttContextStyle::ChunkedLimited);
@@ -865,20 +711,14 @@ EncoderBuild build_encoder_graph_streaming(
     const int64_t T_cache  = cache_io.channel_in[0]->ne[1];
     const int64_t T_virt   = T_cache + T_q_new;
 
-    // Query slicing (always on): attention queries cover only the
-    // T_q_new new frames while K/V span the full virtual window, so
-    // pos_emb and the chunked mask are sized for that rectangular
-    // [T_virt, T_q_new] geometry. The host-side fills in
-    // emit_streaming_chunk read the sizes back off these tensors, so
-    // builder and driver stay in sync by construction.
+    // Query slicing: attention queries cover only the T_q_new new frames
+    // while K/V span the full virtual window, so pos_emb and the mask are
+    // sized for the rectangular [T_virt, T_q_new] geometry.
 
-    // Streaming KV cache: consume per-layer pre-projected K/V instead
-    // of recomputing them from the channel cache (K/V projections then
-    // run on T_q_new columns instead of T_virt). Disabled when the dump
-    // harness is active — the numerical validation compares last_channel
-    // snapshots against NeMo, and this mode neither reads nor writes
-    // them, so dumping falls back to the channel-recompute path (which
-    // produces bit-identical output and the last_channel the gate needs).
+    // Streaming KV cache: consume per-layer pre-projected K/V instead of
+    // recomputing from the channel cache. Disabled under the dump harness
+    // (which compares last_channel against NeMo); the channel-recompute
+    // path is bit-identical and produces the last_channel the gate needs.
     const bool kv_cache_mode =
         !transcribe::debug::enabled() &&
         static_cast<int>(cache_io.k_in.size()) == n_layers &&
@@ -906,33 +746,24 @@ EncoderBuild build_encoder_graph_streaming(
     ggml_set_name(eb.chunked_mask_in, "stream.attn.chunked_mask.in");
     ggml_set_input(eb.chunked_mask_in);
 
-    // ----- Create the graph BEFORE allocating cache_out tensors, so
-    // the helpers can ggml_build_forward_expand their cpy nodes onto
-    // it. -----
+    // Create the graph BEFORE the cache_out tensors so the helpers can
+    // forward-expand their cpy nodes onto it.
     eb.graph = ggml_new_graph_custom(ctx, /*size=*/8192, /*grads=*/false);
     if (eb.graph == nullptr) return eb;
 
-    // ----- BlockParams (per-block, but only streaming_*_in/_out and
-    // streaming_T_q_new change per layer) -----
     conf::BlockParams bparams {};
     bparams.d_model           = hp.enc_d_model;
     bparams.n_head            = hp.enc_n_heads;
     bparams.conv_kernel       = hp.enc_conv_kernel;
     bparams.kv_type           = kv_type;
-    // Same flash-attention opt-out as the offline builder. On CPU the
-    // flash kernel is dramatically slower than the manual mul_mat +
-    // soft_max path at streaming geometry (T_q ~14, T_k ~70): measured
-    // ~33 ms/layer vs ~1 ms on a Cortex-A55. The numerics gate
-    // (flash casts the rel-pos mask to F16, manual stays F32) is the
-    // same one the offline path documents.
+    // Flash-attention opt-out (TRANSCRIBE_NO_FLASH). On CPU at streaming
+    // geometry the flash kernel is dramatically slower (~33 ms/layer vs
+    // ~1 ms on a Cortex-A55).
     bparams.use_flash         = (std::getenv("TRANSCRIBE_NO_FLASH") == nullptr);
     bparams.policy            = policy;
-    // No att_context_left/right here: ChunkedLimited derives the attention
-    // band entirely from attn_chunked_mask (built host-side in
-    // emit_streaming_chunk). build_conformer_block only reads
-    // att_context_left/right on the Regular (is_local) path, which this
-    // builder never takes — leaving them at the BlockParams defaults keeps
-    // the live source of truth (the mask) singular.
+    // No att_context_left/right: ChunkedLimited derives the band entirely
+    // from attn_chunked_mask (build_conformer_block reads them only on the
+    // Regular path, never taken here).
     bparams.att_context_style = conf::BlockParams::AttContextStyle::ChunkedLimited;
     bparams.attn_chunked_mask = eb.chunked_mask_in;
     bparams.conv_context_left  = hp.enc_conv_context_left;
@@ -953,13 +784,9 @@ EncoderBuild build_encoder_graph_streaming(
         cache_io.v_out.assign(n_layers, nullptr);
     }
     for (int i = 0; i < n_layers; ++i) {
-        // Per-layer cache I/O. The "in" tensors are from the
-        // persistent cache buffer (passed in by the driver). The
-        // "out" tensors are fresh in compute_ctx; the helpers fill
-        // them via ggml_cpy and the driver reads them after compute.
-        // KV mode swaps the channel cache for pre-projected K/V (the
-        // channel_out slot stays null; the driver rotates whichever
-        // outs are present).
+        // Per-layer cache I/O: "in" from the persistent buffer, "out"
+        // fresh in compute_ctx (filled via ggml_cpy, read after compute).
+        // KV mode leaves channel_out null.
         ggml_tensor * cache_tm_out = ggml_new_tensor_2d(
             ctx, GGML_TYPE_F32, k_minus_1, hp.enc_d_model);
         if (cache_tm_out == nullptr) return eb;

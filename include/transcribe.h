@@ -37,30 +37,20 @@
  *   single startup-time install only.
  * - Calling transcribe_log_set() after threads or models exist is
  *   UNSUPPORTED in 0.x. The implementation is data-race-free (the two
- *   atomics ensure no torn reads), but the API does NOT guarantee any
- *   of the following under concurrent or mid-run reconfiguration:
- *     (a) pair-atomic publication of (callback, userdata) - an emitter
- *         may observe a callback from one generation paired with a
- *         userdata from another, especially if two threads call
- *         transcribe_log_set concurrently;
- *     (b) that the old callback or old userdata will not be invoked
- *         after transcribe_log_set returns - an in-flight emission on
- *         another thread may already be holding the previous pair on
- *         its stack and about to call through it.
- *   A caller that needs mid-run reconfiguration must provide its own
- *   external synchronization between transcribe_log_set callers AND
- *   keep every previous callback target and userdata alive until it
- *   can prove no thread can still emit with them. A future revision
- *   may add a properly synchronized reconfiguration entry point with
- *   stronger guarantees.
+ *   atomics ensure no torn reads), but under concurrent or mid-run
+ *   reconfiguration the API does NOT guarantee pair-atomic publication
+ *   of (callback, userdata), nor that the previous callback/userdata
+ *   will not still be invoked after transcribe_log_set returns (an
+ *   in-flight emission on another thread may already hold the old pair).
+ *   A caller that needs mid-run reconfiguration must externally
+ *   synchronize transcribe_log_set callers AND keep every previous
+ *   callback target and userdata alive until no thread can still emit
+ *   with them.
  *
  * ABI stability (0.x):
  * - This library is pre-1.0. The on-disk ABI MAY break between 0.x minor
  *   releases. Consumers should rebuild against matching headers and
  *   should not assume any layout, enum value, or symbol set is frozen.
- *   The `struct_size` mechanism described below is forward-ABI scaffolding
- *   we will lean on for the post-1.0 stable surface; treat it as a
- *   compatibility hook in the making, not a stability promise today.
  *
  * Params (size-aware structs):
  * - Every caller-owned public struct crossing the ABI carries `struct_size`
@@ -208,12 +198,7 @@ typedef enum {
     TRANSCRIBE_ERR_UNSUPPORTED_VARIANT  = 6,
     TRANSCRIBE_ERR_OOM                  = 7,
     TRANSCRIBE_ERR_BACKEND              = 8,
-    /*
-     * Reserved. v1 accepts only 16 kHz mono float32 PCM and the library
-     * does not link a resampler, so there is currently no caller-supplied
-     * sample rate to validate. This code is preserved at its assigned
-     * value for the future "caller declares input rate" entry point.
-     */
+    /* Reserved; not currently returned. */
     TRANSCRIBE_ERR_SAMPLE_RATE          = 9,
     TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE = 10,
     TRANSCRIBE_ERR_UNSUPPORTED_TASK     = 11,
@@ -244,21 +229,9 @@ typedef enum {
      * transcribe_*_init function" specifically.
      */
     TRANSCRIBE_ERR_BAD_STRUCT_SIZE      = 14,
-    /*
-     * Reserved. Phase 2 ships warn-and-proceed semantics for
-     * transcribe_run_params::pnc: a non-DEFAULT value against a model that
-     * does not advertise transcribe_model_supports(model, TRANSCRIBE_FEATURE_PNC)
-     * emits a WARN-level log message and proceeds with the model's
-     * default behavior. This code is preserved at its assigned value
-     * for a future opt-in strict-advisory mode in which the dispatcher
-     * would return this code instead of warning. Not currently
-     * returned.
-     */
+    /* Reserved; not currently returned. */
     TRANSCRIBE_ERR_UNSUPPORTED_PNC      = 15,
-    /*
-     * Reserved. Symmetric with TRANSCRIBE_ERR_UNSUPPORTED_PNC for
-     * transcribe_run_params::itn. Not currently returned.
-     */
+    /* Reserved; not currently returned. */
     TRANSCRIBE_ERR_UNSUPPORTED_ITN      = 16,
     /*
      * Returned by transcribe_run / transcribe_run_batch when the input
@@ -494,9 +467,9 @@ typedef enum {
  * Each family that exposes a runtime PNC toggle reads this field; families
  * that do not (whisper, parakeet, ...) ignore it. The dispatcher emits a
  * WARN-level log message when a non-DEFAULT value is set against a model
- * whose capabilities advertise supports_pnc == false, then proceeds with
- * the model's default behavior. Use transcribe_capabilities::supports_pnc
- * to pre-check.
+ * for which transcribe_model_supports(model, TRANSCRIBE_FEATURE_PNC)
+ * returns false, then proceeds with the model's default behavior. Use
+ * that probe to pre-check.
  *
  *   DEFAULT (0): the family's shipped default. Zero-init via
  *                transcribe_run_params_init() gives this value. The family
@@ -522,8 +495,9 @@ enum transcribe_pnc_mode {
  * transformation that renders numbers, dates, currencies, etc. in formal
  * form ("twenty twenty four" → "2024", "ten dollars" → "$10"). Each
  * family that exposes a runtime ITN toggle reads this field; families
- * that do not ignore it. Non-DEFAULT values against
- * supports_itn == false emit a WARN and proceed with default behavior.
+ * that do not ignore it. Non-DEFAULT values against a model for which
+ * transcribe_model_supports(model, TRANSCRIBE_FEATURE_ITN) returns false
+ * emit a WARN and proceed with default behavior.
  *
  *   DEFAULT (0): family default. Zero-init gives this value.
  *   OFF:         explicit ITN off. Supporting families emit verbatim
@@ -993,13 +967,17 @@ TRANSCRIBE_API void transcribe_session_params_init(
  *
  * pnc:         punctuation+capitalization runtime toggle. See
  *              transcribe_pnc_mode. DEFAULT is always safe. Non-DEFAULT
- *              values against models with supports_pnc == false emit a
- *              WARN and proceed with the model's default behavior.
+ *              values against models for which
+ *              transcribe_model_supports(model, TRANSCRIBE_FEATURE_PNC) is
+ *              false emit a WARN and proceed with the model's default
+ *              behavior.
  *
  * itn:         inverse text normalization runtime toggle. See
  *              transcribe_itn_mode. DEFAULT is always safe. Non-DEFAULT
- *              values against models with supports_itn == false emit a
- *              WARN and proceed with the model's default behavior.
+ *              values against models for which
+ *              transcribe_model_supports(model, TRANSCRIBE_FEATURE_ITN) is
+ *              false emit a WARN and proceed with the model's default
+ *              behavior.
  *
  * language:        source language hint as a BCP-47-ish short code, or
  *                  NULL to autodetect (only if the model supports it).
@@ -1110,10 +1088,6 @@ TRANSCRIBE_API void transcribe_run_params_init(
  *     anything similar in the future) live behind the
  *     transcribe_model_supports() probe, keyed by transcribe_feature.
  *     A new feature is +1 enum value with no struct_size churn.
- *
- * Trajectory note: revisit this shape if the bool cluster in the
- * struct grows past ~5 or if a plugin-like family ABI is introduced.
- * Neither condition is in flight today.
  */
 struct transcribe_capabilities {
     uint64_t                  struct_size;
@@ -1368,8 +1342,7 @@ TRANSCRIBE_API const char * transcribe_model_meta_val_str(
 /* ----------------------------------------------------------------------- */
 
 /*
- * Load a GGUF model from disk. The _file suffix is preserved to leave
- * room for transcribe_model_load_buffer() later without renaming.
+ * Load a GGUF model from disk.
  *
  * params may be NULL for all library defaults. To customize, initialize
  * a struct with transcribe_model_load_params_init() and set fields. A
@@ -1445,11 +1418,10 @@ TRANSCRIBE_API transcribe_status transcribe_open(
     struct transcribe_session **                out_session);
 
 /*
- * Deprecated alias for transcribe_session_free, kept for source
- * compatibility with the prior split open/close shape. Both honor
- * owns_model and free the owned model when present, so a caller may use
- * either with any session. New code should call transcribe_session_free
- * directly. Passing NULL is a no-op.
+ * Deprecated alias for transcribe_session_free. Both honor owns_model and
+ * free the owned model when present, so a caller may use either with any
+ * session. New code should call transcribe_session_free directly. Passing
+ * NULL is a no-op.
  */
 TRANSCRIBE_API void transcribe_close(struct transcribe_session * session);
 
@@ -2046,7 +2018,7 @@ TRANSCRIBE_API transcribe_status transcribe_stream_get_text(
  *                                    run_params->language not in the
  *                                    model's declared language list.
  *
- * Failure semantics — three stages, split by whether the previous
+ * Failure semantics — three checkpoints, split by whether the previous
  * result snapshot survives:
  *
  *   1. Dispatcher preflight. Top-level argument checks run first:
@@ -2066,9 +2038,9 @@ TRANSCRIBE_API transcribe_status transcribe_stream_get_text(
  *      result snapshot fully preserved and no FAILED transition, so a
  *      caller-side config typo cannot destroy the prior utterance's
  *      transcript. A family that does not implement stream_validate
- *      defers these checks to stage 3.
+ *      performs these checks in stream_begin.
  *
- *   3. Post-clear stream_begin. Once stages 1-2 pass, the dispatcher
+ *   3. Post-clear stream_begin. Once the preflight checks pass, the dispatcher
  *      clears the result snapshot, enters ACTIVE, and calls the
  *      family's stream_begin hook. Any non-OK status from this point
  *      (config a non-preflighting family only catches here, allocation
@@ -2255,9 +2227,7 @@ TRANSCRIBE_API int transcribe_tokenize(
  *   encode_ms  time to run the encoder forward pass on the most recent
  *              transcribe_run.
  *   decode_ms  time to run the decoder (predictor + joint + token
- *              search) on the most recent transcribe_run. Currently
- *              always 0 since the decoder isn't wired yet; phase 5
- *              fills this in.
+ *              search) on the most recent transcribe_run.
  *
  * Output struct: caller initializes via transcribe_timings_init() (zero-
  * fill); the library writes only the fields that fit within

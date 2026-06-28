@@ -20,7 +20,7 @@
 //      (see _f32_seq in make_gguf_fixtures.py).
 //   4. ggml_tensor::ne for representative tensors matches the
 //      catalog shape formulas in build_qwen3_asr_weights.
-//   5. The Phase 1.6 resolve_chat_tokens() call succeeded at load —
+//   5. resolve_chat_tokens() succeeded at load —
 //      every chat-template piece ended up in the resolved
 //      ChatTokens struct with a valid id.
 //   6. The ffn_gate_up packed weight was populated at load (model.cpp
@@ -170,7 +170,7 @@ int main() {
 
     // Capabilities: advertised language list + detection bool round-
     // trip; translate stays false (family invariant); max_timestamp
-    // stays NONE (first port doesn't emit alignment).
+    // stays NONE (alignment is not exposed for this family).
     {
         transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
         const bool caps_ok =
@@ -242,7 +242,7 @@ int main() {
     // ----- Chat template string round-tripped -----
     CHECK(!qm->chat_template.empty());
 
-    // ----- Phase 1.6: chat-template token ids resolved at load -----
+    // ----- Chat-template token ids resolved at load -----
     {
         const auto & ct = qm->chat_tokens;
         CHECK_EQ_INT(ct.im_start,        2);

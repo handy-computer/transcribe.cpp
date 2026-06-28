@@ -1,20 +1,11 @@
 // transcribe-loader.h - internal GGUF loader (architecture-agnostic).
 //
-// This header is INTERNAL. It is C++17 (not C) on purpose: it is consumed
-// only from other .cpp files inside src/. The public C ABI lives in
-// include/transcribe.h and never references anything declared here.
-//
-// The Loader exists so transcribe_model_load_file can answer two
-// questions before it has to commit to a per-family code path:
-//
-//   1. Is this file a readable GGUF at all?
-//   2. What architecture does it claim (general.architecture / stt.variant)?
-//
-// Once the architecture is known the loader is handed off to the per-arch
-// handler, which may take ownership of the underlying gguf_context via
-// release_gguf(). If the handler does not take ownership (e.g. because it
-// returned NOT_IMPLEMENTED in pass 2A), the Loader's destructor frees the
-// context normally on stack unwinding.
+// INTERNAL, C++17. The Loader lets transcribe_model_load_file answer two
+// questions before committing to a per-family code path: is this a readable
+// GGUF, and what architecture does it claim (general.architecture /
+// stt.variant)? It is then handed to the per-arch handler, which may take
+// ownership of the gguf_context via release_gguf(); if it does not, the
+// Loader's destructor frees the context on stack unwinding.
 
 #pragma once
 
@@ -32,9 +23,8 @@ public:
     Loader() = default;
     ~Loader();
 
-    // Non-copyable. Move semantics are not needed in 0.x because the
-    // loader is always either constructed-then-released-by-handler or
-    // constructed-then-destroyed-on-the-stack.
+    // Non-copyable; move is not needed (the loader is always either
+    // released to the handler or destroyed on the stack).
     Loader(const Loader &)             = delete;
     Loader & operator=(const Loader &) = delete;
     Loader(Loader &&)                  = delete;

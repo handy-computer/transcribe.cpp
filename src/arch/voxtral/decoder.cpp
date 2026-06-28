@@ -1,11 +1,10 @@
 // arch/voxtral/decoder.cpp - Voxtral LM prefill/step graph builders.
 //
-// Reference: VoxtralForConditionalGeneration's inner language_model
-// (LlamaForCausalLM). The per-block math (pre-LN RMSNorm, GQA, NEOX
-// RoPE, SwiGLU on packed gate_up) is the shared causal_lm module, called
-// with null Q/K-norm slots (Llama has no per-head Q/K norm). This file
-// owns graph allocation, audio injection (3-way concat), dump naming,
-// and the UNTIED lm_head head.
+// Reference: VoxtralForConditionalGeneration's inner LlamaForCausalLM. The
+// per-block math (pre-LN RMSNorm, GQA, NEOX RoPE, SwiGLU on packed gate_up) is
+// the shared causal_lm module with null Q/K-norm slots (Llama has no per-head
+// Q/K norm). This file owns graph allocation, audio injection (3-way concat),
+// dump naming, and the UNTIED lm_head.
 
 #include "decoder.h"
 
@@ -296,8 +295,8 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     ggml_tensor * logits = ggml_mul_mat(ctx, weights.dec_embed.output_w, x);
     logits = ggml_reshape_1d(ctx, logits, vocab);
     ggml_set_name(logits, "step.logits");
-    // Kept as a graph output so the mid-generation dec.logits_raw.gen<N>
-    // dump can read it back after a step compute (validate.py coverage).
+    // Kept as a graph output so the mid-generation dec.logits_raw.gen<N> dump
+    // can read it back after a step compute.
     ggml_set_output(logits);
     sb.logits = logits;
 
@@ -352,10 +351,8 @@ PrefillBuildBatched build_prefill_graph_batched(
     (void) T_audio_max;  // audio_dense is prompt-sized; T_audio_max no longer used
     pb.input_ids_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, T_prompt_max, B);
     ggml_set_input(pb.input_ids_in);
-    // Audio injection is an elementwise blend over the flat token axis (no
-    // set_rows): a k-quant token_embd get_rows is unsupported on CUDA and runs
-    // on CPU; a set_rows consuming that CPU tensor straddles the CPU/CUDA split
-    // and faults. x*keep_mask + audio_dense crosses the split cleanly.
+    // Audio injection is an elementwise blend (see header): x*keep_mask +
+    // audio_dense, which crosses the CPU/CUDA split cleanly unlike a set_rows.
     pb.audio_dense_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden,
                                            static_cast<int64_t>(T_prompt_max) * B);
     ggml_set_input(pb.audio_dense_in);
@@ -378,14 +375,12 @@ PrefillBuildBatched build_prefill_graph_batched(
     }
     pb.graph = gf;
 
-    // Token-embed all (right-padded) prompt rows, then scatter the audio
-    // embeddings over the audio_token_id placeholder positions.
+    // Token-embed all (right-padded) prompt rows, then blend the audio embeds in
+    // elementwise: x = x*keep_mask + audio_dense (keep_mask broadcasts over
+    // hidden). Reshape to 3D for the batched block stack.
     ggml_tensor * ids_flat =
         ggml_reshape_1d(ctx, pb.input_ids_in,
                         static_cast<int64_t>(T_prompt_max) * B);
-    // x is 2D [hidden, T_prompt_max*B] (contiguous). Blend the audio embeds in
-    // elementwise: x = x*keep_mask + audio_dense. keep_mask broadcasts over
-    // hidden (ne[0]). Then reshape to 3D for the batched block stack.
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, ids_flat);
     x = ggml_add(ctx, ggml_mul(ctx, x, pb.keep_mask_in), pb.audio_dense_in);
     x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);

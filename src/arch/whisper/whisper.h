@@ -1,15 +1,6 @@
-// arch/whisper/whisper.h - Whisper ASR model and context types.
-//
-// This header is INTERNAL to src/arch/whisper/. It defines the concrete
-// classes that derive from transcribe_model / transcribe_session for
-// the Whisper ASR family (encoder-decoder transformer with cross-
-// attention decoder).
-//
-// Shape is a direct descendant of src/arch/cohere/cohere.h: the two
-// families share the encoder-decoder arch pattern, though their
-// encoders are structurally different (cohere is Conformer,
-// whisper is a stack of vanilla transformer blocks on top of a
-// 2-layer conv stem).
+// arch/whisper/whisper.h - Whisper ASR model and context types. INTERNAL to
+// src/arch/whisper/. Defines the concrete transcribe_model /
+// transcribe_session subclasses for the Whisper encoder-decoder family.
 
 #pragma once
 
@@ -42,18 +33,10 @@ namespace transcribe::whisper {
 
 void apply_family_invariants(transcribe_model & model);
 
-// ---------------------------------------------------------------------------
-// KV cache for the autoregressive decoder.
-//
-// Self-attention KV cache: one entry per decode step, grows until EOS.
-// Cross-attention KV cache: computed once from encoder output, reused
-// across every decode step.
-//
-// Layout follows the cohere/whisper.cpp pattern: one flat 1D tensor
-// per role; per-layer slices are constructed as views during graph
-// build.
-// ---------------------------------------------------------------------------
-
+// KV cache for the autoregressive decoder. Self-attention cache grows one
+// entry per decode step until EOS; cross-attention cache is computed once from
+// encoder output and reused across steps. One flat 1D tensor per role;
+// per-layer slices are views built at graph time.
 struct WhisperKvCache {
     // Self-attention cache.
     // Flat tensors of size [d_model * n_layer * n_ctx].
@@ -125,21 +108,11 @@ struct WhisperKvCache {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Persistent encoder output tensor.
-//
-// Backend-resident F32 tensor sized [d_model, T_enc] that holds the
-// encoder output across the encoder→cross-KV transition. Avoids the
-// GPU→CPU→GPU roundtrip the previous design paid every chunk: the
-// encoder graph appends a ggml_cpy into this tensor as its final op,
-// and build_cross_kv_graph reads from it via a view.
-//
-// Lifetime: allocated on first use, sized from hparams.enc_d_model
-// and the per-chunk T_enc the encoder emits. Reallocated only when
-// shape changes (which does not happen for stock whisper variants —
-// T_enc is fixed at hparams.enc_max_source_positions = 1500).
-// ---------------------------------------------------------------------------
-
+// Persistent backend-resident F32 encoder output [d_model, T_enc], held across
+// the encoder->cross-KV transition so cross-KV reads it via a view (no
+// GPU->CPU->GPU roundtrip): the encoder graph ends with a ggml_cpy into it.
+// Allocated on first use, reallocated only on shape change (T_enc is fixed at
+// max_source_positions=1500 for stock variants, so effectively never).
 struct WhisperEncOut {
     ggml_tensor *         tensor = nullptr;
     ggml_context *        ctx    = nullptr;
@@ -167,17 +140,15 @@ bool enc_out_init(WhisperEncOut & enc_out,
                   int             d_model,
                   int             T_enc);
 
-// Active-KV padding for the self-attention step graph. whisper.cpp's
-// whisper_kv_cache_get_padding policy: 32 on Metal+FA, 1 otherwise
-// (CUDA path uses 256 but is not exercised here yet). Padding the
-// active n_kv lets the FA op land on a kernel that prefers shapes
-// aligned to 32 — the trailing positions are masked to -inf so they
-// do not contribute. Returns 1 (no padding) when use_flash is false.
+// Active-KV padding for the self-attention step graph (whisper.cpp's
+// whisper_kv_cache_get_padding): 32 on Metal+FA, 1 otherwise. Aligns the FA
+// op's n_kv to a kernel-preferred multiple; trailing positions are masked to
+// -inf. Returns 1 (no padding) when use_flash is false.
 int kv_pad_self_attn(transcribe::BackendKind kind, bool use_flash);
 
-// Cross-attention cache padding multiple. Universal in whisper.cpp
-// (not gated on backend); the cost is 36 unused rows per layer for
-// whisper-tiny and the small cross-attn dilution that comes with it.
+// Cross-attention cache padding multiple. Universal in whisper.cpp (not gated
+// on backend); cost is a few unused rows per layer plus small cross-attn
+// dilution.
 constexpr int k_cross_kv_pad = 256;
 
 // Allocate cache tensors. n_ctx caps self-attention length; T_enc is
@@ -206,18 +177,8 @@ bool kv_cache_init_batched(WhisperKvCache & cache,
                            int              n_batch,
                            ggml_type        kv_type);
 
-// ---------------------------------------------------------------------------
-// Per-stage timing counters for performance diagnosis.
-//
-// Always-on (the timestamps themselves are negligible). Printing is
-// opt-in via TRANSCRIBE_WHISPER_PROFILE=1 — see whisper_run /
-// commit_result. Reset at the top of every whisper_run.
-//
-// Counters are organized by run-stage so a single summary line per
-// stage shows the per-call breakdown of build / alloc / compute /
-// tensor_get / cpu — matching the structural targets of Phases 2-4.
-// ---------------------------------------------------------------------------
-
+// Per-stage timing counters. Always-on (timestamps are negligible); printing
+// is opt-in via TRANSCRIBE_WHISPER_PROFILE=1. Reset at the top of whisper_run.
 struct WhisperPerfStage {
     int64_t total_us = 0;
     int     count    = 0;
@@ -292,10 +253,6 @@ struct WhisperPerf {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Model / context
-// ---------------------------------------------------------------------------
-
 struct WhisperModel final : public transcribe_model {
     Tokenizer       tok;
     WhisperHParams  hparams;
@@ -306,19 +263,15 @@ struct WhisperModel final : public transcribe_model {
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
 
-    // Language token ids keyed by BCP-47 short code read from
-    // general.languages. Populated at load time. Used by the decoder
-    // to resolve a params.language string to the correct
-    // <|lang_xx|> token id (whisper packs these in tokenizer slots
-    // 50259 + lang_index).
+    // Language token ids keyed by BCP-47 short code (from general.languages).
+    // Resolves a params.language string to the <|lang_xx|> token id (whisper
+    // packs these in tokenizer slots 50259 + lang_index).
     std::vector<std::string> lang_codes;   // owned copy; lifetime matches the model
     std::vector<int32_t>     lang_token_ids;
 
-    // C++ mel frontend (per_utterance / hann_periodic / reflect /
-    // Slaney filterbank). Constructed at load() time using the
-    // filterbank + window baked into the GGUF for parity with the
-    // transformers reference. Optional so failures during load can
-    // still surface a usable model object for inspection.
+    // C++ mel frontend (per_utterance / hann_periodic / reflect / Slaney).
+    // Built from the filterbank + window baked into the GGUF. Optional so a
+    // load failure still surfaces a model object for inspection.
     std::optional<transcribe::MelFrontend> mel;
 
     WhisperModel() = default;
@@ -335,17 +288,12 @@ struct WhisperSession final : public transcribe_session {
     size_t                compute_ctx_size = 0;
     ggml_backend_sched_t  sched       = nullptr;
 
-    // Persistent backend-resident encoder output. Encoder graph
-    // appends a ggml_cpy into enc_out.tensor as its final op so the
-    // cross-KV graph can read the encoder output via a view without
-    // a GPU→CPU→GPU roundtrip.
+    // Persistent backend-resident encoder output (see WhisperEncOut).
     WhisperEncOut enc_out;
 
-    // Host-side mirror of the encoder output, populated only when a
-    // path needs an F32 input fed via ggml_backend_tensor_set
-    // (currently: language detection on the first chunk and any
-    // dump-emitting validation runs). Kept off the per-chunk hot
-    // path so cross-KV no longer requires the materialization.
+    // Host-side mirror of the encoder output, populated only when a path needs
+    // an F32 input fed via ggml_backend_tensor_set (language detection on the
+    // first chunk, dump-emitting validation runs). Off the per-chunk hot path.
     std::vector<float> enc_host;
     int                enc_T = 0;  // number of encoder frames (1500)
 
@@ -355,31 +303,21 @@ struct WhisperSession final : public transcribe_session {
     // KV cache for the autoregressive decoder.
     WhisperKvCache kv_cache;
 
-
-    // Flash-attention policy. Encoder runs at seqlen=1500 and always
-    // benefits from flash kernels where available; decoder runs at
-    // seqlen ≤ 448 but the cross-attention keys are 1500 long. Head
-    // dim is d_model/n_heads = 64 for tiny, which is supported by
-    // every backend's flash_attn_ext kernel today. Keep both on by
-    // default; TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH env vars
-    // still apply.
+    // Flash-attention policy. On by default for both; TRANSCRIBE_NO_FLASH /
+    // TRANSCRIBE_FORCE_FLASH still apply.
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
 
-    // Per-chunk decoding trace for the most recent successful run —
-    // populated by whisper_run as the chunk loop executes and exposed
-    // via transcribe_get_whisper_chunk_count / _get_whisper_chunk_trace.
-    // Cleared at the top of each run alongside cc->clear_result().
+    // Per-chunk decoding trace for the most recent run, exposed via
+    // transcribe_get_whisper_chunk_count / _get_whisper_chunk_trace. Cleared
+    // at the top of each run alongside cc->clear_result().
     std::vector<transcribe_whisper_chunk_trace> chunk_traces;
 
-    // Per-stage timing counters. Always populated; a final summary is
-    // printed when TRANSCRIBE_WHISPER_PROFILE=1.
+    // Per-stage timing counters; summary printed when TRANSCRIBE_WHISPER_PROFILE=1.
     WhisperPerf perf;
 
-    // Reusable scratch for the multinomial T>0 sampler. Sized to
-    // vocab_size on first use; kept across steps to avoid the per-call
-    // double[vocab] allocation in the hot path. Argmax / T==0 do not
-    // touch this buffer.
+    // Reusable scratch for the multinomial T>0 sampler, sized to vocab_size on
+    // first use to avoid a per-call double[vocab] allocation in the hot path.
     std::vector<double> sample_scratch;
 
     WhisperSession() = default;

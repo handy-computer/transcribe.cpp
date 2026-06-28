@@ -1,34 +1,14 @@
 // src/sanm/sanm.h - shared SAN-M encoder helpers + sinusoidal PE.
 //
-// Both SenseVoice (`SenseVoiceEncoderSmall`) and Fun-ASR-Nano
-// (`FunASRNano.encoder`) ship identical SAN-M block code: a fused QKV
-// projection with a parallel FSMN depthwise-conv1d branch on V, SDPA
-// over the QKV split, and a 2-layer ReLU FFN. The encoder structures
-// only differ in the surrounding shape — sensevoice prepends prefix
-// embeddings and adds a CTC head, funasr_nano feeds the encoder output
-// directly into an audio adaptor.
+// SenseVoice (SenseVoiceEncoderSmall) and Fun-ASR-Nano (FunASRNano.encoder)
+// ship identical SAN-M block code: a fused QKV projection with a parallel
+// FSMN depthwise-conv1d branch on V, SDPA over the QKV split, and a 2-layer
+// ReLU FFN. Per-block primitives follow the conformer-style view +
+// free-function pattern (src/conformer/conformer.h); sub-blocks are exposed
+// for families that instrument dump points. build_sinusoidal_pe is the
+// host-side PE-table companion both families add before the first block.
 //
-// This module exposes the per-block primitives via the conformer-style
-// view + free-function pattern (`src/conformer/conformer.h`):
-//
-//   - SanmBlockView : nullable-pointer projection over one block's
-//                     weights. Each family fills it from its own
-//                     per-block weight struct at the call site.
-//   - SanmBlockParams : per-call shape (n_heads, d_model, kernel).
-//   - sanm_block_residual / sanm_block_projection : the two block
-//                     variants used by SenseVoice / Fun-ASR-Nano.
-//   - sub-blocks (sv_layer_norm, fsmn_branch, sanm_attention,
-//     sanm_ffn) are exposed too for families that want to instrument
-//     intermediate dump points.
-//
-// `build_sinusoidal_pe` is the host-side companion that builds the
-// 1-based-positions PE table. Both families add the table to the
-// frontend output before the first SAN-M block; the consumer set is
-// identical so the function lives here. Promote to a standalone
-// `transcribe-sinusoidal-pe.{h,cpp}` only if a third consumer needs PE
-// without SAN-M.
-//
-// LayerNorm epsilon is 1e-12 (FunASR's `transformer.layer_norm.LayerNorm`),
+// LayerNorm epsilon is 1e-12 (FunASR's transformer.layer_norm.LayerNorm),
 // NOT the conformer-shared 1e-5.
 
 #pragma once
@@ -40,14 +20,12 @@ struct ggml_tensor;
 
 namespace transcribe::sanm {
 
-// LayerNorm epsilon used by FunASR's `transformer.layer_norm.LayerNorm`.
-// Hardcoded here to match the reference; if a future SAN-M variant
-// changes it, plumb through SanmBlockParams rather than bumping this.
+// LayerNorm epsilon (FunASR's transformer.layer_norm.LayerNorm); hardcoded
+// to match the reference.
 constexpr float kLayerNormEps = 1e-12f;
 
-// Nullable-pointer projection over one SAN-M block's weights. Field
-// names match SenseVoice's `SenseVoiceBlock` and Fun-ASR-Nano's
-// `EncBlock` so a family can build the view with a single helper.
+// Nullable-pointer projection over one SAN-M block's weights. Field names
+// match SenseVoice's SenseVoiceBlock and Fun-ASR-Nano's EncBlock.
 //
 // Tensor shapes (ggml channel-innermost layout):
 //   norm_attn_w/b   [d_in]
@@ -77,22 +55,15 @@ struct SanmBlockView {
     ggml_tensor * ffn_fc2_b    = nullptr;
 };
 
-// Per-call shape for the SAN-M block.
-//
-// The batch axis rides the activation's ne[2]: a single-utterance call
-// passes x ne=[d, T] (ne[2] == 1) and every helper below derives B from
-// x->ne[2], so the B == 1 path is byte-identical to the pre-batch code.
-// Offline batching (transcribe_run_batch) packs B utterances at ne[2] and,
-// when their lengths differ, hands in the two padding masks so a padded
-// tail can never perturb a real frame:
+// Per-call shape for the SAN-M block. The batch axis rides ne[2] (B derived
+// from x->ne[2]). Offline batching with mismatched lengths supplies two
+// padding masks so a padded tail never perturbs a real frame:
 //   - attn_pad_mask : additive key-padding mask ne=[T_k, 1, 1, B] f32
-//       (0 on real keys, -INF on padded). Added onto the attention score
-//       matrix. Its presence also forces the manual SDPA path (the flash
-//       kernel's masked batched form is not exercised here).
-//   - conv_pad_mask : FSMN valid-frame mask ne=[1, T, B] f32 (1 on real
-//       frames, 0 on padded). Multiplies V before the depthwise conv so a
-//       padded frame contributes 0 to its real neighbours.
-// Same-length batches leave both null and run the bit-exact flash path.
+//       (0 on real keys, -INF on padded), added onto the score matrix; its
+//       presence forces the manual SDPA path.
+//   - conv_pad_mask : FSMN valid-frame mask ne=[1, T, B] f32 (1 real, 0 pad),
+//       multiplies V before the depthwise conv.
+// Same-length batches leave both null and run the flash path.
 struct SanmBlockParams {
     int n_heads = 0;
     int d_model = 0;

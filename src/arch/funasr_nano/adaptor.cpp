@@ -25,8 +25,7 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
 // Weight matmul forcing F32 accumulation for F16 weights, so CUDA's cuBLAS
 // path does not accumulate the adaptor's multi-token GEMMs in F16 (which
 // overflows F16's ~65504 range -> NaNs). Gated on F16 so BF16/quantized/F32
-// weights and CPU/Metal are bit-identical to before. See the matching helper
-// in sanm.cpp / causal_lm.cpp for the full rationale.
+// weights and CPU/Metal are bit-identical. See sanm.cpp / causal_lm.cpp.
 ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
     if (w->type == GGML_TYPE_F16) {
@@ -166,7 +165,6 @@ AdaptorBuild build_adaptor_graph(ggml_context *             ctx,
     x = ggml_add(ctx, x, w.adaptor.linear1_b);
     mark_dump(ab.dumps.linear1_out, x, "adaptor.linear1.out");
 
-    // ReLU.
     x = ggml_relu(ctx, x);
 
     // linear2 (2048 → 1024) + bias.

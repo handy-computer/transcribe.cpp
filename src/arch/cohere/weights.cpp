@@ -22,10 +22,6 @@
 
 namespace transcribe::cohere {
 
-// ---------------------------------------------------------------------------
-// Hparams
-// ---------------------------------------------------------------------------
-
 namespace {
 
 constexpr const char * kFamilyTag = "cohere";
@@ -170,20 +166,12 @@ transcribe_status read_cohere_hparams(const gguf_context * gguf,
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Weights
-// ---------------------------------------------------------------------------
-
 namespace {
 
 using transcribe::weights::lname;
 
-// The canonical find_tensor() + lname() helpers live in
-// src/transcribe-weights-util.{h,cpp}; see that header for rationale.
-// They are shared between every per-family weights.cpp. The GET_*
-// macros still live here so the family log tag lands in diagnostics,
-// but the type allowlists (TRANSCRIBE_QUANT_{LINEAR,CONV}_TYPES)
-// are project-wide — every family accepts the same set.
+// find_tensor() + lname() live in src/transcribe-weights-util.{h,cpp};
+// the GET_* macros stay here so the family log tag lands in diagnostics.
 constexpr const char * kTag = kFamilyTag;
 
 #define GET_F32(slot, name, ...) \
@@ -316,15 +304,14 @@ transcribe_status build_cohere_weights(ggml_context *         ctx_meta,
     GET_F32(weights.enc_dec_proj.bias,   "enc_dec_proj.bias",   dec_h);
 
     // ----- decoder embedding -----
-    // Token embedding: ne=[dec_hidden, vocab_size] in ggml (PyTorch [vocab, hidden]).
-    // We read vocab_size from the tensor shape since we don't have it as a separate KV.
+    // Token embedding ne=[dec_hidden, vocab_size]; vocab_size is read from
+    // the tensor shape (no separate KV).
     {
         ggml_tensor * tw = ggml_get_tensor(ctx_meta, "dec.embed.token.weight");
         if (tw == nullptr) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "cohere: missing tensor \"dec.embed.token.weight\"");
             return TRANSCRIBE_ERR_GGUF;
         }
-        // The embedding table: ne[0]=dec_hidden, ne[1]=vocab_size.
         if (tw->ne[0] != dec_h) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                          "cohere: dec.embed.token.weight ne[0]=%lld, expected %lld",
@@ -335,10 +322,8 @@ transcribe_status build_cohere_weights(ggml_context *         ctx_meta,
         weights.dec_embed.token_w = tw;
     }
 
-    // Read vocab_size from the token embedding shape.
     const int64_t vocab_size = weights.dec_embed.token_w->ne[1];
 
-    // Positional encoding: [dec_hidden, dec_max_seq].
     GET_F32(weights.dec_embed.pos_enc, "dec.embed.pos_enc", dec_h, hp.dec_max_seq);
     GET_F32(weights.dec_embed.norm_w,  "dec.embed.norm.weight", dec_h);
     GET_F32(weights.dec_embed.norm_b,  "dec.embed.norm.bias",   dec_h);

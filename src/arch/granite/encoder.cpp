@@ -48,9 +48,7 @@
 
 namespace transcribe::granite {
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+// Constants.
 
 namespace {
 
@@ -88,9 +86,7 @@ ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x,
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Host-side mel + 2-frame stack
-// ---------------------------------------------------------------------------
+// Host-side mel + 2-frame stack.
 
 transcribe_status compute_mel_encoder_input(
     const transcribe::MelFrontend & mel,
@@ -154,9 +150,7 @@ transcribe_status compute_mel_encoder_input(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Shaw attention_dists + last-block mask
-// ---------------------------------------------------------------------------
+// Shaw attention_dists + last-block mask.
 
 std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_emb)
 {
@@ -167,12 +161,9 @@ std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_em
     //
     // `seq.view(-1, 1) - seq.view(1, -1)` broadcasts to a [c, r] matrix
     // whose element at (c, r) is `c - r` — i.e., the offset from the
-    // KEY position back to the QUERY position. (i in the row index is
-    // the query position; j in the column index is the key position.)
-    //
-    // We were writing `r - c` here — the opposite sign — which mirrored
-    // the Shaw bias across the diagonal and corrupted block-local
-    // attention from the first encoder layer.
+    // KEY position back to the QUERY position. (Row index = query position;
+    // column index = key position. The sign matters: `r - c` would mirror
+    // the Shaw bias across the diagonal.)
     std::vector<int32_t> dists(static_cast<size_t>(context_size) * context_size);
     for (int c = 0; c < context_size; ++c) {
         for (int r = 0; r < context_size; ++r) {
@@ -216,9 +207,7 @@ std::vector<float> precompute_last_block_mask(int context_size, int t_enc_remain
     return mask;
 }
 
-// ---------------------------------------------------------------------------
-// Per-block builders
-// ---------------------------------------------------------------------------
+// Per-block builders.
 
 namespace {
 
@@ -250,14 +239,10 @@ ggml_tensor * granite_macaron(ggml_context * ctx,
 
 // Conv module: LN -> pointwise1 (d_model -> 2*inner_dim) -> GLU split
 // (-> inner_dim) -> depthwise (k=15) -> BN -> SiLU -> pointwise2
-// (inner_dim -> d_model). Operates on [d_model, T] (ne ordering).
-//
-// inner_dim = d_model * conv_expansion. For granite conv_expansion=2,
-// so inner_dim = 2*d_model and the pw1 kernel maps d_model -> 4*d_model.
-//
-// The conformer::conv_module helper hardcodes inner_dim == d_model
-// (parakeet / cohere / canary all use conv_expansion=1). We inline the
-// module here. The shape of operations is otherwise identical.
+// (inner_dim -> d_model), on [d_model, T]. inner_dim = d_model *
+// conv_expansion (=2 on granite). Inlined rather than using
+// conformer::conv_module, which hardcodes inner_dim == d_model
+// (conv_expansion=1 on parakeet / cohere / canary).
 ggml_tensor * granite_conv_module(ggml_context *          ctx,
                                   ggml_tensor *           x,
                                   const GraniteEncBlock & b,
@@ -309,7 +294,6 @@ ggml_tensor * granite_conv_module(ggml_context *          ctx,
                                                 bn_fused_scale,
                                                 bn_fused_bias);
 
-    // SiLU.
     x = ggml_silu(ctx, x);
 
     // Transpose back: [T, inner_dim] -> [inner_dim, T].
@@ -331,9 +315,7 @@ ggml_tensor * granite_conv_module(ggml_context *          ctx,
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Encoder graph
-// ---------------------------------------------------------------------------
+// Encoder graph.
 
 EncoderBuild build_encoder_graph(ggml_context *           ctx,
                                  const GraniteWeights &   weights,
@@ -355,7 +337,7 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     const int     head_dim   = hp.enc_head_dim;
     const int     ctx_size   = hp.enc_context_size;
 
-    // ----- Graph inputs -----
+    // Graph inputs.
     // mel_in: [input_dim, T_enc]. Encoder operates at T_enc throughout;
     // the only T_pad expansion happens INSIDE the Shaw block-local
     // attention helper, mirroring the reference's
@@ -390,7 +372,7 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
         ggml_set_input(eb.zero_pad);
     }
 
-    // ----- Input linear (160 -> 1024) -----
+    // Input linear (160 -> 1024).
     ggml_tensor * x = linear(ctx, eb.mel_in,
                              weights.enc_top.input_linear_w,
                              weights.enc_top.input_linear_b);
@@ -399,26 +381,10 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     eb.dumps.input_linear_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // BN fusion happens at load time and we read scale/bias from the
-    // model (filled in model.cpp). For Phase 2 we accept that the
-    // fused tensors come from external storage (via build_encoder_graph
-    // caller wiring); we look them up off the granite weights struct.
-    //
-    // Each block in granite has its own [inner_dim] BN gamma/beta plus
-    // running stats. The graph references the FUSED scale/bias which
-    // model.cpp computes and writes once. They live as separate
-    // ggml_tensor*s outside the GraniteWeights struct (in
-    // GraniteModel::bn_fused); see model.cpp::fuse_batch_norm().
-    //
-    // For Phase 2 we accept a callback-style override: the caller must
-    // ensure GraniteEncBlock::conv_bn_w / conv_bn_b / conv_bn_mean /
-    // conv_bn_var have been "fused" into a pair of [inner_dim] f32
-    // tensors and exposed through a side table. To keep build_encoder
-    // self-contained we recompute the fusion on the fly here using
-    // ggml ops:
+    // The graph references per-block FUSED BN scale/bias that model.cpp
+    // computes once at load time (see model.cpp::fuse_batch_norm):
     //   scale_i = bn_gamma_i / sqrt(bn_var_i + eps)
     //   bias_i  = bn_beta_i  - bn_mean_i * scale_i
-    // These are 1-D fp32 tensors that fold cleanly into the graph.
 
     const int n_layers = static_cast<int>(weights.enc_blocks.size());
     const int bypass_after = hp.enc_n_layers / 2;  // 1-indexed boundary
@@ -519,10 +485,8 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
             transcribe::debug::mark_tensor_for_dump(x);
         }
         if (i == bypass_after) {
-            // i.e., block index N/2 (0-indexed). For n=16, this is
-            // block 8 — Stage 2 dumps `enc.block.8.out` after block 8's
-            // forward completes (with the bypass residual already
-            // injected at block-8 input).
+            // Block index N/2 (0-indexed); for n=16 this is block 8, dumped
+            // after its forward completes (bypass residual already injected).
             char bname[64];
             std::snprintf(bname, sizeof(bname), "enc.block.%d.out", i);
             named(x, bname);
@@ -538,7 +502,7 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
         }
     }
 
-    // ----- cat_hidden_layers channel concat (-plus only) -----
+    // cat_hidden_layers channel concat (-plus only).
     // HF: hidden_states = torch.cat([*exported_hidden_states, hidden_states], dim=-1)
     // i.e. earlier-layer captures FIRST, final hidden LAST, along the
     // channel axis. ggml dim=0 is the channel axis for [hidden, T].
@@ -550,7 +514,7 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
         x = ggml_concat(ctx, *it, x, /*dim=*/0);
     }
 
-    // ----- Final output (already at T_enc) -----
+    // Final output (already at T_enc).
     named(x, "enc.out");
     eb.out = x;
     eb.dumps.out_named = x;

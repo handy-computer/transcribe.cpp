@@ -1,15 +1,8 @@
 // arch/canary/weights.h - Canary tensor catalog and per-instance weight slots.
 //
-// Canary's encoder is a FastConformer in the parakeet shape but with
-// biases on every linear (Q/K/V/out, both macaron FFs, attention-pos
-// projection, conv pointwise pair) — unlike parakeet, which is
-// bias-free. Its decoder is an autoregressive Transformer (cohere
-// shape, but with distinct tensor names and an UNTIED LM head).
-//
-// 180m-flash uniquely has an encoder->decoder projection between the
-// final encoder block and the decoder cross-attention K/V source
-// (enc_d_model=512 -> dec_d_model=1024). The other three variants
-// share enc_d_model=dec_d_model and skip the projection.
+// FastConformer encoder (parakeet shape, biases on every linear) +
+// autoregressive Transformer decoder (untied LM head). 180m-flash adds an
+// enc->dec projection; other variants share enc_d_model=dec_d_model.
 
 #pragma once
 
@@ -138,13 +131,9 @@ struct CanaryPreEncode {
     ggml_tensor * out_b   = nullptr;
 };
 
-// One FastConformer encoder block. Despite the `stt.canary.encoder.use_bias`
-// KV reading false in some GGUFs (a converter mislabel — the .bias tensors
-// are always emitted), every canary variant ships biases on the FFN and
-// attention linears. The cohere-style structure (with biases everywhere)
-// is the right shape for canary.
+// One FastConformer encoder block. Every canary variant ships biases on the
+// FFN and attention linears, regardless of the stt.canary.encoder.use_bias KV.
 struct CanaryBlock {
-    // Macaron FF1.
     ggml_tensor * norm_ff1_w = nullptr;
     ggml_tensor * norm_ff1_b = nullptr;
     ggml_tensor * ff1_lin1_w = nullptr;
@@ -152,7 +141,6 @@ struct CanaryBlock {
     ggml_tensor * ff1_lin2_w = nullptr;
     ggml_tensor * ff1_lin2_b = nullptr;
 
-    // Self-attention with relative positional encoding.
     ggml_tensor * norm_attn_w  = nullptr;
     ggml_tensor * norm_attn_b  = nullptr;
     ggml_tensor * attn_q_w     = nullptr;
@@ -167,7 +155,7 @@ struct CanaryBlock {
     ggml_tensor * attn_pos_u   = nullptr;
     ggml_tensor * attn_pos_v   = nullptr;
 
-    // Convolution module (BN tensors fused at load time into _scale/_bias).
+    // Conv module — BN fused at load into _scale/_bias.
     ggml_tensor * norm_conv_w  = nullptr;
     ggml_tensor * norm_conv_b  = nullptr;
     ggml_tensor * conv_pw1_w   = nullptr;
@@ -183,7 +171,6 @@ struct CanaryBlock {
     ggml_tensor * conv_bn_fused_scale = nullptr;
     ggml_tensor * conv_bn_fused_bias  = nullptr;
 
-    // Macaron FF2.
     ggml_tensor * norm_ff2_w = nullptr;
     ggml_tensor * norm_ff2_b = nullptr;
     ggml_tensor * ff2_lin1_w = nullptr;
@@ -191,7 +178,6 @@ struct CanaryBlock {
     ggml_tensor * ff2_lin2_w = nullptr;
     ggml_tensor * ff2_lin2_b = nullptr;
 
-    // Final per-block layer norm.
     ggml_tensor * norm_out_w = nullptr;
     ggml_tensor * norm_out_b = nullptr;
 };
@@ -214,7 +200,6 @@ struct CanaryDecEmbed {
 //   norm2 -> cross_attn -> add residual
 //   norm3 -> ffn -> add residual
 struct CanaryDecBlock {
-    // norm1 + self-attention.
     ggml_tensor * norm1_w     = nullptr;
     ggml_tensor * norm1_b     = nullptr;
     ggml_tensor * self_q_w    = nullptr;
@@ -226,7 +211,6 @@ struct CanaryDecBlock {
     ggml_tensor * self_o_w    = nullptr;
     ggml_tensor * self_o_b    = nullptr;
 
-    // norm2 + cross-attention.
     ggml_tensor * norm2_w     = nullptr;
     ggml_tensor * norm2_b     = nullptr;
     ggml_tensor * cross_q_w   = nullptr;
@@ -238,7 +222,6 @@ struct CanaryDecBlock {
     ggml_tensor * cross_o_w   = nullptr;
     ggml_tensor * cross_o_b   = nullptr;
 
-    // norm3 + FFN.
     ggml_tensor * norm3_w     = nullptr;
     ggml_tensor * norm3_b     = nullptr;
     ggml_tensor * ffn_up_w    = nullptr;

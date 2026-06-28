@@ -75,29 +75,16 @@ MoonshineModel::~MoonshineModel() {
     plan.primary_kind = transcribe::BackendKind::Unknown;
 }
 
-// ---------------------------------------------------------------------------
-// Input-length contract (see docs/input-limits.md). Moonshine is the honest
-// edge case in the soft-window bucket: its only wall is on *output*, not
-// input. The conv-stem encoder is effectively unbounded (it processes any
-// PCM length), so a long clip is never rejected. Instead the greedy decode
-// loop stops when it hits the decoder's position cap
-// (dec_max_position_embeddings = 194 for moonshine) before emitting EOS, and
-// the transcript silently truncates. We do not gate on audio length — a dense
-// short clip can hit the cap too — so there is no upfront INPUT_TOO_LONG
-// rejection here. Instead, when a decode loop exits on the cap rather than on
-// EOS, we set transcribe_was_truncated() and emit a WARN (same convention as
-// qwen3_asr's generation-budget guard).
-// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md): the wall is on *output*,
+// not input. The conv-stem encoder takes any PCM length, so a clip is never
+// rejected; the greedy decode loop instead stops at the decoder position cap
+// (dec_max_position_embeddings = 194) before EOS and the transcript silently
+// truncates. On a cap-exit we set transcribe_was_truncated() and WARN (same as
+// qwen3_asr). max_audio_ms below is a conservative advisory only.
 
-// Advisory transcribe_capabilities::max_audio_ms. Because the limit is
-// output-bound and content-dependent (it counts decode tokens, not audio
-// frames), there is no exact audio-length ceiling. We report a conservative
-// advisory: the audio duration the output budget (dec_max_position_embeddings
-// tokens) can realistically cover at a typical speaking rate of ~4 output
-// tokens/sec. For moonshine (194 tokens) that is ~48 s — moonshine is intended
-// for short utterances. Returns 0 ("unknown / unbounded") if the cap is
-// missing. Crossing this advisory does not reject the clip; it only makes a
-// mid-decode truncation (transcribe_was_truncated) more likely.
+// Advisory transcribe_capabilities::max_audio_ms: the audio the output budget
+// (dec_max_position_embeddings tokens) covers at ~4 output tokens/sec (~48 s
+// for 194 tokens). 0 means unknown/unbounded. Advisory only — does not reject.
 constexpr int k_tokens_per_sec = 4;  // rough speech-rate estimate; advisory only
 int64_t moonshine_max_audio_ms(const MoonshineHParams & hp) {
     if (hp.dec_max_position_embeddings <= 0) {
@@ -107,10 +94,7 @@ int64_t moonshine_max_audio_ms(const MoonshineHParams & hp) {
            k_tokens_per_sec;
 }
 
-// ---------------------------------------------------------------------------
-// KV cache initialization
-// ---------------------------------------------------------------------------
-
+// KV cache initialization.
 bool kv_cache_init(MoonshineKvCache & cache,
                    ggml_backend_t     backend,
                    int                n_ctx,
@@ -248,12 +232,11 @@ transcribe_status load(
     if (auto st = m->tok.load(loader.gguf());                 st != TRANSCRIBE_OK) return st;
     if (auto st = read_moonshine_hparams(loader.gguf(), m->hparams); st != TRANSCRIBE_OK) return st;
 
-    // Publish the advisory input-length window now that the decoder position
-    // cap is known. apply_family_invariants() ran above (before hparams), so
-    // this is the first point the cap is available. See docs/input-limits.md.
+    // Publish the advisory window now that the decoder position cap is known
+    // (first point it's available after hparams).
     m->caps.max_audio_ms = moonshine_max_audio_ms(m->hparams);
 
-    // Stage 2: reopen GGUF with no_alloc to wire weight slots.
+    // Reopen GGUF with no_alloc to wire weight slots.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -427,7 +410,6 @@ transcribe_status run(
         return TRANSCRIBE_ERR_OOM;
     }
 
-    // Upload PCM and encoder pos_ids.
     ggml_backend_tensor_set(eb.audio_in, pcm,
                             0, static_cast<size_t>(n_samples) * sizeof(float));
     {
@@ -444,7 +426,6 @@ transcribe_status run(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Dump encoder intermediates.
     auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
         if (t != nullptr) transcribe::debug::dump_tensor(name, t, stage);
     };
@@ -479,8 +460,7 @@ transcribe_status run(
             const int n_ctx = hp.dec_max_position_embeddings > 0
                             ? hp.dec_max_position_embeddings : 512;
             ggml_type cache_type = resolved_kv;
-            // For F32 reference dtype, default the cache to F32 too —
-            // matching the reference numerical regime in Stage 4.
+            // Default the cache to F32 to match moonshine's reference regime.
             if (cache_type == GGML_TYPE_COUNT) cache_type = GGML_TYPE_F32;
             if (!kv_cache_init(cc->kv_cache, cm->plan.primary,
                                n_ctx, T_enc, d_model, hp.dec_n_layers,
@@ -580,8 +560,7 @@ transcribe_status run(
                                 0, token_ids.size() * sizeof(int32_t));
         ggml_backend_tensor_set(db.pos_ids_in, pos_ids.data(),
                                 0, pos_ids.size() * sizeof(int32_t));
-        // Causal mask only when n_tokens > 1 (not exercised on this
-        // family today — every step is single-token).
+        // Causal mask only when n_tokens > 1 (every step is single-token).
         if (n_tokens > 1) {
             ggml_tensor * m = find_tensor_by_name(cc->compute_ctx, "dec.causal_mask");
             if (m != nullptr) {
@@ -795,14 +774,9 @@ transcribe_status run(
         }
     }
 
-    // Both greedy paths above (GPU static-graph loop and CPU/debug dynamic
-    // loop) exit either because next_token == eos (complete) or because
-    // n_past reached the position cap (max_pos) — or, on the GPU path, the
-    // KV-width break, which only fires once n_past has reached max_pos. When
-    // the last token was not eos the transcript hit the output cap before
-    // end-of-stream and is incomplete: flag it via transcribe_was_truncated()
-    // and emit one WARN, mirroring qwen3_asr. The decode loops themselves are
-    // unchanged — this only observes their exit. See docs/input-limits.md.
+    // A non-eos last token means the decode hit the position cap before
+    // end-of-stream (see the input-length contract above): flag truncation
+    // and WARN.
     if (next_token != eos) {
         cc->was_truncated = true;
         transcribe::log_msg(
@@ -816,7 +790,6 @@ transcribe_status run(
 
     cc->t_decode_us = ggml_time_us() - t_decode_start;
 
-    // Decode IDs to text.
     if (!generated_ids.empty()) {
         std::string full = cm->tok.decode(generated_ids.data(),
                                           static_cast<int>(generated_ids.size()));
@@ -842,23 +815,16 @@ transcribe_status run(
         cc->has_result  = true;
     }
 
-    // Output truncation is a hard status (see docs/input-limits.md): the
-    // partial transcript above stays readable, but the caller is told the
-    // run did not reach end-of-stream. was_truncated was set in the
-    // OFFLINE single-utterance decode-exit check above.
+    // Truncation is a hard status; the partial transcript stays readable.
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
                              : TRANSCRIBE_OK;
 }
 
-// ===========================================================================
 // Offline batched decode (transcribe_run_batch). Mirrors src/arch/cohere +
-// canary. Encoder serial per utterance (compute-bound; moonshine has no mel
-// frontend to parallelize — raw PCM passthrough); decode (self+cross attn,
-// partial RoPE) batched. Requires the flash step path, so on Metal — where
-// moonshine defaults decoder flash OFF (head_dim_padded unsupported) — this
-// falls back to serial; it engages on Vulkan/CUDA. See
-// docs/batching-autoregressive-plan.md.
-// ===========================================================================
+// canary. Encoder serial per utterance (raw PCM, no mel to parallelize);
+// decode (self+cross attn, partial RoPE) batched. Requires the flash step
+// path, so on Metal (decoder flash OFF — head_dim_padded unsupported) it falls
+// back to serial; engages on Vulkan/CUDA.
 
 transcribe_status encode_one_to_host(
     MoonshineSession * cc, MoonshineModel * cm,
@@ -954,11 +920,9 @@ transcribe_status run_batch(
         cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
         cm->plan.primary_kind != transcribe::BackendKind::Accel &&
         cm->plan.primary_kind != transcribe::BackendKind::Unknown;
-    // The batched path always uses flash, even on Metal where moonshine
-    // defaults decoder flash OFF for single-shot (base's head_dim_padded=56
-    // CPU-spills). At B>1 the flash path still beats serial (measured: tiny
-    // ~1.7×, base ~1.17×), so we don't gate on cc->decoder_use_flash here —
-    // the batched step graph below is built with use_flash=true unconditionally.
+    // The batched path always uses flash (unconditional), even on Metal where
+    // single-shot defaults decoder flash OFF (base's head_dim_padded=56
+    // CPU-spills): at B>1 flash still beats serial (tiny ~1.7×, base ~1.17×).
     if (n == 1 || !primary_is_gpu || transcribe::debug::enabled())
         return run_batch_serial(cc, pcm, n_samples, n, params);
 
@@ -1107,11 +1071,8 @@ transcribe_status run_batch(
     }
     const int64_t dec_us = ggml_time_us() - t_dec0;
 
-    // Batched truncation flag. The shared step loop marks each valid row that
-    // stopped on the output cap (max_pos) / context window before end-of-stream
-    // — its transcript is incomplete. Mirror the serial path: set
-    // transcribe_was_truncated() and emit one WARN. (The decode is unchanged.)
-    // See docs/input-limits.md.
+    // Batched truncation: the shared step loop marks each valid row that hit
+    // the output cap before end-of-stream. Mirror the serial path (WARN + flag).
     {
         int n_truncated = 0;
         for (int b = 0; b < n; ++b) {
@@ -1147,9 +1108,7 @@ transcribe_status run_batch(
         rs.full_text = full;
         rs.result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
         rs.has_result = true; rs.status = TRANSCRIBE_OK;
-        // Per-utterance truncation parity with the single-shot path: a valid row
-        // marked truncated by the shared loop reports
-        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained). Only
+        // Per-utterance truncation parity with the single-shot path. Only
         // override an otherwise-OK status — never a worse one.
         if (rs.status == TRANSCRIBE_OK &&
             b < static_cast<int>(truncated.size()) && truncated[b]) {

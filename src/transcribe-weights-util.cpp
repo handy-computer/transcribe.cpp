@@ -1,10 +1,7 @@
 // transcribe-weights-util.cpp - shared GGUF tensor validation helpers.
 //
 // Implementation of transcribe::weights::find_tensor. See the header
-// for rationale. This is a verbatim hoist of the function that used
-// to live in both src/arch/parakeet/weights.cpp and
-// src/arch/cohere/weights.cpp (they were character-for-character
-// identical apart from the "parakeet:"/"cohere:" log prefix).
+// for rationale.
 
 #include "transcribe-weights-util.h"
 #include "transcribe-log.h"

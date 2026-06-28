@@ -60,9 +60,8 @@ transcribe_status read_granite_nar_hparams(const gguf_context * gguf,
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.output_dim", kTag, hp.enc_output_dim); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.bpe_output_dim", kTag, hp.enc_bpe_output_dim); st != TRANSCRIBE_OK) return st;
     if (auto st = read_required_u32_kv(gguf, "stt.granite_nar.encoder.bpe_pool_window", kTag, hp.enc_bpe_pool_window); st != TRANSCRIBE_OK) return st;
-    // bpe_blank_id is a NEW key (added when we re-finalized against the
-    // 99a4df9 snapshot). Older GGUFs (converted before this change) won't
-    // have it; default to 0 to preserve the legacy decode scheme.
+    // bpe_blank_id is an optional key; older GGUFs lack it. Default to 0 to
+    // preserve the legacy decode scheme.
     {
         int32_t tmp = 0;
         if (read_required_u32_kv(gguf, "stt.granite_nar.encoder.bpe_blank_id", kTag, tmp) == TRANSCRIBE_OK) {
@@ -206,7 +205,7 @@ transcribe_status build_granite_nar_weights(ggml_context *            ctx_meta,
     const int64_t q_out     = dec_nh  * dec_hd;
     const int64_t kv_out    = dec_nkv * dec_hd;
 
-    // ----- Encoder top -----
+    // Encoder top.
     GET_LIN(weights.enc_top.input_linear_w, "enc.input_linear.weight", enc_in,  enc_h);
     GET_F32(weights.enc_top.input_linear_b, "enc.input_linear.bias",   enc_h);
     GET_LIN(weights.enc_top.ctc_proj_w,     "enc.ctc_proj.weight",     enc_h,   enc_out);
@@ -218,7 +217,7 @@ transcribe_status build_granite_nar_weights(ggml_context *            ctx_meta,
         GET_F32(weights.enc_top.ctc_bpe_b,  "enc.ctc_bpe.bias",        enc_bpe_out);
     }
 
-    // ----- Encoder blocks -----
+    // Encoder blocks.
     weights.enc_blocks.assign(hp.enc_n_layers, GraniteNarEncBlock{});
     for (int i = 0; i < hp.enc_n_layers; ++i) {
         auto & b = weights.enc_blocks[i];
@@ -262,7 +261,7 @@ transcribe_status build_granite_nar_weights(ggml_context *            ctx_meta,
         GET_F32(b.norm_post_b, lname("enc.blocks.%d.norm_post.bias",   i), enc_h);
     }
 
-    // ----- Projector top -----
+    // Projector top.
     GET_LIN(weights.proj_top.layer_projector_w, "prj.layer_projector.weight", prj_kv_in, prj_h);
     GET_F32(weights.proj_top.layer_projector_b, "prj.layer_projector.bias",   prj_h);
     GET_F32(weights.proj_top.out_norm_w,        "prj.out_norm.weight",        prj_h);
@@ -320,7 +319,7 @@ transcribe_status build_granite_nar_weights(ggml_context *            ctx_meta,
         GET_F32(b.ffn_fc2_b,  lname("prj.blocks.%d.ffn_fc2.bias",    i), prj_h);
     }
 
-    // ----- LLM (granite-4) -----
+    // LLM (granite-4).
     GET_LIN(weights.dec_embed.token_w, "dec.token_embd.weight", dec_h, dec_vocab);
 
     weights.dec_blocks.assign(hp.dec_n_layers, GraniteNarDecBlock{});

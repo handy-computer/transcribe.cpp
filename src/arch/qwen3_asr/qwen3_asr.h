@@ -1,13 +1,8 @@
 // arch/qwen3_asr/qwen3_asr.h - Qwen3-ASR model and context types.
 //
-// INTERNAL to src/arch/qwen3_asr/. Defines the concrete classes that
-// derive from transcribe_model / transcribe_session for the Qwen3-ASR
-// family (audio-LLM: audio encoder + Qwen3 causal LM with audio-token
-// injection).
-//
-// First port targets non-streaming ASR transcription. The sibling
-// forced-aligner variant (Qwen3-ForcedAligner-0.6B) and the streaming
-// stream_transcribe path are tracked separately.
+// INTERNAL to src/arch/qwen3_asr/. Concrete transcribe_model /
+// transcribe_session subclasses for the Qwen3-ASR family (audio-LLM: audio
+// encoder + Qwen3 causal LM with audio-token injection).
 
 #pragma once
 
@@ -40,12 +35,10 @@ namespace transcribe::qwen3_asr {
 
 void apply_family_invariants(transcribe_model & model);
 
-// Encode "language {Name}<asr_text>" for the given BCP-47 code. The
-// output is the token-id sequence the Qwen3-ASR chat template seeds
-// the assistant turn with when a caller forces a language hint.
-// Declared here (rather than hiding in the model.cpp anonymous
-// namespace) so the BPE parity test can verify the full prefix
-// matches the HF reference including the <asr_text> special token.
+// Encode "language {Name}<asr_text>" for the given BCP-47 code: the token-id
+// sequence the chat template seeds the assistant turn with on a forced hint.
+// Declared here (not in model.cpp's anon namespace) so the BPE parity test can
+// verify the full prefix against the HF reference.
 //
 // Returns:
 //   TRANSCRIBE_OK                     on success, out_ids populated.
@@ -66,16 +59,9 @@ transcribe_status encode_language_prefix(const transcribe::Tokenizer & tok,
 // Model / Context
 // ---------------------------------------------------------------------------
 
-// Qwen3 chat-template special-token ids resolved through the loaded
-// tokenizer at load time. The prompt renderer is narrow (no Jinja)
-// but it still tokenizes to exact ids; resolving at load lets a
-// future checkpoint that reorders the vocab fail loudly instead of
-// silently corrupting the prompt.
-//
-// All fields are the *resolved* ids; the reference ids on the 0.6B
-// and 1.7B vocab are stable (im_start=151644, im_end=151645,
-// newline=198, system=8948, user=872, assistant=77091) but we do
-// not hardcode them at runtime.
+// Qwen3 chat-template special-token ids, resolved through the loaded tokenizer
+// at load time so a future vocab reorder fails loudly. Reference ids on the
+// 0.6B/1.7B vocab are stable but never hardcoded at runtime.
 struct ChatTokens {
     int32_t im_start       = -1;
     int32_t im_end         = -1;
@@ -97,14 +83,10 @@ struct QwenAsrModel final : public transcribe_model {
 
     std::optional<transcribe::MelFrontend> mel;
 
-    // Jinja chat template. The prompt is rebuilt at run time with the
-    // caller's language / context; we only store the template string
-    // from the GGUF KV. Empty string means "no template" (the first
-    // port will refuse to run without one).
+    // Jinja chat template string from the GGUF KV (empty == none).
     std::string chat_template;
 
-    // Resolved chat-template token ids (filled at load time, see
-    // resolve_chat_tokens in model.cpp). Used by build_prompt_tokens.
+    // Resolved chat-template token ids (see resolve_chat_tokens in model.cpp).
     ChatTokens chat_tokens;
 
     QwenAsrModel() = default;

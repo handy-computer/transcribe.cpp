@@ -3,8 +3,6 @@
 // INTERNAL to src/arch/voxtral_realtime/. Streaming audio-LLM: causal RoPE
 // sliding-window audio encoder + 4x frame-group projector + Ministral causal
 // LM with ADDITIVE audio fusion and per-layer delay-conditioned adaptive-norm.
-// Stage 4 builds the offline whole-clip forward first (the per-tensor
-// contract), then the incremental streaming scheduler.
 
 #pragma once
 
@@ -90,18 +88,14 @@ struct Session final : public transcribe_session {
     std::vector<ggml_tensor *> ada_scale;              // per-layer views
     int ada_num_delay = -1;
 
-
     bool encoder_use_flash = false;
     bool decoder_use_flash = true;
 
-    // ---- Incremental streaming state (real reference StaticCache mechanism) --
+    // ---- Incremental streaming state (reference StaticCache mechanism) -------
     // The encoder transformer runs INCREMENTALLY: new embedder frames attend to
     // an encoder KV cache (StaticCache, sliding_window=750) under a windowed
     // mask, each frame processed exactly once. The decoder prefills the prompt
-    // once then steps one token per audio frame against its persistent KV. The
-    // cheap conv stem + mel are recomputed over the accumulated buffer and
-    // sliced (bit-exact via causal conv + frame-independent global mel); a conv
-    // padding cache / streaming mel is a documented constant-cost follow-up.
+    // once then steps one token per audio frame against its persistent KV.
     std::vector<float> stream_pcm;                  // accumulated raw PCM (no pad)
     int                stream_num_delay = -1;       // active num_delay_tokens
     int                stream_min_decode_ms = -1;   // partial-decode throttle
@@ -111,10 +105,9 @@ struct Session final : public transcribe_session {
     int     stream_enc_slot     = 0;                // ring write head (slot units)
     int     stream_enc_abs_base = 0;                // absolute frame index of slot 0
     int     stream_n_enc_committed = 0;             // enc frames committed (absolute)
-    // Conv-stem padding cache (reference VoxtralRealtimeConv1dCacheLayer): feed only
-    // new mel frames through the conv stem, carrying the conv left-context instead of
-    // recomputing the whole buffer. conv0 (k3 s1) ← last 2 mel frames; conv1 (k3 s2)
-    // ← last 1 conv0-output frame. Zeros on the first chunk == whole-buffer left-pad.
+    // Conv-stem padding cache: feed only new mel frames, carrying the conv
+    // left-context. conv0 (k3 s1) ← last 2 mel frames; conv1 (k3 s2) ← last 1
+    // conv0-output frame. Zeros on the first chunk == whole-buffer left-pad.
     std::vector<float> stream_conv0_cache;          // [n_mels, 2] (mel-major, 2 frames)
     std::vector<float> stream_conv1_cache;          // [d_model, 1] (last conv0-out frame)
     int     stream_n_mel_committed = 0;             // mel frames fed through the conv stem

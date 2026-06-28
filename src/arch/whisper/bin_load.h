@@ -1,23 +1,12 @@
-// arch/whisper/bin_load.h - legacy whisper.cpp .bin adapter for the
-// Whisper architecture.
+// arch/whisper/bin_load.h - legacy whisper.cpp .bin adapter. INTERNAL,
+// consumed by transcribe.cpp (magic-byte dispatch) and bin_load.cpp.
 //
-// INTERNAL. Consumed by transcribe.cpp (magic-byte dispatch) and
-// arch/whisper/bin_load.cpp.
-//
-// The .bin parser (transcribe-bin-loader.{h,cpp}) is architecture-
-// neutral: it knows the byte layout but nothing about WhisperHParams,
-// WhisperWeights, or the canonical tensor names this codebase uses.
+// The .bin parser (transcribe-bin-loader.{h,cpp}) is architecture-neutral.
 // This module is the whisper-specific bridge: it consumes a parsed
-// WhisperBinModel, synthesizes hparams + capabilities + special-token
-// ids + language list, populates the Tokenizer via the decode-only
-// raw-bytes path, builds ctx_meta with canonical-named tensors, allocs
-// backend memory, and streams tensor bytes from the .bin into the
-// allocated slots.
-//
-// Once load_from_bin returns, the resulting transcribe_model* is
-// indistinguishable from one produced by the GGUF whisper_load path
-// — same WhisperModel struct, same encoder/decoder runtime, same
-// public ABI.
+// WhisperBinModel, synthesizes hparams/capabilities/special-tokens/languages,
+// populates the Tokenizer, builds ctx_meta with canonical-named tensors, and
+// streams tensor bytes into the allocated slots. The resulting
+// transcribe_model* is indistinguishable from the GGUF whisper_load path.
 
 #pragma once
 

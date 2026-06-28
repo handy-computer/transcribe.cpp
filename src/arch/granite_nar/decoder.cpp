@@ -177,7 +177,7 @@ ForwardBuild build_forward_graph(ggml_context *            ctx,
     const float   emb_mul = hp.dec_embedding_multiplier;
     const auto params = to_params(hp);
 
-    // ---------- Inputs ----------
+    // Inputs.
     fb.audio_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden, n_audio_tokens);
     named(fb.audio_in, "dec.audio_in");
     ggml_set_input(fb.audio_in);
@@ -197,7 +197,7 @@ ForwardBuild build_forward_graph(ggml_context *            ctx,
     }
     fb.graph = gf;
 
-    // ---------- Flat input embeds ----------
+    // Flat input embeds.
     // text embeds via lookup. ggml_get_rows returns the embed table dtype
     // (BF16 here); cast to F32 so ggml_concat with the F32 audio_in is
     // legal (concat requires matching dtypes).
@@ -221,16 +221,16 @@ ForwardBuild build_forward_graph(ggml_context *            ctx,
     // round-trip through ×(1/emb_mul)×emb_mul = identity).
     ggml_tensor * x = ggml_scale(ctx, flat, emb_mul);
 
-    // ---------- Block stack ----------
+    // Block stack.
     for (int il = 0; il < n_layer; ++il) {
         x = block_bidi(ctx, x, weights.dec_blocks[il],
                        params, fb.T_total, fb.positions_in);
     }
 
-    // ---------- Final RMSNorm ----------
+    // Final RMSNorm.
     x = rms_norm(ctx, x, weights.dec_final.norm_w, rms_eps);
 
-    // ---------- Slice text portion ----------
+    // Slice text portion.
     // text_x = x[:, n_audio_tokens:]
     ggml_tensor * text_x = ggml_view_2d(
         ctx, x,
@@ -240,18 +240,10 @@ ForwardBuild build_forward_graph(ggml_context *            ctx,
             static_cast<size_t>(n_audio_tokens));
     text_x = ggml_cont(ctx, text_x);
 
-    // ---------- LM head (tied to token_embd) ----------
-    // 99a4df9 modeling: GraniteSpeechNarLM.forward applies
-    //   logits = lm_head(hidden) / config.logits_scaling
-    // (the /logits_scaling divisor is part of the Granite-4 head and
-    //  the new NAR LM does NOT bypass it — see line 913 of
-    //  modeling_granite_speech_nar.py). The OLD multi-file snapshot
-    //  (7d20732d) called self.llm.lm_head(text_x) directly, bypassing
-    //  the divisor. The dumper now follows the README path which
-    //  routes through the new forward; mirror its scaling here so
-    //  dec.text_logits dump aligns numerically with the reference.
-    //  Argmax is scale-invariant either way, so the C++ transcript is
-    //  unchanged by this division.
+    // LM head (tied to token_embd). The Granite-4 head divides by
+    // logits_scaling; we mirror it so dec.text_logits aligns numerically with
+    // the reference dump. Argmax is scale-invariant, so the transcript is
+    // unchanged by this division.
     ggml_tensor * logits = ggml_mul_mat(
         ctx, weights.dec_embed.token_w, text_x);
     if (hp.dec_logits_scaling > 0.0f && hp.dec_logits_scaling != 1.0f) {

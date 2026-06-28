@@ -1,7 +1,7 @@
 // whisper_tokenize_parity.cpp - real-model gated test that
 // transcribe_tokenize() produces HF-identical token sequences on
 // Whisper's GPT-2 byte-level BPE, including the digit / contraction
-// cases that forced the GPT-2 pretokenizer branch in Stage 1.
+// cases that exercise the GPT-2 pretokenizer branch.
 //
 // The expected token ids were computed with HuggingFace's
 // openai/whisper-tiny tokenizer, add_special_tokens=False. That

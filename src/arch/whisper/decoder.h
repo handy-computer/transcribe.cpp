@@ -1,29 +1,19 @@
 // arch/whisper/decoder.h - Whisper decoder graph builder.
 //
-// The decoder is an autoregressive Transformer with:
-//   - Token embedding + learned positional embedding (NO post-embed LayerNorm)
-//   - N decoder layers (pre-LN self-attn + pre-LN cross-attn + pre-LN FFN)
-//   - Final LayerNorm
-//   - Linear head (tied to token embedding, NO bias) + log-softmax
+// Autoregressive Transformer: token embedding + learned positional embedding
+// (NO post-embed LayerNorm), N pre-LN layers (self-attn + cross-attn + FFN),
+// final LayerNorm, linear head tied to token embedding (NO bias) + log-softmax.
 //
-// Two graph families are exposed:
-//
-//   1. build_decoder_prefill_graph() — non-cached prefill, used only
-//      for language detection (a single SOT-only forward pass on the
-//      first chunk before the cross-KV cache exists). Cross-K/V are
-//      recomputed from the encoder output inside the graph.
-//
+// Two graph families:
+//   1. build_decoder_prefill_graph() — non-cached, used only for language
+//      detection (SOT-only forward on the first chunk before the cross-KV
+//      cache exists); cross-K/V recomputed inside the graph.
 //   2. build_cross_kv_graph() + build_decoder_graph_kv() — KV-cached
-//      autoregressive path. The production decoder driver. Cross-K/V
-//      are precomputed once per chunk into the cross cache; self-K/V
-//      are written on each step into the self cache. The same graph
-//      handles both the prompt pass (n_tokens > 1, n_past = 0) and
-//      per-step generation (n_tokens = 1, n_past = current). All
-//      dec.* dump points are wired on the prompt pass so validate.py
-//      tolerances apply directly.
+//      production path. Cross-K/V precomputed once per chunk; self-K/V written
+//      per step. One graph handles both prompt pass (n_tokens>1, n_past=0) and
+//      per-step generation (n_tokens=1, n_past=current).
 //
-// Whisper attention quirk (matches encoder.cpp): q/v/out projections
-// carry bias; k_proj has NO bias on both self- and cross-attention.
+// Attention quirk (as encoder.cpp): q/v/out carry bias, k does NOT.
 
 #pragma once
 
@@ -102,10 +92,7 @@ DecoderBuild build_cross_kv_graph(ggml_context *         compute_ctx,
 // prev total). Self-K/V are written into the self cache at position
 // n_past; the full [0..n_past+n_tokens) window is read back for
 // attention. Cross-attention reads from the pre-populated cross cache.
-//
-// On the prompt pass dumps are wired for every dec.* tensor so the
-// validate.py harness keeps working. Step passes produce the same
-// graph shape minus the dumps.
+// The prompt pass wires every dec.* dump; step passes omit them.
 //
 // skip_log_softmax=true outputs pre-softmax logits (argmax-invariant,
 // cheaper readback). skip_log_softmax=false matches the reference dump.
@@ -159,17 +146,11 @@ StepBuild build_step_graph(ggml_context *         compute_ctx,
                            int                    T_enc,
                            bool                   use_flash = true);
 
-// ---------------------------------------------------------------------------
-// Offline batched decode (B utterances in lockstep).
-//
-// Mirrors the single-shot cross-KV + step graphs but threads an utterance
-// batch on the trailing flash axis (ne[3]). The cross cache is populated
-// once per batch from a host-packed [d_model, T_enc_max, B] encoder tensor;
-// the step graph emits RAW logits [vocab, B] (NOT an in-graph argmax) so the
-// host can apply whisper's suppress / begin_suppress / timestamp / no_speech
-// rules per utterance before sampling. Flash-only (the batched view layout
+// Offline batched decode (B utterances in lockstep). Mirrors the single-shot
+// cross-KV + step graphs but threads the batch on the trailing flash axis
+// (ne[3]). Emits RAW logits [vocab, B] so the host applies whisper's per-
+// utterance rules before sampling. Flash-only (the batched view layout
 // requires flash_attn_ext).
-// ---------------------------------------------------------------------------
 
 // Build a batched cross-attention K/V precompute graph. encoder_out_in is a
 // [d_model, T_enc_max, B] f32 input the caller fills with zero-padded

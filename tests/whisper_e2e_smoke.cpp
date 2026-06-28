@@ -1,6 +1,6 @@
 // whisper_e2e_smoke.cpp - real-model gated public-ABI test for Whisper.
 //
-// Covers the runtime capability contract that Stage 4 must not fake:
+// Covers the runtime capability contract:
 // language detection is advertised and exercised by running without a
 // language hint, default params use no-timestamp decode, explicit
 // SEGMENT timestamps are advertised and returned, and no-timestamp
@@ -105,11 +105,8 @@ int main() {
         CHECK(caps->n_languages > 0);
         CHECK(caps->languages != nullptr);
 
-        // Stage 2 + 3 feature surface. Cancellation + temperature
-        // fallback + long-form shipped in Stage 2; initial_prompt
-        // (initial_prompt / prompt_tokens / condition_on_prev_tokens)
-        // shipped in Stage 3. These advisories live behind the
-        // transcribe_model_supports() probe, not the caps struct.
+        // Feature advisories live behind the transcribe_model_supports()
+        // probe, not the caps struct.
         CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_CANCELLATION));
         CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_TEMPERATURE_FALLBACK));
         CHECK(transcribe_model_supports(model, TRANSCRIBE_FEATURE_LONG_FORM));
@@ -192,10 +189,8 @@ int main() {
     // KV loop. The callback returns true after `trigger_after`
     // invocations; we expect TRANSCRIBE_ERR_ABORTED, transcribe_was_aborted
     // true, and the context to expose whatever partial content was
-    // committed before the abort point (Stage 1: no chunks, so
-    // partial == "nothing beyond the prompt-pass argmax that hasn't
-    // been consumed yet"). The assertion here is semantic: the run
-    // short-circuited and was_aborted is true.
+    // committed before the abort point. The assertion here is semantic:
+    // the run short-circuited and was_aborted is true.
     struct AbortState {
         int calls_so_far;
         int trigger_after;
@@ -246,7 +241,7 @@ int main() {
         CHECK(!transcribe_was_aborted(ctx));
     }
 
-    // Stage 2.6: trace accessors populated on short-form. Exactly one
+    // Trace accessors populated on short-form. Exactly one
     // chunk for a ≤ 30 s clip. Tier 0 at default params accepts, so
     // temperature_used == 0.0, n_fallbacks == 0. compression_ratio and
     // avg_logprob are real numbers from the decoder, not zero.
@@ -272,7 +267,7 @@ int main() {
               oor.temperature_used == 0.0f && oor.n_fallbacks == 0);
     }
 
-    // Stage 2.2 + 2.3: long-form chunk loop with dynamic stride.
+    // Long-form chunk loop with dynamic stride.
     // Synthesize a 40-second clip from the JFK PCM (repeat pattern).
     // The real audio exceeds one 30-second window, so the seek loop
     // runs at least twice and we expect at least two chunk traces.
@@ -311,7 +306,7 @@ int main() {
         }
     }
 
-    // Stage 2.5 silence-detection test is deferred: all-zero PCM is a
+    // The default-threshold silence-detection test is deferred: all-zero PCM is a
     // pathological input for the mel frontend (log10(0) behavior) and
     // the downstream no_speech_prob is not guaranteed to exceed the
     // 0.6 default threshold without real ambient audio. The mechanism
@@ -319,7 +314,7 @@ int main() {
     // reads no_speech_triggered on every chunk. The forced-threshold
     // test below exercises the skip logic on JFK audio.
     //
-    // TODO (Stage 2 follow-ups; tracked on the whisper-parity branch):
+    // TODO:
     //   - Real silence fixture under samples/ (room-tone or mic-off
     //     recording) so the default-threshold no-speech path exercises
     //     un-tuned behavior end-to-end.
@@ -450,7 +445,7 @@ int main() {
         CHECK(!text_a.empty());
     }
 
-    // ============ Stage 3: prompt + condition_on_prev_tokens ============
+    // ============ Prompt + condition_on_prev_tokens ============
 
     // ALL_SEGMENTS without condition_on_prev_tokens must reject with
     // INVALID_ARG before any compute runs (HF generation_whisper.py

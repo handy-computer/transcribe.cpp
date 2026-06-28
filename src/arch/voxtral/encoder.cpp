@@ -1,7 +1,7 @@
 // arch/voxtral/encoder.cpp - Voxtral audio encoder + projector graph.
 //
 // Reference: VoxtralEncoder (= Whisper-large-v3 encoder) +
-// VoxtralMultiModalProjector in modeling_voxtral.py.
+// VoxtralMultiModalProjector.
 //
 //   mel [n_mels=128, T=3000]
 //     -> transpose to [T, n_mels] for ggml_conv_1d

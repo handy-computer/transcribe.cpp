@@ -22,11 +22,6 @@ void apply_family_invariants(transcribe_model & model) {
     // ("，不进行文本规整" appended on itn=false, omitted on itn=true).
     // The generic transcribe_run_params::itn enum routes here. No PNC
     // runtime toggle.
-    //
-    // TODO(family doc): observe whether itn=true bundles
-    // punctuation/casing changes alongside number/date normalization on
-    // shipped variants (fun-asr-nano-2512, fun-asr-mlt-nano-2512) and
-    // record in the family doc. API shape unchanged either way.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN,          true);
 }

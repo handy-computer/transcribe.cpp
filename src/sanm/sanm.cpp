@@ -12,17 +12,10 @@
 
 namespace transcribe::sanm {
 
-// SAN-M scales activations by sqrt(d_model) before the encoder stack, so its
-// internal activations run large. With F16 weights, CUDA's cuBLAS path
-// accumulates matmuls in F16 (CUBLAS_COMPUTE_16F) and those large dot-product
-// partial sums overflow F16's ~65504 range -> NaNs / garbage. Metal and CPU
-// accumulate in F32 regardless, which is why F16 only breaks on CUDA. Forcing
-// GGML_PREC_F32 makes cuBLAS accumulate in F32 (matching the CPU reference).
-//
-// Gated on F16 weights so it cannot perturb any already-validated numerics:
-// CPU/Metal ignore the prec hint (always F32-accumulate), and BF16/quantized
-// weights are left on their default path (BF16 already COMPUTE_32F; quantized
-// goes through MMQ). Only CUDA-F16 changes.
+// Force F32 accumulation for F16 weights (see mul_mat_f32acc in
+// causal_lm.cpp for the CUDA COMPUTE_16F saturation rationale). SAN-M scales
+// activations by sqrt(d_model), so its internal activations run large and
+// overflow F16 on CUDA without this.
 static ggml_tensor * mul_mat_f32acc(ggml_context * ctx,
                                     ggml_tensor *  w,
                                     ggml_tensor *  x)
@@ -90,7 +83,7 @@ ggml_tensor * fsmn_branch(ggml_context * ctx,
         // [T, 1, d_model, B] -> [T, d_model, B].
         fsmn = ggml_reshape_3d(ctx, fsmn, fsmn->ne[0], d_model, B);
     } else {
-        // Single-shot: keep the validated im2col path bit-for-bit.
+        // Single-shot: im2col path.
         fsmn = conf::conv_1d_dw_f32(ctx, fsmn_w, v_t,
                                     /*stride=*/1, /*padding=*/padding,
                                     /*dilation=*/1);
@@ -142,12 +135,11 @@ ggml_tensor * sanm_attention(ggml_context *          ctx,
     // a strided alias of V.
     ggml_tensor * v_pre = ggml_cont(ctx, v);
 
-    // ----- FSMN branch (parallel to SDPA) -----
+    // FSMN branch (parallel to SDPA).
     ggml_tensor * fsmn = fsmn_branch(ctx, v_pre, b.attn_fsmn_w, kernel,
                                      p.conv_pad_mask);
 
-    // ----- SDPA -----
-    // Reshape Q,K,V to [head_dim, n_heads, T, B]. The fused QKV split above
+    // SDPA. Reshape Q,K,V to [head_dim, n_heads, T, B]. The fused QKV split
     // is non-contiguous along the channel axis, so cont each before reshape.
     auto split_heads = [&](ggml_tensor * t) {
         t = ggml_cont(ctx, t);
@@ -167,12 +159,10 @@ ggml_tensor * sanm_attention(ggml_context *          ctx,
     kh = to_attn_layout(kh);
     vh = to_attn_layout(vh);
 
-    // A variable-length batch supplies an additive key-padding mask; the
-    // flash kernel's masked batched form is not exercised here, so route
+    // A variable-length batch supplies an additive key-padding mask; route
     // through the manual mul_mat + soft_max path, which broadcasts the
-    // [T_k, 1, 1, B] mask cleanly over queries and heads. Same-length
-    // batches (and single-shot) take the flash path, bit-identical to the
-    // pre-batch graph at B == 1.
+    // [T_k, 1, 1, B] mask cleanly over queries and heads. Same-length batches
+    // (and single-shot) take the flash path.
     ggml_tensor * o;
     if (p.use_flash && p.attn_pad_mask == nullptr) {
         o = ggml_flash_attn_ext(
@@ -197,7 +187,6 @@ ggml_tensor * sanm_attention(ggml_context *          ctx,
         o = ggml_reshape_3d(ctx, o, d_model, T, B);
     }
 
-    // Output projection.
     o = mul_mat_f32acc(ctx, b.attn_out_w, o);
     o = ggml_add(ctx, o, b.attn_out_b);
 

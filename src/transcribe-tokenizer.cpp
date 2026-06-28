@@ -485,7 +485,7 @@ transcribe_status Tokenizer::encode(const std::string &    text,
         return TRANSCRIBE_OK;
     }
 
-    // Stage 1: pretokenize into byte-encoded "words". Dispatch on the
+    // Pretokenize into byte-encoded "words". Dispatch on the
     // pretokenizer flavor (set at load time from tokenizer.ggml.pre,
     // or overridden by a per-family loader via set_pretokenizer).
     // Unknown flavors fall back to qwen2 with a warning — keeps old
@@ -504,7 +504,7 @@ transcribe_status Tokenizer::encode(const std::string &    text,
         words = unicode::pretokenize_qwen2(text);
     }
 
-    // Stage 2: run the BPE merge loop per word and collect ids.
+    // Run the BPE merge loop per word and collect ids.
     out_ids.reserve(words.size() * 2);
 
     std::vector<Symbol> symbols;
@@ -561,12 +561,10 @@ transcribe_status Tokenizer::encode(const std::string &    text,
             ++index;
         }
 
-        // Seed initial bigrams.
         for (int i = 1; i < static_cast<int>(symbols.size()); ++i) {
             push_bigram(i - 1, i);
         }
 
-        // Greedy merge loop.
         while (!queue.empty()) {
             Bigram bg = queue.top();
             queue.pop();
@@ -595,7 +593,6 @@ transcribe_status Tokenizer::encode(const std::string &    text,
             push_bigram(bg.left,   left.next);
         }
 
-        // Walk the surviving chain and emit ids.
         for (int i = 0; i != -1; i = symbols[i].next) {
             const Symbol & s = symbols[i];
             if (s.n == 0) continue;
@@ -672,10 +669,10 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
         decode_mode_ = DecodeMode::SentencePiece;
     }
 
-    // Optional: pretokenizer flavor. Absent means "qwen2" (historical
-    // default for the "gpt2" model tag on Qwen3-ASR GGUFs). Per-family
-    // loaders override after load() when the source file did not emit
-    // the key but the family's pretokenizer is fixed (Whisper → "gpt2").
+    // Optional: pretokenizer flavor. Absent means "qwen2" (the default
+    // for the "gpt2" model tag on Qwen3-ASR GGUFs). Per-family loaders
+    // override after load() when the source file did not emit the key but
+    // the family's pretokenizer is fixed (Whisper → "gpt2").
     pre_.clear();
     switch (read_string_kv(gguf, "tokenizer.ggml.pre", pre_)) {
         case KvResult::Absent:
@@ -745,12 +742,11 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
             break;
     }
 
-    // Optional: merges. Only "gpt2" uses them; SentencePiece
-    // tokenizers ("unigram"/"bpe") encode via the score-based lattice
-    // we haven't wired up yet, and their decode path doesn't need
-    // merges. Missing merges on a "gpt2" file means encode() will
-    // fail at call time -- that's the right surface because the
-    // decode path still works.
+    // Optional: merges. Only "gpt2" uses them; SentencePiece tokenizers
+    // ("unigram"/"bpe") encode via a score-based lattice (not
+    // implemented) and their decode path needs no merges. Missing merges
+    // on a "gpt2" file means encode() fails at call time -- the right
+    // surface, since the decode path still works.
     merge_rank_.clear();
     std::vector<std::string> merges;
     switch (read_string_array_kv(gguf, "tokenizer.ggml.merges", merges)) {

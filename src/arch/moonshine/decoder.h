@@ -11,8 +11,7 @@
 //      Handles both the prompt pass (n_tokens=1, n_past=0 — moonshine's
 //      prompt is a single bos token) and steady-state step passes
 //      (n_tokens=1, n_past=current). All dec.* dump points are wired
-//      on the prompt pass; the validate.py harness compares them
-//      against the reference dumps.
+//      on the prompt pass.
 //
 // All attention projections (q/k/v/o) are bias-less (attention_bias=False).
 // Self-attn applies partial RoPE 0.9 to q/k; cross-attn does NOT rotate.
@@ -116,10 +115,8 @@ StepBuild build_step_graph(ggml_context *           compute_ctx,
                            int                      T_enc,
                            bool                     use_flash = true);
 
-// ---------------------------------------------------------------------------
 // Offline batched decode (B utterances). Mirrors src/arch/cohere + canary,
 // with moonshine's partial RoPE on self-attn and head-dim padding.
-// ---------------------------------------------------------------------------
 
 // Batched cross-attention K/V from packed encoder outputs [d_model, T_enc_max, B].
 DecoderBuild build_cross_kv_graph_batched(ggml_context *           ctx,

@@ -1,21 +1,11 @@
 // arch/medasr/weights.h - MedASR (Google LASR-CTC) tensor catalog and
 // per-instance weight slots.
 //
-// INTERNAL to src/arch/medasr/. Patterned after arch/gigaam/weights.h
-// (encoder-CTC Conformer + rotary). MedASR differs in:
-//   - Subsampling is LINEAR -> RELU -> CONV1D(s=2,p=0) -> RELU ->
-//     CONV1D(s=2,p=0) -> RELU -> LINEAR (NOT gigaam's 2-conv stack).
-//     Effective downsampling = 4x.
-//   - Every LayerNorm in the encoder is bias=false; norm_b slots are
-//     left nullptr.
-//   - Self-attn / FF linears are bias=false.
-//   - Conv module uses BatchNorm (running_mean / running_var fused at
-//     load) — NOT LayerNorm.
-//   - Macaron FF residual scalars are [1.5, 0.5] (NOT 0.5 macaron).
-//     Conv-module residual scalars are [2.0, 1.0]. Per-block scalars
-//     are baked into the encoder graph builder.
-//   - CTC head Conv1d(512, 512, k=1) with bias (NOT no-bias Linear).
-//     CTC blank id = 0 (NOT vocab_size - 1).
+// INTERNAL to src/arch/medasr/. Encoder-CTC Conformer + rotary, with a
+// 4x subsampling stem (LINEAR -> CONV1D(s=2) -> CONV1D(s=2) -> LINEAR),
+// bias=false LayerNorms / linears, BatchNorm conv module (fused at load),
+// macaron FF residual scalars [1.5, 0.5] and conv [2.0, 1.0], and a
+// Conv1d(k=1) CTC head with bias (blank id = 0).
 
 #pragma once
 

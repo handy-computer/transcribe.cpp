@@ -1,17 +1,15 @@
 // arch/parakeet/decoder.cpp - Parakeet TDT decoder implementation.
 //
-// See decoder.h for the API contract. The predictor LSTM, the encoder
-// projection, and the joint network all run as ggml backend graphs on a
-// single shared CPU backend + persistent threadpool (owned by PredGraph;
-// see build_pred_graph). Decode weights are uploaded to resident ggml
-// tensors at load time and the host-side fp32 mirrors are then freed.
+// See decoder.h for the API contract. The predictor LSTM, encoder
+// projection, and joint network all run as ggml backend graphs on a
+// single shared CPU backend + persistent threadpool (owned by PredGraph).
+// Decode weights are uploaded to resident ggml tensors at load and the
+// host fp32 mirrors then freed.
 //
-// Numerical-accuracy strategy: ggml's reduction order differs slightly
-// from a naive host loop, so per-step values drift ~1e-7 vs the reference;
-// over a full utterance this stays within ~1e-4 and the greedy transcript
-// is unchanged. The per-step dump points wired below feed
-// scripts/compare_tensors.py for the bring-up loop and are gated on
-// TRANSCRIBE_DUMP_DIR.
+// Numerical note: ggml's reduction order differs slightly from a naive
+// host loop, so per-step values drift ~1e-7 vs the reference; over an
+// utterance this stays within ~1e-4 and the greedy transcript is
+// unchanged.
 
 #include "decoder.h"
 
@@ -22,16 +20,14 @@
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
 
-// ggml-backend.h only — NOT ggml-cpu.h: backend-specific entry points such
-// as ggml_backend_cpu_init live inside the loadable CPU module under
-// GGML_BACKEND_DL, so the library must reach the CPU backend through the
-// registry (ggml_backend_init_by_type / get_proc_address), never by direct
-// link-time reference.
+// ggml-backend.h, not ggml-cpu.h: under GGML_BACKEND_DL the CPU backend
+// is a loadable module, so backend-specific entry points must be reached
+// through the registry (ggml_backend_init_by_type / get_proc_address),
+// never by direct link-time reference.
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-alloc.h"
-#include "ggml-cpu.h"   // ggml_threadpool_params_default (the rest of the CPU
-                        // backend API is reached via the registry, see above)
+#include "ggml-cpu.h"   // ggml_threadpool_params_default (rest via registry)
 
 #include <thread>
 
@@ -60,25 +56,11 @@ namespace transcribe::parakeet {
 namespace {
 
 // Read all elements of a ggml_tensor into a host fp32 vector,
-// dequantizing as needed via ggml_get_type_traits()->to_float. Decode
-// weights are uploaded to resident fp32 ggml tensors once at load time
-// (see build_pred_weights / build_joint_weight), so quantized weight
-// tensors are dequantized exactly once here and the per-decode hot path
-// pays no readback or dequant cost.
-//
-// Source dtype support is whatever ggml's type traits register a
-// to_float implementation for: F32, F16, BF16, all the Q* and IQ*
-// quants. Tensors with no to_float fall through to the diagnostic
-// (which would be a configuration mistake — the loader's per-slot
-// allowlist in weights.cpp should never accept such a type).
-//
-// ggml_backend_tensor_get is the universal backend API: it's a memcpy
-// on host buffers, a readback on discrete GPUs. We stage the raw
-// (possibly quantized) bytes into a local buffer first, then walk the
-// type's to_float to materialize fp32 in `out`.
-//
-// Returns false on missing-trait / size errors (logs a diagnostic
-// naming the offending tensor).
+// dequantizing via ggml_get_type_traits()->to_float. Source dtype
+// support is whatever ggml registers a to_float for (F32, F16, BF16, all
+// Q*/IQ*). ggml_backend_tensor_get is universal (memcpy on host buffers,
+// readback on discrete GPUs); we stage the raw bytes then materialize
+// fp32 in `out`. Returns false on missing-trait / size errors.
 bool read_tensor_to_f32(const ggml_tensor * t,
                         std::vector<float> & out)
 {
@@ -102,10 +84,8 @@ bool read_tensor_to_f32(const ggml_tensor * t,
 
     out.resize(static_cast<size_t>(nelem));
 
-    // F32 fast path. ggml's type_traits[GGML_TYPE_F32] entry does
-    // NOT set a to_float (the identity case is left null upstream),
-    // so we must short-circuit here rather than dispatch through it.
-    // Read straight from the backend into the output buffer.
+    // F32 fast path. type_traits[GGML_TYPE_F32] has no to_float (identity
+    // is left null upstream), so short-circuit rather than dispatch.
     if (t->type == GGML_TYPE_F32) {
         if (nbytes != static_cast<size_t>(nelem) * sizeof(float)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -119,10 +99,8 @@ bool read_tensor_to_f32(const ggml_tensor * t,
         return true;
     }
 
-    // Quantized / non-fp32 path. Stage the raw bytes off the backend,
-    // then walk the type's to_float to materialize fp32. F16, BF16,
-    // and every Q*/IQ* register a to_float in ggml.c's type_traits
-    // table.
+    // Quantized / non-fp32 path: stage the raw bytes off the backend,
+    // then walk the type's to_float to materialize fp32.
     const auto * tt = ggml_get_type_traits(t->type);
     if (tt == nullptr || tt->to_float == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -137,15 +115,11 @@ bool read_tensor_to_f32(const ggml_tensor * t,
     return true;
 }
 
-// Make the joint network's weights resident as fp32 ggml tensors on the model
-// (the immutable half): the encoder projection (g_enc_w/g_enc_b), the predictor
-// projection (g_pred_w/g_pred_b), and the output projection (gw_w/gw_b). Built
-// once at load; only ever read after, so it is safe to share across every
-// context. The per-decode compute graph that consumes these is built per call
-// (build_joint_graph below). out_w is dequantized to fp32 from the model tensor
-// `src_out_w`; the other weights come from the host mirrors, which are freed
-// here once uploaded. On any failure it frees its partial state and returns
-// false (w_ready stays false), so the decode reports a hard error.
+// Make the joint network's weights resident as fp32 ggml tensors on the
+// model: enc / pred / out projections. Built once at load. out_w is
+// dequantized from the model tensor src_out_w; the rest come from the
+// host mirrors, freed here once uploaded. On failure frees partial state
+// and returns false (w_ready stays false → hard decode error).
 bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w) {
     const int joint_h = j.joint_h;
     const int joint_n = j.joint_n;
@@ -160,9 +134,8 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w) {
         return false;
     };
 
-    // A CPU backend used ONLY to allocate the resident weight buffer — never
-    // graph_compute'd (each decode call owns its own compute backend), so it
-    // carries no per-step state and is safe to keep on the shared model.
+    // CPU backend used ONLY to allocate the resident weight buffer —
+    // never graph_compute'd, so it carries no per-step state.
     j.w_backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     if (j.w_backend == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: ggml CPU backend init failed");
@@ -186,8 +159,7 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w) {
     j.w_buf = ggml_backend_alloc_ctx_tensors(j.w_ctx, j.w_backend);
     if (j.w_buf == nullptr) return fail();
 
-    // out_w: dequantize the model tensor to fp32 once (faithful to the host
-    // reference: fp32×fp32 accumulation, no activation down-conversion).
+    // out_w: dequantize the model tensor to fp32 once.
     {
         std::vector<float> tmp;
         if (!read_tensor_to_f32(src_out_w, tmp)) return fail();
@@ -211,12 +183,11 @@ bool build_joint_weight(HostJoint & j, const ggml_tensor * src_out_w) {
     return true;
 }
 
-// Make the predictor LSTM weights resident as fp32 ggml tensors — the immutable
-// half consumed by the per-call PredGraph. Built once at load. ne fast-to-slow
-// is [pred_hidden, 4*pred_hidden] for Wx/Wh (the row-major [4*H, H] host bytes
-// read as a ggml mul_mat operand) and [4*pred_hidden] for the bias. On any
-// failure frees its partial state and returns false; the caller leaves
-// lstm_ready false; building the pred graph then fails and the decode returns a hard error (no host fallback remains).
+// Make the predictor LSTM weights resident as fp32 ggml tensors for the
+// per-call PredGraph. Built once at load. ne is [pred_hidden, 4*pred_hidden]
+// for Wx/Wh (row-major [4*H, H] host bytes as a mul_mat operand) and
+// [4*pred_hidden] for the bias. On failure frees partial state and returns
+// false (lstm_ready stays false → hard decode error).
 bool build_pred_weights(HostPredictor & p) {
     const int H      = p.pred_hidden;
     const int four_H = 4 * H;
@@ -261,7 +232,7 @@ bool build_pred_weights(HostPredictor & p) {
         ggml_backend_tensor_set(lh.g_Wx, lh.Wx.data(), 0, lh.Wx.size() * sizeof(float));
         ggml_backend_tensor_set(lh.g_Wh, lh.Wh.data(), 0, lh.Wh.size() * sizeof(float));
         ggml_backend_tensor_set(lh.g_b,  lh.b.data(),  0, lh.b.size()  * sizeof(float));
-        // Host mirrors are now resident in ggml — release them (load-time scratch).
+        // Host mirrors now resident in ggml — release them.
         std::vector<float>().swap(lh.Wx);
         std::vector<float>().swap(lh.Wh);
         std::vector<float>().swap(lh.b);
@@ -273,22 +244,16 @@ bool build_pred_weights(HostPredictor & p) {
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Per-call joint compute graph
-// ---------------------------------------------------------------------------
-//
-// The MUTABLE half of the joint network: a full per-call graph
+// Per-call joint compute graph (the mutable half of the joint network):
 //   pred_proj = pred_w @ pred_in + pred_b      [joint_h]
 //   summed    = enc_proj + pred_proj           [joint_h]
 //   activated = activation(summed)             [joint_h]
 //   logits    = out_w @ activated + out_b      [joint_n]
-// built on a BORROWED backend — the shared decoder pool owned by PredGraph — so
-// the joint runs on the SAME single threadpool as the pred LSTM and enc_proj
-// (no separate pool, no oversubscription). Inputs are the predictor output
-// [pred_hidden] and this frame's precomputed encoder projection [joint_h];
-// output is the logits [joint_n]. Built fresh per decode call (reentrant: each
-// decode owns its own I/O tensors); weights are the shared resident
-// HostJoint::g_pred_w/g_pred_b/gw_w/gw_b.
+// Built on a BORROWED backend (PredGraph's shared pool) so the joint runs
+// on the same threadpool as the pred LSTM and enc_proj. Inputs are the
+// predictor output and this frame's precomputed enc projection; output is
+// the logits. Built fresh per decode call (reentrant); weights are the
+// shared resident HostJoint tensors.
 namespace {
 
 struct JointGraph {
@@ -305,17 +270,15 @@ struct JointGraph {
     ~JointGraph() {
         if (buf != nullptr) ggml_backend_buffer_free(buf);
         if (ctx != nullptr) ggml_free(ctx);
-        // backend is borrowed from PredGraph — do NOT free here (and PredGraph,
-        // declared first in the driver, is destroyed after this).
+        // backend is borrowed from PredGraph — do NOT free here.
     }
     JointGraph(const JointGraph &)             = delete;
     JointGraph & operator=(const JointGraph &) = delete;
 };
 
-// Build the full joint graph on the shared `backend` (PredGraph's pool). Returns
-// false (g.ready == false) if the resident weights are absent or any ggml step
-// fails; the driver treats a non-ready joint graph as a hard decode error (there
-// is no host fallback — the resident weights are the only copy).
+// Build the full joint graph on the shared `backend` (PredGraph's pool).
+// Returns false if the resident weights are absent or any ggml step
+// fails (→ hard decode error).
 bool build_joint_graph(JointGraph & g, const HostJoint & j, ggml_backend_t backend) {
     if (backend == nullptr) return false;
     if (!j.w_ready || j.gw_w == nullptr || j.gw_b == nullptr ||
@@ -371,11 +334,9 @@ bool build_joint_graph(JointGraph & g, const HostJoint & j, ggml_backend_t backe
     return true;
 }
 
-// CPU-backend threadpool entry points, reached through the registry so the
-// library stays DL-safe: under GGML_BACKEND_DL the CPU backend is a loadable
-// module and these symbols are NOT linkable directly into libtranscribe (only
-// ggml-base symbols like ggml_threadpool_params_default are). Resolve them via
-// ggml_backend_reg_get_proc_address, exactly as for ggml_backend_set_n_threads.
+// CPU-backend threadpool entry points, reached through the registry so
+// the library stays DL-safe (under GGML_BACKEND_DL these symbols are not
+// directly linkable). Resolved via ggml_backend_reg_get_proc_address.
 typedef ggml_threadpool_t (*pfn_threadpool_new)(ggml_threadpool_params *);
 typedef void              (*pfn_threadpool_free)(ggml_threadpool_t);
 typedef void              (*pfn_set_threadpool)(ggml_backend_t, ggml_threadpool_t);
@@ -395,18 +356,12 @@ static void free_cpu_threadpool(ggml_backend_t backend, ggml_threadpool_t tp) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Per-call predictor (LSTM) compute graph
-// ---------------------------------------------------------------------------
-//
-// The MUTABLE half of the predictor: a single per-step LSTM graph built fresh
-// per decode call around the model-resident HostPredictor::lstm weights, and
-// recomputed in place each step. Inputs are the embedding x and, per layer, the
-// previous (h, c); outputs are the new (h, c) per layer. The decode loop feeds
-// prev state in and reads new state back into its host LstmState each step, so
-// the loop's state machine (swap / predictor_dirty cache / dumps) is unchanged.
-// Mirrors JointGraph's reentrancy: every concurrent decode owns its own
-// PredGraph (its own backend + threadpool + I/O tensors).
+// Per-call predictor LSTM graph (the mutable half of the predictor):
+// a single per-step graph built fresh per decode call around the
+// model-resident HostPredictor::lstm weights, recomputed in place each
+// step. Inputs are the embedding x and per-layer previous (h, c); outputs
+// are the new (h, c) per layer. Reentrant: every concurrent decode owns
+// its own PredGraph (backend + threadpool + I/O tensors).
 struct PredGraph {
     ggml_context *             ctx     = nullptr;
     ggml_backend_t             backend = nullptr;
@@ -434,9 +389,8 @@ struct PredGraph {
 };
 
 // Build the per-call LSTM graph around the resident p.lstm[*].g_Wx/g_Wh/g_b.
-// Returns false (g.ready == false) if the resident weights are absent or any
-// ggml step fails; the driver then returns a hard decode error (no host fallback). n_threads is
-// the resolved (>0) decode thread count.
+// Returns false if the resident weights are absent or any ggml step fails
+// (→ hard decode error). n_threads is the resolved (>0) thread count.
 bool build_pred_graph(PredGraph & g, const HostPredictor & p, int n_threads) {
     if (!p.lstm_ready) return false;
     const int H = p.pred_hidden;
@@ -553,11 +507,8 @@ HostPredictor::~HostPredictor() {
     if (lstm_w_backend != nullptr) ggml_backend_free(lstm_w_backend);
 }
 
-// Resolve a decode thread count: n_threads <= 0 means "auto" → min(8, usable
-// cpus) via default_n_threads(), matching the encoder default. Threaded through
-// to the joint compute backend
-// and the per-call ggml decode graphs; no process-global state is set,
-// so concurrent decodes on one model do not stomp each other.
+// Resolve a decode thread count: n_threads <= 0 means "auto" →
+// default_n_threads() (min(8, usable cpus)), matching the encoder.
 static int resolve_decode_threads(int n_threads) {
     return n_threads > 0
         ? n_threads
@@ -579,13 +530,10 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
     }
 
     if (hp.head_kind == HeadKind::CTC) {
-        // ----- CTC head mirror -----
-        //
-        // Source weight has ggml ne [1, d_model, n_classes] (PyTorch
-        // [n_classes, d_model, 1] flat). The bytes are already laid out
-        // exactly the way the host decoder wants to consume them
-        // (row-major [n_classes, d_model]); read_tensor_to_f32 just
-        // copies them into a flat fp32 vector. Bias is [n_classes].
+        // CTC head mirror. Source weight ne [1, d_model, n_classes]
+        // (PyTorch [n_classes, d_model, 1]); bytes are already row-major
+        // [n_classes, d_model] as the host decoder consumes them. Bias is
+        // [n_classes].
         out.ctc_head.n_classes = hp.head_ctc_n_classes;
         out.ctc_head.blank_id  = hp.head_ctc_n_classes - 1; // NeMo convention
         out.ctc_head.d_enc     = hp.enc_d_model;
@@ -629,10 +577,7 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
     if (!read_tensor_to_f32(w.predictor.embed_w, out.predictor.embed_w)) {
         return TRANSCRIBE_ERR_GGUF;
     }
-    // Sanity-check the flattened size against the catalog shape. The
-    // loader already validated ne against hparams; this is a cheap
-    // belt-and-braces in case future surgery to either side gets out
-    // of sync without updating the other.
+    // Sanity-check the flattened size against the catalog shape.
     {
         const size_t expected =
             static_cast<size_t>(hp.pred_vocab) * static_cast<size_t>(hp.pred_hidden);
@@ -667,9 +612,8 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
         }
     }
 
-    // Make the predictor LSTM weights resident as fp32 ggml tensors for the ggml
-    // predictor graph. Fatal: there is no host fallback, so a failure here means
-    // the model cannot decode — fail fast at load rather than at first decode.
+    // Make the predictor LSTM weights resident. Fatal: a failure means
+    // the model cannot decode — fail fast at load.
     if (!build_pred_weights(out.predictor)) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
             "parakeet decoder: predictor ggml weight build failed");
@@ -683,20 +627,16 @@ transcribe_status build_host_decoder_weights(const ParakeetModel & model,
     out.joint.joint_n     = hp.joint_n_classes();
     out.joint.activation  = hp.joint_activation;
 
-    // enc/pred/out_b are mirrored to host fp32 (build_joint_weight uploads them
-    // into resident ggml tensors and frees them). out_w is NOT mirrored here:
-    // build_joint_weight dequantizes it straight from the model tensor.
+    // enc/pred/out_b are mirrored to host fp32; out_w is NOT mirrored
+    // here (build_joint_weight dequantizes it from the model tensor).
     if (!read_tensor_to_f32(w.joint.enc_w,  out.joint.enc_w))  return TRANSCRIBE_ERR_GGUF;
     if (!read_tensor_to_f32(w.joint.enc_b,  out.joint.enc_b))  return TRANSCRIBE_ERR_GGUF;
     if (!read_tensor_to_f32(w.joint.pred_w, out.joint.pred_w)) return TRANSCRIBE_ERR_GGUF;
     if (!read_tensor_to_f32(w.joint.pred_b, out.joint.pred_b)) return TRANSCRIBE_ERR_GGUF;
     if (!read_tensor_to_f32(w.joint.out_b,  out.joint.out_b))  return TRANSCRIBE_ERR_GGUF;
 
-    // Make the joint weights resident as fp32 ggml tensors for the joint graph.
-    // fp32 keeps decode numerically faithful to the historical host path (the
-    // out_w matmul was always fp32 there); any joint quantization is handled at
-    // the model/quant level. Fatal: with no host fallback, a failure here means
-    // the model cannot decode — fail fast at load.
+    // Make the joint weights resident as fp32 ggml tensors. Fatal: a
+    // failure means the model cannot decode — fail fast at load.
     if (w.joint.out_w == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "parakeet decoder: joint out_w missing");
         return TRANSCRIBE_ERR_GGUF;
@@ -744,13 +684,11 @@ void LstmState::reset(int n_layers, int pred_hidden) {
 
 namespace {
 
-// ggml-graph variant of predictor_step. Same contract:
-// reads `prev_state`, writes the new step's (h, c) into `new_state`, returns a
-// borrowed pointer into `new_state.h.back()`. Internally it feeds prev state and
-// the embedding into the resident per-call graph, computes, and reads the new
-// state back into the host LstmState — so the decode loop's state machine (swap,
-// predictor_dirty cache, dumps) is identical to the host path. Caller guarantees
-// g.ready and that new_state is sized to (L, H).
+// One predictor step on the ggml graph: reads prev_state, writes the new
+// step's (h, c) into new_state, returns a borrowed pointer into
+// new_state.h.back(). Feeds prev state + embedding into the resident
+// per-call graph, computes, reads new state back into the host LstmState.
+// Caller guarantees g.ready and that new_state is sized to (L, H).
 const float * predictor_step_ggml(const HostPredictor & predictor,
                                   PredGraph &           g,
                                   int                   last_token,
@@ -763,7 +701,7 @@ const float * predictor_step_ggml(const HostPredictor & predictor,
         scratch_x.resize(static_cast<size_t>(H));
     }
 
-    // Embed lookup (or start-state zeros) — identical to predictor_step.
+    // Embed lookup (or start-state zeros).
     if (last_token < 0) {
         std::fill_n(scratch_x.data(), H, 0.0f);
     } else {
@@ -793,19 +731,14 @@ const float * predictor_step_ggml(const HostPredictor & predictor,
 // Run the joint network for one decode step.
 //
 // `enc_proj` is the precomputed encoder projection for this frame
-// (enc_w @ enc_frame + enc_b, `joint_h` floats). The caller batches
-// all T_enc projections via one ggml GEMM (precompute_enc_proj_ggml)
-// before the decode loop so they are computed once rather than
-// redundantly per iteration.
-//
+// (enc_w @ enc_frame + enc_b, joint_h floats); the caller batches all
+// T_enc projections via one GEMM (precompute_enc_proj_ggml) before the
+// loop. The graph computes:
 //   pred_proj = pred_w @ pred_state + pred_b     [joint_h]
 //   summed    = enc_proj + pred_proj             [joint_h]
 //   activated = activation(summed)               [joint_h]
 //   logits    = out_w @ activated   + out_b      [joint_n]
-//
-// Activation is one of {relu, sigmoid, tanh}; the loader's
-// allow-list guarantees we'll see exactly one of those at run
-// time. Parakeet 0.6B v2/v3 ship "relu".
+// Activation is one of {relu, sigmoid, tanh} (loader allow-list).
 void joint_step(const HostJoint &     j,
                 const JointGraph &    g,
                 const float *         enc_proj,
@@ -814,10 +747,7 @@ void joint_step(const HostJoint &     j,
 {
     if (static_cast<int>(out_logits.size()) < j.joint_n) out_logits.resize(static_cast<size_t>(j.joint_n));
 
-    // Full joint on the shared decoder pool: pred_w proj + sum + activation +
-    // out_w proj + bias, one graph, one dispatch. Inputs are the predictor
-    // output and this frame's enc_proj; the weights (incl. activation) are baked
-    // into the graph.
+    // Full joint on the shared decoder pool, one graph, one dispatch.
     ggml_backend_tensor_set(g.pred_in, pred_state, 0,
                             static_cast<size_t>(j.pred_hidden) * sizeof(float));
     ggml_backend_tensor_set(g.enc_in, enc_proj, 0,
@@ -826,34 +756,13 @@ void joint_step(const HostJoint &     j,
     ggml_backend_tensor_get(g.logits, out_logits.data(), 0,
                             static_cast<size_t>(j.joint_n) * sizeof(float));
 
-    // Apply log_softmax over the full joint output (vocab+blank+durations
-    // for TDT, vocab+blank for RNNT) to match NeMo's CPU-inference
-    // representation of `joint_after_projection`. NeMo's RNNTJoint applies
-    // `log_softmax(dim=-1)` when running on CPU and `self.log_softmax`
-    // is None (the default), or when `self.log_softmax=True`. Applying
-    // it here:
-    //   - leaves token-argmax and duration-argmax invariant (subtracting
-    //     a constant from all elements of either sub-range preserves
-    //     argmax),
-    //   - leaves token_confidence invariant (it re-softmaxes the token
-    //     sub-range, which absorbs any uniform shift),
-    //   - lets `dec.joint.0` dump compare element-wise against NeMo's
-    //     reference dump (representation match — without this, our raw
-    //     logits sit ~+25 to +35 above NeMo's log-softmax-normalized
-    //     values, and the only flat tolerance that fits is 100/100,
-    //     which is loose enough to hide real numerical divergence).
-    //
-    // Cost: ~joint_n adds + 1 logsumexp. For joint_n=1030 that's ~2K
-    // ops per decode iter, negligible vs the joint_h × pred_hidden +
-    // joint_h × joint_n matmuls (~1.3M ops).
-    //
-    // GREEDY FAST PATH: the log_softmax is a uniform per-row shift, so it leaves
-    // BOTH the token/duration argmax AND token_confidence (which re-softmaxes the
-    // token sub-range, absorbing the shift) invariant. It is therefore only
-    // needed to make the `dec.joint.0` dump comparable to NeMo's normalized
-    // reference. Skip it entirely unless dumping — saves a joint_n-wide
-    // max+exp+log+sub pass (joint_n≈1030, with a double exp) on every decode
-    // iteration. Bit-identical decode output either way.
+    // log_softmax over the full joint output matches NeMo's CPU-inference
+    // representation of joint_after_projection. It is a uniform per-row
+    // shift, so it leaves token/duration argmax AND token_confidence
+    // (which re-softmaxes the token sub-range) invariant — the decode
+    // output is bit-identical with or without it. It is only needed to
+    // make the dec.joint.0 dump element-wise comparable to NeMo's
+    // normalized reference, so skip it unless dumping.
     if (transcribe::debug::enabled()) {
         float max_v = out_logits[0];
         for (int i = 1; i < j.joint_n; ++i) {
@@ -871,13 +780,11 @@ void joint_step(const HostJoint &     j,
 }
 
 // Compute the per-utterance encoder projection out[T, joint_h] =
-// enc_out[T, d_enc] @ enc_w^T + enc_b as a single GEMM on `backend` — which
-// carries the shared decoder threadpool, so this runs on the same pool as the
-// pred/joint graphs (no extra pool). The weight + bias are the model-resident
-// j.g_enc_w / j.g_enc_b (no per-call upload); only the activation input and the
-// result are allocated here. At n = T the matmul is a real GEMM, so with
-// GGML_LLAMAFILE=ON tinyBLAS engages (n >= 2). Returns false on any ggml
-// failure; the driver treats it as a hard decode error (no host fallback).
+// enc_out[T, d_enc] @ enc_w^T + enc_b as a single GEMM on `backend`
+// (the shared decoder pool). Weight + bias are the model-resident
+// j.g_enc_w / j.g_enc_b; only the input and result are allocated here.
+// At n = T the matmul is a real GEMM (tinyBLAS engages with
+// GGML_LLAMAFILE=ON). Returns false on ggml failure (→ hard decode error).
 bool precompute_enc_proj_ggml(const HostJoint &    j,
                               ggml_backend_t       backend,
                               const float *        enc_out,
@@ -1014,15 +921,11 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     const int n_dur        = static_cast<int>(w.tdt_durations.size());
     const int blank_id     = w.blank_id;
 
-    // Per-call joint compute graph around the shared resident weight. Owns its
-    // own backend + I/O tensors, so concurrent decodes don't share mutable
-    // state. A graph build failure is a hard decode error (guarded at driver entry).
-    // All-ggml decode on ONE shared threadpool: PredGraph owns the backend +
-    // pool; enc_proj and the joint graph borrow it. pg is declared first so it
-    // is destroyed LAST (jg's buffer lives on pg's backend). Built per decode
-    // call, reentrant. The CPU backend is always available, so these succeed in
-    // practice; a build failure is a hard error (the host decode path was
-    // removed when the migration finalized).
+    // All-ggml decode on ONE shared threadpool: PredGraph owns the
+    // backend + pool; enc_proj and the joint graph borrow it. pg is
+    // declared first so it is destroyed LAST (jg's buffer lives on pg's
+    // backend). Built per decode call, reentrant. A build failure is a
+    // hard decode error.
     PredGraph pg;
     JointGraph jg;
     build_pred_graph(pg, w.predictor, nt);
@@ -1063,25 +966,16 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
     int step        = 0;
     int new_symbols = 0;
 
-    // Honest cap: a 30-second clip emits a few hundred tokens at
-    // most. Bound the loop iterations as a runaway-protection net
-    // in case the joint produces pathological logits we haven't
-    // anticipated. The cap is generous; legitimate transcriptions
-    // never approach it.
+    // Runaway-protection cap; legitimate transcriptions never approach it.
     const int max_iters = 16 * T_enc + 1024;
     int iter = 0;
     int64_t t_pred_us = 0, t_joint_us = 0, t_conf_us = 0;
 
-    // On a blank emission `(last_token, state)` are preserved, so the
-    // predictor would deterministically write the same `next_state` on the
-    // following iteration. Skip the LSTM unroll and reuse the previous
-    // `decoder_out`; recompute on a non-blank emission, where
-    // `state.swap(next_state)` and `last_token` change. Bit-exact with the
-    // unconditional path. Complements the `duration==0` fast-forward
-    // below: that fast-forward only fires when `tdt_max_symbols > 0` and
-    // duration is zero. Blanks with `duration > 0` advance `step` but
-    // still leave `(last_token, state)` unchanged, and this cache catches
-    // them.
+    // On a blank emission (last_token, state) are preserved, so the
+    // predictor would write the same next_state next iteration. Skip the
+    // LSTM unroll and reuse the previous decoder_out; recompute on a
+    // non-blank emission (state.swap + last_token change). Bit-exact with
+    // the unconditional path.
     bool predictor_dirty = true;
 
     while (step < T_enc && iter < max_iters) {
@@ -1116,16 +1010,9 @@ transcribe_status decode_tdt_greedy(const HostDecoderWeights & w,
         const int duration   = w.tdt_durations[static_cast<size_t>(decision)];
 
 
-        // ----- Optional dump (first iteration only, for bring-up) -----
-        //
-        // Dumping every iteration would flood the dump dir on a long
-        // clip; the bring-up only needs a few well-chosen sample
-        // points to verify each component matches the NeMo reference.
-        // The first decode step (start state, encoder frame 0) gives
-        // us four reference points: predictor input (the embed lookup,
-        // here all zeros), per-layer LSTM h, the joint logits, the
-        // argmax decision. The Python `dump_reference_parakeet_nemo.py
-        // decode` subcommand mirrors these.
+        // Optional dump of the first decode step (start state, encoder
+        // frame 0): embed input, per-layer LSTM h, joint logits. Mirrors
+        // the Python reference dumper's decode subcommand.
         if (iter == 1 && transcribe::debug::enabled()) {
             // Predictor scratch_x at start: zeros (vector of length H).
             const long long s_h = H;
@@ -1266,13 +1153,7 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
     const int n_token_cls  = w.predictor.pred_vocab; // == vocab + 1
     const int blank_id     = w.blank_id;
 
-    // Per-call joint compute graph (see decode_tdt_greedy).
-    // All-ggml decode on ONE shared threadpool: PredGraph owns the backend +
-    // pool; enc_proj and the joint graph borrow it. pg is declared first so it
-    // is destroyed LAST (jg's buffer lives on pg's backend). Built per decode
-    // call, reentrant. The CPU backend is always available, so these succeed in
-    // practice; a build failure is a hard error (the host decode path was
-    // removed when the migration finalized).
+    // Per-call decode graphs (see decode_tdt_greedy for the lifecycle).
     PredGraph pg;
     JointGraph jg;
     build_pred_graph(pg, w.predictor, nt);
@@ -1310,14 +1191,9 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
     int iter = 0;
     int64_t t_pred_us = 0, t_joint_us = 0, t_conf_us = 0;
 
-    // On a blank emission `(last_token, state)` are preserved, so the
-    // predictor would deterministically write the same `next_state` on the
-    // following iteration. Skip the LSTM unroll and reuse the previous
-    // `decoder_out`; recompute on a non-blank emission, where
-    // `state.swap(next_state)` and `last_token` change. Bit-exact with the
-    // unconditional path. On a 0.6B FastConformer RNN-T with a typical
-    // 4-5× iters/token ratio this elides 60-80% of predictor work and
-    // ~halves decode wall time.
+    // Predictor-step cache (see decode_tdt_greedy). Bit-exact with the
+    // unconditional path; elides 60-80% of predictor work on a typical
+    // RNN-T iters/token ratio.
     bool predictor_dirty = true;
 
     while (step < T_enc && iter < max_iters) {
@@ -1438,14 +1314,9 @@ transcribe_status decode_rnnt_greedy_streaming(
     if (enc_out == nullptr || T_enc_new <= 0 || d_enc <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
-    // This driver implements pure RNN-T greedy search: every non-blank
-    // advances the predictor by one symbol and every blank advances the
-    // encoder frame by exactly one. A TDT head's duration predictions
-    // would be silently ignored here (collapsing every blank to a single
-    // frame) and a CTC head carries no predictor state at all. Both of
-    // today's streaming parakeet variants are RNN-T, so this only guards
-    // a hypothetical future TDT/CTC streaming model — but it fails loud at
-    // the exact point of mis-decode rather than emitting wrong tokens.
+    // Pure RNN-T greedy only: a TDT head's durations would be silently
+    // ignored and a CTC head carries no predictor state. Fail loud rather
+    // than mis-decode a hypothetical future TDT/CTC streaming model.
     if (w.head_kind != HostHeadKind::RNNT) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet decoder (rnnt-stream): streaming decode "
@@ -1466,13 +1337,7 @@ transcribe_status decode_rnnt_greedy_streaming(
     const int n_token_cls  = w.predictor.pred_vocab;
     const int blank_id     = w.blank_id;
 
-    // Per-call joint compute graph (see decode_tdt_greedy).
-    // All-ggml decode on ONE shared threadpool: PredGraph owns the backend +
-    // pool; enc_proj and the joint graph borrow it. pg is declared first so it
-    // is destroyed LAST (jg's buffer lives on pg's backend). Built per decode
-    // call, reentrant. The CPU backend is always available, so these succeed in
-    // practice; a build failure is a hard error (the host decode path was
-    // removed when the migration finalized).
+    // Per-call decode graphs (see decode_tdt_greedy for the lifecycle).
     PredGraph pg;
     JointGraph jg;
     build_pred_graph(pg, w.predictor, nt);
@@ -1483,7 +1348,7 @@ transcribe_status decode_rnnt_greedy_streaming(
         return TRANSCRIBE_ERR_BACKEND;
     }
 
-    // Validate state_io shape; reset if degenerate (paranoid guard).
+    // Validate state_io shape; reset if degenerate.
     if (static_cast<int>(state_io.h.size()) != n_layers ||
         static_cast<int>(state_io.c.size()) != n_layers)
     {
@@ -1508,10 +1373,9 @@ transcribe_status decode_rnnt_greedy_streaming(
         return TRANSCRIBE_ERR_BACKEND;
     }
 
-    // Working state. We mutate `state` and `next_state`; on return we
-    // copy `state` (the COMMITTED state after the last non-blank
-    // emission, or unchanged for an all-blank chunk) back into
-    // state_io. last_token is committed similarly.
+    // Working state. On return, `state` (committed after the last
+    // non-blank emission, or unchanged for an all-blank chunk) and
+    // last_token are copied back into state_io / last_token_io.
     LstmState state     = state_io;
     LstmState next_state;
     next_state.reset(n_layers, H);
@@ -1588,19 +1452,11 @@ transcribe_status decode_rnnt_greedy_streaming(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
-// CTC greedy decode
-// ---------------------------------------------------------------------------
+// CTC greedy decode.
 //
-// Per-frame: logits[t] = W @ enc[t] + b   ->   log_softmax   ->   argmax.
-// Collapse: drop adjacent duplicates ("aaab" -> "ab"), then drop the
-// blank label. Standard CTC greedy (see NeMo GreedyCTCInfer).
-//
-// Dump points (gated on TRANSCRIBE_DUMP_DIR):
-//   - dec.ctc.logprobs   : full [T_enc, n_classes] log-softmax
-//   - dec.ctc.logprobs.0 : frame 0 of the same
-// These match the Stage 2 oracle's reference dumps.
-
+// Per-frame: logits[t] = W @ enc[t] + b -> log_softmax -> argmax.
+// Collapse: drop adjacent duplicates ("aaab" -> "ab"), then drop blanks
+// (standard CTC greedy, cf. NeMo GreedyCTCInfer).
 transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
                                     const float *              enc_out,
                                     int                        T_enc,
@@ -1633,10 +1489,9 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
                 w.ctc_head.weight.data(), d_enc,
                 0.0f, logits_all.data(), n_classes);
 #else
-    // No BLAS: project all T frames in parallel over the shared parallel_for_all
-    // helper (one thread spawn for the utterance; rows within a frame are a
-    // serial, auto-vectorized dot). The bias is folded in below. (nt is unused
-    // on BLAS builds — cblas_sgemm owns its own threading — so it lives here.)
+    // No BLAS: project all T frames in parallel over parallel_for_all
+    // (rows within a frame are a serial, auto-vectorized dot). Bias folded
+    // in below.
     {
         const int nt    = resolve_decode_threads(n_threads);
         const float * Wc = w.ctc_head.weight.data();

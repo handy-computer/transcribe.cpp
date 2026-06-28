@@ -10,8 +10,9 @@
  *
  * Whisper exposes substantial real model-specific knobs (13 fields).
  * The PNC/ITN toggles that other families share via transcribe_run_params
- * do not apply: whisper does not advertise supports_pnc / supports_itn,
- * and a non-DEFAULT pnc/itn against a whisper model produces a WARN.
+ * do not apply: transcribe_model_supports(model, TRANSCRIBE_FEATURE_PNC)
+ * and (..., TRANSCRIBE_FEATURE_ITN) both return false for whisper, and a
+ * non-DEFAULT pnc/itn against a whisper model produces a WARN.
  * Probe via transcribe_model_accepts_ext_kind before pointing
  * transcribe_run_params::family at this struct.
  *

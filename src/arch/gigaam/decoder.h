@@ -1,8 +1,4 @@
 // arch/gigaam/decoder.h - GigaAM RNN-T / CTC greedy decoders.
-//
-// M1 stub. M3 lands the RNN-T predictor LSTM + joint + greedy loop on
-// host (mirrors parakeet's host-decode pattern). M4 lands the CTC
-// argmax-collapse path.
 
 #pragma once
 

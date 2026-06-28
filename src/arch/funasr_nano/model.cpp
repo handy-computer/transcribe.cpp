@@ -87,22 +87,17 @@ constexpr const char k_default_variant[] = "fun-asr-nano-2512";
 // Input-length contract (see docs/input-limits.md). Fun-ASR-Nano is a
 // hard-context-cap family: audio tokens + chat prompt + generation share the
 // Qwen3 decoder's context window (dec_max_position_embeddings). The KV cache
-// grows to fit the prompt, clamped to that ceiling (replacing the earlier
-// fixed 2048 wall that ignored the model's real context). Over-length input
-// is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that
+// grows to fit the prompt, clamped to that ceiling. Over-length input is
+// rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that
 // fills the per-run generation budget before end-of-stream is flagged via
 // transcribe_was_truncated().
 // ---------------------------------------------------------------------------
 
-// Per-run generation budget (matches the step-loop literal below; the decode
-// loop is intentionally left unchanged — see the family doc).
+// Per-run generation budget.
 constexpr int k_max_new = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
-// optionally lowered — never raised — by the caller's session n_ctx knob. For
-// Fun-ASR-Nano dec_max_position_embeddings is the Qwen3 RoPE max (40960), huge
-// relative to any practical clip; grow-to-fit means we never allocate it all
-// at once, so using it as the ceiling matches the qwen3_asr reference exactly.
+// optionally lowered — never raised — by the caller's session n_ctx knob.
 int funasr_nano_context_ceiling(int32_t n_ctx_knob, const FunAsrNanoHParams & hp) {
     int ceiling = hp.dec_max_position_embeddings;
     if (n_ctx_knob > 0 && n_ctx_knob < ceiling) {
@@ -113,19 +108,9 @@ int funasr_nano_context_ceiling(int32_t n_ctx_knob, const FunAsrNanoHParams & hp
 
 // Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
 // audio tokens plus a representative prompt and the generation reserve fit
-// the context ceiling. The audio-token count is a deterministic function of
-// sample count:
-//   T_frames    = 1 + floor((N - win) / hop)                  ~ N/hop
-//   T_lfr       = ceil(T_frames / lfr_n)                       ~ T_frames/lfr_n
-//   audio_tokens = fake_token_len(T_lfr) (3 stride-2 folds)    ~ T_lfr/8
-// so audio_tokens ≈ N / (hop * lfr_n * 8). Inverting:
-//   ms ≈ audio_tokens * 8 * lfr_n * hop * 1000 / sr.
-// Returns 0 ("unknown / unbounded") if the rate constants are missing. Note:
-// the ceiling (40960) is huge, so the number is large and honest — within it,
-// a long transcript can still truncate at the generation budget
-// (transcribe_was_truncated). We report it as-is (no 1-hour cap); a fully
-// dense clip near the ceiling is not physically reachable from real audio, so
-// capping the report would only hide the honest derived value.
+// the context ceiling. audio_tokens ≈ N / (hop * lfr_n * folds), so
+// ms ≈ audio_tokens * folds * lfr_n * hop * 1000 / sr. Returns 0
+// ("unknown / unbounded") if the rate constants are missing.
 int64_t funasr_nano_max_audio_ms(const FunAsrNanoHParams & hp) {
     if (hp.dec_max_position_embeddings <= 0 ||
         hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0 ||
@@ -138,8 +123,6 @@ int64_t funasr_nano_max_audio_ms(const FunAsrNanoHParams & hp) {
     if (max_audio_tokens <= 0) {
         return 0;
     }
-    // audio_tokens ≈ T_lfr / 8 ; T_lfr ≈ T_frames / lfr_n ; T_frames ≈ N / hop
-    //   => N ≈ audio_tokens * 8 * lfr_n * hop ; ms = N * 1000 / sr.
     const int folds = hp.adaptor_use_low_frame_rate ? 8 : 1;
     const int64_t samples = static_cast<int64_t>(max_audio_tokens) *
                             folds * hp.fe_lfr_n * hp.fe_hop_length;
@@ -340,8 +323,6 @@ transcribe_status load(
         m->limits.model_max_ctx   = m->hparams.dec_max_position_embeddings;
         m->limits.prompt_overhead = 48;
         m->limits.gen_reserve     = k_max_new;
-        // audio_tokens ≈ N / (hop * lfr_n * folds) ; ms = N * 1000 / sr
-        //   => ms per audio token = folds * lfr_n * hop * 1000 / sr
         m->limits.ms_per_audio_token =
             static_cast<double>(folds) * m->hparams.fe_lfr_n *
             m->hparams.fe_hop_length * 1000.0 / m->hparams.fe_sample_rate;
@@ -366,7 +347,7 @@ transcribe_status load(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Stage 2: reopen with no_alloc to bind the tensor catalog.
+    // Reopen with no_alloc to bind the tensor catalog.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -705,8 +686,9 @@ transcribe_status run(
     // Generic transcribe_run_params::itn routes here. DEFAULT maps to the
     // family's shipping default (use_itn=false; matches the upstream
     // `itn=False` Python path). OFF / ON override explicitly. The
-    // dispatcher's advisory WARN only fires when supports_itn == false;
-    // funasr_nano advertises supports_itn = true, so no WARN here.
+    // dispatcher's advisory WARN only fires when transcribe_model_supports(
+    // model, TRANSCRIBE_FEATURE_ITN) is false; funasr_nano sets
+    // TRANSCRIBE_FEATURE_ITN so the probe returns true and no WARN here.
     bool use_itn = false;
     if (params != nullptr) {
         switch (params->itn) {
@@ -752,9 +734,7 @@ transcribe_status run(
     // Size to hold the prompt plus the generation budget, rounded up to a
     // power of two (the step graph's attention width wants pow2 for the fast
     // flash-attn path). The cache grows across runs as audio length demands;
-    // a pre-allocated smaller cache is freed and re-allocated. For typical
-    // short clips this is the same 1024/2048 width as the prior fixed cache,
-    // so the decode is unchanged — only previously-walled long clips now fit.
+    // a pre-allocated smaller cache is freed and re-allocated.
     int want_n_ctx = 1024;
     while (want_n_ctx < T_prompt + k_max_new) want_n_ctx *= 2;
     if (want_n_ctx > ceiling) want_n_ctx = ceiling;
@@ -898,13 +878,12 @@ transcribe_status run(
 
     // ---- Step loop ----
     const int32_t eos_id = hp.eos_token_id;
-    const int max_new = k_max_new;  // matches the per-run generation budget
+    const int max_new = k_max_new;
     int cur_past = T_prompt;
 
     // Static step-graph shape: T_prompt prefilled + up to max_new generated.
     // Clamp to cc->kv_cache.n_ctx (the grown cache size) so the attention
-    // width never exceeds the allocation. For typical short clips this is the
-    // same 1024/2048 width as before — decode numerics are unchanged.
+    // width never exceeds the allocation.
     int max_n_kv = 1024;
     while (max_n_kv < T_prompt + max_new) max_n_kv *= 2;
     if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
@@ -938,16 +917,8 @@ transcribe_status run(
     const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
     std::vector<ggml_fp16_t> step_mask(max_n_kv, mask_neg_inf);
 
-    // Mid-generation logits dump. The reference dumper captures
-    // `lm_head_h.values[8]` — the 9th lm_head call (0-indexed, where
-    // call 0 is the prefill pass). In our step loop, the 9th lm_head
-    // call corresponds to iter 7 of the loop (prefill = 1st call,
-    // iter K = (K+2)th call), so we dump when n_steps == 7. Misnamed
-    // historically as gen_dump_step=8 — that captured the 10th call
-    // and produced an off-by-one against the reference; the bug
-    // happened to pass nano's tolerances because nano's adjacent-step
-    // logits are similar in magnitude, but blew up on MLT where the
-    // tied-lm_head distribution is heavily shifted.
+    // Mid-generation logits dump. The reference captures the 9th lm_head call
+    // (prefill = 1st call, iter K = (K+2)th call), so dump when n_steps == 7.
     const int gen_dump_step = 7;
     int n_steps = 0;
     while (next_tok != eos_id &&
@@ -985,12 +956,6 @@ transcribe_status run(
         next_tok = argmax_tok;
         generated_ids.push_back(next_tok);
 
-        // Mid-generation tensor coverage: `dec.logits_raw.gen8` is the
-        // logits for the 9th lm_head call (= step 8 of our step loop,
-        // when we've already emitted prefill + 7 generated tokens and
-        // are emitting the 8th from gen step 8). The reference dumper
-        // calls this same tensor `dec.logits_raw.gen8`; capture here so
-        // validate.py can compare the n_past>0 step-graph code path.
         if (n_steps == gen_dump_step && transcribe::debug::enabled()) {
             try_dump("dec.logits_raw.gen8", sb.logits, "decoder.logits.gen8");
         }

@@ -1,20 +1,12 @@
 // transcribe-log.h - internal printf-style logging facility.
 //
 // Routes a formatted message through the process-global log callback
-// installed via transcribe_log_set(), falling back to stderr when no
-// callback is installed (so dev / CLI builds still see the diagnostic).
-//
-// This is the supported way for library internals — including per-family
-// run() drivers in src/arch/<family>/ — to surface diagnostics. Family
-// code must NOT call std::fprintf(stderr, ...) directly for user-facing
-// conditions: a consumer that installed a log sink would never see those
-// messages. In particular the input-length contract (input-too-long
-// rejection, mid-decode truncation, soft-window degradation; see
-// docs/input-limits.md) is surfaced through here so it reaches the
-// caller's sink at the right level.
-//
-// The implementation lives in transcribe.cpp alongside the callback
-// globals it reads.
+// installed via transcribe_log_set(), falling back to stderr when none is
+// installed. This is the supported way for library internals (including
+// per-family run() drivers) to surface diagnostics; family code must NOT
+// call std::fprintf(stderr, ...) directly, or a consumer's log sink would
+// never see the message. The implementation lives in transcribe.cpp
+// alongside the callback globals it reads.
 
 #pragma once
 

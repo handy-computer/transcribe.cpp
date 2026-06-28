@@ -8,7 +8,7 @@
 //
 //   enc.*  Conformer encoder (16 layers, hidden=1024) — same block as
 //          the AR granite encoder, plus an extra `enc.ctc_bpe.*` head
-//          (1024 -> 100353) used for the initial BPE CTC hypothesis.
+//          used for the initial BPE CTC hypothesis.
 //   prj.*  EncoderProjectorQFormer:
 //             - 4 per-encoder-layer LayerNorms (one per layer index in
 //               encoder_layer_indices, e.g. [4, 8, 12, -1])
@@ -36,9 +36,7 @@ struct ggml_tensor;
 
 namespace transcribe::granite_nar {
 
-// ---------------------------------------------------------------------------
 // Hyperparameters
-// ---------------------------------------------------------------------------
 
 struct GraniteNarHParams {
     // Encoder
@@ -130,9 +128,7 @@ struct GraniteNarHParams {
 transcribe_status read_granite_nar_hparams(const gguf_context * gguf,
                                            GraniteNarHParams &  hp);
 
-// ---------------------------------------------------------------------------
 // Weight slots
-// ---------------------------------------------------------------------------
 
 struct GraniteNarEncTop {
     ggml_tensor * input_linear_w = nullptr;
@@ -141,7 +137,7 @@ struct GraniteNarEncTop {
     ggml_tensor * ctc_proj_b     = nullptr;
     ggml_tensor * ctc_bypass_w   = nullptr;  // 348 -> 1024 (out_mid)
     ggml_tensor * ctc_bypass_b   = nullptr;
-    ggml_tensor * ctc_bpe_w      = nullptr;  // 1024 -> 100353 (NLE-only)
+    ggml_tensor * ctc_bpe_w      = nullptr;  // 1024 -> bpe_output_dim
     ggml_tensor * ctc_bpe_b      = nullptr;
 };
 

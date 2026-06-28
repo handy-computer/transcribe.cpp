@@ -6,14 +6,9 @@
 // models and samples. Progress lines go to stderr; the JSON goes
 // to --json-out (or stdout if omitted).
 //
-// Schema version: "transcribe-bench-v2".
-//
-// v2 changes from v1:
-//   - "rtf_mean" replaced by "rtf_wall_mean" (wall-clock RTF) and
-//     "rtf_compute_mean" (phase-timer sum RTF). Wall is the
-//     user-visible number; compute is for backward compat.
-//
-// The Python driver accepts both v1 and v2 schemas.
+// Schema version: "transcribe-bench-v2". Reports "rtf_wall_mean"
+// (wall-clock RTF, the user-visible number) and "rtf_compute_mean"
+// (phase-timer sum RTF). The Python driver accepts both v1 and v2 schemas.
 
 #include "transcribe.h"
 #include "wav.h"
@@ -198,7 +193,6 @@ int main(int argc, char ** argv) {
     if (args.quiet) transcribe_log_set(nullptr, nullptr);
     const bool quiet = args.quiet;
 
-    // Load WAV.
     if (!quiet) std::fprintf(stderr, "loading sample %s\n", args.sample_path.c_str());
     std::vector<float> pcm;
     std::string        wav_err;
@@ -225,7 +219,6 @@ int main(int argc, char ** argv) {
     const char * backend_c = transcribe_model_backend(model);
     const std::string backend = (backend_c && *backend_c) ? backend_c : "unknown";
 
-    // Init context.
     struct transcribe_session_params cp; transcribe_session_params_init(&cp);
     cp.n_threads = args.n_threads;
     struct transcribe_session * ctx = nullptr;

@@ -1,14 +1,8 @@
 // arch/canary/model.cpp - Canary multitask AED family handler.
 //
 // Load / init_context / run lifecycle for the four canary variants
-// (180m-flash, 1b-flash, 1b-v2, 1b). Encoder is FastConformer in the
-// parakeet shape, but unlike parakeet every linear (Q/K/V/out, both
-// macaron FFs, attention-pos projection, conv pointwise pair) carries
-// a bias term — see weights.cpp for the full set. Decoder is an
-// autoregressive Transformer (cohere-shape, but with canary-specific
-// tensor names and an UNTIED LM head). The multitask prompt is a
-// 4-slot or 5-slot positional sequence read from the GGUF's
-// stt.canary.special.* / stt.canary.tokenizer.prompt_format KV.
+// (180m-flash, 1b-flash, 1b-v2, 1b): FastConformer encoder + autoregressive
+// Transformer decoder, driven by a 4/5-slot multitask prompt.
 
 #include "canary.h"
 
@@ -220,43 +214,18 @@ namespace {
 
 constexpr float kBnEps = 1e-5f;
 
-// ---------------------------------------------------------------------------
-// Input-length contract (see docs/input-limits.md). Canary is the same
-// shape as cohere ASR: a FastConformer encoder feeding an autoregressive
-// Transformer decoder, with TWO distinct limits:
-//
-//   (a) INPUT limit — the encoder's relative positional-encoding table
-//       (enc_pos_emb_max_len, 5000 encoder frames for every shipped
-//       checkpoint). Like cohere (and unlike parakeet's unbounded
-//       conformer), encode_positions() is generated at the subsampled
-//       sequence length T_enc, so T_enc must stay within the trained
-//       pos-emb span or the runtime-generated table aliases past the
-//       trained range. T_enc is a deterministic function of mel frames,
-//       so this is the binding INPUT bound and it is gated up front,
-//       before the encoder graph is built. For the shipped rate
-//       (5000 frames * subsampling 8 * hop 160 / 16 kHz) that is ~400 s.
-//
-//   (b) DECODER self-KV — dec_max_position (512 on canary-1b, 1024 on the
-//       flash / v2 variants) bounds prompt + transcript tokens, and a
-//       512 max-new-tokens cap bounds generation. These bound the
-//       *output*: a transcript that runs long enough to exhaust the budget
-//       is kept as a partial result and flagged via
-//       transcribe_was_truncated(), not rejected. The prompt is only
-//       ~5-9 tokens, so this is an output-length wall, not an audio-length
-//       one — a 60 s clip of dense speech can hit it while a 300 s clip of
-//       sparse speech does not.
-//
-// The encoder is the input limit, so transcribe_capabilities::max_audio_ms
-// is derived from (a); (b) is surfaced as the truncation flag.
-// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Two limits:
+//   (a) INPUT — the encoder rel-pos table (enc_pos_emb_max_len, ~400 s).
+//       T_enc must stay within it or the runtime table aliases past the
+//       trained range; gated up front. Drives max_audio_ms.
+//   (b) DECODER self-KV (dec_max_position) + 512 max-new cap bound the
+//       OUTPUT length; an overrun is kept as a partial and flagged via
+//       transcribe_was_truncated(), not rejected.
 
 // Predicted encoder frame count T_enc for a given mel frame count. The
-// FastConformer pre-encode downsamples time by enc_subsampling_factor via
-// stride-2, kernel-3, pad-1 convs; each stage maps T_in -> floor((T_in-1)/2)+1.
-// We fold that exact per-stage recurrence so the prediction matches the
-// graph's T_enc (the net result is floor(T_mel / subsampling_factor)). This
-// is a pure host-side count; it touches no graph math. Mirrors cohere's
-// cohere_predict_t_enc.
+// FastConformer pre-encode downsamples time via stride-2, kernel-3, pad-1
+// convs; each stage maps T_in -> floor((T_in-1)/2)+1. We fold that exact
+// per-stage recurrence so the prediction matches the graph's T_enc.
 int canary_predict_t_enc(int mel_n_frames, int subsampling_factor) {
     if (mel_n_frames <= 0 || subsampling_factor <= 0) {
         return 0;
@@ -281,17 +250,11 @@ int canary_predict_t_enc(int mel_n_frames, int subsampling_factor) {
     return t;
 }
 
-// Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
-// encoder frame count T_enc still fits the trained positional-encoding span
-// enc_pos_emb_max_len. Inverts the rate:
-//   T_enc       = mel_frames / subsampling_factor
-//   mel_frames  = ms * sample_rate / (hop_length * 1000)
-//   => ms       = T_enc * subsampling_factor * hop_length * 1000 / sr
-// at T_enc == enc_pos_emb_max_len. Returns 0 ("unknown / unbounded") if any
-// rate hparam is missing, so a misconfigured model is never advertised with
-// a wrong finite number. The decoder self-KV / max-new cap bounds the
-// OUTPUT, not the input, so it does not enter this figure (a long-but-fitting
-// clip may still truncate its transcript — see transcribe_was_truncated).
+// Advisory max_audio_ms: longest audio whose T_enc still fits
+// enc_pos_emb_max_len, inverting the rate
+//   ms = T_enc * subsampling_factor * hop_length * 1000 / sr
+// at T_enc == enc_pos_emb_max_len. Returns 0 (unknown) if any rate hparam
+// is missing, so a misconfigured model is never advertised with a wrong number.
 int64_t canary_max_audio_ms(const CanaryHParams & hp) {
     if (hp.enc_pos_emb_max_len <= 0 || hp.enc_subsampling_factor <= 0 ||
         hp.fe_hop_length <= 0 || hp.fe_sample_rate <= 0) {
@@ -302,10 +265,8 @@ int64_t canary_max_audio_ms(const CanaryHParams & hp) {
     return mel_frames * hp.fe_hop_length * 1000 / hp.fe_sample_rate;
 }
 
-// Effective decoder self-KV ceiling, in tokens: the model's trained
-// dec_max_position, optionally lowered — never raised — by the caller's
-// session n_ctx knob. Used to size / clamp the autoregressive self-KV cache
-// and bound generation. Mirrors cohere's cohere_dec_ctx_ceiling.
+// Effective decoder self-KV ceiling, in tokens: dec_max_position, optionally
+// lowered — never raised — by the caller's session n_ctx knob.
 int canary_context_ceiling(int32_t n_ctx_knob, const CanaryHParams & hp) {
     int ceiling = hp.dec_max_position > 0 ? hp.dec_max_position : 1024;
     if (n_ctx_knob > 0 && n_ctx_knob < ceiling) {
@@ -432,22 +393,14 @@ transcribe_status load(
         return st;
     }
 
-    // Publish the input-length ceiling now that the encoder positional-
-    // encoding span and frontend rate are known (apply_family_invariants
-    // ran before the hparams were read, so it could not set this). The
-    // encoder is the binding INPUT limit for canary — see canary_max_audio_ms
-    // above and docs/input-limits.md.
+    // Publish the input-length ceiling now that the encoder positional span
+    // and frontend rate are known (apply_family_invariants ran before the
+    // hparams were read). The encoder is the binding INPUT limit for canary.
     m->caps.max_audio_ms = canary_max_audio_ms(m->hparams);
 
-    // Basis for the session-level limits query (transcribe_session_get_limits).
-    // Canary's INPUT bound is the ENCODER positional table (enc_pos_emb_max_len,
-    // ~400 s — see canary_max_audio_ms), not the decoder context: the decoder
-    // emits text tokens, so audio never consumes decoder context, and
-    // dec_max_position only bounds transcript LENGTH (surfaced via
-    // TRANSCRIBE_ERR_OUTPUT_TRUNCATED). So audio_from_caps = true keeps
-    // effective_max_audio_ms pinned to the encoder bound regardless of n_ctx,
-    // while effective_n_ctx / max_kv_bytes still reflect the decoder self-KV
-    // (which n_ctx does lower). Same shape as cohere. See docs/input-limits.md.
+    // Basis for transcribe_session_get_limits. audio_from_caps = true pins
+    // effective_max_audio_ms to the encoder bound regardless of n_ctx; the
+    // decoder self-KV (which n_ctx does lower) only bounds transcript length.
     if (m->hparams.dec_max_position > 0) {
         m->limits.has_context_cap = true;
         m->limits.audio_from_caps = true;
@@ -606,9 +559,8 @@ transcribe_status init_context(
     cc->model     = model;
     cc->n_threads = params->n_threads;
     cc->kv_type   = params->kv_type;
-    // Cache the caller's n_ctx knob. For canary this lowers the DECODER
-    // self-KV ceiling (dec_max_position); it does not affect the encoder
-    // input limit. See canary_context_ceiling and docs/input-limits.md.
+    // Cache the caller's n_ctx knob. For canary this lowers the decoder
+    // self-KV ceiling only; it does not affect the encoder input limit.
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
     auto * cm = static_cast<CanaryModel *>(model);
@@ -625,37 +577,19 @@ transcribe_status init_context(
     return TRANSCRIBE_OK;
 }
 
-// Build the multitask prompt token sequence.
-//
-// canary  (4-slot, used by canary-1b):
-//   <|startoftranscript|> <|src_lang|> <|task|> <|target_lang|> <|nopnc|or|pnc|>
-//
-// canary2 (5-slot, used by canary-1b-flash, canary-1b-v2, canary-180m-flash):
-//   <|startofcontext|> <|startoftranscript|> <|src_lang|> <|target_lang|>
-//   <|task|> <|pnc|or|nopnc|> <|notimestamp|or|timestamp|>
-//
-// The actual prompt format used by NeMo is determined by the model's
-// CanaryTokenizer / CanaryBPETokenizer implementation. For v1 we
-// hardcode pnc=yes and timestamps=no (the first port focuses on
-// transcription correctness; pnc/timestamp toggles land in a follow-up).
-//
-// Each slot's value is selected from the GGUF's stt.canary.special.*_id
-// catalog at load time. Returns the assembled prompt or an empty
-// vector + error message if any required slot is missing for the
-// detected variant.
+// Build the multitask prompt token sequence. Each slot's value comes from the
+// GGUF's stt.canary.special.*_id catalog; returns {} if a required slot is
+// missing. itn / timestamp / diarize are hardwired off; only pnc is toggleable.
+
+// canary-1 (4-slot), task token explicit:
+//   <|startoftranscript|> <|src_lang|> <|task|> <|target_lang|> <|pnc|>
+// <|task|> is <|translate|> when src != tgt (and available), else <|transcribe|>.
 std::vector<int32_t> build_prompt_canary(const CanaryHParams & hp,
                                          int                   src_lang_id,
                                          int                   tgt_lang_id,
                                          const char *          task,
                                          bool                  pnc)
 {
-    // canary-1 5-slot prompt template (from
-    // nemo.collections.common.prompts.canary.CanaryPromptFormatter):
-    //   <|startoftranscript|> <|source_lang|> <|task|> <|target_lang|> <|pnc|>
-    // where <|task|> is one of <|transcribe|> / <|translate|> (canary-1
-    // ships explicit task tokens, unlike canary2 which infers from
-    // src/tgt). We pick <|translate|> when src != tgt (and translate_id
-    // is available), else <|transcribe|>.
     std::vector<int32_t> ids;
     ids.reserve(8);
 
@@ -692,13 +626,10 @@ std::vector<int32_t> build_prompt_canary2(const CanaryModel &   cm,
                                           const char *          /*task*/,
                                           bool                  pnc)
 {
-    // canary2 prompt template (from nemo.collections.common.prompts.canary2):
+    // canary2 prompt template:
     //   <|startofcontext|> [decodercontext] <|startoftranscript|>
     //   <|emo:?|> <|src_lang|> <|tgt_lang|> <|pnc|> <|itn|> <|timestamp|> <|diarize|>
-    //
-    // For ASR with empty decoder context the realized sequence is 9
-    // tokens. itn / timestamp / diarize stay hardwired to their off
-    // tokens — only pnc is user-toggleable (see transcribe_run_params::pnc).
+    // ASR with empty decoder context realizes 9 tokens.
     std::vector<int32_t> ids;
     ids.reserve(9);
 
@@ -790,7 +721,7 @@ transcribe_status run(
 
     transcribe::debug::init();
 
-    // ----- Mel front-end -------------------------------------------
+    // Mel front-end.
     if (!cm->mel.has_value()) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "canary run: model has no MelFrontend");
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -809,16 +740,10 @@ transcribe_status run(
     }
     cc->t_mel_us = ggml_time_us() - t_mel_start;
 
-    // ----- Input-length gate (see docs/input-limits.md) -------------
-    // The encoder's relative positional-encoding table is the binding
-    // INPUT limit: encode_positions() is generated at the subsampled
-    // sequence length T_enc, so T_enc must stay within the trained span
-    // enc_pos_emb_max_len or the runtime pos table aliases past the
-    // trained range (silent out-of-bounds before this gate existed).
-    // T_enc is a deterministic function of mel_n_frames, so reject an
-    // over-length clip here — before the encoder graph is even built —
-    // rather than paying for a compute pass that cannot fit. The
-    // rejection goes through the log callback, not raw stderr.
+    // Input-length gate: T_enc must stay within enc_pos_emb_max_len or the
+    // runtime pos table aliases past the trained range. T_enc is a
+    // deterministic function of mel_n_frames, so reject an over-length clip
+    // here, before building the encoder graph.
     if (cm->hparams.enc_pos_emb_max_len > 0) {
         const int t_enc_pred = canary_predict_t_enc(
             mel_n_frames, cm->hparams.enc_subsampling_factor);
@@ -835,14 +760,14 @@ transcribe_status run(
         }
     }
 
-    // ----- Reset compute state --------------------------------------
+    // Reset compute state.
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
     }
     cc->encoder_out = nullptr;
 
-    // ----- Build encoder graph --------------------------------------
+    // Build encoder graph.
     {
         ggml_init_params init_params {};
         init_params.mem_size   = 8 * 1024 * 1024;
@@ -919,7 +844,6 @@ transcribe_status run(
         transcribe::debug::dump_tensor("enc.pos_emb", eb.pos_emb_in, "encoder.pos_emb");
     }
 
-    // Thread count.
     transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 
     const int64_t t_enc_start = ggml_time_us();
@@ -972,7 +896,7 @@ transcribe_status run(
     ggml_backend_tensor_get(eb.out, cc->enc_host.data(), 0,
                             cc->enc_host.size() * sizeof(float));
 
-    // ----- Build multitask prompt -----------------------------------
+    // Build multitask prompt.
     const char * lang = (params && params->language) ? params->language : "en";
     const bool is_translate =
         (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE);
@@ -1010,8 +934,9 @@ transcribe_status run(
     // model's shipped behavior (pnc=on; matches the upstream model card's
     // published WER numbers). OFF / ON override explicitly. Non-DEFAULT
     // requests have already passed the dispatcher's advisory-warn gate
-    // (which only warns when supports_pnc == false; canary advertises
-    // supports_pnc = true so no warn fires here).
+    // (which only warns when transcribe_model_supports(model,
+    // TRANSCRIBE_FEATURE_PNC) is false; canary sets TRANSCRIBE_FEATURE_PNC
+    // so the probe returns true and no warn fires here).
     bool pnc = true;
     if (params != nullptr) {
         switch (params->pnc) {
@@ -1037,7 +962,7 @@ transcribe_status run(
     }
     const int prompt_len = static_cast<int>(prompt_ids.size());
 
-    // ----- Init KV cache --------------------------------------------
+    // Init KV cache.
     {
         if (cc->kv_cache.buffer != nullptr && cc->kv_cache.T_enc != T_enc) {
             cc->kv_cache.free();
@@ -1099,7 +1024,7 @@ transcribe_status run(
         return nullptr;
     };
 
-    // ----- Cross-attention KV pre-compute ---------------------------
+    // Cross-attention KV pre-compute.
     const int64_t t_dec_start = ggml_time_us();
     {
         if (!new_compute_ctx(4 * 1024 * 1024)) {
@@ -1138,7 +1063,7 @@ transcribe_status run(
         cc->kv_cache.cross_populated = true;
     }
 
-    // ----- Prompt pass + autoregressive decode ---------------------
+    // Prompt pass + autoregressive decode.
     {
         if (!new_compute_ctx(4 * 1024 * 1024)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -1305,35 +1230,21 @@ transcribe_status run(
             cc->has_result  = true;
         };
 
-        // Two decoder loop variants; pick by primary backend kind.
-        //
-        //   GPU (Vulkan/Metal/CUDA/SYCL): build_step_graph — one static-
-        //     topology graph for the whole utterance. KV writes go via
-        //     ggml_set_rows at runtime kv_idx; flash-attn reads a fixed
-        //     max_n_kv window with a runtime mask. Removes per-step
-        //     graph_build + sched_alloc, which dominate dispatch overhead
-        //     on GPUs (~2 ms/tok on Vulkan-Renoir for canary-1b).
-        //
-        //   CPU (incl. accelerator host-memory backends): build_decoder_
-        //     graph_kv per step — n_kv grows with n_past, attention only
-        //     reads the populated prefix. CPU has no dispatch overhead
-        //     to amortize, so the static-graph bandwidth tax (reading
-        //     max_n_kv KV slots when avg n_past is ~25) is a net loss
-        //     on the deep-decoder variants.
-        //
-        // The prompt pass uses build_decoder_graph_kv on both paths
-        // (already executed above) — only the per-token loop branches.
+        // Two decoder loop variants, picked by primary backend kind:
+        //   GPU: build_step_graph — one static-topology graph reused for the
+        //     whole utterance, amortizing per-step graph_build + sched_alloc
+        //     dispatch overhead.
+        //   CPU: build_decoder_graph_kv per step — n_kv grows with n_past, so
+        //     no dispatch overhead to amortize and no static-graph bandwidth tax.
         const bool primary_is_gpu =
             cm->plan.primary_kind != transcribe::BackendKind::Cpu &&
             cm->plan.primary_kind != transcribe::BackendKind::Accel &&
             cm->plan.primary_kind != transcribe::BackendKind::Unknown;
 
         if (primary_is_gpu) {
-            // ---------- Static-graph step path (GPU) ----------
-            // max_n_kv: pad to next power of two with a 1024 floor.
-            // Vulkan/Metal flash-attn dispatches faster on pow2 ne[1]
-            // (~30% on M4 Max per qwen3_asr); the slight bandwidth cost
-            // is amortized by removing per-step graph_build + sched_alloc.
+            // Static-graph step path (GPU). max_n_kv: pad to next power of two
+            // with a 1024 floor — Vulkan/Metal flash-attn dispatches ~30%
+            // faster on pow2 ne[1].
             int max_n_kv = 1024;
             while (max_n_kv < prompt_len + max_tokens) max_n_kv *= 2;
             if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
@@ -1413,9 +1324,8 @@ transcribe_status run(
                 if (next_token != eos_id) generated_ids.push_back(next_token);
             }
         } else {
-            // ---------- Dynamic-graph step path (CPU) ----------
-            // Reserve the worst-case step graph so per-step alloc_graph
-            // doesn't grow the scheduler's memory pool.
+            // Dynamic-graph step path (CPU). Reserve the worst-case step graph
+            // so per-step alloc_graph doesn't grow the scheduler's memory pool.
             if (new_compute_ctx(4 * 1024 * 1024)) {
                 const int worst_n_past = cc->kv_cache.n_ctx - 1;
                 DecoderBuild db_reserve = build_decoder_graph_kv(
@@ -1477,16 +1387,10 @@ transcribe_status run(
             }
         }
 
-        // The decode stopped either at EOS (complete) or at the generation
-        // cap / KV ceiling (truncated). Both step paths above share the same
-        // exit condition: the loop runs while `next_token != eos_id`, so a
-        // post-loop `next_token != eos_id` means it hit max_tokens / KV-full
-        // / a compute break without ever emitting end-of-stream. Surface that
-        // via transcribe_was_truncated() and a WARN rather than handing back
-        // a silently shortened transcript. A clean EOS decode leaves the flag
-        // false. See docs/input-limits.md. (The abort paths return early with
-        // a partial result and intentionally do NOT set the flag — abort is a
-        // caller-initiated stop, not a length truncation.)
+        // A post-loop next_token != eos_id means the decode hit max_tokens /
+        // KV-full / a compute break without end-of-stream: flag truncation and
+        // WARN rather than silently shortening. (Abort paths return early and
+        // intentionally do NOT set the flag — abort is not a length truncation.)
         if (next_token != eos_id) {
             cc->was_truncated = true;
             transcribe::log_msg(
@@ -1500,18 +1404,15 @@ transcribe_status run(
         commit_result();
     }
 
-    // The partial transcript is committed by commit_result() above; a truncated
-    // decode returns the hard OUTPUT_TRUNCATED status (the result stays
-    // readable, like an aborted run). See docs/input-limits.md.
+    // Partial transcript committed above; a truncated decode returns the hard
+    // OUTPUT_TRUNCATED status (the result stays readable, like an aborted run).
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
                              : TRANSCRIBE_OK;
 }
 
 // ===========================================================================
-// Offline batched decode (transcribe_run_batch). Mirrors src/arch/cohere.
-// Encoder stays serial per utterance (compute-bound); mel parallel; the
-// autoregressive decode (self + cross attention) is batched. See
-// docs/batching-autoregressive-plan.md.
+// Offline batched decode (transcribe_run_batch). Encoder stays serial per
+// utterance (compute-bound); mel parallel; the autoregressive decode is batched.
 // ===========================================================================
 
 // Encoder for one utterance from a precomputed mel buffer → host [hidden, T_enc].
@@ -1644,7 +1545,7 @@ transcribe_status run_batch(
     const int hidden  = hp.dec_d_model;
     const int n_layer = hp.dec_n_layers;
 
-    // ----- Shared multitask prompt (identical across the batch) -----
+    // Shared multitask prompt (identical across the batch).
     const char * lang = (params && params->language) ? params->language : "en";
     const bool is_translate =
         (params != nullptr && params->task == TRANSCRIBE_TASK_TRANSLATE);
@@ -1667,7 +1568,7 @@ transcribe_status run_batch(
     if (prompt_ids.empty()) return TRANSCRIBE_ERR_INVALID_ARG;
     const int prompt_len = static_cast<int>(prompt_ids.size());
 
-    // ----- Pass 0: parallel mel -----
+    // Pass 0: parallel mel.
     std::vector<char> valid(n, 0);
     std::vector<std::vector<float>> mel_bufs(n);
     std::vector<int> mel_nf(n, 0);
@@ -1685,12 +1586,9 @@ transcribe_status run_batch(
     });
     mel_us += ggml_time_us() - t_mel0;
 
-    // ----- Pass 1: serial per-utterance encoder -----
-    // Per-utterance input-length gate (same binding limit as run(): the
-    // encoder positional-encoding span enc_pos_emb_max_len). An over-length
-    // utterance is marked invalid with INPUT_TOO_LONG so the rest of the
-    // batch still decodes, mirroring how an encode failure drops one row.
-    // See docs/input-limits.md.
+    // Pass 1: serial per-utterance encoder. Per-utterance input-length gate
+    // (same enc_pos_emb_max_len limit as run()); an over-length utterance is
+    // marked invalid with INPUT_TOO_LONG so the rest of the batch still decodes.
     std::vector<transcribe_status> reject_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<float>> enc_hosts(n);
     std::vector<int> T_enc(n, 0);
@@ -1728,7 +1626,7 @@ transcribe_status run_batch(
         return TRANSCRIBE_OK;
     }
 
-    // ----- Batched KV cache -----
+    // Batched KV cache.
     const int max_new = 512;
     int max_n_kv = 1024;
     while (max_n_kv < prompt_len + max_new) max_n_kv *= 2;
@@ -1769,7 +1667,7 @@ transcribe_status run_batch(
 
     const int64_t t_dec0 = ggml_time_us();
 
-    // ----- Batched cross-attention K/V -----
+    // Batched cross-attention K/V.
     {
         if (!new_compute_ctx(8 * 1024 * 1024)) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -1801,12 +1699,10 @@ transcribe_status run_batch(
         cc->kv_cache.cross_populated = true;
     }
 
-    // ----- Batched step graph with a GROWING self-attention window -----
-    // Self-KV holds only the short prompt + transcript (audio is in cross-KV),
-    // so the static n_ctx read is mostly empty for short clips. Start the read
-    // window at 64 and double it as n_past advances (rebuild graph + widen
-    // mask, O(log) rebuilds; KV cache persists). Cache capacity (max_n_kv)
-    // unchanged. See docs/batching-autoregressive-plan.md.
+    // Batched step graph with a GROWING self-attention window. Self-KV holds
+    // only the short prompt + transcript (audio is in cross-KV), so start the
+    // read window at 64 and double it as n_past advances (rebuild graph + widen
+    // mask, O(log) rebuilds; KV cache persists, capacity max_n_kv unchanged).
     const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
     const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-INFINITY);
     const int32_t eos_id = hp.eos_token_id;
@@ -1852,7 +1748,7 @@ transcribe_status run_batch(
     }
     const int64_t dec_us = ggml_time_us() - t_dec0;
 
-    // ----- Capture (strip control tokens like serial commit_result) -----
+    // Capture (strip control tokens like serial commit_result).
     const bool strip = (params == nullptr) ? true : !params->keep_special_tags;
     const int valid_count = std::max(1, static_cast<int>(
         std::count(valid.begin(), valid.end(), char(1))));

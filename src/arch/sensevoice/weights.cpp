@@ -1,12 +1,5 @@
 // arch/sensevoice/weights.cpp - read_sensevoice_hparams +
 // build_sensevoice_weights.
-//
-// Pattern mirrors src/arch/parakeet/weights.cpp:
-//   - read every required hparam from KV explicitly,
-//   - build the tensor catalog as get_tensor() calls with explicit
-//     expected shapes,
-//   - missing tensor or shape mismatch → TRANSCRIBE_ERR_GGUF with a
-//     log naming the offending tensor.
 
 #include "weights.h"
 
@@ -207,9 +200,8 @@ transcribe_status load_block(ggml_context *      ctx_meta,
         std::snprintf(buf, sizeof(buf), "%s.%s", prefix, suffix);
         return buf;
     };
-    // Reserve a second buffer for callers that need two names live in
-    // the same expression. We dispatch through copies into local
-    // std::strings to dodge buffer reuse.
+    // Names are built as local std::strings so two can be live in one
+    // expression without the single `buf` aliasing.
     std::string name_norm_attn_w = std::string(prefix) + ".norm_attn.weight";
     std::string name_norm_attn_b = std::string(prefix) + ".norm_attn.bias";
     std::string name_qkv_w       = std::string(prefix) + ".attn.qkv.weight";
@@ -243,7 +235,7 @@ transcribe_status load_block(ggml_context *      ctx_meta,
     GET_F32(b.ffn_fc1_b,   name_fc1_b.c_str(),       d_ff);
     GET_LIN(b.ffn_fc2_w,   name_fc2_w.c_str(),       d_ff, d_model);
     GET_F32(b.ffn_fc2_b,   name_fc2_b.c_str(),       d_model);
-    (void)namef; // currently unused; left for future per-block helpers.
+    (void)namef;
     return TRANSCRIBE_OK;
 }
 

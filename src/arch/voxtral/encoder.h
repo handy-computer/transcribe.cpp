@@ -49,14 +49,12 @@ EncoderBuild build_encoder_graph(ggml_context *         ctx,
                                  int                    n_mel_frames,
                                  bool                   use_flash);
 
-// Batched encoder+projector: process `n_chunks` equal-length 30 s chunks
-// at once (batch on ne[2]). mel_in is [n_mels, n_mel_frames, n_chunks];
-// out (proj.out) is [dec_hidden, n_audio_tokens, n_chunks]. Each chunk is
-// an independent forward pass sharing weights, so chunk b is numerically
-// identical to the single-chunk build_encoder_graph on chunk b (the batch
-// parity gate relies on this). Requires use_flash (no batched manual-GQA
-// path); the caller falls back to per-chunk when flash is off. No dump
-// hooks — the batch fast path never runs under debug dumps.
+// Batched encoder+projector: process `n_chunks` equal-length 30 s chunks at once
+// (batch on ne[2]). mel_in is [n_mels, n_mel_frames, n_chunks]; out (proj.out) is
+// [dec_hidden, n_audio_tokens, n_chunks]. Each chunk is an independent forward
+// pass sharing weights, so chunk b is numerically identical to the single-chunk
+// build_encoder_graph. Requires use_flash (no batched manual-GQA path); the
+// caller falls back to per-chunk when flash is off. No dump hooks.
 EncoderBuild build_encoder_graph_batched(ggml_context *         ctx,
                                          const VoxtralWeights & weights,
                                          const VoxtralHParams & hp,

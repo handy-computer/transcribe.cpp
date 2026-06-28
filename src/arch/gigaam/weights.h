@@ -18,7 +18,7 @@
 //   - Frontend: htk mel scale, no slaney norm. `frontend.mel_filterbank`
 //     (shape [n_mels=64, n_freq_bins=161]) and `frontend.window`
 //     (length 320, Hann periodic) are baked into the GGUF — the C++
-//     loader holds borrowed pointers and the M3 mel path reads them
+//     loader holds borrowed pointers and the mel path reads them
 //     directly.
 
 #pragma once

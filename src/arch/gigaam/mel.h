@@ -17,15 +17,10 @@ namespace transcribe::gigaam {
 struct GigaamHParams;
 struct GigaamWeights;
 
-// Load the baked HTK mel filterbank + periodic Hann window from the
-// GGUF at load time. hp drives the scalar shape parameters.
-//
-// The filterbank and window are emitted by the converter from the
-// upstream torchaudio state_dict (`preprocessor.featurizer.0.*`), so
-// the C++ MelFrontend uses bit-identical buffers — recomputing them
-// from htk_hz_to_mel / Hann formulas drifts at high-freq bins because
-// torchaudio uses Float32 throughout while a C++ recomputation in
-// fp64 produces slightly different bin boundaries.
+// Loads the HTK mel filterbank + periodic Hann window baked into the GGUF at
+// load time (hp drives the scalar shapes). We use the baked buffers rather than
+// recomputing from htk_hz_to_mel / Hann: torchaudio uses Float32 throughout, so
+// an fp64 C++ recomputation drifts at high-freq bin boundaries.
 struct GigaamMelFrontend {
     int n_freq;                       // n_fft/2 + 1
     int n_mels;

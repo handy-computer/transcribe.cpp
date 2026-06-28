@@ -281,8 +281,7 @@ int main(int /*argc*/, char ** /*argv*/) {
     // Streaming parity across a range of chunk sizes. 1 ms is a
     // pathological "every PCM sample basically gets its own feed"
     // case; the others cover typical end-user buffer sizes. Throttle
-    // = 0 means decode on every advance (matches Phase 4b-full v0
-    // behavior).
+    // = 0 means decode on every advance.
     const int chunk_ms_choices[] = { 1, 20, 40, 80, 160, 500, 1000 };
     for (int chunk_ms : chunk_ms_choices) {
         const int chunk_samples = std::max(1, chunk_ms * 16000 / 1000);

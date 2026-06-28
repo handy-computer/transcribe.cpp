@@ -152,7 +152,7 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    // Public ABI sanity. After phase 4 step 1, backend is one of
+    // Public ABI sanity. After load, backend is one of
     // "metal" (Apple Silicon, default) or "cpu" (fallback). The
     // exact label depends on the build platform; we just assert
     // it's non-empty and one of the expected values.

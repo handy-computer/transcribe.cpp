@@ -5,13 +5,9 @@
 // qwen_asr.core.transformers_backend.modeling_qwen3_asr
 // .Qwen3ASRAudioEncoder.
 //
-// Attention note: the reference's transformers/eager path ignores
-// `cu_seqlens` and runs full bidirectional attention over the
-// pad-select-trimmed sequence. We match that (see
-// build_cu_seqlens_mask). vLLM's flash-attn-2 path honors
-// `cu_seqlens` to chunk at `n_window_infer`, but measurements show
-// the eager path has better LibriSpeech WER and that's the reference
-// we validate against.
+// Attention: we match the reference's eager full-bidirectional attention over
+// the pad-trimmed sequence (see build_cu_seqlens_mask), not vLLM's
+// cu_seqlens chunking.
 //
 // Shape conventions (ggml fast-to-slow ne[]):
 //
@@ -71,12 +67,9 @@ EncoderTiming compute_encoder_timing(int32_t n_mel_frames,
 std::vector<float> build_sinusoid_pe(int32_t d_model, int32_t length,
                                      double max_timescale = 10000.0);
 
-// Additive attention bias [T_enc, T_enc]. All zeros — full
-// bidirectional attention over the pad-trimmed sequence. Named
-// `build_cu_seqlens_mask` for history; the reference's `cu_seqlens`
-// block-diagonal pattern is only applied by vLLM's flash-attn-2
-// path, and measurements show the eager full-attention baseline has
-// better WER on LibriSpeech.
+// Additive attention bias [T_enc, T_enc]. All zeros — full bidirectional
+// attention over the pad-trimmed sequence (the eager baseline, not vLLM's
+// cu_seqlens block-diagonal pattern).
 std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t,
                                          const QwenAsrHParams & hp);
 

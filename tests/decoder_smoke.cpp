@@ -1,9 +1,8 @@
 // decoder_smoke.cpp - real-model gated end-to-end decoder accuracy test.
 //
-// Phase 5 + phase 6 acceptance gate. Loads a real Parakeet v2 GGUF,
-// runs the full pipeline (load → mel → encoder → predictor + joint
-// + TDT decode → result accessor population) on samples/jfk.wav, and
-// asserts:
+// Loads a real Parakeet v2 GGUF, runs the full pipeline (load → mel →
+// encoder → predictor + joint + TDT decode → result accessor population)
+// on samples/jfk.wav, and asserts:
 //
 //   1. transcribe_run completes OK on the canonical sample.
 //   2. transcribe_full_text matches the canonical JFK reference text

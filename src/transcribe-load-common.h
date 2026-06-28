@@ -1,23 +1,18 @@
 // transcribe-load-common.h - shared model-load scaffolding.
 //
-// INTERNAL. C++17. Consumed only from other .cpp files inside src/.
-// Not part of the public include/transcribe.h ABI.
+// INTERNAL, C++17. Not part of the public ABI.
 //
-// Every per-family load() walks the same three steps after the GGUF
-// catalog has been built:
+// Every per-family load() walks the same three steps after building the
+// GGUF catalog:
 //
 //   1. Resolve a BackendPlan from transcribe_model_load_params::backend.
-//      (See transcribe-backend.h for the plan type.)
-//   2. Allocate a backend buffer for every tensor in ctx_meta on the
-//      primary backend from the plan.
-//   3. Stream each tensor's bytes from the GGUF data section into
-//      its backend slot via ggml_backend_tensor_set.
+//   2. Allocate a backend buffer for every tensor in ctx_meta on the plan's
+//      primary backend.
+//   3. Stream each tensor's bytes from the GGUF data section into its
+//      backend slot via ggml_backend_tensor_set.
 //
-// Parakeet and Cohere had character-for-character copies of all
-// three steps, modulo a "parakeet:"/"cohere:" log prefix. This
-// header hoists them. Per-family `load()` still owns the model,
-// params validation, weights catalog, fusion passes, and destructor
-// wiring; what moves here is the uniform scaffolding in between.
+// These functions hoist that scaffolding; per-family load() still owns the
+// model, params validation, weights catalog, fusion, and destructor wiring.
 
 #pragma once
 
@@ -158,13 +153,8 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
 //
 // On success, `out` is resized and filled. On every other return
 // (including Absent), `out` is cleared so stale data cannot leak.
-// On any failure other than Absent, a diagnostic is printed to
-// stderr using `error_tag` and `tensor_name`.
-//
-// Introduced for the cohere frontend tensor path
-// (frontend.mel_filterbank / frontend.window), which previously used
-// an unchecked inline lambda that silently accepted non-F32 types,
-// didn't verify read counts, and had no expected-size bounds.
+// On any failure other than Absent, a diagnostic is logged using
+// `error_tag` and `tensor_name`.
 enum class ReadF32Result {
     Ok,       // tensor found, validated, and read successfully
     Absent,   // tensor not in the GGUF index (caller should compute)

@@ -1,29 +1,15 @@
 // arch/cohere/decoder.cpp - Cohere ASR Transformer decoder graph builder.
 //
-// Implements three graph builders:
+// Graph builders: build_decoder_graph (non-cached prompt pass, kept for
+// reference), build_cross_kv_graph (cross-attn K/V once per utterance),
+// build_decoder_graph_kv (KV-cached, both prompt and step passes), plus the
+// static-topology step graphs.
 //
-// 1. build_decoder_graph() -- Original prompt-pass graph (no KV cache).
-//    Kept for reference/validation. Processes all tokens at once with
-//    a causal self-attention mask.
-//
-// 2. build_cross_kv_graph() -- Computes cross-attention K/V for all
-//    decoder layers from the encoder output. Run once per utterance.
-//    Writes into the cross-attention KV cache via ggml_cpy.
-//
-// 3. build_decoder_graph_kv() -- KV-cached decoder graph. Works for
-//    both prompt pass (n_tokens > 1) and step pass (n_tokens = 1).
-//    Reads/writes the self-attention KV cache; reads cross-attention
-//    KV cache.
-//
-// The decoder forward pass:
-//   1. Token embedding lookup + positional embedding lookup + LayerNorm
-//   2. For each layer:
-//      a. Pre-LN -> causal self-attention -> residual add
-//      b. Pre-LN -> cross-attention (encoder as K/V) -> residual add
-//      c. Pre-LN -> FFN (ReLU) -> residual add
-//   3. Final LayerNorm
-//   4. Linear projection (tied weight = token embedding^T) + bias
-//   5. Log-softmax
+// Decoder forward pass:
+//   1. token + positional embedding lookups + LayerNorm
+//   2. per layer: Pre-LN self-attn / cross-attn / FFN, each with residual add
+//   3. final LayerNorm
+//   4. tied LM head (token embedding^T) + bias + optional log-softmax
 
 #include "decoder.h"
 
@@ -197,10 +183,8 @@ ggml_tensor * mha_self_cached(
     Q = ggml_permute(ctx, Q, 0, 2, 1, 3);
     // Q is now [head_dim, n_tokens, n_heads, 1]
 
-    // Write new K/V into cache.
-    // Cache layout (flash_attn mode): K and V are stored contiguously
-    // per-layer as [hidden, n_ctx] (i.e., n_state elements per position).
-    // Layer il occupies offset il*n_ctx*hidden in the flat 1D buffer.
+    // Write new K/V into cache. Layout: per-layer [hidden, n_ctx] contiguous
+    // (n_state per position); layer il at flat offset il*n_ctx*hidden.
     {
         ggml_tensor * k_dst = ggml_view_1d(ctx, kv_cache.self_k,
             static_cast<int64_t>(n_tokens) * hidden,
@@ -234,26 +218,20 @@ ggml_tensor * mha_self_cached(
         ggml_element_size(kv_cache.self_v) * static_cast<size_t>(
             static_cast<int64_t>(il) * n_ctx * hidden));
 
-    // Attention. Flash path is fused; manual path is the usual
-    // mul_mat + soft_max_ext + mul_mat triple. See `mha` above for
-    // the shape argument.
+    // Flash path is fused; manual path is the mul_mat + soft_max_ext +
+    // mul_mat triple (see `mha` above for the shape walkthrough).
     ggml_tensor * o;
     if (use_flash) {
         o = ggml_flash_attn_ext(ctx, Q, K, V, mask, scale, 0.0f, 0.0f);
         o = ggml_reshape_2d(ctx, o, hidden, n_tokens);
     } else {
-        // K is [head_dim, n_kv, n_heads, 1] from the cache view.
-        // mul_mat(K, Q) -> [n_kv, n_tokens, n_heads, 1]
+        // Manual path — see `mha` for the shape walkthrough.
+        // K: [head_dim, n_kv, n_heads, 1]; V transposed for the value matmul.
         ggml_tensor * kq = ggml_mul_mat(ctx, K, Q);
         ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, mask,
                                                    scale, 0.0f);
-
-        // V is [head_dim, n_kv, n_heads, 1]; we need
-        //      [n_kv, head_dim, n_heads, 1] for the value matmul.
         ggml_tensor * v_t = ggml_cont(ctx,
                                        ggml_permute(ctx, V, 1, 0, 2, 3));
-
-        // attn_weights @ V -> [head_dim, n_tokens, n_heads, 1]
         o = ggml_mul_mat(ctx, v_t, kq_soft);
         o = ggml_permute(ctx, o, 0, 2, 1, 3);
         o = ggml_cont(ctx, o);
@@ -415,26 +393,20 @@ ggml_tensor * mha_cross_cached(
         ggml_element_size(kv_cache.cross_v) * static_cast<size_t>(
             static_cast<int64_t>(il) * T_enc * hidden));
 
-    // No mask for cross-attention. Flash path is the fused kernel;
-    // manual path is the usual triple.
+    // No mask for cross-attention.
     ggml_tensor * o;
     if (use_flash) {
         o = ggml_flash_attn_ext(ctx, Q, K, V, nullptr,
                                 scale, 0.0f, 0.0f);
         o = ggml_reshape_2d(ctx, o, hidden, n_tokens);
     } else {
-        // K is [head_dim, T_enc, n_heads, 1] from the cache view.
-        // mul_mat(K, Q) -> [T_enc, n_tokens, n_heads, 1]
+        // Manual path — see `mha` for the shape walkthrough.
+        // K: [head_dim, T_enc, n_heads, 1]; V transposed for the value matmul.
         ggml_tensor * kq = ggml_mul_mat(ctx, K, Q);
         ggml_tensor * kq_soft = ggml_soft_max_ext(ctx, kq, nullptr,
                                                    scale, 0.0f);
-
-        // V is [head_dim, T_enc, n_heads, 1]; transpose for the
-        // value matmul.
         ggml_tensor * v_t = ggml_cont(ctx,
                                        ggml_permute(ctx, V, 1, 0, 2, 3));
-
-        // attn_weights @ V -> [head_dim, n_tokens, n_heads, 1]
         o = ggml_mul_mat(ctx, v_t, kq_soft);
         o = ggml_permute(ctx, o, 0, 2, 1, 3);
         o = ggml_cont(ctx, o);
@@ -449,10 +421,7 @@ ggml_tensor * mha_cross_cached(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Original non-cached prompt-pass graph (kept for reference/validation).
-// ---------------------------------------------------------------------------
-
 DecoderBuild build_decoder_graph(ggml_context *         ctx,
                                  const CohereWeights &  w,
                                  const CohereHParams &  hp,
@@ -486,16 +455,14 @@ DecoderBuild build_decoder_graph(ggml_context *         ctx,
     ggml_set_name(db.encoder_out_in, "dec.encoder_out");
     ggml_set_input(db.encoder_out_in);
 
-    // Token embedding: lookup from [hidden, vocab_size] table.
-    // ggml_get_rows takes a table of ne=[hidden, vocab_size] and indices
-    // of ne=[seq_len], producing [hidden, seq_len].
+    // Token embedding: get_rows over [hidden, vocab_size] -> [hidden, seq_len].
     ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_embed.token_w,
                                           db.token_ids_in);
     tok_emb = named(tok_emb, "dec.token_emb");
     ggml_set_output(tok_emb);
     db.dumps.token_emb = tok_emb;
 
-    // Positional embedding: lookup from [hidden, max_seq] table.
+    // Positional embedding: get_rows over [hidden, max_seq].
     ggml_tensor * pos_emb = ggml_get_rows(ctx, w.dec_embed.pos_enc,
                                           db.pos_ids_in);
     pos_emb = named(pos_emb, "dec.pos_emb");
@@ -509,19 +476,14 @@ DecoderBuild build_decoder_graph(ggml_context *         ctx,
     ggml_set_output(x);
     db.dumps.embed_norm = x;
 
-    // Build causal self-attention mask. Shape [seq_len, seq_len] f16.
-    // mask[i][j] = 0 if j <= i, else -inf.
-    // For flash_attn, mask shape should be [T_k, T_q, 1, 1].
+    // Causal self-attention mask [T_k=seq_len, T_q=seq_len]: 0 if j <= i else
+    // -inf. Driver fills the F32 input; cast to F16 for flash_attn.
     ggml_tensor * causal_mask = nullptr;
     if (seq_len > 1) {
-        // ggml_new_tensor_2d(ctx, F32, T_k=seq_len, T_q=seq_len)
-        // filled with causal pattern, then cast to F16.
         causal_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
                                          seq_len, seq_len);
         ggml_set_name(causal_mask, "dec.causal_mask");
         ggml_set_input(causal_mask);
-        // Will be filled by the driver with proper causal mask values.
-        // Cast to f16 for flash_attn.
         causal_mask = ggml_cast(ctx, causal_mask, GGML_TYPE_F16);
     }
 
@@ -579,10 +541,8 @@ DecoderBuild build_decoder_graph(ggml_context *         ctx,
     x = named(x, "dec.out_before_head");
     db.dumps.out_before_head = x;
 
-    // Head: tied weight (transpose of token embedding) + bias + log-softmax.
-    // ggml_mul_mat(W, x) where W=[hidden, vocab_size] and x=[hidden, seq_len]
-    // gives [vocab_size, seq_len]. The token embedding is [hidden, vocab_size]
-    // which is exactly what we need.
+    // Head: tied weight (the [hidden, vocab_size] token embedding) + bias +
+    // log-softmax. mul_mat(token_w, x[hidden,seq]) -> [vocab_size, seq_len].
     ggml_tensor * logits = ggml_mul_mat(ctx, w.dec_embed.token_w, x);
     if (w.head.bias != nullptr) {
         logits = ggml_add(ctx, logits, w.head.bias);
@@ -609,10 +569,7 @@ DecoderBuild build_decoder_graph(ggml_context *         ctx,
     return db;
 }
 
-// ---------------------------------------------------------------------------
 // Cross-attention KV computation graph.
-// ---------------------------------------------------------------------------
-
 DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
                                   const CohereWeights &  w,
                                   const CohereHParams &  hp,
@@ -647,14 +604,12 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
     for (int il = 0; il < hp.dec_n_layers; ++il) {
         const auto & blk = w.dec_blocks[il];
 
-        // K = cross_k_w * encoder_out + cross_k_b
         ggml_tensor * Kcross = ggml_mul_mat(ctx, blk.cross_k_w,
                                             db.encoder_out_in);
         if (blk.cross_k_b != nullptr) {
             Kcross = ggml_add(ctx, Kcross, blk.cross_k_b);
         }
 
-        // V = cross_v_w * encoder_out + cross_v_b
         ggml_tensor * Vcross = ggml_mul_mat(ctx, blk.cross_v_w,
                                             db.encoder_out_in);
         if (blk.cross_v_b != nullptr) {
@@ -679,10 +634,7 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
     return db;
 }
 
-// ---------------------------------------------------------------------------
 // KV-cached decoder graph (prompt + step passes).
-// ---------------------------------------------------------------------------
-
 DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
                                     const CohereWeights &  w,
                                     const CohereHParams &  hp,
@@ -716,14 +668,12 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     ggml_set_name(db.pos_ids_in, "dec.pos_ids");
     ggml_set_input(db.pos_ids_in);
 
-    // Token embedding.
     ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_embed.token_w,
                                           db.token_ids_in);
     tok_emb = named(tok_emb, "dec.token_emb");
     ggml_set_output(tok_emb);
     db.dumps.token_emb = tok_emb;
 
-    // Positional embedding.
     ggml_tensor * pos_emb = ggml_get_rows(ctx, w.dec_embed.pos_enc,
                                           db.pos_ids_in);
     pos_emb = named(pos_emb, "dec.pos_emb");
@@ -737,28 +687,18 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     ggml_set_output(x);
     db.dumps.embed_norm = x;
 
-    // Causal mask for self-attention.
-    // Shape: [n_kv, n_tokens] -- for each new query position, which
-    // cache positions are visible.
-    //
-    // For the prompt pass (n_past=0, n_tokens>1):
-    //   mask[k, q] = 0 if k <= q, else -inf
-    //
-    // For step pass (n_tokens=1):
-    //   All n_kv positions are visible (mask is all zeros), so we can
-    //   skip the mask entirely. But for correctness with n_tokens>1 in
-    //   prompt pass, we always create the mask.
+    // Causal mask [n_kv, n_tokens]: mask[k, q] = 0 if k <= q else -inf. Only
+    // the prompt pass (n_tokens > 1) needs it; a single step sees all n_kv.
     ggml_tensor * causal_mask = nullptr;
     if (n_tokens > 1) {
-        // Need a mask of shape [n_kv, n_tokens].
         causal_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_kv, n_tokens);
         ggml_set_name(causal_mask, "dec.causal_mask");
         ggml_set_input(causal_mask);
         causal_mask = ggml_cast(ctx, causal_mask, GGML_TYPE_F16);
     }
 
-    // Pre-create the graph (we need it for ggml_build_forward_expand in
-    // the self-attention cache writes).
+    // Pre-create the graph: the self-attention cache writes call
+    // ggml_build_forward_expand on it.
     db.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (db.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -851,11 +791,9 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     db.out = logits;
     ggml_set_output(db.out);
 
-    // When skipping log_softmax (prompt and step passes), add argmax on
-    // GPU so we only need to read back a single int32 instead of the
-    // full [vocab_size x n_tokens] logits tensor. For n_tokens > 1 we
-    // only need the argmax of the last position (the next token to
-    // generate), so take a view of the last row before argmax.
+    // When skipping log_softmax, argmax on GPU so we read back a single int32
+    // instead of the full logits tensor. For n_tokens > 1 only the last
+    // position matters, so view its row before argmax.
     if (skip_log_softmax) {
         ggml_tensor * last_logits = logits;
         if (n_tokens > 1) {
@@ -879,10 +817,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     return db;
 }
 
-// ---------------------------------------------------------------------------
 // Static-topology single-token step graph (GPU dispatch path).
-// ---------------------------------------------------------------------------
-
 StepBuild build_step_graph(ggml_context *         ctx,
                            const CohereWeights &  w,
                            const CohereHParams &  hp,
@@ -1001,10 +936,7 @@ StepBuild build_step_graph(ggml_context *         ctx,
     return sb;
 }
 
-// ===========================================================================
-// Offline batched decode (B utterances)
-// ===========================================================================
-
+// Offline batched decode (B utterances).
 namespace {
 
 // Batched self-attention step. x: [hidden, B] (one token per utterance).

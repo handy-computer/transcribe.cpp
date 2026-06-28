@@ -18,9 +18,7 @@
 
 namespace transcribe::qwen3_asr {
 
-// ---------------------------------------------------------------------------
 // Timing / cu_seqlens
-// ---------------------------------------------------------------------------
 
 int32_t aftercnn_len(int32_t mel_len) {
     // Three rounds of Conv2d(stride=2, pad=1, kernel=3):
@@ -91,9 +89,7 @@ std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t,
     return std::vector<float>(static_cast<size_t>(T) * T, 0.0f);
 }
 
-// ---------------------------------------------------------------------------
 // Graph construction
-// ---------------------------------------------------------------------------
 
 namespace {
 
