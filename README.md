@@ -126,6 +126,39 @@ For the model-family smoke-test, numerical-validation, and benchmark
 pattern expected of new ports, see
 [`docs/model-family-testing.md`](docs/model-family-testing.md).
 
+## Sponsors & Supporting Organizations
+
+### Mozilla AI & BiR Program
+
+A huge thanks to [Mozilla AI](https://www.mozilla.ai/) and their [BiR Program](https://www.mozilla.ai/company/bir).
+This whole project started out as an idea, not even an implementation direction. It was a research project in how
+to accelerate transcription models across all platforms as easily as possible. The BiR program and Davide helped
+support the research, and my eventual direction to choose to implement and inference engine backed by ggml. And
+also experimenting with automated model porting using agentic programming tools.
+
+### Hugging Face
+
+[Hugging Face](https://huggingface.co/) provided the project extra storage so we can host all of the models
+which we support. We want to provide canonical references for as many models as reasonably possible,
+the support from Hugging Face helps to enable this.
+
+### Modal
+
+[Modal](https://modal.com/) helped to provide GPU credits so the project can test and validate the projects
+implementations match the transformers or nemo reference source. This is critical to ensuring that we have 
+as close to a production grade inference engine that works everywhere. We believe it is critical to have
+accurate transcriptions and the only way to ensure this is through long running WER checks which Modal
+helps to provide. Every model published under [handy-computer](https://huggingface.co/handy-computer) 
+on hugggingface has had the WER checked, so you can trust the results. And if there are any regressions, you
+bet we will be fixing them.
+
+### Blacksmith
+
+[Blacksmith](https://www.blacksmith.sh/) provides many of the CI runners for this project. That helps to keep
+transcribe.cpp well tested and ensure our releases are as smooth as possible. The CI is quick and a drop 
+in replacement for the standard Github Actions runners. I ran into limits very fast with them and super happy
+upon reaching out to Blacksmith they were able to provide runners for the project. 
+
 ## Project layout
 
 ```
