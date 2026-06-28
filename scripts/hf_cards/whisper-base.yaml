@@ -129,6 +129,23 @@ summary: |
 
 default_quant_index: 2
 
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: true
+  lang_detect: true
+  timestamps: segment  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    metal: 209.4
+    cpu: 36.6
+  ryzen-4750u:
+    vulkan: 34.8
+    cpu: 11.9
+
 wer:
   source: LibriSpeech test-clean
   notes: |

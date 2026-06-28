@@ -40,6 +40,36 @@ def load_spec(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
+def build_transcribe_cpp_block(spec: dict) -> str:
+    """Serialize the `transcribe_cpp:` block (raw WER/RTF + capability flags).
+
+    See docs/tools/hf-metadata-schema.md. Returns "" when a spec omits `perf`,
+    opting out of the block.
+    """
+    if "perf" not in spec:
+        return ""
+
+    caps = spec.get("capabilities", {})
+    dataset_key = spec["wer"].get("metadata_key", "librispeech_test_clean")
+    block: dict = {
+        f"wer_{dataset_key}": {
+            q["name"].lower(): float(str(q["wer"]).rstrip("%")) for q in spec["quants"]
+        },
+        **{
+            f"rtf_{machine.replace('-', '_')}": backends
+            for machine, backends in spec["perf"].items()
+        },
+        "streaming": bool(caps.get("streaming", False)),
+        "translate": bool(caps.get("translate", False)),
+        "lang_detect": bool(caps.get("lang_detect", False)),
+        "timestamps": caps.get("timestamps", "none"),
+    }
+    dumped = yaml.safe_dump(
+        {"transcribe_cpp": block}, sort_keys=False, default_flow_style=False
+    )
+    return dumped.rstrip("\n")
+
+
 def fetch_upstream_card(repo_id: str, revision: str) -> str:
     """Download README.md from an HF repo at a specific commit.
 
@@ -62,7 +92,11 @@ def render(spec: dict, upstream_card: str) -> str:
         keep_trailing_newline=True,
     )
     template = env.get_template("template.md.j2")
-    return template.render(upstream_card=upstream_card, **spec)
+    return template.render(
+        upstream_card=upstream_card,
+        transcribe_cpp_yaml=build_transcribe_cpp_block(spec),
+        **spec,
+    )
 
 
 def main() -> int:

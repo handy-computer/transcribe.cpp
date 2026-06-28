@@ -38,8 +38,26 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: false
+  timestamps: token  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, hand-authored from the bench;
+# published raw as rtf_<machine> in the metadata block.
+perf:
+  ryzen-4750u:
+    cpu: 8
+    vulkan: 15
+  m4-max:
+    cpu: 29
+    metal: 175
+
 wer:
   source: LibriSpeech test-clean
+  # metadata_key: librispeech_test_clean  # names the wer_<key> field; override when scored on another corpus
   notes: |
     WER measured on the full LibriSpeech test-clean split (2620 utterances) with
     greedy transducer decoding and no external LM. F32 reference baseline: 1.68%.
