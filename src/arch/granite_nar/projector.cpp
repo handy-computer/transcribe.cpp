@@ -119,7 +119,7 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
     named(pb.enc_in, "proj.enc_in");
     ggml_set_input(pb.enc_in);
 
-    // ---------- Per-encoder-layer LayerNorms ----------
+    // Per-encoder-layer LayerNorms.
     // Slice enc_in along the channel axis into `enc_layers` chunks of
     // size `enc_hidden`, LN each chunk with its own gamma/beta, then
     // concat back.
@@ -141,14 +141,14 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
     }
     // normed ne = [cat_in, T_enc]
 
-    // ---------- Linear projector (cat_in -> prj_hidden) + GELU ----------
+    // Linear projector (cat_in -> prj_hidden) + GELU.
     ggml_tensor * proj_lp = linear(ctx, normed,
                                    weights.proj_top.layer_projector_w,
                                    weights.proj_top.layer_projector_b);
     proj_lp = ggml_gelu(ctx, proj_lp);
     // proj_lp ne = [prj_hidden, T_enc]
 
-    // ---------- Pad along T to nblocks * block_size ----------
+    // Pad along T to nblocks * block_size.
     // The pad is allocated at prj_hidden width (post-GELU) so the
     // caller only uploads a small zero buffer once per encode. The
     // reference does the pad on the same axis, post-layer_projector,
@@ -167,7 +167,7 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
     ggml_tensor * windowed = ggml_reshape_3d(ctx, full,
                                              prj_hidden, block_size, pb.nblocks);
 
-    // ---------- K/V: x + window_positions ----------
+    // K/V: x + window_positions.
     // window_positions tensor ne = [prj_hidden, block_size, 1]. We add
     // it to `windowed` which is [prj_hidden, block_size, nblocks]; ggml
     // broadcasts the ne[2]=1 across the nblocks dim.
@@ -175,7 +175,7 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
                                    GGML_TYPE_F32);
     ggml_tensor * kv = ggml_add(ctx, windowed, wpos);
 
-    // ---------- Mean-pool windowed -> [prj_hidden, n_query, nblocks] ----------
+    // Mean-pool windowed -> [prj_hidden, n_query, nblocks].
     // Reference reshapes the windowed tensor (B*nblocks, block_size, h) as
     // (B*nblocks, n_query, downsample, h) and means over the downsample
     // axis. In ggml ne order, this is reshape [h, block_size, nblocks] ->
@@ -192,14 +192,14 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
     ggml_tensor * mean_pool = ggml_reshape_3d(ctx, mp_mean,
                                               prj_hidden, n_query, pb.nblocks);
 
-    // ---------- Query: learned [prj_hidden, n_query, 1] + mean_pool ----------
+    // Query: learned [prj_hidden, n_query, 1] + mean_pool.
     ggml_tensor * query = ggml_cast(ctx, weights.proj_top.query, GGML_TYPE_F32);
     // Broadcast query over the nblocks axis when adding mean_pool. ggml_add
     // broadcasts dims of size 1, so the [h, n_query, 1] query expands
     // naturally to match mean_pool's [h, n_query, nblocks].
     query = ggml_add(ctx, mean_pool, query);
 
-    // ---------- Q-Former layers (no self-attention) ----------
+    // Q-Former layers (no self-attention).
     for (int i = 0; i < hp.prj_n_layers; ++i) {
         const auto & b = weights.proj_blocks[i];
 
@@ -226,7 +226,7 @@ ProjectorBuild build_projector_graph(ggml_context *            ctx,
     pb.dumps.qformer_out = query;
     transcribe::debug::mark_tensor_for_dump(query);
 
-    // ---------- out_norm + out_linear (LLM-space) ----------
+    // out_norm + out_linear (LLM-space).
     ggml_tensor * onorm = layer_norm(ctx, query,
                                      weights.proj_top.out_norm_w,
                                      weights.proj_top.out_norm_b,

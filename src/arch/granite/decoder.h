@@ -11,7 +11,14 @@
 //   - Attention softmax scale = attention_multiplier (1/128), NOT
 //     1/sqrt(head_dim).
 //   - Residual adds use residual_multiplier (0.22): x + 0.22 * sub_out
-//   - SwiGLU MLP (separate gate + up; no packing in first port)
+//   - SwiGLU MLP. When ffn_gate_up_w is present (packed at load via
+//     causal_lm::pack_gate_up), the step, batched-prefill, and
+//     batched-step paths take the fused single-mul_mat + ggml_swiglu
+//     route, falling back to separate gate/up mul_mats otherwise. The
+//     single (non-batched) prefill path always uses separate gate + up.
+//     See decoder.cpp (ffn_gate_up_w branches in block_step /
+//     block_prefill_batched / block_step_batched; block_prefill is
+//     unconditionally separate).
 //
 // Outer flow (matches HF GraniteSpeechForConditionalGeneration +
 // GraniteModel.forward):
@@ -22,7 +29,7 @@
 //   5. x = RMSNorm(x)                           # dec.out_before_head
 //   6. logits = lm_head(x) / logits_scaling     # dec.logits_raw (last pos)
 //
-// First port handles a single contiguous audio block at positions
+// The public path handles a single contiguous audio block at positions
 // [prefix_len, prefix_len + n_audio_tokens). Granite's chat template
 // has exactly one <|audio|> placeholder per turn so multi-audio prompts
 // aren't reachable from the public API today.
@@ -85,7 +92,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  bool                            use_flash,
                                  bool                            slice_last);
 
-// ---------- Step graph (one token) ----------
+// Step graph (one token).
 
 struct StepBuild {
     ggml_tensor * input_id_in  = nullptr;  // [1] i32
@@ -107,7 +114,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
                            int                             max_n_kv,
                            bool                            use_flash);
 
-// ---------- Batched prefill / step (offline transcribe_run_batch) ----------
+// Batched prefill / step (offline transcribe_run_batch).
 // Same recipe as the causal_lm families but with Granite block math (no Q/K
 // norm, attention_multiplier scale, residual_multiplier, embedding_multiplier,
 // logits_scaling). Batch rides ne[2]; requires use_flash.

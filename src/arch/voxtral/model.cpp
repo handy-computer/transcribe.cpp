@@ -1,15 +1,14 @@
 // arch/voxtral/model.cpp - Voxtral (2507) family handler.
 //
 // audio-llm: Whisper-large-v3 encoder + 4x frame-group projector + a
-// Llama/Ministral causal LM with audio-token injection. Two prompt
-// modes share the same encoder/projector/decoder:
+// Llama/Ministral causal LM with audio-token injection. Two prompt modes share
+// the same encoder/projector/decoder:
 //
 //   transcription : [BOS][INST][BEGIN_AUDIO][AUDIO]*N[/INST](lang:<l>)?[TRANSCRIBE]
 //   instruct      : [BOS][INST][BEGIN_AUDIO][AUDIO]*N BPE(instruction)[/INST]
 //
-// The instruct mode covers translation (task TRANSLATE synthesizes
-// "Translate this to {Language}.") and free-text prompting; both are
-// mistral-common instruct requests, not transcription requests.
+// Instruct mode covers translation (task TRANSLATE synthesizes "Translate this
+// to {Language}.") and free-text prompting.
 
 #include "voxtral.h"
 
@@ -94,11 +93,10 @@ constexpr const char k_default_variant[] = "voxtral-mini-3b-2507";
 constexpr int k_decode_budget_min = 448;
 
 // Decode budget (max new text tokens) for an utterance with `n_audio` audio
-// embedding tokens. Real speech yields fewer text tokens than audio frames, so
-// the audio token count is a safe upper bound; clamp to the context remaining
-// under the decoder's trained max so prompt+decode always fits. Greedy decode
-// stops at EOS well before this, so a generous ceiling costs nothing but the
-// KV allocation it implies.
+// embedding tokens. Speech yields fewer text tokens than audio frames, so the
+// audio token count is a safe upper bound; clamp to the context remaining under
+// the trained max so prompt+decode fits. Greedy decode stops at EOS well before
+// this, so a generous ceiling costs only its KV allocation.
 int pick_decode_budget(int n_audio, int t_prompt, int model_max) {
     int budget = std::max(k_decode_budget_min, n_audio);
     const int room = model_max - t_prompt;
@@ -106,12 +104,10 @@ int pick_decode_budget(int n_audio, int t_prompt, int model_max) {
     return budget;
 }
 
-// Pick a KV-cache context length that fits `needed` (prompt + decode budget)
-// tokens. Rounds up to a power of two (so the step graph's `max_n_kv`, computed
-// the same way, never exceeds the allocation) and clamps to the decoder's
-// trained max_position_embeddings — the real ceiling, since RoPE is only valid
-// there. The model's own context (131072 for Voxtral-Mini-3B) is far larger
-// than the conservative initial allocation, so long audio grows it on demand.
+// Pick a KV-cache context length that fits `needed` (prompt + decode budget).
+// Rounds up to a power of two (so the step graph's `max_n_kv`, computed the same
+// way, never exceeds the allocation) and clamps to the trained
+// max_position_embeddings — the real ceiling, since RoPE is only valid there.
 int pick_kv_ctx(int needed, int model_max) {
     int want = 1024;
     while (want < needed) want *= 2;
@@ -119,23 +115,15 @@ int pick_kv_ctx(int needed, int model_max) {
     return want;
 }
 
-// ---------------------------------------------------------------------------
-// Input-length contract (see docs/input-limits.md). Voxtral is a
-// hard-context-cap family: the audio tokens, the instruct/transcription
-// prompt, and the generated transcript all share the Llama/Ministral decoder's
-// context window (dec_max_position_embeddings). The Whisper encoder already
-// chunks audio into 30 s windows (375 audio tokens per chunk via the 4x
-// projector downsample), so the binding limit is the decoder context, not the
-// encoder. Over-length input is rejected up front with
-// TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that fills the generation budget
-// before end-of-stream is flagged via transcribe_was_truncated().
-// ---------------------------------------------------------------------------
+// Input-length contract (see docs/input-limits.md). Hard-context-cap family:
+// audio tokens + prompt + transcript share the decoder context window
+// (dec_max_position_embeddings); the Whisper encoder chunks audio into 30 s
+// windows, so the decoder context is the binding limit. Over-length input is
+// rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that fills the
+// generation budget before EOS is flagged via transcribe_was_truncated().
 
-// Generation room the up-front gate reserves, in tokens. Mirrors the floor of
-// pick_decode_budget(): an accepted clip is always guaranteed at least this
-// many output tokens within the context window. (Longer audio raises the
-// actual decode budget above this floor, but the gate only needs to guarantee
-// the minimum useful transcript fits.)
+// Generation room the up-front gate reserves, in tokens (the pick_decode_budget
+// floor): an accepted clip is always guaranteed at least this many output tokens.
 constexpr int k_gen_reserve = k_decode_budget_min;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
@@ -149,14 +137,10 @@ int voxtral_context_ceiling(int32_t n_ctx_knob, const VoxtralHParams & hp) {
 }
 
 // Advisory transcribe_capabilities::max_audio_ms: the longest audio whose audio
-// tokens, a representative prompt, and the generation reserve still fit the
-// context ceiling. The encoder rate is fixed by the 30 s chunk geometry:
-// audio_tokens_per_chunk() tokens (375) cover one fe_nb_max_frames-frame chunk
-// (3000 mel frames = 30 s), so ms-per-audio-token = chunk_ms / tokens_per_chunk.
-// Returns 0 ("unknown / unbounded") if the rate hparams are missing, so a
-// misconfigured model is never advertised with a wrong finite number. Note:
-// even within this bound a long transcript may truncate at the generation
-// budget (transcribe_was_truncated) — max_audio_ms is the input bound.
+// tokens + prompt + generation reserve still fit the context ceiling. The
+// encoder rate is fixed by the 30 s chunk geometry (ms-per-audio-token =
+// chunk_ms / tokens_per_chunk). Returns 0 (unbounded) if the rate hparams are
+// missing, so a misconfigured model is never advertised with a wrong number.
 int64_t voxtral_max_audio_ms(const VoxtralHParams & hp) {
     const int tokens_per_chunk = hp.audio_tokens_per_chunk();
     if (tokens_per_chunk <= 0 || hp.fe_nb_max_frames <= 0 ||
@@ -321,18 +305,14 @@ transcribe_status load(
     if (const transcribe_status st = read_voxtral_hparams(loader.gguf(), m->hparams);
         st != TRANSCRIBE_OK) return st;
 
-    // Publish the input-length ceiling now that the decoder context window
-    // and the 30 s-chunk encoder rate are known (apply_family_invariants ran
-    // before the hparams were read, so it could not set this). See
-    // docs/input-limits.md.
+    // Publish the input-length ceiling now that the decoder context window and
+    // the 30 s-chunk encoder rate are known (apply_family_invariants ran before
+    // hparams). See docs/input-limits.md.
     m->caps.max_audio_ms = voxtral_max_audio_ms(m->hparams);
 
-    // Basis for the session-level limits query (transcribe_session_get_limits):
-    // the same constants voxtral_max_audio_ms uses, kept so the effective limit
-    // can be recomputed at a lowered session n_ctx. The decoder context window
-    // is the binding cap (audio tokens + prompt + transcript share it), so the
-    // n_ctx knob and KV-byte estimate agree with caps.max_audio_ms at n_ctx=0.
-    // See docs/input-limits.md.
+    // Basis for transcribe_session_get_limits: the same constants
+    // voxtral_max_audio_ms uses, kept so the effective limit can be recomputed at
+    // a lowered session n_ctx.
     {
         const int tokens_per_chunk = m->hparams.audio_tokens_per_chunk();
         if (m->hparams.dec_max_position_embeddings > 0 && tokens_per_chunk > 0 &&
@@ -484,10 +464,8 @@ transcribe_status init_context(
     cc->kv_type   = params->kv_type;
     cc->n_ctx     = transcribe_session_params_n_ctx(params);
 
-    // Encoder is the Whisper-large-v3 encoder (head_dim 64, full
-    // bidirectional attention, null mask) — flash-supported on every
-    // backend we ship, matching the whisper arch which runs encoder
-    // flash unconditionally. Decoder (Llama head_dim 128) also flash.
+    // Whisper-large-v3 encoder (head_dim 64, full bidirectional, null mask) —
+    // flash-supported on every backend. Decoder (Llama head_dim 128) also flash.
     cc->encoder_use_flash = true;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash, cc->decoder_use_flash);
@@ -705,14 +683,10 @@ transcribe_status run(
     const int T_prompt = static_cast<int>(prompt_ids.size());
 
     // ----- Input-length gate (see docs/input-limits.md) -----
-    // Auto-size the KV cache to this utterance. The initial allocation from
-    // init_context is a conservative starting point; long audio produces a
-    // longer audio prompt than that, so grow the cache to fit (capped at the
-    // context ceiling). The audio-token count is fixed by the input length, so
-    // reject an over-length clip here, before prefill/decode, instead of
-    // growing the cache past the trained context and aliasing RoPE. Reserving
-    // the generation budget means an accepted clip always has room for a real
-    // transcript. The ceiling honors the caller's n_ctx knob (lowered, never
+    // Auto-size the KV cache to this utterance (grow to fit, capped at the
+    // ceiling). The audio-token count is fixed by the input length, so reject an
+    // over-length clip up front rather than growing past the trained context and
+    // aliasing RoPE. The ceiling honors the caller's n_ctx knob (lowered, never
     // raised).
     const int model_max = voxtral_context_ceiling(cc->n_ctx, cm->hparams);
     if (T_prompt + k_gen_reserve > model_max) {
@@ -905,9 +879,8 @@ transcribe_status run(
                          static_cast<int>(gs));
             return TRANSCRIBE_ERR_GGUF;
         }
-        // Mid-generation logits dump (validate.py coverage): the step at
-        // cur_past == T_prompt + 7 produces the reference's scores[8], i.e.
-        // the logits for the 9th generated token after 8 greedy steps.
+        // Mid-generation logits dump: the step at cur_past == T_prompt + 7 is
+        // the reference's scores[8] (logits for the 9th generated token).
         if (dumps_on && sb.logits != nullptr && cur_past == T_prompt + 7) {
             transcribe::debug::dump_tensor("dec.logits_raw.gen8", sb.logits, "dec.step");
         }
@@ -922,10 +895,8 @@ transcribe_status run(
     }
     cc->t_decode_us = ggml_time_us() - t_dec_start;
 
-    // The decode stopped at EOS (complete) or at the generation budget /
-    // context width (truncated). Surface the latter via
-    // transcribe_was_truncated() and a WARN rather than returning a silently
-    // shortened transcript. See docs/input-limits.md.
+    // Decode stopped at EOS (complete) or at the generation budget / context
+    // width (truncated). Surface the latter via transcribe_was_truncated() + WARN.
     if (next_tok != eos_id) {
         cc->was_truncated = true;
         transcribe::log_msg(
@@ -959,11 +930,8 @@ transcribe_status run(
               / static_cast<int64_t>(cm->hparams.fe_sample_rate);
     cc->segments.push_back(std::move(seg));
 
-    // Output truncation is a hard status: when the single-shot decode stopped
-    // before EOS (the post-loop check above set cc->was_truncated) the partial
-    // transcript is already populated and stays readable (like an aborted run);
-    // surface the truncation to the caller rather than reporting a clean OK.
-    // See docs/input-limits.md.
+    // Output truncation is a hard status: the partial transcript stays readable
+    // (like an aborted run) but the caller is told, not given a clean OK.
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED : TRANSCRIBE_OK;
 }
 
@@ -1226,10 +1194,8 @@ transcribe_status run_batch(
     }
     T_audio_max = std::max(1, T_audio_max);
 
-    // Size the batched KV cache to the longest prompt in the batch plus the
-    // decode budget, clamped to the decoder context ceiling (the trained max,
-    // lowered by the caller's n_ctx knob — not the single-shot cache's initial
-    // allocation). kv_init_batched below grows the cache to this on demand.
+    // Size the batched KV cache to the longest prompt plus the decode budget,
+    // clamped to the context ceiling. kv_init_batched grows the cache on demand.
     const int model_max = ctx_ceiling;
     const int max_new = pick_decode_budget(T_audio_max, max_T_prompt, model_max);
     int max_n_kv = 1024;
@@ -1285,9 +1251,9 @@ transcribe_status run_batch(
         }
 
         std::vector<int32_t> ids(static_cast<size_t>(max_T_prompt) * n, 0);
-        // Audio injection by elementwise blend: audio_dense holds each
-        // utterance's audio embeds scattered into their prompt positions (zero
-        // elsewhere), keep is 0 there and 1 elsewhere. x = x*keep + audio_dense.
+        // Audio-injection blend buffers: audio_dense holds each utterance's audio
+        // embeds at their prompt positions (zero elsewhere); keep is 0 there, 1
+        // elsewhere. x = x*keep + audio_dense.
         std::vector<float>   audio_dense(static_cast<size_t>(dec_h) * max_T_prompt * n, 0.0f);
         std::vector<float>   keep(static_cast<size_t>(max_T_prompt) * n, 1.0f);
         std::vector<int64_t> kidx(static_cast<size_t>(max_T_prompt) * n, 0);

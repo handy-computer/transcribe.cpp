@@ -384,7 +384,6 @@ ggml_tensor * block_prefill_batched(
     Q = ggml_reshape_4d(ctx, Q, head_dim, n_heads,    T, B);
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T, B);
     V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, T, B);
-    // No per-head Q/K RMSNorm on Granite.
     Q = ggml_rope_ext(ctx, Q, positions, nullptr, static_cast<int>(head_dim),
                       GGML_ROPE_TYPE_NEOX, params.max_position,
                       rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
@@ -523,9 +522,7 @@ ggml_tensor * block_step_batched(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Prefill graph
-// ---------------------------------------------------------------------------
+// Prefill graph.
 
 PrefillBuild build_prefill_graph(ggml_context *                  ctx,
                                  const GraniteWeights &          weights,
@@ -579,7 +576,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
 
     const auto params = to_params(hp);
 
-    // ---------- Graph inputs ----------
+    // Graph inputs.
     pb.input_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_prompt);
     named(pb.input_ids_in, "dec.input_ids");
     ggml_set_input(pb.input_ids_in);
@@ -605,14 +602,14 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     }
     pb.graph = gf;
 
-    // ---------- Token embedding (for full prompt, for dump parity) ----------
+    // Token embedding (for full prompt, for dump parity).
     ggml_tensor * token_emb_all = ggml_get_rows(
         ctx, weights.dec_embed.token_w, pb.input_ids_in);
     named(token_emb_all, "dec.token_emb");
     pb.dumps.token_emb = token_emb_all;
     transcribe::debug::mark_tensor_for_dump(token_emb_all);
 
-    // ---------- Audio injection via 3-way concat ----------
+    // Audio injection via 3-way concat.
     const size_t emb_elem = ggml_element_size(token_emb_all);
     ggml_tensor * x_prefix = nullptr;
     if (prefix_len > 0) {
@@ -642,10 +639,10 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     pb.dumps.audio_injected = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // ---------- Embedding multiplier (after the dump point) ----------
+    // Embedding multiplier (after the dump point).
     x = ggml_scale(ctx, x, emb_mul);
 
-    // ---------- Block stack ----------
+    // Block stack.
     const int mid_idx = n_layer / 2;
     for (int il = 0; il < n_layer; ++il) {
         x = block_prefill(
@@ -678,13 +675,13 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
         }
     }
 
-    // ---------- Final RMSNorm ----------
+    // Final RMSNorm.
     x = rms_norm(ctx, x, weights.dec_final.norm_w, rms_eps);
     named(x, "dec.out_before_head");
     pb.dumps.out_before_head = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // ---------- LM head (slice last position) ----------
+    // LM head (slice last position).
     ggml_tensor * last_x = ggml_view_2d(
         ctx, x,
         hidden, 1,
@@ -720,9 +717,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     return pb;
 }
 
-// ---------------------------------------------------------------------------
-// Step graph
-// ---------------------------------------------------------------------------
+// Step graph.
 
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const GraniteWeights &          weights,
@@ -823,9 +818,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     return sb;
 }
 
-// ---------------------------------------------------------------------------
-// Batched prefill / step (offline transcribe_run_batch)
-// ---------------------------------------------------------------------------
+// Batched prefill / step (offline transcribe_run_batch).
 
 PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,

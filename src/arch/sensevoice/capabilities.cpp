@@ -22,19 +22,13 @@ void apply_family_invariants(transcribe_model & model) {
     // The non-AR CTC head has no segment- or word-timestamp head in
     // the published runtime. forced-CTC alignment IS available via
     // ctc_forced_align in the upstream demo, but the C++ runtime does
-    // not expose it in v1; mark NONE and revisit in a follow-up if a
-    // user asks for word timing.
+    // not expose it; mark NONE.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
     // Feature bits: cancellation is wired at the run level. SenseVoice
     // exposes a runtime ITN toggle via the textnorm prefix embedding
     // (`woitn` / `withitn`); the generic transcribe_run_params::itn enum
     // routes here. No PNC runtime toggle.
-    //
-    // TODO(family doc): on en/zh/yue/ja/ko, observe whether `withitn`
-    // also bundles punctuation/casing changes alongside number/date
-    // normalization and capture in the family doc. API shape doesn't
-    // change either way.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN,          true);
 }

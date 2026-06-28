@@ -1,27 +1,4 @@
 // arch/granite/model.cpp - Granite Speech family handler.
-//
-// Wiring skeleton (Phase 1 of porting-4-cpp).
-//
-//   load()         is real: reads the GGUF KV, resolves the tokenizer,
-//                  configures the mel frontend, builds the tensor
-//                  catalog, allocates the backend buffer, and streams
-//                  tensor data. This lets `transcribe-cli -m <gguf> ...`
-//                  load every granite variant and print its hparams
-//                  before any encode/decode code lands.
-//   init_context() returns TRANSCRIBE_ERR_NOT_IMPLEMENTED.
-//   run()          returns TRANSCRIBE_ERR_NOT_IMPLEMENTED.
-//
-// Phase 2-5 fill in the encoder graph, projector, decoder LM, and
-// end-to-end run(). The Phase 1 contract is "loader smoke succeeds";
-// we deliberately error out on context creation so a caller cannot
-// accidentally invoke an empty encode pipeline.
-//
-// The mel frontend currently builds with the existing MelFrontend
-// surface. Granite's torchaudio melspec needs htk-mel norm, no log,
-// no per-utterance norm, and a 2-frame stack — those knobs are added
-// in Phase 2b. For Phase 1 we just record the cfg and accept whatever
-// the existing frontend produces; the encoder isn't wired up yet so
-// the discrepancy is not user-visible.
 
 #include "granite.h"
 
@@ -108,13 +85,11 @@ namespace {
 constexpr const char k_default_variant[] = "granite-speech";
 constexpr float kBnEps = 1e-5f;
 
-// ---------------------------------------------------------------------------
 // Input-length contract (see docs/input-limits.md). Granite is a
 // hard-context-cap family: audio tokens + prompt + generation share the LLM
 // decoder's context window (dec_max_position_embeddings, typically 4096).
 // Over-length input is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG
 // rather than silently aliasing RoPE past the trained range.
-// ---------------------------------------------------------------------------
 
 // Generation budget reserved per run. Also the KV grow-to-fit step budget,
 // so an accepted clip always has room for up to this many output tokens.
@@ -169,11 +144,8 @@ int64_t granite_max_audio_ms(const GraniteHParams & hp) {
     return frames * hp.fe_hop_length * 1000 / hp.fe_sample_rate;
 }
 
-// Pre-fuse BatchNorm scale/bias per encoder block. Mirrors parakeet's
-// fuse_batch_norm: allocates a separate ggml context + CPU buffer for
-// the [inner_dim] fused tensors, copies the raw BN tensors out,
-// computes  scale = gamma / sqrt(var + eps) and bias = beta - mean * scale,
-// and uploads.
+// Pre-fuse BatchNorm scale/bias per encoder block (mirrors parakeet's
+// fuse_batch_norm): scale = gamma / sqrt(var + eps), bias = beta - mean * scale.
 transcribe_status fuse_batch_norm(GraniteModel & m) {
     const size_t n_blocks = m.weights.enc_blocks.size();
     if (n_blocks == 0) return TRANSCRIBE_OK;
@@ -235,14 +207,10 @@ transcribe_status fuse_batch_norm(GraniteModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// Resolve the chat-template pieces we may need across the two
-// templates (bare-USER/ASSISTANT for 1b/2b, granite-4 system-role for
-// -plus). The audio token must exist on every variant; the
-// start_of_role / end_of_role pieces only exist on the -plus vocab,
-// so they're allowed to be absent.
-//
-// Hard-fails for the must-have pieces (audio, end_of_text, pad) so a
-// future vocab drift surfaces at load rather than mid-decode.
+// Resolve chat-template pieces across both templates (bare-USER/ASSISTANT for
+// 1b/2b, granite-4 system-role for -plus). audio exists on every variant;
+// start_of_role / end_of_role only on -plus, so they may be absent. Hard-fails
+// for the must-haves (audio, end_of_text, pad) so vocab drift surfaces at load.
 transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
                                       ChatTokens &                  out)
 {
@@ -312,7 +280,7 @@ transcribe_status load(
 
     // Publish the input-length ceiling now that the decoder context window
     // and frontend rate are known (apply_family_invariants ran before the
-    // hparams were read, so it could not set this). See docs/input-limits.md.
+    // hparams were read, so it could not set this).
     m->caps.max_audio_ms = granite_max_audio_ms(m->hparams);
 
     // Basis for the session-level limits query (transcribe_session_get_limits):
@@ -360,13 +328,7 @@ transcribe_status load(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Mel frontend. Phase 1: we configure with the granite KV but the
-    // existing MelFrontend doesn't yet honour htk-norm / no-log /
-    // power=2 / per-utterance-stack. Phase 2b extends the frontend
-    // surface. Since the encoder graph isn't wired up in Phase 1, the
-    // frontend's actual output is not observed by any code path that
-    // matters yet — but we still construct it so the loader smoke
-    // exercises the same code path the eventual run() will use.
+    // Mel frontend: configured from the granite KV.
     {
         transcribe::MelConfig cfg {};
         cfg.sample_rate  = m->hparams.fe_sample_rate;
@@ -383,7 +345,7 @@ transcribe_status load(
 
         // Frontend buffers baked by the converter: librosa htk mel
         // filterbank + periodic Hann window. We pick them up here so
-        // the eventual frontend bring-up uses bit-identical values.
+        // the frontend uses bit-identical values.
         {
             using R = transcribe::load_common::ReadF32Result;
             const size_t fb_elems =
@@ -409,7 +371,7 @@ transcribe_status load(
         m->mel.emplace(cfg);
     }
 
-    // Stage 2: reopen with no_alloc to build the tensor catalog.
+    // Reopen with no_alloc to build the tensor catalog.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -513,8 +475,7 @@ transcribe_status init_context(
 
     // Encoder uses manual mul_mat + soft_max (no flash) because the
     // Shaw bias requires a per-(head, block) additive term that
-    // flash_attn_ext doesn't broadcast cleanly yet. Decoder flash is
-    // wired in Phase 4.
+    // flash_attn_ext doesn't broadcast cleanly yet.
     cc->encoder_use_flash = false;
     cc->decoder_use_flash = true;
     transcribe::flash::apply_env_overrides(cc->encoder_use_flash,
@@ -524,11 +485,6 @@ transcribe_status init_context(
     return TRANSCRIBE_OK;
 }
 
-// Phase 2 run(): mel + 2-frame stack -> encoder graph -> dump enc.*
-// tensors. The projector + LM are still NOT_IMPLEMENTED, so we set
-// has_result/full_text to "" so validate.py picks up a `text:` line
-// and the per-tensor compare can run against enc.* dumps. Phase 3-5
-// replaces this body with the full pipeline.
 // Map a BCP-47 language code or English name to the language name the
 // granite-speech instruction expects. Returns nullptr for unsupported.
 // granite-speech (1b/2b/-plus) advertises fr / de / es / pt / ja.
@@ -668,7 +624,7 @@ transcribe_status run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // ----- Mel + 2-frame stack (host side) -----
+    // Mel + 2-frame stack (host side).
     const int64_t t_mel_start = ggml_time_us();
     int t_enc = 0;
     if (const transcribe_status mst = compute_mel_encoder_input(
@@ -693,7 +649,7 @@ transcribe_status run(
             shape, 2, "encoder");
     }
 
-    // ----- Reset compute state -----
+    // Reset compute state.
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
@@ -713,7 +669,7 @@ transcribe_status run(
         }
     }
 
-    // ----- Build encoder graph -----
+    // Build encoder graph.
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights,
                                           cm->hparams, t_enc,
                                           cc->encoder_use_flash);
@@ -725,7 +681,7 @@ transcribe_status run(
     // the mel buffer required). The Shaw-attention helper pads to
     // T_pad internally using the eb.zero_pad graph input.
 
-    // ----- Scheduler -----
+    // Scheduler.
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(
             cm->plan.scheduler_list.data(), nullptr,
@@ -744,7 +700,7 @@ transcribe_status run(
         return TRANSCRIBE_ERR_OOM;
     }
 
-    // ----- Upload inputs -----
+    // Upload inputs.
     // mel_in: contiguous [T_enc, input_dim] row-major matches ggml ne
     // [input_dim, T_enc] (ne[0]=input_dim is innermost).
     ggml_backend_tensor_set(eb.mel_in, cc->mel_buf.data(), 0,
@@ -787,7 +743,7 @@ transcribe_status run(
     // Thread count.
     transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 
-    // ----- Compute -----
+    // Compute.
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs =
             ggml_backend_sched_graph_compute(cc->sched, eb.graph);
@@ -800,7 +756,7 @@ transcribe_status run(
     }
     cc->t_encode_us = ggml_time_us() - t_enc_start;
 
-    // ----- Dump intermediates -----
+    // Dump intermediates.
     auto try_dump = [](const char * name, ggml_tensor * t, const char * stage) {
         if (t != nullptr) transcribe::debug::dump_tensor(name, t, stage);
     };
@@ -820,11 +776,9 @@ transcribe_status run(
     }
     try_dump("enc.out", eb.dumps.out_named, "encoder");
 
-    // ----- Read encoder output to host for the projector pass -----
-    // Phase 3 uses a SEPARATE compute graph for the projector so the
-    // per-stage validation harness can compare proj.* dumps without
-    // any encoder graph state lingering. Phase 5 may fuse encoder +
-    // projector into one compute when end-to-end latency matters.
+    // Read encoder output to host for the projector pass. The projector
+    // uses a separate compute graph so its dumps compare without encoder
+    // graph state lingering.
     const int64_t enc_hidden_runtime = eb.out->ne[0];
     const int64_t enc_T_runtime      = eb.out->ne[1];
     std::vector<float> enc_host(static_cast<size_t>(enc_hidden_runtime) *
@@ -832,14 +786,12 @@ transcribe_status run(
     ggml_backend_tensor_get(eb.out, enc_host.data(), 0,
                             enc_host.size() * sizeof(float));
 
-    // ----- Cat-hidden-layers handling (-plus variant) -----
-    // The -plus checkpoint sets enc.cat_hidden_layers = [3]: the
-    // encoder graph (see encoder.cpp) channel-concatenates block[K-1].out
-    // captures with the final hidden along dim=0 BEFORE returning eb.out,
-    // so the projector input dimension widens from 1024 to 2048
-    // automatically. Nothing variant-specific is needed here.
+    // Cat-hidden-layers handling (-plus variant): the -plus checkpoint sets
+    // enc.cat_hidden_layers = [3]; the encoder graph channel-concatenates
+    // block[K-1].out with the final hidden along dim=0 before returning eb.out,
+    // so the projector input dimension widens from 1024 to 2048 automatically.
 
-    // ----- Projector graph -----
+    // Projector graph.
     ggml_context * proj_ctx = nullptr;
     {
         ggml_init_params ip {};
@@ -904,7 +856,7 @@ transcribe_status run(
 
     ggml_free(proj_ctx);
 
-    // ----- Decoder prefill pass -----
+    // Decoder prefill pass.
     // Build the prompt as `prefix_text | <|audio|>×n | suffix_text`.
     // Two templates ship today:
     //
@@ -928,9 +880,8 @@ transcribe_status run(
     //                                       (leading space matters: BPE token IDs differ)
     //                                       PLUS a Granite-specific system prompt (see use_granite4_chat below).
     //   word-timestamps task             : "transcribe the speech with timestamps in [SS:MS] format"
-    //                                       (only -plus actually emits the [SS:N] markers; 1b/2b
-    //                                       fall back to plain transcript, which Stage-4 Capability
-    //                                       Validation records as SKIP rather than PASS)
+    //                                       (only -plus emits the [SS:N] markers; 1b/2b
+    //                                       fall back to plain transcript)
     //   translate task                   : "can you translate the speech into <Language>?"
     std::vector<int32_t> prefix_ids;
     std::vector<int32_t> suffix_ids;
@@ -945,12 +896,10 @@ transcribe_status run(
     const int suffix_len     = static_cast<int>(suffix_ids.size());
     const int T_prompt       = prefix_len + n_audio_tokens + suffix_len;
 
-    // Reference quirk: HF's GraniteSpeechForConditionalGeneration replaces
-    // audio_token_id with 0 BEFORE the embed_tokens lookup (the
-    // resulting rows are scattered over with audio_features moments
-    // later). We mirror that masking so dec.token_emb matches at the
-    // audio positions — the forward result is identical either way
-    // because those rows are overwritten by the audio scatter.
+    // Reference quirk: HF replaces audio_token_id with 0 before the
+    // embed_tokens lookup (those rows are overwritten by the audio scatter
+    // moments later). We mirror the masking so dec.token_emb matches at the
+    // audio positions; the forward result is identical either way.
     std::vector<int32_t> input_ids;
     input_ids.reserve(T_prompt);
     input_ids.insert(input_ids.end(), prefix_ids.begin(), prefix_ids.end());
@@ -959,11 +908,10 @@ transcribe_status run(
     }
     input_ids.insert(input_ids.end(), suffix_ids.begin(), suffix_ids.end());
 
-    // ----- Input-length gate (see docs/input-limits.md) -----
-    // The decoder context window is the binding limit: audio tokens +
-    // prompt + generation must fit dec_max_position_embeddings (optionally
-    // lowered by the caller's n_ctx knob). The audio-token count is fixed
-    // by the input length, so reject an over-length clip here, before the
+    // Input-length gate. The decoder context window is the binding limit:
+    // audio tokens + prompt + generation must fit dec_max_position_embeddings
+    // (optionally lowered by the caller's n_ctx knob). The audio-token count is
+    // fixed by the input length, so reject an over-length clip here, before the
     // autoregressive decode, instead of growing the cache unboundedly and
     // aliasing RoPE past the trained range. Reserving the full generation
     // budget means an accepted clip always has room for a real transcript.
@@ -1134,7 +1082,7 @@ transcribe_status run(
 
     int32_t next_id = argmax_logits(last_logits);
 
-    // ----- Greedy step loop -----
+    // Greedy step loop.
     // Build one reusable step graph sized for the whole run. The
     // n_ctx of the KV cache bounds the max generation length we can
     // attend over.
@@ -1221,7 +1169,7 @@ transcribe_status run(
     // The decode stopped either at EOS (complete) or at the generation
     // budget / context ceiling (truncated). Surface the latter via
     // transcribe_was_truncated() and a WARN rather than handing back a
-    // silently shortened transcript. See docs/input-limits.md.
+    // silently shortened transcript.
     if (next_id != eos_id) {
         cc->was_truncated = true;
         transcribe::log_msg(
@@ -1232,7 +1180,7 @@ transcribe_status run(
             static_cast<int>(gen_ids.size()));
     }
 
-    // ----- Detokenize -----
+    // Detokenize.
     cc->full_text = cm->tok.decode(gen_ids.data(),
                                    static_cast<int>(gen_ids.size()));
 
@@ -1253,13 +1201,11 @@ transcribe_status run(
                              : TRANSCRIBE_OK;
 }
 
-// ===========================================================================
-// Offline batched decode (transcribe_run_batch)
-// ===========================================================================
-// Serial mel + Conformer encoder + Q-Former projector per utterance produce
-// each one's audio embedding [hidden, n_audio_tokens]; then prefill + step are
-// batched via granite's batched block builders. Same recipe as the causal_lm
-// families, with Granite-specific block math.
+// Offline batched decode (transcribe_run_batch). Serial mel + Conformer
+// encoder + Q-Former projector per utterance produce each one's audio embedding
+// [hidden, n_audio_tokens]; then prefill + step are batched via granite's
+// batched block builders. Same recipe as the causal_lm families, with
+// Granite-specific block math.
 
 transcribe_status reset_ctx_g(GraniteSession * cc, int mb) {
     if (cc->compute_ctx != nullptr) {
@@ -1278,17 +1224,12 @@ void apply_threads_g(GraniteSession * cc) {
     transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 }
 
-// encoder + projector for one utterance from a PRECOMPUTED mel buffer (the
-// mel+2-frame-stack is computed in parallel by the caller) → [hidden, n_audio].
-//
-// NOTE: the encoder is run PER-UTTERANCE (serial) deliberately. The 2B
-// conformer is compute-bound — the time axis (T_enc) already amortizes the
-// weight reads and the matmuls saturate the GPU — so a batched single-graph
-// encoder is a measured wash on BOTH Metal and L40S (wall time identical
-// batched vs serial; encoder compute flat across batch sizes), and for
-// mixed-length batches it is strictly worse (it pads every utterance to the
-// longest). See docs/batching-autoregressive-plan.md. Only the latency-bound
-// decode (M=1) and the host-side mel benefit from batching/threading.
+// encoder + projector for one utterance from a PRECOMPUTED mel buffer →
+// [hidden, n_audio]. The encoder runs PER-UTTERANCE (serial) deliberately: the
+// 2B conformer is compute-bound, so a batched single-graph encoder is a
+// measured wash on Metal and L40S and strictly worse for mixed-length batches
+// (it pads to the longest). Only the decode and host-side mel benefit from
+// batching/threading.
 transcribe_status encode_one(
     GraniteSession * cc, GraniteModel * cm,
     const std::vector<float> & mel_buf, int t_enc,
@@ -1447,7 +1388,7 @@ transcribe_status run_batch(
         return TRANSCRIBE_ERR_INVALID_ARG;
     const int prefix_len = static_cast<int>(prefix_ids.size());
 
-    // ---- Pass 1: per-utterance mel + encoder + projector (serial) ----
+    // Pass 1: per-utterance mel + encoder + projector (serial).
     std::vector<char> valid(n, 0);
     // Per-utterance failure status for the result capture below. Defaults to
     // INVALID_ARG (bad pcm / mel / encode); the input-length gate upgrades it
@@ -1459,13 +1400,13 @@ transcribe_status run_batch(
     std::vector<int> T_prompt(n, 0);
     int64_t mel_us = 0, enc_us = 0;
 
-    // Decoder context ceiling for the per-utterance input-length gate (see
-    // docs/input-limits.md). Same value the single-utterance run() enforces;
-    // an over-length utterance is rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG
-    // rather than growing the cache unboundedly.
+    // Decoder context ceiling for the per-utterance input-length gate. Same
+    // value the single-utterance run() enforces; an over-length utterance is
+    // rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG rather than growing the cache
+    // unboundedly.
     const int ceiling = granite_context_ceiling(cc->n_ctx, cm->hparams);
 
-    // ---- Pass 0: parallel mel + 2-frame stack (host-side, thread-safe) ----
+    // Pass 0: parallel mel + 2-frame stack (host-side, thread-safe).
     std::vector<std::vector<float>> mel_bufs(n);
     std::vector<int> mel_t_enc(n, 0);
     int n_mel_threads = cc->n_threads;
@@ -1482,12 +1423,8 @@ transcribe_status run_batch(
     });
     mel_us += ggml_time_us() - t_mel0;
 
-    // ---- Pass 1: per-utterance encoder + projector (serial) ----
-    // The conformer encoder is compute-bound (see encode_one's note): a
-    // batched single-graph encoder is a wash on Metal AND L40S (wall
-    // identical) and regresses on mixed-length batches, so it is NOT
-    // batched. Only the mel (Pass 0) is parallelized; the decode (prefill +
-    // step loop) is batched below.
+    // Pass 1: per-utterance encoder + projector (serial — see encode_one's
+    // note). Only the mel (Pass 0) is parallelized; the decode is batched below.
     for (int b = 0; b < n; ++b) {
         if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
         if (mel_t_enc[b] <= 0) continue;
@@ -1500,10 +1437,7 @@ transcribe_status run_batch(
         prompt_ids[b].insert(prompt_ids[b].end(), suffix_ids.begin(), suffix_ids.end());
         T_prompt[b] = static_cast<int>(prompt_ids[b].size());
 
-        // Input-length gate (see docs/input-limits.md). Audio tokens + prompt +
-        // generation must fit the decoder context window; reject an over-length
-        // utterance here instead of growing the cache unboundedly. Mirrors the
-        // single-shot run() gate (T_prompt + k_gen_budget > ceiling).
+        // Input-length gate, mirroring the single-shot run() gate.
         if (T_prompt[b] + k_gen_budget > ceiling) {
             transcribe::log_msg(
                 TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -1539,7 +1473,7 @@ transcribe_status run_batch(
     // ceiling (the per-utterance gate guarantees every valid row fits).
     if (max_n_kv > ceiling) max_n_kv = ceiling;
 
-    // ---- Allocate batched KV cache ----
+    // Allocate batched KV cache.
     ggml_type kv_type = (cc->kv_type == TRANSCRIBE_KV_TYPE_F32)
                       ? GGML_TYPE_F32 : GGML_TYPE_F16;
     if (cc->kv_batch.self_k == nullptr ||
@@ -1558,7 +1492,7 @@ transcribe_status run_batch(
         ggml_backend_buffer_clear(cc->kv_batch.buffer, 0);
     }
 
-    // ---- Pass 2: batched prefill ----
+    // Pass 2: batched prefill.
     std::vector<int32_t> next_tok(n, 0);
     std::vector<int> n_past(n, 0);
     std::vector<std::vector<int32_t>> generated(n);
@@ -1644,7 +1578,7 @@ transcribe_status run_batch(
 
     const int64_t prefill_us = ggml_time_us() - t_pref0;
 
-    // ---- Pass 3: batched step loop (shared causal_lm driver) ----
+    // Pass 3: batched step loop (shared causal_lm driver).
     const int32_t eos_id = cm->hparams.eos_token_id;
 
     if (reset_ctx_g(cc, 32) != TRANSCRIBE_OK) {
@@ -1700,7 +1634,7 @@ transcribe_status run_batch(
             total_steps > 0 ? step_us / 1000.0 / total_steps : 0.0);
     }
 
-    // ---- Capture results ----
+    // Capture results.
     const int valid_count = std::max(1, static_cast<int>(
         std::count(valid.begin(), valid.end(), char(1))));
     for (int b = 0; b < n; ++b) {

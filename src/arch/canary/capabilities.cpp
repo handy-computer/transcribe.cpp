@@ -16,10 +16,8 @@ void apply_family_invariants(transcribe_model & model) {
     // by read_capability_kv after this call) overrides per-variant.
     caps.supports_translate = true;
 
-    // V1 port: timestamps are explicitly experimental upstream and
-    // out of scope (per intake known_risks). Advertise NONE; the GGUF
-    // KV stt.capability.timestamps overrides this when a future port
-    // wires up the timestamp decoder path.
+    // Timestamps out of scope. Advertise NONE; the GGUF KV
+    // stt.capability.timestamps overrides this once the path is wired up.
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
     // Feature bits: cancellation is wired at the run level. Canary

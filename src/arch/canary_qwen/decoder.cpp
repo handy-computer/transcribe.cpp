@@ -1,15 +1,9 @@
 // arch/canary_qwen/decoder.cpp - Qwen3-1.7B LM prefill / step graphs.
 //
-// Same Qwen3 block math as funasr_nano (and qwen3_asr) — verified
-// byte-for-byte against HF's `transformers/models/qwen3/modeling_qwen3.py`
-// (qwen_asr's `Qwen3ASRTextDecoderLayer` is HF's `Qwen3DecoderLayer`
-// with only the class name changed). Funasr_nano validates the same
-// helpers on Qwen3-0.6B with `dec.logits_raw.prefill` drift of
-// max_abs=0.12 / mean_abs=0.022 (fp32 noise).
-//
-// Audio injection: 3-way concat. For B=1 with one
-// `<|audioplaceholder|>` in the prompt, this is mathematically
-// equivalent to NeMo SALM's `replace_placeholders_and_build_targets`.
+// Same Qwen3 block math as funasr_nano and qwen3_asr (shared via
+// src/causal_lm/). Audio injection: 3-way concat, equivalent to NeMo SALM's
+// `replace_placeholders_and_build_targets` for B=1 with one
+// `<|audioplaceholder|>`.
 
 #include "decoder.h"
 
@@ -162,15 +156,8 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
         x_suffix = ggml_cont(ctx, x_suffix);
     }
 
-    // Note: SALM's reference dumper captures `dec.token_emb` from the
-    // top-level embed_tokens call, which embeds the *un-expanded* text
-    // prompt (15 tokens, including a single audio_locator placeholder).
-    // Our C++ pipeline uses already-expanded input_ids (152 tokens, with
-    // T_audio locator slots that get overwritten by audio frames) and
-    // does not have a clean intermediate that matches the reference's
-    // (15, hidden) shape. We skip the C++ dump here; the downstream
-    // `dec.audio_injected` (152, hidden) is the real input to the LM and
-    // is dumped on both sides.
+    // No clean C++ intermediate matches the reference's un-expanded (15, hidden)
+    // dec.token_emb; skip it and rely on the downstream dec.audio_injected dump.
     pb.dumps.token_emb = nullptr;
 
     ggml_tensor * x;
@@ -260,9 +247,7 @@ PrefillBuild build_prefill_graph(ggml_context *                  ctx,
     return pb;
 }
 
-// ---------------------------------------------------------------------------
 // Step graph (single-token decode)
-// ---------------------------------------------------------------------------
 
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const CanaryQwenWeights &       weights,
@@ -356,9 +341,7 @@ StepBuild build_step_graph(ggml_context *                  ctx,
     return sb;
 }
 
-// ---------------------------------------------------------------------------
 // Batched prefill / step (offline transcribe_run_batch)
-// ---------------------------------------------------------------------------
 
 PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
@@ -392,10 +375,7 @@ PrefillBuildBatched build_prefill_graph_batched(
 
     pb.input_ids_in = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, T_prompt_max, B);
     ggml_set_input(pb.input_ids_in);
-    // Audio injection is an elementwise blend over the flat token axis (no
-    // set_rows): a k-quant token_embd get_rows is unsupported on CUDA and runs
-    // on CPU; a set_rows consuming that CPU tensor straddles the CPU/CUDA split
-    // and faults. x*keep_mask + audio_dense crosses the split cleanly.
+    // Audio injection via elementwise blend (no set_rows); see decoder.h.
     pb.audio_dense_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hidden,
                                            static_cast<int64_t>(T_prompt_max) * B);
     ggml_set_input(pb.audio_dense_in);
@@ -418,9 +398,8 @@ PrefillBuildBatched build_prefill_graph_batched(
     ggml_tensor * ids_flat =
         ggml_reshape_1d(ctx, pb.input_ids_in,
                         static_cast<int64_t>(T_prompt_max) * B);
-    // x is 2D [hidden, T_prompt_max*B] (contiguous). Blend the audio embeds in
-    // elementwise: x = x*keep_mask + audio_dense. keep_mask broadcasts over
-    // hidden (ne[0]). Then reshape to 3D for the batched block stack.
+    // x = x*keep_mask + audio_dense (keep_mask broadcasts over hidden), then
+    // reshape to 3D for the batched block stack.
     ggml_tensor * x = ggml_get_rows(ctx, weights.dec_embed.token_w, ids_flat);
     x = ggml_add(ctx, ggml_mul(ctx, x, pb.keep_mask_in), pb.audio_dense_in);
     x = ggml_reshape_3d(ctx, x, hidden, T_prompt_max, B);

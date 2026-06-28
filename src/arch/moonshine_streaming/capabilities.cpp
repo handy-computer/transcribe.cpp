@@ -19,10 +19,13 @@ void apply_family_invariants(transcribe_model & model) {
     // text-only segment with zeroed timings (same policy as moonshine).
     caps.max_timestamp_kind = TRANSCRIBE_TIMESTAMPS_NONE;
 
-    // Phase 4b-encoder streaming: stream_feed runs the encoder
-    // incrementally over a sliding window, appending stable frames to
-    // a per-utterance committed buffer; stream_finalize runs adapter +
-    // cross_kv + AR decode once over the full committed buffer.
+    // Streaming: stream_feed runs the encoder, adapter, and cross-KV
+    // projection incrementally over a sliding window, appending each stable
+    // slice to per-utterance host K/V buffers, and can run a throttled
+    // partial AR decode over the growing cross-KV for a live transcript.
+    // stream_finalize only tops up the trailing tail and runs a final AR
+    // decode when frames advanced past the last partial (otherwise it just
+    // commits the last partial transcript).
     caps.supports_streaming            = true;
 
     // Streaming latency characteristics (≈240 ms cumulative encoder

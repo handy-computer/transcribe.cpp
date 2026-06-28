@@ -8,13 +8,13 @@
 //   - UNTIED lm_head (dec.output.weight, separate from token_embd)
 //
 // The per-block math is the shared causal_lm module; this file owns graph
-// allocation, prompt + audio injection (3-way concat of
-// prefix | proj.out | suffix), tensor naming / dump parity, the untied
-// head, and the driver-facing build structs.
+// allocation, audio injection, tensor naming / dump parity, the untied head, and
+// the driver-facing build structs.
 //
-// Audio injection: the prompt has `audio_token_id` placeholders at a
-// single contiguous run [prefix_len, prefix_len + T_enc); the projector
-// output (T_enc audio embeddings in dec_hidden space) is spliced there.
+// Audio injection: the prompt has `audio_token_id` placeholders at a single
+// contiguous run [prefix_len, prefix_len + T_enc); the projector output (T_enc
+// audio embeddings) is spliced there via a 3-way concat (prefix | proj.out |
+// suffix).
 
 #pragma once
 
@@ -92,14 +92,12 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 // ---------------------------------------------------------------------------
 // Batched prefill / step (offline transcribe_run_batch fast path)
 //
-// B utterances decoded in lockstep against a batched KV cache
-// (causal_lm::kv_init_batched, n_batch=B). Ragged prompts are right-padded
-// to T_prompt_max; the shared causal mask works because pads land after
-// each utterance's real tokens, and per-row last_idx selects each real
-// final position. Audio embeddings are scattered into the token-embedding
-// sequence via ggml_set_rows at the audio_token_id positions. Both require
-// use_flash (the causal_lm batched blocks have no manual GQA path). Mirrors
-// arch/canary_qwen, with Voxtral's UNTIED lm_head (dec.output.weight).
+// B utterances decoded in lockstep against a batched KV cache (n_batch=B).
+// Ragged prompts are right-padded to T_prompt_max; the shared causal mask works
+// because pads land after each utterance's real tokens, and per-row last_idx
+// selects each real final position. Audio embeddings are blended in at the
+// audio_token_id positions. Both require use_flash (the batched blocks have no
+// manual GQA path). UNTIED lm_head (dec.output.weight).
 // ---------------------------------------------------------------------------
 
 struct PrefillBuildBatched {

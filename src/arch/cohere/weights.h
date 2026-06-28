@@ -32,10 +32,6 @@ struct ggml_tensor;
 
 namespace transcribe::cohere {
 
-// ---------------------------------------------------------------------------
-// Hyperparameters
-// ---------------------------------------------------------------------------
-
 struct CohereHParams {
     // Encoder (Conformer).
     int32_t enc_n_layers          = 0;
@@ -89,10 +85,6 @@ struct CohereHParams {
 
 transcribe_status read_cohere_hparams(const gguf_context * gguf,
                                       CohereHParams &      hp);
-
-// ---------------------------------------------------------------------------
-// Weight slots
-// ---------------------------------------------------------------------------
 
 struct CoherePreEncode {
     // Same structure as Parakeet: dw_striding subsampling.

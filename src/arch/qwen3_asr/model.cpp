@@ -1,11 +1,4 @@
 // arch/qwen3_asr/model.cpp - Qwen3-ASR family handler.
-//
-// Wiring-only skeleton. `load()` is real — it reads the GGUF KV,
-// resolves the tokenizer + frontend, and builds the tensor catalog —
-// so that GGUF conversion round-trips can be verified before inference
-// code lands. `init_context()` and `run()` currently return
-// TRANSCRIBE_ERR_NOT_IMPLEMENTED and will be filled in once the
-// encoder and LM graph builders exist.
 
 #include "qwen3_asr.h"
 
@@ -86,19 +79,14 @@ namespace {
 
 constexpr const char k_default_variant[] = "qwen3-asr";
 
-// ---------------------------------------------------------------------------
 // Input-length contract (see docs/input-limits.md). Qwen3-ASR is a
 // hard-context-cap family: audio tokens + chat prompt + generation share the
-// Qwen3 decoder's context window (dec_max_position_embeddings). The KV cache
-// grows to fit the prompt, clamped to that ceiling (replacing the earlier
-// fixed 2048 wall that ignored the model's real context). Over-length input
-// is rejected up front with TRANSCRIBE_ERR_INPUT_TOO_LONG; a transcript that
-// fills the per-run generation budget before end-of-stream is flagged via
-// transcribe_was_truncated().
-// ---------------------------------------------------------------------------
+// Qwen3 decoder's context window (dec_max_position_embeddings), clamped to that
+// ceiling. Over-length input is rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG; a
+// transcript that fills the generation budget before end-of-stream is flagged
+// via transcribe_was_truncated().
 
-// Per-run generation budget (matches the reference dumper default; the
-// decode loop is intentionally left unchanged — see the family doc).
+// Per-run generation budget (matches the reference dumper default).
 constexpr int k_max_new = 256;
 
 // Effective decoder context ceiling, in tokens: the model's trained maximum,
@@ -165,30 +153,25 @@ transcribe_status load(
     if (const transcribe_status st = m->tok.load(loader.gguf());
         st != TRANSCRIBE_OK) return st;
 
-    // Chat template (optional, but required at run time — we read it
-    // here so the absence surfaces at load rather than mid-decode).
+    // Chat template (read here so its absence surfaces at load, not mid-decode).
     (void)read_optional_string_kv(
         loader.gguf(), "tokenizer.chat_template", "qwen3_asr",
         "", m->chat_template);
 
-    // Resolve the chat-template special-token ids at load so a vocab
-    // drift (e.g. a future fine-tune that renames or reorders the
-    // role tokens) surfaces here instead of silently producing a
-    // wrong prompt at decode time.
+    // Resolve chat-template special-token ids at load so a vocab drift surfaces
+    // here instead of silently producing a wrong prompt at decode time.
     if (const transcribe_status st = resolve_chat_tokens(m->tok, m->chat_tokens);
         st != TRANSCRIBE_OK) return st;
 
-    // Hparams.
     if (const transcribe_status st = read_qwen3_asr_hparams(loader.gguf(), m->hparams);
         st != TRANSCRIBE_OK) return st;
 
     // Publish the input-length ceiling now that the decoder context window
-    // and frontend rate are known. See docs/input-limits.md.
+    // and frontend rate are known.
     m->caps.max_audio_ms = qwen3_max_audio_ms(m->hparams);
 
-    // Basis for the session-level limits query (transcribe_session_get_limits):
-    // the same constants qwen3_max_audio_ms uses, kept so the effective limit
-    // can be recomputed at a lowered session n_ctx.
+    // Basis for transcribe_session_get_limits: the same constants
+    // qwen3_max_audio_ms uses, so the limit recomputes at a lowered n_ctx.
     if (m->hparams.dec_max_position_embeddings > 0 &&
         m->hparams.fe_hop_length > 0 && m->hparams.fe_sample_rate > 0) {
         m->limits.has_context_cap = true;
@@ -234,11 +217,8 @@ transcribe_status load(
         cfg.window_type  = m->hparams.fe_window;     // "hann_periodic"
         cfg.normalize    = m->hparams.fe_normalize;  // "per_utterance" (Whisper)
 
-        // Optional filterbank + window buffers baked by the converter
-        // from librosa / Whisper. If present, MelFrontend uses them
-        // instead of reconstructing from hparams. Removes filterbank/
-        // window as a variable during numerical bring-up. Absent falls
-        // back to the in-code builders.
+        // Optional filterbank + window buffers baked by the converter; if
+        // present MelFrontend uses them instead of reconstructing from hparams.
         {
             using R = transcribe::load_common::ReadF32Result;
             const size_t fb_elems =
@@ -264,7 +244,7 @@ transcribe_status load(
         m->mel.emplace(cfg);
     }
 
-    // Stage 2: reopen with no_alloc to build the tensor catalog.
+    // Reopen with no_alloc to build the tensor catalog.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -391,15 +371,10 @@ transcribe_status init_context(
     return TRANSCRIBE_OK;
 }
 
-// Resolve the narrow set of chat-template piece strings against the
-// loaded tokenizer, filling `out`. Hard-fails with TRANSCRIBE_ERR_GGUF
-// if any piece is missing — a future checkpoint that reorders the
-// vocab will surface here at load time, before any prompt is built.
-//
-// The newline piece is stored under its GPT-2 byte-level-encoded form
-// (\n = 0x0A → Unicode codepoint U+010A "Ċ", UTF-8 \xC4\x8A), same as
-// every other non-printable byte in the Qwen3 vocab. The role names
-// and the two <|im_*|> special tokens are stored verbatim.
+// Resolve the chat-template piece strings against the loaded tokenizer.
+// Hard-fails with TRANSCRIBE_ERR_GGUF on a missing piece (a vocab reorder
+// surfaces here at load). The newline is stored in its GPT-2 byte-level form
+// (\n → U+010A "Ċ", \xC4\x8A); roles and <|im_*|> tokens are verbatim.
 transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
                                       ChatTokens &                  out)
 {
@@ -428,21 +403,16 @@ transcribe_status resolve_chat_tokens(const transcribe::Tokenizer & tok,
     return TRANSCRIBE_OK;
 }
 
-// Build the prompt token sequence + audio-position list for a single
-// utterance. Mirrors the Qwen3-ASR chat template at the token level:
+// Build the prompt token sequence + audio-position list, mirroring the
+// Qwen3-ASR chat template at the token level:
 //
 //   <|im_start|>system\n<|im_end|>\n
 //   <|im_start|>user\n<|audio_start|><|audio_pad|>*T_enc<|audio_end|><|im_end|>\n
 //   <|im_start|>assistant\n[language {Name}<asr_text>]?
 //
-// The system prompt is empty (we do not yet thread a caller-supplied
-// context through). When `lang_prefix_ids` is non-null its contents
-// are appended verbatim after the trailing newline, which is how the
-// reference forces a specific output language: the LM continues from
-// "<asr_text>" with pure transcript text rather than emitting its own
-// "language X<asr_text>" prefix. Callers resolve the prefix via
-// encode_language_prefix() below; it stays out of this function so
-// build_prompt_tokens can remain a pure token-id assembler.
+// System prompt is empty. A non-null `lang_prefix_ids` (resolved via
+// encode_language_prefix) is appended after the trailing newline to force an
+// output language; kept out of here so this stays a pure token-id assembler.
 void build_prompt_tokens(const QwenAsrHParams &           hp,
                          const ChatTokens &               ct,
                          int                              T_enc,
@@ -485,19 +455,13 @@ void build_prompt_tokens(const QwenAsrHParams &           hp,
     }
 }
 
-} // namespace  (close anon temporarily; the two helpers below have
-  // external linkage — one because the public-header declaration in
-  // qwen3_asr.h needs a matching definition, the other because the
-  // function lives just above and wants to name the data table.)
+} // namespace  (close anon temporarily for the two external-linkage helpers
+  // below; encode_language_prefix matches the qwen3_asr.h declaration.)
 
-// BCP-47 → publisher canonical name. The Qwen3-ASR prompt renders the
-// publisher's canonical string ("English", "Chinese", ...) rather
-// than the BCP-47 code, and the list is frozen per Qwen3-ASR release
-// (qwen_asr.inference.utils.SUPPORTED_LANGUAGES in the publisher's
-// Python package). Keeping the map here tracks the publisher's list
-// directly; if a future Qwen3-ASR variant changes it, this table is
-// the update point and the model will error cleanly for languages
-// that haven't been added yet.
+// BCP-47 → publisher canonical name ("English", "Chinese", ...), which the
+// prompt renders instead of the code. Frozen per release
+// (qwen_asr.inference.utils.SUPPORTED_LANGUAGES); this table is the update
+// point for a future variant.
 struct LangNameEntry {
     const char * bcp47;
     const char * pub_name;
@@ -535,26 +499,12 @@ constexpr LangNameEntry k_qwen3_asr_language_names[] = {
     {"mk",  "Macedonian"},
 };
 
-// Resolve a caller-supplied BCP-47 language code to the token-id
-// sequence the chat template expects: the BPE-encoded bytes of
-// "language {Name}" followed by the `<asr_text>` special-token id.
-//
-// We split the prefix around the special token because
-// Tokenizer::encode() does not partition special tokens out before
-// BPE — it would run a byte-level merge loop over the literal
-// "<asr_text>" string and produce wrong ids. The Hugging Face
-// tokenizer's "added_tokens" path is what recognizes the tag and
-// emits its single id; we replicate that by looking up the id
-// directly from the vocab and appending it by hand. The id is
-// checkpoint-specific (151704 on Qwen3-ASR 0.6B / 1.7B) but we never
-// hardcode it — `tok.find("<asr_text>")` reads the actual vocab.
-//
-// The dispatcher validates `bcp47` against caps.languages before we
-// get here, so an unknown code at this layer is either a converter
-// drift (language written into caps that our static map doesn't
-// know about) or a future Qwen3-ASR variant we haven't caught up to.
-// Either way, surface as UNSUPPORTED_LANGUAGE so the caller sees the
-// right error.
+// Resolve a caller-supplied BCP-47 code to the token-id sequence the chat
+// template expects: BPE("language {Name}") + the `<asr_text>` special id.
+// encode() doesn't split special tokens out, so we look up the <asr_text> id
+// directly from the vocab (never hardcoded) and append it by hand. The
+// dispatcher validates `bcp47` against caps.languages first, so an unknown
+// code here means converter/map drift — surface as UNSUPPORTED_LANGUAGE.
 transcribe_status encode_language_prefix(const transcribe::Tokenizer & tok,
                                          const char *                  bcp47,
                                          std::vector<int32_t> &        out_ids)
@@ -646,26 +596,16 @@ transcribe_status run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Pre-run abort check. Qwen3-ASR is single-shot today; this is
-    // the single observation point. Stage 2's long-form loop will add
-    // per-chunk polling for Whisper; the other autoregressive families
-    // can wire per-step polling when they grow their own long-form
-    // paths.
+    // Pre-run abort check (Qwen3-ASR is single-shot, so this is the only
+    // observation point).
     if (cc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
 
-    // Language hint handling. Null / empty == auto-detect (the LM
-    // emits its own "language X<asr_text>" prefix which the output
-    // parser below strips). A non-null code is resolved to the
-    // token-id sequence for "language {Name}<asr_text>" via the
-    // tokenizer; we seed the assistant turn with those tokens so the
-    // LM continues straight into pure transcript text. Dispatcher
-    // already validated `params->language` against caps.languages,
-    // so if encode_language_prefix reports "no canonical name" the
-    // static publisher map and the converter's BCP-47 list have
-    // drifted — surface that as UNSUPPORTED_LANGUAGE instead of
-    // silently falling back to auto-detect.
+    // Language hint. Null/empty == auto-detect (the LM emits its own
+    // "language X<asr_text>" prefix, stripped by the output parser below). A
+    // non-null code is resolved to "language {Name}<asr_text>" tokens that seed
+    // the assistant turn; a resolve failure surfaces as UNSUPPORTED_LANGUAGE.
     std::vector<int32_t> lang_prefix_ids;
     const std::vector<int32_t> * lang_prefix_ptr = nullptr;
     if (params != nullptr && params->language != nullptr &&
@@ -682,7 +622,7 @@ transcribe_status run(
 
     transcribe::debug::init();
 
-    // ----- Mel front-end -------------------------------------------
+    // Mel front-end.
     if (!cm->mel.has_value()) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "qwen3_asr run: model has no MelFrontend");
@@ -715,7 +655,7 @@ transcribe_status run(
             shape, 2, "frontend.mel.norm");
     }
 
-    // ----- Compute encoder timing + reject unsupported shapes ------
+    // Compute encoder timing + reject unsupported shapes.
     EncoderTiming timing = compute_encoder_timing(mel_n_frames, cm->hparams);
     if (timing.n_chunks <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -724,13 +664,10 @@ transcribe_status run(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // ----- Reset per-call compute state ----------------------------
-    // Phase timers. Internal diagnostic: the public
-    // transcribe_timings only exposes mel/encode/decode, but a lot of
-    // per-run cost sits in graph build, scheduler alloc, host uploads,
-    // and prefill compute. These locals break that out so we can print
-    // a full breakdown under TRANSCRIBE_PERF_DEBUG without touching
-    // the public API.
+    // Reset per-call compute state. The phase timers below break out
+    // per-run cost (graph build, sched alloc, uploads, prefill compute)
+    // that the public transcribe_timings (mel/encode/decode) doesn't
+    // expose, for the TRANSCRIBE_PERF_DEBUG breakdown.
     const int64_t t_enc_build_start = ggml_time_us();
     int64_t t_enc_build_us       = 0;
     int64_t t_enc_d2h_us         = 0;
@@ -747,7 +684,7 @@ transcribe_status run(
 
     {
         ggml_init_params ip {};
-        ip.mem_size   = 16 * 1024 * 1024;  // 18 blocks + subsample + head
+        ip.mem_size   = 16 * 1024 * 1024;
         ip.mem_buffer = nullptr;
         ip.no_alloc   = true;
         cc->compute_ctx = ggml_init(ip);
@@ -758,7 +695,7 @@ transcribe_status run(
         }
     }
 
-    // ----- Build encoder graph -------------------------------------
+    // Build encoder graph.
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights,
                                           cm->hparams, timing,
                                           cc->encoder_use_flash);
@@ -766,7 +703,7 @@ transcribe_status run(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // ----- Allocate + compute encoder graph ------------------------
+    // Allocate + compute encoder graph.
     if (cc->sched == nullptr) {
         cc->sched = ggml_backend_sched_new(
             cm->plan.scheduler_list.data(), nullptr,
@@ -815,7 +752,6 @@ transcribe_status run(
         }
     }
 
-    // Thread count.
     transcribe::configure_sched_n_threads(cc->sched, cc->n_threads);
 
     const int64_t t_enc_start = ggml_time_us();
@@ -849,10 +785,9 @@ transcribe_status run(
     try_dump("enc.ln_post.out",    eb.dumps.ln_post_out,    "enc.ln_post");
     try_dump("enc.proj.out",       eb.dumps.proj_out,       "enc.proj");
 
-    // Read encoder output to host for use by the LM prefill. The graph
-    // already dropped the aftercnn pad rows before the encoder blocks
-    // (see encoder.cpp), so eb.out is exactly [d_enc, T_enc] — matching
-    // the reference's `padded_embed[padded_mask_after_cnn]`-selected
+    // Read encoder output to host for the LM prefill. The graph already
+    // dropped the aftercnn pad rows (see encoder.cpp), so eb.out is exactly
+    // [d_enc, T_enc] — the reference's `padded_embed[padded_mask_after_cnn]`
     // shape.
     const int d_enc = static_cast<int>(eb.out->ne[0]);
     const int T_enc = static_cast<int>(eb.out->ne[1]);
@@ -863,14 +798,12 @@ transcribe_status run(
                             cc->enc_host.size() * sizeof(float));
     t_enc_d2h_us = ggml_time_us() - t_d2h_start;
 
-    // ----- Decode phase begins -----
-    // t_dec_start covers the whole decode phase (prompt + KV init +
-    // prefill build/compute + step loop). Prefill is part of "decode" as
-    // users understand it.
+    // Decode phase begins. t_dec_start covers prompt + KV init + prefill
+    // build/compute + step loop (prefill is part of "decode" to users).
     const int64_t t_dec_start = ggml_time_us();
     const int64_t t_prefill_build_start = t_dec_start;
 
-    // ----- Prompt construction -----
+    // Prompt construction.
     std::vector<int32_t> prompt_ids;
     std::vector<int64_t> audio_positions;
     build_prompt_tokens(cm->hparams, cm->chat_tokens, T_enc,
@@ -879,13 +812,10 @@ transcribe_status run(
     const int prefix_len = audio_positions.empty()
                          ? 0 : static_cast<int>(audio_positions.front());
     const int suffix_len = T_prompt - prefix_len - T_enc;
-    (void)audio_positions;  // no longer fed to the graph
+    (void)audio_positions;
 
-    // ----- Input-length gate (see docs/input-limits.md) -----
-    // audio tokens + prompt + generation must fit the decoder context
-    // window (optionally lowered by the caller's n_ctx). The audio-token
-    // count is fixed by the input length, so reject an over-length clip
-    // here, before prefill/decode, instead of walling at a fixed size.
+    // Input-length gate: audio + prompt + generation must fit the decoder
+    // context window. Reject an over-length clip here, before prefill/decode.
     const int ceiling = qwen3_context_ceiling(cc->n_ctx, cm->hparams);
     if (T_prompt + k_max_new > ceiling) {
         transcribe::log_msg(
@@ -898,13 +828,10 @@ transcribe_status run(
         return TRANSCRIBE_ERR_INPUT_TOO_LONG;
     }
 
-    // ----- KV cache init (grow-to-fit, clamped to the context ceiling) -----
-    // Size to hold the prompt plus the generation budget, rounded up to a
-    // power of two (the step graph's attention width wants pow2 for the
-    // fast flash-attn path). The cache grows across runs as audio length
-    // demands; a pre-allocated smaller cache is freed and re-allocated. For
-    // typical short clips this is the same 1024/2048 width as before, so the
-    // decode is unchanged — only previously-walled long clips now fit.
+    // KV cache init (grow-to-fit, clamped to the context ceiling). Size to
+    // hold prompt + generation budget, rounded up to a power of two (the step
+    // graph's flash-attn path wants pow2 attention width). A pre-allocated
+    // smaller cache is freed and re-allocated.
     int want_n_ctx = 1024;
     while (want_n_ctx < T_prompt + k_max_new) want_n_ctx *= 2;
     if (want_n_ctx > ceiling) want_n_ctx = ceiling;
@@ -938,11 +865,9 @@ transcribe_status run(
         cc->kv_cache.head = 0;
     }
 
-    // ----- Prefill graph -----
-    // slice_last: when false, the last block's FFN + final norm run
-    // on every position (needed for debug dump parity). When true, we
-    // slice to just the final position before the last FFN — same
-    // optimization llama.cpp's inp_out_ids gives, worth ~25 ms here.
+    // Prefill graph. slice_last false: last block's FFN + final norm run on
+    // every position (needed for dump parity). true: slice to just the final
+    // position before the last FFN (llama.cpp's inp_out_ids trick, ~25 ms).
     const bool dumps_on  = transcribe::debug::enabled();
     const bool slice_last = !dumps_on;
     PrefillBuild pb = build_prefill_graph(
@@ -977,9 +902,8 @@ transcribe_status run(
     }
 
     {
-        // Causal mask in F16 (matches pb.mask_in's type). Row r, col c:
-        // +0 if c <= r, else -inf. Row-major (ne[0]=T_prompt fastest).
-        // F16 direct upload avoids a per-layer ggml_cast in the graph.
+        // Causal mask in F16 (matches pb.mask_in): row r col c is 0 if c <= r,
+        // else -inf, row-major. F16 upload avoids a per-layer ggml_cast.
         const ggml_fp16_t mask_zero    = ggml_fp32_to_fp16(0.0f);
         const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
         std::vector<ggml_fp16_t> mask(
@@ -1022,7 +946,7 @@ transcribe_status run(
     try_dump("dec.out_before_head", pb.dumps.out_before_head, "dec.out_before_head");
     try_dump("dec.logits_raw",      pb.dumps.logits_raw,      "dec.logits_raw");
 
-    // ----- Read prefill logits + first argmax -----
+    // Read prefill logits + first argmax.
     const int64_t t_prefill_logits_start = ggml_time_us();
     const int vocab = cm->hparams.dec_vocab_size;
     std::vector<float> logits(vocab);
@@ -1043,18 +967,15 @@ transcribe_status run(
     generated_ids.push_back(next_tok);
     t_prefill_logits_us = ggml_time_us() - t_prefill_logits_start;
 
-    // ----- Step loop -----
+    // Step loop.
     const int32_t eos_id = cm->hparams.eos_token_id;
-    const int32_t max_new = k_max_new;  // matches reference dumper default
+    const int32_t max_new = k_max_new;
     int cur_past = T_prompt;
 
-    // ---------- Build step graph ONCE and reuse every step ----------
-    // Static shape sized for the actual workload: T_prompt audio/prompt
-    // tokens already written + up to max_new generated tokens.
-    // Metal's flash-attn kernels dispatch much faster (~30% on M4 Max)
-    // when the K/V ne[1] is a power of 2. Round up accordingly, with a
-    // floor of 1024 since smaller values just move us into the "slow
-    // misaligned" branch without saving meaningful bandwidth.
+    // Build the step graph ONCE and reuse every step, sized for the actual
+    // workload (T_prompt written + up to max_new generated). Metal's flash-attn
+    // kernels dispatch ~30% faster (M4 Max) when K/V ne[1] is a power of 2, so
+    // round up; floor of 1024 (smaller just hits the slow-misaligned branch).
     int max_n_kv = 1024;
     while (max_n_kv < T_prompt + max_new) max_n_kv *= 2;
     if (max_n_kv > cc->kv_cache.n_ctx) max_n_kv = cc->kv_cache.n_ctx;
@@ -1091,14 +1012,13 @@ transcribe_status run(
     }
     const int64_t t_step_build_once_us = ggml_time_us() - t_step_build_start;
 
-    // Mask buffer: reused host-side across steps. Starts all -inf;
-    // per step we zero positions [0, cur_past] (attend) and leave
-    // [cur_past+1, max_n_kv) as -inf (ignore).
+    // Mask buffer reused host-side across steps. Starts all -inf; per step we
+    // zero positions [0, cur_past] (attend) and leave the rest -inf.
     const ggml_fp16_t mask_zero    = ggml_fp32_to_fp16(0.0f);
     const ggml_fp16_t mask_neg_inf = ggml_fp32_to_fp16(-INFINITY);
     std::vector<ggml_fp16_t> step_mask(max_n_kv, mask_neg_inf);
 
-    // Per-step timers. Now much smaller — no per-step graph work.
+    // Per-step timers.
     int64_t t_step_set_us  = 0;
     int64_t t_step_comp_us = 0;
     int64_t t_step_get_us  = 0;
@@ -1158,10 +1078,8 @@ transcribe_status run(
     t_step_loop_us = ggml_time_us() - t_step_loop_start;
     n_steps = static_cast<int>(generated_ids.size()) - 1;
 
-    // The decode stopped at EOS (complete) or at the generation budget /
-    // context width (truncated). Surface the latter via
-    // transcribe_was_truncated() and a WARN rather than returning a
-    // silently shortened transcript. See docs/input-limits.md.
+    // Decode stopped at EOS (complete) or the generation budget / context width
+    // (truncated). Surface the latter via transcribe_was_truncated() + WARN.
     if (next_tok != eos_id) {
         cc->was_truncated = true;
         transcribe::log_msg(
@@ -1172,10 +1090,9 @@ transcribe_status run(
             static_cast<int>(generated_ids.size()));
     }
 
-    // Map the granular diagnostic counters to the shape the debug
-    // print expects. With graph reuse all per-step overhead collapses
-    // to tensor_set; build/alloc/ctx_reset are amortized in the
-    // t_step_build_once_us bucket printed separately.
+    // Map granular counters to the debug-print shape. With graph reuse all
+    // per-step overhead collapses to tensor_set; build/alloc/ctx_reset are
+    // amortized in t_step_build_once_us.
     int64_t t_step_ctx_us   = 0;
     int64_t t_step_build_us = t_step_build_once_us;
     int64_t t_step_alloc_us = 0;
@@ -1185,30 +1102,20 @@ transcribe_status run(
         generated_ids.pop_back();
     }
 
-    // Decode generated ids to text. Tokenizer::decode handles the
-    // "gpt2" byte-level inversion natively — no more per-family
-    // byte-to-unicode walker.
+    // Decode generated ids to text (Tokenizer::decode handles the "gpt2"
+    // byte-level inversion natively).
     std::string raw_text = cm->tok.decode(
         generated_ids.data(), static_cast<int>(generated_ids.size()));
 
-    // Parse Qwen3-ASR output format:
-    //   auto-detect: "language X<asr_text>actual_text"  (strip prefix)
-    //   forced:      "actual_text"                      (no prefix -
-    //                we seeded the assistant turn with "language
-    //                X<asr_text>" already, so the LM's generated
-    //                continuation is pure transcript.)
-    //
-    // We unconditionally try the split — if the prefix is absent (the
-    // forced case, or a model that just didn't emit it this run), the
-    // find() returns npos and transcript_text stays as raw_text.
+    // Parse Qwen3-ASR output: auto-detect emits "language X<asr_text>text"
+    // (strip prefix); forced emits "text" (we already seeded the prefix). The
+    // split is unconditional — absent prefix leaves transcript_text = raw_text.
     std::string transcript_text = raw_text;
     if (auto sep = raw_text.find("<asr_text>"); sep != std::string::npos) {
-        // Auto-detect path: the prefix carries the language name the
-        // model picked. Surface it as detected_language (reverse-map
-        // the human-readable name to its BCP-47 code via the same
-        // table encode_language_prefix uses), but only when the caller
-        // did NOT supply a hint — the public field's contract is "what
-        // the model told us," not "what we told the model."
+        // Auto-detect path: surface the model-picked language name as
+        // detected_language (reverse-mapped to BCP-47), but only when the
+        // caller did NOT supply a hint (the field reports what the model told
+        // us, not what we told it).
         if (lang_prefix_ptr == nullptr) {
             constexpr const char k_prefix[] = "language ";
             const size_t name_start = raw_text.find(k_prefix);
@@ -1231,15 +1138,11 @@ transcribe_status run(
         transcript_text = raw_text.substr(sep + std::strlen("<asr_text>"));
     }
 
-    // Write full_text + a single segment (no timestamps; Qwen3-ASR's
-    // ASR head emits TIMESTAMPS_NONE per the family capability).
+    // Write full_text + a single segment (no timestamps; TIMESTAMPS_NONE).
     cc->t_decode_us = ggml_time_us() - t_dec_start;
 
-    // Optional perf breakdown. Public transcribe_timings only has
-    // mel/encode/decode — this dumps the finer split we need to
-    // reason about bench wall-vs-phase gaps without changing the
-    // public API or the bench JSON schema. Gated on env var so it
-    // doesn't spam normal runs.
+    // Optional perf breakdown (finer split than the public mel/encode/decode
+    // timings), gated on env var.
     if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG");
         e != nullptr && *e != '\0' && *e != '0')
     {
@@ -1295,9 +1198,8 @@ transcribe_status run(
               / static_cast<int64_t>(cm->hparams.fe_sample_rate);
     cc->segments.push_back(std::move(seg));
 
-    // The partial transcript is fully populated above; a truncated decode
-    // returns the hard OUTPUT_TRUNCATED status (the result stays readable,
-    // like an aborted run). See docs/input-limits.md.
+    // A truncated decode returns OUTPUT_TRUNCATED; the partial transcript above
+    // stays readable (like an aborted run).
     return cc->was_truncated ? TRANSCRIBE_ERR_OUTPUT_TRUNCATED
                              : TRANSCRIBE_OK;
 }
@@ -1306,12 +1208,10 @@ transcribe_status run(
 // Offline batched decode (transcribe_run_batch)
 // ===========================================================================
 //
-// Strategy (see docs/batching-autoregressive-plan.md): prefill each utterance
-// serially into its OWN slab of a batched KV cache — byte-identical to the
-// single-shot prefill, so it inherits correctness — then batch only the
-// expensive autoregressive step loop. The encoder + prefill stay per-utterance
-// (low risk); all new batch-axis math lives in the batched step graph and is
-// gated by per-row text/logits parity vs single-shot.
+// Prefill each utterance serially into its OWN slab of a batched KV cache
+// (byte-identical to single-shot prefill, so it inherits correctness), then
+// batch only the autoregressive step loop. Encoder + prefill stay
+// per-utterance; the batch-axis math lives in the batched step graph.
 
 namespace {
 
@@ -1347,7 +1247,7 @@ transcribe_status encode_all_batched(
     int64_t & mel_us, int64_t & enc_us) {
     const int n_mels = cm->hparams.enc_num_mel_bins;
 
-    // ---- mel (parallel across utterances) ----
+    // Mel (parallel across utterances).
     std::vector<std::vector<float>> mels(n);
     std::vector<int> mel_nf(n, 0);
     int n_threads = cc->n_threads;
@@ -1368,7 +1268,7 @@ transcribe_status encode_all_batched(
     });
     mel_us += ggml_time_us() - t_mel0;
 
-    // ---- per-utterance timing + packing geometry ----
+    // Per-utterance timing + packing geometry.
     std::vector<EncoderTiming> timings(n);
     int n_chunks_max = 1;
     bool any = false;
@@ -1382,7 +1282,7 @@ transcribe_status encode_all_batched(
     }
     if (!any) return TRANSCRIBE_OK;  // caller emits per-row errors
 
-    // ---- build batched encoder graph ----
+    // Build batched encoder graph.
     if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK)
         return st;
     EncoderBuildBatched eb = build_encoder_graph_batched(
@@ -1502,7 +1402,7 @@ transcribe_status encode_all_batched(
 // KV into its slab and returning the first generated token per utterance. The
 // caller must have allocated cc->kv_cache_batch with n_ctx >= max T_prompt and
 // computed prompt_ids[b] / T_prompt[b] / prefix_len. Collapses B per-utterance
-// prefill graph-builds + sched-allocs into one (the L40S floor-lift).
+// prefill graph-builds + sched-allocs into one.
 transcribe_status prefill_all_batched(
     QwenAsrSession * cc, QwenAsrModel * cm,
     const std::vector<char> & valid,
@@ -1545,10 +1445,9 @@ transcribe_status prefill_all_batched(
         ggml_backend_tensor_set(pb.input_ids_in, ids.data(), 0,
                                 ids.size() * sizeof(int32_t));
     }
-    // Audio injection by elementwise blend: audio_dense [d_enc, T_prompt_max, n]
-    // holds each utterance's enc_out embeds scattered into their prompt
-    // positions (zero elsewhere), keep [T_prompt_max, n] is 0 there and 1
-    // elsewhere. x = x*keep + audio_dense. (d_enc == dec_hidden, enforced.)
+    // Audio injection by elementwise blend (see decoder.h): audio_dense holds
+    // each utterance's enc_out embeds scattered into their prompt positions,
+    // keep is 0 there and 1 elsewhere. (d_enc == dec_hidden, enforced.)
     {
         std::vector<float> audio_dense(
             static_cast<size_t>(d_enc) * T_prompt_max * n, 0.0f);
@@ -1708,8 +1607,7 @@ transcribe_status run_batch(
     if (!cm->mel.has_value()) return TRANSCRIBE_ERR_INVALID_ARG;
 
     // Batched decode requires the flash-attention step path and dump-free
-    // operation (the per-utterance graphs reuse one compute_ctx). Fall back
-    // to the serial loop otherwise — same results, no throughput gain.
+    // operation. Fall back to the serial loop otherwise (same results).
     if (!cc->decoder_use_flash || transcribe::debug::enabled() || n == 1) {
         return run_batch_serial(cc, pcm, n_samples, n, params);
     }
@@ -1723,13 +1621,12 @@ transcribe_status run_batch(
         params->language[0] != '\0') {
         if (encode_language_prefix(cm->tok, params->language, lang_prefix_ids)
             != TRANSCRIBE_OK) {
-            // Bad language hint is a whole-batch config error; mirror run().
             return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
         }
         lang_prefix_ptr = &lang_prefix_ids;
     }
 
-    // ---- Pass 1: per-utterance encoder + prefill into KV slabs ----
+    // Pass 1: per-utterance encoder + prefill into KV slabs.
     std::vector<std::vector<int32_t>> generated(n);
     std::vector<int>     T_prompt(n, 0);
     std::vector<int32_t> next_tok(n, 0);
@@ -1754,10 +1651,8 @@ transcribe_status run_batch(
     const int max_new = 256;
     int max_T_prompt = 0;
     int prefix_len   = 0;
-    // Per-utterance terminal status for rows we reject before decode. Defaults
-    // to INVALID_ARG (the encode pass already invalidated malformed rows);
-    // over-length rows below are upgraded to INPUT_TOO_LONG so run_batch
-    // enforces the same input-length contract as the single-shot run().
+    // Per-utterance terminal status for rejected rows. Defaults to INVALID_ARG;
+    // over-length rows below are upgraded to INPUT_TOO_LONG.
     const int ceiling = qwen3_context_ceiling(cc->n_ctx, cm->hparams);
     std::vector<transcribe_status> fail_status(n, TRANSCRIBE_ERR_INVALID_ARG);
     std::vector<std::vector<int32_t>> prompt_ids(n);
@@ -1768,9 +1663,7 @@ transcribe_status run_batch(
                             lang_prefix_ptr, prompt_ids[b], ap);
         T_prompt[b]  = static_cast<int>(prompt_ids[b].size());
         prefix_len   = ap.empty() ? 0 : static_cast<int>(ap.front());
-        // Same gate as single-shot run(): audio + prompt + generation must fit
-        // the context ceiling. Reject the over-length utterance (the rest of
-        // the batch still runs); see docs/input-limits.md.
+        // Same gate as single-shot run(); the rest of the batch still runs.
         if (T_prompt[b] + max_new > ceiling) {
             transcribe::log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                 "qwen3_asr run_batch: utterance %d input too long — %d audio + "
@@ -1794,9 +1687,8 @@ transcribe_status run_batch(
     }
     int max_n_kv = 1024;
     while (max_n_kv < max_T_prompt + max_new) max_n_kv *= 2;
-    // Honor the session context cap: the pow2 rounding above can overshoot the
-    // ceiling, so clamp (the per-utterance gate guarantees every valid row's
-    // T_prompt + max_new <= ceiling, so the cache still fits all rows).
+    // Clamp the pow2 round-up to the ceiling (the per-utterance gate guarantees
+    // every valid row still fits).
     if (max_n_kv > ceiling) max_n_kv = ceiling;
 
     // Allocate / reuse the batched KV cache (n_ctx == max_n_kv, n slabs).
@@ -1839,7 +1731,7 @@ transcribe_status run_batch(
     }
     const int64_t prefill_pass_us = ggml_time_us() - t_prefpass0;
 
-    // ---- Pass 2: batched step loop (shared causal_lm driver) ----
+    // Pass 2: batched step loop (shared causal_lm driver).
     const int32_t eos_id = cm->hparams.eos_token_id;
 
     if (const transcribe_status st = reset_compute_ctx(cc, 16); st != TRANSCRIBE_OK)
@@ -1875,7 +1767,7 @@ transcribe_status run_batch(
     const int64_t step_us = step_stats.step_us;
     const int     n_steps = step_stats.n_steps;
 
-    // ---- Capture per-utterance results ----
+    // Capture per-utterance results.
     const int valid_count = std::max(1, static_cast<int>(
         std::count(valid.begin(), valid.end(), char(1))));
     for (int b = 0; b < n; ++b) {
@@ -1887,9 +1779,7 @@ transcribe_status run_batch(
         }
         transcribe_session::ResultSet rs =
             finalize_utterance(cm, generated[b], lang_prefix_ptr, n_samples[b]);
-        // Per-utterance truncation parity with the single-shot path: a row that
-        // hit the generation budget / context before eos reports
-        // TRANSCRIBE_ERR_OUTPUT_TRUNCATED (partial transcript retained).
+        // Per-utterance truncation parity with the single-shot path.
         if (b < static_cast<int>(truncated.size()) && truncated[b]) {
             cc->was_truncated = true;
             rs.status = TRANSCRIBE_ERR_OUTPUT_TRUNCATED;

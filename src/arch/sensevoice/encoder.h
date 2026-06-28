@@ -1,9 +1,8 @@
 // arch/sensevoice/encoder.h - SenseVoice SAN-M encoder graph builder.
 //
-// Stage 4 brings up the encoder graph here. The .cpp file builds a
-// ggml_cgraph that mirrors SenseVoiceEncoderSmall.forward (SAN-M
-// blocks with FSMN memory branch, two-tier depth, sinusoidal PE,
-// pre-encoder prefix-embedding prepend).
+// The .cpp file builds a ggml_cgraph that mirrors
+// SenseVoiceEncoderSmall.forward (SAN-M blocks with FSMN memory branch,
+// two-tier depth, sinusoidal PE, pre-encoder prefix-embedding prepend).
 //
 // This header is INTERNAL to src/arch/sensevoice/. The C ABI sees
 // only SenseVoice::run, which builds and runs this graph.
@@ -21,9 +20,8 @@ namespace transcribe::sensevoice {
 struct SenseVoiceHParams;
 struct SenseVoiceWeights;
 
-// Named intermediate dump points for the validate.py harness.
-// Mirrors dump_coverage.json. Each field is a borrowed pointer into
-// the compute_ctx; nullptr means the sub-stage is not yet wired.
+// Named intermediate dump points. Each field is a borrowed pointer into
+// the compute_ctx; nullptr means the sub-stage is not wired.
 struct EncoderDumps {
     // Frontend output (LFR + CMVN). ne=[d_input, T_lfr, 1, 1].
     ggml_tensor * frontend_out      = nullptr;

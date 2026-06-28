@@ -1,5 +1,5 @@
-// debug_dump_unit.cpp - round-trip unit test for the per-stage tensor
-// dumper in src/transcribe-debug.{h,cpp}.
+// debug_dump_unit.cpp - round-trip unit test for the tensor dumper in
+// src/transcribe-debug.{h,cpp}.
 //
 // What we cover:
 //
@@ -17,12 +17,12 @@
 //
 //   - Metal backend correctness. The same code path runs on Metal in
 //     real builds (the loader binds Metal first on Apple Silicon and
-//     the encoder graph in step 3 will dump from Metal-resident
-//     activations). Phase 4 step 3 will exercise that end-to-end via
-//     the encoder graph; this unit test stays CPU-only so it's
+//     the encoder graph can dump from Metal-resident activations).
+//     Real-model validation exercises that end-to-end via the encoder
+//     graph; this unit test stays CPU-only so it's
 //     fast and runs in CI without Metal hardware.
-//   - The compare_tensors.py side. That's exercised ad-hoc by the
-//     numerical bringup loop in step 3.
+//   - The compare_tensors.py side. That's exercised by numerical
+//     validation runs.
 
 #include "transcribe-debug.h"
 

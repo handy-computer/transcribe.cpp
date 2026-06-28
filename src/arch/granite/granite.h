@@ -5,8 +5,7 @@
 // Speech family (audio-LLM: Conformer encoder + BLIP-2 Q-Former
 // projector + Granite-4 causal LM with audio-token injection).
 //
-// First port targets non-streaming ASR transcription across 3 AR
-// variants:
+// Supported non-streaming ASR variants:
 //   - granite-4.0-1b-speech
 //   - granite-speech-4.1-2b
 //   - granite-speech-4.1-2b-plus
@@ -53,15 +52,10 @@ namespace transcribe::granite {
 
 void apply_family_invariants(transcribe_model & model);
 
-// Chat-template token ids resolved through the loaded tokenizer at
-// load time. Granite's bare-USER:/ASSISTANT: template (1b/2b) and the
-// Granite-4 system-role template (plus) overlap on the role-marker
-// tokens; we resolve every piece we might need ahead of time so a
-// future vocab drift fails loudly at load instead of mid-decode.
-//
-// All fields are the *resolved* ids. The reference IDs on the granite
-// vocab (100256..100352 are added tokens) are stable across the 3 AR
-// variants, but we look them up rather than hardcode.
+// Chat-template token ids resolved through the loaded tokenizer at load time
+// (bare-USER:/ASSISTANT: for 1b/2b, Granite-4 system-role for -plus). Every
+// piece is resolved ahead of time so vocab drift fails loudly at load instead
+// of mid-decode. All fields are resolved ids — looked up, not hardcoded.
 struct ChatTokens {
     int32_t audio          = -1;   // <|audio|>
     int32_t end_of_text    = -1;   // <|end_of_text|>  (also EOS / BOS)
@@ -70,9 +64,7 @@ struct ChatTokens {
     int32_t end_of_role    = -1;   // <|end_of_role|>    (granite-4 chat only)
 };
 
-// ---------------------------------------------------------------------------
-// Model / Context
-// ---------------------------------------------------------------------------
+// Model / Context.
 
 struct GraniteModel final : public transcribe_model {
     Tokenizer        tok;
@@ -98,10 +90,9 @@ struct GraniteModel final : public transcribe_model {
     std::optional<transcribe::MelFrontend> mel;
 
     // Jinja chat template from the GGUF KV. Stored verbatim — we don't
-    // render Jinja at runtime; the family-specific prompt builder
-    // (Phase 5) emits the equivalent token sequence directly. Empty
-    // string means "no template" (the runtime will refuse to decode
-    // without one).
+    // render Jinja at runtime; the family-specific prompt builder emits the
+    // equivalent token sequence directly. Empty string means "no template"
+    // (the runtime will refuse to decode without one).
     std::string chat_template;
 
     // Resolved chat-template token ids (filled at load time).

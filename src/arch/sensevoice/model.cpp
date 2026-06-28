@@ -454,7 +454,6 @@ transcribe_status run(
 
     const int T_full = T_lfr + 4;  // 4 prepended prefix tokens
 
-    // ---------- Reset per-call compute state --------------------------
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
@@ -520,8 +519,9 @@ transcribe_status run(
     // ITN slot. Generic transcribe_run_params::itn routes here. DEFAULT maps
     // to the shipped behavior (use_itn=false; matches the family's
     // `itn=False` Python default). OFF / ON override explicitly. The
-    // dispatcher's advisory WARN only fires when supports_itn == false;
-    // SenseVoice advertises supports_itn = true, so no WARN fires here.
+    // dispatcher's advisory WARN only fires when transcribe_model_supports(
+    // model, TRANSCRIBE_FEATURE_ITN) is false; SenseVoice sets
+    // TRANSCRIBE_FEATURE_ITN so the probe returns true and no WARN fires here.
     bool use_itn = false;
     if (params != nullptr) {
         switch (params->itn) {

@@ -1,39 +1,13 @@
 // arch/medasr/encoder.cpp - MedASR (Google LASR-CTC) Conformer encoder
 // graph builder.
 //
-// Forward shape:
-//
-//   mel.in       ne=[T_mel, n_mels=128, 1, B]
-//     -> subsampling (custom: dense + 2x conv1d(s=2,p=0) + dense)
-//                  ne=[d_model=512, T_enc, 1, B]   = enc.subsampling.out
-//     -> 17 x conformer block {
-//         FF1 macaron residual w=[1.5, 0.5]   (sub-step: enc.block.0.post_ff1)
-//         RoPE self-attention, unscaled residual (post_attn)
-//         conv module, scaled residual w=[2.0, 1.0]                 (post_conv)
-//         FF2 macaron residual w=[1.5, 0.5]                         (post_ff2)
-//         norm_out                                          = enc.block.i.out
-//       }
-//     -> enc.out_norm                                 = enc.out_norm.out
-//     -> ctc head (Conv1d k=1 = mul_mat + bias)
-//                  ne=[vocab=512, T_enc, 1, B]                = enc.ctc_logits
-//
-// Differences from src/arch/gigaam/encoder.cpp (the closest in-tree
-// analog):
-//
-//   - Subsampling is 1-D (linear -> relu -> conv1d(s=2) -> relu ->
-//     conv1d(s=2) -> relu -> linear), NOT 2x conv1d. The leading dense
-//     reduces n_mels -> d_model before the convs touch the time axis.
-//   - All encoder LayerNorms are bias=false (norm has scale w, no beta).
-//   - Conv module uses BatchNorm — host-fused at load time, uploaded as
-//     compute_ctx tensors per call. Asymmetric padding (15, 16) for
-//     k=32 "same" depthwise.
-//   - Scaled residuals: macaron weights [1.5, 0.5] on FF1/FF2, conv
-//     weights [2.0, 1.0]. NOT the standard 0.5 macaron half-step.
-//   - Attention uses RoPE on Q and K AFTER projection (standard
-//     convention). GigaAM rotates before projection, which is rare.
-//   - LayerNorm eps is 1e-6 (loaded from hparams), NOT the
-//     conf::layer_norm hardcoded 1e-5; this file uses a local helper
-//     `lasr_layer_norm` that takes eps as a runtime arg.
+// mel.in ne=[n_mels=128, T_mel, 1, B] -> subsampling (dense + 2x
+// conv1d(s=2,p=0) + dense) [d_model=512, T_enc, 1, B] -> 17 x conformer
+// block {macaron FF1 [1.5,0.5] | RoPE self-attn | conv (BatchNorm) [2.0,1.0]
+// | macaron FF2 [1.5,0.5] | norm_out} -> enc.out_norm -> ctc head
+// (Conv1d k=1) [vocab=512, T_enc, 1, B]. All encoder LayerNorms are
+// bias=false with eps=1e-6 (local `lasr_layer_norm`, not conf's 1e-5);
+// RoPE is applied to Q/K after projection.
 
 #include "encoder.h"
 
@@ -56,17 +30,13 @@ namespace {
 
 namespace conf = transcribe::conformer;
 
-// Weight-matmul forcing F32 accumulation for F16 weights. On CUDA,
-// `ggml_mul_mat` with an F16 weight takes the cuBLAS COMPUTE_16F path
-// whose accumulator saturates at ~6.5e4 — and medasr's scaled-residual
-// stream pushes intermediate activations to ~2e6 between blocks (the
-// macaron [1.5, 0.5] and conv [2.0, 1.0] amplification). F16 accum
-// overflows to NaN, the CTC argmax collapses to blank/specials, and
-// every transcript comes back empty. GGML_PREC_F32 forces cuBLAS to run
-// the GEMM in F32 instead, matching CPU/Metal which always F32-accumulate.
-// No-op on CPU/Metal; slight perf cost on CUDA. Skip on non-F16 weights
-// (BF16 already COMPUTE_32F; quantized routes through MMQ). Mirrors the
-// `mul_mat_f32acc` helper at src/causal_lm/causal_lm.cpp:40.
+// Weight-matmul forcing F32 accumulation for F16 weights. On CUDA, an F16
+// weight takes the cuBLAS COMPUTE_16F path whose accumulator saturates at
+// ~6.5e4 — and medasr's scaled-residual stream (macaron [1.5,0.5] + conv
+// [2.0,1.0]) pushes activations to ~2e6 between blocks, so F16 accum
+// overflows to NaN and every transcript comes back empty. GGML_PREC_F32
+// matches CPU/Metal's always-F32 accumulate. No-op on CPU/Metal and on
+// non-F16 weights (BF16 already COMPUTE_32F; quantized routes through MMQ).
 ggml_tensor * mul_mat_f32acc(ggml_context * ctx,
                              ggml_tensor *  w,
                              ggml_tensor *  x)
@@ -122,31 +92,12 @@ ggml_tensor * scaled_residual(ggml_context * ctx,
 }
 
 // ---------------------------------------------------------------------------
-// Subsampling
+// Subsampling: dense_0 -> relu -> conv_0(s=2) -> relu -> conv_1(s=2) ->
+// relu -> dense_1 (no relu). The running tensor stays "channel-fast"
+// [C, T, B] for the dense layers (mul_mat) and "time-fast" [T, C, B] for
+// the convs (conv_1d_f32); one permute on each boundary. Per-step ne is
+// noted inline below.
 // ---------------------------------------------------------------------------
-//
-// Reference (LasrEncoderSubsampling.forward):
-//   h = relu(dense_0(x))                # [B, T_mel, d_model]
-//   h = h.transpose(1, 2)               # [B, d_model, T_mel]
-//   h = relu(conv_0(h))                 # [B, d_model, T1]    (k=5, s=2, p=0)
-//   h = relu(conv_1(h))                 # [B, sub_c, T_enc]   (k=5, s=2, p=0)
-//   h = h.transpose(1, 2)               # [B, T_enc, sub_c]
-//   return dense_1(h)                   # [B, T_enc, d_model] (no relu)
-//
-// In ggml (channel-fast):
-//   mel_in     ne=[T_mel, n_mels, 1, B]
-//   dense_0    mul_mat in [n_mels, T_mel, B] orientation -> [d_model, T_mel, B]
-//              ... but mel_in is [T_mel, n_mels, 1, B]; we permute to
-//              [n_mels, T_mel, 1, B] first so mul_mat sees n_mels at ne[0].
-//   relu, then conv_0 takes [d_model, T_mel, B] as data with kernel
-//   ne=[k=5, d_model, d_model]; conv_1d_f32 produces [T1, d_model, B] —
-//   the same transpose pattern gigaam uses.
-//   Pre-relu, transpose back to [d_model, T_mel, B] for the same-conv shape.
-//
-// We avoid back-and-forth permutes by keeping the running tensor in
-// "channel-fast" [C, T, B] layout for the dense layers (mul_mat) and
-// "time-fast" [T, C, B] layout for the conv layers (conv_1d_f32). One
-// permute on each boundary is enough.
 ggml_tensor * build_subsampling(ggml_context *            ctx,
                                 const MedAsrSubsampling & ss,
                                 ggml_tensor *             mel_in,
@@ -414,7 +365,7 @@ ggml_tensor * build_block(ggml_context *           ctx,
     const float conv_w0  = hp.enc_conv_resid_w0; // 2.0
     const float conv_w1  = hp.enc_conv_resid_w1; // 1.0
 
-    // FF1: x = w0*x + w1*FF1(LN(x)).
+    // Macaron FF1.
     {
         ggml_tensor * y = lasr_layer_norm(ctx, x, b.norm_ff1_w, ln_eps);
         y = lasr_feed_forward(ctx, y, b.ff1_up_w, b.ff1_down_w);
@@ -422,7 +373,7 @@ ggml_tensor * build_block(ggml_context *           ctx,
     }
     if (obs != nullptr) obs->post_ff1 = x;
 
-    // Self-attention: x = x + Attn(LN(x)).
+    // Self-attention.
     {
         ggml_tensor * y = lasr_layer_norm(ctx, x, b.norm_attn_w, ln_eps);
         y = build_rope_attn(ctx, y, positions, b, d_model, n_head,
@@ -431,7 +382,7 @@ ggml_tensor * build_block(ggml_context *           ctx,
     }
     if (obs != nullptr) obs->post_attn = x;
 
-    // Conv: x = w0*x + w1*Conv(LN(x)).
+    // Conv module.
     {
         ggml_tensor * y = lasr_layer_norm(ctx, x, b.norm_conv_w, ln_eps);
         y = build_conv_module(ctx, y, b, bn_scale, bn_bias,
@@ -440,7 +391,7 @@ ggml_tensor * build_block(ggml_context *           ctx,
     }
     if (obs != nullptr) obs->post_conv = x;
 
-    // FF2: x = w0*x + w1*FF2(LN(x)).
+    // Macaron FF2.
     {
         ggml_tensor * y = lasr_layer_norm(ctx, x, b.norm_ff2_w, ln_eps);
         y = lasr_feed_forward(ctx, y, b.ff2_up_w, b.ff2_down_w);

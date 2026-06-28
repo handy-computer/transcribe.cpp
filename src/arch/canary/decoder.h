@@ -1,12 +1,6 @@
 // arch/canary/decoder.h - Canary autoregressive Transformer decoder graph builder.
 //
-// Modeled on src/arch/cohere/decoder.h. Differences:
-//   - per-sublayer dumps (self_attn / cross_attn / ffn outputs) at
-//     layers {0, n_layers/2, n_layers-1} so the C++ matches the
-//     reference dumper's hooks
-//   - LM head is UNTIED: head.weight is read as a separate tensor
-//     and `mul_mat(head.weight, x) + head.bias` produces the logits
-//   - tensor naming follows canary's GGUF (norm1/2/3, q/k/v/o, ffn.up/down)
+// Untied LM head; per-sublayer dumps at layers {0, n_layers/2, n_layers-1}.
 
 #pragma once
 

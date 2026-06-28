@@ -109,7 +109,7 @@ struct transcribe_model * load_or_fail(const char * fixture_name,
     }
     CHECK_STR_EQ(transcribe_model_arch_string(model),    "parakeet");
     CHECK_STR_EQ(transcribe_model_variant_string(model), expected_variant);
-    // After phase 4 step 1 the loader binds a runtime backend; the
+    // After load the loader binds a runtime backend; the
     // exact label is platform-dependent (Metal on Apple Silicon, CPU
     // elsewhere or on Metal init failure). Just assert non-empty.
     {

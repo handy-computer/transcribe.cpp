@@ -11,10 +11,6 @@
 // per-block fused-BN scale/bias inputs, computes the graph, reads
 // back the CTC logits, performs greedy collapse (drop blanks, collapse
 // repeats), and populates the result snapshot.
-//
-// run_batch is left nullptr — the central dispatcher falls back to
-// calling run() once per utterance. A run_batch fast path can be wired
-// later (Stage 4 Step 9) without changing this file's contract.
 
 #include "medasr.h"
 
@@ -303,9 +299,8 @@ transcribe_status init_context(transcribe_model *                model,
     return TRANSCRIBE_OK;
 }
 
-// Load reference mel sidecar from <dir>/mel.in.f32 (validate.py emits
-// JSON; the .f32 sidecar is written next to it for fast bytes-only
-// reload). For the encoder bring-up path we accept either filename.
+// Load reference mel sidecar from <dir>/mel.in.f32 (or
+// frontend.mel.out.f32).
 transcribe_status load_ref_mel(const std::string & dir,
                                int                 n_mels,
                                int &               n_mel_frames,
@@ -358,12 +353,9 @@ transcribe_status load_ref_mel(const std::string & dir,
 // Greedy CTC decode: argmax per frame, collapse repeats, drop blanks
 // AND skip the LASR special tokens (<s>=1, </s>=2, <unk>=3) — matching
 // the reference's `processor.batch_decode(skip_special_tokens=True)`.
-// Without this, an utterance whose final CTC frame argmaxes to id 2
-// (`</s>`) leaks the literal string `</s>` into the transcript, which
-// scores as a +1 insertion against the reference text and lifts the
-// dataset WER by ~0.2pp on test-clean. `<epsilon>` (id 0) is already
-// dropped by the standard blank-skip; `<unk>` and `<s>` are explicit
-// skips here to mirror the HF tokenizer's behaviour.
+// Without this, a final frame that argmaxes to id 2 (`</s>`) leaks the
+// literal `</s>` into the transcript, scoring as a +1 insertion (~0.2pp
+// WER on test-clean). `<epsilon>` (id 0) is the standard blank-skip.
 void decode_ctc_greedy(const float * logits,
                        int           vocab,
                        int           T_enc,
@@ -384,10 +376,7 @@ void decode_ctc_greedy(const float * logits,
         if (best == blank_id) { prev = -1; continue; }
         if (best == prev) continue;
         prev = best;
-        // skip_special_tokens=True equivalent: drop ids 1 (<s>), 2 (</s>),
-        // and 3 (<unk>). The blank id is checked above; this conditional
-        // is unreachable when blank_id is itself in {1,2,3}, but the
-        // explicit check keeps the intent local.
+        // skip_special_tokens=True: drop ids 1 (<s>), 2 (</s>), 3 (<unk>).
         if (best == 1 || best == 2 || best == 3) continue;
         tokens.push_back(best);
         frames.push_back(t);

@@ -25,7 +25,7 @@ ggml_tensor * named(ggml_tensor * t, const char * name) {
 }
 
 // `ffn_norm_folded` is the per-layer (1+ada(t_cond)) ⊙ norm_ffn_w precomputed per
-// session (Stage 6 #2). Passing it as the FFN-norm weight lets the fused
+// session. Passing it as the FFN-norm weight lets the fused
 // rms_norm(·weight) apply the ada scale — no separate per-layer ggml_mul. Null
 // falls back to the raw FFN-norm weight (ada not yet computed).
 causal_lm::BlockView to_block_view(const DecBlock & b, ggml_tensor * ffn_norm_folded) {
@@ -40,7 +40,7 @@ causal_lm::BlockView to_block_view(const DecBlock & b, ggml_tensor * ffn_norm_fo
     v.attn_k_norm   = nullptr;
     v.ffn_gate_up_w = b.ffn_gate_up_w;
     v.ffn_down_w    = b.ffn_down_w;
-    v.ffn_scale     = nullptr;  // ada scale folded into norm_ffn_w (Stage 6 #2)
+    v.ffn_scale     = nullptr;  // ada scale folded into norm_ffn_w
     return v;
 }
 

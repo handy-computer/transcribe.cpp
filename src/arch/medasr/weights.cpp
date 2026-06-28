@@ -1,11 +1,9 @@
 // arch/medasr/weights.cpp - read_medasr_hparams + build_medasr_weights.
 //
-// Pattern follows arch/gigaam/weights.cpp: read every required KV from
-// the GGUF, then validate the tensor catalog by name + shape using
-// transcribe::weights::find_tensor. Adds fuse_batch_norm() which the
-// load() handler calls after data streaming completes — the conv-module
-// BatchNorm in each block is fused on the host to a per-channel scale +
-// bias pair, and the raw BN tensors stop being consulted after that.
+// Reads every required KV, validates the tensor catalog by name + shape,
+// then fuse_batch_norm() (called by load() after data streaming) folds
+// each block's conv-module BatchNorm on the host to a per-channel scale +
+// bias pair, after which the raw BN tensors stop being consulted.
 
 #include "weights.h"
 

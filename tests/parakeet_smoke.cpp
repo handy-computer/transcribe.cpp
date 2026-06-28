@@ -18,7 +18,7 @@
 //      the per-block shape formulas baked into weights.cpp's GET()
 //      sequence — paranoia in case the canonical shape formulas drift
 //      out of sync with the fixture.
-//   5. transcribe_model_backend() is non-empty after phase 4 step 1
+//   5. transcribe_model_backend() is non-empty after load
 //      (Metal on Apple Silicon, CPU elsewhere or on Metal init
 //      failure). The synthetic fixture uses the same load path as
 //      the real model so this is the same code being exercised.
@@ -133,7 +133,7 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    // Public ABI sanity. After phase 4 step 1, backend is one of
+    // Public ABI sanity. After load, backend is one of
     // "metal" or "cpu" (Metal-first on Apple Silicon, CPU fallback).
     // The exact label is platform-dependent so we just assert
     // non-empty here; the real-model test does the same.

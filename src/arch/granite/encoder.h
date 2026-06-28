@@ -38,9 +38,7 @@ namespace transcribe { class MelFrontend; }
 
 namespace transcribe::granite {
 
-// ---------------------------------------------------------------------------
-// Host-side mel preprocessing
-// ---------------------------------------------------------------------------
+// Host-side mel preprocessing.
 
 // Run the reference MelSpectrogram (via transcribe::MelFrontend in
 // whisper-mode + htk filterbank + reflect-pad + hann_periodic window),
@@ -58,9 +56,7 @@ transcribe_status compute_mel_encoder_input(
     std::vector<float> &            out_mel,
     int &                           out_t_enc);
 
-// ---------------------------------------------------------------------------
-// Graph construction
-// ---------------------------------------------------------------------------
+// Graph construction.
 
 struct EncoderBuild {
     // Graph inputs (caller uploads at compute time).
@@ -80,7 +76,7 @@ struct EncoderBuild {
 
     ggml_cgraph * graph             = nullptr;
 
-    // Dump points (exposed so model.cpp can wire them up for validate.py).
+    // Dump points (exposed so model.cpp can wire them up).
     struct Dumps {
         ggml_tensor * input_linear_out = nullptr;  // [hidden, T_enc]
         ggml_tensor * block_0_out      = nullptr;
@@ -97,7 +93,7 @@ struct EncoderBuild {
 
 // Build the encoder graph. `T_enc` is the number of post-stack frames
 // (== n_mel_frames / 2 after the whisper-mode trim). `use_flash` is
-// reserved for future use — the first port uses manual mul_mat + soft_max
+// reserved for future use — the implementation uses manual mul_mat + soft_max
 // because the Shaw bias requires a per-(head, block) additive term and
 // the flash_attn_ext path doesn't yet broadcast that cleanly.
 EncoderBuild build_encoder_graph(ggml_context *           ctx,
@@ -107,9 +103,11 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
                                  bool                     use_flash);
 
 // Host-side precomputation of the Shaw attention_dists matrix.
-// attention_dists[c, r] = clamp(r - c, -context_size, context_size) + max_pos_emb,
-// flattened to row-major int32 [context_size * context_size]. Caller
-// uploads this once per encode into EncoderBuild::attention_dists.
+// attention_dists[c, r] = clamp(c - r, -context_size, context_size) + max_pos_emb,
+// where c is the key/column index and r is the query/row index (matches the
+// reference `seq.view(-1,1) - seq.view(1,-1)`; see precompute_attention_dists
+// in encoder.cpp). Flattened to row-major int32 [context_size * context_size].
+// Caller uploads this once per encode into EncoderBuild::attention_dists.
 //
 // The same matrix is reused across every encoder block and every batch
 // element (and across decode calls if the encoder shape is unchanged).

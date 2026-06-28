@@ -7,24 +7,17 @@
 //     -> transpose + cont to [T, n_mels] for ggml_conv_1d
 //     -> conv1 (k=3, s=1, p=1) + GELU                 [T=3000, d_model]
 //     -> conv2 (k=3, s=2, p=1) + GELU                 [T=1500, d_model]
-//     -> transpose + cont to [d_model, T=1500]        (channel-innermost,
-//                                                       matching reference
-//                                                       dump layout and the
-//                                                       natural transformer
-//                                                       layout)
+//     -> transpose + cont to [d_model, T=1500]        (channel-innermost)
 //     -> + learned positional embedding [d_model, T=1500]
-//     -> 4x pre-LN transformer block
+//     -> Nx pre-LN transformer block
 //     -> final LayerNorm
 //     -> enc.final [d_model, T=1500]
 //
-// The reference dumps pin the layout: enc.mel.in numpy shape is
-// (T, n_mels) and every post-stem activation is (T, d_model). In
-// ggml ne terms (fast innermost), that's [n_mels, T] for the mel
-// input and [d_model, T] for everything after the stem transpose.
+// ggml ne (fast innermost): [n_mels, T] for the mel input, [d_model, T]
+// for everything after the stem transpose.
 //
-// Whisper attention quirk: q / v / out carry bias; k has NO bias.
-// The `mha` helper below takes all four bias slots as nullable
-// ggml_tensor *'s and skips the add when the slot is null.
+// Whisper attention quirk: q/v/out carry bias; k has NO bias. The mha helper
+// takes nullable bias slots and skips the add when null.
 
 #include "encoder.h"
 
@@ -62,14 +55,8 @@ ggml_tensor * add_conv1d_bias(ggml_context * ctx,
 }
 
 // Standard multi-head self-attention without relative position.
-// Whisper-specific: q/v/out carry bias; k does NOT. The helper
-// accepts nullable bias slots so the call site just passes whatever
-// weights.cpp populated.
-//
-// x:         [d_model, T]
-// mask:      additive mask (f16), or nullptr for unmasked / self-attn
-//            in the encoder (no causal mask — encoder is bidirectional)
-// Returns:   [d_model, T]
+// x: [d_model, T] -> returns [d_model, T]. Encoder is bidirectional
+// (no causal mask).
 ggml_tensor * mha_encoder(ggml_context * ctx,
                           ggml_tensor *  x,
                           ggml_tensor *  q_w, ggml_tensor * q_b,
@@ -84,12 +71,11 @@ ggml_tensor * mha_encoder(ggml_context * ctx,
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T        = x->ne[1];
 
-    // Q, K, V projections.
+    // Q, K, V projections (k has no bias).
     ggml_tensor * q = ggml_mul_mat(ctx, q_w, x);
     if (q_b != nullptr) q = ggml_add(ctx, q, q_b);
 
     ggml_tensor * k = ggml_mul_mat(ctx, k_w, x);
-    // k has no bias.
 
     ggml_tensor * v = ggml_mul_mat(ctx, v_w, x);
     if (v_b != nullptr) v = ggml_add(ctx, v, v_b);
@@ -108,9 +94,7 @@ ggml_tensor * mha_encoder(ggml_context * ctx,
 
     ggml_tensor * o;
     if (use_flash) {
-        // flash_attn_ext wants its q/k/v in contiguous form. ggml
-        // inserts internal cont()s when needed but being explicit
-        // makes the graph easier to reason about.
+        // flash_attn_ext wants q/k/v contiguous.
         ggml_tensor * q_c = ggml_cont(ctx, q);
         ggml_tensor * k_c = ggml_cont(ctx, k);
         ggml_tensor * v_c = ggml_cont(ctx, v);
@@ -139,8 +123,7 @@ ggml_tensor * mha_encoder(ggml_context * ctx,
     return o;
 }
 
-// FFN used by every transformer block: pre-LN wrapped outside, inside
-// is just `fc2(GELU(fc1(x)))`. fc1 / fc2 both carry bias in whisper.
+// FFN: fc2(GELU(fc1(x))); pre-LN wrapped outside. fc1/fc2 carry bias.
 ggml_tensor * ffn(ggml_context * ctx,
                   ggml_tensor *  x,
                   ggml_tensor *  fc1_w, ggml_tensor * fc1_b,
@@ -224,10 +207,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         return eb;
     }
 
-    // ---- mel input handle ---------------------------------------------
-    //
-    // ggml ne=[n_mels, T] matches the reference dump layout
-    // enc.mel.in: numpy shape (T, n_mels). The caller uploads the mel
+    // mel input handle. ggml ne=[n_mels, T]; caller uploads the mel
     // spectrogram row-major in this layout.
     eb.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_mels, n_mel_frames);
     if (eb.mel_in == nullptr) return eb;
@@ -236,46 +216,34 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     eb.dumps.mel_in = eb.mel_in;
     transcribe::debug::mark_tensor_for_dump(eb.mel_in);
 
-    // ---- conv stem ----------------------------------------------------
-    //
-    // ggml_conv_1d wants data ne=[T, Cin]. Transpose mel from
-    // [n_mels, T] to [T, n_mels], materialize with cont, feed to conv1.
+    // conv stem. ggml_conv_1d wants data ne=[T, Cin]; transpose mel from
+    // [n_mels, T] to [T, n_mels], cont, feed to conv1.
     ggml_tensor * x = ggml_cont(ctx, ggml_transpose(ctx, eb.mel_in));
 
-    // conv1: k=3, stride=1, padding=1 -> [T, d_model]
-    // Use conf::conv_1d_f32 instead of ggml_conv_1d because whisper
-    // stores conv kernels in F32; ggml_conv_1d's internal im2col hard-
-    // codes F16 as the im2col dst dtype and the CPU kernel asserts
-    // src0->type == F16, crashing at run time.
+    // conv1: k=3, stride=1, padding=1 -> [T, d_model]. Use conf::conv_1d_f32,
+    // not ggml_conv_1d: whisper conv kernels are F32, but ggml_conv_1d's
+    // im2col hard-codes F16 dst and the CPU kernel asserts src0==F16 (crash).
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv0_w, x, 1, 1, 1);
     x = add_conv1d_bias(ctx, x, w.enc_stem.conv0_b);
-    // HF Whisper uses nn.functional.gelu (exact erf form) for both conv
-    // stems and the FFN; ggml_gelu is the tanh approximation.
+    // HF Whisper uses exact-erf GELU for conv stems and FFN; ggml_gelu is tanh.
     x = ggml_gelu_erf(ctx, x);
-    // Transpose to [d_model, T] so the dump matches reference layout.
-    x = ggml_cont(ctx, ggml_transpose(ctx, x));
+    x = ggml_cont(ctx, ggml_transpose(ctx, x));  // -> [d_model, T]
     named(x, "enc.conv1.out");
     eb.dumps.conv1_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // conv2 needs input in [T, Cin] layout again; transpose back.
+    // conv2: k=3, stride=2, padding=1 -> [T_enc, d_model] (needs [T, Cin]).
     x = ggml_cont(ctx, ggml_transpose(ctx, x));
-    // conv2: k=3, stride=2, padding=1 -> [T_enc, d_model]
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv1_w, x, 2, 1, 1);
     x = add_conv1d_bias(ctx, x, w.enc_stem.conv1_b);
     x = ggml_gelu_erf(ctx, x);
-    // Back to [d_model, T_enc] for the rest of the encoder.
-    x = ggml_cont(ctx, ggml_transpose(ctx, x));
+    x = ggml_cont(ctx, ggml_transpose(ctx, x));  // -> [d_model, T_enc]
     named(x, "enc.conv2.out");
     eb.dumps.conv2_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // ---- positional embedding + add ----------------------------------
-    //
-    // pos_emb weight is stored in GGUF with ne=[d_model, max_source_positions].
-    // For T_enc < max_source_positions, take a prefix view. For whisper-tiny
-    // T_enc is always 1500 = max_source_positions, so this is a no-op view
-    // in practice.
+    // positional embedding + add. pos_emb ne=[d_model, max_source_positions];
+    // for T_enc < max take a prefix view (no-op when T_enc == max).
     ggml_tensor * pos_emb = w.enc_top.pos_emb_w;
     if (T_enc != hp.enc_max_source_positions) {
         pos_emb = ggml_view_2d(ctx, w.enc_top.pos_emb_w,
@@ -291,17 +259,14 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     eb.dumps.embed_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // ---- transformer blocks ------------------------------------------
+    // transformer blocks
     const int n_blocks = static_cast<int>(w.enc_blocks.size());
     eb.dumps.block_outs.reserve(static_cast<size_t>(n_blocks));
     for (int i = 0; i < n_blocks; ++i) {
         x = build_block(ctx, x, w.enc_blocks[i], n_heads, d_model, use_flash);
 
-        // Name every block so the reference-dump harness can compare
-        // layer-by-layer. block0 / block_last are stashed separately
-        // for backwards compatibility with callers that only want the
-        // spot-check pair; block_outs carries the full vector so a
-        // caller that wants to dump all N layers can iterate.
+        // Name every block for layer-by-layer comparison. block0 / block_last
+        // are stashed separately for callers that only want the spot-check pair.
         char bname[64];
         std::snprintf(bname, sizeof(bname), "enc.block.%d.out", i);
         named(x, bname);
@@ -315,7 +280,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
         }
     }
 
-    // ---- final layer norm --------------------------------------------
+    // final layer norm
     x = layer_norm(ctx, x, w.enc_top.final_norm_w, w.enc_top.final_norm_b);
     named(x, "enc.final");
     eb.dumps.final_out = x;
@@ -324,8 +289,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     eb.out = x;
     ggml_set_output(eb.out);
 
-    // Build the forward cgraph. whisper-tiny is 4 blocks; other variants
-    // go up to 32 (large). 8192 leaves headroom for the block ops.
+    // Build the forward cgraph. 8192 leaves headroom up to large (32 blocks).
     eb.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (eb.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,

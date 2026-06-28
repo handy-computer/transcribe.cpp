@@ -41,9 +41,7 @@ struct ggml_tensor;
 
 namespace transcribe::granite {
 
-// ---------------------------------------------------------------------------
 // Hyperparameters
-// ---------------------------------------------------------------------------
 
 struct GraniteHParams {
     // Identity. `stt.variant` distinguishes models that share the same
@@ -119,8 +117,7 @@ struct GraniteHParams {
     int32_t vocab_size   = 0;    // 100353
 
     // Frontend (torchaudio MelSpectrogram). htk-norm mel, no log, no
-    // per-utterance norm, power=2 spectrogram. Stage 2b extends
-    // MelFrontend to support these knobs; for now we just record them.
+    // per-utterance norm, power=2 spectrogram.
     std::string fe_type;             // "mel"
     int32_t     fe_num_mels      = 0;  // 80
     int32_t     fe_sample_rate   = 0;  // 16000
@@ -141,9 +138,7 @@ struct GraniteHParams {
 transcribe_status read_granite_hparams(const gguf_context * gguf,
                                        GraniteHParams &     hp);
 
-// ---------------------------------------------------------------------------
 // Weight slots - encoder (Conformer)
-// ---------------------------------------------------------------------------
 
 // Top-level encoder tensors: input linear (160 -> 1024) and the
 // self-conditioned CTC bypass pair (ctc_proj: 1024 -> 348 for the
@@ -183,9 +178,7 @@ struct GraniteEncBlock {
     // Looked up by clamped (k - q + max_pos_emb) and added to QK^T.
     ggml_tensor * attn_rel_pos_emb = nullptr;  // [head_dim, 2*max_pos_emb+1]
 
-    // Conv module: LN -> pointwise expand to 2*inner_dim -> GLU split
-    // -> depthwise(k=15) -> BN -> SiLU -> pointwise contract back to
-    // hidden. inner_dim = hidden * conv_expansion.
+    // Conv module (see granite_conv_module in encoder.cpp).
     ggml_tensor * norm_conv_w        = nullptr;  // [hidden]
     ggml_tensor * norm_conv_b        = nullptr;
     ggml_tensor * conv_pointwise1_w  = nullptr;  // [1, hidden, 2*inner_dim]
@@ -198,10 +191,7 @@ struct GraniteEncBlock {
     ggml_tensor * conv_pointwise2_w  = nullptr;  // [1, inner_dim, hidden]
     ggml_tensor * conv_pointwise2_b  = nullptr;  // [hidden]
     // Fused BatchNorm scale/bias precomputed at load (model.cpp
-    // fuse_batch_norm). Replaces the raw weight/bias + running stats
-    // for graph use; the raw tensors are still loaded but only feed
-    // the fusion step. Both are [inner_dim] f32, allocated in a
-    // separate ctx on the model.
+    // fuse_batch_norm); the raw tensors above only feed the fusion step.
     ggml_tensor * conv_bn_fused_scale = nullptr;  // [inner_dim]
     ggml_tensor * conv_bn_fused_bias  = nullptr;  // [inner_dim]
 
@@ -218,15 +208,16 @@ struct GraniteEncBlock {
     ggml_tensor * norm_post_b  = nullptr;
 };
 
-// ---------------------------------------------------------------------------
 // Weight slots - projector (BLIP-2 Q-Former)
-// ---------------------------------------------------------------------------
 
 // Top-level projector tensors.
 //   query: [hidden, num_queries=3, 1] — learned queries broadcast over
 //          per-window encoder slices.
 //   linear: lifts Q-Former hidden (1024) to LM hidden (2048).
-//   qformer.final_norm: post Q-Former-stack LN over the query stream.
+//   qformer.final_norm: despite the name (a converter-side misnomer),
+//          this is Blip2QFormerModel.layernorm — the Q-Former INPUT LN,
+//          applied to the queries BEFORE the layer stack, not after it.
+//          See projector.cpp (qformer_layer_norm at graph entry).
 struct GraniteProjTop {
     ggml_tensor * query           = nullptr;  // [hidden, num_queries, 1]
     ggml_tensor * linear_w        = nullptr;  // [hidden, lm_hidden]
@@ -273,9 +264,7 @@ struct GraniteProjBlock {
     ggml_tensor * norm_ffn_b  = nullptr;
 };
 
-// ---------------------------------------------------------------------------
 // Weight slots - Granite-4 LM
-// ---------------------------------------------------------------------------
 
 struct GraniteDecEmbed {
     ggml_tensor * token_w = nullptr;  // [hidden, vocab]
@@ -305,9 +294,7 @@ struct GraniteDecFinal {
     ggml_tensor * output_w = nullptr;   // [hidden, vocab] or nullptr
 };
 
-// ---------------------------------------------------------------------------
 // Aggregated weights
-// ---------------------------------------------------------------------------
 
 struct GraniteWeights {
     GraniteEncTop                   enc_top;

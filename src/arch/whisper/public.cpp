@@ -1,11 +1,9 @@
 // arch/whisper/public.cpp - Whisper-family public C entry points.
 //
-// The Whisper run-extension + chunk-trace init and accessor functions
-// live here, not in the generic transcribe.cpp, so the central dispatcher
-// stays family-agnostic (matching parakeet/moonshine, whose extension
-// init functions live in their own family source). These symbols are part
-// of the public ABI declared in include/transcribe/whisper.h and are
-// linked into libtranscribe.
+// The run-extension + chunk-trace init and accessor functions live here, not
+// in the generic transcribe.cpp, so the central dispatcher stays family-
+// agnostic (matching parakeet/moonshine). Public ABI from
+// include/transcribe/whisper.h.
 
 #include "whisper.h"            // WhisperSession (+ transcribe/whisper.h, transcribe-session.h)
 
@@ -46,10 +44,7 @@ maybe_whisper_context(const struct transcribe_session * session)
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Init functions (single source of truth for Whisper struct defaults).
-// ---------------------------------------------------------------------------
-
 extern "C" void transcribe_whisper_chunk_trace_init(struct transcribe_whisper_chunk_trace * p) {
     if (p == nullptr) { return; }
     std::memset(p, 0, sizeof(*p));
@@ -73,10 +68,7 @@ extern "C" void transcribe_whisper_run_ext_init(struct transcribe_whisper_run_ex
     p->max_initial_timestamp   = 1.0f;
 }
 
-// ---------------------------------------------------------------------------
 // Chunk-trace accessors.
-// ---------------------------------------------------------------------------
-
 extern "C" int transcribe_get_whisper_chunk_count(
     const struct transcribe_session * session)
 {

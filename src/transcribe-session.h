@@ -1,17 +1,12 @@
 // transcribe-session.h - internal base class for the public opaque
 // transcribe_session handle.
 //
-// Mirror of transcribe-model.h. Same Option B layout: a small base owned
-// by the central dispatch, derived per-family contexts owning everything
-// else. The base has a virtual destructor so transcribe_session_free()
-// can `delete ctx;` polymorphically.
-//
-// The result storage is on the BASE because it's family-agnostic: the
-// public C ABI surfaces the same hierarchy (segments / words / tokens
-// / full text) regardless of which family produced it. Per-family
-// run() drivers populate these vectors during decode; the public
-// accessors in transcribe.cpp read them directly with no per-family
-// dispatch.
+// Mirrors transcribe-model.h: a small base owned by the central dispatch,
+// derived per-family contexts owning everything else, with a virtual
+// destructor so transcribe_session_free() can delete polymorphically.
+// Result storage lives on the base because it's family-agnostic (segments
+// / words / tokens / full text); per-family run() drivers populate the
+// vectors and the public accessors read them directly.
 
 #pragma once
 
@@ -70,7 +65,7 @@ struct transcribe_session {
     // clamped down to the model maximum by the family that honors it.
     // Only hard-context-cap families read this; chunked / unbounded
     // families ignore it. See include/transcribe.h
-    // (transcribe_session_params::n_ctx) and docs/input-limits.md.
+    // (transcribe_session_params::n_ctx).
     int32_t n_ctx = 0;
 
     // Cached kv_type the caller passed at init time. Hoisted to the base so
@@ -87,24 +82,12 @@ struct transcribe_session {
     int64_t t_encode_us = 0;
     int64_t t_decode_us = 0;
 
-    // -----------------------------------------------------------------
     // Result storage (family-agnostic; populated by per-family run()).
-    //
-    // The shape mirrors PLAN.md "Results": a flat backing array per
-    // level (segments / words / tokens) plus forward and backward
-    // pointers between levels. v1 produces a single segment per run;
-    // word splitting is family-specific but the per-token / per-word
-    // / per-segment fields below are the same for every family.
-    //
-    // result_kind tells the public accessor what timestamp granularity
-    // the family populated. v1 Parakeet TDT produces token-level
-    // timestamps from the encoder frame indices; word/segment t0/t1
-    // are computed from the contained tokens.
-    //
-    // has_result is the "transcribe_run produced a real result" flag.
-    // When false (no run yet, or the most recent run failed before
-    // populating), every accessor returns its safe sentinel ("",
-    // 0, NAN).
+    // A flat backing array per level (segments / words / tokens) with
+    // forward/backward indices between levels. result_kind is the
+    // timestamp granularity the family populated; has_result is false
+    // until a run populates, in which case accessors return safe
+    // sentinels ("", 0, NAN).
 
     struct TokenEntry {
         int         id            = 0;
@@ -140,29 +123,22 @@ struct transcribe_session {
     std::vector<SegmentEntry>    segments;
     std::string                  full_text;
 
-    // -----------------------------------------------------------------
-    // Offline batch results (transcribe_run_batch).
-    //
-    // The scratch fields above (tokens / words / segments / full_text /
-    // detected_language / result_kind / has_result) remain the single
-    // "current result" slot that every per-family run() writes into and
-    // that the legacy single-shot accessors read. Batch results are a
-    // separate vector so a per-family run() needs no change to participate
-    // in the generic serial-fallback batch path: the dispatcher calls
-    // run() once per utterance and snapshots the scratch slot into one
-    // ResultSet here. A family with a real batched run_batch() hook writes
-    // these entries directly.
+    // Offline batch results (transcribe_run_batch). The scratch fields
+    // above are the single "current result" slot every run() writes into
+    // and the single-shot accessors read; batch_results is a separate
+    // vector so the serial-fallback path can snapshot each utterance
+    // without per-family changes.
     //
     // Source-of-truth rule for the public accessors:
     //   - batch_results non-empty  -> the batch accessors index it, and
-    //     the scratch slot is restored to mirror batch_results[0] so the
-    //     legacy single accessors stay coherent (they show utterance 0).
+    //     the scratch slot mirrors batch_results[0] so the single
+    //     accessors stay coherent (they show utterance 0).
     //   - batch_results empty      -> single-shot mode; the batch
     //     accessors synthesize index 0 from the scratch slot.
-    // batch_results is cleared at the top of every transcribe_run and
-    // transcribe_run_batch (NOT by clear_result, which only wipes the
-    // scratch slot and streaming snapshot so a per-utterance run() inside
-    // the fallback loop does not erase already-accumulated entries).
+    // Cleared at the top of every transcribe_run / transcribe_run_batch,
+    // NOT by clear_result (which only wipes the scratch slot + streaming
+    // snapshot, so a run() inside the fallback loop does not erase
+    // already-accumulated entries).
     struct ResultSet {
         std::vector<TokenEntry>   tokens;
         std::vector<WordEntry>    words;
@@ -215,18 +191,12 @@ struct transcribe_session {
     transcribe_timestamp_kind    result_kind = TRANSCRIBE_TIMESTAMPS_NONE;
     bool                         has_result  = false;
 
-    // -----------------------------------------------------------------
     // Abort / cancellation (set via transcribe_set_abort_callback).
-    //
-    // Per-family run() drivers call poll_abort() at chunk boundaries
-    // and between greedy decode steps. A callback returning true sets
-    // was_aborted and the run path returns TRANSCRIBE_ERR_ABORTED,
-    // preserving whatever partial segments accumulated before the
-    // abort point.
-    //
-    // was_aborted is cleared at the top of every transcribe_run; it
-    // is NOT cleared by clear_result because the result may be
-    // explicitly preserved after an abort (partial-retained contract).
+    // run() drivers call poll_abort() at chunk / decode-step boundaries;
+    // a callback returning true sets was_aborted and the run returns
+    // TRANSCRIBE_ERR_ABORTED with partial segments preserved. was_aborted
+    // is cleared at the top of every transcribe_run, NOT by clear_result
+    // (the partial result may be deliberately retained).
     transcribe_abort_callback    abort_cb        = nullptr;
     void *                       abort_userdata  = nullptr;
     bool                         was_aborted     = false;
@@ -239,33 +209,21 @@ struct transcribe_session {
         return false;
     }
 
-    // Set by a per-family run() driver when greedy decode stops because it
-    // reached the model's context / position cap before end-of-stream,
-    // i.e. the output transcript was truncated. The partial result is
-    // retained. Surfaced via transcribe_was_truncated(); like was_aborted
-    // it is cleared at the top of every transcribe_run (NOT by
-    // clear_result, since the partial result is preserved). Distinct from
-    // the up-front TRANSCRIBE_ERR_INPUT_TOO_LONG rejection: this is the
-    // "couldn't finish", that is the "couldn't start". See
-    // docs/input-limits.md.
+    // Set by a run() driver when decode stops at the model's context /
+    // position cap before end-of-stream (output truncated; partial result
+    // retained). Surfaced via transcribe_was_truncated(); cleared at the
+    // top of every transcribe_run, NOT by clear_result. Distinct from the
+    // up-front TRANSCRIBE_ERR_INPUT_TOO_LONG rejection (couldn't finish vs
+    // couldn't start). See docs/input-limits.md.
     bool                         was_truncated   = false;
 
-    // -----------------------------------------------------------------
-    // Streaming state.
-    //
-    // Lifecycle (stream_state) is separated from result snapshot so
-    // that clear_result() — which is called by both transcribe_run and
-    // transcribe_stream_begin — can wipe per-call data without churning
-    // the IDLE/ACTIVE/FINISHED/FAILED state machine. The dispatcher
-    // manages stream_state explicitly at begin/feed/finalize/reset.
-    //
-    // The snapshot fields below (revision, committed counts,
-    // last_status, audio cursors) ARE cleared by clear_result so that
-    // a fresh transcribe_run starts with zeroed streaming bookkeeping
-    // and a streaming caller does not see stale counters across runs.
-    //
-    // Audio cursors are us-precision; the public stream_update struct
-    // exposes them as ms.
+    // Streaming state. Lifecycle (stream_state) is separated from the
+    // result snapshot so clear_result() can wipe per-call data without
+    // churning the IDLE/ACTIVE/FINISHED/FAILED machine, which the
+    // dispatcher manages explicitly. The snapshot fields below (revision,
+    // committed counts, last_status, audio cursors) ARE cleared by
+    // clear_result. Audio cursors are us-precision; the public
+    // stream_update struct exposes them as ms.
     transcribe_stream_state      stream_state          = TRANSCRIBE_STREAM_IDLE;
     int32_t                      stream_revision      = 0;
     int                          n_committed_segments = 0;
@@ -278,16 +236,13 @@ struct transcribe_session {
         TRANSCRIBE_STREAM_COMMIT_AUTO;
     uint32_t                     stream_stable_prefix_agreement_n = 0;
 
-    // Session-owned copies of the caller's run-params strings, refreshed on
-    // every transcribe_stream_begin. The dispatcher hands the family hooks a
-    // params view whose language/target_language point HERE, so a family
-    // that captures `*run_params` (parakeet re-reads .language on every
-    // feed; moonshine_streaming carries the copy through its decode path)
-    // holds pointers into library-owned storage. The public contract lets
-    // the caller free every params pointer the moment begin returns —
-    // retaining a caller pointer is a use-after-free. Stable for the
-    // stream's lifetime: only the next begin mutates these, and it also
-    // refreshes every retained copy.
+    // Session-owned copies of the caller's run-params strings, refreshed
+    // on every transcribe_stream_begin. The dispatcher hands the family
+    // hooks a params view whose language/target_language point HERE, so a
+    // family that captures *run_params holds pointers into library-owned
+    // storage (the public contract lets the caller free its params pointers
+    // the moment begin returns). Stable for the stream's lifetime; only the
+    // next begin mutates them.
     std::string                  stream_language_owned;
     std::string                  stream_target_language_owned;
 

@@ -1,10 +1,7 @@
 // transcribe-load-common.cpp - shared model-load scaffolding.
 //
-// See transcribe-load-common.h for rationale. The functions here
-// are the common backend-init and tensor-stream logic that used to
-// live duplicated in every per-family model.cpp. The pre-hoist copies
-// differed only in the "parakeet:"/"cohere:" log prefix and were
-// otherwise character-identical.
+// See transcribe-load-common.h for rationale. The functions here are the
+// common backend-init and tensor-stream logic shared by per-family load().
 
 #include "transcribe-load-common.h"
 
@@ -250,18 +247,13 @@ transcribe_status init_backends(transcribe_backend_request requested,
     switch (requested_raw) {
     case TRANSCRIBE_BACKEND_CPU:
     case TRANSCRIBE_BACKEND_CPU_ACCEL: {
-        // CPU primary. The CPU_ACCEL variant additionally layers the
-        // host-memory accelerators (BLAS/AMX/…) registered by ggml as
-        // GGML_BACKEND_DEVICE_TYPE_ACCEL onto the scheduler. Both
-        // variants set primary_kind == Cpu so CPU-keyed policy
-        // decisions (e.g. F16→F32 conv pointwise promotion) trigger
-        // identically. Strict CPU is the right choice for numerical
-        // reference runs and cross-platform determinism; CPU_ACCEL is
-        // for production CPU throughput on machines where the build
-        // included an accel backend (e.g. GGML_BLAS=ON).
+        // CPU primary. CPU_ACCEL additionally layers the host-memory
+        // accelerators (BLAS/AMX/…, GGML_BACKEND_DEVICE_TYPE_ACCEL) onto the
+        // scheduler. Both set primary_kind == Cpu so CPU-keyed policy (e.g.
+        // F16→F32 conv pointwise promotion) triggers identically.
         //
-        // ggml requires the CPU backend to sit last in the scheduler
-        // list, so accel backends (when included) go in first.
+        // ggml requires the CPU backend to sit last in the scheduler list,
+        // so accel backends (when included) go in first.
         const bool with_accel = (requested == TRANSCRIBE_BACKEND_CPU_ACCEL);
         ggml_backend_t cpu_be = init_cpu_backend(error_tag);
         if (cpu_be == nullptr) return TRANSCRIBE_ERR_BACKEND;
@@ -434,10 +426,9 @@ transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
     ggml_context **                    out_ctx,
     ggml_backend_buffer_t *            out_buffer)
 {
-    // Key off the classified primary kind, not off ACCEL/CPU
-    // ordering in the backend list. This is the fix for the latent
-    // bug where strict-CPU requests could be silently shadowed by
-    // an ACCEL backend sitting ahead of CPU.
+    // Key off the classified primary kind, not off ACCEL/CPU ordering in
+    // the backend list, so a strict-CPU request reliably triggers promotion
+    // even when an ACCEL backend sorts ahead of CPU.
     if (plan.primary_kind != BackendKind::Cpu) return TRANSCRIBE_OK;
     if (plan.primary == nullptr)               return TRANSCRIBE_OK;
 

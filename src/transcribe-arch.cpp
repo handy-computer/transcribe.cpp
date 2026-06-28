@@ -1,15 +1,8 @@
 // transcribe-arch.cpp - explicit registry of supported architectures.
 //
-// The registry is intentionally a function-local static array. Pros:
-//   - No static-initializer-order dependency between this TU and the
-//     per-family TUs that define each Arch instance (the array holds
-//     pointers, not copies, and is initialized lazily on first call).
-//   - The full set of supported architectures is grep-able from one file.
-//   - Adding a family is a two-line edit (forward declaration + array
-//     entry) plus the per-family TU.
-//
-// Cons (acceptable for now):
-//   - Linear search. Single-digit n; lookups happen once per model load.
+// The registry is a function-local static array of pointers (no static-
+// initializer-order dependency on the per-family TUs, grep-able from one
+// file). Adding a family is a two-line edit plus the per-family TU.
 
 #include "transcribe-arch.h"
 

@@ -1,4 +1,4 @@
-// arch/whisper/decoder.cpp - Whisper decoder graph builder (prefill).
+// arch/whisper/decoder.cpp - Whisper decoder graph builder.
 //
 // Mirrors the transformers reference (WhisperDecoderLayer):
 //
@@ -11,12 +11,8 @@
 //   logits_raw = proj_out(x)              # tied: W = embed_tokens.weight
 //   logits     = log_softmax(logits_raw)
 //
-// Whisper has NO post-embed LayerNorm (cohere does — that is the
-// notable shape difference vs. cohere/decoder.cpp).
-//
-// q/v/out carry bias on both self and cross attention; k_proj has NO
-// bias. The shared `mha_decoder` helper takes nullable bias slots and
-// skips the add when null, matching encoder.cpp's `mha_encoder`.
+// NO post-embed LayerNorm (unlike cohere). q/v/out carry bias, k does NOT
+// (self and cross); the mha_* helpers take nullable bias slots.
 
 #include "decoder.h"
 
@@ -72,8 +68,7 @@ ggml_tensor * mha_decoder(ggml_context * ctx,
     ggml_tensor * q = ggml_mul_mat(ctx, q_w, x);
     if (q_b != nullptr) q = ggml_add(ctx, q, q_b);
 
-    ggml_tensor * k = ggml_mul_mat(ctx, k_w, source);
-    // k has no bias.
+    ggml_tensor * k = ggml_mul_mat(ctx, k_w, source);  // k has no bias
 
     ggml_tensor * v = ggml_mul_mat(ctx, v_w, source);
     if (v_b != nullptr) v = ggml_add(ctx, v, v_b);
@@ -171,35 +166,23 @@ ggml_tensor * build_block(ggml_context *          ctx,
     return x;
 }
 
-// ---------------------------------------------------------------------------
-// KV-cached helpers
-// ---------------------------------------------------------------------------
+// KV-cached helpers.
 //
 // Cache layout (flat 1D tensors, one slot per layer, per role):
-//
 //   self_k / self_v   : [hidden * n_layer * n_ctx]
 //       layer il offset:  il * n_ctx * hidden
-//       position  n  slot within layer:
-//                         il * n_ctx * hidden + n * hidden
-//
+//       position n slot:  il * n_ctx * hidden + n * hidden
 //   cross_k / cross_v : [hidden * n_layer * T_enc]
 //       layer il offset:  il * T_enc * hidden
-//
-// Shape follows cohere's layout exactly so the ggml patterns transfer
-// unchanged; whisper's only quirk is k_proj has no bias on both self
-// and cross (cohere has k_b which may also be null).
 
 // Self-attention reading/writing the self KV cache.
 //
 // x:         [d_model, n_tokens] input for new tokens only
 // mask:      [n_kv, n_tokens] f16 additive mask, or nullptr
-// il:        layer index (for cache offset)
-// n_past:    number of tokens already in cache
-// n_tokens:  number of new tokens being processed
+// n_past:    tokens already in cache; n_tokens: new tokens this call
 //
-// Writes new K/V into the cache at [il, n_past..n_past+n_tokens),
-// then reads the full [il, 0..n_past+n_tokens) window for attention.
-// Returns [d_model, n_tokens].
+// Writes new K/V into the cache at [il, n_past..n_past+n_tokens), then reads
+// the full [il, 0..n_past+n_tokens) window. Returns [d_model, n_tokens].
 ggml_tensor * mha_self_cached(ggml_context *   ctx,
                               ggml_cgraph *    gf,
                               ggml_tensor *    x,
@@ -220,17 +203,15 @@ ggml_tensor * mha_self_cached(ggml_context *   ctx,
     const int head_dim = d_model / n_heads;
     const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int n_ctx    = kv_cache.n_ctx;
-    // n_kv may be padded to a FA-friendly multiple beyond n_past +
-    // n_tokens. Trailing slots are masked to -inf via the caller's
-    // mask so they do not contribute. The cache write below still
-    // touches only the [n_past, n_past+n_tokens) range.
+    // n_kv may be padded beyond n_past + n_tokens (FA-friendly multiple);
+    // trailing slots are masked to -inf. The cache write still touches only
+    // [n_past, n_past+n_tokens).
 
-    // Q / K / V projections for the *new* tokens only.
+    // Q / K / V projections for the new tokens only.
     ggml_tensor * Qcur = ggml_mul_mat(ctx, q_w, x);
     if (q_b != nullptr) Qcur = ggml_add(ctx, Qcur, q_b);
 
     ggml_tensor * Kcur = ggml_mul_mat(ctx, k_w, x);
-    // k has no bias on whisper.
 
     ggml_tensor * Vcur = ggml_mul_mat(ctx, v_w, x);
     if (v_b != nullptr) Vcur = ggml_add(ctx, Vcur, v_b);
@@ -330,7 +311,6 @@ ggml_tensor * mha_self_step(ggml_context *   ctx,
     if (q_b != nullptr) Qcur = ggml_add(ctx, Qcur, q_b);
 
     ggml_tensor * Kcur = ggml_mul_mat(ctx, k_w, x);
-    // k has no bias on whisper.
 
     ggml_tensor * Vcur = ggml_mul_mat(ctx, v_w, x);
     if (v_b != nullptr) Vcur = ggml_add(ctx, Vcur, v_b);
@@ -405,12 +385,7 @@ ggml_tensor * mha_self_step(ggml_context *   ctx,
 }
 
 // Cross-attention reading the pre-populated cross KV cache.
-//
-// x:        [d_model, n_tokens] query input
-// il:       layer index
-// T_enc:    number of encoder frames
-//
-// Returns: [d_model, n_tokens].
+// x: [d_model, n_tokens] query input -> returns [d_model, n_tokens].
 ggml_tensor * mha_cross_cached(ggml_context *   ctx,
                                ggml_tensor *    x,
                                WhisperKvCache & kv_cache,
@@ -427,11 +402,9 @@ ggml_tensor * mha_cross_cached(ggml_context *   ctx,
     const float scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t n_tokens = x->ne[1];
 
-    // Cross-attn cache is laid out at T_enc_pad rows per layer; the
-    // trailing T_enc_pad - T_enc rows hold zeros (cleared at init,
-    // never written by build_cross_kv_graph). FA reads the padded
-    // shape — the unmasked padded slots contribute a small dilution
-    // but produce a kernel-friendly sequence dim.
+    // Cross cache is T_enc_pad rows per layer; trailing rows hold zeros (never
+    // written). FA reads the padded shape — kernel-friendly seq dim at the cost
+    // of small dilution unless the caller masks the padded slots.
     const int T_enc_pad = kv_cache.T_enc_pad > 0
                               ? kv_cache.T_enc_pad : T_enc;
     (void)T_enc;
@@ -519,8 +492,8 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
     named(db.encoder_out_in, "dec.encoder_out");
     ggml_set_input(db.encoder_out_in);
 
-    // Causal mask declared as F32 input; cast to F16 inside the graph
-    // because flash_attn_ext / soft_max_ext both want f16.
+    // Causal mask declared F32, cast to F16 inside (flash_attn_ext /
+    // soft_max_ext want f16).
     ggml_tensor * causal_mask = nullptr;
     if (seq_len > 1) {
         db.causal_mask_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
@@ -530,20 +503,17 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
         causal_mask = ggml_cast(ctx, db.causal_mask_in, GGML_TYPE_F16);
     }
 
-    // ---- Token embedding --------------------------------------------
-    // token_embd_w is [d_model, vocab]; ggml_get_rows with i32 indices
-    // [seq_len] yields [d_model, seq_len].
+    // ---- Token embedding ----
+    // get_rows(token_embd_w [d_model, vocab], ids [seq_len]) -> [d_model, seq_len].
     ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_top.token_embd_w,
                                           db.token_ids_in);
     named(tok_emb, "dec.token_emb");
     transcribe::debug::mark_tensor_for_dump(tok_emb);
     db.dumps.token_emb = tok_emb;
 
-    // ---- Positional embedding ---------------------------------------
-    // pos_emb_w is [d_model, max_target_positions]. The transformers
-    // reference takes weight[past:past+seq_len]; for prefill past=0 so
-    // a 2D view of the leading seq_len rows is exactly the same data
-    // (and avoids needing an i32 input for position ids).
+    // ---- Positional embedding ----
+    // Reference takes pos_emb_w[past:past+seq_len]; prefill is past=0, so a 2D
+    // view of the leading seq_len rows is the same data (no pos-id input).
     ggml_tensor * pos_emb = w.dec_top.pos_emb_w;
     if (seq_len != hp.dec_max_target_positions) {
         pos_emb = ggml_view_2d(ctx, w.dec_top.pos_emb_w,
@@ -554,13 +524,13 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
     transcribe::debug::mark_tensor_for_dump(pos_emb);
     db.dumps.pos_emb = pos_emb;
 
-    // ---- Embedding sum (no LayerNorm) -------------------------------
+    // ---- Embedding sum (no LayerNorm) ----
     ggml_tensor * x = ggml_add(ctx, tok_emb, pos_emb);
     named(x, "dec.embed_sum");
     transcribe::debug::mark_tensor_for_dump(x);
     db.dumps.embed_sum = x;
 
-    // ---- Decoder blocks ---------------------------------------------
+    // ---- Decoder blocks ----
     const int n_blocks = static_cast<int>(w.dec_blocks.size());
     db.dumps.block_outs.reserve(static_cast<size_t>(n_blocks));
     for (int i = 0; i < n_blocks; ++i) {
@@ -574,15 +544,14 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
         db.dumps.block_outs.push_back(x);
     }
 
-    // ---- Final LayerNorm --------------------------------------------
+    // ---- Final LayerNorm ----
     x = layer_norm(ctx, x, w.dec_top.final_norm_w, w.dec_top.final_norm_b);
     named(x, "dec.out_before_head");
     transcribe::debug::mark_tensor_for_dump(x);
     db.dumps.out_before_head = x;
 
-    // ---- Logits head (tied weight, no bias) -------------------------
-    // mul_mat(W, x) where W=[d_model, vocab] and x=[d_model, seq_len]
-    // gives [vocab, seq_len].
+    // ---- Logits head (tied weight, no bias) ----
+    // mul_mat(W [d_model, vocab], x [d_model, seq_len]) -> [vocab, seq_len].
     ggml_tensor * logits_raw = ggml_mul_mat(ctx, w.dec_top.token_embd_w, x);
     named(logits_raw, "dec.logits_raw");
     transcribe::debug::mark_tensor_for_dump(logits_raw);
@@ -596,9 +565,7 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
     db.out = logits;
     ggml_set_output(db.out);
 
-    // 8192 leaves headroom for 4-block whisper-tiny (and for larger
-    // variants up to whisper-large-v3 at 32 blocks; each block adds
-    // ~20 ops with self+cross+ffn).
+    // 8192 leaves headroom up to large-v3 (32 blocks, ~20 ops each).
     db.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (db.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -607,16 +574,12 @@ DecoderBuild build_decoder_prefill_graph(ggml_context *         ctx,
     }
     ggml_build_forward_expand(db.graph, db.out);
 
-    // Suppress unused-variable warning when vocab is only used in the
-    // bounds check above (kept for documentation in the catalog).
     (void)vocab;
 
     return db;
 }
 
-// ---------------------------------------------------------------------------
 // KV-cached path: cross-KV precompute + prompt/step decoder graph.
-// ---------------------------------------------------------------------------
 
 DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
                                   const WhisperWeights & w,
@@ -638,9 +601,8 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
 
     const int d_model = hp.dec_d_model;
 
-    // View the persistent encoder_out tensor into this compute_ctx.
-    // No data is copied — the view shares storage with the source,
-    // which the encoder graph populated on the same backend.
+    // View the persistent encoder_out tensor into this compute_ctx (no copy;
+    // shares storage with the encoder-populated source on the same backend).
     db.encoder_out_in = ggml_view_2d(ctx, encoder_out,
                                      d_model, T_enc,
                                      encoder_out->nb[1], 0);
@@ -653,9 +615,8 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
         return db;
     }
 
-    // Layer slots in the flat cross cache are spaced by T_enc_pad
-    // (allocator size) but each layer only writes T_enc rows; the
-    // trailing T_enc_pad - T_enc rows stay zero from buffer_clear.
+    // Layer slots are spaced by T_enc_pad (allocator size) but each writes
+    // only T_enc rows; trailing T_enc_pad - T_enc rows stay zero.
     const int T_enc_pad = kv_cache.T_enc_pad > 0
                               ? kv_cache.T_enc_pad : T_enc;
 
@@ -663,7 +624,7 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
     for (int il = 0; il < n_layers; ++il) {
         const auto & blk = w.dec_blocks[il];
 
-        // Whisper: cross k has no bias; cross v has a bias.
+        // Cross k has no bias; cross v does.
         ggml_tensor * Kcross = ggml_mul_mat(ctx, blk.cross_k_w,
                                             db.encoder_out_in);
         ggml_tensor * Vcross = ggml_mul_mat(ctx, blk.cross_v_w,
@@ -672,10 +633,8 @@ DecoderBuild build_cross_kv_graph(ggml_context *         ctx,
             Vcross = ggml_add(ctx, Vcross, blk.cross_v_b);
         }
 
-        // Write the [d_model, T_enc] projections into the flat cache
-        // slot for this layer. Offset in elements = il * T_enc_pad *
-        // d_model so the layer slots in the padded cache do not
-        // overlap; the size of each write is T_enc * d_model.
+        // Write [d_model, T_enc] into this layer's slot at element offset
+        // il * T_enc_pad * d_model (slots don't overlap).
         const size_t k_elem = ggml_element_size(kv_cache.cross_k);
         const size_t v_elem = ggml_element_size(kv_cache.cross_v);
 
@@ -726,11 +685,9 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         return db;
     }
 
-    // Pad the K/V view length up to a FA-friendly multiple. Trailing
-    // slots in [n_kv_active, n_kv) hold either zeros (first use of a
-    // freshly-cleared cache) or stale K/V values from prior tiers /
-    // chunks; the mask zeroes them out so they do not contribute.
-    // Clamp to kv_cache.n_ctx so we do not read past the allocation.
+    // Pad the K/V view length to a FA-friendly multiple. Trailing slots in
+    // [n_kv_active, n_kv) hold zeros or stale K/V; the mask zeroes them.
+    // Clamp to n_ctx so we don't read past the allocation.
     const int kv_pad_eff = kv_pad > 0 ? kv_pad : 1;
     int n_kv = n_kv_active;
     if (kv_pad_eff > 1) {
@@ -748,26 +705,16 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     named(db.token_ids_in, "dec.token_ids");
     ggml_set_input(db.token_ids_in);
 
-    // Position ids as an input so the step loop can upload a single
-    // int32 (the absolute position) without rebuilding the graph
-    // structure. For prompt pass (n_past=0, n_tokens=4) the caller
-    // uploads [0, 1, 2, 3].
+    // Position ids as an input so the step loop uploads absolute positions
+    // without rebuilding the graph (prompt pass uploads [0..n_tokens)).
     ggml_tensor * pos_ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_tokens);
     named(pos_ids_in, "dec.pos_ids");
     ggml_set_input(pos_ids_in);
 
-    // Self-attention mask. Two reasons we need one:
-    //   (1) prompt pass (n_tokens > 1) needs a causal mask
-    //   (2) padded step (kv_pad > 1) needs -inf at trailing slots
-    // The single mask covers both: shape [n_kv, n_tokens] with -inf
-    // for k >= n_kv_active (covers padding) and -inf for k > q +
-    // n_past (covers causality when n_tokens > 1). Caller in model.cpp
-    // populates the values.
-    //
-    // When n_tokens == 1 AND there is no padding, the mask can be
-    // omitted (single token attends to the full real cache window).
-    // Preserve that fast path so non-FA / non-Metal paths skip the
-    // extra input tensor.
+    // Self-attention mask [n_kv, n_tokens], covering both causality (prompt
+    // pass, n_tokens > 1) and padding (kv_pad > 1): -inf for k >= n_kv_active
+    // and for k > q + n_past. Omitted on the unpadded single-token step (it
+    // attends the full real cache window); model.cpp fills the values.
     ggml_tensor * causal_mask = nullptr;
     const bool need_mask = (n_tokens > 1) || has_padding;
     if (need_mask) {
@@ -781,12 +728,9 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
                     "decoder_kv mask-null branch requires single-token step");
     }
 
-    // Cross-attention mask. Only needed when the cross cache has
-    // been allocated with padding (T_enc_pad > T_enc); the trailing
-    // padded slots hold zero K/V and would otherwise dilute the
-    // unmasked FA softmax. -inf at those positions zeros the
-    // contribution and restores numerical equivalence to an
-    // unpadded view.
+    // Cross-attention mask, only when the cross cache is padded (T_enc_pad >
+    // T_enc): the trailing zero-K/V slots would dilute the FA softmax, so -inf
+    // there restores equivalence to an unpadded view.
     ggml_tensor * cross_mask = nullptr;
     const int T_enc_pad = kv_cache.T_enc_pad > 0
                               ? kv_cache.T_enc_pad : T_enc;
@@ -798,7 +742,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         cross_mask = ggml_cast(ctx, db.cross_mask_in, GGML_TYPE_F16);
     }
 
-    // ---- Token embedding -------------------------------------------
+    // ---- Token embedding ----
     ggml_tensor * tok_emb = ggml_get_rows(ctx, w.dec_top.token_embd_w,
                                           db.token_ids_in);
     named(tok_emb, "dec.token_emb");
@@ -807,7 +751,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         db.dumps.token_emb = tok_emb;
     }
 
-    // ---- Positional embedding --------------------------------------
+    // ---- Positional embedding ----
     ggml_tensor * pos_emb = ggml_get_rows(ctx, w.dec_top.pos_emb_w,
                                           pos_ids_in);
     named(pos_emb, "dec.pos_emb");
@@ -816,7 +760,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         db.dumps.pos_emb = pos_emb;
     }
 
-    // ---- Embed sum (no LayerNorm) ----------------------------------
+    // ---- Embed sum (no LayerNorm) ----
     ggml_tensor * x = ggml_add(ctx, tok_emb, pos_emb);
     named(x, "dec.embed_sum");
     if (n_past == 0) {
@@ -824,8 +768,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         db.dumps.embed_sum = x;
     }
 
-    // Pre-create the graph so mha_self_cached can use
-    // ggml_build_forward_expand to wire the cache writes into it.
+    // Pre-create the graph so mha_self_cached can wire cache writes into it.
     db.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (db.graph == nullptr) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
@@ -833,7 +776,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         return db;
     }
 
-    // ---- Decoder blocks --------------------------------------------
+    // ---- Decoder blocks ----
     const int n_blocks = static_cast<int>(w.dec_blocks.size());
     db.dumps.block_outs.reserve(static_cast<size_t>(n_blocks));
     for (int i = 0; i < n_blocks; ++i) {
@@ -880,7 +823,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         }
     }
 
-    // ---- Final LayerNorm -------------------------------------------
+    // ---- Final LayerNorm ----
     x = layer_norm(ctx, x, w.dec_top.final_norm_w, w.dec_top.final_norm_b);
     named(x, "dec.out_before_head");
     if (n_past == 0) {
@@ -888,7 +831,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         db.dumps.out_before_head = x;
     }
 
-    // ---- Logits head (tied weight, no bias) ------------------------
+    // ---- Logits head (tied weight, no bias) ----
     ggml_tensor * logits_raw = ggml_mul_mat(ctx, w.dec_top.token_embd_w, x);
     named(logits_raw, "dec.logits_raw");
     if (n_past == 0) {
@@ -913,10 +856,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     return db;
 }
 
-// ---------------------------------------------------------------------------
 // Static-topology single-token step graph (GPU dispatch path).
-// ---------------------------------------------------------------------------
-
 StepBuild build_step_graph(ggml_context *         ctx,
                            const WhisperWeights & w,
                            const WhisperHParams & hp,
@@ -1031,10 +971,7 @@ StepBuild build_step_graph(ggml_context *         ctx,
     return sb;
 }
 
-// ===========================================================================
-// Offline batched decode (B utterances)
-// ===========================================================================
-
+// Offline batched decode (B utterances).
 namespace {
 
 // Batched self-attention step. x: [d_model, B] (one token per utterance).
@@ -1170,7 +1107,7 @@ DecoderBuild build_cross_kv_graph_batched(ggml_context *         ctx,
     for (int il = 0; il < n_layers; ++il) {
         const auto & blk = w.dec_blocks[il];
 
-        // Whisper: cross k has no bias; cross v has a bias.
+        // Cross k has no bias; cross v does.
         ggml_tensor * Kc = ggml_mul_mat(ctx, blk.cross_k_w, db.encoder_out_in);
         ggml_tensor * Vc = ggml_mul_mat(ctx, blk.cross_v_w, db.encoder_out_in);
         if (blk.cross_v_b != nullptr) Vc = ggml_add(ctx, Vc, blk.cross_v_b);

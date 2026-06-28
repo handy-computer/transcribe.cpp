@@ -6,7 +6,7 @@
 //   - graph allocation
 //   - audio injection (3-way concat: prefix | adaptor_out | suffix);
 //     T_audio == 0 is a supported chat-only path
-//   - tensor naming and dump-point preservation for validate.py parity
+//   - tensor naming and dump points
 //   - final RMSNorm + tied lm_head head
 //   - block_prefill / block_step driver loops
 //
@@ -14,12 +14,9 @@
 //   - The audio block is the adaptor output (already in llm_dim=1024
 //     space), not the raw encoder output.
 //   - T_audio is allowed to be 0 (no audio); the prefill skips the
-//     concat and uses token_emb_all directly. Kept here at the call
-//     site since the shared block helper has no business knowing about
-//     audio shapes.
+//     concat and uses token_emb_all directly.
 //   - The step graph also exposes raw logits as an output (not just
-//     argmax) so the autoregressive driver can dump `dec.logits_raw.gen8`
-//     for tensor parity at gen step 7.
+//     argmax) so the autoregressive driver can dump them at gen step 7.
 
 #include "decoder.h"
 

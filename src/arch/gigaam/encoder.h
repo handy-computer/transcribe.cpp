@@ -1,8 +1,4 @@
 // arch/gigaam/encoder.h - GigaAM Conformer encoder graph builder.
-//
-// M1 stub: build_encoder_graph is not yet implemented. M2 lands the
-// pre-encode + rotary PE bank + all 16 conformer blocks. M3 wires the
-// per-call run() against this.
 
 #pragma once
 

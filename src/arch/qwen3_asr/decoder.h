@@ -17,9 +17,17 @@
 // multi-modal positions we'll switch to ggml_rope_multi.
 //
 // Audio injection: input_ids contains `audio_token_id` placeholders at
-// the positions the encoder's output frames should land. The prefill
-// graph embeds input_ids as usual, then `ggml_set_rows` scatters the
-// encoder output over the audio positions.
+// the positions the encoder's output frames should land. Two injection
+// mechanisms, neither uses ggml_set_rows:
+//   - single-utterance prefill (build_prefill_graph): a 3-way ggml_concat
+//     of [prefix_emb | encoder_output | suffix_emb] along the time axis,
+//     assuming one contiguous audio block at [prefix_len, prefix_len+T_enc).
+//   - batched prefill (build_prefill_graph_batched): an elementwise blend
+//     x*keep_mask + audio_dense, where audio_dense holds the encoder embeds
+//     scattered host-side into their prompt positions (zero elsewhere) and
+//     keep_mask is 0 at audio positions / 1 elsewhere. Elementwise ops
+//     cross the CPU/CUDA split (forced by k-quant token_embd get_rows)
+//     cleanly, unlike a set_rows.
 
 #pragma once
 
@@ -48,7 +56,7 @@ struct PrefillBuild {
     ggml_tensor * input_ids_in    = nullptr;  // [T_prompt] i32 (for dec.token_emb dump)
     ggml_tensor * enc_out_in      = nullptr;  // [enc_output_dim, T_enc] f32
     ggml_tensor * positions_in    = nullptr;  // [T_prompt] i32 for RoPE
-    ggml_tensor * mask_in         = nullptr;  // [T_prompt, T_prompt] f32 (causal)
+    ggml_tensor * mask_in         = nullptr;  // [T_prompt, T_prompt] f16 (causal)
     ggml_tensor * out             = nullptr;  // [vocab_size] — last-position logits
     DecoderDumps  dumps {};
     ggml_cgraph * graph           = nullptr;
@@ -59,26 +67,13 @@ struct PrefillBuild {
     int           suffix_len      = 0;  // # prompt tokens after the audio block
 };
 
-// Build a prefill graph that:
-//   1. fetches token embeddings for the full prompt (for dump parity),
-//   2. builds the injected-embedding sequence by concatenating
-//      [prefix_token_embeddings | encoder_output | suffix_token_embeddings],
-//   3. runs the 28 Qwen3 blocks, writing K/V into kv_cache at positions
-//      [0, T_prompt),
-//   4. applies the final RMSNorm and tied-head projection,
-//   5. outputs logits for the last position only.
-//
-// First port assumption: the audio block is a single contiguous run at
-// positions [prefix_len, prefix_len + T_enc). Multi-audio prompts (not
-// used by Qwen3-ASR's chat template) would need repeated get_rows +
-// concat segments.
-//
-// The kv_cache is WRITTEN by the graph. Callers should set
-// kv_cache.n = T_prompt and kv_cache.head = T_prompt after compute.
-// kv_batch_slot / kv_n_batch: for offline batched decode, write this
-// utterance's KV into slab `kv_batch_slot` of a batched cache holding
-// `kv_n_batch` slabs (see causal_lm::block_prefill / kv_init_batched).
-// Defaults (0, 1) reproduce the single-shot KV layout exactly.
+// Build a prefill graph: token-embed the full prompt, concat
+// [prefix_emb | encoder_output | suffix_emb], run the Qwen3 blocks (writing
+// K/V into kv_cache at [0, T_prompt)), final RMSNorm + tied head, output
+// last-position logits. Assumes a single contiguous audio block at
+// [prefix_len, prefix_len + T_enc). Callers set kv_cache.n / .head = T_prompt
+// after compute. kv_batch_slot / kv_n_batch route this utterance's KV into a
+// batched cache slab; defaults (0, 1) reproduce the single-shot layout.
 PrefillBuild build_prefill_graph(ggml_context *                ctx,
                                  const QwenAsrWeights &        weights,
                                  const QwenAsrHParams &        hp,
@@ -105,18 +100,14 @@ struct StepBuild {
     int           max_n_kv     = 0;  // static shape sized for whole run
 };
 
-// Build a static-shape single-token step graph suitable for reuse
-// across every autoregressive step in a run. Topology depends only on
-// max_n_kv (the max KV window the LM will see), not on n_past. The
-// graph has four input tensors the caller updates per step:
+// Build a static-shape single-token step graph reused across every step.
+// Topology depends only on max_n_kv (the max KV window), not n_past. Four
+// per-step input tensors:
 //   input_id_in [1]      — the token to embed
 //   position_in [1]      — RoPE position
 //   kv_idx_in   [1]      — where to write K/V (via ggml_set_rows)
 //   mask_in     [max_n_kv, 1] — attention mask; positions > n_past hold -inf
-//
-// Reusing the same graph every step eliminates the ggml_free/init +
-// rebuild + sched_reset + sched_alloc_graph overhead that per-step
-// construction incurs (measured ~0.4 ms/step before this change).
+// Reuse avoids per-step rebuild + sched_alloc overhead (~0.4 ms/step).
 StepBuild build_step_graph(ggml_context *                  ctx,
                            const QwenAsrWeights &          weights,
                            const QwenAsrHParams &          hp,
@@ -129,10 +120,10 @@ StepBuild build_step_graph(ggml_context *                  ctx,
 struct PrefillBuildBatched {
     ggml_tensor * input_ids_in = nullptr;  // [T_prompt_max, B] i32 (audio_token placeholders)
     // Audio injection via elementwise blend (no set_rows): audio_dense holds the
-    // enc_out embeds scattered (host-side) into their prompt positions, zero
-    // elsewhere; keep_mask is 0 at audio positions and 1 elsewhere. The block
-    // input is x*keep_mask + audio_dense. Elementwise ops cross the CPU/CUDA
-    // split (forced by k-quant token_embd get_rows) cleanly, unlike a set_rows.
+    // enc_out embeds scattered host-side into their prompt positions (zero
+    // elsewhere), keep_mask is 0 there and 1 elsewhere, block input is
+    // x*keep_mask + audio_dense. Elementwise ops cross the CPU/CUDA split
+    // (forced by k-quant token_embd get_rows) cleanly, unlike a set_rows.
     ggml_tensor * audio_dense_in = nullptr;  // [dec_hidden, T_prompt_max*B] f32
     ggml_tensor * keep_mask_in   = nullptr;  // [1, T_prompt_max*B] f32 (0=audio,1=keep)
     ggml_tensor * positions_in = nullptr;  // [T_prompt_max] i32 (shared 0..T-1)
@@ -150,10 +141,9 @@ struct PrefillBuildBatched {
 
 // Build a batched prefill graph: B prompts of up to T_prompt_max tokens each,
 // writing each utterance's K/V into slab b of a batched cache (kv_init_batched).
-// Audio is injected by ggml_set_rows scatter of enc_out into the audio
-// placeholder positions (per-utterance scatter indices in enc_idx_in). The
-// last-real-position logits per utterance are gathered via last_idx_in, so the
-// readback is [vocab, B] (not [vocab, T_prompt_max, B]). Requires use_flash.
+// Audio is injected by the elementwise blend (audio_dense_in / keep_mask_in).
+// Per-utterance last-real-position logits are gathered via last_idx_in, so the
+// readback is [vocab, B]. Requires use_flash.
 PrefillBuildBatched build_prefill_graph_batched(
     ggml_context *                  ctx,
     const QwenAsrWeights &          weights,
@@ -179,9 +169,8 @@ struct StepBuildBatched {
     int           n_batch      = 0;
 };
 
-// Build a static-shape batched step graph reused across every step of an
-// offline batch of `n_batch` utterances against a batched KV cache
-// (causal_lm::kv_init_batched). The four input tensors are updated per step:
+// Build a static-shape batched step graph reused across every step for an
+// offline batch of `n_batch` utterances. Four per-step input tensors:
 //   input_ids_in [B]            — the token to embed for each utterance
 //   position_in  [B]            — RoPE position per utterance (= its n_past)
 //   kv_idx_in    [1, B]         — KV write row per utterance (= its n_past)

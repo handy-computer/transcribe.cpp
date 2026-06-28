@@ -2,23 +2,16 @@
 //
 // What lives here:
 //   - The C entry points declared in include/transcribe.h.
-//   - The single dispatch site that maps an opened GGUF file to its
-//     per-family Arch handler (transcribe_model_load_file).
+//   - The single dispatch site mapping an opened GGUF to its per-family
+//     Arch handler (transcribe_model_load_file).
 //   - The log-sink publication / emission helpers.
 //   - The factory functions that initialize each public params struct.
 //
-// What does NOT live here:
-//   - GGUF reading itself (transcribe-loader.{h,cpp}).
-//   - Per-family load / context / run code (src/arch/<family>/...).
-//   - Anything ggml-specific (the public header is ggml-free; this file
-//     forwards to the loader which is the only place gguf.h is included).
-//
-// 2B: model and context lifecycle entry points are real now. The base
-// classes in transcribe-model.h / transcribe-session.h hold the data
-// the introspection accessors need (caps, variant, backend, arch
-// name), so this file reads them directly without going through the
-// per-family Arch trait. Per-family code still owns load(),
-// init_context(), and run().
+// What does NOT live here: GGUF reading (transcribe-loader), per-family
+// load / context / run code (src/arch/<family>/...), and ggml-specific
+// code. The introspection accessors read the base structs in
+// transcribe-model.h / transcribe-session.h directly; per-family code owns
+// load(), init_context(), and run().
 
 #include "transcribe.h"
 #include "transcribe/whisper.h"
@@ -75,9 +68,7 @@
 #include <string>
 #include <vector>
 
-// ---------------------------------------------------------------------------
 // Status
-// ---------------------------------------------------------------------------
 
 // Parameter is `int` (not `transcribe_status`) so a caller passing an
 // out-of-range value does not form a bogus enum object. See the comment
@@ -108,15 +99,11 @@ extern "C" const char * transcribe_status_string(int status) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Version
-// ---------------------------------------------------------------------------
 
-// TRANSCRIBE_COMMIT is stamped by the build: the top-level CMakeLists.txt
-// captures `git rev-parse --short HEAD` at configure time and passes it as a
-// compile definition. Fall back to "unknown" for builds without git metadata
-// (source tarballs, etc.) so the accessor never returns NULL. TRANSCRIBE_VERSION
-// comes from <transcribe.h>, the single source of truth for the version.
+// TRANSCRIBE_COMMIT is stamped by the build (git rev-parse --short HEAD at
+// configure time); fall back to "unknown" so the accessor never returns
+// NULL. TRANSCRIBE_VERSION comes from <transcribe.h>.
 #ifndef TRANSCRIBE_COMMIT
 #define TRANSCRIBE_COMMIT "unknown"
 #endif
@@ -129,17 +116,13 @@ extern "C" const char * transcribe_version_commit(void) {
     return TRANSCRIBE_COMMIT;
 }
 
-// ---------------------------------------------------------------------------
 // Raw enum reads at the public ABI boundary
-// ---------------------------------------------------------------------------
 //
-// C callers can store ANY int in an enum-typed ABI field or pass any int as
-// an enum-typed argument — in C that is well-defined. In C++ (this TU),
-// loading an out-of-range value through an enum-typed lvalue is undefined
-// behavior, and UBSan traps it. So every public entry point reads
-// caller-supplied enum values as raw bytes first, validates the raw int, and
-// only then (if ever) converts to the enum type. All public enums are
-// int-sized; the static_assert below pins one representative.
+// C callers can store ANY int in an enum-typed ABI field; in C++ loading an
+// out-of-range value through an enum-typed lvalue is UB (UBSan traps it). So
+// every public entry point reads caller-supplied enum values as raw bytes
+// first, validates the raw int, and only then converts to the enum type. All
+// public enums are int-sized; the static_assert below pins one.
 
 static inline int enum_field_raw(const void * field) {
     int raw;
@@ -149,13 +132,9 @@ static inline int enum_field_raw(const void * field) {
 static_assert(sizeof(transcribe_backend_request) == sizeof(int),
               "public enums must be int-sized for raw boundary reads");
 
-// ---------------------------------------------------------------------------
-// ABI metadata
-// ---------------------------------------------------------------------------
-//
-// sizeof/alignof for the public structs, so a binding can verify its own
-// layout against this build before constructing instances. See the contract in
-// <transcribe.h>. Keep this switch in sync with the transcribe_abi_struct enum.
+// ABI metadata: sizeof/alignof for the public structs, so a binding can
+// verify its layout against this build. Keep these switches in sync with the
+// transcribe_abi_struct enum.
 
 extern "C" size_t transcribe_abi_struct_size(transcribe_abi_struct which) {
     switch (enum_field_raw(&which)) {
@@ -199,18 +178,9 @@ extern "C" size_t transcribe_abi_struct_align(transcribe_abi_struct which) {
 
 namespace {
 
-// Ordered rank for timestamp granularities, used by the dispatcher to
-// compare a request against a family's advertised maximum.
-//
-//   NONE    < SEGMENT  < WORD     < TOKEN
-//     0          1          2          3
-//
-// AUTO is a sentinel at the call site and is handled by the caller
-// (resolved to the model's max before ranking). A value that isn't a
-// known enumerator gets rank -1 so an out-of-range request compares
-// strictly less than every valid max (the dispatcher's earlier
-// enum-range switch has already rejected those anyway; this keeps
-// the helper total).
+// Ordered rank for timestamp granularities (NONE < SEGMENT < WORD < TOKEN),
+// used to compare a request against a family's advertised maximum. AUTO and
+// any unknown value get rank -1.
 int timestamp_rank(transcribe_timestamp_kind k) {
     switch (k) {
         case TRANSCRIBE_TIMESTAMPS_NONE:    return 0;
@@ -296,47 +266,22 @@ transcribe_status validate_run_params_common(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Logging
-// ---------------------------------------------------------------------------
 //
-// Two-atomic log sink. Publication of (cb, userdata) stores userdata
-// (relaxed) and then cb (release). Emission acquire-loads cb, early-outs
-// on null, and relaxed-loads userdata. The acquire/release pairing on
-// the cb pointer establishes a happens-before edge between the install
-// thread and any later emitter, which is the property the supported
-// "install once at startup" usage model needs.
+// Two-atomic log sink. Publication stores userdata (relaxed) then cb
+// (release); emission acquire-loads cb and relaxed-loads userdata. The
+// acquire/release pairing on cb is the happens-before edge the supported
+// "install once at startup, before threads or models exist" model needs.
+// Reconfiguration is unsupported (the (cb, userdata) pair can tear and an
+// in-flight emitter may still hold the old sink); the only guarantee then is
+// absence of data races, not correct semantics.
 //
-// What this implementation does NOT promise:
-//   - Pair-atomic publication of (cb, userdata) under reconfiguration.
-//     Two concurrent calls to transcribe_log_set can interleave their
-//     stores in modification order such that an emitter observes a cb
-//     from one generation and a userdata from another. Even with a
-//     single writer, an emitter that still observes the previous cb
-//     may already see the new userdata via its relaxed load.
-//   - Lifetime safety for old sinks across reconfiguration. After
-//     transcribe_log_set returns, an in-flight emission on another
-//     thread may already be holding the previous (cb, userdata) on its
-//     stack and about to call through it. A caller that frees the old
-//     userdata immediately after reconfiguring would create a UAF.
-//
-// The supported model (per the threading contract in transcribe.h) is
-// "install once at startup, before threads or models exist." In that
-// model neither caveat above can occur. Anything beyond startup-time
-// install is unsupported in 0.x and is the caller's problem; the only
-// guarantee the implementation provides in that case is the absence of
-// data races, not correct semantics.
-//
-// Three sink states, all classified from a single acquire load of
-// g_log_cb:
-//   nullptr           never configured  -> stderr default for surfaced
-//                                          messages (emit_or_stderr)
-//   sentinel          explicitly disabled via transcribe_log_set(NULL)
-//                                       -> drop everything
-//   anything else     caller's callback -> route everything
-// The sentinel exists so "caller asked for silence" is distinguishable
-// from "caller never called us" without a second atomic whose pairing
-// could tear under the (unsupported) reconfiguration case.
+// Three sink states, classified from one acquire load of g_log_cb:
+//   nullptr        never configured -> stderr default (emit_or_stderr)
+//   sentinel       disabled via transcribe_log_set(NULL) -> drop everything
+//   anything else  caller's callback -> route everything
+// The sentinel distinguishes "asked for silence" from "never called us"
+// without a second atomic whose pairing could tear.
 
 namespace {
 
@@ -460,25 +405,12 @@ void log_msg(transcribe_log_level level, const char * fmt, ...) {
 }
 } // namespace transcribe
 
-// ---------------------------------------------------------------------------
 // Params init functions
-// ---------------------------------------------------------------------------
 //
-// Every input params struct is initialized by zero-filling and stamping
-// struct_size. This works because each field's documented default IS its
-// zero value (TASK_TRANSCRIBE, TIMESTAMPS_NONE, PNC/ITN_MODE_DEFAULT,
-// BACKEND_AUTO, KV_TYPE_AUTO are all 0; gpu_device 0 = auto; NULL
-// pointers; keep_special_tags false = strip). That invariant lets the
-// init functions stay as memset + stamp without per-field assignments.
-// `{0}` itself is NOT accepted as a defaults form — struct_size == 0 is
-// rejected — because uninitialized stack memory can silently hit the
-// zero case; callers reach defaults via NULL only.
-//
-// These are one-argument by design: they assume the caller and library
-// agree on the struct layout, which holds for the supported build-with-
-// your-consumers distribution model. A caller passing a struct smaller
-// than the library's view would be a version-skew bug handled at release
-// time (soname), not in this API.
+// Each input params struct is initialized by zero-filling and stamping
+// struct_size, which works because every field's documented default is its
+// zero value. struct_size == 0 is NOT a defaults form (uninitialized stack
+// memory could hit the zero case); callers reach defaults via NULL only.
 
 extern "C" void transcribe_model_load_params_init(struct transcribe_model_load_params * p) {
     if (p == nullptr) { return; }
@@ -508,18 +440,13 @@ extern "C" void transcribe_stream_params_init(struct transcribe_stream_params * 
     p->struct_size = sizeof(*p);
 }
 
-// ---------------------------------------------------------------------------
 // Output struct init functions
-// ---------------------------------------------------------------------------
 //
 // Output structs are caller-allocated buffers the library writes into,
-// bounded by min(caller struct_size, library size). The caller must
-// declare its buffer size via struct_size; these init functions do that
-// and zero-fill the rest. Every output field is designed so its zero
-// value means "absent / unknown / false / none", so a zeroed struct +
-// struct_size is the correct empty state. (Unlike input params, a {0}
-// output struct is NOT accepted by the accessors — struct_size == 0 there
-// is a real "you forgot to init the buffer" error.)
+// bounded by min(caller struct_size, library size). Every output field's
+// zero value means "absent / unknown / false / none", so a zeroed struct +
+// struct_size is the correct empty state. struct_size == 0 is rejected by
+// the accessors as a "you forgot to init the buffer" error.
 
 extern "C" void transcribe_capabilities_init(struct transcribe_capabilities * p) {
     if (p == nullptr) { return; }
@@ -575,21 +502,13 @@ extern "C" void transcribe_token_init(struct transcribe_token * p) {
     p->struct_size = sizeof(*p);
 }
 
-// Whisper telemetry + run-extension init and chunk-trace accessors live
-// in arch/whisper/public.cpp (family source) so this dispatcher stays
-// family-agnostic, matching parakeet/moonshine.
+// Whisper telemetry + run-extension init and chunk-trace accessors live in
+// arch/whisper/public.cpp so this dispatcher stays family-agnostic. Whisper
+// run knobs are in transcribe_whisper_run_ext (via run_params::family);
+// sensevoice/funasr_nano use_itn and canary pnc use the generic run_params
+// itn/pnc enums.
 
-// The whisper/sensevoice/funasr_nano/canary per-family run-params
-// factories were removed in the Phase-2 migration:
-//   - whisper's knobs are now in transcribe_whisper_run_ext (reached via
-//     transcribe_run_params::family); use transcribe_whisper_run_ext_init().
-//   - sensevoice/funasr_nano `use_itn` collapsed into the generic
-//     transcribe_run_params::itn enum.
-//   - canary `pnc` collapsed into the generic transcribe_run_params::pnc enum.
-
-// ---------------------------------------------------------------------------
 // Extension helpers
-// ---------------------------------------------------------------------------
 
 extern "C" transcribe_status transcribe_ext_check(
     const struct transcribe_ext * ext,
@@ -712,21 +631,18 @@ static bool valid_stream_commit_policy(int policy) {
 
 } // namespace
 
-// ---------------------------------------------------------------------------
 // Backend modules and device discovery
-// ---------------------------------------------------------------------------
 //
 // transcribe_init_backends loads ggml backend modules from ONE caller-named
-// directory (a Python wheel's package dir, an app bundle, ...). It never
-// widens the search: ggml_backend_load_all_from_path with a non-null path
-// scans only that path. ggml tolerates every per-module failure (missing
-// system deps such as the Vulkan loader -> dlopen fails -> module skipped),
-// which is exactly the ship-Vulkan-by-default degradation contract.
+// directory (a Python wheel's package dir, an app bundle, ...) via
+// ggml_backend_load_all_from_path; it never widens the search. ggml tolerates
+// every per-module failure (missing system deps -> dlopen fails -> module
+// skipped), the ship-Vulkan-by-default degradation contract.
 //
 // NOTE: these definitions must sit at FILE scope, outside the anonymous
 // namespace above. clang exports extern "C" functions defined inside an
-// unnamed namespace; gcc gives them internal linkage, which strips them
-// from the shared library on Linux (undefined references at link).
+// unnamed namespace; gcc gives them internal linkage, which strips them from
+// the shared library on Linux (undefined references at link).
 
 // ggml's MSVC timer (ggml_time_us/ms in ggml.c) divides QueryPerformanceCounter
 // by a global frequency that ggml_time_init() fills in from
@@ -836,13 +752,10 @@ extern "C" transcribe_status transcribe_init_backends(const char * artifact_dir)
         ggml_backend_load_all_from_path(artifact_dir);
         s_loaded_dirs.insert(key);
 
-        // Post-scan device summary, through the installed sink only. Release
-        // ggml compiles its per-module load-failure diagnostics out
-        // (silent=true under NDEBUG), so this one line is the reliable
-        // signal a host's log callback gets for "which backends made it" —
-        // the input to debugging an accelerator that degraded to CPU. Sent
-        // via the callback-only emitter on purpose: a host without a sink
-        // keeps today's stderr behavior, no new import-time noise.
+        // Post-scan device summary, through the installed sink only (release
+        // ggml compiles its per-module load-failure diagnostics out, so this
+        // line is the reliable signal of which backends made it). Callback-only
+        // so a host without a sink gets no new import-time stderr noise.
         char devices[256];
         size_t off = 0;
         const size_t n_dev = ggml_backend_dev_count();
@@ -1330,19 +1243,12 @@ static void publish_observable_delta(
     }
 }
 
-// Advisory pnc/itn warning. Emits a WARN log message when a non-DEFAULT
-// caller request hits a model that does not support runtime control of
-// the corresponding axis, then returns so the dispatcher can proceed.
-// "Best effort" semantics: the model produces *something* either way,
-// and silently ignoring the request would be a footgun. The reserved
-// TRANSCRIBE_ERR_UNSUPPORTED_PNC / _ITN codes are NOT returned today;
-// they are placeholders for a future opt-in strict-advisory mode (a
-// per-call advisory_strict flag on transcribe_run_params).
-//
-// The arch + variant strings are included in the message so a grepping
-// developer can pinpoint which model dropped the request without having
-// to reproduce the call. Emission falls back to stderr when no log
-// callback is installed (mirrors transcribe_print_timings).
+// Advisory pnc/itn warning. Emits a WARN when a non-DEFAULT request hits a
+// model that does not support runtime control of that axis, then returns so
+// the dispatcher proceeds with best-effort semantics. The reserved
+// TRANSCRIBE_ERR_UNSUPPORTED_PNC / _ITN codes are NOT returned today
+// (placeholders for a future opt-in strict mode). The message includes the
+// arch + variant strings to pinpoint which model dropped the request.
 void warn_unsupported_advisory(
     const struct transcribe_model *  model,
     const struct transcribe_run_params * rp)
@@ -1389,9 +1295,7 @@ void warn_unsupported_advisory(
 
 } // namespace
 
-// ---------------------------------------------------------------------------
-// Lifecycle (stubs)
-// ---------------------------------------------------------------------------
+// Lifecycle
 
 extern "C" transcribe_status transcribe_model_load_file(
     const char *                           path,
@@ -1447,17 +1351,10 @@ extern "C" transcribe_status transcribe_model_load_file(
             return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Stage 0: format sniff. Two formats are supported today:
-    //   GGUF magic 0x46554747 ("GGUF") — the canonical path.
-    //   ggml magic 0x67676d6c           — legacy whisper.cpp `.bin`.
-    // We detect by reading the first four bytes rather than by file
-    // extension: HF distributes whisper.cpp models under the `.bin`
-    // suffix even though some are GGUFs internally, and conversely a
-    // user could rename a .bin to .gguf.
-    //
-    // Open semantics preserve the existing public contract: missing
-    // path → ERR_FILE_NOT_FOUND; everything else (truncated header,
-    // unrecognized magic, structural failure) collapses to ERR_GGUF.
+    // Format sniff by reading the first four bytes (not the file extension,
+    // which HF/users mislabel): GGUF magic 0x46554747 is the canonical path,
+    // ggml magic 0x67676d6c is a legacy whisper.cpp .bin. Public contract:
+    // missing path -> ERR_FILE_NOT_FOUND; every other failure -> ERR_GGUF.
     {
         struct stat st {};
         if (::stat(path, &st) != 0) {
@@ -1486,29 +1383,23 @@ extern "C" transcribe_status transcribe_model_load_file(
         }
     }
 
-    // 0x67676d6c ("ggml" little-endian): legacy whisper.cpp .bin.
-    // Hand off to the whisper-specific .bin adapter, which validates
-    // the hparams as whisper-shaped (rejecting Silero VAD and other
-    // unrelated `ggml`-magic files with UNSUPPORTED_ARCH).
+    // 0x67676d6c ("ggml" little-endian): legacy whisper.cpp .bin. Hand off
+    // to the whisper .bin adapter, which validates the hparams as
+    // whisper-shaped (rejecting unrelated ggml-magic files like Silero VAD).
     if (magic == 0x67676d6cu) {
         return transcribe::whisper::load_from_bin(path, params, out_model);
     }
 
-    // Stage 1: header-only GGUF inspection. The loader returns
-    // FILE_NOT_FOUND for a missing path (pre-checked via stat) or
-    // ERR_GGUF for any structural failure inside gguf_init_from_file
-    // (corrupt magic, truncated header, missing general.architecture).
-    // The Loader is stack-allocated; if anything below this point bails
-    // out before transferring ownership, its destructor frees the
-    // gguf_context on unwind.
+    // Header-only GGUF inspection. The Loader is stack-allocated; if
+    // anything below bails before transferring ownership, its destructor
+    // frees the gguf_context on unwind.
     transcribe::Loader loader;
     if (const transcribe_status st = loader.open(path); st != TRANSCRIBE_OK) {
         return st;
     }
 
-    // Stage 2: per-family dispatch. The architecture string came from
-    // the GGUF KV section so it is guaranteed non-null and NUL-terminated
-    // by the loader.
+    // Per-family dispatch. The architecture string came from the GGUF KV so
+    // the loader guarantees it is non-null and NUL-terminated.
     const transcribe::Arch * arch = transcribe::find_arch(loader.arch().c_str());
     if (arch == nullptr) {
         return TRANSCRIBE_ERR_UNSUPPORTED_ARCH;
@@ -1614,17 +1505,12 @@ extern "C" void transcribe_session_free(struct transcribe_session * session) {
     transcribe_model_free(owned);  // NULL is a no-op
 }
 
-// ---------------------------------------------------------------------------
 // Convenience: open / close / get_model
-// ---------------------------------------------------------------------------
 //
-// transcribe_open bundles load + session_init for the common single-session
-// case and hands back a session that owns its model (owns_model = true).
-// transcribe_close is a thin alias for transcribe_session_free — both honor
-// owns_model and free the owned model after the session, so calling either
-// on an open()-created session does the right thing. Pre-1.0 the alias is
-// kept for source-compatibility; consumers should migrate to
-// transcribe_session_free.
+// transcribe_open bundles load + session_init and hands back a session that
+// owns its model (owns_model = true). transcribe_close is a thin alias for
+// transcribe_session_free; both honor owns_model and free the owned model
+// after the session.
 
 extern "C" transcribe_status transcribe_open(
     const char *                                path,
@@ -1706,24 +1592,14 @@ extern "C" bool transcribe_was_truncated(const struct transcribe_session * sessi
     return session->was_truncated;
 }
 
-// ---------------------------------------------------------------------------
 // Streaming dispatcher
-// ---------------------------------------------------------------------------
 //
-// State transitions are managed entirely here; per-family hooks see
-// stream_state == ACTIVE on entry to begin/feed/finalize and never
-// observe transitions themselves. Hooks own the per-utterance result
-// data on the context and may freely mutate tokens/words/segments,
-// low-level candidate committed counts, audio cursors, and
-// stream_revision; the dispatcher owns lifecycle state, last_status, and
-// the public committed/tentative text view.
-//
-// The result snapshot and lifecycle state are deliberately separate.
-// clear_result() (called by both begin and transcribe_run) wipes the
-// snapshot but never touches stream_state, so a future caller that
-// wants to "rewind to a fresh result without restarting the stream"
-// has a path. The streaming dispatcher is currently the only caller
-// that drives stream_state.
+// State transitions are managed entirely here; hooks see ACTIVE on entry to
+// begin/feed/finalize and never observe transitions. Hooks own the
+// per-utterance result data (tokens/words/segments, committed counts, audio
+// cursors, stream_revision); the dispatcher owns lifecycle state,
+// last_status, and the public committed/tentative text view. clear_result()
+// wipes the snapshot but never touches stream_state.
 
 extern "C" transcribe_status transcribe_stream_begin(
     struct transcribe_session *              session,
@@ -2181,24 +2057,15 @@ static transcribe_status run_one_inner(
 
     // Pre-clear family-extension SHAPE validation: a run ext with a bad
     // transcribe_ext header size or a kind the model does not accept must
-    // NOT wipe the previous result snapshot. (The family's run_validate
-    // hook, run below after the run-param checks, additionally enforces
-    // the per-kind minimum struct size.) Mirrors the transcribe_stream_begin
-    // contract for stream_params->family. The kind-accept probe needs a
-    // valid model; when model is null we skip the pre-clear check and let
-    // the post-clear NOT_IMPLEMENTED path handle it (the existing
-    // snapshot-wipe-on-NOT_IMPLEMENTED contract is preserved).
+    // NOT wipe the previous result snapshot (mirrors the
+    // transcribe_stream_begin contract). When model is null we skip the
+    // pre-clear check and let the post-clear NOT_IMPLEMENTED path handle it.
     //
-    // NOTE the limit of this guarantee: it covers ext *shape* (size/kind)
-    // and the run-param checks below. A family is free to defer deeper
-    // *value* validation to its run() handler, in which case a
-    // correctly-shaped but semantically-malformed ext can still be
-    // rejected after the snapshot is cleared. Whisper does exactly this
-    // for its prompt-semantics checks — an intentional, accepted gap on
-    // the one-shot run() path (see whisper_run_validate and
-    // docs/follow-ups.md). A family wanting full pre-clear safety should
-    // validate values in run_validate, the way parakeet's stream_validate
-    // vets its (L,C,R) menu.
+    // This guarantee covers ext shape (size/kind) and the run-param checks
+    // below. A family that defers deeper value validation to run() (whisper
+    // does this for prompt semantics) can still reject a correctly-shaped
+    // ext after the snapshot is cleared; full pre-clear safety requires
+    // validating values in run_validate.
     if (params->family != nullptr &&
         session->model != nullptr && session->model->arch != nullptr)
     {
@@ -2322,9 +2189,7 @@ extern "C" transcribe_status transcribe_run(
     return run_one_inner(session, pcm, n_samples, params);
 }
 
-// ---------------------------------------------------------------------------
 // Batch run (offline)
-// ---------------------------------------------------------------------------
 //
 // transcribe_run_batch validates the shared run_params ONCE, then either
 // delegates to the family's batched run_batch() fast path or falls back to
@@ -2350,13 +2215,10 @@ transcribe_session::ResultSet snapshot_scratch_result(
 }
 
 // Pad batch_results out to `n` entries with explicit aborted failures.
-// Called only on an aborted batch: retained results keep their real ResultSet;
-// synthesized slots carry TRANSCRIBE_ERR_ABORTED, meaning "did not complete
-// because the batch was aborted" (NOT that the utterance itself reached an
-// abort checkpoint). This is what gives the result-set view one slot per input
-// utterance — transcribe_batch_n_results() == n — after an ABORTED return,
-// keeping the index->input mapping uniform across families and across the fast
-// path vs the serial fallback.
+// Called only on an aborted batch: synthesized slots carry
+// TRANSCRIBE_ERR_ABORTED ("did not complete because the batch was aborted"),
+// so the result-set view has one slot per input utterance
+// (transcribe_batch_n_results() == n) regardless of family or path.
 void pad_batch_results_aborted(transcribe_session * s, int n) {
     while (s->batch_results.size() < static_cast<size_t>(n)) {
         transcribe_session::ResultSet rs;
@@ -2365,8 +2227,8 @@ void pad_batch_results_aborted(transcribe_session * s, int n) {
     }
 }
 
-// Restore the scratch slot from a ResultSet so the legacy single-result
-// accessors stay coherent after a batch run (they reflect utterance 0).
+// Restore the scratch slot from a ResultSet so the single-result accessors
+// stay coherent after a batch run (they reflect utterance 0).
 void restore_scratch_from_result(
     transcribe_session * s, const transcribe_session::ResultSet & rs)
 {
@@ -2474,7 +2336,7 @@ extern "C" transcribe_status transcribe_run_batch(
         if (st == TRANSCRIBE_ERR_ABORTED) {
             pad_batch_results_aborted(session, n);
         }
-        // Keep the legacy single accessors coherent with utterance 0.
+        // Keep the single accessors coherent with utterance 0.
         if (!session->batch_results.empty()) {
             restore_scratch_from_result(session, session->batch_results.front());
         }
@@ -2520,22 +2382,18 @@ extern "C" transcribe_status transcribe_run_batch(
         pad_batch_results_aborted(session, n);
     }
 
-    // Restore the scratch slot to mirror utterance 0 for the legacy
-    // single-result accessors. clear_result() if the batch is somehow empty
-    // (n >= 1 guarantees at least one entry, but be defensive).
+    // Restore the scratch slot to mirror utterance 0 for the single-result
+    // accessors (n >= 1 guarantees at least one entry, but be defensive).
     if (!session->batch_results.empty()) {
         restore_scratch_from_result(session, session->batch_results.front());
     }
     return batch_status;
 }
 
-// ---------------------------------------------------------------------------
 // Model introspection
-// ---------------------------------------------------------------------------
 //
-// All four accessors read directly from the base struct. There is no
-// per-family callback for them: per-family load() is responsible for
-// filling caps / variant / backend in the base before returning success.
+// These accessors read directly from the base struct; per-family load()
+// fills caps / variant / backend before returning success.
 
 extern "C" transcribe_status transcribe_model_get_capabilities(
     const struct transcribe_model *  model,
@@ -2692,10 +2550,8 @@ extern "C" int transcribe_tokenize(
 }
 
 extern "C" const char * transcribe_model_backend(const struct transcribe_model * model) {
-    // Empty string means "no runtime backend bound" — see the public
-    // header for the full semantic. In 2B no model is ever bound to a
-    // backend, so per-family load() leaves this empty and we just
-    // pass it through.
+    // Empty string means "no runtime backend bound" — see the public header
+    // for the full semantic.
     if (model == nullptr) {
         return "";
     }
@@ -2715,7 +2571,7 @@ extern "C" transcribe_status transcribe_model_get_device(
         return st;
     }
     // The model's primary backend is bound by per-family load(); a model
-    // that never resolved one (or a 2B build with no real backend) has none.
+    // that never resolved one has none.
     if (model->primary_backend == nullptr) {
         return TRANSCRIBE_ERR_BACKEND;
     }
@@ -2727,15 +2583,11 @@ extern "C" transcribe_status transcribe_model_get_device(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
 // Timings
-// ---------------------------------------------------------------------------
 //
-// All accumulators live on the base classes (transcribe_model::t_load_us
-// and transcribe_session::t_{mel,encode,decode}_us). Per-family run()
-// drivers populate the context-side fields; per-family load() drivers
-// populate t_load_us. The accessors here just convert microseconds to
-// milliseconds and return a small value type.
+// Accumulators live on the base classes (transcribe_model::t_load_us and
+// transcribe_session::t_{mel,encode,decode}_us), populated by per-family
+// load() / run(). These accessors convert microseconds to milliseconds.
 
 extern "C" transcribe_status transcribe_get_timings(
     const struct transcribe_session * session,
@@ -2795,16 +2647,12 @@ transcribe_reset_timings(struct transcribe_session * session)
     session->t_decode_us = 0;
 }
 
-// ---------------------------------------------------------------------------
 // Result accessors
-// ---------------------------------------------------------------------------
 //
-// All accessors read from the base context's result storage
-// (transcribe_session::tokens / words / segments / full_text /
-// result_kind / has_result), which is populated by the per-family
-// run() driver during decode. Out-of-range indices and pre-run
-// access return safe sentinels per the public contract; we never
-// reach into invalid memory.
+// These read from the base context's result storage (tokens / words /
+// segments / full_text / result_kind / has_result), populated by the
+// per-family run() driver. Out-of-range indices and pre-run access return
+// safe sentinels per the public contract.
 
 extern "C" const char * transcribe_full_text(const struct transcribe_session * session) {
     if (session == nullptr || !session->has_result) {
@@ -2841,24 +2689,18 @@ extern "C" int transcribe_n_tokens(const struct transcribe_session * session) {
     return static_cast<int>(session->tokens.size());
 }
 
-// ---------------------------------------------------------------------------
 // Result accessors - per-item rows
-// ---------------------------------------------------------------------------
 //
-// 3 copy-out accessors backed by the context's segments / words /
-// tokens vectors. Each takes a caller-owned struct initialized via
-// TRANSCRIBE_*_INIT and writes only the prefix that fits within the
-// caller's struct_size. Out-of-range index or pre-run access leaves
-// the caller's struct as zero-init (text==NULL, scalars 0); the
-// dispatch path always returns OK in those cases so callers can use
-// the row's text!=NULL check as the "row present" signal without
-// branching on status.
+// Copy-out accessors backed by the context's segments / words / tokens
+// vectors, writing only the prefix that fits the caller's struct_size.
+// Out-of-range index or pre-run access leaves the caller's struct zero-init
+// and still returns OK, so callers can use text!=NULL as the "row present"
+// signal without branching on status.
 //
-// `text` pointers in the staged structs alias the context's
-// std::string storage. The library treats that as session-owned: valid
-// until the next transcribe_run / transcribe_stream_begin /
-// transcribe_stream_reset / transcribe_session_free on the same
-// context. The public header documents the lifetime contract.
+// `text` pointers in the staged structs alias the context's std::string
+// storage; the library treats that as session-owned, valid until the next
+// transcribe_run / transcribe_stream_begin / transcribe_stream_reset /
+// transcribe_session_free on the same context (see the public header).
 
 extern "C" transcribe_status transcribe_get_segment(
     const struct transcribe_session * session,
@@ -2967,15 +2809,12 @@ extern "C" transcribe_status transcribe_get_token(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
 // Batch result accessors
-// ---------------------------------------------------------------------------
 //
 // These index session->batch_results when a batch run populated it, and
-// otherwise synthesize utterance 0 from the scratch slot after transcribe_run.
-// The copy-out row accessors share the same staging shape as the single-result
-// accessors above; only the source vector differs (batch ResultSet rows vs the
-// scratch slot).
+// otherwise synthesize utterance 0 from the scratch slot after
+// transcribe_run. They share the staging shape of the single-result
+// accessors above; only the source vector differs.
 
 namespace {
 

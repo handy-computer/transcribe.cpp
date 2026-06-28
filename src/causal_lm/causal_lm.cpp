@@ -1,11 +1,5 @@
 // src/causal_lm/causal_lm.cpp - shared causal-decoder LM block math
-// (Llama / Qwen3 lineage; Qwen3 adds the per-head Q/K RMSNorm noted below).
-//
-// See causal_lm.h for the API contract. The block forward functions are
-// strict extractions of the per-family code that lived in
-// arch/qwen3_asr/decoder.cpp and arch/funasr_nano/decoder.cpp before
-// this module landed; tensor topology, math, and KV memory layout are
-// preserved bit-for-bit.
+// (Llama / Qwen3 lineage). See causal_lm.h for the API contract.
 
 #include "causal_lm.h"
 #include "transcribe-session.h"
@@ -24,21 +18,20 @@ namespace transcribe::causal_lm {
 
 namespace {
 
-// Qwen3 RMSNorm: weight * rsqrt(mean(x²) + eps) * x.
 ggml_tensor * rms_norm(ggml_context * ctx, ggml_tensor * x,
                        ggml_tensor * weight, float eps)
 {
     return ggml_mul(ctx, ggml_rms_norm(ctx, x, eps), weight);
 }
 
-// Weight matmul forcing F32 accumulation for F16 weights. On CUDA, F16 weights
-// take the cuBLAS path that accumulates in F16 (CUBLAS_COMPUTE_16F); a deep LLM
-// residual stream has large-magnitude outlier channels that overflow F16's
-// ~65504 range -> NaNs (multi-token prefill / batched GEMMs only; single-token
-// decode uses an F32-accumulating mat-vec). GGML_PREC_F32 makes cuBLAS run the
-// GEMM in F32, matching the CPU reference. Gated on F16 so BF16/quantized/F32
-// weights are untouched (BF16 is already COMPUTE_32F; quantized uses MMQ) and
-// CPU/Metal — which always F32-accumulate — are unaffected.
+// Weight matmul forcing F32 accumulation for F16 weights (CANONICAL F16-accum
+// note for this module). On CUDA, F16 weights take the cuBLAS path that
+// accumulates in F16 (CUBLAS_COMPUTE_16F); a deep LLM residual stream has
+// large-magnitude outlier channels that overflow F16's ~65504 range -> NaNs.
+// GGML_PREC_F32 makes cuBLAS run the GEMM in F32, matching the CPU reference.
+// Gated on F16 so BF16/quantized/F32 weights are untouched (BF16 already
+// COMPUTE_32F; quantized uses MMQ) and CPU/Metal (always F32-accumulate) are
+// unaffected.
 ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x)
 {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
@@ -49,10 +42,6 @@ ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * w, ggml_tensor * 
 }
 
 } // namespace
-
-// ---------------------------------------------------------------------------
-// KvCache
-// ---------------------------------------------------------------------------
 
 void KvCache::free() {
     if (buffer != nullptr) {
@@ -183,10 +172,7 @@ bool kv_init_batched(KvCache &      cache,
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Block forward — prefill
-// ---------------------------------------------------------------------------
-
+// Block forward — prefill.
 ggml_tensor * block_prefill(
     ggml_context *      ctx,
     ggml_cgraph *       gf,
@@ -214,7 +200,6 @@ ggml_tensor * block_prefill(
     const size_t k_elem = ggml_element_size(kv_cache.self_k);
     const size_t v_elem = ggml_element_size(kv_cache.self_v);
 
-    // ---- Attention sub-layer ----
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
     // Q/K/V projections (bias-free on Qwen3). Packing into one mul_mat
@@ -227,10 +212,9 @@ ggml_tensor * block_prefill(
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T_seq, 1);
     V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, T_seq, 1);
 
-    // Per-head Q/K RMSNorm on head_dim (Qwen3 innovation).
-    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders
-    // (e.g. Voxtral's Ministral backbone) ship no q_norm/k_norm tensors,
-    // so the call site leaves these view slots null and we skip the norm.
+    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders ship no
+    // q_norm/k_norm tensors, so the call site leaves these slots null and we
+    // skip the norm. (Same for block_step / step_n / batched below.)
     if (view.attn_q_norm != nullptr) {
         Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
     }
@@ -253,13 +237,10 @@ ggml_tensor * block_prefill(
                       rope_theta,
                       1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
 
-    // KV write: K, V have ne=[D, Hkv, T_seq, 1]; memory order
-    // (fastest→slowest) is D, Hkv, T. Cache stores position-major
-    // within each layer (per position, all D·Hkv values contiguous).
-    // Same layout — a 1D cpy handles it.
-    // Slab (layer, batch-slot) base offset, in elements. Defaults
-    // (kv_batch_slot=0, kv_n_batch=1) collapse to layer_idx*n_ctx*kv_dim —
-    // byte-identical to the single-shot layout.
+    // KV write: K, V have ne=[D, Hkv, T_seq, 1], same layout as the cache
+    // (position-major within each layer), so a 1D cpy handles it. Slab
+    // (layer, batch-slot) base offset in elements; defaults (kv_batch_slot=0,
+    // kv_n_batch=1) collapse to layer_idx*n_ctx*kv_dim.
     const size_t slab =
         static_cast<size_t>(opts.kv_batch_slot) +
         static_cast<size_t>(opts.kv_n_batch) * static_cast<size_t>(layer_idx);
@@ -338,8 +319,6 @@ ggml_tensor * block_prefill(
     o = mul_mat_f32acc(ctx, view.attn_o_w, o);
     x = ggml_add(ctx, x, o);
 
-    // Optional last-position slice before FFN (caller uses on the LAST
-    // block when only the final logits are consumed).
     if (opts.slice_last_before_ffn) {
         const int64_t hidden = x->ne[0];
         const size_t  elem   = ggml_element_size(x);
@@ -349,7 +328,6 @@ ggml_tensor * block_prefill(
         x = ggml_cont(ctx, x);
     }
 
-    // ---- MLP sub-layer (SwiGLU on packed gate_up) ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
     if (view.ffn_scale != nullptr) ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
@@ -360,10 +338,7 @@ ggml_tensor * block_prefill(
     return x;
 }
 
-// ---------------------------------------------------------------------------
-// Block forward — step
-// ---------------------------------------------------------------------------
-
+// Block forward — step.
 ggml_tensor * block_step(
     ggml_context *      ctx,
     ggml_cgraph *       gf,
@@ -392,7 +367,6 @@ ggml_tensor * block_step(
     const size_t k_elem = ggml_element_size(kv_cache.self_k);
     const size_t v_elem = ggml_element_size(kv_cache.self_v);
 
-    // ---- Attention sub-layer ----
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
     ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);
@@ -403,9 +377,6 @@ ggml_tensor * block_step(
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, 1, 1);
     V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, 1, 1);
 
-    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders
-    // (e.g. Voxtral's Ministral backbone) ship no q_norm/k_norm tensors,
-    // so the call site leaves these view slots null and we skip the norm.
     if (view.attn_q_norm != nullptr) {
         Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
     }
@@ -451,9 +422,8 @@ ggml_tensor * block_step(
     }
 
     // Attention reads the FULL [0, max_n_kv) window. Mask zeros valid
-    // positions and -inf's the rest, so softmax ignores empty slots.
-    // Full-window read costs extra bandwidth (~1.6× avg) but the graph
-    // is static → zero per-step rebuild overhead.
+    // positions and -inf's the rest, so softmax ignores empty slots; the
+    // graph stays static (zero per-step rebuild).
     const size_t layer_off_bytes =
         k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim;
     ggml_tensor * K_att = ggml_view_3d(
@@ -505,7 +475,6 @@ ggml_tensor * block_step(
     o = mul_mat_f32acc(ctx, view.attn_o_w, o);
     x = ggml_add(ctx, x, o);
 
-    // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
     if (view.ffn_scale != nullptr) ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
@@ -516,10 +485,7 @@ ggml_tensor * block_step(
     return x;
 }
 
-// ---------------------------------------------------------------------------
-// Block forward — multi-position step (T_seq positions, single utterance)
-// ---------------------------------------------------------------------------
-
+// Block forward — multi-position step (T_seq positions, single utterance).
 ggml_tensor * block_step_n(
     ggml_context *      ctx,
     ggml_cgraph *       gf,
@@ -664,10 +630,7 @@ ggml_tensor * block_step_n(
     return x;
 }
 
-// ---------------------------------------------------------------------------
-// Block forward — batched step (B utterances)
-// ---------------------------------------------------------------------------
-
+// Block forward — batched step (B utterances).
 ggml_tensor * block_step_batched(
     ggml_context *      ctx,
     ggml_cgraph *       gf,
@@ -697,7 +660,6 @@ ggml_tensor * block_step_batched(
     const size_t k_elem = ggml_element_size(kv_cache.self_k);
     const size_t v_elem = ggml_element_size(kv_cache.self_v);
 
-    // ---- Attention sub-layer ----
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
     ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);  // [q_dim, B]
@@ -710,9 +672,6 @@ ggml_tensor * block_step_batched(
     K = ggml_reshape_3d(ctx, K, head_dim, n_kv_heads, B);
     V = ggml_reshape_3d(ctx, V, head_dim, n_kv_heads, B);
 
-    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders
-    // (e.g. Voxtral's Ministral backbone) ship no q_norm/k_norm tensors,
-    // so the call site leaves these view slots null and we skip the norm.
     if (view.attn_q_norm != nullptr) {
         Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
     }
@@ -730,9 +689,8 @@ ggml_tensor * block_step_batched(
                       GGML_ROPE_TYPE_NEOX, params.max_position,
                       rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
 
-    // ---- Batched KV write ----
-    // Per layer the cache slab is [kv_dim, n_ctx, B]; one ggml_set_rows
-    // writes B rows (one per utterance) at B independent indices kv_idx[b].
+    // Batched KV write: per layer the cache slab is [kv_dim, n_ctx, B]; one
+    // ggml_set_rows writes B rows at B independent indices kv_idx[b].
     {
         const size_t layer_off_k =
             k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
@@ -755,7 +713,7 @@ ggml_tensor * block_step_batched(
             gf, ggml_set_rows(ctx, v_layer, V_row, kv_idx));
     }
 
-    // ---- Attention read: [head_dim, max_n_kv, n_kv_heads, B] per layer ----
+    // Attention read: [head_dim, max_n_kv, n_kv_heads, B] per layer.
     const size_t layer_off_bytes_k =
         k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
     const size_t layer_off_bytes_v =
@@ -792,7 +750,6 @@ ggml_tensor * block_step_batched(
     o = mul_mat_f32acc(ctx, view.attn_o_w, o);  // [hidden, B]
     x = ggml_add(ctx, x, o);
 
-    // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
     if (view.ffn_scale != nullptr) ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
@@ -803,10 +760,7 @@ ggml_tensor * block_step_batched(
     return x;
 }
 
-// ---------------------------------------------------------------------------
-// Block forward — batched prefill (B utterances, T tokens each)
-// ---------------------------------------------------------------------------
-
+// Block forward — batched prefill (B utterances, T tokens each).
 ggml_tensor * block_prefill_batched(
     ggml_context *      ctx,
     ggml_cgraph *       gf,
@@ -837,7 +791,6 @@ ggml_tensor * block_prefill_batched(
     const size_t k_elem = ggml_element_size(kv_cache.self_k);
     const size_t v_elem = ggml_element_size(kv_cache.self_v);
 
-    // ---- Attention sub-layer ----
     ggml_tensor * x_norm = rms_norm(ctx, x, view.norm_attn_w, rms_eps);
 
     ggml_tensor * Q = mul_mat_f32acc(ctx, view.attn_q_w, x_norm);  // [q_dim, T, B]
@@ -848,9 +801,6 @@ ggml_tensor * block_prefill_batched(
     K = ggml_reshape_4d(ctx, K, head_dim, n_kv_heads, T, B);
     V = ggml_reshape_4d(ctx, V, head_dim, n_kv_heads, T, B);
 
-    // Per-head Q/K RMSNorm is a Qwen3 feature; Llama-style decoders
-    // (e.g. Voxtral's Ministral backbone) ship no q_norm/k_norm tensors,
-    // so the call site leaves these view slots null and we skip the norm.
     if (view.attn_q_norm != nullptr) {
         Q = ggml_mul(ctx, ggml_rms_norm(ctx, Q, rms_eps), view.attn_q_norm);
     }
@@ -866,7 +816,7 @@ ggml_tensor * block_prefill_batched(
                       GGML_ROPE_TYPE_NEOX, params.max_position,
                       rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
 
-    // ---- Batched KV write: each utterance's T rows -> [0, T) of its slab ----
+    // Batched KV write: each utterance's T rows -> [0, T) of its slab.
     {
         const size_t layer_off_k =
             k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
@@ -889,7 +839,7 @@ ggml_tensor * block_prefill_batched(
             gf, ggml_set_rows(ctx, v_layer, V_rows, kv_idx));
     }
 
-    // ---- Attention read: [head_dim, T, n_kv_heads, B] (positions [0, T)) ----
+    // Attention read: [head_dim, T, n_kv_heads, B] (positions [0, T)).
     const size_t layer_off_bytes_k =
         k_elem * static_cast<size_t>(layer_idx) * n_ctx * kv_dim * B;
     const size_t layer_off_bytes_v =
@@ -920,7 +870,6 @@ ggml_tensor * block_prefill_batched(
     o = mul_mat_f32acc(ctx, view.attn_o_w, o);  // [hidden, T, B]
     x = ggml_add(ctx, x, o);
 
-    // ---- MLP sub-layer ----
     ggml_tensor * ff_norm = rms_norm(ctx, x, view.norm_ffn_w, rms_eps);
     if (view.ffn_scale != nullptr) ff_norm = ggml_mul(ctx, ff_norm, view.ffn_scale);
     ggml_tensor * gate_up = mul_mat_f32acc(ctx, view.ffn_gate_up_w, ff_norm);
@@ -930,10 +879,6 @@ ggml_tensor * block_prefill_batched(
     x = ggml_add(ctx, x, ff);
     return x;
 }
-
-// ---------------------------------------------------------------------------
-// pack_gate_up
-// ---------------------------------------------------------------------------
 
 void PackedGateUpHandles::free() {
     if (buffer != nullptr) {
@@ -977,9 +922,8 @@ bool pack_gate_up(ggml_backend_t                  backend,
         return false;
     }
 
-    // Allocate one packed tensor per block with the SAME dtype as
-    // gate_w. Mixed-quant blocks (e.g. all Q4_K_M) are fine because
-    // gate and up share a row-wise quant block size.
+    // One packed tensor per block, same dtype as gate_w (gate and up share
+    // a row-wise quant block size).
     for (size_t i = 0; i < entries.size(); ++i) {
         const auto & e = entries[i];
         if (e.gate_w == nullptr || e.up_w == nullptr ||
@@ -1020,9 +964,8 @@ bool pack_gate_up(ggml_backend_t                  backend,
     ggml_backend_buffer_set_usage(out_handles.buffer,
                                   GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    // Fill: for row-wise quants (and f32/f16) concat-along-dim-1 is
-    // gate's bytes followed by up's bytes. One CPU round-trip per
-    // block at load time; zero cost at inference.
+    // Fill: concat-along-dim-1 is gate's bytes followed by up's bytes
+    // (one CPU round-trip per block at load time).
     std::vector<uint8_t> buf;
     for (const auto & e : entries) {
         ggml_tensor * gate_up = *e.gate_up_w_out;
@@ -1136,17 +1079,11 @@ transcribe_status run_batched_step_loop(
         stats->step_us = ggml_time_us() - t_step0;
     }
 
-    // A valid row was truncated if it stopped for a reason OTHER than emitting
-    // eos — i.e. it hit the generation budget (max_new) or the KV window. Note
-    // `finished` is NOT the discriminator: it is set on every stop reason (eos
-    // AND budget AND KV exhaustion, above), and the loop only exits once every
-    // valid row is finished, so `!finished[b]` is always false here. The actual
-    // signal is the last sampled token: `next_tok[b]` equals `eos_id` exactly
-    // when the row stopped by emitting eos (line `next_tok[b] = tok;` runs
-    // before the eos test, and `next_tok` is frozen once the row finishes), so
-    // `next_tok[b] != eos_id` means the row was cut off mid-transcript. This
-    // lets the family return per-utterance TRANSCRIBE_ERR_OUTPUT_TRUNCATED. See
-    // docs/input-limits.md.
+    // A valid row was truncated if it stopped for a reason OTHER than eos
+    // (generation budget or KV window). `finished` is set on every stop
+    // reason, so it can't discriminate; the signal is the last sampled token:
+    // `next_tok[b] != eos_id` means the row was cut off mid-transcript (it is
+    // frozen once the row finishes). See docs/input-limits.md.
     if (truncated_out != nullptr) {
         truncated_out->assign(n, 0);
         for (int b = 0; b < n; ++b) {

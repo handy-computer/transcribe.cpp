@@ -2,7 +2,7 @@
 //
 // Architecture:
 //   - Conformer encoder (16 layers, hidden=1024) with self-conditioned
-//     CTC bypass at layer N/2 and a BPE-CTC head (1024 -> 100353)
+//     CTC bypass at layer N/2 and a BPE-CTC head
 //   - EncoderProjectorQFormer (per-encoder-layer LN over the cat of 4
 //     captured layers, layer_projector 4096->2048, learned query +
 //     window_positions, 2 cross-attn+MLP layers, out_norm + out_linear)
@@ -98,7 +98,6 @@ namespace {
 constexpr const char k_default_variant[] = "granite-speech-nar";
 constexpr float kBnEps = 1e-5f;
 
-// ---------------------------------------------------------------------------
 // Input-length contract (see docs/input-limits.md). granite_nar is a
 // hard-context-cap family: the bidirectional editor runs a SINGLE forward
 // pass over (audio_tokens + text) and every position uses RoPE bounded by
@@ -108,7 +107,6 @@ constexpr float kBnEps = 1e-5f;
 // the up-front input gate on T_total plus an advisory max_audio_ms. Over-
 // length input is rejected with TRANSCRIBE_ERR_INPUT_TOO_LONG before the
 // decoder graph is built.
-// ---------------------------------------------------------------------------
 
 // Representative text budget reserved when advertising max_audio_ms. The
 // editor's text side (initial BPE hypothesis + insertion slots) shares the
@@ -138,15 +136,12 @@ int granite_nar_num_queries(const GraniteNarHParams & hp) {
 }
 
 // Advisory transcribe_capabilities::max_audio_ms: the longest audio whose
-// audio tokens, a representative text hypothesis (k_text_budget), still fit
+// audio tokens plus a representative text hypothesis (k_text_budget) still fit
 // the decoder context ceiling. This is the input bound the gate enforces.
 // Returns 0 ("unknown / unbounded") if the rate constants are missing, so a
-// misconfigured model is never advertised with a wrong finite number.
-//
-// Mirrors granite/model.cpp's granite_max_audio_ms with granite_nar's hparam
-// field names (prj_block_size / prj_downsample_rate vs window_size /
-// downsample_rate) and reserves a text budget in place of AR's prompt +
-// generation reserve, because the NAR editor has no autoregressive output.
+// misconfigured model is never advertised with a wrong finite number. Mirrors
+// granite's granite_max_audio_ms, reserving a text budget in place of AR's
+// prompt + generation reserve.
 int64_t granite_nar_max_audio_ms(const GraniteNarHParams & hp) {
     const int num_queries = granite_nar_num_queries(hp);
     if (num_queries <= 0 || hp.prj_block_size <= 0 ||
@@ -267,7 +262,7 @@ transcribe_status load(
 
     // Publish the input-length ceiling now that the decoder context window and
     // frontend rate are known (apply_family_invariants ran before the hparams
-    // were read, so it could not set this). See docs/input-limits.md.
+    // were read, so it could not set this).
     m->caps.max_audio_ms = granite_nar_max_audio_ms(m->hparams);
 
     // Basis for the session-level limits query (transcribe_session_get_limits):
@@ -302,7 +297,7 @@ transcribe_status load(
         }
     }
 
-    // ---------- Mel frontend ----------
+    // Mel frontend.
     // The NLE shares the whisper-mode feature extractor with AR Granite
     // but the NAR GGUF doesn't ship pre_emphasis / f_min / f_max KVs (the
     // upstream WhisperFeatureExtractor doesn't expose them; we hardcode
@@ -347,7 +342,7 @@ transcribe_status load(
         m->mel.emplace(cfg);
     }
 
-    // ---------- Tensor catalog ----------
+    // Tensor catalog.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -455,7 +450,7 @@ transcribe_status run(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // ---------- Mel + 2-frame stack ----------
+    // Mel + 2-frame stack.
     const int64_t t_mel_start = ggml_time_us();
     int t_enc = 0;
     if (const transcribe_status mst = compute_mel_encoder_input(
@@ -478,7 +473,7 @@ transcribe_status run(
             shape, 2, "encoder");
     }
 
-    // ---------- Reset compute state ----------
+    // Reset compute state.
     if (cc->compute_ctx != nullptr) {
         ggml_free(cc->compute_ctx);
         cc->compute_ctx = nullptr;
@@ -497,7 +492,7 @@ transcribe_status run(
         }
     }
 
-    // ---------- Encoder graph ----------
+    // Encoder graph.
     EncoderBuild eb = build_encoder_graph(cc->compute_ctx, cm->weights,
                                           cm->hparams, t_enc,
                                           cc->encoder_use_flash);
@@ -583,7 +578,7 @@ transcribe_status run(
                                           eb.dumps.block_last_out, "encoder");
     try_dump("enc.ctc_logits", eb.dumps.ctc_logits, "encoder");
 
-    // ---------- Read encoder outputs to host ----------
+    // Read encoder outputs to host.
     const int64_t cat_h = eb.cat_out->ne[0];
     const int64_t cat_T = eb.cat_out->ne[1];
     cc->enc_cat_host.resize(static_cast<size_t>(cat_h) * cat_T);
@@ -623,7 +618,7 @@ transcribe_status run(
     // and gets the v-th logit at frame t correctly.
     (void)n_ctc_vocab;
 
-    // ---------- Initial BPE hypothesis ----------
+    // Initial BPE hypothesis.
     std::vector<int32_t> hyp_ids;
     if (n_bpe_vocab > 0 && !mid_non_blank.empty()) {
         compute_bpe_ctc_initial_hypothesis(
@@ -646,7 +641,7 @@ transcribe_status run(
         return TRANSCRIBE_OK;
     }
 
-    // ---------- Projector graph ----------
+    // Projector graph.
     ggml_context * proj_ctx = nullptr;
     {
         ggml_init_params ip {};
@@ -720,12 +715,12 @@ transcribe_status run(
                             cc->proj_out_host.size() * sizeof(float));
     ggml_free(proj_ctx);
 
-    // ---------- add_insertion_slots ----------
+    // add_insertion_slots.
     std::vector<int32_t> text_ids;
     add_insertion_slots(hyp_ids, cm->hparams.dec_eos_id, text_ids);
     const int n_text = static_cast<int>(text_ids.size());
 
-    // ---------- Input-length gate (see docs/input-limits.md) ----------
+    // Input-length gate.
     // The editor is non-autoregressive: a SINGLE bidirectional forward over
     // (audio_tokens + text) where every position's RoPE is bounded by
     // dec_max_pos_emb (optionally lowered by the caller's n_ctx knob). Both
@@ -756,7 +751,7 @@ transcribe_status run(
         for (auto & v : cc->proj_out_host) v *= inv;
     }
 
-    // ---------- Decoder graph ----------
+    // Decoder graph.
     ggml_context * dec_ctx = nullptr;
     {
         ggml_init_params ip {};

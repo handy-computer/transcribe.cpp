@@ -1,63 +1,27 @@
 // transcribe-mel.cpp - native C++ log-mel feature extractor.
 //
-// Implementation notes
-// --------------------
+// Matches NeMo's AudioToMelSpectrogramPreprocessor
+// (FilterbankFeatures.forward in features.py) as exported in the
+// Parakeet 0.6B nemo128.onnx preprocessor. Constants / ordering:
 //
-// The pipeline below matches NeMo's AudioToMelSpectrogramPreprocessor
-// (FilterbankFeatures.forward in nemo/collections/asr/parts/preprocessing/
-// features.py) as exported in the Parakeet 0.6B nemo128.onnx
-// preprocessor. Phase 3 preflight cross-checked the algorithm three
-// ways: NeMo source, ONNX op graph + initializers, and a standalone
-// PyTorch reproduction. Constants and ordering decisions:
-//
-//   * Pre-emphasis alpha: read from MelConfig::pre_emphasis (0.97 for
-//     real Parakeet; 0.0 disables the step entirely).
-//
-//   * Reflect padding by n_fft/2 on each side. The NeMo source on
-//     main says pad_mode="constant" but the ONNX export uses
-//     reflect, and the released checkpoint was packaged with the
-//     reflect path; reflect is what produces working transcriptions.
-//     Trust the ONNX, ignore the source on this one point.
-//
-//   * STFT in fp32 for the mixed-radix path (whisper, n_fft=400) and
+//   * Pre-emphasis alpha: MelConfig::pre_emphasis (0.97; 0.0 disables).
+//   * Reflect padding by n_fft/2 on each side. The NeMo source says
+//     pad_mode="constant" but the ONNX export (and the released
+//     checkpoint) use reflect; trust the ONNX.
+//   * STFT in fp32 for the mixed-radix path (whisper, n_fft=400),
 //     fp64 for the radix-2 vDSP path (parakeet/cohere, n_fft=512).
-//     The fp32 mixed-radix matches whisper.cpp's choice and was
-//     verified WER-neutral on test-clean-300 (5.83% vs 5.84% fp64).
-//     vDSP's fp64 stays because it's already fast (Accelerate SIMD)
-//     and the precision is free.
+//     fp32 mixed-radix matches whisper.cpp and is WER-neutral.
+//   * Window: symmetric Hann length win_length zero-padded to n_fft
+//     (NeMo passes periodic=False, features.py:316).
+//   * Power spectrum: re^2 + im^2 (mag_power=2.0 folded into squaring).
+//   * Mel filterbank: Slaney-normalized librosa formula, ~3e-7 vs ONNX.
+//   * Log epsilon: 2^-24 (NeMo log_zero_guard_value, features.py:256).
+//   * Per-feature normalize: UNBIASED variance, divides by (n-1)
+//     (NeMo normalize_batch, features.py:79); biased drifts ~1/n.
+//   * Normalize epsilon: 1e-5 (NeMo CONSTANT).
+//   * Dither: never applied (NeMo gates it on self.training).
 //
-//   * Window: symmetric Hann length win_length, zero-padded to n_fft.
-//     The NeMo source explicitly passes periodic=False
-//     (features.py:316).
-//
-//   * Power spectrum: re^2 + im^2 (matches ONNX ReduceSumSquare).
-//     mag_power=2.0 is collapsed into the squaring; we never compute
-//     the magnitude itself.
-//
-//   * Mel filterbank: Slaney-normalized librosa formula computed at
-//     constructor time from (sr, n_fft, n_mels, fmin, fmax). Verified
-//     to match the ONNX-baked filterbank to ~3e-7 in fp32.
-//
-//   * Log epsilon: 2^-24 (NeMo log_zero_guard_value default).
-//     Hardcoded; not in the schema. Different from the 1e-5 we
-//     initially planned for; the value comes straight from
-//     features.py:256.
-//
-//   * Per-feature normalize uses the UNBIASED variance estimator,
-//     dividing by (n_frames - 1) not n_frames. This is what NeMo's
-//     normalize_batch does (features.py line 79) and what the ONNX
-//     graph reproduces (Sub-1 op before the Div). The biased
-//     estimator would silently drift the test by ~1/n_frames.
-//
-//   * Normalize epsilon: 1e-5. Matches NeMo's CONSTANT.
-//
-//   * Dither: never applied. NeMo gates dither on self.training,
-//     so inference always sees a deterministic frontend. We don't
-//     even read MelConfig::dither.
-//
-// Output layout: [num_mels, n_frames] row-major float32. The encoder
-// builder in phase 4 will copy this into a ggml_tensor at the
-// backend boundary; the frontend itself stays backend-free.
+// Output: [num_mels, n_frames] row-major float32; backend-free.
 
 #include "transcribe-mel.h"
 
@@ -197,18 +161,9 @@ void build_hann_window_symmetric_padded(
 // surface zero. Drop in pocketfft only if profiling later shows the
 // frontend is a bottleneck.
 // Per-MelFrontend sin/cos cache, indexed by 2π*i / lut_size. The mixed-
-// radix path is the only consumer; for it to hit the LUT on every level
-// we need lut_size divisible by every N seen during recursion. With
-// lut_size == n_fft this holds automatically: n_fft → n_fft/2 → … → odd
-// leaf, all divisors of n_fft. Stride at recursion level N is
-// lut_size / N, and (k*n*stride) % lut_size lands on the right phase.
-//
-// Historical note: this was previously a process-wide 5040-entry
-// singleton ("7! covers divisors 1..10"), but for Whisper's n_fft=400 =
-// 2^4·5² the recursion sizes are {400, 200, 100, 50, 25} — none divide
-// 5040, so use_lut was false at every level and we silently fell
-// through to live std::cos/sin in tight loops (~10K trig calls per
-// frame from the leaf DFT alone). Sizing the LUT to n_fft fixes that.
+// radix path is the only consumer; lut_size == n_fft so every recursion
+// size N (n_fft → n_fft/2 → … → odd leaf) divides it. Stride at level N
+// is lut_size / N, and (k*n*stride) % lut_size lands on the right phase.
 
 // Naive O(N^2) DFT leaf for the mixed-radix path. Used when N hits an
 // odd factor during recursive halving (e.g. N=400 → 200 → 100 → 50 → 25
@@ -431,15 +386,10 @@ transcribe_status MelFrontend::compute(
 
     // ---- 1. Pad + pre-emphasis ----
     //
-    // The non-pow2 (mixed-radix) path runs fp32 throughout, so we build
-    // the padded buffer directly in fp32 and skip the intermediate emph
-    // copy entirely. The pow2 paths (vDSP / hand-rolled radix-2) stay
-    // fp64 since their FFT routines are fp64-native.
-    //
-    // Whisper's mel was already lossy-cast fp64→fp32 right before the
-    // FFT in the non-pow2 path, so this just removes a memory-bandwidth
-    // hit (and one allocation) without changing the precision the FFT
-    // itself sees.
+    // The non-pow2 (mixed-radix) path runs fp32 throughout, so build the
+    // padded buffer directly in fp32 and skip the intermediate emph copy.
+    // The pow2 paths (vDSP / hand-rolled radix-2) stay fp64 since their
+    // FFT routines are fp64-native.
     const bool n_fft_is_pow2 = ((n_fft > 0) && ((n_fft & (n_fft - 1)) == 0));
 
     std::vector<float>  padded_f32;
@@ -536,30 +486,21 @@ transcribe_status MelFrontend::compute(
 
     // ---- 3. STFT + mel filterbank matmul + log ----
     //
-    // Output: log_mel[n_mels, n_frames] row-major float32.
+    // Output: log_mel[n_mels, n_frames] row-major float32. Two paths by
+    // n_fft factorization:
     //
-    // Two distinct architectures depending on n_fft factorization:
+    //   non-pow2 (Whisper, Qwen3-ASR): FFT worker fuses the per-frame mel
+    //     matmul + log directly into log_mel (no shared power[]), matmul
+    //     parallelized across stft_threads. Same as whisper.cpp; a win on
+    //     no-BLAS CPUs.
+    //   pow2 (Parakeet, Cohere): FFT worker writes shared power[], then a
+    //     post-pass does matmul + log via cblas_sgemm (much faster than a
+    //     per-frame scalar matmul). vDSP / fft_radix2 are fp64-native, so
+    //     the fp64 power[] avoids cast traffic.
     //
-    //   non-pow2 (Whisper, Qwen3-ASR): the FFT worker also runs the
-    //     per-frame mel matmul + log directly into log_mel. No shared
-    //     power[] buffer, and the matmul parallelizes across all
-    //     stft_threads (it's per-frame work). This is the same
-    //     architecture whisper.cpp uses, and on no-BLAS CPUs it's a
-    //     significant win — the matmul cost moves from a single-
-    //     threaded post-pass to fully threaded inline work.
-    //
-    //   pow2 (Parakeet, Cohere): the FFT worker writes a shared
-    //     power[] buffer, then a post-pass does the matmul + log. On
-    //     Apple/Linux+OpenBLAS the post-pass uses cblas_sgemm, which
-    //     is dramatically faster than a per-frame scalar matmul, so
-    //     worker fusion would be a regression there. The fp64 vDSP /
-    //     fft_radix2 routines are also fp64-native, so keeping the
-    //     existing fp64 power[] avoids cast traffic at the worker.
-    //
-    // log mode (whisper_mode): per_utterance writes log10(max(x, 1e-10))
-    // so the normalize step skips the 1/ln(10) conversion. per_feature
-    // writes log(x + 2^-24) (natural log; base doesn't matter for the
-    // per-bin mean/std normalize that follows).
+    // log mode (whisper_mode): per_utterance writes log10(max(x, 1e-10));
+    // per_feature writes log(x + 2^-24) (natural log; base is irrelevant
+    // to the per-bin mean/std normalize that follows).
     std::vector<float> log_mel(
         static_cast<size_t>(n_mels) * static_cast<size_t>(n_frames));
 
@@ -593,14 +534,9 @@ transcribe_status MelFrontend::compute(
 
     if (!n_fft_is_pow2) {
         // Fused worker: window mul → mixed-radix FFT → power → mel
-        // matmul + log → log_mel, all in fp32, all per-frame on this
-        // thread. Per-thread scratches stay tiny (~14 KB total) and
-        // L1-resident; nothing crosses thread boundaries except the
-        // final log_mel writes.
-        //
-        // Matmul: outer m (mel), inner k (freq) with 4-way unroll.
-        // fp64 sum accumulator for numerical stability vs the linear
-        // sum size; cast back to fp32 at the log boundary.
+        // matmul + log → log_mel, all fp32, all per-frame on this thread.
+        // Matmul uses a 4-way-unrolled fp64 accumulator for numerical
+        // stability; cast back to fp32 at the log boundary.
         auto worker = [&](int tid) {
             std::vector<float> fft_in(2 * static_cast<size_t>(n_fft), 0.0f);
             std::vector<float> fft_out(8 * static_cast<size_t>(n_fft), 0.0f);
@@ -782,39 +718,33 @@ transcribe_status MelFrontend::compute(
             }
         }
 #endif
-        // power[] released at end of this scope.
-    }  // end pow2 path
+    }
 
     std::vector<double>().swap(padded);
     std::vector<float>().swap(padded_f32);
     std::vector<float>().swap(window_f32);
 
     // ---- 5n. No-op normalize (NeMo "NA"/none) ----
-    // Emit raw log-mel as-is. The feature normalisation that streaming
-    // Conformer variants like nemotron-speech-streaming-en-0.6b apply
-    // is baked into training (mean/std absorbed into the encoder
-    // weights), so at inference we hand the encoder unnormalised
-    // log-mel exactly the way NeMo's `normalize_batch` falls through.
+    // Emit raw log-mel as-is: streaming Conformer variants (e.g.
+    // nemotron-speech-streaming-en-0.6b) bake feature normalization into
+    // the encoder weights, matching NeMo's normalize_batch fall-through.
     //
-    // NeMo's FilterbankFeatures.forward still masks frames beyond
-    // `get_seq_len(n_samples) = floor(n_samples / hop_length)` to
-    // `pad_value` (zero) — that runs after normalize regardless of
-    // normalize_type. The reflect-pad STFT here emits one extra frame
-    // (n_frames = floor(n_samples / hop) + 1), so the last frame is a
-    // padding artifact and we mirror NeMo by zeroing it. Without this
-    // the encoder sees a real log-mel value at the padding position
-    // and the resulting frame-level drift dominates the early
+    // Trailing-frame masking (the canonical rationale): NeMo's
+    // FilterbankFeatures.forward masks frames beyond get_seq_len =
+    // floor(n_samples / hop_length) to pad_value (zero), after normalize,
+    // regardless of normalize_type. The reflect-pad STFT emits one extra
+    // frame (n_frames = floor(n/hop) + 1), so the last frame is a padding
+    // artifact and we zero it to mirror NeMo. Without this the encoder
+    // sees a real log-mel value there and the drift dominates the early
     // pre_encode output (max_abs ~13 on that single frame).
     if (cfg_.normalize == "none") {
         out_mel = std::move(log_mel);
         out_n_mels   = n_mels;
         out_n_frames = n_frames;
         // pad_mode="none" emits exactly (n - win)/hop + 1 frames with no
-        // padding artifact, so the trailing-mask step is unnecessary
-        // (and would zero a legitimate final frame). For NeMo-style
-        // reflect/constant padding, the last centered frame is a padding
-        // artifact that needs to be zeroed to match NeMo's normalize_batch
-        // behavior — see the comment block in the doc-history above.
+        // padding artifact, so skip the trailing mask (it would zero a
+        // legitimate final frame). NeMo-style reflect/constant padding
+        // needs the mask — see the trailing-frame rationale above.
         if (!no_pad) {
             const int valid = static_cast<int>(
                 n_samples / static_cast<size_t>(cfg_.hop_length));
@@ -830,10 +760,9 @@ transcribe_status MelFrontend::compute(
     }
 
     // ---- 5a. Whisper-style per-utterance normalization ----
-    // log_mel already holds log10(max(x, 1e-10)) values (the matmul step
-    // wrote them directly). Find the global max, clamp to max - 8.0,
-    // then scale (x + 4) / 4. Whisper drops the trailing center-pad
-    // STFT frame so the output has n_samples / hop_length frames.
+    // log_mel already holds log10(max(x, 1e-10)). Find the global max,
+    // clamp to max - 8.0, then scale (x + 4) / 4. Drops the trailing
+    // center-pad STFT frame (output has n_samples / hop_length frames).
     if (cfg_.normalize == "per_utterance") {
         const int n_out = n_frames - 1;
         if (n_out <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
@@ -868,9 +797,9 @@ transcribe_status MelFrontend::compute(
     }
 
     // ---- 5b. Voxtral Realtime streaming log-mel (fixed global max) ----
-    // Identical to per_utterance but the clamp floor uses a FIXED maximum
-    // (global_log_mel_max), not the per-utterance max — what makes per-frame
-    // normalization causal/streaming-safe. Drops the trailing center-pad frame.
+    // Like per_utterance but the clamp floor uses a FIXED max
+    // (global_log_mel_max), making per-frame normalization causal/
+    // streaming-safe. Drops the trailing center-pad frame.
     if (cfg_.normalize == "global") {
         const int n_out = n_frames - 1;
         if (n_out <= 0) return TRANSCRIBE_ERR_INVALID_ARG;
@@ -893,32 +822,24 @@ transcribe_status MelFrontend::compute(
     }
 
     // ---- 5. Per-feature normalize, unbiased ----
-    // For each mel bin m: subtract the mean across time, divide by
-    // (std + 1e-5). The variance uses (n_norm - 1) in the
-    // denominator (Bessel's correction) to match NeMo's
-    // normalize_batch. fp64 accumulators throughout to keep the row
-    // sums numerically stable; cast back to fp32 at storage.
+    // For each mel bin m: subtract the time mean, divide by (std + 1e-5).
+    // Variance uses (n_norm - 1) (Bessel's correction) to match NeMo's
+    // normalize_batch. fp64 accumulators throughout, cast to fp32 at
+    // storage.
     //
-    // When pad_mode is "constant" (Cohere), the last STFT frame is
-    // a padding artifact. The normalization statistics are computed
-    // over the first seq_len = n_samples / hop frames (not n_frames
-    // = seq_len + 1), and the last frame is zeroed after
-    // normalization. This matches the Cohere reference
-    // (processing_cohere_asr.py get_seq_len / normalize_batch).
+    // pad_mode "constant" (Cohere): the last STFT frame is a padding
+    // artifact; stats are over the first seq_len = n/hop frames and the
+    // last is zeroed after normalize (processing_cohere_asr.py
+    // get_seq_len / normalize_batch).
     //
-    // When pad_mode is "reflect" (Parakeet / Canary), all n_frames
-    // frames are valid and used for normalization. Empirically,
-    // unconditionally treating the trailing frame as a center-pad
-    // artifact regresses long-form Canary decode (e.g. test-clean
-    // 672-122797-0008, 30.8s, drops into a "the boy was a man of
-    // the world" loop). NeMo's FilterbankFeatures masks per seq_len
-    // computed from the raw sample count, but for reflect-padded
-    // single-segment offline runs that seq_len == n_frames so no
-    // masking happens — keep the pad_mode gate to preserve that.
+    // pad_mode "reflect" (Parakeet / Canary): all n_frames are valid.
+    // Unconditionally masking the trailing frame regresses long-form
+    // Canary decode (test-clean 672-122797-0008, 30.8s, falls into a "the
+    // boy was a man of the world" loop): for reflect-padded single-segment
+    // offline runs NeMo's seq_len == n_frames so it masks nothing — the
+    // pad_mode gate preserves that.
     //
-    // resize() instead of assign(): the loop below writes every
-    // element exactly once, so the zero-fill that assign() would do
-    // is dead work.
+    // resize() not assign(): the loop writes every element once.
     const bool mask_last = (cfg_.pad_mode == "constant");
     const int  n_norm    = mask_last ? (n_frames - 1) : n_frames;
 

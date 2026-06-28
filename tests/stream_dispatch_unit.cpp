@@ -8,7 +8,7 @@
 //
 // Capability-gated paths (NOT_IMPLEMENTED for non-streaming families,
 // TRANSLATE rejection, language validation) require a real model and
-// land in Phase 3 against an existing non-streaming arch.
+// are covered by stream_capability_unit.cpp.
 
 #include "transcribe-session.h"
 #include "transcribe-arch.h"

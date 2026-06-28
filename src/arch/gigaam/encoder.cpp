@@ -1,19 +1,9 @@
 // arch/gigaam/encoder.cpp - GigaAM Conformer encoder graph builder.
 //
-// Reuses transcribe::conformer helpers for the macaron FF, conv module,
-// and the LayerNorm primitive. Adds gigaam-specific pieces:
-//
-//   - 2-conv1d pre_encode (not parakeet's 4-conv2d stack).
-//   - Rotary self-attention with PRE-projection rotation (the rotation
-//     is applied to x before Wq/Wk; same rotated x feeds both, Wv gets
-//     unrotated x).
-//
-// Layout convention:
-//   - mel_in ne=[T_mel, n_mels, 1, 1] f32 (matches the reference dumper's
-//     [n_mels, T_mel] row-major layout byte-for-byte).
-//   - After pre_encode: [d_model, T_enc, 1, 1] where T_enc = floor((T_mel-1)/4)
-//     (two stride-2 conv1d with kernel=5, sym pad=2).
-//   - All conformer block intermediates stay at [d_model, T_enc, 1, 1].
+// Reuses transcribe::conformer helpers (macaron FF, conv module, LayerNorm)
+// plus gigaam-specific pieces: a 2-conv1d pre_encode and rotary self-attention
+// with PRE-projection rotation (rotation applied to x before Wq/Wk; Wv gets
+// unrotated x). Activations stay [d_model, T_enc, B]; T_enc = floor((T_mel-1)/4).
 
 #include "encoder.h"
 
@@ -65,32 +55,15 @@ struct PreEncodeMasks {
 };
 
 // Build the 2-conv1d pre-encode stack.
-//
-// Input  mel_in:    ne=[T_mel, n_mels, B]  (B == 1 single-shot)
-// Output pre_enc:   ne=[d_model, T_enc, B] with T_enc ≈ T_mel / 4
-//
-// Reference (gigaam.encoder.StridingSubsampling):
-//   x = audio.transpose(1, 2)            # [B, n_mels, T]
-//   x = self.conv(x)                     # Sequential(Conv1d(64→768, k=5, s=2),
-//                                        #            ReLU,
-//                                        #            Conv1d(768→768, k=5, s=2),
-//                                        #            ReLU)
-//   x = x.transpose(1, 2)                # [B, T_enc, d_model]
-//
-// In ggml: mel_in is already [T_mel, n_mels] (matching PyTorch [n_mels, T] when
-// considering row-major + ggml's fast-to-slow convention). conv_1d_f32 expects
-// data ne=[W=T, IC, N] and kernel ne=[K, IC, OC] — both match the GGUF layout,
-// and conv_1d_f32 carries the batch N at ne[2] natively. After two stride-2
-// conv1d the result is [T_enc, d_model, B] which we transpose+contiguous to
-// [d_model, T_enc, B] to match the conformer downstream layout.
+//   Input  mel_in:  ne=[T_mel, n_mels, B]  (B == 1 single-shot)
+//   Output pre_enc: ne=[d_model, T_enc, B] with T_enc ≈ T_mel / 4
 //
 // masks (optional): variable-length batching zero-pads each utterance's mel to
-// the batch T_max along time. The convs carry bias + ReLU, so a padded zero
-// becomes non-zero after the first conv and then leaks into each utterance's
-// last VALID frame via the next stride-2 conv's receptive field — corrupting
-// the boundary frame. NeMo's masked subsampling fix is to zero each conv
-// intermediate's padded time region after every ReLU; passing non-null masks
-// applies that (mask_s1 after conv0, mask_s2 after conv2).
+// T_max along time. The convs carry bias + ReLU, so a padded zero becomes
+// non-zero after the first conv and then leaks into each utterance's last VALID
+// frame via the next stride-2 conv's receptive field. NeMo's masked-subsampling
+// fix is to zero each conv intermediate's padded time region after every ReLU
+// (mask_s1 after conv0, mask_s2 after conv2).
 ggml_tensor * build_pre_encode(ggml_context *          ctx,
                                const GigaamPreEncode & pe,
                                ggml_tensor *           mel_in,
@@ -174,11 +147,8 @@ ggml_tensor * build_rotary_attn(ggml_context *      ctx,
     // ne[2] as the position axis (== T) and ne[3] as the batch (== B).
     ggml_tensor * x_rot = ggml_reshape_4d(ctx, x, head_dim, n_head, T, Bb);
     // GigaAM passes pos_emb_max_len (default 5000) as the rotary `base`
-    // (theta). That is NOT the standard 10000 — see
-    // RotaryPositionalEmbedding(d_model // n_heads, pos_emb_max_len) and
-    // PositionalEncoding.__init__(dim, base). Verified empirically: the
-    // dumped enc.pos_emb tensor matches base=5000 to ~1e-6 and base=10000
-    // is off by ~0.1.
+    // (theta), NOT the standard 10000: the dumped enc.pos_emb tensor matches
+    // base=5000 to ~1e-6 and base=10000 is off by ~0.1.
     x_rot = ggml_rope_ext(ctx, x_rot, positions, /*c=*/nullptr,
                           /*n_dims=*/head_dim,
                           GGML_ROPE_TYPE_NEOX,
@@ -400,7 +370,7 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     ggml_tensor * positions = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T_enc);
     ggml_set_name(positions, "enc.positions");
     ggml_set_input(positions);
-    eb.dumps.pos_emb = positions; // documentation only
+    eb.dumps.pos_emb = positions;
 
     // Conv policy. GigaAM's depthwise k=5 — Metal direct path works.
     conf::ConvPolicy policy {};
@@ -415,7 +385,7 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
 
     const int n_layers = hp.enc_n_layers;
     eb.dumps.all_block_outs.reserve(n_layers);
-    eb.dumps.mid_block_idx  = n_layers / 2 - 1;     // matches dumper (8 for 16-layer)
+    eb.dumps.mid_block_idx  = n_layers / 2 - 1;
     eb.dumps.last_block_idx = n_layers - 1;
 
     for (int i = 0; i < n_layers; ++i) {
@@ -461,8 +431,7 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
     // `audio_signal.transpose(1, 2)` — [B, T, D] -> [B, D, T]. Apply
     // the final transpose to match the reference enc.out byte layout.
     // CRITICAL: do NOT wrap in a reshape view afterwards; ggml_set_output
-    // on a view doesn't preserve the materialized cont buffer (verified
-    // experimentally during M2 bring-up of pre_encode).
+    // on a view doesn't preserve the materialized cont buffer.
     ggml_tensor * enc_out_t = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     ggml_set_name(enc_out_t, "enc.out");
     eb.out = enc_out_t;

@@ -1,38 +1,10 @@
 // arch/whisper/weights.h - canonical Whisper ASR tensor catalog and
-// per-instance weight slots.
+// per-instance weight slots. INTERNAL to src/arch/whisper/.
 //
-// This header is INTERNAL to src/arch/whisper/. It defines:
-//
-//   - WhisperHParams: the architecture KV the loader reads from
-//     stt.whisper.* / stt.frontend.* / stt.capability.* before
-//     allocating any tensors. Every dim that drives a tensor shape
-//     lives here.
-//
-//   - WhisperWeights: a struct of named borrowed ggml_tensor* slots,
-//     one per logical weight in a Whisper ASR model.
-//
-// Architectural highlights:
-//
-//   - Encoder: two Conv1d kernels (stride 1, then stride 2) forming
-//     the stem, then a learned positional embedding of fixed length
-//     max_source_positions (1500 for all whisper variants), then
-//     n_layers pre-LN transformer blocks with standard MHSA + FFN,
-//     then a final LayerNorm.
-//
-//   - Decoder: learned token embedding + learned positional embedding
-//     (max_target_positions=448 for whisper-tiny), n_layers pre-LN
-//     blocks each with self-attention + cross-attention + FFN, final
-//     LayerNorm, logits head tied to the token embedding.
-//
-//   - Whisper attention quirk: q_proj / v_proj / out_proj carry bias;
-//     k_proj does NOT (on both self- and cross-attention). The weight
-//     catalog encodes this by only declaring attn_k_w slots — no
-//     attn_k_b, no self_k_b, no cross_k_b.
-//
-//   - Logits head: tied to dec.token_embd.weight; no separate bias.
-//
-// Tensor naming follows the Stage-3 convert-whisper.py contract
-// (frontend.* / enc.* / dec.* as laid out in that script).
+// WhisperHParams holds the architecture KV the loader reads (stt.whisper.* /
+// stt.frontend.* / stt.capability.*); WhisperWeights holds the borrowed
+// ggml_tensor* slots. Attention quirk: q/v/out carry bias, k does NOT (self
+// and cross). Logits head is tied to dec.token_embd.weight, no separate bias.
 
 #pragma once
 
@@ -49,10 +21,6 @@ struct ggml_context;
 struct ggml_tensor;
 
 namespace transcribe::whisper {
-
-// ---------------------------------------------------------------------------
-// Hyperparameters
-// ---------------------------------------------------------------------------
 
 struct WhisperHParams {
     // Encoder.
@@ -120,10 +88,6 @@ struct WhisperHParams {
 transcribe_status read_whisper_hparams(const gguf_context * gguf,
                                        WhisperHParams &     hp);
 
-// ---------------------------------------------------------------------------
-// Weight slots
-// ---------------------------------------------------------------------------
-
 // Shared mel frontend buffers. preprocessor_config.json ships the
 // exact slaney filterbank and Hann window the model was trained with;
 // the converter stores them verbatim so C++ does not need to
@@ -148,12 +112,10 @@ struct WhisperEncTop {
     ggml_tensor * final_norm_b = nullptr;  // [d_model]
 };
 
-// One encoder transformer block. q/v/out have bias; k does NOT.
+// One encoder transformer block.
 struct WhisperEncBlock {
-    // Pre-LN for self-attention.
     ggml_tensor * norm_attn_w = nullptr;
     ggml_tensor * norm_attn_b = nullptr;
-    // MHSA projections.
     ggml_tensor * attn_q_w   = nullptr;
     ggml_tensor * attn_q_b   = nullptr;
     ggml_tensor * attn_k_w   = nullptr;  // no bias
@@ -161,10 +123,8 @@ struct WhisperEncBlock {
     ggml_tensor * attn_v_b   = nullptr;
     ggml_tensor * attn_out_w = nullptr;
     ggml_tensor * attn_out_b = nullptr;
-    // Pre-LN for FFN.
     ggml_tensor * norm_ffn_w = nullptr;
     ggml_tensor * norm_ffn_b = nullptr;
-    // FFN (GELU).
     ggml_tensor * ffn_fc1_w = nullptr;
     ggml_tensor * ffn_fc1_b = nullptr;
     ggml_tensor * ffn_fc2_w = nullptr;
@@ -180,9 +140,7 @@ struct WhisperDecTop {
 };
 
 // One decoder block: self-attn + cross-attn + FFN, all pre-LN.
-// q/v/out have bias; k does NOT (both self and cross).
 struct WhisperDecBlock {
-    // Pre-LN for self-attention.
     ggml_tensor * norm_self_w = nullptr;
     ggml_tensor * norm_self_b = nullptr;
     ggml_tensor * self_q_w   = nullptr;
@@ -193,7 +151,7 @@ struct WhisperDecBlock {
     ggml_tensor * self_out_w = nullptr;
     ggml_tensor * self_out_b = nullptr;
 
-    // Pre-LN for cross-attention (queries decoder state against encoder output).
+    // Cross-attention queries decoder state against encoder output.
     ggml_tensor * norm_cross_w = nullptr;
     ggml_tensor * norm_cross_b = nullptr;
     ggml_tensor * cross_q_w   = nullptr;
@@ -204,10 +162,8 @@ struct WhisperDecBlock {
     ggml_tensor * cross_out_w = nullptr;
     ggml_tensor * cross_out_b = nullptr;
 
-    // Pre-LN for FFN.
     ggml_tensor * norm_ffn_w = nullptr;
     ggml_tensor * norm_ffn_b = nullptr;
-    // FFN (GELU).
     ggml_tensor * ffn_fc1_w = nullptr;
     ggml_tensor * ffn_fc1_b = nullptr;
     ggml_tensor * ffn_fc2_w = nullptr;

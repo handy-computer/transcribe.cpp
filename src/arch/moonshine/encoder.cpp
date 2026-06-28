@@ -1,42 +1,14 @@
 // arch/moonshine/encoder.cpp - Moonshine encoder graph builder.
 //
-// Forward shape:
+// 3-conv stem (conv0 k=127 s=64 + tanh + GroupNorm; conv1 k=7 s=3 + gelu;
+// conv2 k=3 s=2 + gelu) on raw 16 kHz PCM, then n_layers pre-LN blocks
+// (bidirectional partial-RoPE MHSA + GELU MLP) and a final bias-less LN.
 //
-//   audio [T_samples] (raw 16 kHz PCM in [-1, 1])
-//     -> reshape [T_samples, in=1] for ggml_conv_1d
-//     -> conv0 (k=127, s=64, no bias)              [T1, d_model]
-//     -> tanh
-//     -> transpose to [d_model, T1]                (channel-innermost,
-//                                                   matching reference dump
-//                                                   layout enc.conv1.out)
-//     -> dump enc.conv1.out
-//     -> bias-less LayerNorm (= GroupNorm num_groups=1, ε=1e-5)
-//        with affine (* gn_w + gn_b)
-//     -> dump enc.groupnorm.out
-//     -> transpose back to [T1, d_model] for conv1
-//     -> conv1 (k=7, s=3) + bias                   [T2, 2·d_model]
-//     -> gelu
-//     -> transpose to [2·d_model, T2]
-//     -> dump enc.conv2.out
-//     -> transpose back to [T2, 2·d_model] for conv2
-//     -> conv2 (k=3, s=2) + bias                   [T_enc, d_model]
-//     -> gelu
-//     -> transpose to [d_model, T_enc]
-//     -> dump enc.conv3.out
-//     -> n_layers x pre-LN transformer block (partial-RoPE MHSA + GELU MLP)
-//     -> final layer_norm (no bias)
-//     -> dump enc.final
+// HF uses exact-erf gelu (ggml_gelu_erf); the tanh approx drifts ~1e-4/elem.
 //
-// Conv stem note: HF uses `nn.functional.gelu(...)` (exact-erf form) for
-// every gelu call in moonshine. ggml_gelu_erf matches; ggml_gelu is the
-// tanh approximation and drifts ~1e-4 per element.
-//
-// Encoder block: pre-LN MHSA (no causal mask — bidirectional, no mask
-// at all) + pre-LN GELU MLP. Self-attn applies partial RoPE to the
-// leading `head_dim_rot` dims of q/k. q/k/v are pre-padded to
-// `head_dim_padded = round_up(head_dim, pad_head_dim_multiple)` before
-// the matmul; the trailing `head_dim_padding` rows of attn_output are
-// sliced off before o_proj (matching HF MoonshineAttention).
+// q/k/v are pre-padded to head_dim_padded = round_up(head_dim,
+// pad_head_dim_multiple); the padding rows of attn_output are sliced off
+// before o_proj (matching HF MoonshineAttention).
 
 #include "encoder.h"
 
@@ -70,15 +42,10 @@ ggml_tensor * add_conv1d_bias(ggml_context * ctx,
     return ggml_add(ctx, conv_out, bias_4d);
 }
 
-// Apply partial RoPE to `x` (shape [head_dim, n_heads, T, 1] in ggml
-// ne — head_dim at ne[0], T at ne[2]). RoPE rotates the leading
-// `head_dim_rot` of dim-0; the trailing dims pass through unchanged.
-//
-// Moonshine uses GPT-J / **interleaved** RoPE: rotation pairs are
-// (0, 1), (2, 3), ... — see `rotate_half` in HF modeling_moonshine.py
-// (`x[..., 0::2]` / `x[..., 1::2]`). That is GGML_ROPE_TYPE_NORMAL
-// (mode=0), NOT GGML_ROPE_TYPE_NEOX (mode=2, which uses split-halves
-// pairing (0, D/2), (1, D/2+1), ...).
+// Partial RoPE on the leading `head_dim_rot` of dim-0 (x ne =
+// [head_dim, n_heads, T, 1]). Moonshine uses GPT-J / interleaved RoPE
+// (rotate_half slices x[..., 0::2] / x[..., 1::2]) = GGML_ROPE_TYPE_NORMAL,
+// NOT NEOX.
 ggml_tensor * apply_partial_rope(ggml_context *           ctx,
                                  ggml_tensor *            x,
                                  ggml_tensor *            positions,
@@ -119,14 +86,11 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
     const int     head_dim_pad = hp.enc_head_dim_padded();
     const int     head_dim_rot = hp.enc_head_dim_rot();
     const int     pad          = head_dim_pad - head_dim;
-    // HF MoonshineAttention uses unpadded head_dim for the scale
-    // (`self.scaling = self.head_dim**-0.5`). The padded slots are
-    // zero-extension and contribute zero to the dot product, so the
-    // unpadded scale is the numerically correct match.
+    // Unpadded scale: HF uses head_dim**-0.5; padded slots are
+    // zero-extension and don't change the dot product.
     const float   scale        = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T            = x->ne[1];
 
-    // Q, K, V projections (bias-less).
     ggml_tensor * q = ggml_mul_mat(ctx, q_w, x);  // [d_model, T]
     ggml_tensor * k = ggml_mul_mat(ctx, k_w, x);
     ggml_tensor * v = ggml_mul_mat(ctx, v_w, x);
@@ -158,7 +122,6 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
     k = to_attn_layout(k);
     v = to_attn_layout(v);
 
-    // Attention.
     ggml_tensor * o;
     if (use_flash) {
         o = ggml_flash_attn_ext(ctx, q, k, v, /*mask=*/nullptr,
@@ -177,10 +140,8 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
         // o shape: [head_dim_pad, T, n_heads, 1]
     }
 
-    // Slice off the head_dim padding before merging heads (HF order:
-    // slice in [..., :head_dim] BEFORE the n_heads*head_dim merge so the
-    // padding regions of every head are removed). In ggml ne terms the
-    // op is ggml_view_3d on dim-0 with new ne[0]=head_dim, then cont.
+    // Slice off head_dim padding before merging heads (HF slices
+    // [..., :head_dim] before the n_heads*head_dim merge).
     if (pad > 0) {
         o = ggml_view_3d(ctx, o,
                          head_dim, T, n_heads,
@@ -193,7 +154,6 @@ ggml_tensor * mha_encoder(ggml_context *           ctx,
     o = ggml_cont(ctx, o);
     o = ggml_reshape_2d(ctx, o, d_model, T);
 
-    // Output projection (bias-less).
     o = ggml_mul_mat(ctx, out_w, o);
     return o;
 }
@@ -221,7 +181,6 @@ ggml_tensor * build_block(ggml_context *            ctx,
                           int                       d_model,
                           bool                      use_flash)
 {
-    // Self-attn sublayer (bias-less LN, bias-less projections).
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_attn_w, /*beta=*/nullptr);
         y = mha_encoder(ctx, y, pos_ids,
@@ -229,7 +188,6 @@ ggml_tensor * build_block(ggml_context *            ctx,
                         hp, n_heads, d_model, use_flash);
         x = ggml_add(ctx, x, y);
     }
-    // FFN sublayer.
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, /*beta=*/nullptr);
         y = ffn_encoder(ctx, y,
@@ -306,16 +264,10 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     ggml_set_input(eb.pos_ids_in);
 
     // ---- conv stem ----
-    // ggml_conv_1d wants [T, in_channels]. PCM is 1 channel: reshape
-    // [n_samples] -> [n_samples, 1].
+    // ggml_conv_1d / conv_1d_f32 want input ne=[T, in_channels] (T
+    // innermost). PCM is 1 channel: reshape [n_samples] -> [n_samples, 1].
     ggml_tensor * x = ggml_reshape_2d(ctx, eb.audio_in, n_samples, 1);
-    // Now x ne=[n_samples, 1]. ggml_conv_1d expects ne[0]=T innermost,
-    // ne[1]=in_channels. We need [T, in] with T innermost — actually
-    // checking conformer's conv_1d_f32 helper signature: it takes input
-    // ne=[T, Cin] (T innermost). ggml_reshape_2d sets ne[0]=n_samples,
-    // ne[1]=1 — that's [T, 1] with T innermost. ✓
 
-    // conv0: k=127, s=64, no padding, no bias.
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv0_w, x,
                           /*s=*/hp.conv_strides[0],
                           /*p=*/0,
@@ -330,18 +282,10 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     eb.dumps.conv1_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
 
-    // GroupNorm with num_groups=1 over [B, C, T]: PyTorch normalizes
-    // jointly over (C, T) per batch (NOT just over C, like LayerNorm).
-    // ggml_group_norm with n_groups=1 matches: it pools all elements
-    // outside the leading group axis into a single moment computation.
-    // Affine (* gn_w + gn_b) is applied separately — ggml_group_norm
-    // handles only the standardization.
-    //
-    // Layout note: ggml_group_norm reads ne[2] as the channel axis
-    // (matching stable-diffusion's [N, H, W, C] convention with C at
-    // ne[0]). We currently have x in ne=[C, T1] = ne=[288, 2749]; need
-    // to reshape to ne=[C, T1, 1, 1] so the group axis (ne[2]) is the
-    // expected one. (ggml internally splits ne[2] into n_groups.)
+    // GroupNorm num_groups=1: PyTorch normalizes jointly over (C, T) per
+    // batch (not just over C). ggml_group_norm matches (standardization
+    // only; affine * gn_w + gn_b applied separately below), but reads
+    // ne[2] as the channel axis, so reshape [C, T1] -> [C, T1, 1, 1].
     {
         const int64_t C  = w.enc_stem.gn_w->ne[0];
         const int64_t T1 = x->ne[1];
@@ -359,7 +303,6 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     // Transpose back to [T1, d_model] for conv1.
     x = ggml_cont(ctx, ggml_transpose(ctx, x));
 
-    // conv1: k=7, s=3, with bias.
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv1_w, x,
                           /*s=*/hp.conv_strides[1],
                           /*p=*/0,
@@ -375,7 +318,6 @@ EncoderBuild build_encoder_graph(ggml_context *           ctx,
     // Back to [T2, 2·d_model] for conv2.
     x = ggml_cont(ctx, ggml_transpose(ctx, x));
 
-    // conv2: k=3, s=2, with bias.
     x = conf::conv_1d_f32(ctx, w.enc_stem.conv2_w, x,
                           /*s=*/hp.conv_strides[2],
                           /*p=*/0,

@@ -204,7 +204,7 @@ transcribe_status read_required_u32_kv(const gguf_context * gguf,
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
+    return TRANSCRIBE_ERR_GGUF;
 }
 
 transcribe_status read_required_f32_kv(const gguf_context * gguf,
@@ -224,7 +224,7 @@ transcribe_status read_required_f32_kv(const gguf_context * gguf,
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
+    return TRANSCRIBE_ERR_GGUF;
 }
 
 transcribe_status read_required_string_kv(const gguf_context * gguf,
@@ -244,7 +244,7 @@ transcribe_status read_required_string_kv(const gguf_context * gguf,
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
+    return TRANSCRIBE_ERR_GGUF;
 }
 
 transcribe_status read_optional_bool_kv(const gguf_context * gguf,
@@ -267,7 +267,7 @@ transcribe_status read_optional_bool_kv(const gguf_context * gguf,
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
+    return TRANSCRIBE_ERR_GGUF;
 }
 
 transcribe_status read_optional_string_kv(const gguf_context * gguf,
@@ -290,7 +290,7 @@ transcribe_status read_optional_string_kv(const gguf_context * gguf,
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
+    return TRANSCRIBE_ERR_GGUF;
 }
 
 transcribe_status read_optional_int32_kv(const gguf_context * gguf,
@@ -313,7 +313,7 @@ transcribe_status read_optional_int32_kv(const gguf_context * gguf,
                          error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
+    return TRANSCRIBE_ERR_GGUF;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +335,7 @@ transcribe_status read_capability_bool(const gguf_context * gguf,
         case KvResult::Ok:      return TRANSCRIBE_OK;
         case KvResult::BadType: return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable; placates -Wreturn-type on some compilers
+    return TRANSCRIBE_ERR_GGUF; // unreachable; placates -Wreturn-type
 }
 
 } // namespace
@@ -347,20 +347,10 @@ transcribe_status read_capability_kv(const gguf_context *      gguf,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // 2B-recognized capability keys. The schema is in PLAN.md
-    // "Speech-specific metadata" / `stt.capability.*`.
-    //
-    // Timestamp granularity (`max_timestamp_kind`) is deliberately
-    // NOT read here. Both shipped families have a fixed, code-set
-    // ceiling (Parakeet=TOKEN, Cohere=NONE) and no converter emits
-    // `stt.capability.timestamps`. A KV-driven override is a
-    // future change — the loader would need rules for how the KV
-    // interacts with what the family code can actually produce
-    // (the KV should only lower the ceiling, never raise it, since
-    // code is the floor of what can physically be emitted). When a
-    // second checkpoint of an existing family ships with a
-    // different ceiling, resolve that interaction before wiring
-    // the reader.
+    // Timestamp granularity (max_timestamp_kind) is deliberately NOT read
+    // here: every family has a fixed, code-set ceiling and no converter
+    // emits stt.capability.timestamps. A KV-driven override (which could
+    // only lower the ceiling, never raise it) is a future change.
     if (auto st = read_capability_bool(gguf, "stt.capability.translate",
                                        caps.supports_translate);
         st != TRANSCRIBE_OK)
@@ -406,7 +396,7 @@ transcribe_status read_languages_kv(const gguf_context * gguf,
         case KvResult::BadType:
             return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable
+    return TRANSCRIBE_ERR_GGUF;
 }
 
 } // namespace transcribe

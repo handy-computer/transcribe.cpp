@@ -1,29 +1,12 @@
-// arch/whisper/weights.cpp - implementation of read_whisper_hparams
-// and build_whisper_weights.
+// arch/whisper/weights.cpp - read_whisper_hparams + build_whisper_weights.
+// Read every required KV explicitly, validate cross-field invariants, then
+// resolve each tensor slot against the GGUF with expected shape.
 //
-// Pattern mirrors cohere/weights.cpp: read every required KV
-// explicitly, validate cross-field invariants, then resolve each
-// tensor slot against the GGUF with expected shape.
-//
-// Whisper-specific notes:
-//
-//   - Attention projections: q/v/out carry bias; k does NOT. The
-//     tensor catalog reflects this — no "attn.k.bias" slot exists
-//     (self-attn and cross-attn follow the same rule).
-//
-//   - Logits head: no separate lm_head weight or bias. The converter
-//     does not emit dec.lm_head.weight; the decoder graph reuses
-//     dec.token_embd.weight via ggml_mul_mat at the final step.
-//
-//   - suppress_tokens / begin_suppress_tokens are int32 arrays under
-//     the stt.whisper.* namespace. Empty vectors are the Absent case
-//     — the .en variants legitimately ship without these keys.
-//
-//   - The converter tags normalization as "whisper_logmel", not one of
-//     the stat-based names (per_feature, global). This is the
-//     per-utterance log10(max(mel, 1e-10)) → clamp(max-8) → (+4)/4
-//     dynamic-range compression. Any future frontend shared-helper
-//     must understand this tag.
+// Whisper notes: q/v/out carry bias, k does NOT (no "attn.k.bias" slot, both
+// self and cross); logits head has no separate lm_head, the decoder reuses
+// dec.token_embd.weight (tied); suppress_tokens / begin_suppress_tokens are
+// int32 arrays (empty for .en variants); normalize tag "whisper_logmel" =
+// per-utterance log10(max(mel, 1e-10)) -> clamp(max-8) -> (+4)/4.
 
 #include "weights.h"
 
@@ -105,10 +88,6 @@ transcribe_status read_optional_f32_kv(const gguf_context * gguf,
 }
 
 } // namespace
-
-// ---------------------------------------------------------------------------
-// Hparams
-// ---------------------------------------------------------------------------
 
 transcribe_status read_whisper_hparams(const gguf_context * gguf,
                                        WhisperHParams &     hp)
@@ -330,10 +309,7 @@ transcribe_status read_whisper_hparams(const gguf_context * gguf,
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
 // Frontend (mel filterbank + Hann window install)
-// ---------------------------------------------------------------------------
-
 transcribe_status install_mel_from_buffers(
     const WhisperHParams &                   hp,
     std::vector<float>                       filterbank,
@@ -374,10 +350,7 @@ transcribe_status install_mel_from_buffers(
     return TRANSCRIBE_OK;
 }
 
-// ---------------------------------------------------------------------------
 // Weights
-// ---------------------------------------------------------------------------
-
 namespace {
 
 using transcribe::weights::lname;
@@ -461,8 +434,7 @@ transcribe_status build_whisper_weights(ggml_context *          ctx_meta,
 
         GET_LIN(b.attn_q_w,    lname("enc.blocks.%d.attn.q.weight",   i), d_model, d_model);
         GET_F32(b.attn_q_b,    lname("enc.blocks.%d.attn.q.bias",     i), d_model);
-        GET_LIN(b.attn_k_w,    lname("enc.blocks.%d.attn.k.weight",   i), d_model, d_model);
-        // attn.k has NO bias.
+        GET_LIN(b.attn_k_w,    lname("enc.blocks.%d.attn.k.weight",   i), d_model, d_model);  // no bias
         GET_LIN(b.attn_v_w,    lname("enc.blocks.%d.attn.v.weight",   i), d_model, d_model);
         GET_F32(b.attn_v_b,    lname("enc.blocks.%d.attn.v.bias",     i), d_model);
         GET_LIN(b.attn_out_w,  lname("enc.blocks.%d.attn.out.weight", i), d_model, d_model);
@@ -478,9 +450,8 @@ transcribe_status build_whisper_weights(ggml_context *          ctx_meta,
 
     // ----- decoder top -----
     // Token embedding: PyTorch [vocab, dec_h] -> ggml ne = [dec_h, vocab].
-    // This tensor doubles as the lm_head weight (tied), so it must
-    // accept the full quant allowlist (Embed bucket gets bumped to Q6_K
-    // under _M presets, F16 under F16, etc).
+    // Doubles as the tied lm_head weight, so it accepts the full quant
+    // allowlist (GET_LIN, not GET_F32).
     GET_LIN(weights.dec_top.token_embd_w, "dec.token_embd.weight", dec_h, vocab_size);
     GET_F32(weights.dec_top.pos_emb_w,    "dec.pos_emb.weight",    dec_h, tgt_pos);
     GET_F32(weights.dec_top.final_norm_w, "dec.final_norm.weight", dec_h);
@@ -491,23 +462,23 @@ transcribe_status build_whisper_weights(ggml_context *          ctx_meta,
     for (int i = 0; i < hp.dec_n_layers; ++i) {
         auto & b = weights.dec_blocks[i];
 
-        // Self-attention (k has no bias).
+        // Self-attention.
         GET_F32(b.norm_self_w,  lname("dec.blocks.%d.norm_self.weight",    i), dec_h);
         GET_F32(b.norm_self_b,  lname("dec.blocks.%d.norm_self.bias",      i), dec_h);
         GET_LIN(b.self_q_w,     lname("dec.blocks.%d.self_attn.q.weight",  i), dec_h, dec_h);
         GET_F32(b.self_q_b,     lname("dec.blocks.%d.self_attn.q.bias",    i), dec_h);
-        GET_LIN(b.self_k_w,     lname("dec.blocks.%d.self_attn.k.weight",  i), dec_h, dec_h);
+        GET_LIN(b.self_k_w,     lname("dec.blocks.%d.self_attn.k.weight",  i), dec_h, dec_h);  // no bias
         GET_LIN(b.self_v_w,     lname("dec.blocks.%d.self_attn.v.weight",  i), dec_h, dec_h);
         GET_F32(b.self_v_b,     lname("dec.blocks.%d.self_attn.v.bias",    i), dec_h);
         GET_LIN(b.self_out_w,   lname("dec.blocks.%d.self_attn.out.weight",i), dec_h, dec_h);
         GET_F32(b.self_out_b,   lname("dec.blocks.%d.self_attn.out.bias",  i), dec_h);
 
-        // Cross-attention (k has no bias).
+        // Cross-attention.
         GET_F32(b.norm_cross_w, lname("dec.blocks.%d.norm_cross.weight",    i), dec_h);
         GET_F32(b.norm_cross_b, lname("dec.blocks.%d.norm_cross.bias",      i), dec_h);
         GET_LIN(b.cross_q_w,    lname("dec.blocks.%d.cross_attn.q.weight",  i), dec_h, dec_h);
         GET_F32(b.cross_q_b,    lname("dec.blocks.%d.cross_attn.q.bias",    i), dec_h);
-        GET_LIN(b.cross_k_w,    lname("dec.blocks.%d.cross_attn.k.weight",  i), dec_h, dec_h);
+        GET_LIN(b.cross_k_w,    lname("dec.blocks.%d.cross_attn.k.weight",  i), dec_h, dec_h);  // no bias
         GET_LIN(b.cross_v_w,    lname("dec.blocks.%d.cross_attn.v.weight",  i), dec_h, dec_h);
         GET_F32(b.cross_v_b,    lname("dec.blocks.%d.cross_attn.v.bias",    i), dec_h);
         GET_LIN(b.cross_out_w,  lname("dec.blocks.%d.cross_attn.out.weight",i), dec_h, dec_h);

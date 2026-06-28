@@ -1,15 +1,13 @@
 // arch/voxtral_realtime/decoder.h - Ministral LM prefill/step builders.
 //
-// The per-block math is the shared causal_lm module (GQA, NEOX RoPE, SwiGLU,
-// KV cache) with null Q/K-norm and a per-layer FFN-branch scale (ffn_scale)
-// carrying the delay-conditioned adaptive-norm `1 + ada(t_cond)`. This file
-// owns graph allocation, ADDITIVE audio fusion (inputs_embeds += audio at
-// every position), the TIED lm_head, and dump naming.
+// The per-block math is the shared causal_lm module (GQA, NEOX RoPE, SwiGLU, KV
+// cache) with null Q/K-norm and a per-layer FFN-branch scale (ffn_scale)
+// carrying the delay-conditioned adaptive-norm `1 + ada(t_cond)`. This file owns
+// graph allocation, ADDITIVE audio fusion, the TIED lm_head, and dump naming.
 //
 // Audio fusion: x[:, i] = embed_tokens(id[i]) + audio[:, i] for all i. The
-// caller supplies exactly T audio embeddings ([dec_hidden, T]); the prefill
-// over the prompt uses the first T_prompt audio embeds, each decode step adds
-// the audio embed for its position.
+// caller supplies exactly T audio embeddings ([dec_hidden, T]); each decode step
+// adds the audio embed for its position.
 
 #pragma once
 
@@ -79,15 +77,13 @@ StepBuild build_step_graph(ggml_context *                  ctx,
                            bool                            use_flash);
 
 // ---------------------------------------------------------------------------
-// Multi-position verify (spec-decode prototype)
+// Multi-position verify (speculative decode)
 // ---------------------------------------------------------------------------
 //
 // Runs the decoder on T_verify positions in one pass. Used by an n-gram
 // speculative-decode driver: feed [next_tok, draft[0..K-1]] (T_verify = K+1),
 // get back T_verify predicted tokens, accept the longest prefix where draft[i]
-// matches the predicted token at column i, rewind by emitting up to that
-// point. KV writes are committed at positions kv_idx[T_verify]; if some
-// draft tokens are rejected, the wrongly-written KV rows are simply
+// matches the predicted token at column i. Rejected drafts' KV rows are simply
 // overwritten on the next pass (positions are addressed by slot).
 struct VerifyBuild {
     ggml_tensor * input_ids_in = nullptr;  // [T_verify] i32
@@ -118,11 +114,10 @@ VerifyBuild build_verify_graph(ggml_context *                  ctx,
 // Mirrors the single-utterance builders with the batch on ne[2], via the shared
 // causal_lm::block_{prefill,step}_batched (flash-only, n_batch=B kv cache). The
 // realtime specifics ride along: TIED lm_head, the per-layer ada ffn_scale view,
-// and ADDITIVE audio fusion. The prompt is uniform length across the batch (BOS
-// + STREAMING_PAD*(32+delay) with `num_delay` shared), so the prefill is
-// rectangular [hidden, T_prompt, B] — no ragged padding; the last real position
-// is T_prompt-1 for every row. Per-step audio injection (a fresh audio embed per
-// position) is why the decode loop cannot reuse causal_lm::run_batched_step_loop.
+// and ADDITIVE audio fusion. The prompt is uniform length across the batch, so
+// the prefill is rectangular [hidden, T_prompt, B] (last real position T_prompt-1
+// for every row). Per-step audio injection is why the decode loop cannot reuse
+// causal_lm::run_batched_step_loop.
 
 struct PrefillBuildBatched {
     ggml_tensor * input_ids_in   = nullptr;  // [T_prompt, B] i32

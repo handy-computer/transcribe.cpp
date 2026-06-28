@@ -1,12 +1,6 @@
 // arch/canary/decoder.cpp - Canary autoregressive Transformer decoder.
 //
-// Modeled on src/arch/cohere/decoder.cpp. Differences from cohere:
-//   - per-sublayer dump points: dec.layer.{i}.{self_attn,cross_attn,ffn}.out
-//     so the C++ matches the reference dumper's hooks at layers
-//     {0, n_layers/2, n_layers-1}
-//   - LM head is UNTIED: applies w.head.weight + w.head.bias rather
-//     than reusing the token embedding
-//   - tensor names follow canary's GGUF (norm1/2/3, q/k/v/o, ffn.up/down)
+// Untied LM head; per-sublayer dump points at layers {0, n_layers/2, n_layers-1}.
 
 #include "decoder.h"
 
@@ -287,9 +281,8 @@ ggml_tensor * mha_cross_cached(
     return o;
 }
 
-// Layers we attach per-sublayer dump points to. Mirrors the reference
-// dumper's _block_indices convention: {0, n_layers/2, n_layers-1}, with
-// dedup if the set collapses (n_layers <= 2).
+// Layers we attach per-sublayer dump points to: {0, n_layers/2, n_layers-1}
+// (deduped when the set collapses, n_layers <= 2).
 bool is_dump_layer(int i, int n_layers) {
     if (n_layers <= 0) return false;
     if (i == 0 || i == n_layers - 1) return true;
@@ -419,13 +412,8 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
         const auto & blk = w.dec_blocks[i];
         const bool dump_this = is_dump_layer(i, hp.dec_n_layers) && i < 64;
 
-        // norm1 + self-attention. Reference dump hooks first_sub_layer
-        // output BEFORE the residual add — see TransformerDecoderBlock
-        // forward_preln in NeMo, which does
-        //   self_attn_output = first_sub_layer(LN(x), ...)
-        //   self_attn_output += residual
-        // and the forward_hook captures self_attn_output BEFORE the +=.
-        // So we dump self_out (the sublayer's contribution), not x.
+        // norm1 + self-attention. NeMo's forward_hook captures the sublayer
+        // output BEFORE the residual add, so we dump self_out, not x.
         {
             ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm1_w, blk.norm1_b);
             ggml_tensor * self_out = mha_self_cached(
@@ -447,9 +435,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
             x = ggml_add(ctx, x, self_out);
         }
 
-        // norm2 + cross-attention. Same pattern — second_sub_layer
-        // returns the raw cross-attn output before NeMo adds the
-        // residual.
+        // norm2 + cross-attention (dump before residual, as above).
         {
             ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm2_w, blk.norm2_b);
             ggml_tensor * cross_out = mha_cross_cached(
@@ -469,8 +455,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
             x = ggml_add(ctx, x, cross_out);
         }
 
-        // norm3 + FFN. third_sub_layer (PositionWiseFF) returns the FFN
-        // output before NeMo adds the residual.
+        // norm3 + FFN (dump before residual, as above).
         {
             ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm3_w, blk.norm3_b);
             ggml_tensor * ff = ggml_mul_mat(ctx, blk.ffn_up_w, x_norm);
@@ -498,7 +483,7 @@ DecoderBuild build_decoder_graph_kv(ggml_context *         ctx,
     x = named(x, "dec.out_before_head");
     db.dumps.out_before_head = x;
 
-    // Untied LM head: head.weight is its own tensor, not the token embedding.
+    // Untied LM head.
     ggml_tensor * logits = ggml_mul_mat(ctx, w.head.weight, x);
     if (w.head.bias != nullptr) {
         logits = ggml_add(ctx, logits, w.head.bias);
@@ -594,7 +579,6 @@ StepBuild build_step_graph(ggml_context *        ctx,
     for (int i = 0; i < hp.dec_n_layers; ++i) {
         const auto & blk = w.dec_blocks[i];
 
-        // norm1 + self-attention with set_rows-based KV write.
         {
             ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm1_w, blk.norm1_b);
             ggml_tensor * self_out = mha_self_step(
@@ -609,8 +593,7 @@ StepBuild build_step_graph(ggml_context *        ctx,
             x = ggml_add(ctx, x, self_out);
         }
 
-        // norm2 + cross-attention. Unchanged from prompt path: cross_k/v
-        // are pre-populated full T_enc, no n_past dependency.
+        // norm2 + cross-attention. cross_k/v are pre-populated full T_enc.
         {
             ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm2_w, blk.norm2_b);
             ggml_tensor * cross_out = mha_cross_cached(
@@ -623,7 +606,6 @@ StepBuild build_step_graph(ggml_context *        ctx,
             x = ggml_add(ctx, x, cross_out);
         }
 
-        // norm3 + FFN.
         {
             ggml_tensor * x_norm = layer_norm(ctx, x, blk.norm3_w, blk.norm3_b);
             ggml_tensor * ff = ggml_mul_mat(ctx, blk.ffn_up_w, x_norm);
@@ -869,7 +851,7 @@ StepBuildBatched build_step_graph_batched(ggml_context *        ctx,
     }
 
     x = layer_norm(ctx, x, w.dec_final.norm_w, w.dec_final.norm_b);
-    ggml_tensor * logits = ggml_mul_mat(ctx, w.head.weight, x);  // untied head
+    ggml_tensor * logits = ggml_mul_mat(ctx, w.head.weight, x);
     if (w.head.bias != nullptr) logits = ggml_add(ctx, logits, w.head.bias);
 
     sb.argmax_out = ggml_argmax(ctx, logits);  // [B]

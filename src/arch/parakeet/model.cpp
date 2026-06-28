@@ -1,40 +1,13 @@
 // arch/parakeet/model.cpp - Parakeet family handler.
 //
-// Phase 4 step 1: load() now binds a runtime backend (Metal on Apple
-// Silicon, CPU elsewhere or on Metal init failure). The second-stage
-// gguf_init_from_file uses no_alloc=true so ggml builds the tensor
-// catalog without touching the data section; we then allocate a
-// backend buffer for every tensor via ggml_backend_alloc_ctx_tensors
-// and stream the GGUF data section directly into it via
-// ggml_backend_tensor_set. After load returns, every borrowed
-// ggml_tensor* in `weights` has its data pointer rebound to backend
-// memory.
-//
-// Stage 1 (header-only via transcribe::Loader, done by the dispatcher
-// before we get here) is unchanged. Stage 2's gguf_context is freed
-// before load() returns; the model's persistent state is ctx_meta +
-// backend_buffer + backend_handle, freed in that order in the
-// destructor.
-//
-// Phase 4 step 3a: run() now computes the mel front-end and runs
-// the pre_encode subsampling stack of the encoder, with the result
-// dumped via TRANSCRIBE_DUMP_DIR for the numerical accuracy harness.
-// The remaining sub-stages (3b conformer FF1, 3c MHSA, 3d conv
-// module, 3e FF2/norm_out, 3f loop over 24 blocks) progressively
-// extend the encoder graph in arch/parakeet/encoder.cpp; the
-// run-driver wiring here doesn't need to change. The decoder
-// (predictor + joint + TDT) lands in phase 5. run() returns OK
-// today, but every result accessor (full_text / segment / word /
-// token) still returns its safe sentinel because nothing has
-// populated the result yet.
-//
-// What's still missing relative to a fully-functional v1:
-//   - Conformer blocks (3b-3f).
-//   - Predictor + joint + TDT decode driver (phase 5).
-//   - Quantization. fp32 only today.
-//   - ggml_gallocr_t for repeat-call buffer reuse (phase 4 step 5).
-//   - Public timings API. t_load_us is captured on the model but
-//     not surfaced; phase 4 step 6 adds transcribe_timings.
+// load() binds a runtime backend, opens the GGUF with no_alloc=true so
+// ggml builds the tensor catalog without touching the data section,
+// allocates a backend buffer for every tensor, and streams the data
+// section into it; afterward every borrowed ggml_tensor* in `weights`
+// points at backend memory. The persistent model state is ctx_meta +
+// backend_buffer + backends, freed in that order in the destructor.
+// run() computes the mel front-end, runs the encoder graph, then
+// host-decodes (predictor + joint + TDT).
 
 #include "parakeet.h"
 
@@ -56,12 +29,10 @@
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-// ggml-cpu.h no longer needed — threading is set via the registry
-// proc address pattern, not ggml_backend_cpu_set_n_threads directly.
 #include "gguf.h"
 
-// No backend-specific #includes needed — ggml's device registry in
-// ggml-backend.h discovers Metal/Vulkan/CUDA/BLAS at runtime.
+// No backend-specific #includes: ggml's device registry discovers
+// Metal/Vulkan/CUDA/BLAS at runtime.
 
 #include <algorithm>
 #include <cassert>
@@ -82,22 +53,15 @@
 
 namespace transcribe::parakeet {
 
-// Forward declaration so the anonymous-namespace functions below can
-// take the address of the registry entry. The full definition lives at
-// the bottom of the file (after the per-call function definitions it
-// references).
+// Forward declaration; full definition at the bottom of the file.
 extern const Arch arch;
 
-// Cheap insurance against a future contributor accidentally dropping the
-// inheritance relationship. Cost: zero. Caught at compile time.
 static_assert(std::is_base_of_v<transcribe_model,   ParakeetModel>);
 static_assert(std::is_base_of_v<transcribe_session, ParakeetSession>);
 
 ParakeetSession::~ParakeetSession() {
-    // Tear down per-call compute state. Order matters: the scheduler
-    // owns the compute buffers, the context owns the tensor metadata,
-    // both must be freed before the model's backend plan (which
-    // outlives the context, owned by ParakeetModel).
+    // Tear down per-call compute state before the model's backend plan
+    // (which outlives the context): scheduler, then context.
     if (sched != nullptr) {
         ggml_backend_sched_free(sched);
         sched = nullptr;
@@ -108,12 +72,8 @@ ParakeetSession::~ParakeetSession() {
     }
     encoder_out = nullptr;
 
-    // Streaming cache tensors live in their own ggml_context with
-    // their own backend buffer (allocated lazily on first stream_begin
-    // for ChunkedLimited variants). Free in the same order as the
-    // weights buffer/session in ParakeetModel: backend buffer first (it
-    // may hold a backend ref), then the ggml_context that owned the
-    // tensor metadata.
+    // Streaming cache tensors live in their own ggml_context + backend
+    // buffer. Free buffer first (may hold a backend ref), then the ctx.
     if (stream_caches.buffer != nullptr) {
         ggml_backend_buffer_free(stream_caches.buffer);
         stream_caches.buffer = nullptr;
@@ -141,15 +101,9 @@ ParakeetSession::~ParakeetSession() {
 }
 
 ParakeetModel::~ParakeetModel() {
-    // Teardown order: ctx_meta → backend_buffer → plan backends
-    // (reverse init order).
-    //
-    // ctx_meta owns the tensor metadata (ggml_tensor structs); the
-    // tensors' data pointers reference backend_buffer's interior.
-    // Freeing ctx_meta drops the metadata only — the buffer is
-    // independent. backend_buffer must be freed before the backends
-    // because the buffer was allocated against a backend and may
-    // hold a reference to it. Backends freed in reverse init order.
+    // Teardown order: ctx_meta → backend_buffer → plan backends. The
+    // buffer must be freed before the backends (it holds a backend ref);
+    // backends freed in reverse init order.
     if (bn_fused_ctx != nullptr) {
         ggml_free(bn_fused_ctx);
         bn_fused_ctx = nullptr;
@@ -158,8 +112,8 @@ ParakeetModel::~ParakeetModel() {
         ggml_backend_buffer_free(bn_fused_buffer);
         bn_fused_buffer = nullptr;
     }
-    // The CPU conv_pw F32 promotion session + buffer (no-op on GPU primary
-    // backends; non-null only when promote_conv_pw_to_f32_on_cpu ran).
+    // CPU conv_pw F32 promotion ctx + buffer (non-null only when
+    // promote_conv_pw_to_f32_on_cpu ran).
     if (conv_pw_f32_ctx != nullptr) {
         ggml_free(conv_pw_f32_ctx);
         conv_pw_f32_ctx = nullptr;
@@ -191,18 +145,10 @@ namespace {
 constexpr float kBnEps = 1e-5f;
 
 // Resolve the runtime language hint to a prompt-table index for the
-// multilingual prompt-conditioned variants
-// (NeMo's EncDecRNNTBPEModelWithPrompt). The dictionary carries both
-// canonical BCP-47 codes ("en-US") and short aliases ("en") that map
-// to the same index — we just do an exact-string lookup.
-//
-// Empty / null hint maps to the dictionary's `auto` slot (i.e.
-// `prompt.auto_id`). When the model exposes language detection (its
-// hparams declare auto_id), this is the "let the model emit a
-// <lang-XX> tag" path. Unknown hints return -1 (the caller should
-// surface this as TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE — capability
-// validation in transcribe.cpp will already have screened most
-// invalid hints; this is the prompt-dictionary-vs-caps mismatch case).
+// multilingual prompt-conditioned variants. The dictionary carries both
+// BCP-47 codes ("en-US") and short aliases ("en"); exact-string lookup.
+// Empty/null hint maps to the dictionary's auto slot (prompt.auto_id);
+// unknown hints return -1 (caller surfaces UNSUPPORTED_LANGUAGE).
 int32_t resolve_prompt_id(const ParakeetHParams & hp,
                           const char *            language_hint)
 {
@@ -210,9 +156,8 @@ int32_t resolve_prompt_id(const ParakeetHParams & hp,
     const bool empty_hint =
         (language_hint == nullptr) || (*language_hint == '\0');
     if (empty_hint) {
-        // Auto-language slot. Models without an explicit auto entry
-        // leave auto_id at -1; in that case the dictionary's first
-        // entry is the conservative default.
+        // Auto-language slot; fall back to the dictionary's first entry
+        // when there is no explicit auto_id.
         if (hp.prompt_auto_id >= 0) return hp.prompt_auto_id;
         if (!hp.prompt_dictionary_indices.empty()) {
             return hp.prompt_dictionary_indices.front();
@@ -227,13 +172,10 @@ int32_t resolve_prompt_id(const ParakeetHParams & hp,
     return -1;
 }
 
-// Fill a [num_prompts, T_enc, 1, n_batch] float buffer with a one-hot
-// vector at column `prompt_id` of each utterance, replicated across
-// the T_enc axis. The host-side replication keeps the in-graph
-// step a single concat + two matmuls, with no in-graph one_hot /
-// broadcast machinery. `prompt_ids` carries one id per utterance.
-//
-// Returns false if any per-utterance prompt_id is out of range.
+// Fill a [num_prompts, T_enc, 1, n_batch] buffer with a one-hot at
+// column prompt_id of each utterance, replicated across T_enc (one id
+// per utterance in prompt_ids). Host-side replication keeps the in-graph
+// step a single concat + two matmuls. Returns false if any id is OOR.
 bool fill_prompt_one_hot(std::vector<float> &        out,
                          int                         num_prompts,
                          int                         T_enc,
@@ -262,15 +204,12 @@ bool fill_prompt_one_hot(std::vector<float> &        out,
     return true;
 }
 
-// Fuse inference-time BatchNorm into precomputed scale + bias tensors.
-// BN eval: y = (x - mean) / sqrt(var + eps) * weight + bias
-// Fused:   y = x * scale + shift
-//   where scale = weight / sqrt(var + eps)
-//         shift = bias - mean * scale
-//
-// Allocates fused tensors in a separate ggml context + CPU buffer on
-// the model. Called once at load time; the fused tensors are then
-// referenced by the encoder graph instead of the raw BN parameters.
+// Fuse inference-time BatchNorm into scale + bias tensors:
+//   BN eval: y = (x - mean) / sqrt(var + eps) * weight + bias
+//   fused:   y = x * scale + shift,  scale = weight / sqrt(var + eps),
+//            shift = bias - mean * scale
+// Fused tensors live in a separate ggml ctx + CPU buffer, computed once
+// at load and referenced by the encoder graph in place of the raw BN.
 transcribe_status fuse_batch_norm(ParakeetModel & m) {
     const size_t n_blocks = m.weights.blocks.size();
     if (n_blocks == 0) return TRANSCRIBE_OK;
@@ -278,7 +217,6 @@ transcribe_status fuse_batch_norm(ParakeetModel & m) {
     const int64_t d = m.hparams.enc_d_model;
     const size_t tensor_bytes = static_cast<size_t>(d) * sizeof(float);
 
-    // Create a context for the fused tensors (2 per block).
     const size_t ctx_size = n_blocks * 2 * ggml_tensor_overhead() + 256;
     ggml_init_params params = {ctx_size, nullptr, /*no_alloc=*/true};
     m.bn_fused_ctx = ggml_init(params);
@@ -291,9 +229,7 @@ transcribe_status fuse_batch_norm(ParakeetModel & m) {
         b.conv_bn_fused_bias  = ggml_new_tensor_1d(m.bn_fused_ctx, GGML_TYPE_F32, d);
     }
 
-    // Allocate on the CPU backend. The plan's scheduler list always
-    // has CPU last as the fallback; for strict-CPU loads it is the
-    // only entry.
+    // Allocate on the CPU backend (always last in the scheduler list).
     m.bn_fused_buffer = ggml_backend_alloc_ctx_tensors(
         m.bn_fused_ctx, m.plan.scheduler_list.back());
     if (m.bn_fused_buffer == nullptr) return TRANSCRIBE_ERR_BACKEND;
@@ -322,26 +258,11 @@ transcribe_status fuse_batch_norm(ParakeetModel & m) {
     return TRANSCRIBE_OK;
 }
 
-// On a CPU primary backend, dequantize the conformer 1×1 pointwise
-// conv weights (pw1, pw2) from F16 back to F32. The shared quantizer
-// (post commit 6fee9b9) routes Conformer ConvPw to F16 across all
-// presets so GPU backends with native F16 compute (Metal, Vulkan,
-// CUDA) get the bandwidth halving for free; on CPUs without native
-// F16 arithmetic (Zen 2 and earlier) the per-element F16→F32
-// upconvert per matmul erases the bandwidth win and outweighs the
-// original cost.
-//
-// Today's parakeet GGUFs predate the universal F16 conv_pw policy
-// and ship F32 conv_pw weights, so this function is a no-op against
-// the current on-disk artifacts. The wiring is in place so the next
-// regen does the right thing automatically. See the same comment
-// block on the cohere side for the cost trade and the ~235 MB of
-// "wasted" originals that stay resident in the main weight buffer
-// (ggml's backend buffer model does not support freeing individual
-// tensors).
-//
-// The machinery itself lives in transcribe::load_common — this
-// function is just the parakeet-specific weight walk.
+// On a CPU primary backend, dequantize the conformer 1×1 pointwise conv
+// weights (pw1, pw2) from F16 to F32: CPUs without native F16 arithmetic
+// pay a per-matmul F16→F32 upconvert that erases the bandwidth win. The
+// machinery lives in transcribe::load_common; this is the parakeet-
+// specific weight walk.
 transcribe_status promote_conv_pw_to_f32_on_cpu(ParakeetModel & m) {
     std::vector<load_common::ConvPwF32Slot> slots;
     slots.reserve(m.weights.blocks.size() * 2);
@@ -359,24 +280,14 @@ transcribe_status promote_conv_pw_to_f32_on_cpu(ParakeetModel & m) {
 }
 
 // Default variant string when the GGUF did not carry stt.variant.
-// Defaulting belongs in the family handler, not the loader: each
-// family knows its own canonical default and the loader does not.
 constexpr const char k_default_variant[] = "tdt-0.6b-v2";
 
 // Allocate the streaming encoder caches (cache_last_channel,
-// cache_last_time). Called lazily on the first
-// stream_begin for ChunkedLimited variants. Layout matches NeMo's
-// get_initial_cache_state exactly: see ParakeetStreamingCaches in
-// parakeet.h for shapes and the per-variant sizing rule.
-//
-// The cache tensors live in their own ggml_context with a dedicated
-// backend buffer, allocated on the model's primary backend so reads
-// and writes inside the encoder graph stay backend-local. The buffer
-// is freed in ~ParakeetSession.
-//
-// Initialization is idempotent — calling on an already-initialized
-// caches struct is a no-op. To zero contents on a fresh stream, call
-// zero_streaming_caches separately.
+// cache_last_time), lazily on the first stream_begin for ChunkedLimited
+// variants. Layout matches NeMo's get_initial_cache_state (see
+// ParakeetStreamingCaches in parakeet.h). The tensors live in their own
+// ggml_context + backend buffer on the primary backend (freed in the
+// dtor). Idempotent; zero_streaming_caches clears contents separately.
 transcribe_status init_streaming_caches(ParakeetSession * pc,
                                         ParakeetModel *   pm)
 {
@@ -398,9 +309,7 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // 4 tensors per layer (last_channel + last_time + last_k + last_v)
-    // plus headroom for descriptor / view tensors created during graph
-    // build.
+    // 4 tensors per layer (last_channel/time/k/v) plus graph-build headroom.
     const size_t ctx_size =
         static_cast<size_t>(4 * n_layer + 8) * ggml_tensor_overhead();
     ggml_init_params ip {};
@@ -470,11 +379,9 @@ transcribe_status init_streaming_caches(ParakeetSession * pc,
     return TRANSCRIBE_OK;
 }
 
-// Zero the streaming caches and reset cursors. Called at the start of
-// every stream_begin so each utterance starts from a clean slate
-// (NeMo's get_initial_cache_state returns zeros every time).
-//
-// The backend buffer survives — only the contents are cleared.
+// Zero the streaming caches and reset cursors at each stream_begin
+// (NeMo's get_initial_cache_state returns zeros every time). The backend
+// buffer survives; only the contents are cleared.
 void zero_streaming_caches(ParakeetSession * pc) {
     if (pc->stream_caches.buffer != nullptr) {
         ggml_backend_buffer_clear(pc->stream_caches.buffer, 0);
@@ -484,10 +391,8 @@ void zero_streaming_caches(ParakeetSession * pc) {
     pc->stream_caches.pcm_start_sample    = 0;
 }
 
-// Reset the streaming decoder state (LSTM h/c, prev token, frame
-// offset). Sized to the model's predictor on first call; resized
-// in-place on subsequent calls if the predictor reshape ever happens
-// (it won't, but the guard is cheap).
+// Reset the streaming decoder state (LSTM h/c, prev token, frame offset)
+// to the model's predictor sizing.
 void reset_streaming_decoder_state(ParakeetSession * pc,
                                    const ParakeetModel * pm)
 {
@@ -514,59 +419,36 @@ transcribe_status load(
     const transcribe_model_load_params *   params,
     transcribe_model **               out_model)
 {
-    // The dispatcher has already verified out_model is non-null and
-    // the loader has a valid gguf_context with general.architecture
-    // set. *out_model is currently null (the dispatcher cleared it).
-    // Backend and device selection are resolved below via load_common.
+    // The dispatcher has verified out_model is non-null and cleared it,
+    // and the loader has a valid gguf_context.
 
     const int64_t t_load_start = ggml_time_us();
 
     auto m = std::make_unique<ParakeetModel>();
     m->arch      = &arch;
-    m->t_load_us = 0; // will be set just before the successful return
+    m->t_load_us = 0;
 
-    // Variant defaulting belongs here, not in the loader: each family
-    // knows its own canonical default. We accept the GGUF's stt.variant
-    // verbatim if present and only fall back when it is empty.
-    //
-    // The variant string is descriptive metadata for users — it
-    // surfaces through transcribe_model_variant_string but does NOT
-    // drive any behavior decision. Capability differences between
-    // Parakeet variants (v2 English vs v3 multilingual, etc.) are
-    // expressed as stt.capability.* and general.languages KV, read
-    // below. The only PLAN.md-blessed exception is the decoder-kind
-    // prefix dispatch for hybrid models, which Parakeet v1 does not
-    // exercise (only TDT ships).
+    // Variant defaulting belongs in the family handler. The variant
+    // string is descriptive metadata (surfaced via
+    // transcribe_model_variant_string) and drives no behavior decision;
+    // capability differences are expressed as stt.capability.* /
+    // general.languages KV, read below.
     if (loader.variant().empty()) {
         m->variant = k_default_variant;
     } else {
         m->variant = loader.variant();
     }
 
-    // backend is set below, after the runtime backend is initialized.
-    // Until then m->backend stays empty per the public ABI semantic
-    // for "no backend currently bound".
+    // Empty until the runtime backend is bound below (public ABI: "no
+    // backend currently bound").
     m->backend.clear();
 
-    // Capability resolution, KV-driven. Order matters:
-    //
-    //   1. apply_family_invariants populates the family defaults
-    //      (native_sample_rate, supports_translate). These are the
-    //      "the architecture supplies a default" half of PLAN.md's
-    //      capability precedence rule.
-    //   2. read_capability_kv overlays any stt.capability.* KV the
-    //      converter wrote. This is the "GGUF KV is authoritative"
-    //      half. Absent KV leaves the family default in place;
-    //      present-but-wrong-type KV is a converter bug and propagates
-    //      as TRANSCRIBE_ERR_GGUF.
-    //
-    // Information-gap default for the languages chain. read_languages_kv
-    // below leaves these in place if general.languages is absent — the
-    // result is the public ABI's "n_languages == 0, languages == nullptr"
-    // observation, documented in include/transcribe.h as "we don't
-    // know" rather than "the model has no languages". A v3 multilingual
-    // GGUF supplies the real list via general.languages and
-    // read_languages_kv overwrites the defaults via set_languages.
+    // Capability resolution, KV-driven. apply_family_invariants
+    // populates the family defaults; read_capability_kv then overlays any
+    // stt.capability.* KV (absent leaves the default; wrong-type
+    // propagates as TRANSCRIBE_ERR_GGUF). n_languages=0 / languages=null
+    // is the "we don't know" state until read_languages_kv overwrites it
+    // from general.languages.
     apply_family_invariants(*m);
     m->caps.n_languages = 0;
     m->caps.languages   = nullptr;
@@ -577,48 +459,35 @@ transcribe_status load(
         return st;
     }
 
-    // Languages from general.languages, installed via set_languages
-    // (which keeps the language pointer chain in caps in sync). The
-    // strings are copied into the model so the loader's gguf_context
-    // can be freed after this point without invalidating them.
+    // Languages from general.languages (copied into the model, so the
+    // loader's gguf_context can be freed afterward).
     if (const transcribe_status st = read_languages_kv(loader.gguf(), *m);
         st != TRANSCRIBE_OK)
     {
         return st;
     }
 
-    // Tokenizer ingest. Reads tokenizer.ggml.* keys from the loader's
-    // gguf_context and copies the strings / scores / token types into
-    // the Tokenizer's own storage. Like read_languages_kv above, this
-    // does not retain a borrow into the gguf_context.
+    // Tokenizer ingest: copies tokenizer.ggml.* into the Tokenizer's own
+    // storage (no borrow into the gguf_context).
     if (const transcribe_status st = m->tok.load(loader.gguf()); st != TRANSCRIBE_OK) {
         return st;
     }
 
     // Architecture KV (encoder / predictor / joint / frontend dims).
-    // Read directly from the loader's gguf_context — these are
-    // hparams, not tensor data, so we can do this before the second
-    // open. read_parakeet_hparams enforces cross-field invariants
-    // (d_model divisible by n_heads, etc.) so we know the shapes
-    // we're about to validate against are themselves consistent.
+    // read_parakeet_hparams enforces cross-field invariants so the shapes
+    // we validate against are consistent.
     if (const transcribe_status st = read_parakeet_hparams(loader.gguf(), m->hparams);
         st != TRANSCRIBE_OK)
     {
         return st;
     }
 
-    // Derive supports_streaming from hparams.
-    //
-    //   ChunkedLimited + (L, R) >= 0   — cache-aware streaming
-    //     (nemotron-speech-streaming-en-0.6b). The cache_last_channel /
-    //     cache_last_time path is engaged at stream_begin.
+    // Derive supports_streaming from hparams:
+    //   ChunkedLimited + (L, R) >= 0 — cache-aware streaming
+    //     (nemotron-speech-streaming-en-0.6b).
     //   ChunkedLimitedWithRc + non-empty (L, C, R) menu — buffered
-    //     streaming (parakeet-unified-en-0.6b). The buffered driver
-    //     re-runs the offline encoder per chunk with a 3-tuple chunk
-    //     mask; no per-layer cache.
-    //
-    // Offline parakeet variants (Regular full attention or no chunking)
-    // stay non-streaming regardless of any KV claim.
+    //     streaming (parakeet-unified-en-0.6b).
+    // Offline variants stay non-streaming.
     const bool cache_aware_streaming =
         (m->hparams.enc_att_context_style ==
              ParakeetHParams::AttContextStyle::ChunkedLimited) &&
@@ -630,20 +499,14 @@ transcribe_status load(
         !m->hparams.enc_att_chunk_left_choices.empty() &&
         !m->hparams.enc_att_chunk_chunk_choices.empty() &&
         !m->hparams.enc_att_chunk_right_choices.empty();
-    // supports_streaming is the generic gate; the configurable
-    // streaming geometry (the (left, chunk, right) menu for buffered,
-    // the att_context_right menu for cache-aware) is reached via the
-    // parakeet stream extensions, not advertised as flat caps fields.
+    // supports_streaming is the generic gate; the configurable geometry
+    // is reached via the parakeet stream extensions, not flat caps.
     if (buffered_streaming || cache_aware_streaming) {
         m->caps.supports_streaming = true;
     }
 
-    // Construct the mel front-end now that hparams are available.
-    // The MelFrontend constructor precomputes the periodic Hann
-    // window + Slaney mel filterbank (~50 ms on jfk-sized configs);
-    // doing it here amortizes the cost across every transcribe_run
-    // on every context derived from this model. The instance is
-    // const-after-construction and thread-safe per its contract.
+    // Construct the mel front-end (precomputes Hann window + Slaney mel
+    // filterbank); amortized across every run on every context.
     {
         transcribe::MelConfig cfg {};
         cfg.sample_rate  = m->hparams.fe_sample_rate;
@@ -655,31 +518,18 @@ transcribe_status load(
         cfg.f_min        = m->hparams.fe_f_min;
         cfg.f_max        = m->hparams.fe_f_max;
         cfg.normalize    = m->hparams.fe_normalize;
-        // NeMo's FilterbankFeatures.stft uses pad_mode="constant" for
-        // the STFT center-pad (see features.py line 385). The cpp
-        // MelConfig default is "reflect" — matching cpp's behavior to
-        // NeMo here. The two differ in the first/last few STFT frames:
-        // reflect pads with mirrored audio, constant pads with zeros.
-        // Offline this is one boundary per utterance and the residual
-        // washes it out; streaming sees boundary effects every chunk
-        // and the per-feature normalize amplifies the divergence into
-        // the encoder.
+        // NeMo's FilterbankFeatures.stft uses pad_mode="constant" (the
+        // cpp MelConfig default is "reflect"). The two differ in the
+        // first/last few STFT frames; offline the residual washes out but
+        // streaming sees it every chunk, amplified by per-feature normalize.
         cfg.pad_mode     = "constant";
         m->mel.emplace(cfg);
     }
 
-    // Stage 2: reopen the file with no_alloc=true + session=&ctx_meta.
-    // ggml builds the tensor catalog (metadata only — no data
-    // buffers); we then bind a runtime backend, allocate a backend
-    // buffer for every tensor in ctx_meta, and stream the GGUF data
-    // section directly into that backend buffer. After this
-    // sequence, ggml_get_tensor(ctx_meta, name)->data points at
-    // backend memory, not host malloc.
-    //
-    // The first gguf_context held by the loader stays alive until
-    // load() returns (the dispatcher owns its lifetime); we don't
-    // touch it here. The second gguf_context (gguf_data below) is
-    // freed before load() returns.
+    // Reopen the file with no_alloc=true + ctx=&ctx_meta: ggml builds the
+    // tensor catalog (metadata only), then we bind a backend, allocate a
+    // buffer for every tensor, and stream the data section into it. The
+    // second gguf_context (gguf_data) is freed before load() returns.
     gguf_init_params init_params {};
     init_params.no_alloc = true;
     init_params.ctx      = &m->ctx_meta;
@@ -687,16 +537,13 @@ transcribe_status load(
     gguf_context * gguf_data = gguf_init_from_file(loader.path().c_str(),
                                                    init_params);
     if (gguf_data == nullptr) {
-        // ggml has already logged a structured error. The first-stage
-        // open succeeded so this is genuinely unexpected — most
-        // likely a race where the file changed between the two opens,
-        // or a permissions transition. Surface as ERR_GGUF.
+        // The first-stage open succeeded, so this is unexpected (file
+        // changed between opens, or a permissions transition).
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Validate every tensor against the canonical catalog. find_tensor
-    // only inspects type + shape (not data pointers), so this works
-    // before the backend buffer is bound.
+    // Validate every tensor against the canonical catalog (type + shape
+    // only, so it works before the backend buffer is bound).
     if (const transcribe_status st =
             build_parakeet_weights(m->ctx_meta, m->hparams, m->weights);
         st != TRANSCRIBE_OK)
@@ -705,13 +552,8 @@ transcribe_status load(
         return st;
     }
 
-    // Resolve the backend plan via ggml's device registry. The
-    // caller's requested backend (AUTO, CPU, METAL, VULKAN) is
-    // honored here; see transcribe-backend.h + transcribe-load-common.h
-    // for the full semantic. This is runtime-dynamic: the library
-    // code has no compile-time #if TRANSCRIBE_METAL / #if
-    // TRANSCRIBE_VULKAN guards. Whatever backends ggml was compiled
-    // with are discovered here.
+    // Resolve the backend plan via ggml's device registry (runtime, no
+    // compile-time backend guards). See transcribe-load-common.h.
     const transcribe_backend_request backend_req =
         (params != nullptr) ? params->backend : TRANSCRIBE_BACKEND_AUTO;
 
@@ -723,15 +565,11 @@ transcribe_status load(
         return st;
     }
 
-    // Label for the public API: report the primary backend.
     m->backend = ggml_backend_name(m->plan.primary);
     m->primary_backend = m->plan.primary;
 
     // Allocate a backend buffer for every tensor in ctx_meta on the
-    // primary backend. After this returns, each ggml_tensor in
-    // ctx_meta has its `buffer` and `data` slot bound to the backend
-    // allocation. We still need to upload the actual weight bytes
-    // from the GGUF data section.
+    // primary backend; the weight bytes are streamed in below.
     ggml_backend_buffer_t weights_buffer =
         ggml_backend_alloc_ctx_tensors(m->ctx_meta, m->plan.primary);
     if (weights_buffer == nullptr) {
@@ -744,11 +582,9 @@ transcribe_status load(
     ggml_backend_buffer_set_usage(weights_buffer,
                                   GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
-    // Stream tensor data from the GGUF file into the backend buffer
-    // slots. See transcribe-load-common.h for the shared loop; it
-    // uses ggml_backend_tensor_set so this works for both host-
-    // memory backends (CPU, Metal on Apple Silicon) and discrete
-    // GPUs.
+    // Stream tensor data from the GGUF into the backend buffer slots
+    // (shared loop in transcribe-load-common.h; works on host-memory
+    // backends and discrete GPUs).
     if (const transcribe_status st = transcribe::load_common::stream_tensor_data(
             loader.path(), gguf_data, m->ctx_meta, "parakeet");
         st != TRANSCRIBE_OK)
@@ -757,17 +593,11 @@ transcribe_status load(
         return st;
     }
 
-    // gguf_data only carried tensor offsets + names; both have been
-    // consumed by build_parakeet_weights and the streaming loop
-    // above. m->ctx_meta + m->backend_buffer + m->backend_handle +
-    // m->weights are now the model's entire state.
     gguf_free(gguf_data);
 
-    // Fuse BatchNorm parameters into scale + bias for the encoder
-    // graph. This replaces 4 elementwise ops per block with 2. Skipped
-    // for streaming variants whose conv module uses LayerNorm (raw
-    // bn.weight / bn.bias travel through the graph as LN scale/bias,
-    // and there are no running stats to fuse against).
+    // Fuse BatchNorm into scale + bias (replaces 4 elementwise ops per
+    // block with 2). Skipped for LayerNorm conv-module variants (no
+    // running stats to fuse against).
     if (m->hparams.enc_conv_norm_type
             == ParakeetHParams::ConvNormType::BatchNorm)
     {
@@ -778,37 +608,25 @@ transcribe_status load(
         }
     }
 
-    // On CPU primary backend, dequantize conv pointwise weights back
-    // to F32 — Zen 2 class CPUs don't have native F16 compute and the
-    // upconvert cost per matmul outweighs the bandwidth savings from
-    // the smaller weight. No-op on GPU backends and on parakeet GGUFs
-    // that predate the universal F16 conv_pw quantizer policy (today,
-    // all of them).
+    // On CPU primary backend, dequantize conv pointwise weights to F32
+    // (see promote_conv_pw_to_f32_on_cpu). No-op on GPU backends.
     if (const transcribe_status st = promote_conv_pw_to_f32_on_cpu(*m);
         st != TRANSCRIBE_OK)
     {
         return st;
     }
 
-    // Phase 5: build the host mirror of the predictor + joint
-    // weights. This is a one-shot copy from backend memory into
-    // std::vector<float>s on the model. The decoder runs on host
-    // (see decoder.h for the rationale), and centralizing the
-    // backend → host copy here means the per-call decode loop
-    // pays no readback cost.
+    // Build the host mirror of the predictor + joint weights (one-shot
+    // backend → host copy; the decoder runs on host, see decoder.h).
     if (const transcribe_status st = build_host_decoder_weights(*m, m->host_decoder);
         st != TRANSCRIBE_OK)
     {
         return st;
     }
 
-    // Capture wall-clock load time on the model. The accumulator
-    // is on the base transcribe_model so the public timings API
-    // can read it without per-family casts.
     m->t_load_us = ggml_time_us() - t_load_start;
 
-    // Hand off to the caller. From here on the caller owns the model
-    // and must call transcribe_model_free.
+    // The caller now owns the model and must call transcribe_model_free.
     *out_model = m.release();
     return TRANSCRIBE_OK;
 }
@@ -818,12 +636,8 @@ transcribe_status init_context(
     const transcribe_session_params * params,
     transcribe_session **             out_ctx)
 {
-    // The central dispatcher has already null-checked model, params,
-    // and out_ctx. We still want to be sure the model we received is
-    // actually a ParakeetModel — `arch` is the discriminator. In debug
-    // builds an assert would be louder, but a routing mistake should
-    // not silently corrupt anything in release either, so we
-    // defensively check.
+    // The dispatcher has null-checked model/params/out_ctx; verify the
+    // model is actually a ParakeetModel (arch is the discriminator).
     if (model->arch != &arch) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -837,38 +651,12 @@ transcribe_status init_context(
     return TRANSCRIBE_OK;
 }
 
-// Internal inference helper. Assumes pc/pm are non-null and the
-// scheduler plan is populated; callers (run() and stream_finalize)
-// validate that up front. n_samples must be > 0; pcm must be non-null.
-//
-// Does NOT call pc->clear_result(); callers handle result-snapshot
-// management. (The public run() entry clears once before reaching here;
-// stream_finalize relies on the dispatcher's clear at stream_begin time
-// and does not re-clear, so its accumulated stream cursors survive.)
-//
-// Phase 4a — run/stream parity:
-//
-//   For cache-aware-streaming Parakeet variants (today: nemotron-
-//   speech-streaming-en-0.6b), transcribe_run and the streaming hooks
-//   are siblings of this helper; neither owns the inference. That
-//   gives the streaming-of-whole path guaranteed-by-construction
-//   parity with one-shot run on the same audio. When real per-chunk
-//   encoder feeding lands (Phase 4b: cache_last_channel /
-//   cache_last_time / RNNT predictor carry), the streaming hooks
-//   will diverge from this helper and an empirical stream-vs-batch
-//   parity test becomes meaningful.
-// Host-side TDT/RNNT/CTC decode + public result-hierarchy build for a
-// single utterance's encoder output. Shared by the single-shot path
-// True for a multilingual language-tag SentencePiece piece of the form
-// "<ll-RR>" (lowercase 2-3 letter language, '-', 2-4 letter region), e.g.
-// "<en-US>", "<zh-CN>", "<nb-NO>". The nemotron-3.5 multilingual vocab emits
-// one of these per segment to mark the (detected or requested) language. We
-// drop them from the public token/word/segment/text result by default so the
-// transcript stays clean and word/timestamp aggregation isn't polluted by a
-// zero-width tag "word". Requiring the '-REGION' part avoids matching control
-// pieces like "<unk>". No-op for the English parakeets (no such pieces in
-// their 1024-token vocab). Preserved when keep_special_tags is set
-// (CLI --raw-tokens).
+// True for a multilingual language-tag SentencePiece piece "<ll-RR>"
+// (2-3 letter language, '-', 2-4 letter region), e.g. "<en-US>". The
+// nemotron-3.5 vocab emits one per segment to mark the language; we drop
+// them from the public result by default (clean transcript, uncorrupted
+// word/timestamp aggregation). Requiring '-REGION' avoids matching
+// control pieces like "<unk>". No-op for the English parakeets.
 static bool is_lang_tag_piece(const std::string & p) {
     const size_t n = p.size();
     if (n < 7 || p.front() != '<' || p.back() != '>') return false; // min "<aa-AA>"
@@ -887,22 +675,15 @@ static bool is_lang_tag_piece(const std::string & p) {
     return i == end; // interior consumed exactly up to '>'
 }
 
-// Single source of truth for "drop this piece from the public result when
-// keep_special_tags is off." A piece is stripped if the vocab marks it
-// CONTROL (canary/nemotron tag pieces are CONTROL-typed in the GGUF) or it
-// matches the multilingual <ll-RR> locale-tag pattern (transitional fallback
-// for GGUFs predating the converter's CONTROL marking). Used by both the
-// offline (decode_and_populate) and streaming (rebuild_streaming_result_text)
-// result builders so they strip exactly the same set.
+// Drop this piece from the public result when keep_special_tags is off:
+// stripped if CONTROL-typed or matching the <ll-RR> locale-tag pattern
+// (transitional fallback). Shared by the offline and streaming builders.
 static bool is_strippable_special(const transcribe::Tokenizer & tok, int id) {
     return tok.is_control(id) || is_lang_tag_piece(tok.token(id));
 }
 
-// Normalize a decoded transcript's whitespace: collapse runs of ASCII spaces
-// to one and trim both ends. Stripping an interior tag leaves its neighbours'
-// spaces adjacent (double space); a stripped trailing tag leaves a trailing
-// space. An ASR transcript never carries meaningful double/edge whitespace, so
-// this is a no-op when nothing was stripped. Shared by both result builders.
+// Collapse runs of ASCII spaces to one and trim both ends — cleans up the
+// double/edge spaces a stripped tag leaves behind. Shared by both builders.
 static void normalize_transcript_whitespace(std::string & s) {
     std::string norm;
     norm.reserve(s.size());
@@ -918,15 +699,10 @@ static void normalize_transcript_whitespace(std::string & s) {
     s.swap(norm);
 }
 
-// Milliseconds spanned by one encoder frame, following NeMo's reference
-// conversion (collections/asr/parts/utils/timestamp_utils.py:
-// time_seconds = frame_offset * window_stride * subsampling_factor, where
-// window_stride is the preprocessor hop in seconds = hop_length /
-// sample_rate). NeMo keeps the product in floating point; we keep the per-
-// frame stride as a double and round once at the call site to the public
-// API's ms grain. Returned as a double (NOT pre-rounded to an integer) so a
-// non-integral stride doesn't quantize before the multiply. Single source of
-// truth for both the offline and streaming result builders.
+// Milliseconds per encoder frame (NeMo: subsampling_factor * hop_length /
+// sample_rate). Returned as a double — not pre-rounded — so a non-integral
+// stride doesn't quantize before the call-site multiply. Shared by both
+// result builders.
 static double parakeet_ms_per_enc_frame(const ParakeetHParams & hp) {
     return 1000.0 *
         static_cast<double>(hp.enc_subsampling_factor) *
@@ -934,10 +710,10 @@ static double parakeet_ms_per_enc_frame(const ParakeetHParams & hp) {
         static_cast<double>(hp.fe_sample_rate);
 }
 
-// (run_one_shot_inner) and the batched path (run_batch_inner). `enc` is
-// the row-major [T_enc, d_enc] encoder activation for ONE utterance;
-// utt_index >= 0 tags the optional tensor dump per utterance, -1 for the
-// single-shot name. Writes the session scratch result slot (tokens /
+// Host-side TDT/RNNT/CTC decode + public result-hierarchy build for one
+// utterance's encoder output. `enc` is the row-major [T_enc, d_enc]
+// activation for ONE utterance; utt_index >= 0 tags the per-utterance
+// dump (-1 for single-shot). Writes the session result slot (tokens /
 // words / segments / full_text / result_kind / has_result).
 static transcribe_status decode_and_populate(
     ParakeetSession *             pc,
@@ -959,9 +735,7 @@ static transcribe_status decode_and_populate(
     if (utt_index >= 0) {
         dump_name += ".b" + std::to_string(utt_index);
     }
-    // Optional dump of the encoder output as the decoder sees it,
-    // so the bring-up loop can verify the readback is faithful
-    // before chasing decoder bugs.
+    // Optional dump of the encoder output as the decoder sees it.
     if (transcribe::debug::enabled()) {
         const long long shape[2] = { T_enc, d_enc };
         const char * stage = (enc_dump_name_override != nullptr &&
@@ -996,39 +770,27 @@ static transcribe_status decode_and_populate(
     }
     pc->t_decode_us = ggml_time_us() - t_dec_start;
 
-    // ----- Build the public result hierarchy ----------------------
+    // ----- Build the public result hierarchy -----
     //
-    // Conversion: each emitted token's `step_at_emit` is an encoder
-    // frame index. The encoder downsamples by `subsampling_factor`
-    // relative to the mel hop, so one encoder frame corresponds to
-    // `subsampling_factor * hop_length / sample_rate` seconds of
-    // audio. For Parakeet 0.6B v2/v3 that's 8 * 160 / 16000 = 0.08 s
-    // per frame, i.e. 80 ms. Shared with the streaming builder.
+    // step_at_emit is an encoder frame index; one frame is
+    // subsampling_factor * hop_length / sample_rate seconds (80 ms on
+    // v2/v3). Shared with the streaming builder.
     const double frame_to_ms = parakeet_ms_per_enc_frame(pm->hparams);
 
-    // SentencePiece word-boundary marker U+2581 ("▁"). UTF-8 bytes
-    // 0xE2 0x96 0x81. A token whose decoded text starts with the
-    // marker opens a new word; otherwise it extends the current
-    // word. We use the raw NeMo piece (not the post-decode "▁ →
-    // space" form) because the post-decode form leads with a space
-    // and that's a fragile thing to compare against — the raw
-    // piece's leading 3 UTF-8 bytes are unambiguous.
+    // SentencePiece word-boundary marker U+2581 ("▁", UTF-8 E2 96 81): a
+    // raw piece starting with it opens a new word. We use the raw NeMo
+    // piece (its leading 3 bytes are unambiguous), not the post-decode
+    // "▁ → space" form.
     constexpr const char k_sp_marker[] = "\xE2\x96\x81";
     constexpr int        k_sp_marker_len = 3;
 
     const transcribe::Tokenizer & tok = pm->tok;
 
     pc->tokens.reserve(pc->raw_tokens.size());
-    // Strip multilingual <ll-RR> language tags from the public result by
-    // default (clean transcript + uncorrupted word/timestamp aggregation).
-    // Gated on the standard keep_special_tags run param (CLI --raw-tokens) —
-    // the same switch canary/sensevoice use for their <|...|> tags.
-    //
-    // Primary detection is Tokenizer::is_control: convert-parakeet.py marks the
-    // tag pieces CONTROL in the GGUF token_type (read from the vocab shape, not
-    // a hard-coded list). The is_lang_tag_piece() pattern is a transitional
-    // fallback for GGUFs produced before that converter change; it can be
-    // dropped once all shipped artifacts carry the metadata.
+    // Strip multilingual <ll-RR> language tags by default (gated on
+    // keep_special_tags / CLI --raw-tokens). Detection is
+    // Tokenizer::is_control (CONTROL token_type); is_lang_tag_piece is a
+    // transitional fallback for GGUFs predating that converter change.
     const bool strip_tags = (params == nullptr) ? true : !params->keep_special_tags;
     for (const TdtToken & rt : pc->raw_tokens) {
         if (strip_tags && is_strippable_special(tok, rt.id)) {
@@ -1039,42 +801,28 @@ static transcribe_status decode_and_populate(
         te.p     = rt.p;
         te.t0_ms = static_cast<int64_t>(
             std::llround(frame_to_ms * static_cast<double>(rt.step_at_emit)));
-        // Per-token duration: clamp the duration_frames=0 case to a
-        // visually-distinct minimum of 0 ms (== t0). The result is a
-        // "point in time" token with no width.
+        // duration_frames=0 yields a zero-width "point in time" token.
         const double end_frame =
             static_cast<double>(rt.step_at_emit) +
             static_cast<double>(rt.duration_frames);
         te.t1_ms = static_cast<int64_t>(std::llround(frame_to_ms * end_frame));
-        // Decode just this single token to get its visible text
-        // fragment. The decoder strips the SentencePiece marker via
-        // Tokenizer::decode (▁ → space), so the leading character
-        // for word-starting tokens is an ASCII space.
         te.text  = tok.decode(&rt.id, 1);
-        // seg_index / word_index filled below.
         pc->tokens.push_back(std::move(te));
     }
 
-    // Word + segment construction. v1 produces a single segment
-    // covering the entire clip; words are split on SentencePiece
-    // marker boundaries. Empty result → no segment, no words, no
-    // text — exactly what the public accessors return as their
-    // safe-sentinel state when there are no tokens.
+    // Word + segment construction. v1 produces a single segment over the
+    // whole clip; words split on SentencePiece marker boundaries. Empty
+    // result → no segment/words/text (the accessors' safe-sentinel state).
     if (!pc->tokens.empty()) {
-        // Single segment.
         transcribe_session::SegmentEntry seg;
         seg.t0_ms       = pc->tokens.front().t0_ms;
         seg.t1_ms       = pc->tokens.back().t1_ms;
         seg.first_token = 0;
         seg.n_tokens    = static_cast<int>(pc->tokens.size());
         seg.first_word  = 0;
-        // n_words filled after we count words below.
 
-        // Walk the raw token ids again to detect word boundaries.
-        // The first token always opens word 0; a token whose raw
-        // piece begins with the SentencePiece marker opens a new
-        // word. Continuation tokens (no marker) extend the current
-        // word.
+        // First token opens word 0; a raw piece beginning with the
+        // marker opens a new word, others extend the current word.
         transcribe_session::WordEntry  cur_word;
         bool                        cur_word_open = false;
 
@@ -1101,8 +849,7 @@ static transcribe_status decode_and_populate(
             if (starts_word) {
                 open_new_word(static_cast<int>(i), tk);
             }
-            // Whether we just opened a new word or not, the current
-            // word now contains this token. seg/word back-pointers:
+            // seg/word back-pointers.
             pc->tokens[i].seg_index  = 0;
             pc->tokens[i].word_index = static_cast<int>(pc->words.size());
         }
@@ -1113,11 +860,8 @@ static transcribe_status decode_and_populate(
             pc->words.push_back(std::move(cur_word));
         }
 
-        // Materialize each word's text via the tokenizer (so the
-        // SentencePiece "▁ → space" substitution runs on the whole
-        // span at once, including any mid-word continuation
-        // pieces). The leading space from a word-opener token is
-        // trimmed: a "word" should not include its own leading
+        // Materialize each word's text via the tokenizer (so "▁ → space"
+        // runs over the whole span), trimming the word-opener's leading
         // space.
         std::vector<int> id_buf;
         for (auto & wd : pc->words) {
@@ -1148,32 +892,16 @@ static transcribe_status decode_and_populate(
         pc->full_text  = std::move(full);
         pc->segments.push_back(std::move(seg));
 
-        // Parakeet TDT produces token-level timestamps from the
-        // encoder frame indices (each emitted token's
-        // step_at_emit). Word and segment timestamps are derived
-        // by aggregating contained tokens. TOKEN is therefore the
-        // family's max_timestamp_kind, and everything above has
-        // already been populated at TOKEN granularity.
-        //
-        // Clamp to the caller's requested ceiling. AUTO resolves to
-        // the family max (TOKEN). A coarser request elides the
-        // finer levels: WORD drops the token list, SEGMENT drops
-        // tokens+words, NONE drops tokens+words and zeros the
-        // segment's t0/t1 so nothing dresses up as alignment data
-        // the caller did not ask for.
-        //
-        // The dispatcher has already rejected any request finer
-        // than TOKEN, so after the AUTO resolution below, eff is in
-        // {NONE, SEGMENT, WORD, TOKEN}.
+        // Clamp to the caller's requested ceiling. AUTO resolves to the
+        // family max (TOKEN); a coarser request elides the finer levels.
+        // The dispatcher has already rejected any request finer than
+        // TOKEN, so eff ends up in {NONE, SEGMENT, WORD, TOKEN}.
         transcribe_timestamp_kind eff = params->timestamps;
         if (eff == TRANSCRIBE_TIMESTAMPS_AUTO) {
             eff = pm->caps.max_timestamp_kind; // = TOKEN for parakeet
         }
         if (eff == TRANSCRIBE_TIMESTAMPS_NONE) {
-            // Keep the segment and its text, but drop alignment
-            // data. Tokens + words are a finer granularity than
-            // the caller asked for; segment timings are alignment
-            // too, so zero them.
+            // Keep the segment + text, drop all alignment data.
             pc->tokens.clear();
             pc->words.clear();
             auto & s = pc->segments.back();
@@ -1193,13 +921,9 @@ static transcribe_status decode_and_populate(
             s.first_token = 0;
             s.n_tokens    = 0;
         } else if (eff == TRANSCRIBE_TIMESTAMPS_WORD) {
-            // Keep segment + word timings, drop the token table.
-            // Every back-reference into the cleared token table
-            // must also be zeroed so a caller iterating words or
-            // the segment can never index into a now-empty
-            // pc->tokens. The word_* / segment_* accessors return
-            // safe sentinels when n_tokens == 0, which is the
-            // documented behavior for "coarser than requested."
+            // Keep segment + word timings, drop the token table. Zero the
+            // back-references so word/segment accessors return safe
+            // sentinels (n_tokens == 0) rather than indexing it.
             pc->tokens.clear();
             for (auto & w : pc->words) {
                 w.first_token = 0;
@@ -1225,23 +949,14 @@ static transcribe_status run_one_shot_inner(
     int                       n_samples,
     const transcribe_run_params * params)
 {
-    // Pre-run abort check. Parakeet is non-chunked today; this is the
-    // single observation point. A caller that wants to veto a run
-    // without paying encoder cost flips the callback's state and the
-    // next transcribe_run short-circuits here.
+    // Pre-run abort check (the single observation point on this path).
     if (pc->poll_abort()) {
         return TRANSCRIBE_ERR_ABORTED;
     }
 
-    // Initialize the debug dumper from TRANSCRIBE_DUMP_DIR. Idempotent
-    // — only the first call has effect.
     transcribe::debug::init();
 
-    // ----- Mel front-end -------------------------------------------
-    //
-    // The MelFrontend was constructed once at load() time and lives
-    // on the model. compute() is documented thread-safe across
-    // contexts since the instance is const-after-construction.
+    // ----- Mel front-end -----
     if (!pm->mel.has_value()) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
                      "parakeet run: model has no MelFrontend (load skipped?)");
@@ -1262,29 +977,19 @@ static transcribe_status run_one_shot_inner(
     }
     pc->t_mel_us = ggml_time_us() - t_mel_start;
 
-    // ----- Reset per-call compute state ----------------------------
-    //
-    // Free the previous run's compute_ctx (tensor metadata + cgraph).
-    // The gallocr persists across calls — it reuses its internal
-    // buffer when the graph topology is unchanged (same audio length)
-    // and reallocates automatically on topology change. The
-    // encoder_out borrowed pointer is invalidated here.
+    // ----- Reset per-call compute state -----
+    // Free the previous run's compute_ctx; encoder_out is invalidated.
     if (pc->compute_ctx != nullptr) {
         ggml_free(pc->compute_ctx);
         pc->compute_ctx = nullptr;
     }
     pc->encoder_out = nullptr;
 
-    // ----- Build the compute context + encoder graph ---------------
+    // ----- Build the compute context + encoder graph -----
     //
-    // The compute context only holds tensor metadata + the cgraph;
-    // tensor data is allocated separately by
-    // ggml_backend_alloc_ctx_tensors below. The full 24-block
-    // encoder graph has ~2200 tensors plus an 8192-slot cgraph
-    // (see encoder.cpp's ggml_new_graph_custom call). Empirically
-    // this uses ~1.23 MB of metadata arena (logged once during
-    // step 5 polish). 4 MB gives ~3x headroom for future per-block
-    // op additions (BN fold, gallocr metadata, etc.).
+    // compute_ctx holds tensor metadata + the cgraph (data is allocated
+    // by the scheduler below). The 24-block encoder graph uses ~1.23 MB
+    // of metadata arena; 4 MB gives ~3x headroom.
     {
         ggml_init_params init_params {};
         init_params.mem_size   = 4 * 1024 * 1024;
@@ -1298,9 +1003,8 @@ static transcribe_status run_one_shot_inner(
         }
     }
 
-    // Resolve kv_type from the public enum to ggml_type.
-    // GGML_TYPE_COUNT is the sentinel for "auto" inside the encoder.
-    ggml_type resolved_kv = GGML_TYPE_COUNT; // auto
+    // GGML_TYPE_COUNT is the encoder's "auto" sentinel.
+    ggml_type resolved_kv = GGML_TYPE_COUNT;
     if (pc->kv_type == TRANSCRIBE_KV_TYPE_F32) resolved_kv = GGML_TYPE_F32;
     if (pc->kv_type == TRANSCRIBE_KV_TYPE_F16) resolved_kv = GGML_TYPE_F16;
 
@@ -1308,16 +1012,11 @@ static transcribe_status run_one_shot_inner(
         pc->compute_ctx, pm->weights, pm->hparams, mel_n_frames,
         resolved_kv, pm->backend.c_str());
     if (eb.mel_in == nullptr || eb.out == nullptr || eb.graph == nullptr) {
-        // build_encoder_graph already logged the diagnostic.
-        return TRANSCRIBE_ERR_GGUF;
+        return TRANSCRIBE_ERR_GGUF; // build_encoder_graph logged
     }
 
-    // ----- Allocate compute tensors via scheduler --------------------
-    //
-    // The multi-backend scheduler dispatches ops to the best backend
-    // (GPU for matmuls if available, BLAS for CPU matmuls, CPU for
-    // the rest). It also manages compute buffer allocation with
-    // live-range packing. Created lazily, persists across calls.
+    // ----- Allocate compute tensors via the multi-backend scheduler.
+    // Created lazily, persists across calls. -----
     if (pc->sched == nullptr) {
         pc->sched = ggml_backend_sched_new(
             pm->plan.scheduler_list.data(), nullptr,
@@ -1336,25 +1035,17 @@ static transcribe_status run_one_shot_inner(
         return TRANSCRIBE_ERR_GGUF;
     }
 
-    // Upload the mel into the input tensor. The C++ MelFrontend
-    // produces a row-major [num_mels, n_frames] buffer, which is
-    // byte-identical to the ggml ne=[n_frames, num_mels, 1, 1]
-    // layout the encoder builder created (see encoder.cpp's layout
-    // cheat sheet for the derivation).
+    // Upload the mel; the row-major [num_mels, n_frames] buffer is
+    // byte-identical to the ggml ne=[n_frames, num_mels, 1, 1] input.
     ggml_backend_tensor_set(eb.mel_in, pc->mel_buf.data(),
                             0, pc->mel_buf.size() * sizeof(float));
 
-    // Optional dump of the mel input for the numerical accuracy
-    // harness. Gated on TRANSCRIBE_DUMP_DIR; zero-cost when unset.
     transcribe::debug::dump_tensor(
         "enc.mel.in", eb.mel_in, "encoder.mel");
 
-    // Prompt one-hot input (multilingual variants only). The graph
-    // builder allocates `prompt_one_hot_in` of shape
-    // [num_prompts, T_enc, 1, 1] when hp.has_prompt is true; the
-    // host fills it with the resolved language's one-hot replicated
-    // across T_enc frames. See resolve_prompt_id for the language
-    // string → index lookup.
+    // Prompt one-hot input (multilingual variants only): fill
+    // prompt_one_hot_in with the resolved language's one-hot replicated
+    // across T_enc frames (see resolve_prompt_id).
     if (eb.prompt_one_hot_in != nullptr) {
         const int P     = static_cast<int>(eb.prompt_one_hot_in->ne[0]);
         const int T_oh  = static_cast<int>(eb.prompt_one_hot_in->ne[1]);
@@ -1383,35 +1074,21 @@ static transcribe_status run_one_shot_inner(
                                 0, one_hot_buf.size() * sizeof(float));
     }
 
-    // ----- Host-side sinusoidal positional embedding ---------------
+    // ----- Host-side sinusoidal positional embedding -----
     //
-    // Sub-stage 3c+: the attention sub-block needs a precomputed
-    // sin/cos pos_emb input tensor. The encoder graph builder
-    // allocated `eb.pos_emb_in` with ne=[d_model, pos_len, 1, 1]
-    // (after it learned T_enc from pre_encode); we fill it here.
-    //
-    // Full attention (att_context_left == -1):
-    //   positions[i] = (T_enc - 1) - i  for i in [0, 2*T_enc-1)
-    // Local attention (NeMo LocalAttRelPositionalEncoding):
-    //   positions[i] = W_left - i      for i in [0, W_left+W_right+1)
-    // In both cases the per-row sinusoid is identical:
+    // Fill eb.pos_emb_in (ne=[d_model, pos_len, 1, 1]). Positions:
+    //   full attention: positions[i] = (T_enc - 1) - i, i in [0, 2T-1)
+    //   local attention: positions[i] = W_left - i, i in [0, W_left+W_right+1)
+    // Per-row sinusoid (identical in both):
     //   div_term[k]  = exp(2k * -ln(10000) / d_model)
     //   pe[i, 2k]    = sin(positions[i] * div_term[k])
     //   pe[i, 2k+1]  = cos(positions[i] * div_term[k])
-    //
-    // The on-disk row-major shape is (pos_len, d_model). In ggml ne
-    // (fast-to-slow) that's [d_model, pos_len, 1, 1] which the
-    // encoder builder created.
     if (eb.pos_emb_in != nullptr) {
         const int d_model = pm->hparams.enc_d_model;
         const int pos_len = static_cast<int>(eb.pos_emb_in->ne[1]);
 
-        // Recover the position of "relative offset 0" inside the buffer.
-        // - Full attention / chunked_limited streaming: pos_len = 2*T_enc - 1,
-        //   zero index = T_enc - 1 (= (pos_len-1)/2).
-        // - Regular local attention: pos_len = W_left + W_right + 1,
-        //   zero index = W_left. Only applies to the Regular style — the
-        //   ChunkedLimited path always uses the full RelPositionalEncoding.
+        // Position of "relative offset 0" in the buffer: (pos_len-1)/2 for
+        // full / chunked_limited; W_left for Regular local attention.
         const bool is_chunked =
             (pm->hparams.enc_att_context_style ==
                  ParakeetHParams::AttContextStyle::ChunkedLimited);
@@ -1425,7 +1102,6 @@ static transcribe_status run_one_shot_inner(
 
         pc->pos_buf.assign(static_cast<size_t>(pos_len) * d_model, 0.0f);
 
-        // div_term[k] = exp(2k * -ln(10000) / d_model) for k in [0, d_model/2)
         pc->pos_div_term.resize(static_cast<size_t>(d_model / 2));
         const float ln_10000 = std::log(10000.0f);
         for (int k = 0; k < d_model / 2; ++k) {
@@ -1451,13 +1127,10 @@ static transcribe_status run_one_shot_inner(
             "enc.pos_emb", eb.pos_emb_in, "encoder.pos_emb");
     }
 
-    // ChunkedLimited attention mask (streaming variants). pos_emb above
-    // stays at the full 2T-1 length and rel_pos contributes its usual
-    // (q-k) bias; this mask adds 0 on (q, k) pairs whose chunk indices
-    // are in [q_chunk - left_chunks, q_chunk] and -INF elsewhere, so
-    // softmax zeroes everything outside the cache-aware band. NeMo
-    // semantics: chunk_size = att_context_right + 1, left_chunks =
-    // att_context_left / chunk_size.
+    // ChunkedLimited attention mask (streaming variants): 0 on (q, k)
+    // pairs whose chunk indices are in [q_chunk - left_chunks, q_chunk],
+    // -INF outside. NeMo: chunk_size = att_context_right + 1,
+    // left_chunks = att_context_left / chunk_size.
     if (eb.chunked_mask_in != nullptr) {
         const int T_enc       = static_cast<int>(eb.chunked_mask_in->ne[0]);
         const int chunk_size  = pm->hparams.enc_att_context_right + 1;
@@ -1492,14 +1165,10 @@ static transcribe_status run_one_shot_inner(
             "encoder.attn.chunked_mask");
     }
 
-    // ----- Set thread count on all backends --------------------------
-    //
-    // Whisper.cpp pattern: iterate the scheduler's backends and set
-    // n_threads via the registry proc address. GPU backends ignore
-    // this; CPU and BLAS backends use it.
+    // Set n_threads on the CPU/BLAS backends (GPU backends ignore it).
     transcribe::configure_sched_n_threads(pc->sched, pc->n_threads);
 
-    // ----- Compute --------------------------------------------------
+    // ----- Compute -----
     const int64_t t_enc_start = ggml_time_us();
     if (const ggml_status gs =
             ggml_backend_sched_graph_compute(pc->sched, eb.graph);
@@ -1513,12 +1182,7 @@ static transcribe_status run_one_shot_inner(
     pc->t_encode_us = ggml_time_us() - t_enc_start;
     pc->t_decode_us = 0;
 
-    // ----- Dump intermediates (debug only) -------------------------
-    //
-    // Gated on TRANSCRIBE_DUMP_DIR via transcribe::debug::dump_tensor;
-    // when the env var is unset these are zero-cost. Each field on
-    // EncoderDumps is a borrowed pointer into the compute_ctx;
-    // nullptr fields mean "this sub-stage isn't wired yet".
+    // ----- Dump intermediates (debug only; nullptr fields skipped) -----
     auto try_dump = [](const char * name, ggml_tensor * t,
                        const char * stage)
     {
@@ -1532,12 +1196,9 @@ static transcribe_status run_one_shot_inner(
     try_dump("enc.block.0.conv",     eb.dumps.block0_after_conv,"encoder.block0.conv");
     try_dump("enc.block.0.ff2",      eb.dumps.block0_after_ff2, "encoder.block0.ff2");
     try_dump("enc.block.0.out",      eb.dumps.block0_out,       "encoder.block0.out");
-    // Mid- and last-block spot-check dumps. File name encodes the
-    // actual block index (scales with n_layers): 0/12/23 for 24-layer,
-    // 0/21/41 for 42-layer, 0/8/16 for 17-layer. last_block_out
-    // aliases final_out (same ggml pointer); we dump it under the
-    // per-variant block name AND under "enc.final" so both validation
-    // entries find data.
+    // Mid- and last-block spot-check dumps. File name encodes the actual
+    // block index (scales with n_layers). last_block_out aliases
+    // final_out; dumped under both its block name and "enc.final".
     if (eb.dumps.mid_block_out != nullptr && eb.dumps.mid_block_idx >= 0) {
         char name[64];
         std::snprintf(name, sizeof(name), "enc.block.%d.out", eb.dumps.mid_block_idx);
@@ -1550,13 +1211,8 @@ static transcribe_status run_one_shot_inner(
         transcribe::debug::dump_tensor(name, eb.dumps.last_block_out,
                                        "encoder.block.last.out");
     }
-    // Per-block dump for the layer-by-layer divergence bisect (gated
-    // by TRANSCRIBE_DUMP_ALL_BLOCKS env var; mark_tensor_for_dump was
-    // applied per-block in encoder.cpp's loop, so the data is
-    // preserved across the scheduler's compute. The block 0 / mid /
-    // last names are still emitted above; this just adds the
-    // remaining blocks under "enc.block.<i>.out" so they collide
-    // (overwrite) consistently with the named dumps.
+    // Per-block dump for the layer-by-layer divergence bisect (gated by
+    // TRANSCRIBE_DUMP_ALL_BLOCKS).
     if (std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr) {
         for (size_t i = 0; i < eb.dumps.all_block_outs.size(); ++i) {
             ggml_tensor * t = eb.dumps.all_block_outs[i];
@@ -1567,10 +1223,8 @@ static transcribe_status run_one_shot_inner(
                                            "encoder.block.bisect");
         }
     }
-    // Sub-block intermediates for blocks listed in
-    // TRANSCRIBE_DUMP_SUB_BLOCKS. Each entry was populated by the
-    // sub-block observer (see encoder.cpp) at graph-build time and
-    // passed through the scheduler intact via mark_tensor_for_dump.
+    // Sub-block intermediates for TRANSCRIBE_DUMP_SUB_BLOCKS (populated
+    // by the sub-block observer in encoder.cpp).
     for (const auto & p : eb.dumps.sub_block_dumps) {
         if (p.second == nullptr) continue;
         transcribe::debug::dump_tensor(p.first.c_str(), p.second,
@@ -1579,24 +1233,15 @@ static transcribe_status run_one_shot_inner(
     try_dump("enc.final",            eb.dumps.final_out,        "encoder.final");
     try_dump("enc.prompted",         eb.dumps.prompted_out,     "encoder.prompted");
 
-    // Stash the encoder output for the accuracy test (it reaches in
-    // via the ParakeetSession view) and as a borrowed reference for
-    // the readback below.
     pc->encoder_out = eb.out;
 
-    // ----- TDT decode --------------------------------------------
+    // ----- TDT decode -----
     //
-    // Read the encoder output to host, run the decoder, then build
-    // the result hierarchy (segments / words / tokens / full text)
-    // for the public accessors. The encoder activation has ne=
-    // [d_enc, T_enc, 1, 1] in fast-to-slow ggml order, so the
-    // contiguous byte range is row-major [T_enc, d_enc] from the
-    // host's POV — exactly what decode_tdt_greedy expects.
-    //
-    // The result snapshot has already been cleared by the caller
-    // (public run() at its entry, or the streaming dispatcher at
-    // stream_begin). Re-clearing here would also reset the audio
-    // cursors stream_finalize is about to commit, so it stays out.
+    // Read the encoder output to host, decode, build the result
+    // hierarchy. The activation ne=[d_enc, T_enc, 1, 1] is row-major
+    // [T_enc, d_enc] from the host's POV — what the decoder expects. The
+    // caller cleared the result snapshot; re-clearing here would reset
+    // the cursors stream_finalize is about to commit.
     const int d_enc = static_cast<int>(eb.out->ne[0]);
     const int T_enc = static_cast<int>(eb.out->ne[1]);
     if (d_enc <= 0 || T_enc <= 0) {
@@ -1610,13 +1255,9 @@ static transcribe_status run_one_shot_inner(
     ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
                             pc->enc_host.size() * sizeof(float));
 
-    // For prompt-conditioned models the pre-prompt encoder output is
-    // a distinct buffer from `eb.out` (which is the post-prompt
-    // tensor the decoder consumes). The reference dumper labels the
-    // pre-prompt tensor "dec.enc_out" and the post-prompt tensor
-    // "dec.enc_out_prompted"; read both back so the validate.py
-    // compare names match. decode_and_populate handles the prompted
-    // dump via the override below.
+    // Prompt-conditioned models: eb.out is the post-prompt tensor
+    // ("dec.enc_out_prompted"); also read back the pre-prompt final_out
+    // as "dec.enc_out" so both reference dump names match.
     if (pm->hparams.has_prompt && eb.dumps.final_out != nullptr &&
         transcribe::debug::enabled())
     {
@@ -1638,23 +1279,17 @@ static transcribe_status run_one_shot_inner(
 }
 
 // One-shot entry point. Validates session/pm, clears the previous result
-// snapshot, then forwards to the shared inference helper. The
-// streaming hooks reuse the same helper so a finalize on the
-// accumulated buffer produces identical results to a direct run() of
-// the same audio.
+// snapshot, then forwards to the shared inference helper (also reused by
+// the streaming hooks).
 transcribe_status run(
     transcribe_session *      session,
     const float *             pcm,
     int                       n_samples,
     const transcribe_run_params * params)
 {
-    // The dispatcher (transcribe.cpp) has already enum-range
-    // validated params->task / params->timestamps, rejected
-    // TRANSLATE against this family's supports_translate=false, and
-    // rejected any timestamp request finer than our advertised
-    // max_timestamp_kind=TOKEN. What arrives here is guaranteed
-    // sane — we only need to resolve AUTO and downcast finer-grained
-    // output to the requested ceiling when the result is built.
+    // The dispatcher has already enum-validated params and rejected
+    // TRANSLATE / sub-TOKEN timestamps; we only resolve AUTO and downcast
+    // when the result is built.
     if (session == nullptr || pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -1673,24 +1308,13 @@ transcribe_status run(
 // Offline batch (transcribe_run_batch)
 // ---------------------------------------------------------------------------
 //
-// Batches B same-length utterances through ONE encoder graph (n_batch == B,
-// the batch riding the activation's ne[2] axis — see the conformer helpers)
-// in a single device dispatch, then host-decodes each utterance's encoder
-// slice. The mel front-end, decoder, and result-build are identical to the
-// single-shot path; only the encoder is fused. Utterances of differing
-// length fall back to the per-utterance path (variable-length batching pads
-// + masks the overhang — a separate change). Either way every utterance's
-// result is captured into session->batch_results in order.
-
-// Build + compute the batched encoder for `n` utterances, then decode each
-// into session->batch_results. Every entry of `mels` is the raw mel-major
-// [n_mels, nf[b]] buffer; this packs them into a [T_max, n_mels, 1, n] graph
-// input, zero-padding each along time to the batch's T_max. When utterances
-// differ in length it also builds + fills the variable-length masks (attn
-// key-padding + conv valid-frame) so each utterance's padded tail cannot
-// corrupt its real frames, and decodes each at its own T_enc. Same-length
-// batches (every nf == T_max) skip the masks and are bit-identical to
-// single-shot.
+// Batches B utterances through ONE encoder graph (batch on the
+// activation's ne[2]) in a single device dispatch, then host-decodes each
+// slice; mel / decode / result-build are identical to single-shot. Mels
+// pack into [T_max, n_mels, 1, n], zero-padded to T_max. Variable-length
+// batches build attn key-padding + conv valid-frame masks so a padded
+// tail can't corrupt real frames and decode each at its own T_enc;
+// same-length batches skip the masks and are bit-identical to single-shot.
 static int pre_encode_t_out(int in) {
     // One stride-2, kernel-3, pad-1 conv: floor((in + 2 - 3)/2) + 1.
     return (in - 1) / 2 + 1;
@@ -1835,10 +1459,9 @@ static transcribe_status run_batch_encode(
                                 0, pc->pos_buf.size() * sizeof(float));
     }
 
-    // Prompt one-hot upload (multilingual variants). Resolves params->language
-    // ONCE for the whole batch (the public ABI doesn't expose a per-utterance
-    // language array yet — every utterance in a batched call shares the same
-    // language hint) and replicates the one-hot across all (T_enc, B) slots.
+    // Prompt one-hot upload (multilingual variants). Resolves
+    // params->language once for the whole batch (no per-utterance language
+    // array in the ABI) and replicates across all (T_enc, B) slots.
     if (eb.prompt_one_hot_in != nullptr) {
         const int P    = static_cast<int>(eb.prompt_one_hot_in->ne[0]);
         const int T_oh = static_cast<int>(eb.prompt_one_hot_in->ne[1]);
@@ -1866,12 +1489,9 @@ static transcribe_status run_batch_encode(
                                 0, one_hot_buf.size() * sizeof(float));
     }
 
-    // ChunkedLimited attention mask (cache-aware variants). Allocated by
-    // build_encoder_graph when the model declares chunked attention; the
-    // single-shot path fills it and the batched path must too (otherwise the
-    // input is uninitialized and corrupts every attention score). The pattern
-    // depends only on T_enc, which the whole batch shares, so one mask
-    // broadcasts across the batch. Mirrors run_one_shot_inner.
+    // ChunkedLimited attention mask (cache-aware variants), same as
+    // run_one_shot_inner. The pattern depends only on T_enc, shared
+    // across the batch, so one mask broadcasts.
     if (eb.chunked_mask_in != nullptr) {
         const int Tk          = static_cast<int>(eb.chunked_mask_in->ne[0]);
         const int chunk_size  = pm->hparams.enc_att_context_right + 1;
@@ -1932,11 +1552,9 @@ static transcribe_status run_batch_encode(
     ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
                             pc->enc_host.size() * sizeof(float));
 
-    // Prompt-conditioned variants: eb.out is the POST-prompt tensor (what
-    // the decoder consumes); the single-shot path dumps the PRE-prompt
-    // tensor as "dec.enc_out" and the POST-prompt as "dec.enc_out_prompted"
-    // so the comparator sees both under their reference names. Mirror that
-    // in the batched path with per-utterance .b{i} suffixes.
+    // Prompt-conditioned variants: dump the PRE-prompt final_out per
+    // utterance as "dec.enc_out.b{i}" (the post-prompt eb.out is dumped
+    // via decode_and_populate's override). Mirrors single-shot.
     const bool has_prompt = pm->hparams.has_prompt &&
                             eb.dumps.final_out != nullptr;
     std::vector<float> unprompted_host;
@@ -1959,10 +1577,9 @@ static transcribe_status run_batch_encode(
     const char * enc_dump_name =
         has_prompt ? "dec.enc_out_prompted" : nullptr;
 
-    // Host-slice the shared encoder output and decode each utterance. The
-    // encoder is ONE shared dispatch, so decode_batch_slices amortizes its
-    // total compute + the total mel cost across the batch (the per-utt sum then
-    // equals the real batch time); decode is genuinely per-utterance.
+    // Host-slice the shared encoder output and decode each utterance.
+    // decode_batch_slices amortizes the one shared encoder + total mel
+    // cost across the batch; decode is genuinely per-utterance.
     return transcribe::decode_batch_slices(
         pc, n, pc->enc_host.data(), utt_elems, pc->t_encode_us, total_mel_us,
         [&](int b, const float * enc_b) {
@@ -1989,15 +1606,10 @@ transcribe_status run_batch(
     }
     transcribe::debug::init();
 
-    // Compute each utterance's mel. A malformed utterance (null pcm /
-    // non-positive samples / mel failure) means we cannot pack a clean batch
-    // tensor, so we fall back to the per-utterance path for the whole call
-    // (rare; keeps the batch tensor rectangular and the masks well-defined).
-    // The mel front-end is pure host code with no cross-utterance state, so
-    // the B extractions run in parallel across CPU workers (see
-    // transcribe::parallel_for_all) — frequently the dominant wall cost once
-    // the encoder is on a fast accelerator. n_mels is constant across
-    // utterances; collect it per-index to avoid a shared write.
+    // Compute each utterance's mel in parallel (pure host, no
+    // cross-utterance state). A malformed utterance falls the whole call
+    // back to the per-utterance path (keeps the batch tensor rectangular).
+    // n_mels collected per-index to avoid a shared write.
     std::vector<std::vector<float>> mels(static_cast<size_t>(n));
     std::vector<int>                nf(static_cast<size_t>(n), 0);
     std::vector<int>                n_mels_per(static_cast<size_t>(n), 0);
@@ -2044,25 +1656,14 @@ transcribe_status run_batch(
 }
 
 // ---------------------------------------------------------------------------
-// Streaming hooks (Phase 4a: stream-of-whole)
+// Streaming hooks
 // ---------------------------------------------------------------------------
 //
-// Phase 4a buffers the entire stream in stream_pcm_buffer and runs
-// the existing one-shot inference path at finalize. This makes the
-// streaming API observable end-to-end and trivially parity-equivalent
-// to transcribe_run on the same audio. Real incremental encoder /
-// RNNT-predictor streaming via NeMo's cache_last_channel /
-// cache_last_time tensors is Phase 4b.
-//
-// Only cache-aware streaming variants (ChunkedLimited attention) take
-// this path; offline parakeet variants never reach the hook because
-// load() leaves caps.supports_streaming = false for them and the
-// streaming dispatcher rejects begin with NOT_IMPLEMENTED. The defensive
-// gate in stream_begin below is defense in depth.
-//
-// The dispatcher handles the IDLE/ACTIVE/FINISHED/FAILED lifecycle
-// and the result-snapshot counters (revision, committed counts, audio
-// cursors). Family hooks own the per-utterance audio scratch.
+// Only streaming variants reach these hooks (load() leaves
+// supports_streaming = false otherwise; the gate in stream_begin is
+// defense in depth). The dispatcher handles the lifecycle and the
+// result-snapshot counters; the family hooks own the per-utterance audio
+// scratch.
 
 constexpr int64_t k_sample_rate_hz = 16000;
 
@@ -2075,34 +1676,17 @@ static int64_t us_to_ms(int64_t us) {
 }
 
 // ---------------------------------------------------------------------------
-// M2 streaming-encoder helpers
+// Streaming-encoder helpers
 // ---------------------------------------------------------------------------
-
-// Per-chunk shape constants for nemotron-speech-streaming-en-0.6b
-// (att_context_size=[70,13], subsampling_factor=8). These match NeMo's
-// Streaming chunk geometry now lives on ParakeetStreamingCaches and is
-// resolved per stream from ParakeetHParams + the caller-selected
-// att_context_right. The values used here in stream_feed /
-// emit_streaming_chunk are pc->stream_caches.{mel_chunk_total,
-// mel_new_per_chunk, drop_extra_pre_encoded}; pm->hparams.
-// enc_stream_pre_encode_cache_size is used directly for the
-// history-frame count (= mel_chunk_total - mel_new_per_chunk).
 //
-// Simplification vs NeMo (M2): we always use the "subsequent" mode
-// (with history-frame mel prepend) for every chunk including the
-// first; the first chunk's history is zero-initialized at
-// stream_begin. The downside is a few frames of output are wasted at
-// the start; the upside is uniform driver logic. Phase B will fix
-// the first-chunk semantics to match NeMo's chunk_size[0] /
-// pre_encode_cache_size[0] = 0.
+// Chunk geometry lives on ParakeetStreamingCaches, resolved per stream
+// from ParakeetHParams + the caller-selected att_context_right.
 
-// Fill the sinusoidal pos_emb buffer for a streaming chunk. Layout is
-// identical to the offline ChunkedLimited path (RelPositionalEncoding):
-// pos_len = 2*T_virtual - 1; positions[i] = (T_virtual - 1) - i; per-row
-// sinusoid uses div_term[k] = exp(2k * -ln(10000) / d_model).
-// `pos_emb_in` shape: ne=[d_model, pos_len, 1, 1] f32 (the encoder
-// graph builder allocated it). Side-effect: pc->pos_buf and
-// pc->pos_div_term are resized in place.
+// Fill the sinusoidal pos_emb buffer for a streaming chunk. Same layout
+// as the offline ChunkedLimited path: pos_len = 2*T_virtual - 1,
+// positions[i] = (T_virtual - 1) - i, div_term[k] = exp(2k * -ln(10000)
+// / d_model). pos_emb_in is ne=[d_model, pos_len, 1, 1] f32. Resizes
+// pc->pos_buf / pc->pos_div_term in place.
 void fill_streaming_pos_emb(ParakeetSession * pc,
                             ggml_tensor *     pos_emb_in,
                             int               d_model,
@@ -2178,13 +1762,10 @@ void fill_streaming_chunked_mask(ggml_tensor * mask_in,
 }
 
 // Rebuild the per-layer rel-pos projection cache for `pos_len` (see
-// ParakeetStreamingCaches::pos_proj). Runs a small one-off graph —
-// n_layers mul_mats of [d_model, d_model] x [d_model, pos_len] plus
-// layout massaging — through the session scheduler, reading the pos_emb
-// values from pc->pos_buf (filled by fill_streaming_pos_emb earlier in
-// the same chunk). Called only on a geometry change: in practice twice
-// per stream session (first-chunk geometry, then steady state) and
-// never again, since the cache is geometry-keyed, not stream-keyed.
+// ParakeetStreamingCaches::pos_proj). Runs a one-off graph (n_layers
+// mul_mats + layout massaging) through the session scheduler, reading
+// pos_emb from pc->pos_buf. Called only on a geometry change — twice per
+// stream in practice (first-chunk, then steady state).
 transcribe_status ensure_pos_proj_cache(ParakeetSession * pc,
                                         ParakeetModel *   pm,
                                         int               pos_len)
@@ -2284,9 +1865,8 @@ transcribe_status ensure_pos_proj_cache(ParakeetSession * pc,
 
 } // namespace
 
-// Already inside namespace transcribe::parakeet { ... }. The function is
-// declared in parakeet.h so external callers (unit tests, the buffered
-// streaming driver) can link against it.
+// Declared in parakeet.h (non-anonymous) so unit tests and the buffered
+// driver can link against it.
 void compute_chunked_limited_with_rc_mask(
     float * out_buf,
     int     T,
@@ -2333,25 +1913,15 @@ namespace {
 
 // Build, run, and post-process a single streaming encoder chunk.
 //
-// Inputs:
-//   pc, pm                      context + model
-//   mel_chunk_data              row-major [n_mels, n_mel_chunk_frames]
-//                               f32 (matches ggml ne=[n_mel_chunk_frames,
-//                               n_mels, 1, 1] for upload).
-//   n_mel_chunk_frames          mel frames in this chunk (e.g. 121 for
-//                               nemotron subsequent chunks = 9 cache +
-//                               112 new; 105 for first chunk = no
-//                               cache prepend).
-//   drop_extra_pre_encoded      0 for first chunk, 2 for subsequent on
-//                               nemotron-streaming.
-//   mel_frames_advance          how many mel frames this chunk consumes
-//                               from the input buffer (chunk_size_first
-//                               or chunk_size_subsequent). NOT the same
-//                               as n_mel_chunk_frames when a pre-encode
-//                               cache prepend is in play.
-//
-// On success, appends new TdtTokens to pc->raw_tokens and advances
-// the persistent cache + decoder state.
+//   mel_chunk_data         row-major [n_mels, n_mel_chunk_frames] f32.
+//   n_mel_chunk_frames     mel frames in this chunk (history prepend +
+//                          new).
+//   drop_extra_pre_encoded 0 for first chunk, else drop_extra_subsequent.
+//   mel_frames_advance     mel frames this chunk consumes from the input
+//                          (NOT n_mel_chunk_frames when a cache prepend
+//                          is in play).
+// On success, appends TdtTokens to pc->raw_tokens and advances the cache
+// + decoder state.
 transcribe_status emit_streaming_chunk(
     ParakeetSession * pc,
     ParakeetModel *   pm,
@@ -2367,14 +1937,13 @@ transcribe_status emit_streaming_chunk(
     if (pc->kv_type == TRANSCRIBE_KV_TYPE_F32) resolved_kv = GGML_TYPE_F32;
     if (pc->kv_type == TRANSCRIBE_KV_TYPE_F16) resolved_kv = GGML_TYPE_F16;
 
-    // Tear down any previous compute_ctx (one per chunk; matches the
-    // offline run() lifecycle and keeps scratch bounded).
+    // One compute_ctx per chunk (matches the offline run() lifecycle).
     if (pc->compute_ctx != nullptr) {
         ggml_free(pc->compute_ctx);
         pc->compute_ctx = nullptr;
     }
     ggml_init_params ip {};
-    ip.mem_size   = 16 * 1024 * 1024;  // 16 MB; same as offline run path
+    ip.mem_size   = 16 * 1024 * 1024;
     ip.mem_buffer = nullptr;
     ip.no_alloc   = true;
     pc->compute_ctx = ggml_init(ip);
@@ -2465,35 +2034,25 @@ transcribe_status emit_streaming_chunk(
     const int T_cache   = hp.enc_att_context_left;
     const int T_q_new   = T_virtual - T_cache;
 
-    // Build & upload pos_emb. The zero-offset row sits at T_virtual - 1
-    // in both the square (pos_len = 2*T_virtual-1) and the query-sliced
-    // rectangular (pos_len = T_virtual + T_q_new - 1) geometries. Null
-    // when every block consumes the memoized rel-pos projection — the
-    // graph then carries no pos_emb input at all.
+    // Build & upload pos_emb. The zero-offset row sits at T_virtual - 1.
+    // Null when every block consumes the memoized rel-pos projection.
     if (eb.pos_emb_in != nullptr) {
         fill_streaming_pos_emb(pc, eb.pos_emb_in, hp.enc_d_model,
                                /*zero_index=*/T_virtual - 1);
     }
 
-    // Build & upload chunked mask with cache-unfilled prefix masking.
-    // The mask band is a function of the (att_context_left, att_context_right)
-    // RESOLVED for this stream from the caller's latency selection, not the
-    // model-default hparams. They coincide today (left is invariant across
-    // the menu, and the per-chunk geometry derived from chosen_right keeps
-    // the default-R chunking accidentally equivalent on the new-frame rows),
-    // but reading the resolved values makes the mask correct by construction
-    // for any future variant whose menu breaks those invariants.
+    // Build & upload the chunked mask with cache-unfilled prefix masking.
+    // The band uses the (left, right) RESOLVED for this stream, not the
+    // model-default hparams (correct by construction even if a future
+    // variant's menu breaks today's coincidence).
     fill_streaming_chunked_mask(
         eb.chunked_mask_in, T_virtual, T_cache,
         pc->stream_caches.channel_len,
         pc->stream_caches.att_context_left,
         pc->stream_caches.att_context_right);
 
-    // Prompt one-hot upload (multilingual variants only). Same shape
-    // contract as the offline path: [num_prompts, T_q_new, 1, 1] holds
-    // a single one-hot column at the resolved language's index,
-    // replicated across T_q_new. The streaming language hint lives in
-    // pc->stream_run_params (captured at stream_begin).
+    // Prompt one-hot upload (multilingual variants only). Same shape as
+    // the offline path; the language hint lives in pc->stream_run_params.
     if (eb.prompt_one_hot_in != nullptr) {
         const int P    = static_cast<int>(eb.prompt_one_hot_in->ne[0]);
         const int T_oh = static_cast<int>(eb.prompt_one_hot_in->ne[1]);
@@ -2541,19 +2100,14 @@ transcribe_status emit_streaming_chunk(
     ggml_backend_tensor_get(eb.out, pc->enc_host.data(), 0,
                             pc->enc_host.size() * sizeof(float));
 
-    // Dump enc_out + cache_out (snapshot of outputs from this chunk).
-    // Done BEFORE the cache rotation so we read the freshly-computed
-    // cache_out tensors. channel_len is dumped post-rotation since
-    // that matches NeMo's "cache_last_channel_len after chunk" return.
+    // Dump enc_out + cache_out, BEFORE the cache rotation so the
+    // cache_out tensors are still the freshly-computed ones.
     if (dump_on) {
         char namebuf[128];
         std::snprintf(namebuf, sizeof(namebuf),
                       "stream.chunk.%d.enc_out", step_num);
-        // Match the Python dumper's to_np() squeeze: when T_q_new == 1
-        // (R=0 at the lowest-latency setting), drop the leading size-1
-        // dim so the on-disk shape becomes [d_enc] not [1, d_enc].
-        // compare_tensors.py treats shape mismatches as failures
-        // regardless of element values.
+        // Match the Python dumper's squeeze: T_q_new == 1 (R=0) drops the
+        // leading size-1 dim so the on-disk shape is [d_enc] not [1, d_enc].
         if (T_q_new == 1) {
             const long long enc_shape[1] = {d_enc};
             transcribe::debug::dump_host_f32(
@@ -2580,16 +2134,11 @@ transcribe_status emit_streaming_chunk(
         }
     }
 
-    // Rotate per-layer caches: cache_out → persistent cache_in. Both
-    // tensors live on the model's primary backend, so a backend-side
-    // copy avoids host roundtripping. The null check is defense in
-    // depth — every supported R produces a fully-allocated cache_out
-    // (the conv_module cache_next logic in conformer/conformer.cpp
-    // covers T_q_new < pad_left explicitly), so reaching this branch
-    // indicates a builder bug.
-    // KV-cache mode rotates last_k/last_v and leaves the channel cache
-    // untouched (the builder set channel_out to null); the recompute
-    // path rotates last_channel. The time (conv) cache rotates in both.
+    // Rotate per-layer caches: cache_out → persistent cache_in
+    // (backend-side copy, no host roundtrip). KV-cache mode rotates
+    // last_k/last_v (channel_out is null); the recompute path rotates
+    // last_channel. The time (conv) cache rotates in both. An unallocated
+    // cache_out here is a builder bug.
     const bool kv_mode = !cache_io.k_out.empty();
     for (int i = 0; i < n_layers; ++i) {
         ggml_tensor * ch = cache_io.channel_out[i];
@@ -2618,13 +2167,10 @@ transcribe_status emit_streaming_chunk(
     pc->stream_caches.channel_len = std::min(
         T_cache, pc->stream_caches.channel_len + T_q_new);
 
-    // Refill the rel-pos projection memo on geometry change, so the next
-    // chunk with this pos_len consumes the cached projections instead of
-    // running the per-layer linear_pos matmuls. Must come after the cache
-    // rotation above: ensure_pos_proj_cache resets the scheduler, which
-    // releases this chunk graph's compute buffers (cache_out lives there).
-    // A failure only loses the memoization — streaming continues on the
-    // inline-compute path — so it logs and degrades.
+    // Refill the rel-pos projection memo on geometry change. Must come
+    // after the cache rotation: ensure_pos_proj_cache resets the
+    // scheduler, releasing this chunk's compute buffers (cache_out lives
+    // there). A failure only loses the memoization, so it logs and degrades.
     if (eb.pos_emb_in != nullptr) {
         const int pos_len_cur = static_cast<int>(eb.pos_emb_in->ne[1]);
         if (pos_len_cur != pc->stream_caches.pos_proj_len) {
@@ -2666,28 +2212,17 @@ transcribe_status emit_streaming_chunk(
     }
 
     pc->stream_dec_state.frame_offset += T_q_new;
-    // Cursor advances by mel_frames_advance (caller computes:
-    // chunk_size_first on the first chunk, chunk_size_subsequent
-    // afterward). This is the same as NeMo's shift_size: it is
-    // INDEPENDENT of the chunk we fed (which may include a
-    // pre-encode-cache prepend).
+    // Cursor advances by mel_frames_advance (NeMo's shift_size),
+    // INDEPENDENT of the fed chunk (which may include a cache prepend).
     pc->stream_caches.mel_frames_consumed += mel_frames_advance;
     return TRANSCRIBE_OK;
 }
 
 // Rebuild the public result vectors (tokens, full_text) from the
-// committed raw_tokens. Simple and idempotent: clears the vectors and
-// re-populates from scratch every call. Segments / words are NOT
-// populated during streaming — those derive from richer logic in the
-// offline run() result builder and are deferred to stream_finalize
-// (or omitted entirely for the first M2 cut).
-//
-// result_kind is TOKEN whenever any tokens are present: each TokenEntry
-// gets real t0_ms / t1_ms from step_at_emit, so the snapshot is honest
-// at token granularity. Words/segments stay empty until finalize, but
-// a caller that asked for WORD or SEGMENT timestamps already passed the
-// max_timestamp_kind gate at begin time (Parakeet advertises TOKEN as
-// its max), so TOKEN here is the strongest honest answer we can give.
+// committed raw_tokens; idempotent. Words/segments are NOT populated
+// during streaming (deferred to finalize). result_kind is TOKEN whenever
+// tokens are present — each gets real t0/t1 from step_at_emit, the
+// strongest honest answer at this granularity.
 void rebuild_streaming_result_text(ParakeetSession * pc,
                                    const ParakeetModel * pm)
 {
@@ -2702,19 +2237,11 @@ void rebuild_streaming_result_text(ParakeetSession * pc,
         return;
     }
 
-    // Frame-to-ms ratio, identical to the offline builder and NeMo's
-    // reference (see parakeet_ms_per_enc_frame): float multiply, rounded once
-    // per token below.
     const double frame_to_ms = parakeet_ms_per_enc_frame(pm->hparams);
 
-    // Strip multilingual <ll-RR> language tags (e.g. the trailing "<en-US>"
-    // / "<zh-CN>" the nemotron-3.5 vocab emits) and other CONTROL pieces
-    // from the public streaming result by default, mirroring the offline
-    // builder (decode_and_populate) so streaming honors the same documented
-    // contract. Gated on the keep_special_tags run param captured at
-    // stream_begin (CLI --raw-tokens). Only the public projection is
-    // filtered: pc->raw_tokens stays whole, so the decoder/commit cursor and
-    // the raw token accessors are unaffected.
+    // Strip CONTROL / <ll-RR> tag pieces from the public result, mirroring
+    // decode_and_populate (gated on keep_special_tags). Only the public
+    // projection is filtered; pc->raw_tokens stays whole.
     const transcribe::Tokenizer & tok = pm->tok;
     const bool strip_tags = !pc->stream_run_params.keep_special_tags;
 
@@ -2745,30 +2272,16 @@ void rebuild_streaming_result_text(ParakeetSession * pc,
     pc->result_kind = TRANSCRIBE_TIMESTAMPS_TOKEN;
 }
 
-// ----- Buffered streaming (parakeet-unified-en-0.6b) -----------------
+// ----- Buffered streaming (parakeet-unified-en-0.6b) -----
 //
-// Mirrors NeMo's `speech_to_text_streaming_infer_rnnt.py` reference at
-// the per-chunk granularity. The variable-stride algorithm:
-//   - Step 0 (initial fill): num_new = samples_chunk + samples_right.
-//   - Steady state: num_new = samples_chunk.
-//   - Final step (from finalize): num_new = remaining audio; the
-//     trailing right context slot is folded into chunk via
-//     `add_frames_get_removed_(is_last=true)`.
-// Per step:
-//   - Update the buffer's internal ContextSize (buf_ctx_*) via the
-//     same accounting NeMo's StreamingBatchedAudioBuffer uses.
-//   - Slice the last session.total() samples from stream_pcm_buffer as
-//     the encoder window.
-//   - Compute mel over the full window.
-//   - Build the encoder graph with a BufferedStreamMaskOverride to
-//     engage the chunked_limited_with_rc attention mask sized for
-//     the expected (L, C, R).
-//   - Slice off the first (ctx_left / samples_per_frame) encoder
-//     frames and decode (ctx_chunk / samples_per_frame) on non-last
-//     or (T_enc_full - ctx_left_frames) on last with greedy RNN-T
-//     plus carried LstmState. Matches the reference's
-//     encoder_context_batch.chunk vs
-//     encoder_output_len - encoder_context_batch.left dispatch.
+// Mirrors NeMo's speech_to_text_streaming_infer_rnnt.py. Variable-stride
+// per step: step 0 num_new = samples_chunk + samples_right; steady state
+// num_new = samples_chunk; the final step (finalize) consumes the rest
+// and folds the right slot into chunk. Each step updates the buffer's
+// ContextSize (buf_ctx_*), slices the encoder window, computes mel,
+// builds the graph with a BufferedStreamMaskOverride, then slices off the
+// ctx_left frames and decodes ctx_chunk (or all remaining on last) with a
+// carried RNN-T LstmState.
 static void buf_ctx_add_frames(
     ParakeetSession * pc, int64_t num_new, bool is_last)
 {
@@ -2831,12 +2344,8 @@ transcribe_status emit_buffered_chunk(
         }
     }
 
-    // ----- Per-chunk dumps (TRANSCRIBE_DUMP_DIR; mirror NeMo names) -----
-    //
-    // Push a `stream.chunk.<N>.` prefix so every dump_tensor inside the
-    // encoder graph builder gets scoped per chunk (otherwise the block
-    // outputs `enc.block.<L>.out` would overwrite across chunks). The
-    // prefix is popped at function exit via the guard below.
+    // Push a `stream.chunk.<N>.` dump prefix so per-chunk block outputs
+    // don't overwrite across chunks; popped at function exit.
     const int chunk_step = pc->buf_chunk_step;
     char chunk_prefix[64];
     std::snprintf(chunk_prefix, sizeof(chunk_prefix),
@@ -2949,13 +2458,9 @@ transcribe_status emit_buffered_chunk(
                                 0, pc->pos_buf.size() * sizeof(float));
     }
 
-    // ----- Conformer conv pad mask -----
-    //
-    // NeMo passes pad_mask into every Conformer conv module and zeros
-    // post-GLU activations where pre_encode emitted padded overhang
-    // frames. The attention mask below already excludes those frames
-    // from MHA; this mask prevents them from leaking backward through
-    // the depthwise conv's right context.
+    // Conv pad mask: zeros post-GLU activations on pre_encode overhang
+    // frames so they don't leak backward through the depthwise conv's
+    // right context (the attention mask already excludes them from MHA).
     if (eb.conv_pad_mask_in != nullptr) {
         const int T_enc =
             static_cast<int>(eb.conv_pad_mask_in->ne[0]);
@@ -2972,19 +2477,11 @@ transcribe_status emit_buffered_chunk(
             "encoder.conv.pad_mask");
     }
 
-    // ----- Chunked_limited_with_rc mask fill -----
-    //
-    // Pad-mask: NeMo's encoder ANDs a conv-overhang pad_mask onto the
-    // chunked mask before MHA — frames past `padding_length` (post
-    // pre-encode) are masked out. The conv subsampling can emit T_enc
-    // > session.total/samples_per_frame when the input doesn't tile the
-    // subsampling stride exactly; without the pad mask, those trailing
-    // frames contaminate every other frame's attention scores. We
-    // mirror NeMo by passing `effective_T = session.total /
-    // samples_per_frame` so the mask compute folds in the pad_mask.
-    // Critical at low-C/low-R configs where one extra frame of
-    // contamination tips many greedy-emission decisions; barely
-    // noticeable at (70,13,13).
+    // Chunked_limited_with_rc mask. effective_T folds in NeMo's
+    // conv-overhang pad_mask: the subsampling can emit T_enc >
+    // session.total/samples_per_frame and those trailing frames would
+    // otherwise contaminate every frame's attention scores (critical at
+    // low-C/low-R).
     if (eb.chunked_mask_in != nullptr) {
         const int T_enc =
             static_cast<int>(eb.chunked_mask_in->ne[0]);
@@ -3018,20 +2515,13 @@ transcribe_status emit_buffered_chunk(
 
     pc->encoder_out = eb.out;
 
-    // Dump cpp's mel input alongside the per-block intermediates so the
-    // ref-vs-cpp bisect can also localize drift to the mel frontend.
     if (transcribe::debug::enabled()) {
         transcribe::debug::dump_tensor("enc.mel.in", eb.mel_in, "encoder.mel");
     }
 
     // ----- Per-chunk intermediate dumps (debug only) -----
-    //
-    // Same set of intermediates the offline path dumps via run(); used
-    // for layer-by-layer divergence bisect against NeMo's per-block
-    // outputs at the streaming geometry. Gated on TRANSCRIBE_DUMP_DIR
-    // and TRANSCRIBE_DUMP_ALL_BLOCKS env vars. The active per-chunk
-    // name prefix (push_name_prefix above) scopes these names to this
-    // chunk's directory: `stream.chunk.<N>.enc.block.<L>.out` etc.
+    // Same set as the offline run() path, scoped by the active per-chunk
+    // name prefix.
     if (transcribe::debug::enabled()) {
         auto try_dump = [](const char * name, ggml_tensor * t,
                            const char * stage) {
@@ -3100,9 +2590,7 @@ transcribe_status emit_buffered_chunk(
     };
 
     if (T_enc_full <= ctx_left_frames) {
-        // Window was too small to produce any chunk-region frames
-        // (e.g. degenerate audio shorter than the left context). Skip
-        // emission for this chunk.
+        // Window too small for any chunk-region frames; skip emission.
         advance_cursor();
         return TRANSCRIBE_OK;
     }
@@ -3122,12 +2610,9 @@ transcribe_status emit_buffered_chunk(
     const float * enc_chunk = pc->enc_host.data() +
         static_cast<size_t>(ctx_left_frames) * static_cast<size_t>(d_enc);
 
-    // Per-chunk encoder output dump. Mirrors NeMo's reference: emit
-    // the FULL post-slice encoder output (chunk + right context),
-    // not just the frames that get decoded this step. The decoder
-    // gates on T_to_decode below; the dump captures the entire
-    // chunk-aligned region so the parity harness can compare both
-    // the decoded and lookahead portions.
+    // Per-chunk encoder output dump: the FULL post-slice output (chunk +
+    // right context), not just the T_to_decode frames, so the parity
+    // harness sees both the decoded and lookahead portions.
     if (transcribe::debug::enabled()) {
         const long long shape[2] = {
             static_cast<long long>(T_chunk_avail),
@@ -3159,11 +2644,9 @@ transcribe_status emit_buffered_chunk(
     return TRANSCRIBE_OK;
 }
 
-// Pure validation of the buffered-stream extension. Resolves (L, C, R)
-// to encoder frames using the same sentinel semantics stream_begin uses
-// to configure the buffered path; emits the same stderr diagnostics on
-// rejection. Does NOT touch pc->buf_*. Output pointers are only written
-// on TRANSCRIBE_OK return.
+// Pure validation of the buffered-stream extension: resolves (L, C, R)
+// to encoder frames. Does NOT touch pc->buf_*; out pointers written only
+// on TRANSCRIBE_OK.
 transcribe_status resolve_buffered_stream_geom(
     const ParakeetModel *             pm,
     const transcribe_stream_params *  stream_params,
@@ -3252,10 +2735,9 @@ transcribe_status resolve_buffered_stream_geom(
     return TRANSCRIBE_OK;
 }
 
-// Pure validation of the cache-aware-stream extension. Resolves the
-// active (att_context_left, att_context_right) for the stream from the
-// model's training menu. Does NOT touch pc->*. Output pointers are only
-// written on TRANSCRIBE_OK return.
+// Pure validation of the cache-aware-stream extension: resolves the
+// active (att_context_left, att_context_right) from the training menu.
+// Does NOT touch pc->*; out pointers written only on TRANSCRIBE_OK.
 transcribe_status resolve_cache_aware_stream_geom(
     const ParakeetModel *             pm,
     const transcribe_stream_params *  stream_params,
@@ -3314,11 +2796,9 @@ transcribe_status resolve_cache_aware_stream_geom(
     return TRANSCRIBE_OK;
 }
 
-// Pre-flight: validate caller-supplied extension fields without mutating
-// session or model state. Called by the dispatcher BEFORE clear_result,
-// so a rejection here leaves the previous utterance's snapshot intact.
-// stream_begin re-runs the same resolvers as defense in depth and uses
-// their parsed outputs to configure per-stream state.
+// Pre-flight: validate caller extension fields without mutating state.
+// Called by the dispatcher before clear_result, so a rejection leaves the
+// previous snapshot intact. stream_begin re-runs the same resolvers.
 transcribe_status stream_validate(
     const transcribe_session *        session,
     const transcribe_run_params *     /*run_params*/,
@@ -3360,15 +2840,10 @@ transcribe_status stream_begin(
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    // Initialize the debug dumper from TRANSCRIBE_DUMP_DIR. Idempotent.
-    // Streaming may run without ever going through run() (the offline
-    // path), so this is needed in addition to the run() callsite.
+    // Streaming may run without going through run(), so init the dumper here.
     transcribe::debug::init();
 
-    // Defense in depth: the dispatcher should have already rejected
-    // begin via the supports_streaming gate for non-streaming variants,
-    // but reject again here in case a future refactor lets a Regular
-    // (offline) variant slip through.
+    // Defense in depth (the dispatcher already gates on supports_streaming).
     const bool is_chunked_limited =
         (pm->hparams.enc_att_context_style ==
              ParakeetHParams::AttContextStyle::ChunkedLimited);
@@ -3381,18 +2856,13 @@ transcribe_status stream_begin(
 
     // -------- Buffered streaming path (parakeet-unified-en-0.6b) --------
     //
-    // The unified model declares chunked_limited_with_rc and ships a
-    // 3-tuple training menu. Buffered streaming re-runs the offline
-    // encoder on a sliding [left | chunk | right] PCM window per chunk;
-    // there's no per-layer cache to maintain. The RNN-T predictor +
-    // joint reuse the existing greedy-streaming decoder so the only
-    // new state is the runtime (L, C, R) geometry and the LSTM carry.
+    // chunked_limited_with_rc with a 3-tuple training menu. Re-runs the
+    // offline encoder on a sliding [left | chunk | right] PCM window per
+    // chunk (no per-layer cache); the only new state is the runtime
+    // (L, C, R) geometry and the LSTM carry.
     if (is_chunked_with_rc) {
-        // Resolve and validate (L, C, R) in encoder frames. The same
-        // helper runs in stream_validate, so the dispatcher has
-        // already rejected bad caller input before clearing the
-        // previous result; the call here is defense in depth and
-        // also produces the parsed values we configure state from.
+        // Resolve (L, C, R) in encoder frames (defense in depth; also
+        // produces the parsed values we configure state from).
         int L_frames = 0, C_frames = 0, R_frames = 0;
         if (const transcribe_status st = resolve_buffered_stream_geom(
                 pm, stream_params, &L_frames, &C_frames, &R_frames);
@@ -3423,9 +2893,7 @@ transcribe_status stream_begin(
         pc->raw_tokens.clear();
         pc->stream_run_params = *run_params;
         reset_streaming_decoder_state(pc, pm);
-        // For buffered streaming the predictor state's frame_offset
-        // starts at 0; we advance it per-chunk by T_to_decode so token
-        // step_at_emit lands in stream-wide encoder-frame coordinates.
+        // frame_offset starts at 0, advanced per-chunk by T_to_decode.
         pc->stream_dec_state.frame_offset = 0;
 
         return TRANSCRIBE_OK;
@@ -3434,10 +2902,8 @@ transcribe_status stream_begin(
     // -------- Cache-aware streaming path (nemotron-speech-streaming) --------
     pc->buf_active = false;
 
-    // Resolve the active (att_context_left, att_context_right) for this
-    // stream. Same helper runs in stream_validate; rerunning here is
-    // defense in depth and also extracts the values we use to configure
-    // the per-stream caches.
+    // Resolve the active (att_context_left, att_context_right) (defense in
+    // depth; also extracts the values we configure the caches from).
     int chosen_left = 0, chosen_right = 0;
     if (const transcribe_status st = resolve_cache_aware_stream_geom(
             pm, stream_params, &chosen_left, &chosen_right);
@@ -3447,19 +2913,13 @@ transcribe_status stream_begin(
     }
 
     pc->stream_pcm_buffer.clear();
-    pc->raw_tokens.clear();  // The dispatcher clears session->tokens / words /
-                             // segments / full_text via clear_result, but
-                             // raw_tokens is parakeet-internal and
-                             // accumulates per-chunk; without this reset
-                             // a back-to-back stream_begin (batch WER) on
-                             // the same context would carry the previous
-                             // utterance's tokens into the next stream.
+    pc->raw_tokens.clear();  // parakeet-internal, accumulates per-chunk;
+                             // clear_result doesn't touch it, so reset here
+                             // or a back-to-back stream_begin carries tokens.
     pc->stream_run_params = *run_params;
 
-    // M2: allocate streaming caches on first stream_begin for this
-    // context (idempotent — survives across utterances). Zero the
-    // contents and reset cursors on every begin so each stream starts
-    // from NeMo's get_initial_cache_state (zeros).
+    // Allocate streaming caches on first stream_begin (idempotent); zero
+    // contents and reset cursors on every begin.
     if (const transcribe_status st = init_streaming_caches(pc, pm);
         st != TRANSCRIBE_OK)
     {
@@ -3468,26 +2928,16 @@ transcribe_status stream_begin(
     zero_streaming_caches(pc);
     reset_streaming_decoder_state(pc, pm);
 
-    // Resolve chunking geometry for this stream. Matches NeMo's
-    // setup_streaming_params formulas exactly:
-    //
+    // Resolve chunking geometry (NeMo's setup_streaming_params):
     //   chunk_size_subsequent = subsampling_factor * (1 + R)
     //   chunk_size_first      = sampling_frames_first + subsampling_factor * R
-    //                         = chunk_size_subsequent - (subsampling_factor
-    //                           - sampling_frames_first)
-    //   shift_size_subsequent = chunk_size_subsequent (cache_drop_size=0
-    //                           for chunked_limited)
-    //   mel_fed_first         = chunk_size_first  (pre_encode_cache_size[0] = 0)
+    //   mel_fed_first         = chunk_size_first
     //   mel_fed_subsequent    = chunk_size_subsequent + pre_encode_cache_size
     //   drop_extra_first      = 0
     //   drop_extra_subsequent = streaming_cfg.drop_extra_pre_encoded
-    //
-    // Fallbacks for legacy streaming GGUFs (converted before the new
-    // streaming.* KVs landed): derive pre_encode_cache_size from
-    // subsampling_factor+1, drop_extra_pre_encoded via NeMo's formula,
-    // and sampling_frames_first defaults to subsampling_factor (which
-    // collapses chunk_size_first == chunk_size_subsequent — i.e. no
-    // first-chunk special case, matching pre-Phase-B behavior).
+    // Fallbacks below cover legacy GGUFs lacking the streaming.* KVs
+    // (sampling_frames_first defaults to subsampling_factor, collapsing
+    // chunk_size_first == chunk_size_subsequent — no first-chunk case).
     const int subsampling_factor = pm->hparams.enc_subsampling_factor;
     int pre_encode_cache_size = pm->hparams.enc_stream_pre_encode_cache_size;
     if (pre_encode_cache_size <= 0) {
@@ -3545,15 +2995,11 @@ transcribe_status stream_feed(
 
     // -------- Buffered streaming path --------
     //
-    // Emit one chunk at a time while we have enough audio in
-    // stream_pcm_buffer to cover the next non-final [chunk | right]
-    // window. The left context is pulled from already-buffered audio
-    // (zero-padded at the start of the stream).
+    // Emit non-last chunks while there's enough buffered audio for the
+    // next [chunk | right] window (the last chunk is stream_finalize's
+    // job). Step 0 needs samples_chunk + samples_right; steady-state
+    // needs samples_chunk.
     if (pc->buf_active) {
-        // Variable-stride loop: step 0 requires (samples_chunk +
-        // samples_right) of new audio; steady-state needs samples_chunk.
-        // We only emit non-last chunks here; the last chunk (and its
-        // ragged-tail folding) is the responsibility of stream_finalize.
         while (true) {
             if (pc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
             const int64_t num_new = pc->buf_initialized
@@ -3596,20 +3042,12 @@ transcribe_status stream_feed(
 
     // -------- Cache-aware streaming path --------
     //
-    // Recompute mel from the (sliding) accumulated PCM buffer.
-    //
-    // The buffer is trimmed after each emit to retain only the prefix
-    // samples that future mel frames will still need (the STFT window
-    // of the next-unemitted frame extends back by `n_fft/2` samples).
-    // That keeps mel cost bounded per feed regardless of stream length.
-    //
-    // pcm_start_sample is the absolute sample index of buffer[0] and
-    // is always hop-aligned, so the absolute → buffer-relative
-    // mel-frame translation is the integer pcm_start_sample / hop.
-    // The first few buffer-relative mel frames (where the STFT window
-    // would extend left of buffer[0]) are reflect-pad-contaminated
-    // garbage; they correspond to already-emitted absolute frames and
-    // are never read.
+    // Recompute mel from the sliding PCM buffer (trimmed after each emit
+    // to keep per-feed mel cost bounded). pcm_start_sample is the absolute
+    // hop-aligned index of buffer[0], so absolute → buffer-relative
+    // mel-frame is pcm_start_sample / hop. The first few buffer-relative
+    // frames are reflect-pad garbage but correspond to already-emitted
+    // absolute frames and are never read.
     const int64_t t_mel_start = ggml_time_us();
     int mel_n_mels   = 0;
     int mel_n_frames = 0;
@@ -3620,9 +3058,8 @@ transcribe_status stream_feed(
             pc->n_threads);
         mst != TRANSCRIBE_OK)
     {
-        // For very short buffers (< 2 frames worth) compute returns
-        // INVALID_ARG; that's a "not enough audio yet" condition for
-        // streaming, not a fatal error. Treat as a no-op feed.
+        // For very short buffers compute returns INVALID_ARG — "not
+        // enough audio yet", a no-op feed, not a fatal error.
         if (mst == TRANSCRIBE_ERR_INVALID_ARG) {
             if (update != nullptr) {
                 update->result_changed     = false;
@@ -3638,11 +3075,10 @@ transcribe_status stream_feed(
     }
     pc->t_mel_us += ggml_time_us() - t_mel_start;
 
-    // Emit as many chunks as we have new mel frames for. NeMo
-    // distinguishes first vs subsequent: first chunk has chunk_size_first
-    // NEW mel frames (no pre-encode-cache prepend, drop_extra=0);
-    // subsequent chunks have chunk_size_subsequent NEW frames plus a
-    // pre_encode_cache_size left-prepend (drop_extra=drop_extra_subsequent).
+    // Emit as many chunks as we have new mel frames for. First chunk:
+    // chunk_size_first new frames, no prepend, drop_extra=0. Subsequent:
+    // chunk_size_subsequent new + pre_encode_cache_size prepend,
+    // drop_extra=drop_extra_subsequent.
     const int pre_encode_cache_size = pm->hparams.enc_stream_pre_encode_cache_size > 0
         ? pm->hparams.enc_stream_pre_encode_cache_size
         : pm->hparams.enc_subsampling_factor + 1;
@@ -3670,21 +3106,11 @@ transcribe_status stream_feed(
             : pc->stream_caches.drop_extra_subsequent;
         const int prepend_frames = mel_fed - chunk_advance;
 
-        // Need (consumed + chunk_advance + right_edge_margin) total
-        // mel frames available before we can emit. The +margin is the
-        // right-edge reflect-pad zone of the mel transform: the last
-        // ceil(n_fft/2 / hop_length) frames computed at any moment
-        // have their windows reflect-padded against the buffer end,
-        // producing slightly wrong values until more audio arrives.
-        // Without this margin, chunk N's last few mel frames would
-        // get values from a "pre-mature" mel computation and never
-        // match NeMo's full-audio mel reference. The cost is a few
-        // mel frames of extra latency per chunk (40ms for nemotron's
-        // n_fft=512/hop=160).
-        //
-        // stream_finalize doesn't gate on this margin because by then
-        // we've received the EOF signal and the right-edge reflect-pad
-        // is "real" — it's the end of the stream.
+        // Hold back the last ceil(n_fft/2 / hop) mel frames: their STFT
+        // windows are reflect-padded against the buffer end and stay
+        // slightly wrong (never matching NeMo's full-audio mel) until more
+        // audio arrives. stream_finalize skips this margin since the
+        // right-edge pad is then real (end of stream).
         const int right_edge_margin = (pm->hparams.fe_n_fft / 2 +
                                        pm->hparams.fe_hop_length - 1) /
                                       pm->hparams.fe_hop_length;
@@ -3705,10 +3131,7 @@ transcribe_status stream_feed(
 
         for (int m = 0; m < mel_n_mels; ++m) {
             // Pre-encode-cache prepend: [consumed - prepend_frames,
-            // consumed). On the first chunk prepend_frames == 0 so the
-            // loop is skipped entirely. On subsequent chunks consumed
-            // >= chunk_advance >= prepend_frames so the indices are
-            // never negative.
+            // consumed). prepend_frames == 0 on the first chunk.
             for (int h = 0; h < prepend_frames; ++h) {
                 const int64_t frame_idx = consumed - prepend_frames + h;
                 const float val = (frame_idx < 0)
@@ -3724,11 +3147,10 @@ transcribe_status stream_feed(
             }
         }
 
-        // Flip is_first_chunk BEFORE the emit so the dump hooks see the
-        // correct step_num and drop semantics. The caller (emit) uses
-        // the parameters we already extracted.
+        // Flip is_first_chunk before the emit (the emit uses the params
+        // we already extracted).
         pc->stream_caches.is_first_chunk = false;
-        (void)pre_encode_cache_size; // kept for future first-chunk diagnostics
+        (void)pre_encode_cache_size;
 
         const int64_t t_enc_start = ggml_time_us();
         if (const transcribe_status st = emit_streaming_chunk(
@@ -3754,19 +3176,12 @@ transcribe_status stream_feed(
         pc->stream_revision     += 1;
     }
 
-    // Trim already-consumed PCM. The next chunk's mel_at() reads back
-    // by `prepend_max` frames (the pre-encode-cache history) AND each
-    // mel-frame STFT window extends another `pad = n_fft/2` samples
-    // left of its center. Keep both margins or the prepend frames'
-    // windows reflect-pad against a truncated buffer start, silently
-    // corrupting the pre-encode-cache input on every subsequent chunk
-    // (observed as deletions at chunk boundaries in WER).
-    // Round the drop down to a hop boundary to keep pcm_start_sample
-    // aligned with mel-frame index 0.
-    //
-    // First-feed safety: with mel_frames_consumed == 0 the target
-    // keep_from is negative, the drop_aligned guard rejects it, and
-    // the buffer stays intact.
+    // Trim already-consumed PCM, keeping the prepend_max history frames
+    // AND each mel window's pad = n_fft/2 left margin — drop more and the
+    // prepend frames reflect-pad against a truncated start, corrupting the
+    // cache input (observed as chunk-boundary deletions in WER). Drop is
+    // hop-aligned so pcm_start_sample stays at mel-frame 0. First feed
+    // (mel_frames_consumed == 0): keep_from is negative, guard rejects.
     {
         const int pad = pm->hparams.fe_n_fft / 2;
         const int prepend_max =
@@ -3798,12 +3213,9 @@ transcribe_status stream_feed(
         }
     }
 
-    // Audio "committed" cursor tracks the amount of audio we've fully
-    // consumed through the encoder (one mel frame = hop_length /
-    // sample_rate seconds). Using mel_frames_consumed (vs encoder
-    // output frame count) avoids the right-context overshoot that
-    // makes "encoder frames * 80 ms" exceed the actual audio time
-    // by a few ms per chunk on streaming variants.
+    // Audio "committed" cursor. mel_frames_consumed (vs encoder output
+    // frames) avoids the right-context overshoot that would make
+    // "encoder frames * 80 ms" exceed the real audio time per chunk.
     pc->stream_audio_committed_us =
         pc->stream_caches.mel_frames_consumed *
         static_cast<int64_t>(pm->hparams.fe_hop_length) *
@@ -3838,12 +3250,9 @@ transcribe_status stream_finalize(
 
     // -------- Buffered streaming finalize --------
     //
-    // Mirrors NeMo's reference loop tail exactly: one final emit that
-    // consumes all remaining audio (num_new = audio_len - next_audio_read)
-    // with is_last_chunk=true. add_frames_get_removed_ folds the existing
-    // samples_right slot plus this final num_new into the chunk slot, so
-    // the decoder gets every encoder frame past ctx_left. No zero-pad,
-    // no fixed-stride trailing chunks.
+    // One final emit consuming all remaining audio with is_last_chunk=true;
+    // add_frames_get_removed_ folds the right slot + this num_new into the
+    // chunk slot so the decoder gets every frame past ctx_left (no zero-pad).
     if (pc->buf_active) {
         const int64_t total =
             static_cast<int64_t>(pc->stream_pcm_buffer.size());
@@ -3879,12 +3288,9 @@ transcribe_status stream_finalize(
 
     // -------- Cache-aware streaming finalize --------
     //
-    // Recompute mel one last time and check for a sub-chunk tail.
-    // If there are any unprocessed mel frames left over (i.e. the
-    // stream ended mid-chunk), zero-pad to chunk_size_total and run a
-    // final chunk so we don't drop the tail audio. Sub-chunk tails
-    // produce a smaller post-subsample/drop output, but the encoder
-    // graph handles arbitrary mel chunk sizes.
+    // Recompute mel one last time; if the stream ended mid-chunk, run a
+    // final partial chunk so the tail audio isn't dropped (the encoder
+    // graph handles arbitrary mel chunk sizes).
     if (!pc->stream_pcm_buffer.empty()) {
         int mel_n_mels   = 0;
         int mel_n_frames = 0;
@@ -3917,14 +3323,9 @@ transcribe_status stream_finalize(
                     ? pc->stream_caches.chunk_size_first
                     : pc->stream_caches.chunk_size_subsequent;
                 const int prepend_frames = mel_fed_full - chunk_advance_full;
-                // Feed the natural partial-chunk size — no silence pad.
-                // Matches NeMo's last-chunk behavior (the streaming buffer
-                // gives whatever's left; conformer_stream_step happily
-                // accepts a shorter chunk). The encoder graph rebuilds
-                // each call so it's fine to vary the shape. The decoder
-                // sees fewer enc_out frames but the trailing-audio
-                // tokens (e.g. the closing punctuation) survive instead
-                // of getting masked by zero-pad frames.
+                // Feed the natural partial-chunk size, no silence pad
+                // (NeMo's last-chunk behavior), so trailing-audio tokens
+                // survive instead of being masked by zero-pad frames.
                 const int new_take = static_cast<int>(remaining);
                 const int mel_fed = prepend_frames + new_take;
                 std::vector<float> chunk(
@@ -3991,16 +3392,12 @@ transcribe_status stream_finalize(
 
 void stream_reset(transcribe_session * session) {
     auto * pc = static_cast<ParakeetSession *>(session);
-    // Drop the buffered audio contents but keep the allocation for
-    // the next stream.
-    pc->stream_pcm_buffer.clear();
+    pc->stream_pcm_buffer.clear(); // keep the allocation
 }
 
-// Kind+slot probe. Parakeet ships no run-slot extensions, so the _RUN
-// slot is always false. On the _STREAM slot, cache-aware variants
-// (ChunkedLimited) take the PARAKEET_STREAM kind; chunked-attention
-// variants (ChunkedLimitedWithRc) take the PARAKEET_BUFFERED_STREAM
-// kind. Offline-only Parakeet variants accept neither.
+// Kind+slot probe. No run-slot extensions (always false on _RUN). On
+// _STREAM: ChunkedLimited takes PARAKEET_STREAM, ChunkedLimitedWithRc
+// takes PARAKEET_BUFFERED_STREAM, offline variants neither.
 bool accepts_ext_kind(const transcribe_model * model,
                       transcribe_ext_slot      slot,
                       uint32_t                 kind) {
@@ -4020,9 +3417,8 @@ bool accepts_ext_kind(const transcribe_model * model,
 
 } // namespace
 
-// `extern const` to force external linkage. Without `extern`, a
-// namespace-scope `const` object has internal linkage in C++ and the
-// forward declaration in transcribe-arch.cpp would not resolve.
+// `extern const` forces external linkage (a namespace-scope const object
+// is internal-linkage in C++ otherwise).
 extern const Arch arch = {
     /* .name             = */ "parakeet",
     /* .load             = */ load,
@@ -4041,10 +3437,8 @@ extern const Arch arch = {
 
 // ---------------------------------------------------------------------------
 // Public parakeet extension init functions (global scope, C linkage).
-// Defined here in family source so transcribe.cpp stays family-agnostic.
-// Each stamps the transcribe_ext header (size + kind) and the field
-// defaults; they are the single source of truth now that the INIT macros
-// are gone.
+// Defined here so transcribe.cpp stays family-agnostic; each stamps the
+// transcribe_ext header (size + kind) and the field defaults.
 // ---------------------------------------------------------------------------
 
 extern "C" void transcribe_parakeet_stream_ext_init(
