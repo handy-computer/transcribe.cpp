@@ -69,7 +69,25 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: true
+  translate: false
+  lang_detect: true
+  timestamps: token  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    metal: 98
+    cpu: 29
+  ryzen-4750u:
+    vulkan: 14.5
+    cpu: 7.5
+
 wer:
+  metadata_key: fleurs_en
   source: FLEURS test en (en-US), offline att_context_size=[56, 13]
   notes: |
     WER measured on FLEURS test en (647 utterances), greedy RNN-T, --language en-US, whisper-normalizer scoring; the per-quant column is FLEURS en. NeMo reference baseline on the same manifest: 7.99% (NVIDIA self-reports 7.91% en-US). On LibriSpeech test-clean (2620 utterances) the same presets score F32 3.04 / F16 3.04 / Q8_0 3.05 / Q6_K 3.08 / Q5_K_M 3.10 / Q4_K_M 3.30, against a 3.03% NeMo reference.

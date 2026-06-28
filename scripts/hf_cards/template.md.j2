@@ -18,6 +18,9 @@ tags:
 {%- for tag in tags %}
   - {{ tag }}
 {%- endfor %}
+{%- if transcribe_cpp_yaml %}
+{{ transcribe_cpp_yaml }}
+{%- endif %}
 ---
 
 # {{ hf_repo.split('/')[-1] }}: transcribe.cpp GGUF

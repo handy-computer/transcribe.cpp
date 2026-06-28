@@ -40,7 +40,25 @@ summary: |
 
 default_quant_index: 2  # Q8_0
 
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: false
+  timestamps: token  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    metal: 110
+    cpu: 27
+  ryzen-4750u:
+    vulkan: 25
+    cpu: 9
+
 wer:
+  metadata_key: fleurs_ru
   source: FLEURS ru
   notes: |
     WER measured on the full FLEURS ru test split (775 utterances) with greedy decoding and no external LM. F32 reference baseline: 8.08%. Upstream `gigaam` author package measured on the same manifest: 9.46%; the 1.4 pp gap is upstream rejecting 5 long (>25 s) utterances with `Too long wav file, use 'transcribe_longform' method.` (counted as 100% deletion errors). On the 770-utt subset both sides decode, transcribe.cpp matches upstream exactly. ai-sage does not publish a FLEURS ru WER; this number is measured here.

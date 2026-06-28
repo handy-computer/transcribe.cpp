@@ -2,7 +2,7 @@
 # Consumed by scripts/hf_cards/generate.py.
 
 hf_repo: Qwen/Qwen3-ASR-1.7B
-target_repo: handy-computer/qwen3-asr-1.7b-gguf
+target_repo: handy-computer/Qwen3-ASR-1.7B-gguf
 transcribe_docs_url: https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/qwen3-asr-1.7b.md
 
 upstream_commit: 7278e1e70fe206f11671096ffdd38061171dd6e5
@@ -68,6 +68,23 @@ summary: |
   this time.
 
 default_quant_index: 2  # Q8_0
+
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: true
+  timestamps: none  # none | segment | word | token
+
+# Speedup-over-realtime (×RT) per rig/backend, from docs/models; published
+# raw as rtf_<machine> in the metadata block.
+perf:
+  m4-max:
+    metal: 39.5
+    cpu: 8
+  ryzen-4750u:
+    vulkan: 3.8
+    cpu: 2
 
 wer:
   source: LibriSpeech test-clean

@@ -37,7 +37,25 @@ summary: |
 default_quant_index: 2  # Q8_0
 
 metric: CER
+# Capability flags for the transcribe_cpp metadata block.
+capabilities:
+  streaming: false
+  translate: false
+  lang_detect: false
+  timestamps: none  # none | segment | word | token
+
+# Perf inherited from moonshine-base (identical architecture; per-
+# language RTF not separately benched).
+perf:
+  m4-max:
+    metal: 79.5
+    cpu: 80.5
+  ryzen-4750u:
+    vulkan: 34.5
+    cpu: 22
+
 wer:
+  metadata_key: fleurs_ko
   source: FLEURS ko test
   notes: |
     CER measured on the FLEURS-ko test split (382

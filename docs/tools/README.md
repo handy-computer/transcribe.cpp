@@ -56,6 +56,10 @@ This split mirrors `llama.cpp`'s `convert_hf_to_gguf.py` →
   Perf matrices across (backend, family, quant, sample).
 - [**wer.md**](wer.md) — `scripts/wer/{run,score,compare,ingest}.py`.
   Hypothesis generation + WER scoring against a reference corpus.
+- [**hf-metadata-schema.md**](hf-metadata-schema.md) — `scripts/hf_cards/generate.py`.
+  The `transcribe_cpp` model-card metadata block (per-repo raw WER/RTF plus
+  capability flags) emitted into each published GGUF repo's README. Schema, field
+  reference, and a suggested consumer-side scoring curve.
 - **Quant diagnostics** — `scripts/quant_accuracy.py`. Optional
   activation-drift inspection between a baseline GGUF and a quantized
   sibling. Not a quant acceptance gate; use CLI output-validity plus WER.

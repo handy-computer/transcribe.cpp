@@ -93,8 +93,9 @@ All Whisper variants support:
 - **Transcription** of 16 kHz mono WAV input.
 - **Long-form audio** via 30-second chunked decoding with the
   prev-context window assembly described in the family doc.
-- **Segment timestamps** by default; word timestamps via DTW over
-  cross-attention (multilingual checkpoints only).
+- **Segment timestamps** — the finest granularity the library emits for
+  Whisper (`max_timestamp_kind = segment`). Word-level timestamps are not
+  currently exposed.
 - **Translation** (any supported language → English) on multilingual
   checkpoints — `.en` variants are transcribe-only.
 
