@@ -109,6 +109,89 @@ void print_stats(const std::map<ggml_type, PerTypeStats> & stats,
 }
 
 // ---------------------------------------------------------------------------
+// Bulk-KV trailer
+// ---------------------------------------------------------------------------
+
+// Large tokenizer KVs, in canonical trailer order. Mirrors BULK_KV_KEYS in
+// scripts/lib/gguf_common.py: the Python converter relocates these to the end
+// of the KV section so range-read consumers can fetch the small scalar
+// metadata (general.*, stt.*, tokenizer identity) without pulling the multi-MB
+// tokenizer tables. We re-assert that layout here because the quantizer's
+// general.file_type override appends via ggml's remove-then-append setter,
+// which would otherwise strand file_type — a tiny scalar a remote consumer
+// wants — *after* the tokenizer trailer.
+const char * const kBulkKvKeys[] = {
+    "tokenizer.ggml.tokens",
+    "tokenizer.ggml.scores",
+    "tokenizer.ggml.token_type",
+    "tokenizer.ggml.merges",
+    "tokenizer.chat_template",
+};
+
+// Byte size of one element for the scalar element types that can appear inside
+// a bulk array (strings are handled separately). gguf_type_size is not part of
+// the public gguf.h, so we size the handful of types we actually move; 0 means
+// "unexpected type, leave the key where it is."
+size_t bulk_kv_elem_size(gguf_type t) {
+    switch (t) {
+        case GGUF_TYPE_UINT8:  case GGUF_TYPE_INT8:  case GGUF_TYPE_BOOL:    return 1;
+        case GGUF_TYPE_UINT16: case GGUF_TYPE_INT16:                         return 2;
+        case GGUF_TYPE_UINT32: case GGUF_TYPE_INT32: case GGUF_TYPE_FLOAT32: return 4;
+        case GGUF_TYPE_UINT64: case GGUF_TYPE_INT64: case GGUF_TYPE_FLOAT64: return 8;
+        default: return 0;
+    }
+}
+
+// Move the bulk tokenizer KVs to the very end of ctx's KV section, preserving
+// each value. Every ggml gguf setter is remove-then-append, so reading a key's
+// value into a local copy and re-setting it relocates it to the tail. Keys are
+// processed in kBulkKvKeys order, so the trailer ends up canonical regardless
+// of how they were interleaved on the way in. Absent keys are skipped. Mirrors
+// move_bulk_metadata_last() in scripts/lib/gguf_common.py.
+void move_bulk_kv_last(gguf_context * ctx) {
+    for (const char * key : kBulkKvKeys) {
+        const int64_t kid = gguf_find_key(ctx, key);
+        if (kid < 0) {
+            continue;  // not present — nothing to move
+        }
+        const gguf_type kv_type = gguf_get_kv_type(ctx, kid);
+        if (kv_type == GGUF_TYPE_ARRAY) {
+            const gguf_type elem = gguf_get_arr_type(ctx, kid);
+            const size_t    n    = gguf_get_arr_n(ctx, kid);
+            if (elem == GGUF_TYPE_STRING) {
+                // Copy the strings out before the remove-then-append re-set
+                // frees the originals.
+                std::vector<std::string>  store(n);
+                std::vector<const char *> ptrs(n);
+                for (size_t i = 0; i < n; ++i) {
+                    store[i] = gguf_get_arr_str(ctx, kid, i);
+                }
+                for (size_t i = 0; i < n; ++i) {
+                    ptrs[i] = store[i].c_str();
+                }
+                gguf_set_arr_str(ctx, key, ptrs.data(), n);
+            } else {
+                const size_t esz = bulk_kv_elem_size(elem);
+                if (esz == 0) {
+                    continue;  // unexpected element type — leave it in place
+                }
+                // Copy the raw element bytes out before the re-set frees them.
+                const void * data = gguf_get_arr_data(ctx, kid);
+                std::vector<int8_t> tmp(n * esz);
+                if (!tmp.empty()) {
+                    std::memcpy(tmp.data(), data, n * esz);
+                }
+                gguf_set_arr_data(ctx, key, elem, tmp.data(), n);
+            }
+        } else if (kv_type == GGUF_TYPE_STRING) {
+            const std::string val = gguf_get_val_str(ctx, kid);
+            gguf_set_val_str(ctx, key, val.c_str());
+        }
+        // Other scalar types are not expected among the bulk keys; ignore.
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -290,6 +373,14 @@ int main(int argc, char ** argv) {
     // loader doesn't read this today, but downstream tools like
     // gguf-dump display it.
     gguf_set_val_u32(gguf_out, "general.file_type", preset->file_type);
+
+    // Re-assert the bulk-KV trailer so general.file_type (and every other
+    // small scalar) precedes the multi-MB tokenizer tables. The override
+    // above appends file_type last via ggml's remove-then-append setter;
+    // without this, a range-read consumer couldn't reach file_type without
+    // parsing the whole tokenizer blob. Mirrors the converter's gguf_writer()
+    // layout (scripts/lib/gguf_common.py).
+    move_bulk_kv_last(gguf_out);
 
     // Per-tensor: dequant → fp32 → requant → add to ctx_out.
     std::vector<float> fp32_scratch;

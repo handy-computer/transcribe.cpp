@@ -328,6 +328,26 @@ def add_f32_array(writer: GGUFWriter, name: str, arr: np.ndarray) -> None:
     writer.add_tensor(name, arr)
 
 
+def compute_size_label(total_params: int) -> str:
+    if total_params >= 1_000_000_000:
+        return f"{total_params / 1_000_000_000:.1f}B"
+    if total_params >= 1_000_000:
+        return f"{total_params / 1_000_000:.0f}M"
+    return f"{total_params / 1_000:.0f}K"
+
+
+def total_safetensors_params(model_dir: Path) -> int:
+    """Element count summed across all safetensors shards — drives the coarse
+    general.size_label bucket. get_slice().get_shape() reads only the header,
+    so no tensor data is materialized."""
+    total = 0
+    for sf in sorted(model_dir.glob("*.safetensors")):
+        with safe_open(sf, framework="pt") as h:
+            for k in h.keys():
+                total += int(np.prod(h.get_slice(k).get_shape()))
+    return total
+
+
 # ---- Main -----------------------------------------------------------------
 
 
@@ -373,6 +393,9 @@ def main(argv: list[str]) -> int:
     out_path = outdir / f"{slug}-{REF_DTYPE}.gguf"
     print(f"Writing GGUF: {out_path}")
 
+    size_label = compute_size_label(total_safetensors_params(model_dir))
+    print(f"  params: ~{size_label}")
+
     writer = gguf_writer(str(out_path), ARCH_KEY)
 
     # ---- general.* ----
@@ -380,6 +403,7 @@ def main(argv: list[str]) -> int:
         writer,
         name="MedASR",
         basename="medasr",
+        size_label=size_label,
         file_type=REFERENCE_FILE_TYPE,
         languages=["en"],
         author="Google",

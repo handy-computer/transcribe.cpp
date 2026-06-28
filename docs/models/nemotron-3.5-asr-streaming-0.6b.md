@@ -8,9 +8,10 @@ successor to
 
 ## What it's for
 
-Multilingual speech-to-text across **40 language-locales** (19
-transcription-ready, plus broad-coverage and adaptation tiers — see the
-upstream model card for the full list) with greedy RNN-T decoding.
+Multilingual speech-to-text across **32 supported language-locales** (19
+transcription-ready + 13 broad-coverage; the tokenizer also recognizes 8
+adaptation-ready locales that require fine-tuning — see the upstream model
+card for the full list) with greedy RNN-T decoding.
 Outputs cased, punctuated transcripts (native PnC). Token- and word-level
 timestamps are available.
 
@@ -171,9 +172,10 @@ on WER (Stage 7), not tensor tolerances.
 
 ## Capabilities
 
-- **Languages:** 40 language-locales (e.g. `en-US`, `en-GB`, `es-ES`,
+- **Languages:** 32 supported language-locales (e.g. `en-US`, `en-GB`, `es-ES`,
   `fr-FR`, `de-DE`, `it-IT`, `pt-BR`, `nl-NL`, `ru-RU`, `zh-CN`, `ja-JP`,
-  `ko-KR`, `hi-IN`, `ar-AR`, …), selected via `--language <locale>`.
+  `ko-KR`, `hi-IN`, `ar-AR`, …), selected via `--language <locale>`. (The
+  tokenizer recognizes 40; the 8 adaptation-ready locales need fine-tuning.)
 - **Language detection:** `auto` mode emits `<ll-RR>` locale tags (e.g.
   `<en-US>`, `<zh-CN>`) in the raw token stream. A tag can appear anywhere
   in the sequence, not only at the end. They are stripped from the returned
