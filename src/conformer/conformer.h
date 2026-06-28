@@ -123,9 +123,19 @@ struct ConvPolicy {
     bool causal_pre_encode        = false;
 };
 
+// Resolve a conv-dispatch toggle from its env overrides. The DIRECT var forces
+// true, the NO_DIRECT var forces false (DIRECT wins if both are set); otherwise
+// `backend_default` is used. Centralizes the override parsing shared by the
+// pointwise and the per-family depthwise dispatch helpers, so the env-var read
+// has exactly one definition. `direct_env` / `no_direct_env` are env var names
+// (e.g. "TRANSCRIBE_CONV_DIRECT_DW" / "TRANSCRIBE_CONV_NO_DIRECT_DW").
+bool resolve_conv_direct(const char * direct_env,
+                         const char * no_direct_env,
+                         bool         backend_default);
+
 // Pointwise conv dispatch auto-detect (same answer for every family today).
-// Env overrides: TRANSCRIBE_CONV_NO_DIRECT_PW=1 forces im2col,
-// TRANSCRIBE_CONV_DIRECT_PW=1 forces direct. Vulkan defaults to im2col: on
+// Env overrides: TRANSCRIBE_CONV_NO_DIRECT_PW forces im2col,
+// TRANSCRIBE_CONV_DIRECT_PW forces direct. Vulkan defaults to im2col: on
 // AMD Renoir, im2col + mul_mat measured ~200 ms/encode faster than direct for
 // f32 weights. Metal and CPU prefer direct.
 bool detect_direct_pw(const char * backend);

@@ -1213,7 +1213,7 @@ static transcribe_status run_one_shot_inner(
     }
     // Per-block dump for the layer-by-layer divergence bisect (gated by
     // TRANSCRIBE_DUMP_ALL_BLOCKS).
-    if (std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr) {
+    if (transcribe::debug::dump_all_blocks_requested()) {
         for (size_t i = 0; i < eb.dumps.all_block_outs.size(); ++i) {
             ggml_tensor * t = eb.dumps.all_block_outs[i];
             if (t == nullptr) continue;
@@ -1531,7 +1531,7 @@ static transcribe_status run_batch_encode(
     // [d_model, T_max, n] tensors, so a batched-vs-single divergence can be
     // located per stage. Gated on TRANSCRIBE_DUMP_ALL_BLOCKS.
     if (transcribe::debug::enabled() &&
-        std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr)
+        transcribe::debug::dump_all_blocks_requested())
     {
         if (eb.dumps.pre_encode_out != nullptr) {
             transcribe::debug::dump_tensor("enc.pre_encode.out",
@@ -2547,7 +2547,7 @@ transcribe_status emit_buffered_chunk(
             transcribe::debug::dump_tensor(name, eb.dumps.last_block_out,
                                            "encoder.block.last.out");
         }
-        if (std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr) {
+        if (transcribe::debug::dump_all_blocks_requested()) {
             for (size_t i = 0; i < eb.dumps.all_block_outs.size(); ++i) {
                 ggml_tensor * t = eb.dumps.all_block_outs[i];
                 if (t == nullptr) continue;

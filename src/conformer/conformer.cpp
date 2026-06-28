@@ -3,9 +3,12 @@
 // See conformer.h for the API contract. Each family's encoder.cpp keeps
 // only the glue binding these helpers to its weights / hparams / graph
 // driver; per-family policy knobs (ConvPolicy, BlockParams) are passed in.
-// No environment variables are read here except by detect_direct_pw.
+// Conv-dispatch env vars (TRANSCRIBE_CONV_DIRECT_PW/DW and their NO_ variants)
+// are read only via resolve_conv_direct here, which detect_direct_pw and every
+// family's depthwise detect delegate to — one place owns the parsing.
 
 #include "conformer/conformer.h"
+#include "transcribe-env.h"
 #include "transcribe-log.h"
 
 #include "ggml.h"
@@ -309,18 +312,23 @@ ggml_tensor * add_conv_bias(ggml_context * ctx,
     return ggml_add(ctx, conv_out, bias_4d);
 }
 
+bool resolve_conv_direct(const char * direct_env,
+                         const char * no_direct_env,
+                         bool         backend_default) {
+    if (transcribe::env::flag(direct_env))    return true;  // user override
+    if (transcribe::env::flag(no_direct_env)) return false; // user override
+    return backend_default;
+}
+
 bool detect_direct_pw(const char * backend) {
-    const char * env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_PW");
-    if (env != nullptr) return false; // user override
-    env = std::getenv("TRANSCRIBE_CONV_DIRECT_PW");
-    if (env != nullptr) return true;  // user override
     // Vulkan defaults to im2col: on AMD Renoir, im2col + mul_mat measured
     // ~200 ms/encode faster than direct for f32 weights. Metal/CPU prefer
     // direct.
-    if (backend != nullptr && std::strstr(backend, "Vulkan") != nullptr) {
-        return false;
-    }
-    return true;
+    const bool backend_default =
+        !(backend != nullptr && std::strstr(backend, "Vulkan") != nullptr);
+    return resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_PW",
+                               "TRANSCRIBE_CONV_NO_DIRECT_PW",
+                               backend_default);
 }
 
 // Conv module (pointwise -> GLU -> depthwise -> BN/LN -> SiLU -> pointwise).

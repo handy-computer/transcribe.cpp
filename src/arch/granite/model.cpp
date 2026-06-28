@@ -10,6 +10,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -1625,7 +1626,7 @@ transcribe_status run_batch(
     }
     const int64_t step_us = step_stats.step_us;
 
-    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+    if (transcribe::env::flag("TRANSCRIBE_PERF_DEBUG")) {
         int total_steps = 0;
         for (int b = 0; b < n; ++b)
             total_steps = std::max<int>(total_steps, static_cast<int>(generated[b].size()));

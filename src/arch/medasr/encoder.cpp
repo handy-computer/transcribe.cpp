@@ -15,6 +15,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-flash-policy.h"
 #include "transcribe-log.h"
 
 #include "ggml.h"
@@ -503,10 +504,13 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
         eb.bn_bias_inputs[i]  = bt;
     }
 
-    // Flash attention defaults on. Forced off when the manual SDPA path
-    // is required (variable-length key-padding mask, single-shot/same-
-    // length batches keep flash on).
-    const bool use_flash = (std::getenv("TRANSCRIBE_NO_FLASH") == nullptr);
+    // Flash attention defaults on. Forced off when the manual SDPA path is
+    // required (variable-length key-padding mask, single-shot/same-length
+    // batches keep flash on). TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH
+    // override; MedASR is CTC-only so the decoder flag is a throwaway.
+    bool enc_use_flash = true, dec_use_flash = false;
+    transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
+    const bool use_flash = enc_use_flash;
 
     eb.dumps.all_block_outs.assign(n_layers, nullptr);
 

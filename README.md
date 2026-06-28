@@ -119,7 +119,7 @@ Some tests require a real model file. Enable them with:
 ```bash
 cmake -B build -DTRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON
 cmake --build build
-TRANSCRIBE_REAL_PARAKEET_GGUF=path/to/model.gguf ctest --test-dir build
+TRANSCRIBE_PARAKEET_GGUF=path/to/model.gguf ctest --test-dir build
 ```
 
 For the model-family smoke-test, numerical-validation, and benchmark

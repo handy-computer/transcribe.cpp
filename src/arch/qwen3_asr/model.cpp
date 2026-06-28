@@ -10,6 +10,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -1143,8 +1144,7 @@ transcribe_status run(
 
     // Optional perf breakdown (finer split than the public mel/encode/decode
     // timings), gated on env var.
-    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG");
-        e != nullptr && *e != '\0' && *e != '0')
+    if (transcribe::env::flag("TRANSCRIBE_PERF_DEBUG"))
     {
         const double ms = 1.0 / 1000.0;
         const double sum_ms = (cc->t_mel_us + t_enc_build_us +
@@ -1790,8 +1790,7 @@ transcribe_status run_batch(
         cc->batch_results.push_back(std::move(rs));
     }
 
-    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG");
-        e != nullptr && *e != '\0' && *e != '0') {
+    if (transcribe::env::flag("TRANSCRIBE_PERF_DEBUG")) {
         log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "qwen3_asr run_batch: n=%d valid=%d max_n_kv=%d steps=%d (all phases batched x%d)\n"
             "  enc_pass=%.1fms (mel=%.1f parallel + enc_compute=%.1f, 1 graph)\n"

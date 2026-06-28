@@ -4,19 +4,17 @@
 
 #include "transcribe-flash-policy.h"
 
-#include <cstdlib>
+#include "transcribe-env.h"
 
 namespace transcribe::flash {
 
 void apply_env_overrides(bool & encoder_use_flash,
                          bool & decoder_use_flash) {
-    const char * no_flash = std::getenv("TRANSCRIBE_NO_FLASH");
-    if (no_flash != nullptr && no_flash[0] == '1') {
+    if (transcribe::env::flag("TRANSCRIBE_NO_FLASH")) {
         encoder_use_flash = false;
         decoder_use_flash = false;
     }
-    const char * force_flash = std::getenv("TRANSCRIBE_FORCE_FLASH");
-    if (force_flash != nullptr && force_flash[0] == '1') {
+    if (transcribe::env::flag("TRANSCRIBE_FORCE_FLASH")) {
         encoder_use_flash = true;
         decoder_use_flash = true;
     }

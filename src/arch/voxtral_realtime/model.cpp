@@ -17,6 +17,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -99,6 +100,7 @@ void apply_threads(ggml_backend_sched_t sched, int n_threads) {
     transcribe::configure_sched_n_threads(sched, n_threads);
 }
 
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 // Read a reference enc.mel.in.f32 ([n_mels, n_frames] mel-major) for numerical
 // isolation. Returns true and fills mel_buf (mel-major) + n_frames on success.
 bool read_ref_mel(const std::string & dir, int n_mels,
@@ -118,6 +120,7 @@ bool read_ref_mel(const std::string & dir, int n_mels,
     n_frames = static_cast<int>(n / n_mels);
     return true;
 }
+#endif // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 
 // Input-length contract (see docs/input-limits.md). Chunked/unbounded family:
 // the encoder is causal + sliding-window (750 frames) advanced on a
@@ -434,14 +437,18 @@ transcribe_status forward_buffer(Session * cc, Model * cm,
     // ----- Mel (or reference-injected mel for numerical isolation) -----
     const int n_mels = cm->hparams.enc_num_mel_bins;
     int mel_n_frames = 0;
-    const char * ref_mel_dir = std::getenv("TRANSCRIBE_VOXTRAL_REALTIME_MEL_FROM_REF");
+    bool mel_from_ref = false;
     const int64_t t_mel_start = ggml_time_us();
-    if (ref_mel_dir != nullptr && ref_mel_dir[0] != '\0') {
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    if (const char * ref_mel_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF")) {
         if (!read_ref_mel(ref_mel_dir, n_mels, cc->mel_buf, mel_n_frames)) {
             log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "voxtral_realtime run: failed to read ref mel from %s", ref_mel_dir);
             return TRANSCRIBE_ERR_GGUF;
         }
-    } else {
+        mel_from_ref = true;
+    }
+#endif
+    if (!mel_from_ref) {
         // Streaming offline audio padding (mistral-common encode_transcription,
         // StreamingMode.OFFLINE): pad the audio into the 12.5 Hz token grid as
         //   [n_left_pad zeros] + [raw rounded up to raw_per_tok] + [n_right zeros]
@@ -1534,7 +1541,7 @@ transcribe_status stream_process(Session * cc, Model * cm, bool is_final, bool *
     }
 
     // Per-component timing (diagnostic): printed once at finalize.
-    if (is_final && std::getenv("TRANSCRIBE_VOXTRAL_REALTIME_STREAM_TIMING") != nullptr) {
+    if (is_final && transcribe::env::flag("TRANSCRIBE_VOXTRAL_REALTIME_STREAM_TIMING")) {
         const double mel = cc->stream_t_mel_us / 1000.0, conv = cc->stream_t_conv_us / 1000.0;
         const double enc = cc->stream_t_enc_us / 1000.0, dec = cc->stream_t_dec_us / 1000.0;
         const double enc_c = cc->stream_t_enc_compute_us / 1000.0;  // pure graph_compute

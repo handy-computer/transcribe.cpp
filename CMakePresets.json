@@ -56,6 +56,15 @@
       "inherits": "wheel-linux-cpu-vulkan",
       "displayName": "Windows x86_64 default wheel: CPU + Vulkan backend modules",
       "description": "Same provider shape as wheel-linux-cpu-vulkan on Windows: conservative CPU module + Vulkan module, loaded package-locally (the Python loader calls os.add_dll_directory before CDLL). Build image needs the Vulkan SDK (glslc)."
+    },
+    {
+      "name": "validation",
+      "displayName": "Local numerical-parity validation build (build/)",
+      "description": "Dev build for scripts/validate.py: enables TRANSCRIBE_ENABLE_VALIDATION_HOOKS so the reference-mel injection (TRANSCRIBE_MEL_FROM_REF) and per-layer tensor dumps (TRANSCRIBE_DUMP_ALL_BLOCKS / TRANSCRIBE_DUMP_SUB_BLOCKS) are compiled in. Targets build/ (the dir validate.py runs build/bin/transcribe-cli from) and reuses the existing generator. NOT for release — shipped and wheel builds leave the hooks out (TRANSCRIBE_ENABLE_VALIDATION_HOOKS defaults OFF).",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "TRANSCRIBE_ENABLE_VALIDATION_HOOKS": "ON"
+      }
     }
   ]
 }

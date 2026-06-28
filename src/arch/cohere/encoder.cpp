@@ -29,14 +29,12 @@ namespace conf = transcribe::conformer;
 // (native kernels), im2col + mul_mat on Metal/CPU. See the ConvPolicy
 // comment in conformer.h for why the two dw sites share one detect result.
 bool detect_direct_dw(const char * backend) {
-    const char * env = std::getenv("TRANSCRIBE_CONV_DIRECT_DW");
-    if (env != nullptr) return true;
-    env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW");
-    if (env != nullptr) return false;
-    if (backend == nullptr) return false;
-    if (std::strstr(backend, "Vulkan") != nullptr) return true;
-    if (std::strstr(backend, "CUDA")   != nullptr) return true;
-    return false;
+    const bool backend_default = backend != nullptr &&
+        (std::strstr(backend, "Vulkan") != nullptr ||
+         std::strstr(backend, "CUDA")   != nullptr);
+    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW",
+                                     "TRANSCRIBE_CONV_NO_DIRECT_DW",
+                                     backend_default);
 }
 
 // ----- Views ------------------------------------------------------

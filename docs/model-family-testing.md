@@ -53,7 +53,9 @@ Expected shape:
 
 - Built only when `TRANSCRIBE_BUILD_REAL_MODEL_TESTS=ON`.
 - Skips with return code `77` when the model path is not available.
-- Uses one family-specific environment variable for the model path.
+- Uses one family-specific environment variable for the model path,
+  following the `TRANSCRIBE_<FAMILY>_GGUF` convention (see
+  [`environment-variables.md`](environment-variables.md)).
 - Verifies architecture string, variant string if applicable,
   capabilities, hparams, language list, expected tensor count or
   tensor-table coverage, and canonical weight shapes.

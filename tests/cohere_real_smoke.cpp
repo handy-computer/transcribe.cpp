@@ -11,7 +11,7 @@
 //   - The CMake option TRANSCRIBE_BUILD_REAL_MODEL_TESTS (default OFF)
 //     controls whether this binary is even built.
 //   - At runtime, the GGUF path comes from the
-//     TRANSCRIBE_COHERE_MODEL environment variable (same var that
+//     TRANSCRIBE_COHERE_GGUF environment variable (same var that
 //     cohere_smoke.cpp uses, so a single export drives both tests).
 //     If unset, the test exits 77 (CTest "skipped") with a
 //     regeneration hint.
@@ -120,14 +120,14 @@ cohere_view(const struct transcribe_model * m) {
 } // namespace
 
 int main() {
-    const char * env = std::getenv("TRANSCRIBE_COHERE_MODEL");
+    const char * env = std::getenv("TRANSCRIBE_COHERE_GGUF");
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
-                     "cohere_real_smoke: TRANSCRIBE_COHERE_MODEL not "
+                     "cohere_real_smoke: TRANSCRIBE_COHERE_GGUF not "
                      "set; skipping. Convert a real model with:\n"
                      "  uv run scripts/convert-cohere.py "
                      "<model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026\n"
-                     "and re-run with TRANSCRIBE_COHERE_MODEL=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf\n");
+                     "and re-run with TRANSCRIBE_COHERE_GGUF=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf\n");
         return 77;
     }
     const std::string fixture = env;

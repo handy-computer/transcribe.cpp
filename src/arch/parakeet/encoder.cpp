@@ -26,6 +26,7 @@
 
 #include "conformer/conformer.h"
 #include "transcribe-debug.h"
+#include "transcribe-flash-policy.h"
 #include "transcribe-log.h"
 
 #include "ggml.h"
@@ -49,12 +50,10 @@ namespace conf = transcribe::conformer;
 // backend (faster than the 31x im2col expansion). Env vars override
 // both sites.
 bool detect_direct_dw_in_block(const char * backend) {
-    const char * env = std::getenv("TRANSCRIBE_CONV_DIRECT_DW");
-    if (env != nullptr) return true;  // user override
-    env = std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW");
-    if (env != nullptr) return false; // user override
     (void)backend;
-    return true;
+    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW",
+                                     "TRANSCRIBE_CONV_NO_DIRECT_DW",
+                                     /*backend_default=*/true);
 }
 
 // Pre-encode depthwise dispatch: direct path EXCEPT on Metal, where
@@ -63,13 +62,12 @@ bool detect_direct_dw_in_block(const char * backend) {
 // CONV_2D_DW; the direct path avoids the ~31x im2col expansion and the
 // degenerate per-channel [1 x K] matmul (~40-50ms here).
 bool detect_direct_dw_in_pre_encode(const char * backend) {
-    if (std::getenv("TRANSCRIBE_CONV_DIRECT_DW")    != nullptr) return true;
-    if (std::getenv("TRANSCRIBE_CONV_NO_DIRECT_DW") != nullptr) return false;
-    if (backend != nullptr &&
-        (std::strstr(backend, "Metal") != nullptr || std::strstr(backend, "metal") != nullptr)) {
-        return false;
-    }
-    return true;
+    const bool is_metal = backend != nullptr &&
+        (std::strstr(backend, "Metal") != nullptr ||
+         std::strstr(backend, "metal") != nullptr);
+    return conf::resolve_conv_direct("TRANSCRIBE_CONV_DIRECT_DW",
+                                     "TRANSCRIBE_CONV_NO_DIRECT_DW",
+                                     /*backend_default=*/!is_metal);
 }
 
 // ----- Views ------------------------------------------------------
@@ -216,7 +214,7 @@ void parakeet_subblock_observer_cb(void *        user,
 std::vector<int> parse_sub_block_env(int n_layers)
 {
     std::vector<int> out;
-    const char * raw = std::getenv("TRANSCRIBE_DUMP_SUB_BLOCKS");
+    const char * raw = transcribe::debug::dump_sub_blocks_spec();
     if (raw == nullptr || *raw == '\0') return out;
     const char * p = raw;
     while (*p != '\0') {
@@ -431,10 +429,14 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         bparams.kv_type           = kv_type;
         // Flash attention by default. Flash batches correctly (the batched
         // encoder output is bit-identical to single-shot flash), so the batch
-        // axis does not change the path. TRANSCRIBE_NO_FLASH=1 forces the
-        // manual F32 mul_mat + soft_max path — used by the bit-exact CPU
-        // tensor gate (flash casts the rel-pos mask to F16, manual stays F32).
-        bparams.use_flash         = (std::getenv("TRANSCRIBE_NO_FLASH") == nullptr);
+        // axis does not change the path. TRANSCRIBE_NO_FLASH forces the manual
+        // F32 mul_mat + soft_max path — used by the bit-exact CPU tensor gate
+        // (flash casts the rel-pos mask to F16, manual stays F32);
+        // TRANSCRIBE_FORCE_FLASH forces it back on. Parakeet has no attention
+        // decoder, so the decoder flag is a throwaway.
+        bool enc_use_flash = true, dec_use_flash = false;
+        transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
+        bparams.use_flash         = enc_use_flash;
         bparams.policy            = policy;
         bparams.att_context_left  = hp.enc_att_context_left;
         bparams.att_context_right = hp.enc_att_context_right;
@@ -476,7 +478,7 @@ EncoderBuild build_encoder_graph(ggml_context *                      ctx,
         // Per-block dump opt-in for the divergence bisect
         // (TRANSCRIBE_DUMP_ALL_BLOCKS).
         const bool dump_all_blocks =
-            std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr;
+            transcribe::debug::dump_all_blocks_requested();
         if (dump_all_blocks && eb.dumps.block0_out != nullptr) {
             transcribe::debug::mark_tensor_for_dump(eb.dumps.block0_out);
         }
@@ -756,10 +758,13 @@ EncoderBuild build_encoder_graph_streaming(
     bparams.n_head            = hp.enc_n_heads;
     bparams.conv_kernel       = hp.enc_conv_kernel;
     bparams.kv_type           = kv_type;
-    // Flash-attention opt-out (TRANSCRIBE_NO_FLASH). On CPU at streaming
-    // geometry the flash kernel is dramatically slower (~33 ms/layer vs
-    // ~1 ms on a Cortex-A55).
-    bparams.use_flash         = (std::getenv("TRANSCRIBE_NO_FLASH") == nullptr);
+    // Flash-attention opt-out (TRANSCRIBE_NO_FLASH / TRANSCRIBE_FORCE_FLASH).
+    // On CPU at streaming geometry the flash kernel is dramatically slower
+    // (~33 ms/layer vs ~1 ms on a Cortex-A55). Parakeet has no attention
+    // decoder, so the decoder flag is a throwaway.
+    bool enc_use_flash = true, dec_use_flash = false;
+    transcribe::flash::apply_env_overrides(enc_use_flash, dec_use_flash);
+    bparams.use_flash         = enc_use_flash;
     bparams.policy            = policy;
     // No att_context_left/right: ChunkedLimited derives the band entirely
     // from attn_chunked_mask (build_conformer_block reads them only on the

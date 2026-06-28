@@ -13,6 +13,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
@@ -209,6 +210,7 @@ namespace {
 // ne=[T_mel, n_mels] (fast=T_mel, slow=n_mels), and ggml's
 // fast-to-slow layout maps byte i to ne_index (t=i%T_mel, m=i/T_mel).
 // Both byte orders are identical — just a memcpy is needed.
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 transcribe_status load_ref_mel(const std::string & dir,
                                int                 n_mels,
                                int &               n_mel_frames,
@@ -247,6 +249,7 @@ transcribe_status load_ref_mel(const std::string & dir,
     }
     return TRANSCRIBE_OK;
 }
+#endif // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 
 // Host-side RNN-T / CTC greedy decode of one utterance's encoder slice,
 // publishing the transcript into the session scratch slot (full_text /
@@ -370,14 +373,17 @@ transcribe_status run(transcribe_session *      session,
     // center=False + periodic Hann). The env-var injection is a debug knob
     // for tensor-parity isolation.
     int mel_n_frames = 0;
+    bool mel_from_ref = false;
     const int64_t t_mel_start = ggml_time_us();
-    if (const char * ref_dir = std::getenv("TRANSCRIBE_GIGAAM_MEL_FROM_REF");
-        ref_dir != nullptr && ref_dir[0] != '\0')
-    {
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    if (const char * ref_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF")) {
         if (auto st = load_ref_mel(ref_dir, gm->hparams.fe_num_mels,
                                    mel_n_frames, gc->mel_buf);
             st != TRANSCRIBE_OK) return st;
-    } else {
+        mel_from_ref = true;
+    }
+#endif
+    if (!mel_from_ref) {
         if (auto st = gm->mel.compute(pcm, static_cast<size_t>(n_samples),
                                        gc->mel_buf, mel_n_frames);
             st != TRANSCRIBE_OK) return st;
@@ -674,7 +680,7 @@ transcribe_status run_batch_encode(GigaamSession *                         gc,
 
     // Debug-only full [d, T, n] intermediates, gated on the env var.
     if (transcribe::debug::enabled() &&
-        std::getenv("TRANSCRIBE_DUMP_ALL_BLOCKS") != nullptr)
+        transcribe::debug::dump_all_blocks_requested())
     {
         if (eb.dumps.pre_encode_out != nullptr) {
             transcribe::debug::dump_tensor("enc.subsample.out",

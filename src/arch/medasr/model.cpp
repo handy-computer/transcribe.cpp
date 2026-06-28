@@ -7,7 +7,7 @@
 // init_context() allocates the per-context state.
 //
 // run() builds the encoder graph, uploads the mel (or the reference
-// mel via TRANSCRIBE_MEDASR_MEL_FROM_REF), allocates and uploads the
+// mel via TRANSCRIBE_MEL_FROM_REF), allocates and uploads the
 // per-block fused-BN scale/bias inputs, computes the graph, reads
 // back the CTC logits, performs greedy collapse (drop blanks, collapse
 // repeats), and populates the result snapshot.
@@ -20,6 +20,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
 #include "transcribe-log.h"
@@ -299,6 +300,7 @@ transcribe_status init_context(transcribe_model *                model,
     return TRANSCRIBE_OK;
 }
 
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 // Load reference mel sidecar from <dir>/mel.in.f32 (or
 // frontend.mel.out.f32).
 transcribe_status load_ref_mel(const std::string & dir,
@@ -349,6 +351,7 @@ transcribe_status load_ref_mel(const std::string & dir,
     }
     return TRANSCRIBE_OK;
 }
+#endif // TRANSCRIBE_ENABLE_VALIDATION_HOOKS
 
 // Greedy CTC decode: argmax per frame, collapse repeats, drop blanks
 // AND skip the LASR special tokens (<s>=1, </s>=2, <unk>=3) — matching
@@ -402,14 +405,17 @@ transcribe_status run(transcribe_session *      session,
 
     // ----- Mel acquisition -----------------------------------------------
     int mel_n_frames = 0;
+    bool mel_from_ref = false;
     const int64_t t_mel_start = ggml_time_us();
-    if (const char * ref_dir = std::getenv("TRANSCRIBE_MEDASR_MEL_FROM_REF");
-        ref_dir != nullptr && ref_dir[0] != '\0')
-    {
+#ifdef TRANSCRIBE_ENABLE_VALIDATION_HOOKS
+    if (const char * ref_dir = transcribe::env::str("TRANSCRIBE_MEL_FROM_REF")) {
         if (auto st = load_ref_mel(ref_dir, gm->hparams.fe_num_mels,
                                    mel_n_frames, gc->mel_buf);
             st != TRANSCRIBE_OK) return st;
-    } else {
+        mel_from_ref = true;
+    }
+#endif
+    if (!mel_from_ref) {
         int out_n_mels = 0;
         std::vector<float> m_major;
         if (auto st = gm->mel->compute(pcm, static_cast<size_t>(n_samples),
@@ -577,54 +583,6 @@ transcribe_status run(transcribe_session *      session,
     }
     try_dump("enc.out_norm.out", eb.dumps.out_norm_out,        "encoder.out_norm");
     try_dump("enc.ctc_logits",   eb.dumps.ctc_logits_for_dump, "encoder.ctc_logits");
-
-    // Diagnostic: per-block stats gated by TRANSCRIBE_MEDASR_DEBUG_STATS.
-    // Prints min / max / mean / has_nan / has_inf for each marker tensor
-    // to stderr (Modal captures and surfaces stderr in the run logs).
-    // Used to localize where CUDA Q* output diverges from F32 / F16.
-    if (const char * dbg = std::getenv("TRANSCRIBE_MEDASR_DEBUG_STATS");
-        dbg != nullptr && dbg[0] != '\0')
-    {
-        std::vector<float> tmp;
-        auto report = [&](const char * name, ggml_tensor * t) {
-            if (t == nullptr) return;
-            const size_t n = static_cast<size_t>(ggml_nelements(t));
-            tmp.assign(n, 0.0f);
-            ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(float));
-            float mn = +1e30f, mx = -1e30f;
-            double sum = 0.0;
-            int n_nan = 0, n_inf = 0;
-            for (size_t i = 0; i < n; ++i) {
-                const float v = tmp[i];
-                if (std::isnan(v)) { ++n_nan; continue; }
-                if (std::isinf(v)) { ++n_inf; continue; }
-                sum += v;
-                if (v < mn) mn = v;
-                if (v > mx) mx = v;
-            }
-            const double mean = n > 0 ? sum / static_cast<double>(n) : 0.0;
-            log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
-                         "STATS %-26s n=%zu  min=%+.4e  max=%+.4e  mean=%+.4e  nan=%d  inf=%d",
-                         name, n, mn, mx, mean, n_nan, n_inf);
-        };
-        report("mel.in",                eb.mel_in);
-        report("sub.after_dense0",      eb.dumps.sub_after_dense0);
-        report("sub.after_conv0",       eb.dumps.sub_after_conv0);
-        report("sub.after_conv1",       eb.dumps.sub_after_conv1);
-        report("enc.subsampling.out",   eb.dumps.subsampling_out);
-        report("enc.block.0.post_ff1",  eb.dumps.block0_post_ff1);
-        report("enc.block.0.post_attn", eb.dumps.block0_post_attn);
-        report("enc.block.0.post_conv", eb.dumps.block0_post_conv);
-        report("enc.block.0.post_ff2",  eb.dumps.block0_post_ff2);
-        for (int i = 0; i < n_layers; ++i) {
-            if (eb.dumps.all_block_outs[i] == nullptr) continue;
-            char nm[32];
-            std::snprintf(nm, sizeof(nm), "enc.block.%d.out", i);
-            report(nm, eb.dumps.all_block_outs[i]);
-        }
-        report("enc.out_norm.out", eb.dumps.out_norm_out);
-        report("enc.ctc_logits",   eb.dumps.ctc_logits_for_dump);
-    }
 
     // Per-utterance encoder-output dump (single-shot baseline for the
     // batched-equals-single-shot gate). Matches the parakeet / gigaam name.

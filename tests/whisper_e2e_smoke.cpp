@@ -59,10 +59,10 @@ bool file_exists(const std::string & path) {
 } // namespace
 
 int main() {
-    const char * env = std::getenv("TRANSCRIBE_WHISPER_MODEL");
+    const char * env = std::getenv("TRANSCRIBE_WHISPER_GGUF");
     if (env == nullptr || env[0] == '\0') {
         std::fprintf(stderr,
-                     "whisper_e2e_smoke: TRANSCRIBE_WHISPER_MODEL not set; skipping.\n");
+                     "whisper_e2e_smoke: TRANSCRIBE_WHISPER_GGUF not set; skipping.\n");
         return 77;
     }
     const std::string model_path = env;

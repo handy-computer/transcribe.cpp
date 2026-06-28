@@ -14,6 +14,7 @@
 #include "transcribe-arch.h"
 #include "transcribe-batch-util.h"
 #include "transcribe-debug.h"
+#include "transcribe-env.h"
 #include "transcribe-flash-policy.h"
 #include "transcribe-load-common.h"
 #include "transcribe-loader.h"
@@ -1806,7 +1807,7 @@ transcribe_status run_batch(
         cc->batch_results.push_back(std::move(rs));
     }
 
-    if (const char * e = std::getenv("TRANSCRIBE_PERF_DEBUG"); e && *e && *e != '0') {
+    if (transcribe::env::flag("TRANSCRIBE_PERF_DEBUG")) {
         log_msg(TRANSCRIBE_LOG_LEVEL_DEBUG,
             "cohere run_batch: n=%d T_enc_max=%d kv_cap=%d prompt=%d\n"
             "  mel=%.1fms (parallel)  enc=%.1fms (serial x%d)  decode=%.1fms (batched)",
