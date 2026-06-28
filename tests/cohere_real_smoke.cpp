@@ -54,13 +54,11 @@
 // exist for the real 2.0B dimensions and cannot be exercised by a
 // synthetic fixture.
 
-#include "transcribe.h"
-
 #include "arch/cohere/cohere.h"
 #include "arch/cohere/weights.h"
-#include "transcribe-model.h"
-
 #include "ggml.h"
+#include "transcribe-model.h"
+#include "transcribe.h"
 
 #include <sys/stat.h>
 
@@ -73,51 +71,44 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ_INT(actual, expected)                                      \
-    do {                                                                    \
-        const long long _a = static_cast<long long>(actual);                \
-        const long long _e = static_cast<long long>(expected);              \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: %s = %lld, expected %lld\n",          \
-                         __FILE__, __LINE__, #actual, _a, _e);              \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ_INT(actual, expected)                                                                           \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
-#define CHECK_STR_EQ(a, b)                                                  \
-    do {                                                                    \
-        const std::string _av = (a);                                        \
-        const std::string _bv = (b);                                        \
-        if (_av != _bv) {                                                   \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: \"%s\" != \"%s\"\n",                  \
-                         __FILE__, __LINE__,                                \
-                         _av.c_str(), _bv.c_str());                         \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_STR_EQ(a, b)                                                                                        \
+    do {                                                                                                          \
+        const std::string _av = (a);                                                                              \
+        const std::string _bv = (b);                                                                              \
+        if (_av != _bv) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: \"%s\" != \"%s\"\n", __FILE__, __LINE__, _av.c_str(), _bv.c_str()); \
+            ++g_failures;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
-const transcribe::cohere::CohereModel *
-cohere_view(const struct transcribe_model * m) {
+const transcribe::cohere::CohereModel * cohere_view(const struct transcribe_model * m) {
     return static_cast<const transcribe::cohere::CohereModel *>(m);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const char * env = std::getenv("TRANSCRIBE_COHERE_GGUF");
@@ -127,27 +118,24 @@ int main() {
                      "set; skipping. Convert a real model with:\n"
                      "  uv run scripts/convert-cohere.py "
                      "<model-dir> --repo-id CohereLabs/cohere-transcribe-03-2026\n"
-                     "and re-run with TRANSCRIBE_COHERE_GGUF=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf\n");
+                     "and re-run with "
+                     "TRANSCRIBE_COHERE_GGUF=models/cohere-transcribe-03-2026/cohere-transcribe-03-2026-BF16.gguf\n");
         return 77;
     }
     const std::string fixture = env;
 
     if (!file_exists(fixture)) {
-        std::fprintf(stderr,
-                     "cohere_real_smoke: file not found: %s\n",
-                     fixture.c_str());
+        std::fprintf(stderr, "cohere_real_smoke: file not found: %s\n", fixture.c_str());
         return 77;
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     struct transcribe_model * model = nullptr;
 
-    const transcribe_status st =
-        transcribe_model_load_file(fixture.c_str(), &mp, &model);
+    const transcribe_status st = transcribe_model_load_file(fixture.c_str(), &mp, &model);
     if (st != TRANSCRIBE_OK) {
-        std::fprintf(stderr,
-                     "FAIL load: expected OK, got %s\n",
-                     transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL load: expected OK, got %s\n", transcribe_status_string(st));
         return EXIT_FAILURE;
     }
     if (model == nullptr) {
@@ -159,25 +147,23 @@ int main() {
     // "Metal" (Apple Silicon, default) or "CPU" (fallback). The
     // exact label depends on the build platform; we just assert
     // it is non-empty.
-    CHECK_STR_EQ(transcribe_model_arch_string(model),    "cohere_asr");
+    CHECK_STR_EQ(transcribe_model_arch_string(model), "cohere_asr");
     CHECK_STR_EQ(transcribe_model_variant_string(model), "cohere-transcribe-03-2026");
     {
         const std::string backend = transcribe_model_backend(model);
         if (backend.empty()) {
-            std::fprintf(stderr,
-                         "FAIL: backend = \"\" after load, expected non-empty\n");
+            std::fprintf(stderr, "FAIL: backend = \"\" after load, expected non-empty\n");
             ++g_failures;
         } else {
-            std::fprintf(stderr, "cohere_real_smoke: backend=%s\n",
-                         backend.c_str());
+            std::fprintf(stderr, "cohere_real_smoke: backend=%s\n", backend.c_str());
         }
     }
 
     // Family invariants + language catalog.
-    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
-    const bool caps_ok =
-        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
-    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
+    transcribe_capabilities caps_buf;
+    transcribe_capabilities_init(&caps_buf);
+    const bool                      caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps    = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK_EQ_INT(caps->native_sample_rate, 16000);
@@ -209,45 +195,45 @@ int main() {
     const auto & hp = cm->hparams;
 
     // Encoder (Conformer, 48 layers, d_model 1280, 8 heads).
-    CHECK_EQ_INT(hp.enc_n_layers,             48);
-    CHECK_EQ_INT(hp.enc_d_model,              1280);
-    CHECK_EQ_INT(hp.enc_n_heads,              8);
-    CHECK_EQ_INT(hp.enc_head_dim(),           160);  // 1280 / 8
+    CHECK_EQ_INT(hp.enc_n_layers, 48);
+    CHECK_EQ_INT(hp.enc_d_model, 1280);
+    CHECK_EQ_INT(hp.enc_n_heads, 8);
+    CHECK_EQ_INT(hp.enc_head_dim(), 160);  // 1280 / 8
     // ff_expansion_factor == 4 -> d_ff == d_model * 4 == 5120
-    CHECK_EQ_INT(hp.enc_d_ff,                 5120);
-    CHECK_EQ_INT(hp.enc_conv_kernel,          9);
-    CHECK_EQ_INT(hp.enc_subsampling_factor,   8);
+    CHECK_EQ_INT(hp.enc_d_ff, 5120);
+    CHECK_EQ_INT(hp.enc_conv_kernel, 9);
+    CHECK_EQ_INT(hp.enc_subsampling_factor, 8);
     CHECK_EQ_INT(hp.enc_subsampling_channels, 256);
-    CHECK_EQ_INT(hp.enc_pos_emb_max_len,      5000);
+    CHECK_EQ_INT(hp.enc_pos_emb_max_len, 5000);
     CHECK(hp.enc_use_bias == true);
 
     // Decoder (autoregressive Transformer, 8 layers, hidden 1024,
     // 8 heads, inner 4096, relu activation, max_seq 1024).
-    CHECK_EQ_INT(hp.dec_n_layers,  8);
-    CHECK_EQ_INT(hp.dec_hidden,    1024);
-    CHECK_EQ_INT(hp.dec_n_heads,   8);
+    CHECK_EQ_INT(hp.dec_n_layers, 8);
+    CHECK_EQ_INT(hp.dec_hidden, 1024);
+    CHECK_EQ_INT(hp.dec_n_heads, 8);
     CHECK_EQ_INT(hp.dec_head_dim(), 128);  // 1024 / 8
-    CHECK_EQ_INT(hp.dec_inner,     4096);
-    CHECK_EQ_INT(hp.dec_max_seq,   1024);
+    CHECK_EQ_INT(hp.dec_inner, 4096);
+    CHECK_EQ_INT(hp.dec_max_seq, 1024);
     CHECK_STR_EQ(hp.dec_activation, "relu");
 
     // Frontend (mel feature extractor).
-    CHECK_STR_EQ(hp.fe_type,       "mel");
-    CHECK_EQ_INT(hp.fe_num_mels,    128);
+    CHECK_STR_EQ(hp.fe_type, "mel");
+    CHECK_EQ_INT(hp.fe_num_mels, 128);
     CHECK_EQ_INT(hp.fe_sample_rate, 16000);
-    CHECK_EQ_INT(hp.fe_n_fft,       512);
-    CHECK_EQ_INT(hp.fe_win_length,  400);   // 0.025 s * 16000
-    CHECK_EQ_INT(hp.fe_hop_length,  160);   // 0.010 s * 16000
-    CHECK_STR_EQ(hp.fe_window,      "hann");
-    CHECK_STR_EQ(hp.fe_normalize,   "per_feature");
-    CHECK_STR_EQ(hp.fe_pad_mode,    "constant");
-    CHECK(hp.fe_dither       == 0.0f);
+    CHECK_EQ_INT(hp.fe_n_fft, 512);
+    CHECK_EQ_INT(hp.fe_win_length, 400);  // 0.025 s * 16000
+    CHECK_EQ_INT(hp.fe_hop_length, 160);  // 0.010 s * 16000
+    CHECK_STR_EQ(hp.fe_window, "hann");
+    CHECK_STR_EQ(hp.fe_normalize, "per_feature");
+    CHECK_STR_EQ(hp.fe_pad_mode, "constant");
+    CHECK(hp.fe_dither == 0.0f);
     CHECK(hp.fe_pre_emphasis == 0.97f);
-    CHECK(hp.fe_f_min        == 0.0f);
-    CHECK(hp.fe_f_max        == 8000.0f);
+    CHECK(hp.fe_f_min == 0.0f);
+    CHECK(hp.fe_f_max == 8000.0f);
 
     // Block vectors sized from hparams.
-    CHECK_EQ_INT(cm->weights.blocks.size(),     48);
+    CHECK_EQ_INT(cm->weights.blocks.size(), 48);
     CHECK_EQ_INT(cm->weights.dec_blocks.size(), 8);
 
     // Total tensor count: derived rigorously from the converter
@@ -269,15 +255,14 @@ int main() {
     // collectively prove every tensor in the catalog was present
     // and correctly shaped. We still sanity-check the arithmetic.
     {
-        const int expected_total =
-              12           // PRE_ENCODE_TABLE
-            + 48 * 39      // ENCODER_BLOCK_TABLE per layer
-            + 2            // ENC_DEC_PROJ_TABLE
-            + 4            // DEC_EMBED_TABLE
-            + 8 * 26       // DECODER_BLOCK_TABLE per layer
-            + 2            // DEC_FINAL_NORM_TABLE
-            + 1            // HEAD_TABLE
-            + 2;           // frontend fb + window
+        const int expected_total = 12         // PRE_ENCODE_TABLE
+                                   + 48 * 39  // ENCODER_BLOCK_TABLE per layer
+                                   + 2        // ENC_DEC_PROJ_TABLE
+                                   + 4        // DEC_EMBED_TABLE
+                                   + 8 * 26   // DECODER_BLOCK_TABLE per layer
+                                   + 2        // DEC_FINAL_NORM_TABLE
+                                   + 1        // HEAD_TABLE
+                                   + 2;       // frontend fb + window
         CHECK_EQ_INT(expected_total, 2103);
     }
 
@@ -325,7 +310,7 @@ int main() {
         const auto * t = cm->weights.dec_embed.token_w;
         CHECK(t != nullptr);
         if (t != nullptr) {
-            CHECK_EQ_INT(t->ne[0], 1024);                 // dec_hidden
+            CHECK_EQ_INT(t->ne[0], 1024);  // dec_hidden
             CHECK_EQ_INT(t->ne[1], hp.vocab_size);
             CHECK(hp.vocab_size > 0);
         }

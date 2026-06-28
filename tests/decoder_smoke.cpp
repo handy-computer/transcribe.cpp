@@ -34,7 +34,6 @@
 // on v3 rather than silently mis-validating.
 
 #include "transcribe.h"
-
 #include "wav.h"
 
 #include <sys/stat.h>
@@ -50,29 +49,26 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ_INT(actual, expected)                                      \
-    do {                                                                    \
-        const long long _a = static_cast<long long>(actual);                \
-        const long long _e = static_cast<long long>(expected);              \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: %s = %lld, expected %lld\n",          \
-                         __FILE__, __LINE__, #actual, _a, _e);              \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ_INT(actual, expected)                                                                           \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
@@ -82,21 +78,24 @@ bool file_exists(const std::string & path) {
 // jfk.wav's reference text is ~110 characters so this is trivially
 // fast at the test gate.
 int edit_distance(const std::string & a, const std::string & b) {
-    const int n = static_cast<int>(a.size());
-    const int m = static_cast<int>(b.size());
+    const int        n = static_cast<int>(a.size());
+    const int        m = static_cast<int>(b.size());
     std::vector<int> prev(static_cast<size_t>(m + 1));
     std::vector<int> curr(static_cast<size_t>(m + 1));
-    for (int j = 0; j <= m; ++j) prev[static_cast<size_t>(j)] = j;
+    for (int j = 0; j <= m; ++j) {
+        prev[static_cast<size_t>(j)] = j;
+    }
     for (int i = 1; i <= n; ++i) {
         curr[0] = i;
         for (int j = 1; j <= m; ++j) {
-            const int cost = (a[static_cast<size_t>(i - 1)] ==
-                              b[static_cast<size_t>(j - 1)]) ? 0 : 1;
-            const int del = prev[static_cast<size_t>(j)]     + 1;
-            const int ins = curr[static_cast<size_t>(j - 1)] + 1;
-            const int sub = prev[static_cast<size_t>(j - 1)] + cost;
-            int best = del < ins ? del : ins;
-            if (sub < best) best = sub;
+            const int cost = (a[static_cast<size_t>(i - 1)] == b[static_cast<size_t>(j - 1)]) ? 0 : 1;
+            const int del  = prev[static_cast<size_t>(j)] + 1;
+            const int ins  = curr[static_cast<size_t>(j - 1)] + 1;
+            const int sub  = prev[static_cast<size_t>(j - 1)] + cost;
+            int       best = del < ins ? del : ins;
+            if (sub < best) {
+                best = sub;
+            }
             curr[static_cast<size_t>(j)] = best;
         }
         prev.swap(curr);
@@ -114,7 +113,7 @@ const char * const k_jfk_reference_text =
 
 constexpr int k_max_edit_distance = 3;
 
-} // namespace
+}  // namespace
 
 int main() {
     // ---- Resolve env -----------------------------------------------
@@ -126,28 +125,25 @@ int main() {
         return 77;
     }
     if (!file_exists(gguf_env)) {
-        std::fprintf(stderr,
-                     "decoder_smoke: gguf file not found: %s\n", gguf_env);
+        std::fprintf(stderr, "decoder_smoke: gguf file not found: %s\n", gguf_env);
         return 77;
     }
 
-    const std::string wav_path =
-        std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
+    const std::string wav_path = std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
     if (!file_exists(wav_path)) {
-        std::fprintf(stderr, "decoder_smoke: wav not found: %s\n",
-                     wav_path.c_str());
+        std::fprintf(stderr, "decoder_smoke: wav not found: %s\n", wav_path.c_str());
         return EXIT_FAILURE;
     }
 
     // ---- Load model ------------------------------------------------
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+
     struct transcribe_model * model = nullptr;
     {
-        const transcribe_status st =
-            transcribe_model_load_file(gguf_env, &mp, &model);
+        const transcribe_status st = transcribe_model_load_file(gguf_env, &mp, &model);
         if (st != TRANSCRIBE_OK || model == nullptr) {
-            std::fprintf(stderr, "decoder_smoke: load failed: %s\n",
-                         transcribe_status_string(st));
+            std::fprintf(stderr, "decoder_smoke: load failed: %s\n", transcribe_status_string(st));
             return EXIT_FAILURE;
         }
     }
@@ -160,7 +156,8 @@ int main() {
         if (variant != "tdt-0.6b-v2") {
             std::fprintf(stderr,
                          "decoder_smoke: golden is for tdt-0.6b-v2 only, "
-                         "got \"%s\"\n", variant.c_str());
+                         "got \"%s\"\n",
+                         variant.c_str());
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
@@ -171,23 +168,22 @@ int main() {
 
     // ---- Load wav --------------------------------------------------
     std::vector<float> pcm;
-    std::string load_err;
+    std::string        load_err;
     if (!transcribe_cli::load_wav_mono_16k(wav_path, pcm, load_err)) {
-        std::fprintf(stderr, "decoder_smoke: wav load: %s\n",
-                     load_err.c_str());
+        std::fprintf(stderr, "decoder_smoke: wav load: %s\n", load_err.c_str());
         transcribe_model_free(model);
         return EXIT_FAILURE;
     }
 
     // ---- Init context + run ----------------------------------------
-    transcribe_session_params cp; transcribe_session_params_init(&cp);
+    transcribe_session_params cp;
+    transcribe_session_params_init(&cp);
+
     struct transcribe_session * ctx = nullptr;
     {
-        const transcribe_status st =
-            transcribe_session_init(model, &cp, &ctx);
+        const transcribe_status st = transcribe_session_init(model, &cp, &ctx);
         if (st != TRANSCRIBE_OK || ctx == nullptr) {
-            std::fprintf(stderr, "decoder_smoke: ctx init: %s\n",
-                         transcribe_status_string(st));
+            std::fprintf(stderr, "decoder_smoke: ctx init: %s\n", transcribe_status_string(st));
             transcribe_model_free(model);
             return EXIT_FAILURE;
         }
@@ -198,19 +194,18 @@ int main() {
     // check this so a regression that pre-populates ghost results
     // before the first run is caught.
     CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
-    CHECK_EQ_INT(transcribe_n_words(ctx),    0);
-    CHECK_EQ_INT(transcribe_n_tokens(ctx),   0);
+    CHECK_EQ_INT(transcribe_n_words(ctx), 0);
+    CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
     CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
     CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
     rp.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
     {
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         if (st != TRANSCRIBE_OK) {
-            std::fprintf(stderr, "decoder_smoke: run: %s\n",
-                         transcribe_status_string(st));
+            std::fprintf(stderr, "decoder_smoke: run: %s\n", transcribe_status_string(st));
             transcribe_session_free(ctx);
             transcribe_model_free(model);
             return EXIT_FAILURE;
@@ -224,13 +219,9 @@ int main() {
     std::fprintf(stdout, "decoder_smoke: text=\"%s\"\n", actual.c_str());
 
     const int dist = edit_distance(actual, k_jfk_reference_text);
-    std::fprintf(stdout,
-                 "decoder_smoke: edit_distance=%d (tolerance=%d)\n",
-                 dist, k_max_edit_distance);
+    std::fprintf(stdout, "decoder_smoke: edit_distance=%d (tolerance=%d)\n", dist, k_max_edit_distance);
     if (dist > k_max_edit_distance) {
-        std::fprintf(stderr,
-                     "FAIL: text edit distance %d exceeds %d\n",
-                     dist, k_max_edit_distance);
+        std::fprintf(stderr, "FAIL: text edit distance %d exceeds %d\n", dist, k_max_edit_distance);
         std::fprintf(stderr, "  reference: %s\n", k_jfk_reference_text);
         std::fprintf(stderr, "  actual:    %s\n", actual.c_str());
         ++g_failures;
@@ -242,10 +233,11 @@ int main() {
     const int n_tokens = transcribe_n_tokens(ctx);
     CHECK(n_tokens > 0);
 
-    int   prev_t0  = -1;
-    int   n_with_p = 0;
+    int prev_t0  = -1;
+    int n_with_p = 0;
     for (int i = 0; i < n_tokens; ++i) {
-        transcribe_token tok; transcribe_token_init(&tok);
+        transcribe_token tok;
+        transcribe_token_init(&tok);
         CHECK_EQ_INT(transcribe_get_token(ctx, i, &tok), TRANSCRIBE_OK);
 
         CHECK(tok.id >= 0);
@@ -256,7 +248,9 @@ int main() {
         CHECK_EQ_INT(tok.seg_index, 0);
         CHECK(tok.word_index >= 0);
         CHECK(tok.p >= 0.0f && tok.p <= 1.0001f && !std::isnan(tok.p));
-        if (tok.p > 0.0f) ++n_with_p;
+        if (tok.p > 0.0f) {
+            ++n_with_p;
+        }
         prev_t0 = static_cast<int>(tok.t0_ms);
     }
     // At least most tokens should carry a positive confidence (the
@@ -275,34 +269,31 @@ int main() {
     // order of ~20 words.
     CHECK(n_words >= 15 && n_words <= 30);
 
-    int last_word_t1 = -1;
+    int last_word_t1      = -1;
     int n_words_with_text = 0;
     for (int i = 0; i < n_words; ++i) {
-        transcribe_word wrd; transcribe_word_init(&wrd);
+        transcribe_word wrd;
+        transcribe_word_init(&wrd);
         CHECK_EQ_INT(transcribe_get_word(ctx, i, &wrd), TRANSCRIBE_OK);
 
         CHECK(wrd.text != nullptr);
-        if (wrd.text != nullptr && wrd.text[0] != '\0') ++n_words_with_text;
+        if (wrd.text != nullptr && wrd.text[0] != '\0') {
+            ++n_words_with_text;
+        }
         CHECK_EQ_INT(wrd.seg_index, 0);
         CHECK(wrd.first_token >= 0 && wrd.first_token < n_tokens);
         CHECK(wrd.n_tokens > 0 && wrd.first_token + wrd.n_tokens <= n_tokens);
         CHECK(wrd.t0_ms >= 0);
         CHECK(wrd.t1_ms >= wrd.t0_ms);
-        CHECK(wrd.t0_ms >= last_word_t1 - 200); // allow some inter-word slop
+        CHECK(wrd.t0_ms >= last_word_t1 - 200);  // allow some inter-word slop
         // No leading space on a word — the result builder strips it.
         if (wrd.text != nullptr && wrd.text[0] == ' ') {
-            std::fprintf(stderr,
-                         "FAIL: word %d has leading space: \"%s\"\n",
-                         i, wrd.text);
+            std::fprintf(stderr, "FAIL: word %d has leading space: \"%s\"\n", i, wrd.text);
             ++g_failures;
         }
         // No SentencePiece marker should leak into a word's text.
-        if (wrd.text != nullptr &&
-            std::strstr(wrd.text, k_sp_marker) != nullptr)
-        {
-            std::fprintf(stderr,
-                         "FAIL: word %d contains raw SP marker: \"%s\"\n",
-                         i, wrd.text);
+        if (wrd.text != nullptr && std::strstr(wrd.text, k_sp_marker) != nullptr) {
+            std::fprintf(stderr, "FAIL: word %d contains raw SP marker: \"%s\"\n", i, wrd.text);
             ++g_failures;
         }
         last_word_t1 = static_cast<int>(wrd.t1_ms);
@@ -313,48 +304,52 @@ int main() {
     const int n_segments = transcribe_n_segments(ctx);
     CHECK_EQ_INT(n_segments, 1);
 
-    transcribe_segment seg0; transcribe_segment_init(&seg0);
+    transcribe_segment seg0;
+    transcribe_segment_init(&seg0);
     CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &seg0), TRANSCRIBE_OK);
 
     CHECK(seg0.text != nullptr);
     CHECK(seg0.text != nullptr && seg0.text[0] != '\0');
     CHECK(seg0.t0_ms >= 0);
     CHECK(seg0.t1_ms > seg0.t0_ms);
-    CHECK_EQ_INT(seg0.first_word,  0);
-    CHECK_EQ_INT(seg0.n_words,     n_words);
+    CHECK_EQ_INT(seg0.first_word, 0);
+    CHECK_EQ_INT(seg0.n_words, n_words);
     CHECK_EQ_INT(seg0.first_token, 0);
-    CHECK_EQ_INT(seg0.n_tokens,    n_tokens);
+    CHECK_EQ_INT(seg0.n_tokens, n_tokens);
     // Segment text should equal full_text.
     CHECK(seg0.text != nullptr && std::strcmp(seg0.text, full) == 0);
     // Segment time should span the audio.
-    CHECK(seg0.t1_ms <= 12000); // jfk.wav is ~11 s; allow 1 s slack
+    CHECK(seg0.t1_ms <= 12000);  // jfk.wav is ~11 s; allow 1 s slack
 
     // ---- Out-of-bounds accessors leave the caller's struct zero-init.
     {
-        transcribe_token oob; transcribe_token_init(&oob);
+        transcribe_token oob;
+        transcribe_token_init(&oob);
         CHECK_EQ_INT(transcribe_get_token(ctx, n_tokens, &oob), TRANSCRIBE_OK);
         CHECK(oob.text == nullptr);
         CHECK_EQ_INT(oob.id, 0);
         CHECK_EQ_INT(transcribe_get_token(ctx, -1, &oob), TRANSCRIBE_OK);
         CHECK(oob.text == nullptr);
 
-        transcribe_word oob_w; transcribe_word_init(&oob_w);
+        transcribe_word oob_w;
+        transcribe_word_init(&oob_w);
         CHECK_EQ_INT(transcribe_get_word(ctx, n_words, &oob_w), TRANSCRIBE_OK);
         CHECK_EQ_INT(oob_w.n_tokens, 0);
 
-        transcribe_segment oob_s; transcribe_segment_init(&oob_s);
+        transcribe_segment oob_s;
+        transcribe_segment_init(&oob_s);
         CHECK_EQ_INT(transcribe_get_segment(ctx, 5, &oob_s), TRANSCRIBE_OK);
         CHECK(oob_s.text == nullptr);
     }
 
     // ---- Timings ---------------------------------------------------
-    transcribe_timings t; transcribe_timings_init(&t);
+    transcribe_timings t;
+    transcribe_timings_init(&t);
     CHECK(transcribe_get_timings(ctx, &t) == TRANSCRIBE_OK);
-    std::fprintf(stdout,
-                 "decoder_smoke: timings load=%.2f mel=%.2f encode=%.2f decode=%.2f\n",
-                 t.load_ms, t.mel_ms, t.encode_ms, t.decode_ms);
-    CHECK(t.load_ms   > 0.0f);
-    CHECK(t.mel_ms    > 0.0f);
+    std::fprintf(stdout, "decoder_smoke: timings load=%.2f mel=%.2f encode=%.2f decode=%.2f\n", t.load_ms, t.mel_ms,
+                 t.encode_ms, t.decode_ms);
+    CHECK(t.load_ms > 0.0f);
+    CHECK(t.mel_ms > 0.0f);
     CHECK(t.encode_ms > 0.0f);
     CHECK(t.decode_ms > 0.0f);
 
@@ -366,17 +361,18 @@ int main() {
     // ceiling contract: the request is an upper bound, not an exact
     // match. The default run above already covered AUTO→TOKEN.
     {
-        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
-        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_WORD;
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        transcribe_run_params rp2;
+        transcribe_run_params_init(&rp2);
+        rp2.timestamps             = TRANSCRIBE_TIMESTAMPS_WORD;
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_WORD);
         // Word table still present with real timings.
         const int w_n_words = transcribe_n_words(ctx);
         CHECK(w_n_words > 0);
         if (w_n_words > 0) {
-            transcribe_word w0; transcribe_word_init(&w0);
+            transcribe_word w0;
+            transcribe_word_init(&w0);
             CHECK_EQ_INT(transcribe_get_word(ctx, 0, &w0), TRANSCRIBE_OK);
             CHECK(w0.t1_ms >= w0.t0_ms);
         }
@@ -386,53 +382,57 @@ int main() {
         // word_n_tokens cannot index into a cleared table.
         CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         for (int i = 0; i < w_n_words; ++i) {
-            transcribe_word wi; transcribe_word_init(&wi);
+            transcribe_word wi;
+            transcribe_word_init(&wi);
             CHECK_EQ_INT(transcribe_get_word(ctx, i, &wi), TRANSCRIBE_OK);
             CHECK_EQ_INT(wi.first_token, 0);
-            CHECK_EQ_INT(wi.n_tokens,    0);
+            CHECK_EQ_INT(wi.n_tokens, 0);
         }
         // Segment's token back-references also zeroed.
         {
-            transcribe_segment s0; transcribe_segment_init(&s0);
+            transcribe_segment s0;
+            transcribe_segment_init(&s0);
             CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
             CHECK_EQ_INT(s0.first_token, 0);
-            CHECK_EQ_INT(s0.n_tokens,    0);
+            CHECK_EQ_INT(s0.n_tokens, 0);
         }
         // Full text still populated.
         const char * full2 = transcribe_full_text(ctx);
         CHECK(full2 != nullptr && full2[0] != '\0');
     }
     {
-        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
-        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_SEGMENT;
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        transcribe_run_params rp2;
+        transcribe_run_params_init(&rp2);
+        rp2.timestamps             = TRANSCRIBE_TIMESTAMPS_SEGMENT;
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_SEGMENT);
-        CHECK_EQ_INT(transcribe_n_words(ctx),  0);
+        CHECK_EQ_INT(transcribe_n_words(ctx), 0);
         CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
         // Segment timings are still real at SEGMENT granularity.
         {
-            transcribe_segment s0; transcribe_segment_init(&s0);
+            transcribe_segment s0;
+            transcribe_segment_init(&s0);
             CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
             CHECK(s0.t1_ms > s0.t0_ms);
             CHECK(s0.text != nullptr && s0.text[0] != '\0');
         }
     }
     {
-        transcribe_run_params rp2; transcribe_run_params_init(&rp2);
-        rp2.timestamps = TRANSCRIBE_TIMESTAMPS_NONE;
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
+        transcribe_run_params rp2;
+        transcribe_run_params_init(&rp2);
+        rp2.timestamps             = TRANSCRIBE_TIMESTAMPS_NONE;
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp2);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
-        CHECK_EQ_INT(transcribe_n_words(ctx),  0);
+        CHECK_EQ_INT(transcribe_n_words(ctx), 0);
         CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         // Segment survives as the text carrier; its t0/t1 are zeroed.
         CHECK_EQ_INT(transcribe_n_segments(ctx), 1);
         {
-            transcribe_segment s0; transcribe_segment_init(&s0);
+            transcribe_segment s0;
+            transcribe_segment_init(&s0);
             CHECK_EQ_INT(transcribe_get_segment(ctx, 0, &s0), TRANSCRIBE_OK);
             CHECK_EQ_INT(s0.t0_ms, 0);
             CHECK_EQ_INT(s0.t1_ms, 0);
@@ -452,24 +452,23 @@ int main() {
     {
         // First, seed the context with a real successful run so
         // there is a previous result to clobber.
-        transcribe_run_params rp_ok; transcribe_run_params_init(&rp_ok);
-        rp_ok.timestamps = TRANSCRIBE_TIMESTAMPS_TOKEN;
-        const transcribe_status st_ok =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_ok);
+        transcribe_run_params rp_ok;
+        transcribe_run_params_init(&rp_ok);
+        rp_ok.timestamps              = TRANSCRIBE_TIMESTAMPS_TOKEN;
+        const transcribe_status st_ok = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_ok);
         CHECK(st_ok == TRANSCRIBE_OK);
         CHECK(transcribe_n_tokens(ctx) > 0);
 
-        transcribe_run_params rp_bad; transcribe_run_params_init(&rp_bad);
-        rp_bad.timestamps =
-            static_cast<transcribe_timestamp_kind>(9999);
-        const transcribe_status st_bad =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_bad);
+        transcribe_run_params rp_bad;
+        transcribe_run_params_init(&rp_bad);
+        rp_bad.timestamps              = static_cast<transcribe_timestamp_kind>(9999);
+        const transcribe_status st_bad = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_bad);
         CHECK(st_bad == TRANSCRIBE_ERR_INVALID_ARG);
         // All accessors return their safe sentinels.
         CHECK(std::strcmp(transcribe_full_text(ctx), "") == 0);
         CHECK_EQ_INT(transcribe_n_segments(ctx), 0);
-        CHECK_EQ_INT(transcribe_n_words(ctx),    0);
-        CHECK_EQ_INT(transcribe_n_tokens(ctx),   0);
+        CHECK_EQ_INT(transcribe_n_words(ctx), 0);
+        CHECK_EQ_INT(transcribe_n_tokens(ctx), 0);
         CHECK(transcribe_returned_timestamp_kind(ctx) == TRANSCRIBE_TIMESTAMPS_NONE);
     }
 

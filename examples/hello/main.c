@@ -33,13 +33,11 @@
 // Reads a WAV into mono float32 samples at its native rate. Returns a
 // malloc'd buffer the caller frees, or NULL on failure. Multi-channel
 // input is downmixed by averaging.
-static float * load_wav_mono(const char * path, int * out_n_samples,
-                             unsigned int * out_rate) {
-    unsigned int channels = 0;
-    unsigned int rate     = 0;
-    drwav_uint64 frames   = 0;
-    float * interleaved = drwav_open_file_and_read_pcm_frames_f32(
-        path, &channels, &rate, &frames, NULL);
+static float * load_wav_mono(const char * path, int * out_n_samples, unsigned int * out_rate) {
+    unsigned int channels    = 0;
+    unsigned int rate        = 0;
+    drwav_uint64 frames      = 0;
+    float *      interleaved = drwav_open_file_and_read_pcm_frames_f32(path, &channels, &rate, &frames, NULL);
     if (interleaved == NULL) {
         return NULL;
     }
@@ -60,6 +58,7 @@ static float * load_wav_mono(const char * path, int * out_n_samples,
     *out_n_samples = (int) frames;
     return mono;
 }
+
 // --------------------------------------------------------------------------
 
 int main(int argc, char ** argv) {
@@ -82,7 +81,8 @@ int main(int argc, char ** argv) {
     if (rate != 16000) {
         fprintf(stderr,
                 "error: audio must be 16 kHz (got %u Hz); resample first, "
-                "e.g. ffmpeg -i in.wav -ar 16000 -ac 1 out.wav\n", rate);
+                "e.g. ffmpeg -i in.wav -ar 16000 -ac 1 out.wav\n",
+                rate);
         free(pcm);
         return 1;
     }
@@ -91,10 +91,9 @@ int main(int argc, char ** argv) {
     //    call. NULL load/session params == library defaults. The returned
     //    session OWNS the model; transcribe_close frees both.
     struct transcribe_session * session = NULL;
-    transcribe_status st = transcribe_open(model_path, NULL, NULL, &session);
+    transcribe_status           st      = transcribe_open(model_path, NULL, NULL, &session);
     if (st != TRANSCRIBE_OK) {
-        fprintf(stderr, "error: transcribe_open: %s\n",
-                transcribe_status_string(st));
+        fprintf(stderr, "error: transcribe_open: %s\n", transcribe_status_string(st));
         free(pcm);
         return 1;
     }
@@ -104,8 +103,7 @@ int main(int argc, char ** argv) {
     //    run or close.
     st = transcribe_run(session, pcm, n_samples, NULL);
     if (st != TRANSCRIBE_OK) {
-        fprintf(stderr, "error: transcribe_run: %s\n",
-                transcribe_status_string(st));
+        fprintf(stderr, "error: transcribe_run: %s\n", transcribe_status_string(st));
         transcribe_close(session);
         free(pcm);
         return 1;

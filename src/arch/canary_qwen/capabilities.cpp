@@ -22,4 +22,4 @@ void apply_family_invariants(transcribe_model & model) {
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
 }
 
-} // namespace transcribe::canary_qwen
+}  // namespace transcribe::canary_qwen

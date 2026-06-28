@@ -47,15 +47,11 @@
 // expansion (rather than a constexpr array) keeps the existing
 // find_tensor signature (std::initializer_list<ggml_type>) untouched.
 
-#define TRANSCRIBE_QUANT_LINEAR_TYPES                                        \
-    GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16,                          \
-    GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,                                          \
-    GGML_TYPE_Q5_0, GGML_TYPE_Q5_1,                                          \
-    GGML_TYPE_Q8_0,                                                          \
-    GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K
+#define TRANSCRIBE_QUANT_LINEAR_TYPES                                                                             \
+    GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, \
+        GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K
 
-#define TRANSCRIBE_QUANT_CONV_TYPES                                          \
-    GGML_TYPE_F32, GGML_TYPE_F16
+#define TRANSCRIBE_QUANT_CONV_TYPES GGML_TYPE_F32, GGML_TYPE_F16
 
 namespace transcribe::weights {
 
@@ -70,11 +66,11 @@ namespace transcribe::weights {
 // returns nullptr. The lookup is purely against `ctx_meta`; the source
 // (a real GGUF on disk, or an in-memory legacy whisper.cpp .bin
 // adapter) is invisible at this layer.
-ggml_tensor * find_tensor(ggml_context *                    ctx_meta,
-                          const char *                      name,
-                          std::initializer_list<ggml_type>  allowed_types,
-                          std::initializer_list<int64_t>    expected_ne,
-                          const char *                      error_tag);
+ggml_tensor * find_tensor(ggml_context *                   ctx_meta,
+                          const char *                     name,
+                          std::initializer_list<ggml_type> allowed_types,
+                          std::initializer_list<int64_t>   expected_ne,
+                          const char *                     error_tag);
 
 // Format a per-layer tensor name. The caller passes a printf fmt
 // containing exactly one %d; the layer index is substituted. Returns
@@ -88,4 +84,4 @@ inline const char * lname(const char * fmt, int layer_idx) {
     return buf;
 }
 
-} // namespace transcribe::weights
+}  // namespace transcribe::weights

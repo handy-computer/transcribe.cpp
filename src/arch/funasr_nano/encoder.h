@@ -41,13 +41,13 @@ struct EncoderBuild {
     ggml_tensor * frontend_in = nullptr;  // [d_input, T_lfr] f32 input
     ggml_tensor * pe_in       = nullptr;  // [d_input, T_lfr] f32 sinusoidal PE
     ggml_tensor * out         = nullptr;  // [d_model, T_lfr]
-    EncoderDumps  dumps {};
+    EncoderDumps  dumps{};
     ggml_cgraph * graph = nullptr;
 };
 
-EncoderBuild build_encoder_graph(ggml_context *             compute_ctx,
-                                 const FunAsrNanoWeights &  weights,
-                                 const FunAsrNanoHParams &  hp,
-                                 int                        n_lfr_frames);
+EncoderBuild build_encoder_graph(ggml_context *            compute_ctx,
+                                 const FunAsrNanoWeights & weights,
+                                 const FunAsrNanoHParams & hp,
+                                 int                       n_lfr_frames);
 
-} // namespace transcribe::funasr_nano
+}  // namespace transcribe::funasr_nano

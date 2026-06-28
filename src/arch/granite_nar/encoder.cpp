@@ -16,16 +16,14 @@
 
 #include "encoder.h"
 
-#include "granite_nar.h"
-#include "weights.h"
-
 #include "conformer/conformer.h"
-#include "granite_conformer/shaw_attn.h"
-#include "transcribe-debug.h"
-#include "transcribe-mel.h"
-#include "transcribe-log.h"
-
 #include "ggml.h"
+#include "granite_conformer/shaw_attn.h"
+#include "granite_nar.h"
+#include "transcribe-debug.h"
+#include "transcribe-log.h"
+#include "transcribe-mel.h"
+#include "weights.h"
 
 #include <algorithm>
 #include <cmath>
@@ -41,52 +39,48 @@ namespace {
 constexpr float kLayerNormEps = 1e-5f;
 
 ggml_tensor * named(ggml_tensor * t, const char * name) {
-    if (t != nullptr && name != nullptr) ggml_set_name(t, name);
+    if (t != nullptr && name != nullptr) {
+        ggml_set_name(t, name);
+    }
     return t;
 }
 
-ggml_tensor * layer_norm(ggml_context * ctx, ggml_tensor * x,
-                         ggml_tensor * gamma, ggml_tensor * beta)
-{
+ggml_tensor * layer_norm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * gamma, ggml_tensor * beta) {
     ggml_tensor * y = ggml_norm(ctx, x, kLayerNormEps);
-    y = ggml_mul(ctx, y, gamma);
-    if (beta != nullptr) y = ggml_add(ctx, y, beta);
+    y               = ggml_mul(ctx, y, gamma);
+    if (beta != nullptr) {
+        y = ggml_add(ctx, y, beta);
+    }
     return y;
 }
 
-ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x,
-                     ggml_tensor * w, ggml_tensor * b)
-{
+ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
-    if (b != nullptr) y = ggml_add(ctx, y, b);
+    if (b != nullptr) {
+        y = ggml_add(ctx, y, b);
+    }
     return y;
 }
 
-} // namespace
+}  // namespace
 
 // Host-side mel + 2-frame stack.
 
-transcribe_status compute_mel_encoder_input(
-    const transcribe::MelFrontend & mel,
-    const float *                   pcm,
-    int                             n_samples,
-    int                             n_threads,
-    std::vector<float> &            out_mel,
-    int &                           out_t_enc)
-{
+transcribe_status compute_mel_encoder_input(const transcribe::MelFrontend & mel,
+                                            const float *                   pcm,
+                                            int                             n_samples,
+                                            int                             n_threads,
+                                            std::vector<float> &            out_mel,
+                                            int &                           out_t_enc) {
     if (pcm == nullptr || n_samples <= 0) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
     std::vector<float> raw;
-    int n_mels = 0;
-    int n_frames = 0;
-    if (const transcribe_status st = mel.compute(pcm,
-                                                 static_cast<size_t>(n_samples),
-                                                 raw, n_mels, n_frames,
-                                                 n_threads);
-        st != TRANSCRIBE_OK)
-    {
+    int                n_mels   = 0;
+    int                n_frames = 0;
+    if (const transcribe_status st = mel.compute(pcm, static_cast<size_t>(n_samples), raw, n_mels, n_frames, n_threads);
+        st != TRANSCRIBE_OK) {
         return st;
     }
 
@@ -100,9 +94,8 @@ transcribe_status compute_mel_encoder_input(
 
     const int stride = static_cast<int>(raw.size() / static_cast<size_t>(n_mels));
     if (stride <= 0 || stride < n_frames) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "granite_nar: mel buffer stride (%d) < expected frames (%d)",
-                     stride, n_frames);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar: mel buffer stride (%d) < expected frames (%d)", stride,
+                n_frames);
         return TRANSCRIBE_ERR_GGUF;
     }
 
@@ -111,7 +104,7 @@ transcribe_status compute_mel_encoder_input(
     for (int t = 0; t < t_enc; ++t) {
         float * dst = out_mel.data() + static_cast<size_t>(t) * input_dim;
         for (int m = 0; m < n_mels; ++m) {
-            dst[m]          = raw[static_cast<size_t>(m) * stride + 2 * t    ];
+            dst[m]          = raw[static_cast<size_t>(m) * stride + 2 * t];
             dst[m + n_mels] = raw[static_cast<size_t>(m) * stride + 2 * t + 1];
         }
     }
@@ -121,23 +114,24 @@ transcribe_status compute_mel_encoder_input(
 
 // Shaw bookkeeping (matches AR granite).
 
-std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_emb)
-{
+std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_emb) {
     std::vector<int32_t> dists(static_cast<size_t>(context_size) * context_size);
     for (int c = 0; c < context_size; ++c) {
         for (int r = 0; r < context_size; ++r) {
             int d = c - r;
-            if (d < -context_size) d = -context_size;
-            if (d >  context_size) d =  context_size;
-            dists[static_cast<size_t>(c) * context_size + r] =
-                static_cast<int32_t>(d + max_pos_emb);
+            if (d < -context_size) {
+                d = -context_size;
+            }
+            if (d > context_size) {
+                d = context_size;
+            }
+            dists[static_cast<size_t>(c) * context_size + r] = static_cast<int32_t>(d + max_pos_emb);
         }
     }
     return dists;
 }
 
-std::vector<float> precompute_last_block_mask(int context_size, int t_enc_remainder)
-{
+std::vector<float> precompute_last_block_mask(int context_size, int t_enc_remainder) {
     std::vector<float> mask(static_cast<size_t>(context_size) * context_size, 0.0f);
     if (t_enc_remainder <= 0 || t_enc_remainder >= context_size) {
         return mask;
@@ -156,21 +150,13 @@ std::vector<float> precompute_last_block_mask(int context_size, int t_enc_remain
 
 namespace {
 
-ggml_tensor * macaron(ggml_context * ctx, ggml_tensor * x,
-                      const GraniteNarEncBlock & b, bool is_ff1)
-{
+ggml_tensor * macaron(ggml_context * ctx, ggml_tensor * x, const GraniteNarEncBlock & b, bool is_ff1) {
     if (is_ff1) {
-        return transcribe::conformer::macaron_ff_residual(
-            ctx, x,
-            b.norm_ff1_w, b.norm_ff1_b,
-            b.ff1_up_w,   b.ff1_up_b,
-            b.ff1_down_w, b.ff1_down_b);
+        return transcribe::conformer::macaron_ff_residual(ctx, x, b.norm_ff1_w, b.norm_ff1_b, b.ff1_up_w, b.ff1_up_b,
+                                                          b.ff1_down_w, b.ff1_down_b);
     }
-    return transcribe::conformer::macaron_ff_residual(
-        ctx, x,
-        b.norm_ff2_w, b.norm_ff2_b,
-        b.ff2_up_w,   b.ff2_up_b,
-        b.ff2_down_w, b.ff2_down_b);
+    return transcribe::conformer::macaron_ff_residual(ctx, x, b.norm_ff2_w, b.norm_ff2_b, b.ff2_up_w, b.ff2_up_b,
+                                                      b.ff2_down_w, b.ff2_down_b);
 }
 
 ggml_tensor * conv_module(ggml_context *             ctx,
@@ -179,53 +165,44 @@ ggml_tensor * conv_module(ggml_context *             ctx,
                           ggml_tensor *              bn_fused_scale,
                           ggml_tensor *              bn_fused_bias,
                           int                        conv_kernel,
-                          int                        inner_dim)
-{
+                          int                        inner_dim) {
     const int64_t d_model = x->ne[0];
     const int64_t T       = x->ne[1];
 
     x = layer_norm(ctx, x, b.norm_conv_w, b.norm_conv_b);
     {
-        ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pointwise1_w,
-                                            d_model, 2 * inner_dim);
-        x = ggml_mul_mat(ctx, pw1, x);
-        x = ggml_add(ctx, x, b.conv_pointwise1_b);
+        ggml_tensor * pw1 = ggml_reshape_2d(ctx, b.conv_pointwise1_w, d_model, 2 * inner_dim);
+        x                 = ggml_mul_mat(ctx, pw1, x);
+        x                 = ggml_add(ctx, x, b.conv_pointwise1_b);
     }
     {
-        ggml_tensor * gate  = ggml_view_2d(ctx, x, inner_dim, T,
-                                           x->nb[1], 0);
-        ggml_tensor * value = ggml_view_2d(ctx, x, inner_dim, T,
-                                           x->nb[1],
-                                           inner_dim * ggml_element_size(x));
-        x = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
+        ggml_tensor * gate  = ggml_view_2d(ctx, x, inner_dim, T, x->nb[1], 0);
+        ggml_tensor * value = ggml_view_2d(ctx, x, inner_dim, T, x->nb[1], inner_dim * ggml_element_size(x));
+        x                   = ggml_mul(ctx, gate, ggml_sigmoid(ctx, value));
     }
-    x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+    x                 = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     const int padding = (conv_kernel - 1) / 2;
-    x = transcribe::conformer::conv_1d_dw_f32(
-        ctx, b.conv_depthwise_w, x,
-        /*stride=*/1, /*padding=*/padding, /*dilation=*/1);
-    x = transcribe::conformer::fused_batch_norm(ctx, x,
-                                                bn_fused_scale, bn_fused_bias);
-    x = ggml_silu(ctx, x);
-    x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+    x                 = transcribe::conformer::conv_1d_dw_f32(ctx, b.conv_depthwise_w, x,
+                                                              /*stride=*/1, /*padding=*/padding, /*dilation=*/1);
+    x                 = transcribe::conformer::fused_batch_norm(ctx, x, bn_fused_scale, bn_fused_bias);
+    x                 = ggml_silu(ctx, x);
+    x                 = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     {
-        ggml_tensor * pw2 = ggml_reshape_2d(ctx, b.conv_pointwise2_w,
-                                            inner_dim, d_model);
-        x = ggml_mul_mat(ctx, pw2, x);
-        x = ggml_add(ctx, x, b.conv_pointwise2_b);
+        ggml_tensor * pw2 = ggml_reshape_2d(ctx, b.conv_pointwise2_w, inner_dim, d_model);
+        x                 = ggml_mul_mat(ctx, pw2, x);
+        x                 = ggml_add(ctx, x, b.conv_pointwise2_b);
     }
     return x;
 }
 
-} // namespace
+}  // namespace
 
 EncoderBuild build_encoder_graph(ggml_context *            ctx,
                                  const GraniteNarWeights & weights,
                                  const GraniteNarHParams & hp,
                                  int                       T_enc,
-                                 bool                      /*use_flash*/)
-{
-    EncoderBuild eb {};
+                                 bool /*use_flash*/) {
+    EncoderBuild eb{};
     eb.n_blocks_local = (T_enc + hp.enc_context_size - 1) / hp.enc_context_size;
     const int T_pad   = eb.n_blocks_local * hp.enc_context_size;
     eb.last_block_rem = T_enc - (eb.n_blocks_local - 1) * hp.enc_context_size;
@@ -233,38 +210,32 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     const int64_t d_model   = hp.enc_hidden;
     const int64_t input_dim = hp.enc_input_dim;
     const int64_t inner_dim = static_cast<int64_t>(hp.enc_hidden) * hp.enc_conv_expansion;
-    const int conv_k        = hp.enc_conv_kernel_size;
-    const int n_heads       = hp.enc_n_heads;
-    const int head_dim      = hp.enc_head_dim;
-    const int ctx_size      = hp.enc_context_size;
-    const int n_layers      = hp.enc_n_layers;
+    const int     conv_k    = hp.enc_conv_kernel_size;
+    const int     n_heads   = hp.enc_n_heads;
+    const int     head_dim  = hp.enc_head_dim;
+    const int     ctx_size  = hp.enc_context_size;
+    const int     n_layers  = hp.enc_n_layers;
 
     eb.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, input_dim, T_enc);
     named(eb.mel_in, "enc.mel_in");
     ggml_set_input(eb.mel_in);
 
-    eb.attention_dists = ggml_new_tensor_1d(ctx, GGML_TYPE_I32,
-                                            static_cast<int64_t>(ctx_size) * ctx_size);
+    eb.attention_dists = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, static_cast<int64_t>(ctx_size) * ctx_size);
     named(eb.attention_dists, "enc.attention_dists");
     ggml_set_input(eb.attention_dists);
 
-    eb.last_block_mask = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
-                                            ctx_size, ctx_size,
-                                            eb.n_blocks_local);
+    eb.last_block_mask = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, ctx_size, ctx_size, eb.n_blocks_local);
     named(eb.last_block_mask, "enc.last_block_mask");
     ggml_set_input(eb.last_block_mask);
 
     if (T_pad > T_enc) {
-        eb.zero_pad = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
-                                         d_model, T_pad - T_enc);
+        eb.zero_pad = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d_model, T_pad - T_enc);
         named(eb.zero_pad, "enc.zero_pad");
         ggml_set_input(eb.zero_pad);
     }
 
     // Input linear (160 -> 1024).
-    ggml_tensor * x = linear(ctx, eb.mel_in,
-                             weights.enc_top.input_linear_w,
-                             weights.enc_top.input_linear_b);
+    ggml_tensor * x = linear(ctx, eb.mel_in, weights.enc_top.input_linear_w, weights.enc_top.input_linear_b);
     named(x, "enc.input_linear.out");
     eb.dumps.input_linear_out = x;
     transcribe::debug::mark_tensor_for_dump(x);
@@ -280,9 +251,13 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     std::vector<int> capture_idx;
     capture_idx.reserve(hp.enc_layer_indices.size());
     for (int32_t li : hp.enc_layer_indices) {
-        if (li > 0)       capture_idx.push_back(li - 1);
-        else if (li < 0)  capture_idx.push_back(n_layers + li);
-        else              capture_idx.push_back(0);
+        if (li > 0) {
+            capture_idx.push_back(li - 1);
+        } else if (li < 0) {
+            capture_idx.push_back(n_layers + li);
+        } else {
+            capture_idx.push_back(0);
+        }
     }
 
     std::vector<ggml_tensor *> captures(capture_idx.size(), nullptr);
@@ -298,18 +273,15 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
             transcribe::debug::mark_tensor_for_dump(x);
         }
 
-        const transcribe::granite_conformer::ShawAttnWeights shaw_w {
-            b.norm_attn_w, b.norm_attn_b,
-            b.attn_q_w, b.attn_kv_w, b.attn_rel_pos_emb,
-            b.attn_out_w, b.attn_out_b,
+        const transcribe::granite_conformer::ShawAttnWeights shaw_w{
+            b.norm_attn_w, b.norm_attn_b, b.attn_q_w, b.attn_kv_w, b.attn_rel_pos_emb, b.attn_out_w, b.attn_out_b,
         };
         ggml_tensor * attn_out = transcribe::granite_conformer::shaw_block_attn(
-            ctx, x,
-            eb.zero_pad, eb.attention_dists, eb.last_block_mask,
-            shaw_w,
-            n_heads, head_dim, ctx_size, eb.n_blocks_local, T_enc,
-            kLayerNormEps);
-        if (attn_out == nullptr) return eb;
+            ctx, x, eb.zero_pad, eb.attention_dists, eb.last_block_mask, shaw_w, n_heads, head_dim, ctx_size,
+            eb.n_blocks_local, T_enc, kLayerNormEps);
+        if (attn_out == nullptr) {
+            return eb;
+        }
         x = ggml_add(ctx, x, attn_out);
         if (i == 0) {
             named(x, "enc.block.0.post_attn");
@@ -317,10 +289,8 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
             transcribe::debug::mark_tensor_for_dump(x);
         }
 
-        ggml_tensor * conv_out = conv_module(
-            ctx, x, b,
-            b.conv_bn_fused_scale, b.conv_bn_fused_bias,
-            conv_k, static_cast<int>(inner_dim));
+        ggml_tensor * conv_out =
+            conv_module(ctx, x, b, b.conv_bn_fused_scale, b.conv_bn_fused_bias, conv_k, static_cast<int>(inner_dim));
         x = ggml_add(ctx, x, conv_out);
         if (i == 0) {
             named(x, "enc.block.0.post_conv");
@@ -368,32 +338,31 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
         // it for `importance = 1 - blank_prob_mid` per the reference.
         if ((i + 1) == bypass_after) {
             ggml_tensor * cl = ggml_mul_mat(ctx, weights.enc_top.ctc_proj_w, x);
-            cl = ggml_add(ctx, cl, weights.enc_top.ctc_proj_b);
+            cl               = ggml_add(ctx, cl, weights.enc_top.ctc_proj_b);
             // This is mid_logits in the reference modeling code:
             //   mid_logits = encoder.out(dropout(hidden))  at self_conditioning_layer
             // — the only place the char-CTC head is invoked by the model
             // forward. Dump it here as `enc.ctc_logits` so the C++ and ref
             // dumps capture the same semantic tensor.
             named(cl, "enc.ctc_logits");
-            eb.ctc_logits = cl;
+            eb.ctc_logits       = cl;
             eb.dumps.ctc_logits = cl;
             ggml_set_output(cl);
             transcribe::debug::mark_tensor_for_dump(cl);
-            ggml_tensor * cs = ggml_soft_max(ctx, cl);
+            ggml_tensor * cs         = ggml_soft_max(ctx, cl);
             // Slice the blank-token probability (channel 0). cs ne =
             // [n_ctc_vocab, T_enc]; view a [1, T_enc] window at offset 0
             // and reshape to [T_enc]. Element 0 of ne[0] is the blank.
-            ggml_tensor * blank_prob = ggml_view_2d(
-                ctx, cs, 1, T_enc, cs->nb[1], 0);
-            blank_prob = ggml_cont(ctx, blank_prob);
-            blank_prob = ggml_reshape_1d(ctx, blank_prob, T_enc);
+            ggml_tensor * blank_prob = ggml_view_2d(ctx, cs, 1, T_enc, cs->nb[1], 0);
+            blank_prob               = ggml_cont(ctx, blank_prob);
+            blank_prob               = ggml_reshape_1d(ctx, blank_prob, T_enc);
             named(blank_prob, "enc.mid_blank_probs");
             eb.mid_blank_probs = blank_prob;
             ggml_set_output(blank_prob);
 
             ggml_tensor * bypass = ggml_mul_mat(ctx, weights.enc_top.ctc_bypass_w, cs);
-            bypass = ggml_add(ctx, bypass, weights.enc_top.ctc_bypass_b);
-            x = ggml_add(ctx, x, bypass);
+            bypass               = ggml_add(ctx, bypass, weights.enc_top.ctc_bypass_b);
+            x                    = ggml_add(ctx, x, bypass);
         }
 
         // Multi-layer capture (matches reference's all_hidden_states
@@ -430,13 +399,15 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     ggml_tensor * cat = nullptr;
     for (size_t k = 0; k < captures.size(); ++k) {
         if (captures[k] == nullptr) {
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                         "granite_nar encoder: missing capture for layer index %d",
-                         (int)hp.enc_layer_indices[k]);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar encoder: missing capture for layer index %d",
+                    (int) hp.enc_layer_indices[k]);
             return eb;
         }
-        if (cat == nullptr) cat = captures[k];
-        else cat = ggml_concat(ctx, cat, captures[k], /*dim=*/0);
+        if (cat == nullptr) {
+            cat = captures[k];
+        } else {
+            cat = ggml_concat(ctx, cat, captures[k], /*dim=*/0);
+        }
     }
     named(cat, "enc.cat_out");
     eb.cat_out = cat;
@@ -449,40 +420,59 @@ EncoderBuild build_encoder_graph(ggml_context *            ctx,
     }
     ggml_build_forward_expand(eb.graph, eb.cat_out);
     ggml_build_forward_expand(eb.graph, eb.ctc_logits);
-    if (eb.ctc_bpe_logits)  ggml_build_forward_expand(eb.graph, eb.ctc_bpe_logits);
-    if (eb.mid_blank_probs) ggml_build_forward_expand(eb.graph, eb.mid_blank_probs);
-    if (eb.dumps.input_linear_out) ggml_build_forward_expand(eb.graph, eb.dumps.input_linear_out);
-    if (eb.dumps.block_0_out)      ggml_build_forward_expand(eb.graph, eb.dumps.block_0_out);
-    if (eb.dumps.block_0_post_ff1)  ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_ff1);
-    if (eb.dumps.block_0_post_attn) ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_attn);
-    if (eb.dumps.block_0_post_conv) ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_conv);
-    if (eb.dumps.block_0_post_ff2)  ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_ff2);
-    if (eb.dumps.block_mid_pre)    ggml_build_forward_expand(eb.graph, eb.dumps.block_mid_pre);
-    if (eb.dumps.block_mid_post)   ggml_build_forward_expand(eb.graph, eb.dumps.block_mid_post);
-    if (eb.dumps.block_last_out)   ggml_build_forward_expand(eb.graph, eb.dumps.block_last_out);
+    if (eb.ctc_bpe_logits) {
+        ggml_build_forward_expand(eb.graph, eb.ctc_bpe_logits);
+    }
+    if (eb.mid_blank_probs) {
+        ggml_build_forward_expand(eb.graph, eb.mid_blank_probs);
+    }
+    if (eb.dumps.input_linear_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.input_linear_out);
+    }
+    if (eb.dumps.block_0_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_0_out);
+    }
+    if (eb.dumps.block_0_post_ff1) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_ff1);
+    }
+    if (eb.dumps.block_0_post_attn) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_attn);
+    }
+    if (eb.dumps.block_0_post_conv) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_conv);
+    }
+    if (eb.dumps.block_0_post_ff2) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_0_post_ff2);
+    }
+    if (eb.dumps.block_mid_pre) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_mid_pre);
+    }
+    if (eb.dumps.block_mid_post) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_mid_post);
+    }
+    if (eb.dumps.block_last_out) {
+        ggml_build_forward_expand(eb.graph, eb.dumps.block_last_out);
+    }
 
     return eb;
 }
 
 // Host-side BPE CTC pool + greedy decode.
 
-void compute_bpe_ctc_initial_hypothesis(
-    const std::vector<float> & importance_non_blank,
-    const std::vector<float> & ctc_bpe_logits,
-    int                        n_bpe_vocab,
-    int                        T_enc,
-    int                        pool_window,
-    int                        blank_id,
-    std::vector<int32_t> &     out_token_ids)
-{
+void compute_bpe_ctc_initial_hypothesis(const std::vector<float> & importance_non_blank,
+                                        const std::vector<float> & ctc_bpe_logits,
+                                        int                        n_bpe_vocab,
+                                        int                        T_enc,
+                                        int                        pool_window,
+                                        int                        blank_id,
+                                        std::vector<int32_t> &     out_token_ids) {
     out_token_ids.clear();
     if (T_enc <= 0 || pool_window <= 0 || n_bpe_vocab <= 0) {
         return;
     }
     if (static_cast<int>(importance_non_blank.size()) < T_enc) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "granite_nar BPE CTC: importance has %zu entries, need >= %d",
-                     importance_non_blank.size(), T_enc);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "granite_nar BPE CTC: importance has %zu entries, need >= %d",
+                importance_non_blank.size(), T_enc);
         return;
     }
     const std::vector<float> & non_blank = importance_non_blank;
@@ -491,23 +481,26 @@ void compute_bpe_ctc_initial_hypothesis(
     // total non-blank posterior is non-zero contribute. Within a window
     // we form a weighted sum of the BPE logits, weighted by per-frame
     // non_blank_prob, normalised by the sum of weights.
-    const int n_windows = (T_enc + pool_window - 1) / pool_window;
+    const int          n_windows = (T_enc + pool_window - 1) / pool_window;
     std::vector<float> pooled(static_cast<size_t>(n_windows) * n_bpe_vocab, 0.0f);
     std::vector<int>   valid(n_windows, 0);
     for (int w = 0; w < n_windows; ++w) {
-        const int t0 = w * pool_window;
-        const int t1 = std::min(t0 + pool_window, T_enc);
-        float total = 0.0f;
-        for (int t = t0; t < t1; ++t) total += non_blank[t];
+        const int t0    = w * pool_window;
+        const int t1    = std::min(t0 + pool_window, T_enc);
+        float     total = 0.0f;
+        for (int t = t0; t < t1; ++t) {
+            total += non_blank[t];
+        }
         if (total <= 1e-9f) {
             continue;  // all-blank window — emit a blank, which collapse drops
         }
         float * dst = pooled.data() + static_cast<size_t>(w) * n_bpe_vocab;
         for (int t = t0; t < t1; ++t) {
-            const float wt = non_blank[t] / total;
-            const float * row = ctc_bpe_logits.data() +
-                                static_cast<size_t>(t) * n_bpe_vocab;
-            for (int v = 0; v < n_bpe_vocab; ++v) dst[v] += wt * row[v];
+            const float   wt  = non_blank[t] / total;
+            const float * row = ctc_bpe_logits.data() + static_cast<size_t>(t) * n_bpe_vocab;
+            for (int v = 0; v < n_bpe_vocab; ++v) {
+                dst[v] += wt * row[v];
+            }
         }
         valid[w] = 1;
     }
@@ -519,10 +512,13 @@ void compute_bpe_ctc_initial_hypothesis(
     for (int w = 0; w < n_windows; ++w) {
         int argmax = blank_id;
         if (valid[w]) {
-            const float * dst = pooled.data() + static_cast<size_t>(w) * n_bpe_vocab;
-            float best = dst[0];
+            const float * dst  = pooled.data() + static_cast<size_t>(w) * n_bpe_vocab;
+            float         best = dst[0];
             for (int v = 1; v < n_bpe_vocab; ++v) {
-                if (dst[v] > best) { best = dst[v]; argmax = v; }
+                if (dst[v] > best) {
+                    best   = dst[v];
+                    argmax = v;
+                }
             }
         }
         if (argmax != blank_id && argmax != prev) {
@@ -539,4 +535,4 @@ void compute_bpe_ctc_initial_hypothesis(
     }
 }
 
-} // namespace transcribe::granite_nar
+}  // namespace transcribe::granite_nar

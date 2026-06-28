@@ -47,7 +47,7 @@
 #include <string>
 
 #ifndef TRANSCRIBE_TEST_FIXTURES_DIR
-#  error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
+#    error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
 #endif
 
 namespace {
@@ -56,17 +56,16 @@ const std::string g_fixtures_dir = TRANSCRIBE_TEST_FIXTURES_DIR;
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
@@ -76,19 +75,14 @@ bool file_exists(const std::string & path) {
 // regeneration hint instead of a confusing test failure.
 bool fixtures_present() {
     static const char * const required[] = {
-        "arch_parakeet.gguf",
-        "arch_sensevoice.gguf",
-        "arch_funasr_nano.gguf",
-        "arch_unknown.gguf",
-        "corrupt_magic.gguf",
+        "arch_parakeet.gguf", "arch_sensevoice.gguf", "arch_funasr_nano.gguf",
+        "arch_unknown.gguf",  "corrupt_magic.gguf",
     };
     bool ok = true;
     for (const char * name : required) {
         const std::string p = g_fixtures_dir + "/" + name;
         if (!file_exists(p)) {
-            std::fprintf(stderr,
-                         "loader_smoke: fixture not found: %s\n",
-                         p.c_str());
+            std::fprintf(stderr, "loader_smoke: fixture not found: %s\n", p.c_str());
             ok = false;
         }
     }
@@ -102,22 +96,19 @@ bool fixtures_present() {
     return ok;
 }
 
-void check_load(const char *      fixture_name,
-                transcribe_status expected) {
+void check_load(const char * fixture_name, transcribe_status expected) {
     const std::string p = g_fixtures_dir + "/" + fixture_name;
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     // Sentinel so we can verify the loader clears out_model on every
     // failure path, not just on success.
-    struct transcribe_model * m = (struct transcribe_model *)0xdeadbeef;
+    struct transcribe_model * m = (struct transcribe_model *) 0xdeadbeef;
 
     const transcribe_status st = transcribe_model_load_file(p.c_str(), &mp, &m);
 
     if (st != expected) {
-        std::fprintf(stderr,
-                     "FAIL %s: expected %s, got %s\n",
-                     fixture_name,
-                     transcribe_status_string(expected),
+        std::fprintf(stderr, "FAIL %s: expected %s, got %s\n", fixture_name, transcribe_status_string(expected),
                      transcribe_status_string(st));
         ++g_failures;
     }
@@ -127,9 +118,7 @@ void check_load(const char *      fixture_name,
     // exercise non-OK paths; the success path lives in
     // transcribe_tokenizer_smoke.
     if (m != nullptr) {
-        std::fprintf(stderr,
-                     "FAIL %s: out_model not cleared (got %p)\n",
-                     fixture_name, (void *)m);
+        std::fprintf(stderr, "FAIL %s: out_model not cleared (got %p)\n", fixture_name, (void *) m);
         ++g_failures;
     }
 }
@@ -139,16 +128,14 @@ void check_load(const char *      fixture_name,
 // from ERR_GGUF. The leading slash + sentinel-y name avoids any chance
 // of colliding with a real file the developer happens to have.
 void test_missing_path() {
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
-    struct transcribe_model * m = (struct transcribe_model *)0xdeadbeef;
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+    struct transcribe_model * m = (struct transcribe_model *) 0xdeadbeef;
 
-    const transcribe_status st = transcribe_model_load_file(
-        "/__transcribe_loader_smoke_missing__.gguf", &mp, &m);
+    const transcribe_status st = transcribe_model_load_file("/__transcribe_loader_smoke_missing__.gguf", &mp, &m);
 
     if (st != TRANSCRIBE_ERR_FILE_NOT_FOUND) {
-        std::fprintf(stderr,
-                     "FAIL missing-path: expected FILE_NOT_FOUND, got %s\n",
-                     transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL missing-path: expected FILE_NOT_FOUND, got %s\n", transcribe_status_string(st));
         ++g_failures;
     }
     if (m != nullptr) {
@@ -163,16 +150,14 @@ void test_missing_path() {
 // TRANSCRIBE_ERR_GGUF means. We use the fixtures directory itself,
 // which is guaranteed to exist by the build dependency on `fixtures`.
 void test_directory_path() {
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
-    struct transcribe_model * m = (struct transcribe_model *)0xdeadbeef;
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+    struct transcribe_model * m = (struct transcribe_model *) 0xdeadbeef;
 
-    const transcribe_status st = transcribe_model_load_file(
-        g_fixtures_dir.c_str(), &mp, &m);
+    const transcribe_status st = transcribe_model_load_file(g_fixtures_dir.c_str(), &mp, &m);
 
     if (st != TRANSCRIBE_ERR_GGUF) {
-        std::fprintf(stderr,
-                     "FAIL directory-path: expected ERR_GGUF, got %s\n",
-                     transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL directory-path: expected ERR_GGUF, got %s\n", transcribe_status_string(st));
         ++g_failures;
     }
     if (m != nullptr) {
@@ -181,14 +166,13 @@ void test_directory_path() {
     }
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_missing_path();
 
     if (!fixtures_present()) {
-        std::fprintf(stderr,
-                     "loader_smoke: skipping fixture-dependent cases\n");
+        std::fprintf(stderr, "loader_smoke: skipping fixture-dependent cases\n");
         // 77 -> CTest "skipped" via SKIP_RETURN_CODE. This branch is a
         // backstop; the build dependency on `fixtures` should make sure
         // we never reach it under normal use.
@@ -201,15 +185,15 @@ int main() {
     // payload. The Parakeet handler now requires tokenizer.ggml.* and
     // surfaces the missing payload as TRANSCRIBE_ERR_GGUF — the loader
     // dispatched correctly, the family handler then rejected the file.
-    check_load("arch_parakeet.gguf",   TRANSCRIBE_ERR_GGUF);
+    check_load("arch_parakeet.gguf", TRANSCRIBE_ERR_GGUF);
     // Same shape for sensevoice / funasr_nano: the arch is in the
     // dispatch table, the handler runs, then rejects on the missing
     // hparam / tensor payload. Distinguishes "registered family but
     // bad GGUF" from "unknown architecture".
-    check_load("arch_sensevoice.gguf",  TRANSCRIBE_ERR_GGUF);
+    check_load("arch_sensevoice.gguf", TRANSCRIBE_ERR_GGUF);
     check_load("arch_funasr_nano.gguf", TRANSCRIBE_ERR_GGUF);
-    check_load("arch_unknown.gguf",    TRANSCRIBE_ERR_UNSUPPORTED_ARCH);
-    check_load("corrupt_magic.gguf",   TRANSCRIBE_ERR_GGUF);
+    check_load("arch_unknown.gguf", TRANSCRIBE_ERR_UNSUPPORTED_ARCH);
+    check_load("corrupt_magic.gguf", TRANSCRIBE_ERR_GGUF);
 
     if (g_failures > 0) {
         std::fprintf(stderr, "loader_smoke: %d failures\n", g_failures);

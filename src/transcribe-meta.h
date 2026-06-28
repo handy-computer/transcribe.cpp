@@ -31,10 +31,10 @@ namespace transcribe {
 // Tri-state result for a single GGUF KV read. Consumers must handle
 // BadType explicitly rather than fall back silently.
 enum class KvResult {
-    Absent,    // Key not present in the gguf.
-    Ok,        // Key present, type matches expectation, value extracted.
-    BadType,   // Key present but the GGUF type does not match. Always a
-               // converter bug; callers should surface as TRANSCRIBE_ERR_GGUF.
+    Absent,   // Key not present in the gguf.
+    Ok,       // Key present, type matches expectation, value extracted.
+    BadType,  // Key present but the GGUF type does not match. Always a
+              // converter bug; callers should surface as TRANSCRIBE_ERR_GGUF.
 };
 
 // ---------------------------------------------------------------------------
@@ -46,42 +46,34 @@ enum class KvResult {
 // safely pre-populate a default and rely on the read leaving it alone
 // when the key is missing.
 
-KvResult read_string_kv(const gguf_context * ctx, const char * key,
-                        std::string & out);
+KvResult read_string_kv(const gguf_context * ctx, const char * key, std::string & out);
 
-KvResult read_bool_kv  (const gguf_context * ctx, const char * key,
-                        bool & out);
+KvResult read_bool_kv(const gguf_context * ctx, const char * key, bool & out);
 
-KvResult read_uint32_kv(const gguf_context * ctx, const char * key,
-                        uint32_t & out);
+KvResult read_uint32_kv(const gguf_context * ctx, const char * key, uint32_t & out);
 
-KvResult read_int32_kv (const gguf_context * ctx, const char * key,
-                        int32_t & out);
+KvResult read_int32_kv(const gguf_context * ctx, const char * key, int32_t & out);
 
-KvResult read_float32_kv(const gguf_context * ctx, const char * key,
-                         float & out);
+KvResult read_float32_kv(const gguf_context * ctx, const char * key, float & out);
 
 // Convenience: special-token id KV. The GGUF tokenizer schema has not
 // standardized whether token ids are uint32 or int32 (different
 // converters in the wider ecosystem use different types). This helper
 // accepts either and casts to int. BadType only fires when the key is
 // present and is neither uint32 nor int32.
-KvResult read_token_id_kv(const gguf_context * ctx, const char * key,
-                          int & out);
+KvResult read_token_id_kv(const gguf_context * ctx, const char * key, int & out);
 
 // String array. The destination vector is cleared and replaced with
 // the parsed contents only on Ok. On Absent / BadType the destination
 // is left untouched (caller's responsibility to pre-populate or
 // post-validate).
-KvResult read_string_array_kv(const gguf_context * ctx, const char * key,
-                              std::vector<std::string> & out);
+KvResult read_string_array_kv(const gguf_context * ctx, const char * key, std::vector<std::string> & out);
 
 // int32 scalar array. Same Absent/Ok/BadType semantics as the other
 // readers; the destination vector is replaced only on Ok. Used by the
 // Parakeet TDT durations KV (`stt.parakeet.tdt.durations`); generic
 // enough to live alongside the other low-level readers.
-KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
-                             std::vector<int32_t> & out);
+KvResult read_int32_array_kv(const gguf_context * ctx, const char * key, std::vector<int32_t> & out);
 
 // ---------------------------------------------------------------------------
 // Higher-level required / optional KV helpers
@@ -144,8 +136,7 @@ transcribe_status read_optional_int32_kv(const gguf_context * gguf,
 //   TRANSCRIBE_ERR_INVALID_ARG if gguf is null.
 //   TRANSCRIBE_ERR_GGUF        if any recognized key is present with
 //                              the wrong type.
-transcribe_status read_capability_kv(const gguf_context *      gguf,
-                                     transcribe_capabilities & caps);
+transcribe_status read_capability_kv(const gguf_context * gguf, transcribe_capabilities & caps);
 
 // Read general.languages (string array of BCP-47-ish short codes) and
 // install it on the model via transcribe_model::set_languages(); then
@@ -160,7 +151,6 @@ transcribe_status read_capability_kv(const gguf_context *      gguf,
 //   TRANSCRIBE_ERR_INVALID_ARG if gguf is null.
 //   TRANSCRIBE_ERR_GGUF        if a recognized array is present but is
 //                              not a string array, or any element is null.
-transcribe_status read_languages_kv(const gguf_context * gguf,
-                                    transcribe_model &   model);
+transcribe_status read_languages_kv(const gguf_context * gguf, transcribe_model & model);
 
-} // namespace transcribe
+}  // namespace transcribe

@@ -142,9 +142,23 @@ Formatting rules:
 - Use `void * ptr` and `int & a` pointer/reference spacing.
 - Use vertical alignment when it improves readability and batch editing.
 - Clean up trailing whitespace.
-- Use the root `.clang-format` for new files and touched hunks. It is based on
-  llama.cpp's clang-format profile. Do not reformat unrelated code as part of a
-  behavior change.
+- Format with the pinned formatter rather than a system clang-format:
+
+  ```bash
+  scripts/ci/clang-format.sh            # format our tree in place
+  scripts/ci/clang-format.sh --check    # verify only, no changes
+  ```
+
+  It wraps clang-format `22.1.5` (fetched via `uvx`) against the root
+  `.clang-format`, a profile based on llama.cpp's. The version is pinned in the
+  script so local output matches CI byte-for-byte; bump it there and reformat
+  the tree in the same commit.
+- Formatting scope is our C/C++ only. Vendored trees (`ggml/`,
+  `src/third_party/`) and verbatim upstream copies
+  (`src/transcribe-unicode-data.cpp`) are never reformatted.
+- Do not reformat unrelated code as part of a behavior change. CI enforces this
+  through the `clang-format` workflow (`.github/workflows/clang-format.yml`),
+  which gates our C/C++ against the pinned formatter.
 
 Naming rules:
 
@@ -206,6 +220,7 @@ Required before merge:
 
 | Gate | Command / owner | Requirement |
 | --- | --- | --- |
+| Formatting | `scripts/ci/clang-format.sh --check` (CI: clang-format workflow) | All our C/C++ matches the pinned clang-format |
 | Intake signoff | human review | Schema-valid intake; `reference_framework`, `architecture_pattern`, and `known_risks` reviewed; dtype/frontend/tokenizer gaps resolved or explicitly accepted |
 | Preflight A | `uv run scripts/preflight.py --family <f> [--variant <v>] --gate A` | Pass, or warnings tied to accepted intake gaps |
 | Preflight B | `uv run scripts/preflight.py --family <f> [--variant <v>] --gate B` | Pass after converter exists |

@@ -13,7 +13,6 @@
 #pragma once
 
 #include "causal_lm/causal_lm.h"
-
 #include "ggml.h"
 
 #include <vector>
@@ -28,10 +27,10 @@ struct HParams;
 struct Weights;
 
 struct EncoderDumps {
-    ggml_tensor * embedder_out = nullptr;  // conv stem output [d_model, T_enc]
-    ggml_tensor * enc_out      = nullptr;  // final RMSNorm output
-    ggml_tensor * proj_out     = nullptr;  // projector output (audio embeds)
-    std::vector<ggml_tensor *> block_outs; // per-block residual outputs
+    ggml_tensor *              embedder_out = nullptr;  // conv stem output [d_model, T_enc]
+    ggml_tensor *              enc_out      = nullptr;  // final RMSNorm output
+    ggml_tensor *              proj_out     = nullptr;  // projector output (audio embeds)
+    std::vector<ggml_tensor *> block_outs;              // per-block residual outputs
 };
 
 struct EncoderBuild {
@@ -39,8 +38,8 @@ struct EncoderBuild {
     ggml_tensor * positions_in = nullptr;  // [T_enc] i32 RoPE positions
     ggml_tensor * mask_in      = nullptr;  // [T_enc, T_enc] f16 sw-causal mask
     ggml_tensor * out          = nullptr;  // proj.out [dec_hidden, n_audio]
-    EncoderDumps  dumps {};
-    ggml_cgraph * graph        = nullptr;
+    EncoderDumps  dumps{};
+    ggml_cgraph * graph = nullptr;
 
     int T_enc   = 0;
     int n_audio = 0;
@@ -48,7 +47,7 @@ struct EncoderBuild {
 
 // Build the encoder+projector forward graph for `n_mel_frames` mel frames.
 // The stride-2 causal conv2 yields T_enc = conv-out frames; n_audio = T_enc/4.
-EncoderBuild build_encoder_graph(ggml_context * ctx,
+EncoderBuild build_encoder_graph(ggml_context *  ctx,
                                  const Weights & weights,
                                  const HParams & hp,
                                  int             n_mel_frames,
@@ -78,7 +77,7 @@ struct EncoderBuildBatched {
     int n_batch = 0;
 };
 
-EncoderBuildBatched build_encoder_graph_batched(ggml_context * ctx,
+EncoderBuildBatched build_encoder_graph_batched(ggml_context *  ctx,
                                                 const Weights & weights,
                                                 const HParams & hp,
                                                 int             n_mel_frames,
@@ -104,14 +103,11 @@ struct EmbedderBuild {
     ggml_tensor * mel_in = nullptr;  // [n_mels, n_mel_frames] input
     ggml_tensor * out    = nullptr;  // [d_model, T_enc] embedder frames
     ggml_cgraph * graph  = nullptr;
-    int T_enc = 0;
+    int           T_enc  = 0;
 };
 
 // Conv stem only (no transformer). T_enc = (n_mel_frames - 2)/2 + 1.
-EmbedderBuild build_embedder_graph(ggml_context * ctx,
-                                   const Weights & weights,
-                                   const HParams & hp,
-                                   int             n_mel_frames);
+EmbedderBuild build_embedder_graph(ggml_context * ctx, const Weights & weights, const HParams & hp, int n_mel_frames);
 
 // Conv stem with the streaming PADDING CACHE. Feeds only `n_new_mel` NEW mel
 // frames; the conv left-context comes from host-carried caches instead of zero
@@ -126,10 +122,10 @@ struct EmbedderChunkBuild {
     ggml_tensor * out        = nullptr;  // [d_model, M_emb] new embedder frames
     ggml_tensor * cache2_out = nullptr;  // [d_model, 1] new last conv1-out frame (next cache2)
     ggml_cgraph * graph      = nullptr;
-    int M_emb = 0;
+    int           M_emb      = 0;
 };
 
-EmbedderChunkBuild build_embedder_chunk_graph(ggml_context * ctx,
+EmbedderChunkBuild build_embedder_chunk_graph(ggml_context *  ctx,
                                               const Weights & weights,
                                               const HParams & hp,
                                               int             n_new_mel);
@@ -137,13 +133,13 @@ EmbedderChunkBuild build_embedder_chunk_graph(ggml_context * ctx,
 struct EncoderChunkBuild {
     ggml_tensor * embed_in     = nullptr;  // [d_model, n_new] new embedder frames
     ggml_tensor * positions_in = nullptr;  // [n_new] i32 ABSOLUTE enc-frame pos
-    ggml_tensor * mask_in       = nullptr; // [read_len, n_new] f16 sw-causal
-    ggml_tensor * out           = nullptr; // proj.out audio embeds [dec_hidden, n_audio_new]
-    ggml_tensor * enc_out       = nullptr; // [d_model, n_new] final-normed enc frames
-    ggml_cgraph * graph         = nullptr;
-    int n_new       = 0;
-    int read_len    = 0;
-    int n_audio_new = 0;
+    ggml_tensor * mask_in      = nullptr;  // [read_len, n_new] f16 sw-causal
+    ggml_tensor * out          = nullptr;  // proj.out audio embeds [dec_hidden, n_audio_new]
+    ggml_tensor * enc_out      = nullptr;  // [d_model, n_new] final-normed enc frames
+    ggml_cgraph * graph        = nullptr;
+    int           n_new        = 0;
+    int           read_len     = 0;
+    int           n_audio_new  = 0;
 };
 
 // Build one incremental encoder chunk against the encoder KV cache ring. Writes
@@ -152,14 +148,14 @@ struct EncoderChunkBuild {
 // host mask enforces the 750-frame sliding window using ABSOLUTE positions). The
 // caller owns the ring (compaction + slot bookkeeping). `n_new` must be a
 // multiple of proj_downsample (4) so projector groups never straddle chunks.
-EncoderChunkBuild build_encoder_chunk_graph(ggml_context *                  ctx,
-                                            const Weights &                 weights,
-                                            const HParams &                 hp,
+EncoderChunkBuild build_encoder_chunk_graph(ggml_context *                   ctx,
+                                            const Weights &                  weights,
+                                            const HParams &                  hp,
                                             transcribe::causal_lm::KvCache & enc_kv,
-                                            int                             n_new,
-                                            int                             write_slot,
-                                            int                             read_start,
-                                            int                             read_len,
-                                            bool                            use_flash);
+                                            int                              n_new,
+                                            int                              write_slot,
+                                            int                              read_start,
+                                            int                              read_len,
+                                            bool                             use_flash);
 
-} // namespace transcribe::voxtral_realtime
+}  // namespace transcribe::voxtral_realtime

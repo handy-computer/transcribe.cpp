@@ -51,7 +51,7 @@ struct EncoderDumps {
     ggml_tensor * tp_norm_out       = nullptr;
 
     // CTC head outputs. ne=[vocab, T, 1, 1].
-    ggml_tensor * ctc_logits   = nullptr;
+    ggml_tensor * ctc_logits    = nullptr;
     ggml_tensor * ctc_log_probs = nullptr;
 };
 
@@ -88,7 +88,7 @@ struct EncoderBuild {
     // CTC log-probabilities. ne=[vocab, T, n_batch, 1].
     ggml_tensor * out = nullptr;
 
-    EncoderDumps dumps {};
+    EncoderDumps dumps{};
 
     ggml_cgraph * graph = nullptr;
 };
@@ -103,7 +103,7 @@ EncoderBuild build_encoder_graph(ggml_context *            compute_ctx,
                                  const SenseVoiceWeights & weights,
                                  const SenseVoiceHParams & hp,
                                  int                       n_lfr_frames,
-                                 int                       n_batch = 1,
+                                 int                       n_batch       = 1,
                                  bool                      batch_var_len = false);
 
-} // namespace transcribe::sensevoice
+}  // namespace transcribe::sensevoice

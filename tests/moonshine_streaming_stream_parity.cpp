@@ -26,7 +26,6 @@
 
 #include "transcribe.h"
 #include "transcribe/moonshine_streaming.h"
-
 #include "wav.h"
 
 #include <sys/stat.h>
@@ -42,86 +41,77 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
-int run_one_shot(transcribe_session *      ctx,
-                 const std::vector<float> & pcm,
-                 std::string &              out_text)
-{
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    const transcribe_status st = transcribe_run(
-        ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
+int run_one_shot(transcribe_session * ctx, const std::vector<float> & pcm, std::string & out_text) {
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
     if (st != TRANSCRIBE_OK) {
-        std::fprintf(stderr,
-                     "one-shot transcribe_run failed: status=%d (%s)\n",
-                     static_cast<int>(st), transcribe_status_string(st));
+        std::fprintf(stderr, "one-shot transcribe_run failed: status=%d (%s)\n", static_cast<int>(st),
+                     transcribe_status_string(st));
         return 1;
     }
     const char * t = transcribe_full_text(ctx);
-    out_text = (t == nullptr) ? "" : t;
+    out_text       = (t == nullptr) ? "" : t;
     return 0;
 }
 
-int run_streaming(transcribe_session *      ctx,
+int run_streaming(transcribe_session *       ctx,
                   const std::vector<float> & pcm,
                   int                        chunk_samples,
                   int                        min_decode_interval_ms,
                   int *                      out_n_partial_updates,
-                  std::string &              out_text)
-{
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
-    transcribe_stream_params sp; transcribe_stream_params_init(&sp);
+                  std::string &              out_text) {
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
+    transcribe_stream_params sp;
+    transcribe_stream_params_init(&sp);
     transcribe_moonshine_streaming_stream_ext ms;
     transcribe_moonshine_streaming_stream_ext_init(&ms);
     ms.min_decode_interval_ms = min_decode_interval_ms;
-    sp.family = &ms.ext;
-    transcribe_status st = transcribe_stream_begin(ctx, &rp, &sp);
+    sp.family                 = &ms.ext;
+    transcribe_status st      = transcribe_stream_begin(ctx, &rp, &sp);
     if (st != TRANSCRIBE_OK) {
-        std::fprintf(stderr,
-                     "stream_begin failed: status=%d (%s)\n",
-                     static_cast<int>(st), transcribe_status_string(st));
+        std::fprintf(stderr, "stream_begin failed: status=%d (%s)\n", static_cast<int>(st),
+                     transcribe_status_string(st));
         return 1;
     }
 
-    int feed_count           = 0;
-    int n_partial_updates    = 0;
-    size_t pos               = 0;
-    int    last_revision     = 0;
-    int    last_committed    = 0;
+    int         feed_count        = 0;
+    int         n_partial_updates = 0;
+    size_t      pos               = 0;
+    int         last_revision     = 0;
+    int         last_committed    = 0;
     std::string last_full;
     std::string last_committed_text;
     std::string last_tentative;
     while (pos < pcm.size()) {
-        const size_t take = std::min<size_t>(
-            static_cast<size_t>(chunk_samples), pcm.size() - pos);
-        transcribe_stream_update upd; transcribe_stream_update_init(&upd);
-        st = transcribe_stream_feed(ctx, pcm.data() + pos,
-                                    static_cast<int>(take), &upd);
+        const size_t             take = std::min<size_t>(static_cast<size_t>(chunk_samples), pcm.size() - pos);
+        transcribe_stream_update upd;
+        transcribe_stream_update_init(&upd);
+        st = transcribe_stream_feed(ctx, pcm.data() + pos, static_cast<int>(take), &upd);
         if (st != TRANSCRIBE_OK) {
-            std::fprintf(stderr,
-                         "stream_feed[%d] failed: status=%d (%s)\n",
-                         feed_count, static_cast<int>(st),
+            std::fprintf(stderr, "stream_feed[%d] failed: status=%d (%s)\n", feed_count, static_cast<int>(st),
                          transcribe_status_string(st));
             return 1;
         }
 
         // Revision is monotonic non-decreasing.
         if (upd.revision < last_revision) {
-            std::fprintf(stderr,
-                         "FAIL feed[%d] revision regressed (%d -> %d)\n",
-                         feed_count, last_revision, upd.revision);
+            std::fprintf(stderr, "FAIL feed[%d] revision regressed (%d -> %d)\n", feed_count, last_revision,
+                         upd.revision);
             ++g_failures;
         }
         // n_committed_tokens is monotonic non-decreasing.
@@ -129,8 +119,8 @@ int run_streaming(transcribe_session *      ctx,
         if (committed_now < last_committed) {
             std::fprintf(stderr,
                          "FAIL feed[%d] n_committed_tokens regressed "
-                         "(%d -> %d)\n", feed_count,
-                         last_committed, committed_now);
+                         "(%d -> %d)\n",
+                         feed_count, last_committed, committed_now);
             ++g_failures;
         }
         // When the family signals result_changed, at least one observable
@@ -139,29 +129,24 @@ int run_streaming(transcribe_session *      ctx,
         // tentative_text even when full_text is byte-identical, so check
         // the whole surface rather than full_text alone.
         if (upd.result_changed) {
-            transcribe_stream_text txt; transcribe_stream_text_init(&txt);
+            transcribe_stream_text txt;
+            transcribe_stream_text_init(&txt);
             if (transcribe_stream_get_text(ctx, &txt) != TRANSCRIBE_OK) {
                 std::fprintf(stderr,
                              "FAIL feed[%d] get_text failed after "
-                             "result_changed\n", feed_count);
+                             "result_changed\n",
+                             feed_count);
                 ++g_failures;
             } else {
-                const std::string full =
-                    (txt.full_text == nullptr) ? "" : txt.full_text;
-                const std::string committed =
-                    (txt.committed_text == nullptr) ? "" : txt.committed_text;
-                const std::string tentative =
-                    (txt.tentative_text == nullptr) ? "" : txt.tentative_text;
-                if (full == last_full &&
-                    committed == last_committed_text &&
-                    tentative == last_tentative)
-                {
+                const std::string full      = (txt.full_text == nullptr) ? "" : txt.full_text;
+                const std::string committed = (txt.committed_text == nullptr) ? "" : txt.committed_text;
+                const std::string tentative = (txt.tentative_text == nullptr) ? "" : txt.tentative_text;
+                if (full == last_full && committed == last_committed_text && tentative == last_tentative) {
                     std::fprintf(stderr,
                                  "FAIL feed[%d] result_changed=true but "
                                  "full/committed/tentative all unchanged "
                                  "(full='%s' committed='%s' tentative='%s')\n",
-                                 feed_count, full.c_str(),
-                                 committed.c_str(), tentative.c_str());
+                                 feed_count, full.c_str(), committed.c_str(), tentative.c_str());
                     ++g_failures;
                 }
                 last_full           = full;
@@ -177,29 +162,24 @@ int run_streaming(transcribe_session *      ctx,
         ++feed_count;
     }
 
-    transcribe_stream_update fin_upd; transcribe_stream_update_init(&fin_upd);
+    transcribe_stream_update fin_upd;
+    transcribe_stream_update_init(&fin_upd);
     st = transcribe_stream_finalize(ctx, &fin_upd);
     if (st != TRANSCRIBE_OK) {
-        std::fprintf(stderr,
-                     "stream_finalize failed: status=%d (%s)\n",
-                     static_cast<int>(st), transcribe_status_string(st));
+        std::fprintf(stderr, "stream_finalize failed: status=%d (%s)\n", static_cast<int>(st),
+                     transcribe_status_string(st));
         return 1;
     }
     CHECK(fin_upd.is_final);
     if (fin_upd.revision < last_revision) {
-        std::fprintf(stderr,
-                     "FAIL finalize revision regressed (%d -> %d)\n",
-                     last_revision, fin_upd.revision);
+        std::fprintf(stderr, "FAIL finalize revision regressed (%d -> %d)\n", last_revision, fin_upd.revision);
         ++g_failures;
     }
 
     // At finalize, the whole transcript is committed.
     const int n_tokens_final           = transcribe_n_tokens(ctx);
-    const int n_committed_tokens_final =
-        transcribe_stream_n_committed_tokens(ctx);
-    if (n_tokens_final > 0 &&
-        n_committed_tokens_final != n_tokens_final)
-    {
+    const int n_committed_tokens_final = transcribe_stream_n_committed_tokens(ctx);
+    if (n_tokens_final > 0 && n_committed_tokens_final != n_tokens_final) {
         std::fprintf(stderr,
                      "FAIL finalize: n_committed_tokens=%d != "
                      "n_tokens=%d\n",
@@ -208,14 +188,14 @@ int run_streaming(transcribe_session *      ctx,
     }
 
     const char * t = transcribe_full_text(ctx);
-    out_text = (t == nullptr) ? "" : t;
+    out_text       = (t == nullptr) ? "" : t;
     if (out_n_partial_updates != nullptr) {
         *out_n_partial_updates = n_partial_updates;
     }
     return 0;
 }
 
-} // namespace
+}  // namespace
 
 int main(int /*argc*/, char ** /*argv*/) {
     const char * model_path = std::getenv("TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF");
@@ -226,8 +206,7 @@ int main(int /*argc*/, char ** /*argv*/) {
         return 77;
     }
 
-    const std::string sample_path =
-        std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
+    const std::string sample_path = std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
     if (!file_exists(sample_path)) {
         std::fprintf(stderr, "skipping: %s missing\n", sample_path.c_str());
         return 77;
@@ -236,17 +215,16 @@ int main(int /*argc*/, char ** /*argv*/) {
     std::vector<float> pcm;
     {
         std::string err;
-        if (!transcribe_cli::load_wav_mono_16k(sample_path, pcm, err) ||
-            pcm.empty())
-        {
-            std::fprintf(stderr, "failed to load %s: %s\n",
-                         sample_path.c_str(), err.c_str());
+        if (!transcribe_cli::load_wav_mono_16k(sample_path, pcm, err) || pcm.empty()) {
+            std::fprintf(stderr, "failed to load %s: %s\n", sample_path.c_str(), err.c_str());
             return 1;
         }
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
-    transcribe_session_params cp; transcribe_session_params_init(&cp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+    transcribe_session_params cp;
+    transcribe_session_params_init(&cp);
 
     transcribe_model *   model = nullptr;
     transcribe_session * ctx   = nullptr;
@@ -263,7 +241,8 @@ int main(int /*argc*/, char ** /*argv*/) {
 
     // Capabilities sanity: streaming must be advertised via the gate.
     {
-        transcribe_capabilities caps; transcribe_capabilities_init(&caps);
+        transcribe_capabilities caps;
+        transcribe_capabilities_init(&caps);
         CHECK(transcribe_model_get_capabilities(model, &caps) == TRANSCRIBE_OK);
         CHECK(caps.supports_streaming);
     }
@@ -284,13 +263,11 @@ int main(int /*argc*/, char ** /*argv*/) {
     // = 0 means decode on every advance.
     const int chunk_ms_choices[] = { 1, 20, 40, 80, 160, 500, 1000 };
     for (int chunk_ms : chunk_ms_choices) {
-        const int chunk_samples = std::max(1, chunk_ms * 16000 / 1000);
+        const int   chunk_samples = std::max(1, chunk_ms * 16000 / 1000);
         std::string stream_text;
-        int        n_partial_updates = 0;
+        int         n_partial_updates = 0;
         if (run_streaming(ctx, pcm, chunk_samples,
-                          /*min_decode_interval_ms=*/0,
-                          &n_partial_updates, stream_text) != 0)
-        {
+                          /*min_decode_interval_ms=*/0, &n_partial_updates, stream_text) != 0) {
             ++g_failures;
             continue;
         }
@@ -302,8 +279,7 @@ int main(int /*argc*/, char ** /*argv*/) {
                          chunk_ms, ref_text.c_str(), stream_text.c_str());
             ++g_failures;
         } else {
-            std::fprintf(stdout, "ok  chunk_ms=%-5d  %s\n",
-                         chunk_ms, stream_text.c_str());
+            std::fprintf(stdout, "ok  chunk_ms=%-5d  %s\n", chunk_ms, stream_text.c_str());
         }
 
         // After finalize, transcribe_run on the same context should
@@ -336,31 +312,26 @@ int main(int /*argc*/, char ** /*argv*/) {
         const int chunk_samples = std::max(1, 20 * 16000 / 1000);
 
         std::string s_no_throttle;
-        int n_updates_no_throttle = 0;
+        int         n_updates_no_throttle = 0;
         if (run_streaming(ctx, pcm, chunk_samples,
-                          /*min_decode_interval_ms=*/0,
-                          &n_updates_no_throttle, s_no_throttle) != 0)
-        {
+                          /*min_decode_interval_ms=*/0, &n_updates_no_throttle, s_no_throttle) != 0) {
             ++g_failures;
         }
         CHECK(s_no_throttle == ref_text);
 
         std::string s_default_throttle;
-        int n_updates_default = 0;
+        int         n_updates_default = 0;
         if (run_streaming(ctx, pcm, chunk_samples,
-                          /*min_decode_interval_ms=*/-1, // family default 240
-                          &n_updates_default, s_default_throttle) != 0)
-        {
+                          /*min_decode_interval_ms=*/-1,  // family default 240
+                          &n_updates_default, s_default_throttle) != 0) {
             ++g_failures;
         }
         CHECK(s_default_throttle == ref_text);
 
         std::string s_long_throttle;
-        int n_updates_long = 0;
+        int         n_updates_long = 0;
         if (run_streaming(ctx, pcm, chunk_samples,
-                          /*min_decode_interval_ms=*/500,
-                          &n_updates_long, s_long_throttle) != 0)
-        {
+                          /*min_decode_interval_ms=*/500, &n_updates_long, s_long_throttle) != 0) {
             ++g_failures;
         }
         CHECK(s_long_throttle == ref_text);
@@ -391,7 +362,8 @@ int main(int /*argc*/, char ** /*argv*/) {
         if (n_updates_default < 20 || n_updates_default > 80) {
             std::fprintf(stderr,
                          "FAIL default-throttle update count out of expected "
-                         "20..80 range: %d\n", n_updates_default);
+                         "20..80 range: %d\n",
+                         n_updates_default);
             ++g_failures;
         }
     }

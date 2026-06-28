@@ -23,9 +23,8 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "ggml.h"
+#include "weights.h"
 
 #include <cstdint>
 #include <vector>
@@ -34,7 +33,9 @@ struct ggml_context;
 struct ggml_tensor;
 struct ggml_cgraph;
 
-namespace transcribe { class MelFrontend; }
+namespace transcribe {
+class MelFrontend;
+}
 
 namespace transcribe::granite {
 
@@ -48,33 +49,32 @@ namespace transcribe::granite {
 //
 // Output: out_mel laid out as `[T_enc, 160]` row-major (T_enc =
 // (n_frames_after_whisper_norm // 2)).
-transcribe_status compute_mel_encoder_input(
-    const transcribe::MelFrontend & mel,
-    const float *                   pcm,
-    int                             n_samples,
-    int                             n_threads,
-    std::vector<float> &            out_mel,
-    int &                           out_t_enc);
+transcribe_status compute_mel_encoder_input(const transcribe::MelFrontend & mel,
+                                            const float *                   pcm,
+                                            int                             n_samples,
+                                            int                             n_threads,
+                                            std::vector<float> &            out_mel,
+                                            int &                           out_t_enc);
 
 // Graph construction.
 
 struct EncoderBuild {
     // Graph inputs (caller uploads at compute time).
-    ggml_tensor * mel_in            = nullptr;  // [input_dim, T_enc]
-    ggml_tensor * attention_dists   = nullptr;  // [context_size, context_size]
-                                                //  int32, Shaw bias indices
-    ggml_tensor * last_block_mask   = nullptr;  // [context_size, context_size]
-                                                //  f32 additive mask, all
-                                                //  zeros except final-block
-                                                //  pad positions = -INF
+    ggml_tensor * mel_in          = nullptr;  // [input_dim, T_enc]
+    ggml_tensor * attention_dists = nullptr;  // [context_size, context_size]
+                                              //  int32, Shaw bias indices
+    ggml_tensor * last_block_mask = nullptr;  // [context_size, context_size]
+                                              //  f32 additive mask, all
+                                              //  zeros except final-block
+                                              //  pad positions = -INF
     // Zero-pad tile for attention's internal T_enc → T_pad expansion.
     // Allocated only when T_enc is not a multiple of context_size;
     // shape [hidden, T_pad - T_enc] f32. Caller uploads explicit zeros.
-    ggml_tensor * zero_pad          = nullptr;
+    ggml_tensor * zero_pad        = nullptr;
     // Graph output (encoder's [hidden, T_enc] tensor).
-    ggml_tensor * out               = nullptr;
+    ggml_tensor * out             = nullptr;
 
-    ggml_cgraph * graph             = nullptr;
+    ggml_cgraph * graph = nullptr;
 
     // Dump points (exposed so model.cpp can wire them up).
     struct Dumps {
@@ -87,8 +87,8 @@ struct EncoderBuild {
 
     // Padding bookkeeping computed at build (caller uploads matching
     // attention_dists / last_block_mask shapes).
-    int n_blocks_local = 0;   // ceil(T_enc / context_size)
-    int last_block_rem = 0;   // T_enc % context_size (== 0 means no pad)
+    int n_blocks_local = 0;  // ceil(T_enc / context_size)
+    int last_block_rem = 0;  // T_enc % context_size (== 0 means no pad)
 };
 
 // Build the encoder graph. `T_enc` is the number of post-stack frames
@@ -96,11 +96,11 @@ struct EncoderBuild {
 // reserved for future use — the implementation uses manual mul_mat + soft_max
 // because the Shaw bias requires a per-(head, block) additive term and
 // the flash_attn_ext path doesn't yet broadcast that cleanly.
-EncoderBuild build_encoder_graph(ggml_context *           ctx,
-                                 const GraniteWeights &   weights,
-                                 const GraniteHParams &   hp,
-                                 int                      T_enc,
-                                 bool                     use_flash);
+EncoderBuild build_encoder_graph(ggml_context *         ctx,
+                                 const GraniteWeights & weights,
+                                 const GraniteHParams & hp,
+                                 int                    T_enc,
+                                 bool                   use_flash);
 
 // Host-side precomputation of the Shaw attention_dists matrix.
 // attention_dists[c, r] = clamp(c - r, -context_size, context_size) + max_pos_emb,
@@ -122,4 +122,4 @@ std::vector<int32_t> precompute_attention_dists(int context_size, int max_pos_em
 // graph builder).
 std::vector<float> precompute_last_block_mask(int context_size, int t_enc_remainder);
 
-} // namespace transcribe::granite
+}  // namespace transcribe::granite

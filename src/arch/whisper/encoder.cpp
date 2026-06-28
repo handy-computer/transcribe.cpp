@@ -21,13 +21,11 @@
 
 #include "encoder.h"
 
-#include "weights.h"
-
 #include "conformer/conformer.h"
+#include "ggml.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
-
-#include "ggml.h"
+#include "weights.h"
 
 #include <cmath>
 #include <cstdio>
@@ -38,19 +36,19 @@ namespace transcribe::whisper {
 namespace {
 
 namespace conf = transcribe::conformer;
-using conf::named;
 using conf::layer_norm;
+using conf::named;
 
 // Reshape a 1D conv bias [Cout] into a 4D tensor [1, Cout, 1, 1] so it
 // broadcasts across T when added to a ggml_conv_1d output
 // [T_out, Cout, 1, 1]. ggml's `add_conv_bias` in conformer.cpp is for
 // 2D conv (channels at ne[2]) and does not fit here.
-ggml_tensor * add_conv1d_bias(ggml_context * ctx,
-                              ggml_tensor *  conv_out,
-                              ggml_tensor *  bias_1d) {
-    if (bias_1d == nullptr) return conv_out;
+ggml_tensor * add_conv1d_bias(ggml_context * ctx, ggml_tensor * conv_out, ggml_tensor * bias_1d) {
+    if (bias_1d == nullptr) {
+        return conv_out;
+    }
     const int64_t channels = bias_1d->ne[0];
-    ggml_tensor * bias_4d = ggml_reshape_4d(ctx, bias_1d, 1, channels, 1, 1);
+    ggml_tensor * bias_4d  = ggml_reshape_4d(ctx, bias_1d, 1, channels, 1, 1);
     return ggml_add(ctx, conv_out, bias_4d);
 }
 
@@ -59,26 +57,32 @@ ggml_tensor * add_conv1d_bias(ggml_context * ctx,
 // (no causal mask).
 ggml_tensor * mha_encoder(ggml_context * ctx,
                           ggml_tensor *  x,
-                          ggml_tensor *  q_w, ggml_tensor * q_b,
+                          ggml_tensor *  q_w,
+                          ggml_tensor *  q_b,
                           ggml_tensor *  k_w,
-                          ggml_tensor *  v_w, ggml_tensor * v_b,
-                          ggml_tensor *  out_w, ggml_tensor * out_b,
+                          ggml_tensor *  v_w,
+                          ggml_tensor *  v_b,
+                          ggml_tensor *  out_w,
+                          ggml_tensor *  out_b,
                           int            n_heads,
                           int            d_model,
-                          bool           use_flash)
-{
+                          bool           use_flash) {
     const int     head_dim = d_model / n_heads;
     const float   scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
     const int64_t T        = x->ne[1];
 
     // Q, K, V projections (k has no bias).
     ggml_tensor * q = ggml_mul_mat(ctx, q_w, x);
-    if (q_b != nullptr) q = ggml_add(ctx, q, q_b);
+    if (q_b != nullptr) {
+        q = ggml_add(ctx, q, q_b);
+    }
 
     ggml_tensor * k = ggml_mul_mat(ctx, k_w, x);
 
     ggml_tensor * v = ggml_mul_mat(ctx, v_w, x);
-    if (v_b != nullptr) v = ggml_add(ctx, v, v_b);
+    if (v_b != nullptr) {
+        v = ggml_add(ctx, v, v_b);
+    }
 
     // Split into heads: [d_model, T] -> [head_dim, n_heads, T] ->
     // permute to [head_dim, T, n_heads] so flash_attn / manual path
@@ -98,8 +102,8 @@ ggml_tensor * mha_encoder(ggml_context * ctx,
         ggml_tensor * q_c = ggml_cont(ctx, q);
         ggml_tensor * k_c = ggml_cont(ctx, k);
         ggml_tensor * v_c = ggml_cont(ctx, v);
-        o = ggml_flash_attn_ext(ctx, q_c, k_c, v_c, nullptr, scale, 0.0f, 0.0f);
-        o = ggml_reshape_2d(ctx, o, d_model, T);
+        o                 = ggml_flash_attn_ext(ctx, q_c, k_c, v_c, nullptr, scale, 0.0f, 0.0f);
+        o                 = ggml_reshape_2d(ctx, o, d_model, T);
     } else {
         // Manual attention path: mul_mat(K, Q) gives [T_k, T_q, n_heads]
         // per the standard cohere pattern.
@@ -108,7 +112,7 @@ ggml_tensor * mha_encoder(ggml_context * ctx,
 
         // v^T so the final mul_mat yields [head_dim, T_q, n_heads].
         ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v, 1, 0, 2, 3));
-        o = ggml_mul_mat(ctx, v_t, kq_soft);
+        o                 = ggml_mul_mat(ctx, v_t, kq_soft);
 
         // Merge heads: [head_dim, T_q, n_heads] -> [head_dim, n_heads, T_q]
         // -> cont -> reshape to [d_model, T_q].
@@ -119,20 +123,28 @@ ggml_tensor * mha_encoder(ggml_context * ctx,
 
     // Output projection with bias.
     o = ggml_mul_mat(ctx, out_w, o);
-    if (out_b != nullptr) o = ggml_add(ctx, o, out_b);
+    if (out_b != nullptr) {
+        o = ggml_add(ctx, o, out_b);
+    }
     return o;
 }
 
 // FFN: fc2(GELU(fc1(x))); pre-LN wrapped outside. fc1/fc2 carry bias.
 ggml_tensor * ffn(ggml_context * ctx,
                   ggml_tensor *  x,
-                  ggml_tensor *  fc1_w, ggml_tensor * fc1_b,
-                  ggml_tensor *  fc2_w, ggml_tensor * fc2_b) {
+                  ggml_tensor *  fc1_w,
+                  ggml_tensor *  fc1_b,
+                  ggml_tensor *  fc2_w,
+                  ggml_tensor *  fc2_b) {
     ggml_tensor * h = ggml_mul_mat(ctx, fc1_w, x);
-    if (fc1_b != nullptr) h = ggml_add(ctx, h, fc1_b);
-    h = ggml_gelu_erf(ctx, h);
+    if (fc1_b != nullptr) {
+        h = ggml_add(ctx, h, fc1_b);
+    }
+    h               = ggml_gelu_erf(ctx, h);
     ggml_tensor * o = ggml_mul_mat(ctx, fc2_w, h);
-    if (fc2_b != nullptr) o = ggml_add(ctx, o, fc2_b);
+    if (fc2_b != nullptr) {
+        o = ggml_add(ctx, o, fc2_b);
+    }
     return o;
 }
 
@@ -144,54 +156,45 @@ ggml_tensor * build_block(ggml_context *          ctx,
                           const WhisperEncBlock & b,
                           int                     n_heads,
                           int                     d_model,
-                          bool                    use_flash)
-{
+                          bool                    use_flash) {
     // Self-attention sublayer.
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_attn_w, b.norm_attn_b);
-        y = mha_encoder(ctx, y,
-                        b.attn_q_w, b.attn_q_b,
-                        b.attn_k_w,
-                        b.attn_v_w, b.attn_v_b,
-                        b.attn_out_w, b.attn_out_b,
+        y = mha_encoder(ctx, y, b.attn_q_w, b.attn_q_b, b.attn_k_w, b.attn_v_w, b.attn_v_b, b.attn_out_w, b.attn_out_b,
                         n_heads, d_model, use_flash);
         x = ggml_add(ctx, x, y);
     }
     // FFN sublayer.
     {
         ggml_tensor * y = layer_norm(ctx, x, b.norm_ffn_w, b.norm_ffn_b);
-        y = ffn(ctx, y,
-                b.ffn_fc1_w, b.ffn_fc1_b,
-                b.ffn_fc2_w, b.ffn_fc2_b);
-        x = ggml_add(ctx, x, y);
+        y               = ffn(ctx, y, b.ffn_fc1_w, b.ffn_fc1_b, b.ffn_fc2_w, b.ffn_fc2_b);
+        x               = ggml_add(ctx, x, y);
     }
     return x;
 }
 
-} // namespace
+}  // namespace
 
-EncoderBuild build_encoder_graph(ggml_context *          ctx,
-                                 const WhisperWeights &  w,
-                                 const WhisperHParams &  hp,
-                                 int                     n_mel_frames,
-                                 bool                    use_flash,
-                                 const char *            backend_name)
-{
-    (void)backend_name;
+EncoderBuild build_encoder_graph(ggml_context *         ctx,
+                                 const WhisperWeights & w,
+                                 const WhisperHParams & hp,
+                                 int                    n_mel_frames,
+                                 bool                   use_flash,
+                                 const char *           backend_name) {
+    (void) backend_name;
 
-    EncoderBuild eb {};
+    EncoderBuild eb{};
 
     if (ctx == nullptr || n_mel_frames <= 0) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "whisper encoder: invalid arg (ctx=%p, n_mel_frames=%d)",
-                     static_cast<void *>(ctx), n_mel_frames);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper encoder: invalid arg (ctx=%p, n_mel_frames=%d)",
+                static_cast<void *>(ctx), n_mel_frames);
         return eb;
     }
     if (n_mel_frames % 2 != 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "whisper encoder: n_mel_frames=%d must be even "
-                     "(stride-2 conv2 would produce fractional T_enc)",
-                     n_mel_frames);
+                "whisper encoder: n_mel_frames=%d must be even "
+                "(stride-2 conv2 would produce fractional T_enc)",
+                n_mel_frames);
         return eb;
     }
 
@@ -201,16 +204,17 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     const int T_enc   = n_mel_frames / 2;
 
     if (T_enc > hp.enc_max_source_positions) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "whisper encoder: T_enc=%d exceeds max_source_positions=%d",
-                     T_enc, hp.enc_max_source_positions);
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper encoder: T_enc=%d exceeds max_source_positions=%d", T_enc,
+                hp.enc_max_source_positions);
         return eb;
     }
 
     // mel input handle. ggml ne=[n_mels, T]; caller uploads the mel
     // spectrogram row-major in this layout.
     eb.mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_mels, n_mel_frames);
-    if (eb.mel_in == nullptr) return eb;
+    if (eb.mel_in == nullptr) {
+        return eb;
+    }
     named(eb.mel_in, "enc.mel.in");
     ggml_set_input(eb.mel_in);
     eb.dumps.mel_in = eb.mel_in;
@@ -246,9 +250,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     // for T_enc < max take a prefix view (no-op when T_enc == max).
     ggml_tensor * pos_emb = w.enc_top.pos_emb_w;
     if (T_enc != hp.enc_max_source_positions) {
-        pos_emb = ggml_view_2d(ctx, w.enc_top.pos_emb_w,
-                               d_model, T_enc,
-                               w.enc_top.pos_emb_w->nb[1], 0);
+        pos_emb = ggml_view_2d(ctx, w.enc_top.pos_emb_w, d_model, T_enc, w.enc_top.pos_emb_w->nb[1], 0);
     }
     named(pos_emb, "enc.pos_emb");
     eb.dumps.pos_emb = pos_emb;
@@ -292,8 +294,7 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     // Build the forward cgraph. 8192 leaves headroom up to large (32 blocks).
     eb.graph = ggml_new_graph_custom(ctx, 8192, false);
     if (eb.graph == nullptr) {
-        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "whisper encoder: ggml_new_graph_custom failed");
+        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "whisper encoder: ggml_new_graph_custom failed");
         return eb;
     }
     ggml_build_forward_expand(eb.graph, eb.out);
@@ -301,4 +302,4 @@ EncoderBuild build_encoder_graph(ggml_context *          ctx,
     return eb;
 }
 
-} // namespace transcribe::whisper
+}  // namespace transcribe::whisper

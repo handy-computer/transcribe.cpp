@@ -32,9 +32,8 @@
 
 #pragma once
 
-#include "transcribe.h"
-
 #include "ggml.h"
+#include "transcribe.h"
 
 #include <cstdint>
 #include <string>
@@ -65,28 +64,28 @@ struct WhisperBinHParams {
 // declared type + ne — validated at parse time so the streamer can
 // trust both fields.
 struct BinTensorEntry {
-    std::string name;       // legacy whisper.cpp tensor name
-    ggml_type   type    = GGML_TYPE_F32;
-    int32_t     n_dims  = 0;
-    int64_t     ne[4]   = {1, 1, 1, 1};  // ggml convention (file-reversed)
-    uint64_t    offset  = 0;
-    uint64_t    nbytes  = 0;
+    std::string name;  // legacy whisper.cpp tensor name
+    ggml_type   type   = GGML_TYPE_F32;
+    int32_t     n_dims = 0;
+    int64_t     ne[4]  = { 1, 1, 1, 1 };  // ggml convention (file-reversed)
+    uint64_t    offset = 0;
+    uint64_t    nbytes = 0;
 };
 
 // Whole-file parse result, sans tensor payload bytes.
 struct WhisperBinModel {
-    std::string                  path;
-    WhisperBinHParams            hp;
-    bool                         is_multilingual = false;
-    int32_t                      num_languages   = 0;
+    std::string       path;
+    WhisperBinHParams hp;
+    bool              is_multilingual = false;
+    int32_t           num_languages   = 0;
 
-    int32_t                      n_mel_filters = 0;   // n_mel from the file
-    int32_t                      n_fft_filters = 0;   // n_fft/2+1
-    std::vector<float>           mel_filterbank;      // size n_mel * n_fft
+    int32_t            n_mel_filters = 0;   // n_mel from the file
+    int32_t            n_fft_filters = 0;   // n_fft/2+1
+    std::vector<float> mel_filterbank;      // size n_mel * n_fft
 
-    std::vector<std::string>     vocab_tokens;        // raw byte strings
+    std::vector<std::string> vocab_tokens;  // raw byte strings
 
-    std::vector<BinTensorEntry>  tensors;
+    std::vector<BinTensorEntry> tensors;
 };
 
 // Parse + validate a whisper.cpp legacy `.bin`.
@@ -111,8 +110,7 @@ struct WhisperBinModel {
 // hparams gate (real Whisper geometry, just truncated). They fail at
 // the tensor-payload completeness check inside the manifest pass and
 // surface as ERR_GGUF with a specific "truncated" diagnostic.
-transcribe_status parse_whisper_bin(const char *       path,
-                                    WhisperBinModel &  out);
+transcribe_status parse_whisper_bin(const char * path, WhisperBinModel & out);
 
 // Stream every tensor in `ctx_meta` (which the caller has already built
 // with canonical names + canonical ne + the source's ggml_type, then
@@ -129,9 +127,8 @@ struct BinStreamSlot {
     uint64_t      src_bytes = 0;
 };
 
-transcribe_status stream_tensor_data_from_bin(
-    const std::string &                 path,
-    const std::vector<BinStreamSlot> &  slots,
-    const char *                        error_tag);
+transcribe_status stream_tensor_data_from_bin(const std::string &                path,
+                                              const std::vector<BinStreamSlot> & slots,
+                                              const char *                       error_tag);
 
-} // namespace transcribe::bin_loader
+}  // namespace transcribe::bin_loader

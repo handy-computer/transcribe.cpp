@@ -151,10 +151,10 @@
 
 #define TRANSCRIBE_VERSION_STRINGIZE_(x) #x
 #define TRANSCRIBE_VERSION_STRINGIZE(x)  TRANSCRIBE_VERSION_STRINGIZE_(x)
-#define TRANSCRIBE_VERSION                                    \
-    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_MAJOR) "." \
-    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_MINOR) "." \
-    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_PATCH)
+#define TRANSCRIBE_VERSION                                                                       \
+    TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_MAJOR)                                       \
+    "." TRANSCRIBE_VERSION_STRINGIZE(TRANSCRIBE_VERSION_MINOR) "." TRANSCRIBE_VERSION_STRINGIZE( \
+        TRANSCRIBE_VERSION_PATCH)
 
 /* Monotonic integer form (MAJOR*10000 + MINOR*100 + PATCH) for compile-time
  * comparisons, e.g. `#if TRANSCRIBE_VERSION_NUMBER >= 200`. */
@@ -162,22 +162,22 @@
     (TRANSCRIBE_VERSION_MAJOR * 10000 + TRANSCRIBE_VERSION_MINOR * 100 + TRANSCRIBE_VERSION_PATCH)
 
 #ifndef TRANSCRIBE_API
-#  if defined(_WIN32) && !defined(__GNUC__)
-#    if defined(TRANSCRIBE_STATIC)
-       /* Static archive (lib build or static consumer): no dllimport/export.
+#    if defined(_WIN32) && !defined(__GNUC__)
+#        if defined(TRANSCRIBE_STATIC)
+/* Static archive (lib build or static consumer): no dllimport/export.
         * A consumer linking the static transcribe.lib must NOT see dllimport
         * or the linker chases __imp_* thunks the archive never provides
         * (LNK2019). The static `transcribe` CMake target propagates this
         * PUBLIC; non-CMake static consumers define it themselves. */
-#      define TRANSCRIBE_API
-#    elif defined(TRANSCRIBE_BUILD)
-#      define TRANSCRIBE_API __declspec(dllexport)
+#            define TRANSCRIBE_API
+#        elif defined(TRANSCRIBE_BUILD)
+#            define TRANSCRIBE_API __declspec(dllexport)
+#        else
+#            define TRANSCRIBE_API __declspec(dllimport)
+#        endif
 #    else
-#      define TRANSCRIBE_API __declspec(dllimport)
+#        define TRANSCRIBE_API __attribute__((visibility("default")))
 #    endif
-#  else
-#    define TRANSCRIBE_API __attribute__((visibility("default")))
-#  endif
 #endif
 
 #ifdef __cplusplus
@@ -189,19 +189,19 @@ extern "C" {
 /* ----------------------------------------------------------------------- */
 
 typedef enum {
-    TRANSCRIBE_OK                       = 0,
-    TRANSCRIBE_ERR_INVALID_ARG          = 1,
-    TRANSCRIBE_ERR_NOT_IMPLEMENTED      = 2,
-    TRANSCRIBE_ERR_FILE_NOT_FOUND       = 3,
-    TRANSCRIBE_ERR_GGUF                 = 4,
-    TRANSCRIBE_ERR_UNSUPPORTED_ARCH     = 5,
-    TRANSCRIBE_ERR_UNSUPPORTED_VARIANT  = 6,
-    TRANSCRIBE_ERR_OOM                  = 7,
-    TRANSCRIBE_ERR_BACKEND              = 8,
+    TRANSCRIBE_OK                         = 0,
+    TRANSCRIBE_ERR_INVALID_ARG            = 1,
+    TRANSCRIBE_ERR_NOT_IMPLEMENTED        = 2,
+    TRANSCRIBE_ERR_FILE_NOT_FOUND         = 3,
+    TRANSCRIBE_ERR_GGUF                   = 4,
+    TRANSCRIBE_ERR_UNSUPPORTED_ARCH       = 5,
+    TRANSCRIBE_ERR_UNSUPPORTED_VARIANT    = 6,
+    TRANSCRIBE_ERR_OOM                    = 7,
+    TRANSCRIBE_ERR_BACKEND                = 8,
     /* Reserved; not currently returned. */
-    TRANSCRIBE_ERR_SAMPLE_RATE          = 9,
-    TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE = 10,
-    TRANSCRIBE_ERR_UNSUPPORTED_TASK     = 11,
+    TRANSCRIBE_ERR_SAMPLE_RATE            = 9,
+    TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE   = 10,
+    TRANSCRIBE_ERR_UNSUPPORTED_TASK       = 11,
     /*
      * Returned by transcribe_run when the caller asks for a
      * timestamp granularity finer than the model can produce.
@@ -219,7 +219,7 @@ typedef enum {
      * readable via the normal result accessors; transcribe_was_aborted
      * distinguishes partial-from-abort from complete.
      */
-    TRANSCRIBE_ERR_ABORTED              = 13,
+    TRANSCRIBE_ERR_ABORTED                = 13,
     /*
      * Returned by every entry point that takes a caller-owned size-
      * aware struct (params, stream params, capabilities out, timings
@@ -228,11 +228,11 @@ typedef enum {
      * INVALID_ARG so bindings can match on "caller forgot to call the
      * transcribe_*_init function" specifically.
      */
-    TRANSCRIBE_ERR_BAD_STRUCT_SIZE      = 14,
+    TRANSCRIBE_ERR_BAD_STRUCT_SIZE        = 14,
     /* Reserved; not currently returned. */
-    TRANSCRIBE_ERR_UNSUPPORTED_PNC      = 15,
+    TRANSCRIBE_ERR_UNSUPPORTED_PNC        = 15,
     /* Reserved; not currently returned. */
-    TRANSCRIBE_ERR_UNSUPPORTED_ITN      = 16,
+    TRANSCRIBE_ERR_UNSUPPORTED_ITN        = 16,
     /*
      * Returned by transcribe_run / transcribe_run_batch when the input
      * audio is longer than the loaded model can process in a single
@@ -259,7 +259,7 @@ typedef enum {
      *
      * See docs/input-limits.md for the full contract.
      */
-    TRANSCRIBE_ERR_INPUT_TOO_LONG       = 17,
+    TRANSCRIBE_ERR_INPUT_TOO_LONG         = 17,
     /*
      * Returned by transcribe_run when the decode stopped because it hit
      * the model's context / generation budget BEFORE the model emitted
@@ -286,7 +286,7 @@ typedef enum {
      * has its own terminal-state machine (see transcribe_stream_*).
      * See docs/input-limits.md for the full contract.
      */
-    TRANSCRIBE_ERR_OUTPUT_TRUNCATED     = 18,
+    TRANSCRIBE_ERR_OUTPUT_TRUNCATED       = 18,
 } transcribe_status;
 
 /*
@@ -387,10 +387,7 @@ typedef enum {
     TRANSCRIBE_LOG_LEVEL_CONT  = 5, /* continue previous line */
 } transcribe_log_level;
 
-typedef void (*transcribe_log_callback)(
-    transcribe_log_level level,
-    const char *         msg,
-    void *               userdata);
+typedef void (*transcribe_log_callback)(transcribe_log_level level, const char * msg, void * userdata);
 
 /*
  * Global log sink. Three states:
@@ -576,10 +573,9 @@ struct transcribe_ext {
  * supported layout). The helper exists so every family rejects malformed
  * input identically.
  */
-TRANSCRIBE_API transcribe_status transcribe_ext_check(
-    const struct transcribe_ext * ext,
-    uint32_t                      expected_kind,
-    uint64_t                      min_size);
+TRANSCRIBE_API transcribe_status transcribe_ext_check(const struct transcribe_ext * ext,
+                                                      uint32_t                      expected_kind,
+                                                      uint64_t                      min_size);
 
 /*
  * Extension slot — the API surface a typed family extension is pointed
@@ -617,10 +613,9 @@ typedef enum {
  * over every known kind. See docs/extension-kinds.md for the registered
  * kinds and their slots.
  */
-TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(
-    const struct transcribe_model * model,
-    transcribe_ext_slot             slot,
-    uint32_t                        kind);
+TRANSCRIBE_API bool transcribe_model_accepts_ext_kind(const struct transcribe_model * model,
+                                                      transcribe_ext_slot             slot,
+                                                      uint32_t                        kind);
 
 /* ----------------------------------------------------------------------- */
 /* Params                                                                  */
@@ -723,8 +718,7 @@ typedef enum {
  *                                  usable modules: nothing could run).
  *   TRANSCRIBE_OK                  otherwise.
  */
-TRANSCRIBE_API transcribe_status transcribe_init_backends(
-    const char * artifact_dir);
+TRANSCRIBE_API transcribe_status transcribe_init_backends(const char * artifact_dir);
 
 /*
  * Package-local default for dynamic-backend builds.
@@ -757,10 +751,10 @@ TRANSCRIBE_API int transcribe_backend_device_count(void);
  * enum.
  */
 typedef enum {
-    TRANSCRIBE_DEVICE_TYPE_CPU   = 0,  /* CPU using system memory */
-    TRANSCRIBE_DEVICE_TYPE_GPU   = 1,  /* backend-reported GPU */
-    TRANSCRIBE_DEVICE_TYPE_IGPU  = 2,  /* backend-reported integrated GPU */
-    TRANSCRIBE_DEVICE_TYPE_ACCEL = 3,  /* host-memory accelerator (BLAS/AMX) */
+    TRANSCRIBE_DEVICE_TYPE_CPU   = 0, /* CPU using system memory */
+    TRANSCRIBE_DEVICE_TYPE_GPU   = 1, /* backend-reported GPU */
+    TRANSCRIBE_DEVICE_TYPE_IGPU  = 2, /* backend-reported integrated GPU */
+    TRANSCRIBE_DEVICE_TYPE_ACCEL = 3, /* host-memory accelerator (BLAS/AMX) */
 } transcribe_device_type;
 
 /*
@@ -799,8 +793,7 @@ struct transcribe_backend_device {
     transcribe_device_type device_type;  /* CPU/GPU/IGPU/ACCEL axis */
 };
 
-TRANSCRIBE_API void transcribe_backend_device_init(
-    struct transcribe_backend_device * p);
+TRANSCRIBE_API void transcribe_backend_device_init(struct transcribe_backend_device * p);
 
 /*
  * Fill *out (initialized via transcribe_backend_device_init) with device
@@ -811,9 +804,7 @@ TRANSCRIBE_API void transcribe_backend_device_init(
  * stable for the life of the process, so the same index always names the
  * same device.
  */
-TRANSCRIBE_API transcribe_status transcribe_get_backend_device(
-    int                                index,
-    struct transcribe_backend_device * out);
+TRANSCRIBE_API transcribe_status transcribe_get_backend_device(int index, struct transcribe_backend_device * out);
 
 /*
  * Whether a backend request can be satisfied by some registered device:
@@ -823,8 +814,7 @@ TRANSCRIBE_API transcribe_status transcribe_get_backend_device(
  * probe a binding uses to turn `backend="vulkan"` on a machine without
  * Vulkan into a clear exception instead of a failed model load.
  */
-TRANSCRIBE_API bool transcribe_backend_available(
-    transcribe_backend_request kind);
+TRANSCRIBE_API bool transcribe_backend_available(transcribe_backend_request kind);
 
 /*
  * Fill *out (initialized via transcribe_backend_device_init) with the
@@ -838,9 +828,8 @@ TRANSCRIBE_API bool transcribe_backend_available(
  * the struct-size check), or TRANSCRIBE_ERR_BACKEND if the model has no
  * resolved compute device.
  */
-TRANSCRIBE_API transcribe_status transcribe_model_get_device(
-    const struct transcribe_model *    model,
-    struct transcribe_backend_device * out);
+TRANSCRIBE_API transcribe_status transcribe_model_get_device(const struct transcribe_model *    model,
+                                                             struct transcribe_backend_device * out);
 
 /*
  * Initialization of caller-owned params structs.
@@ -902,8 +891,7 @@ struct transcribe_model_load_params {
     int                        gpu_device;
 };
 
-TRANSCRIBE_API void transcribe_model_load_params_init(
-    struct transcribe_model_load_params * params);
+TRANSCRIBE_API void transcribe_model_load_params_init(struct transcribe_model_load_params * params);
 
 /*
  * Session init params.
@@ -944,8 +932,7 @@ struct transcribe_session_params {
     int32_t            n_ctx;
 };
 
-TRANSCRIBE_API void transcribe_session_params_init(
-    struct transcribe_session_params * params);
+TRANSCRIBE_API void transcribe_session_params_init(struct transcribe_session_params * params);
 
 /*
  * Per-run params.
@@ -1011,7 +998,7 @@ TRANSCRIBE_API void transcribe_session_params_init(
  *              before pointing `family` at it.
  */
 struct transcribe_run_params {
-    uint64_t                      struct_size;
+    uint64_t struct_size;
 
     transcribe_task               task;
     transcribe_timestamp_kind     timestamps;
@@ -1043,11 +1030,10 @@ struct transcribe_run_params {
      *   as ordinary autoregression). Probe the capability bit if you want
      *   to know whether the field will take effect.
      */
-    int32_t                       spec_k_drafts;
+    int32_t spec_k_drafts;
 };
 
-TRANSCRIBE_API void transcribe_run_params_init(
-    struct transcribe_run_params * params);
+TRANSCRIBE_API void transcribe_run_params_init(struct transcribe_run_params * params);
 
 /* ----------------------------------------------------------------------- */
 /* Capabilities                                                            */
@@ -1090,7 +1076,7 @@ TRANSCRIBE_API void transcribe_run_params_init(
  *     A new feature is +1 enum value with no struct_size churn.
  */
 struct transcribe_capabilities {
-    uint64_t                  struct_size;
+    uint64_t struct_size;
 
     int32_t                   native_sample_rate;
     int                       n_languages;
@@ -1119,9 +1105,9 @@ struct transcribe_capabilities {
      *     latency hints are family-specific and live on the family
      *     stream extension, not on this struct.
      */
-    bool                      supports_language_detect;
-    bool                      supports_translate;
-    bool                      supports_streaming;
+    bool supports_language_detect;
+    bool supports_translate;
+    bool supports_streaming;
 
     /*
      * supports_spec_decode: gates transcribe_run_params::spec_k_drafts.
@@ -1133,7 +1119,7 @@ struct transcribe_capabilities {
      *   strategy; callers can probe this bit if they want to know whether
      *   passing K will actually do anything.
      */
-    bool                      supports_spec_decode;
+    bool supports_spec_decode;
 
     /*
      * Streaming timing hints intentionally do NOT live here. Streaming
@@ -1180,7 +1166,7 @@ struct transcribe_capabilities {
      * does not set it is therefore reported as unbounded. See
      * docs/input-limits.md for the full contract.
      */
-    int64_t                   max_audio_ms;
+    int64_t max_audio_ms;
 
     /*
      * translate_target_languages / n_translate_target_languages: the set
@@ -1199,12 +1185,11 @@ struct transcribe_capabilities {
      * family-level target/pair checks (e.g. canary's pivot pairs) still
      * apply on top.
      */
-    int                       n_translate_target_languages;
-    const char * const *      translate_target_languages;
+    int                  n_translate_target_languages;
+    const char * const * translate_target_languages;
 };
 
-TRANSCRIBE_API void transcribe_capabilities_init(
-    struct transcribe_capabilities * out);
+TRANSCRIBE_API void transcribe_capabilities_init(struct transcribe_capabilities * out);
 
 /*
  * Read model capabilities into caller-owned storage. The caller
@@ -1221,9 +1206,8 @@ TRANSCRIBE_API void transcribe_capabilities_init(
  * model-owned storage and remain valid until transcribe_model_free().
  * The output struct itself is caller-owned.
  */
-TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(
-    const struct transcribe_model *  model,
-    struct transcribe_capabilities * out_caps);
+TRANSCRIBE_API transcribe_status transcribe_model_get_capabilities(const struct transcribe_model *  model,
+                                                                   struct transcribe_capabilities * out_caps);
 
 /*
  * Per-feature capability probe. Pure yes/no advisories that don't
@@ -1275,9 +1259,7 @@ typedef enum {
     TRANSCRIBE_FEATURE_ITN                  = 5,
 } transcribe_feature;
 
-TRANSCRIBE_API bool transcribe_model_supports(
-    const struct transcribe_model * model,
-    transcribe_feature              feature);
+TRANSCRIBE_API bool transcribe_model_supports(const struct transcribe_model * model, transcribe_feature feature);
 
 /*
  * Stable identifier strings read from GGUF and runtime state.
@@ -1334,8 +1316,7 @@ TRANSCRIBE_API const char * transcribe_model_backend(const struct transcribe_mod
  * arrays such as the token list are not). There is no fallback to the variant
  * slug — for that, use transcribe_model_variant_string().
  */
-TRANSCRIBE_API const char * transcribe_model_meta_val_str(
-    const struct transcribe_model * model, const char * key);
+TRANSCRIBE_API const char * transcribe_model_meta_val_str(const struct transcribe_model * model, const char * key);
 
 /* ----------------------------------------------------------------------- */
 /* Lifecycle                                                               */
@@ -1353,10 +1334,9 @@ TRANSCRIBE_API const char * transcribe_model_meta_val_str(
  * On success, *out_model is set and the caller owns it. On failure,
  * *out_model is set to NULL and a non-OK status is returned.
  */
-TRANSCRIBE_API transcribe_status transcribe_model_load_file(
-    const char *                           path,
-    const struct transcribe_model_load_params * params,
-    struct transcribe_model **             out_model);
+TRANSCRIBE_API transcribe_status transcribe_model_load_file(const char *                                path,
+                                                            const struct transcribe_model_load_params * params,
+                                                            struct transcribe_model **                  out_model);
 
 /*
  * Free a model. Only valid after every session derived from this model
@@ -1374,10 +1354,9 @@ TRANSCRIBE_API void transcribe_model_free(struct transcribe_model * model);
  * params may be NULL for library defaults, or initialize a struct with
  * transcribe_session_params_init(). See transcribe_model_load_file.
  */
-TRANSCRIBE_API transcribe_status transcribe_session_init(
-    struct transcribe_model *                model,
-    const struct transcribe_session_params * params,
-    struct transcribe_session **             out_session);
+TRANSCRIBE_API transcribe_status transcribe_session_init(struct transcribe_model *                model,
+                                                         const struct transcribe_session_params * params,
+                                                         struct transcribe_session **             out_session);
 
 /*
  * Free a session.
@@ -1411,11 +1390,10 @@ TRANSCRIBE_API void transcribe_session_free(struct transcribe_session * session)
  * status transcribe_model_load_file / transcribe_session_init would
  * return; no partial state leaks).
  */
-TRANSCRIBE_API transcribe_status transcribe_open(
-    const char *                                path,
-    const struct transcribe_model_load_params * load_params,
-    const struct transcribe_session_params *    session_params,
-    struct transcribe_session **                out_session);
+TRANSCRIBE_API transcribe_status transcribe_open(const char *                                path,
+                                                 const struct transcribe_model_load_params * load_params,
+                                                 const struct transcribe_session_params *    session_params,
+                                                 struct transcribe_session **                out_session);
 
 /*
  * Deprecated alias for transcribe_session_free. Both honor owns_model and
@@ -1433,8 +1411,7 @@ TRANSCRIBE_API void transcribe_close(struct transcribe_session * session);
  * capabilities query without holding a separate model handle. Returns
  * NULL if session is NULL.
  */
-TRANSCRIBE_API const struct transcribe_model * transcribe_get_model(
-    const struct transcribe_session * session);
+TRANSCRIBE_API const struct transcribe_model * transcribe_get_model(const struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Run                                                                     */
@@ -1457,11 +1434,10 @@ TRANSCRIBE_API const struct transcribe_model * transcribe_get_model(
  * the accessors below. Calling transcribe_run() again replaces the
  * previous result on the same session.
  */
-TRANSCRIBE_API transcribe_status transcribe_run(
-    struct transcribe_session *      session,
-    const float *                    pcm,
-    int                              n_samples,
-    const struct transcribe_run_params * params);
+TRANSCRIBE_API transcribe_status transcribe_run(struct transcribe_session *          session,
+                                                const float *                        pcm,
+                                                int                                  n_samples,
+                                                const struct transcribe_run_params * params);
 
 /* ----------------------------------------------------------------------- */
 /* Batch run (offline)                                                     */
@@ -1540,12 +1516,11 @@ TRANSCRIBE_API transcribe_status transcribe_run(
  *                                  transcribe_batch_n_results is n (one slot
  *                                  per input utterance).
  */
-TRANSCRIBE_API transcribe_status transcribe_run_batch(
-    struct transcribe_session *          session,
-    const float * const *                pcm,
-    const int *                          n_samples,
-    int                                  n,
-    const struct transcribe_run_params * params);
+TRANSCRIBE_API transcribe_status transcribe_run_batch(struct transcribe_session *          session,
+                                                      const float * const *                pcm,
+                                                      const int *                          n_samples,
+                                                      int                                  n,
+                                                      const struct transcribe_run_params * params);
 
 /* ----------------------------------------------------------------------- */
 /* Cancellation                                                            */
@@ -1583,10 +1558,9 @@ typedef bool (*transcribe_abort_callback)(void * user_data);
  * another thread should do so by flipping state inside the callback's
  * user_data, not by swapping the callback itself.
  */
-TRANSCRIBE_API void transcribe_set_abort_callback(
-    struct transcribe_session *  session,
-    transcribe_abort_callback    cb,
-    void *                       user_data);
+TRANSCRIBE_API void transcribe_set_abort_callback(struct transcribe_session * session,
+                                                  transcribe_abort_callback   cb,
+                                                  void *                      user_data);
 
 /*
  * True if the most recent transcribe_run was aborted by the installed
@@ -1677,8 +1651,7 @@ struct transcribe_session_limits {
     int64_t  max_kv_bytes;
 };
 
-TRANSCRIBE_API void transcribe_session_limits_init(
-    struct transcribe_session_limits * out);
+TRANSCRIBE_API void transcribe_session_limits_init(struct transcribe_session_limits * out);
 
 /*
  * Read the effective limits for a session into caller-owned storage. The
@@ -1692,9 +1665,8 @@ TRANSCRIBE_API void transcribe_session_limits_init(
  *                                  library minimum.
  *   TRANSCRIBE_OK                  otherwise.
  */
-TRANSCRIBE_API transcribe_status transcribe_session_get_limits(
-    const struct transcribe_session *   session,
-    struct transcribe_session_limits *  out);
+TRANSCRIBE_API transcribe_status transcribe_session_get_limits(const struct transcribe_session *  session,
+                                                               struct transcribe_session_limits * out);
 
 /* ----------------------------------------------------------------------- */
 /* Streaming                                                               */
@@ -1829,14 +1801,13 @@ typedef enum {
  *                                it is committed.
  */
 struct transcribe_stream_params {
-    uint64_t                      struct_size;
-    const struct transcribe_ext * family;
+    uint64_t                        struct_size;
+    const struct transcribe_ext *   family;
     transcribe_stream_commit_policy commit_policy;
-    uint32_t                      stable_prefix_agreement_n;
+    uint32_t                        stable_prefix_agreement_n;
 };
 
-TRANSCRIBE_API void transcribe_stream_params_init(
-    struct transcribe_stream_params * params);
+TRANSCRIBE_API void transcribe_stream_params_init(struct transcribe_stream_params * params);
 
 /*
  * Optional per-call change metadata returned by feed/finalize.
@@ -1896,18 +1867,17 @@ TRANSCRIBE_API void transcribe_stream_params_init(
  */
 struct transcribe_stream_update {
     uint64_t struct_size;
-    bool    result_changed;
-    bool    is_final;
-    int32_t revision;
-    int64_t input_received_ms;
-    int64_t audio_committed_ms;
-    int64_t buffered_ms;
-    bool    committed_changed;
-    bool    tentative_changed;
+    bool     result_changed;
+    bool     is_final;
+    int32_t  revision;
+    int64_t  input_received_ms;
+    int64_t  audio_committed_ms;
+    int64_t  buffered_ms;
+    bool     committed_changed;
+    bool     tentative_changed;
 };
 
-TRANSCRIBE_API void transcribe_stream_update_init(
-    struct transcribe_stream_update * out);
+TRANSCRIBE_API void transcribe_stream_update_init(struct transcribe_stream_update * out);
 
 /*
  * UI-facing stream text snapshot.
@@ -1949,7 +1919,7 @@ TRANSCRIBE_API void transcribe_stream_update_init(
  * transcribe_session_free on the same session.
  */
 struct transcribe_stream_text {
-    uint64_t struct_size;
+    uint64_t     struct_size;
     const char * full_text;
     uint64_t     full_text_bytes;
     const char * committed_text;
@@ -1959,12 +1929,10 @@ struct transcribe_stream_text {
     uint64_t     raw_tentative_start_bytes;
 };
 
-TRANSCRIBE_API void transcribe_stream_text_init(
-    struct transcribe_stream_text * out);
+TRANSCRIBE_API void transcribe_stream_text_init(struct transcribe_stream_text * out);
 
-TRANSCRIBE_API transcribe_status transcribe_stream_get_text(
-    const struct transcribe_session * session,
-    struct transcribe_stream_text *   out);
+TRANSCRIBE_API transcribe_status transcribe_stream_get_text(const struct transcribe_session * session,
+                                                            struct transcribe_stream_text *   out);
 
 /*
  * Begin a streaming run on session.
@@ -2056,10 +2024,9 @@ TRANSCRIBE_API transcribe_status transcribe_stream_get_text(
  * structs and every pointer inside them the moment begin returns, while
  * the stream stays ACTIVE. Nothing handed to begin needs to outlive it.
  */
-TRANSCRIBE_API transcribe_status transcribe_stream_begin(
-    struct transcribe_session *              session,
-    const struct transcribe_run_params *         run_params,
-    const struct transcribe_stream_params *  stream_params);
+TRANSCRIBE_API transcribe_status transcribe_stream_begin(struct transcribe_session *             session,
+                                                         const struct transcribe_run_params *    run_params,
+                                                         const struct transcribe_stream_params * stream_params);
 
 /*
  * Feed PCM into the active stream. 16 kHz mono float32, same as
@@ -2083,11 +2050,10 @@ TRANSCRIBE_API transcribe_status transcribe_stream_begin(
  * is a terminal status; transcribe_was_aborted distinguishes it from
  * other failures.
  */
-TRANSCRIBE_API transcribe_status transcribe_stream_feed(
-    struct transcribe_session *        session,
-    const float *                      pcm,
-    int                                n_samples,
-    struct transcribe_stream_update *  update);
+TRANSCRIBE_API transcribe_status transcribe_stream_feed(struct transcribe_session *       session,
+                                                        const float *                     pcm,
+                                                        int                               n_samples,
+                                                        struct transcribe_stream_update * update);
 
 /*
  * Signal end of input. Flushes buffered audio, satisfies right-
@@ -2100,9 +2066,8 @@ TRANSCRIBE_API transcribe_status transcribe_stream_feed(
  * Returns TRANSCRIBE_ERR_INVALID_ARG when session is NULL or state is
  * not ACTIVE.
  */
-TRANSCRIBE_API transcribe_status transcribe_stream_finalize(
-    struct transcribe_session *        session,
-    struct transcribe_stream_update *  update);
+TRANSCRIBE_API transcribe_status transcribe_stream_finalize(struct transcribe_session *       session,
+                                                            struct transcribe_stream_update * update);
 
 /*
  * Abandon the current stream without finalizing.
@@ -2119,15 +2084,13 @@ TRANSCRIBE_API transcribe_status transcribe_stream_finalize(
  *
  * No-op if session is NULL.
  */
-TRANSCRIBE_API void transcribe_stream_reset(
-    struct transcribe_session * session);
+TRANSCRIBE_API void transcribe_stream_reset(struct transcribe_session * session);
 
 /*
  * Current stream lifecycle state. Returns TRANSCRIBE_STREAM_IDLE if
  * session is NULL.
  */
-TRANSCRIBE_API enum transcribe_stream_state
-    transcribe_stream_get_state(const struct transcribe_session * session);
+TRANSCRIBE_API enum transcribe_stream_state transcribe_stream_get_state(const struct transcribe_session * session);
 
 /*
  * Monotonic snapshot revision counter. Advances whenever any observable
@@ -2141,8 +2104,7 @@ TRANSCRIBE_API enum transcribe_stream_state
  * by itself mean the visible text changed; it means "something about
  * the snapshot moved, re-read the accessors."
  */
-TRANSCRIBE_API int transcribe_stream_revision(
-    const struct transcribe_session * session);
+TRANSCRIBE_API int transcribe_stream_revision(const struct transcribe_session * session);
 
 /*
  * Low-level raw row boundary hints. In older streaming APIs these were
@@ -2154,12 +2116,9 @@ TRANSCRIBE_API int transcribe_stream_revision(
  *
  * Return 0 if session is NULL.
  */
-TRANSCRIBE_API int transcribe_stream_n_committed_segments(
-    const struct transcribe_session * session);
-TRANSCRIBE_API int transcribe_stream_n_committed_words(
-    const struct transcribe_session * session);
-TRANSCRIBE_API int transcribe_stream_n_committed_tokens(
-    const struct transcribe_session * session);
+TRANSCRIBE_API int transcribe_stream_n_committed_segments(const struct transcribe_session * session);
+TRANSCRIBE_API int transcribe_stream_n_committed_words(const struct transcribe_session * session);
+TRANSCRIBE_API int transcribe_stream_n_committed_tokens(const struct transcribe_session * session);
 
 /*
  * Last terminal status of the stream. Preserves the failing status
@@ -2170,8 +2129,7 @@ TRANSCRIBE_API int transcribe_stream_n_committed_tokens(
  * Returns TRANSCRIBE_OK if session is NULL or no terminal status has
  * been recorded on the current stream.
  */
-TRANSCRIBE_API transcribe_status transcribe_stream_last_status(
-    const struct transcribe_session * session);
+TRANSCRIBE_API transcribe_status transcribe_stream_last_status(const struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Tokenization                                                            */
@@ -2203,11 +2161,10 @@ TRANSCRIBE_API transcribe_status transcribe_stream_last_status(
  *   - Parakeet     (SentencePiece; currently returns INT_MIN)
  *   - Cohere ASR   (SentencePiece; currently returns INT_MIN)
  */
-TRANSCRIBE_API int transcribe_tokenize(
-    const struct transcribe_model * model,
-    const char *                    text,
-    int32_t *                       tokens,
-    size_t                          n_max);
+TRANSCRIBE_API int transcribe_tokenize(const struct transcribe_model * model,
+                                       const char *                    text,
+                                       int32_t *                       tokens,
+                                       size_t                          n_max);
 
 /* ----------------------------------------------------------------------- */
 /* Timings                                                                 */
@@ -2236,10 +2193,10 @@ TRANSCRIBE_API int transcribe_tokenize(
  */
 struct transcribe_timings {
     uint64_t struct_size;
-    float  load_ms;
-    float  mel_ms;
-    float  encode_ms;
-    float  decode_ms;
+    float    load_ms;
+    float    mel_ms;
+    float    encode_ms;
+    float    decode_ms;
 };
 
 TRANSCRIBE_API void transcribe_timings_init(struct transcribe_timings * out);
@@ -2255,35 +2212,32 @@ TRANSCRIBE_API void transcribe_timings_init(struct transcribe_timings * out);
  *   TRANSCRIBE_ERR_BAD_STRUCT_SIZE out_timings->struct_size is 0 or
  *                                  smaller than the library's minimum.
  */
-TRANSCRIBE_API transcribe_status transcribe_get_timings(
-    const struct transcribe_session * session,
-    struct transcribe_timings *       out_timings);
+TRANSCRIBE_API transcribe_status transcribe_get_timings(const struct transcribe_session * session,
+                                                        struct transcribe_timings *       out_timings);
 
 /*
  * Pretty-print the current timings to the registered log callback at
  * INFO level (or stderr if no callback is installed). No-op if session
  * is NULL.
  */
-TRANSCRIBE_API void
-transcribe_print_timings(const struct transcribe_session * session);
+TRANSCRIBE_API void transcribe_print_timings(const struct transcribe_session * session);
 
 /*
  * Reset the per-run timing accumulators (mel_ms, encode_ms,
  * decode_ms) to 0. Does NOT touch load_ms — that's a model-scoped
  * fact. No-op if session is NULL.
  */
-TRANSCRIBE_API void
-transcribe_reset_timings(struct transcribe_session * session);
+TRANSCRIBE_API void transcribe_reset_timings(struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Result accessors - top level                                            */
 /* ----------------------------------------------------------------------- */
 
-TRANSCRIBE_API const char *               transcribe_full_text(const struct transcribe_session * session);
-TRANSCRIBE_API transcribe_timestamp_kind  transcribe_returned_timestamp_kind(const struct transcribe_session * session);
-TRANSCRIBE_API int                        transcribe_n_segments(const struct transcribe_session * session);
-TRANSCRIBE_API int                        transcribe_n_words(const struct transcribe_session * session);
-TRANSCRIBE_API int                        transcribe_n_tokens(const struct transcribe_session * session);
+TRANSCRIBE_API const char *              transcribe_full_text(const struct transcribe_session * session);
+TRANSCRIBE_API transcribe_timestamp_kind transcribe_returned_timestamp_kind(const struct transcribe_session * session);
+TRANSCRIBE_API int                       transcribe_n_segments(const struct transcribe_session * session);
+TRANSCRIBE_API int                       transcribe_n_words(const struct transcribe_session * session);
+TRANSCRIBE_API int                       transcribe_n_tokens(const struct transcribe_session * session);
 
 /*
  * The language the model itself predicted on the most recent run, as a
@@ -2303,7 +2257,7 @@ TRANSCRIBE_API int                        transcribe_n_tokens(const struct trans
  * streaming mode every transcribe_stream_feed / _finalize call may
  * invalidate it.
  */
-TRANSCRIBE_API const char *               transcribe_detected_language(const struct transcribe_session * session);
+TRANSCRIBE_API const char * transcribe_detected_language(const struct transcribe_session * session);
 
 /* ----------------------------------------------------------------------- */
 /* Result accessors - per-item rows                                        */
@@ -2347,7 +2301,7 @@ struct transcribe_segment {
     int          n_words;
     int          first_token;
     int          n_tokens;
-    const char * text;        /* session-owned; see lifetime note above */
+    const char * text; /* session-owned; see lifetime note above */
 };
 
 TRANSCRIBE_API void transcribe_segment_init(struct transcribe_segment * out);
@@ -2359,7 +2313,7 @@ struct transcribe_word {
     int          seg_index;
     int          first_token;
     int          n_tokens;
-    const char * text;        /* session-owned; see lifetime note above */
+    const char * text; /* session-owned; see lifetime note above */
 };
 
 TRANSCRIBE_API void transcribe_word_init(struct transcribe_word * out);
@@ -2383,7 +2337,7 @@ struct transcribe_token {
     int64_t      t1_ms;
     int          seg_index;
     int          word_index;
-    const char * text;        /* session-owned; see lifetime note above */
+    const char * text; /* session-owned; see lifetime note above */
 };
 
 TRANSCRIBE_API void transcribe_token_init(struct transcribe_token * out);
@@ -2402,20 +2356,17 @@ TRANSCRIBE_API void transcribe_token_init(struct transcribe_token * out);
  *                                  zero-initialized by INIT (text NULL,
  *                                  scalars 0).
  */
-TRANSCRIBE_API transcribe_status transcribe_get_segment(
-    const struct transcribe_session * session,
-    int                               i,
-    struct transcribe_segment *       out);
+TRANSCRIBE_API transcribe_status transcribe_get_segment(const struct transcribe_session * session,
+                                                        int                               i,
+                                                        struct transcribe_segment *       out);
 
-TRANSCRIBE_API transcribe_status transcribe_get_word(
-    const struct transcribe_session * session,
-    int                               i,
-    struct transcribe_word *          out);
+TRANSCRIBE_API transcribe_status transcribe_get_word(const struct transcribe_session * session,
+                                                     int                               i,
+                                                     struct transcribe_word *          out);
 
-TRANSCRIBE_API transcribe_status transcribe_get_token(
-    const struct transcribe_session * session,
-    int                               i,
-    struct transcribe_token *         out);
+TRANSCRIBE_API transcribe_status transcribe_get_token(const struct transcribe_session * session,
+                                                      int                               i,
+                                                      struct transcribe_token *         out);
 
 /* ----------------------------------------------------------------------- */
 /* Batch result accessors                                                  */
@@ -2463,8 +2414,7 @@ TRANSCRIBE_API transcribe_status transcribe_get_token(
  * fault other than abort (OOM, backend error) the count is unspecified;
  * the non-OK top-level return is the signal in that case.
  */
-TRANSCRIBE_API int transcribe_batch_n_results(
-    const struct transcribe_session * session);
+TRANSCRIBE_API int transcribe_batch_n_results(const struct transcribe_session * session);
 
 /*
  * Per-utterance terminal status. TRANSCRIBE_OK when utterance i produced a
@@ -2473,56 +2423,40 @@ TRANSCRIBE_API int transcribe_batch_n_results(
  * Returns TRANSCRIBE_ERR_INVALID_ARG if session is NULL or i is out of
  * range.
  */
-TRANSCRIBE_API transcribe_status transcribe_batch_status(
-    const struct transcribe_session * session,
-    int                               i);
+TRANSCRIBE_API transcribe_status transcribe_batch_status(const struct transcribe_session * session, int i);
 
-TRANSCRIBE_API const char * transcribe_batch_full_text(
-    const struct transcribe_session * session,
-    int                               i);
+TRANSCRIBE_API const char * transcribe_batch_full_text(const struct transcribe_session * session, int i);
 
-TRANSCRIBE_API transcribe_timestamp_kind transcribe_batch_returned_timestamp_kind(
-    const struct transcribe_session * session,
-    int                               i);
+TRANSCRIBE_API transcribe_timestamp_kind
+transcribe_batch_returned_timestamp_kind(const struct transcribe_session * session, int i);
 
-TRANSCRIBE_API const char * transcribe_batch_detected_language(
-    const struct transcribe_session * session,
-    int                               i);
+TRANSCRIBE_API const char * transcribe_batch_detected_language(const struct transcribe_session * session, int i);
 
-TRANSCRIBE_API int transcribe_batch_n_segments(
-    const struct transcribe_session * session,
-    int                               i);
+TRANSCRIBE_API int transcribe_batch_n_segments(const struct transcribe_session * session, int i);
 
-TRANSCRIBE_API int transcribe_batch_n_words(
-    const struct transcribe_session * session,
-    int                               i);
+TRANSCRIBE_API int transcribe_batch_n_words(const struct transcribe_session * session, int i);
 
-TRANSCRIBE_API int transcribe_batch_n_tokens(
-    const struct transcribe_session * session,
-    int                               i);
+TRANSCRIBE_API int transcribe_batch_n_tokens(const struct transcribe_session * session, int i);
 
 /*
  * Copy out row `j` of utterance `i`. The struct is initialized exactly as
  * for transcribe_get_segment / _word / _token (caller calls the matching
  * _init first); the only difference is the utterance index `i`.
  */
-TRANSCRIBE_API transcribe_status transcribe_batch_get_segment(
-    const struct transcribe_session * session,
-    int                               i,
-    int                               j,
-    struct transcribe_segment *       out);
+TRANSCRIBE_API transcribe_status transcribe_batch_get_segment(const struct transcribe_session * session,
+                                                              int                               i,
+                                                              int                               j,
+                                                              struct transcribe_segment *       out);
 
-TRANSCRIBE_API transcribe_status transcribe_batch_get_word(
-    const struct transcribe_session * session,
-    int                               i,
-    int                               j,
-    struct transcribe_word *          out);
+TRANSCRIBE_API transcribe_status transcribe_batch_get_word(const struct transcribe_session * session,
+                                                           int                               i,
+                                                           int                               j,
+                                                           struct transcribe_word *          out);
 
-TRANSCRIBE_API transcribe_status transcribe_batch_get_token(
-    const struct transcribe_session * session,
-    int                               i,
-    int                               j,
-    struct transcribe_token *         out);
+TRANSCRIBE_API transcribe_status transcribe_batch_get_token(const struct transcribe_session * session,
+                                                            int                               i,
+                                                            int                               j,
+                                                            struct transcribe_token *         out);
 
 /*
  * Per-utterance timings for a batched run. Mirrors transcribe_get_timings but
@@ -2537,10 +2471,9 @@ TRANSCRIBE_API transcribe_status transcribe_batch_get_token(
  * Returns TRANSCRIBE_ERR_INVALID_ARG on NULL args or out-of-range i,
  * TRANSCRIBE_ERR_BAD_STRUCT_SIZE on an uninitialized out struct.
  */
-TRANSCRIBE_API transcribe_status transcribe_batch_get_timings(
-    const struct transcribe_session * session,
-    int                               i,
-    struct transcribe_timings *       out);
+TRANSCRIBE_API transcribe_status transcribe_batch_get_timings(const struct transcribe_session * session,
+                                                              int                               i,
+                                                              struct transcribe_timings *       out);
 
 #ifdef __cplusplus
 } /* extern "C" */

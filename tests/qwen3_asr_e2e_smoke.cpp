@@ -30,7 +30,6 @@
 //     second case when the samples/dots.wav file is present.
 
 #include "transcribe.h"
-
 #include "wav.h"
 
 #include <sys/stat.h>
@@ -43,56 +42,55 @@
 #include <vector>
 
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
-#  define TRANSCRIBE_TEST_SAMPLES_DIR "samples"
+#    define TRANSCRIBE_TEST_SAMPLES_DIR "samples"
 #endif
 
 namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_STR_EQ(a, b)                                                  \
-    do {                                                                    \
-        const std::string _av = (a);                                        \
-        const std::string _bv = (b);                                        \
-        if (_av != _bv) {                                                   \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: \"%s\" != \"%s\"\n",                  \
-                         __FILE__, __LINE__,                                \
-                         _av.c_str(), _bv.c_str());                         \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_STR_EQ(a, b)                                                                                        \
+    do {                                                                                                          \
+        const std::string _av = (a);                                                                              \
+        const std::string _bv = (b);                                                                              \
+        if (_av != _bv) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: \"%s\" != \"%s\"\n", __FILE__, __LINE__, _av.c_str(), _bv.c_str()); \
+            ++g_failures;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
 int edit_distance(const std::string & a, const std::string & b) {
-    const int n = static_cast<int>(a.size());
-    const int m = static_cast<int>(b.size());
+    const int        n = static_cast<int>(a.size());
+    const int        m = static_cast<int>(b.size());
     std::vector<int> prev(static_cast<size_t>(m + 1));
     std::vector<int> curr(static_cast<size_t>(m + 1));
-    for (int j = 0; j <= m; ++j) prev[static_cast<size_t>(j)] = j;
+    for (int j = 0; j <= m; ++j) {
+        prev[static_cast<size_t>(j)] = j;
+    }
     for (int i = 1; i <= n; ++i) {
         curr[0] = i;
         for (int j = 1; j <= m; ++j) {
-            const int cost = (a[static_cast<size_t>(i - 1)] ==
-                              b[static_cast<size_t>(j - 1)]) ? 0 : 1;
-            const int del = prev[static_cast<size_t>(j)]     + 1;
-            const int ins = curr[static_cast<size_t>(j - 1)] + 1;
-            const int sub = prev[static_cast<size_t>(j - 1)] + cost;
-            int best = del < ins ? del : ins;
-            if (sub < best) best = sub;
+            const int cost = (a[static_cast<size_t>(i - 1)] == b[static_cast<size_t>(j - 1)]) ? 0 : 1;
+            const int del  = prev[static_cast<size_t>(j)] + 1;
+            const int ins  = curr[static_cast<size_t>(j - 1)] + 1;
+            const int sub  = prev[static_cast<size_t>(j - 1)] + cost;
+            int       best = del < ins ? del : ins;
+            if (sub < best) {
+                best = sub;
+            }
             curr[static_cast<size_t>(j)] = best;
         }
         prev.swap(curr);
@@ -137,63 +135,52 @@ void run_case(transcribe_model *  model,
               const char *        case_name,
               const std::string & wav_path,
               const char *        reference,
-              int                 max_edit_distance)
-{
+              int                 max_edit_distance) {
     if (!file_exists(wav_path)) {
-        std::fprintf(stderr,
-                     "qwen3_asr_e2e_smoke[%s]: wav not found: %s\n",
-                     case_name, wav_path.c_str());
+        std::fprintf(stderr, "qwen3_asr_e2e_smoke[%s]: wav not found: %s\n", case_name, wav_path.c_str());
         ++g_failures;
         return;
     }
 
     std::vector<float> pcm;
-    std::string load_err;
+    std::string        load_err;
     if (!transcribe_cli::load_wav_mono_16k(wav_path, pcm, load_err)) {
-        std::fprintf(stderr,
-                     "qwen3_asr_e2e_smoke[%s]: wav load: %s\n",
-                     case_name, load_err.c_str());
+        std::fprintf(stderr, "qwen3_asr_e2e_smoke[%s]: wav load: %s\n", case_name, load_err.c_str());
         ++g_failures;
         return;
     }
 
-    transcribe_session_params cp; transcribe_session_params_init(&cp);
+    transcribe_session_params cp;
+    transcribe_session_params_init(&cp);
+
     struct transcribe_session * ctx = nullptr;
     {
-        const transcribe_status st =
-            transcribe_session_init(model, &cp, &ctx);
+        const transcribe_status st = transcribe_session_init(model, &cp, &ctx);
         if (st != TRANSCRIBE_OK || ctx == nullptr) {
-            std::fprintf(stderr,
-                         "qwen3_asr_e2e_smoke[%s]: FAIL ctx_init: %s\n",
-                         case_name, transcribe_status_string(st));
+            std::fprintf(stderr, "qwen3_asr_e2e_smoke[%s]: FAIL ctx_init: %s\n", case_name,
+                         transcribe_status_string(st));
             ++g_failures;
             return;
         }
     }
 
-    transcribe_run_params rp; transcribe_run_params_init(&rp);
+    transcribe_run_params rp;
+    transcribe_run_params_init(&rp);
     {
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(),
-                           static_cast<int>(pcm.size()), &rp);
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp);
         if (st != TRANSCRIBE_OK) {
-            std::fprintf(stderr,
-                         "qwen3_asr_e2e_smoke[%s]: FAIL run: %s\n",
-                         case_name, transcribe_status_string(st));
+            std::fprintf(stderr, "qwen3_asr_e2e_smoke[%s]: FAIL run: %s\n", case_name, transcribe_status_string(st));
             ++g_failures;
             transcribe_session_free(ctx);
             return;
         }
     }
 
-    const char * full = transcribe_full_text(ctx);
+    const char *      full   = transcribe_full_text(ctx);
     const std::string actual = full ? full : "";
-    std::fprintf(stderr,
-                 "qwen3_asr_e2e_smoke[%s]: text=\"%s\"\n",
-                 case_name, actual.c_str());
+    std::fprintf(stderr, "qwen3_asr_e2e_smoke[%s]: text=\"%s\"\n", case_name, actual.c_str());
     if (actual.empty()) {
-        std::fprintf(stderr,
-                     "FAIL[%s]: transcript is empty\n", case_name);
+        std::fprintf(stderr, "FAIL[%s]: transcript is empty\n", case_name);
         ++g_failures;
         transcribe_session_free(ctx);
         return;
@@ -205,9 +192,7 @@ void run_case(transcribe_model *  model,
                  "(tolerance=%d)\n",
                  case_name, dist, max_edit_distance);
     if (dist > max_edit_distance) {
-        std::fprintf(stderr,
-                     "FAIL[%s]: text edit distance %d exceeds %d\n",
-                     case_name, dist, max_edit_distance);
+        std::fprintf(stderr, "FAIL[%s]: text edit distance %d exceeds %d\n", case_name, dist, max_edit_distance);
         std::fprintf(stderr, "  reference: %s\n", reference);
         std::fprintf(stderr, "  actual:    %s\n", actual.c_str());
         ++g_failures;
@@ -216,7 +201,7 @@ void run_case(transcribe_model *  model,
     transcribe_session_free(ctx);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const char * env = std::getenv("TRANSCRIBE_QWEN3_ASR_GGUF");
@@ -228,9 +213,7 @@ int main() {
     }
     const std::string model_path = env;
     if (!file_exists(model_path)) {
-        std::fprintf(stderr,
-                     "qwen3_asr_e2e_smoke: model not found: %s\n",
-                     model_path.c_str());
+        std::fprintf(stderr, "qwen3_asr_e2e_smoke: model not found: %s\n", model_path.c_str());
         return 77;
     }
 
@@ -240,20 +223,19 @@ int main() {
     } else {
         jfk_wav = std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/jfk.wav";
     }
-    const std::string dots_wav =
-        std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/dots.wav";
+    const std::string dots_wav = std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/dots.wav";
 
     const auto t_start = std::chrono::steady_clock::now();
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     mp.backend = TRANSCRIBE_BACKEND_CPU;
+
     struct transcribe_model * model = nullptr;
     {
-        const transcribe_status st =
-            transcribe_model_load_file(model_path.c_str(), &mp, &model);
+        const transcribe_status st = transcribe_model_load_file(model_path.c_str(), &mp, &model);
         if (st != TRANSCRIBE_OK || model == nullptr) {
-            std::fprintf(stderr, "FAIL load: %s\n",
-                         transcribe_status_string(st));
+            std::fprintf(stderr, "FAIL load: %s\n", transcribe_status_string(st));
             return EXIT_FAILURE;
         }
     }
@@ -275,10 +257,8 @@ int main() {
     // can't mask a later bug.
     {
         std::vector<float> pcm;
-        std::string load_err;
-        if (!file_exists(jfk_wav) ||
-            !transcribe_cli::load_wav_mono_16k(jfk_wav, pcm, load_err))
-        {
+        std::string        load_err;
+        if (!file_exists(jfk_wav) || !transcribe_cli::load_wav_mono_16k(jfk_wav, pcm, load_err)) {
             std::fprintf(stderr,
                          "qwen3_asr_e2e_smoke: jfk wav load for language "
                          "hint check: %s\n",
@@ -287,11 +267,10 @@ int main() {
             return EXIT_FAILURE;
         }
 
-        transcribe_session_params cp; transcribe_session_params_init(&cp);
+        transcribe_session_params cp;
+        transcribe_session_params_init(&cp);
         struct transcribe_session * ctx = nullptr;
-        if (transcribe_session_init(model, &cp, &ctx) != TRANSCRIBE_OK ||
-            ctx == nullptr)
-        {
+        if (transcribe_session_init(model, &cp, &ctx) != TRANSCRIBE_OK || ctx == nullptr) {
             std::fprintf(stderr,
                          "qwen3_asr_e2e_smoke: ctx_init for language "
                          "hint check failed\n");
@@ -302,28 +281,23 @@ int main() {
         // Accept path: force "en" on English audio and expect a
         // transcript within the same edit-distance tolerance as the
         // auto-detect jfk case.
-        transcribe_run_params rp_lang; transcribe_run_params_init(&rp_lang);
-        rp_lang.language = "en";
-        const transcribe_status st =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()),
-                           &rp_lang);
+        transcribe_run_params rp_lang;
+        transcribe_run_params_init(&rp_lang);
+        rp_lang.language           = "en";
+        const transcribe_status st = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_lang);
         if (st != TRANSCRIBE_OK) {
-            std::fprintf(stderr,
-                         "FAIL: language=\"en\" returned %s (expected OK)\n",
-                         transcribe_status_string(st));
+            std::fprintf(stderr, "FAIL: language=\"en\" returned %s (expected OK)\n", transcribe_status_string(st));
             ++g_failures;
         } else {
-            const char * forced = transcribe_full_text(ctx);
+            const char *      forced      = transcribe_full_text(ctx);
             const std::string forced_text = forced ? forced : "";
-            const int dist = edit_distance(forced_text, k_jfk_reference_text);
+            const int         dist        = edit_distance(forced_text, k_jfk_reference_text);
             std::fprintf(stderr,
                          "qwen3_asr_e2e_smoke[lang=en]: text=\"%s\" "
                          "edit_distance=%d\n",
                          forced_text.c_str(), dist);
             if (dist > k_jfk_max_edit_distance) {
-                std::fprintf(stderr,
-                             "FAIL: forced-en edit distance %d > %d\n",
-                             dist, k_jfk_max_edit_distance);
+                std::fprintf(stderr, "FAIL: forced-en edit distance %d > %d\n", dist, k_jfk_max_edit_distance);
                 ++g_failures;
             }
         }
@@ -331,10 +305,8 @@ int main() {
         // Reject path: a BCP-47 code that is NOT in caps.languages
         // must be rejected with UNSUPPORTED_LANGUAGE by the
         // dispatcher. Use an unambiguously bogus code.
-        rp_lang.language = "xx-fake";
-        const transcribe_status st_bad =
-            transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()),
-                           &rp_lang);
+        rp_lang.language               = "xx-fake";
+        const transcribe_status st_bad = transcribe_run(ctx, pcm.data(), static_cast<int>(pcm.size()), &rp_lang);
         if (st_bad != TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE) {
             std::fprintf(stderr,
                          "FAIL: expected UNSUPPORTED_LANGUAGE for "
@@ -347,8 +319,7 @@ int main() {
     }
 
     // Case 1: jfk.wav (single-chunk).
-    run_case(model, "jfk", jfk_wav,
-             k_jfk_reference_text, k_jfk_max_edit_distance);
+    run_case(model, "jfk", jfk_wav, k_jfk_reference_text, k_jfk_max_edit_distance);
 
     // Case 2: dots.wav (multi-chunk ragged tail). This is the
     // automated gate for the ragged-tail trim path — golden tensor
@@ -357,27 +328,27 @@ int main() {
     // when the sample file is absent so ad-hoc runs that only care
     // about jfk still pass.
     if (file_exists(dots_wav)) {
-        run_case(model, "dots", dots_wav,
-                 k_dots_reference_text, k_dots_max_edit_distance);
+        run_case(model, "dots", dots_wav, k_dots_reference_text, k_dots_max_edit_distance);
     } else {
         std::fprintf(stderr,
                      "qwen3_asr_e2e_smoke[dots]: %s not present; "
-                     "skipping multi-chunk case.\n", dots_wav.c_str());
+                     "skipping multi-chunk case.\n",
+                     dots_wav.c_str());
     }
 
-    const auto t_end = std::chrono::steady_clock::now();
-    const double wall_ms =
-        std::chrono::duration<double, std::milli>(t_end - t_start).count();
+    const auto   t_end   = std::chrono::steady_clock::now();
+    const double wall_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
     std::fprintf(stderr, "qwen3_asr_e2e_smoke: wall=%.2f ms\n", wall_ms);
     if (wall_ms > 180000.0) {
-        std::fprintf(stderr,
-                     "FAIL: wall time %.2f ms exceeds 180000 ms\n", wall_ms);
+        std::fprintf(stderr, "FAIL: wall time %.2f ms exceeds 180000 ms\n", wall_ms);
         ++g_failures;
     }
 
     transcribe_model_free(model);
 
-    if (g_failures > 0) return EXIT_FAILURE;
+    if (g_failures > 0) {
+        return EXIT_FAILURE;
+    }
     std::fprintf(stdout, "qwen3_asr_e2e_smoke: ok\n");
     return EXIT_SUCCESS;
 }

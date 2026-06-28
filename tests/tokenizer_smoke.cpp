@@ -33,11 +33,10 @@
 // should not) expose tokenizer details directly in 2B; the test target
 // has src/ on its PRIVATE include path so this stays internal.
 
-#include "transcribe.h"
-
 #include "arch/parakeet/parakeet.h"
 #include "transcribe-model.h"
 #include "transcribe-tokenizer.h"
+#include "transcribe.h"
 
 #include <sys/stat.h>
 
@@ -46,7 +45,7 @@
 #include <string>
 
 #ifndef TRANSCRIBE_TEST_FIXTURES_DIR
-#  error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
+#    error "TRANSCRIBE_TEST_FIXTURES_DIR must be defined by the build system"
 #endif
 
 namespace {
@@ -55,30 +54,26 @@ const std::string g_fixtures_dir = TRANSCRIBE_TEST_FIXTURES_DIR;
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_STR_EQ(a, b)                                                  \
-    do {                                                                    \
-        const std::string _av = (a);                                        \
-        const std::string _bv = (b);                                        \
-        if (_av != _bv) {                                                   \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: \"%s\" != \"%s\"\n",                  \
-                         __FILE__, __LINE__,                                \
-                         _av.c_str(), _bv.c_str());                         \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_STR_EQ(a, b)                                                                                        \
+    do {                                                                                                          \
+        const std::string _av = (a);                                                                              \
+        const std::string _bv = (b);                                                                              \
+        if (_av != _bv) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: \"%s\" != \"%s\"\n", __FILE__, __LINE__, _av.c_str(), _bv.c_str()); \
+            ++g_failures;                                                                                         \
+        }                                                                                                         \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
@@ -87,27 +82,23 @@ bool file_exists(const std::string & path) {
 // caps->native_sample_rate == 16000, caps->supports_translate == false.
 // Returns the loaded model on success or nullptr on failure (with
 // g_failures incremented).
-struct transcribe_model * load_or_fail(const char * fixture_name,
-                                       const char * expected_variant)
-{
-    const std::string p = g_fixtures_dir + "/" + fixture_name;
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+struct transcribe_model * load_or_fail(const char * fixture_name, const char * expected_variant) {
+    const std::string            p = g_fixtures_dir + "/" + fixture_name;
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     struct transcribe_model * model = nullptr;
-    const transcribe_status st = transcribe_model_load_file(p.c_str(), &mp, &model);
+    const transcribe_status   st    = transcribe_model_load_file(p.c_str(), &mp, &model);
     if (st != TRANSCRIBE_OK) {
-        std::fprintf(stderr,
-                     "FAIL load %s: expected OK, got %s\n",
-                     fixture_name, transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL load %s: expected OK, got %s\n", fixture_name, transcribe_status_string(st));
         ++g_failures;
         return nullptr;
     }
     if (model == nullptr) {
-        std::fprintf(stderr,
-                     "FAIL load %s: model pointer not set\n", fixture_name);
+        std::fprintf(stderr, "FAIL load %s: model pointer not set\n", fixture_name);
         ++g_failures;
         return nullptr;
     }
-    CHECK_STR_EQ(transcribe_model_arch_string(model),    "parakeet");
+    CHECK_STR_EQ(transcribe_model_arch_string(model), "parakeet");
     CHECK_STR_EQ(transcribe_model_variant_string(model), expected_variant);
     // After load the loader binds a runtime backend; the
     // exact label is platform-dependent (Metal on Apple Silicon, CPU
@@ -115,17 +106,15 @@ struct transcribe_model * load_or_fail(const char * fixture_name,
     {
         const std::string backend = transcribe_model_backend(model);
         if (backend.empty()) {
-            std::fprintf(stderr,
-                         "FAIL %s: backend is empty after step 1\n",
-                         fixture_name);
+            std::fprintf(stderr, "FAIL %s: backend is empty after step 1\n", fixture_name);
             ++g_failures;
         }
     }
 
-    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
-    const bool caps_ok =
-        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
-    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
+    transcribe_capabilities caps_buf;
+    transcribe_capabilities_init(&caps_buf);
+    const bool                      caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps    = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->native_sample_rate == 16000);
@@ -145,29 +134,29 @@ void check_toy_vocab(const transcribe::Tokenizer * tok) {
     // Spot-check id -> piece. The bytes literal for ▁ is U+2581 in
     // UTF-8 (0xE2 0x96 0x81); the test source uses the actual code
     // point so the file stays UTF-8 throughout.
-    CHECK_STR_EQ(tok->token(0),  "<unk>");
-    CHECK_STR_EQ(tok->token(1),  "<s>");
-    CHECK_STR_EQ(tok->token(2),  "</s>");
-    CHECK_STR_EQ(tok->token(3),  "\xE2\x96\x81hello");
-    CHECK_STR_EQ(tok->token(4),  "\xE2\x96\x81world");
+    CHECK_STR_EQ(tok->token(0), "<unk>");
+    CHECK_STR_EQ(tok->token(1), "<s>");
+    CHECK_STR_EQ(tok->token(2), "</s>");
+    CHECK_STR_EQ(tok->token(3), "\xE2\x96\x81hello");
+    CHECK_STR_EQ(tok->token(4), "\xE2\x96\x81world");
     CHECK_STR_EQ(tok->token(11), "\xE2\x96\x81the");
     CHECK_STR_EQ(tok->token(15), "<blank>");
 
     // Out-of-range id returns the empty-string sentinel rather than
     // reading off the end of the vector.
-    CHECK_STR_EQ(tok->token(-1),    "");
+    CHECK_STR_EQ(tok->token(-1), "");
     CHECK_STR_EQ(tok->token(10000), "");
 
     // Reverse lookup.
-    CHECK(tok->find("<unk>")               == 0);
-    CHECK(tok->find("\xE2\x96\x81hello")   == 3);
-    CHECK(tok->find("\xE2\x96\x81world")   == 4);
+    CHECK(tok->find("<unk>") == 0);
+    CHECK(tok->find("\xE2\x96\x81hello") == 3);
+    CHECK(tok->find("\xE2\x96\x81world") == 4);
     CHECK(tok->find("definitely not here") == -1);
 
     // Special token ids match the fixture KV.
-    CHECK(tok->unk_id()   == 0);
-    CHECK(tok->bos_id()   == 1);
-    CHECK(tok->eos_id()   == 2);
+    CHECK(tok->unk_id() == 0);
+    CHECK(tok->bos_id() == 1);
+    CHECK(tok->eos_id() == 2);
     CHECK(tok->blank_id() == 15);
 
     CHECK_STR_EQ(tok->model_type(), "unigram");
@@ -175,28 +164,28 @@ void check_toy_vocab(const transcribe::Tokenizer * tok) {
     // Decode: SentencePiece word-boundary marker becomes ASCII space.
     // Sequence: ▁hello ▁world  ->  " hello world".
     {
-        const int ids[] = {3, 4};
+        const int ids[] = { 3, 4 };
         CHECK_STR_EQ(tok->decode(ids, 2), " hello world");
     }
     // Continuation piece in the middle: ▁hello s ▁world -> " hellos world".
     {
-        const int ids[] = {3, 8, 4};
+        const int ids[] = { 3, 8, 4 };
         CHECK_STR_EQ(tok->decode(ids, 3), " hellos world");
     }
     // First piece has no marker: ed ▁the -> "ed the".
     {
-        const int ids[] = {9, 11};
+        const int ids[] = { 9, 11 };
         CHECK_STR_EQ(tok->decode(ids, 2), "ed the");
     }
     // Out-of-range ids are skipped silently.
     {
-        const int ids[] = {3, -1, 4};
+        const int ids[] = { 3, -1, 4 };
         CHECK_STR_EQ(tok->decode(ids, 3), " hello world");
     }
     // Empty / null inputs return an empty string.
     CHECK_STR_EQ(tok->decode(nullptr, 0), "");
     {
-        const int ids[] = {3};
+        const int ids[] = { 3 };
         CHECK_STR_EQ(tok->decode(ids, 0), "");
     }
 }
@@ -209,22 +198,23 @@ void check_toy_vocab(const transcribe::Tokenizer * tok) {
 // stand: language detect off, languages list is the documented
 // information-gap state.
 void test_v2_fixture() {
-    struct transcribe_model * model =
-        load_or_fail("tokenizer_minimal.gguf", "tdt-0.6b-v2");
-    if (model == nullptr) return;
+    struct transcribe_model * model = load_or_fail("tokenizer_minimal.gguf", "tdt-0.6b-v2");
+    if (model == nullptr) {
+        return;
+    }
 
-    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
-    const bool caps_ok =
-        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
-    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
+    transcribe_capabilities caps_buf;
+    transcribe_capabilities_init(&caps_buf);
+    const bool                      caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps    = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->supports_language_detect == false);
-        CHECK(caps->supports_streaming       == false);
+        CHECK(caps->supports_streaming == false);
         // Information gap, not a claim. Documented in
         // arch/parakeet/model.cpp.
         CHECK(caps->n_languages == 0);
-        CHECK(caps->languages   == nullptr);
+        CHECK(caps->languages == nullptr);
     }
 
     const transcribe::Tokenizer * tok = model->tokenizer();
@@ -245,24 +235,25 @@ void test_v2_fixture() {
 // loader does not corrupt or branch the tokenizer based on capability
 // KV).
 void test_v3_fixture() {
-    struct transcribe_model * model =
-        load_or_fail("tokenizer_minimal_v3.gguf", "tdt-0.6b-v3");
-    if (model == nullptr) return;
+    struct transcribe_model * model = load_or_fail("tokenizer_minimal_v3.gguf", "tdt-0.6b-v3");
+    if (model == nullptr) {
+        return;
+    }
 
-    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
-    const bool caps_ok =
-        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
-    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
+    transcribe_capabilities caps_buf;
+    transcribe_capabilities_init(&caps_buf);
+    const bool                      caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps    = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         // Capability KV overrode the family default.
         CHECK(caps->supports_language_detect == true);
         // Streaming KV not present in the fixture, so the family
         // default (false) stands.
-        CHECK(caps->supports_streaming       == false);
+        CHECK(caps->supports_streaming == false);
         // general.languages was a four-element string array.
         CHECK(caps->n_languages == 4);
-        CHECK(caps->languages   != nullptr);
+        CHECK(caps->languages != nullptr);
         if (caps->languages != nullptr && caps->n_languages == 4) {
             CHECK_STR_EQ(caps->languages[0], "en");
             CHECK_STR_EQ(caps->languages[1], "de");
@@ -289,18 +280,18 @@ void test_v3_fixture() {
 // "library picks", positive means "use this many"). The central
 // dispatcher rejects it before the family handler runs.
 void test_n_threads_validation() {
-    struct transcribe_model * model =
-        load_or_fail("tokenizer_minimal.gguf", "tdt-0.6b-v2");
-    if (model == nullptr) return;
+    struct transcribe_model * model = load_or_fail("tokenizer_minimal.gguf", "tdt-0.6b-v2");
+    if (model == nullptr) {
+        return;
+    }
 
-    transcribe_session_params cp; transcribe_session_params_init(&cp);
-    cp.n_threads = -1;
-    struct transcribe_session * ctx = (struct transcribe_session *)0xdeadbeef;
-    const transcribe_status st = transcribe_session_init(model, &cp, &ctx);
+    transcribe_session_params cp;
+    transcribe_session_params_init(&cp);
+    cp.n_threads                    = -1;
+    struct transcribe_session * ctx = (struct transcribe_session *) 0xdeadbeef;
+    const transcribe_status     st  = transcribe_session_init(model, &cp, &ctx);
     if (st != TRANSCRIBE_ERR_INVALID_ARG) {
-        std::fprintf(stderr,
-                     "FAIL n_threads<0: expected INVALID_ARG, got %s\n",
-                     transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL n_threads<0: expected INVALID_ARG, got %s\n", transcribe_status_string(st));
         ++g_failures;
     }
     // Contract: out_ctx is cleared on every non-OK return.
@@ -310,13 +301,11 @@ void test_n_threads_validation() {
     }
 
     // Sanity: n_threads == 0 (library default) succeeds.
-    cp.n_threads = 0;
-    ctx = nullptr;
+    cp.n_threads                  = 0;
+    ctx                           = nullptr;
     const transcribe_status st_ok = transcribe_session_init(model, &cp, &ctx);
     if (st_ok != TRANSCRIBE_OK) {
-        std::fprintf(stderr,
-                     "FAIL n_threads=0: expected OK, got %s\n",
-                     transcribe_status_string(st_ok));
+        std::fprintf(stderr, "FAIL n_threads=0: expected OK, got %s\n", transcribe_status_string(st_ok));
         ++g_failures;
     }
     if (ctx == nullptr) {
@@ -328,7 +317,7 @@ void test_n_threads_validation() {
     transcribe_model_free(model);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     // Build-system backstop. Same rationale as loader_smoke: the
@@ -343,8 +332,7 @@ int main() {
     for (const char * name : required_fixtures) {
         const std::string p = g_fixtures_dir + "/" + name;
         if (!file_exists(p)) {
-            std::fprintf(stderr,
-                         "tokenizer_smoke: fixture not found: %s\n", p.c_str());
+            std::fprintf(stderr, "tokenizer_smoke: fixture not found: %s\n", p.c_str());
             all_present = false;
         }
     }

@@ -2,9 +2,8 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "ggml.h"
+#include "weights.h"
 
 #include <vector>
 
@@ -48,22 +47,22 @@ struct EncoderDumps {
 
 struct EncoderBuild {
     // Inputs.
-    ggml_tensor * mel_in    = nullptr; // [T_mel, n_mels, 1, B]
-    ggml_tensor * positions = nullptr; // [T_enc] i32
+    ggml_tensor * mel_in    = nullptr;  // [T_mel, n_mels, 1, B]
+    ggml_tensor * positions = nullptr;  // [T_enc] i32
 
     // Per-layer fused-BN scale/bias inputs (allocated in the same ctx as
     // the graph; the driver uploads from MedAsrWeights::fused_bn_*_storage
     // after sched_alloc_graph). One pair per encoder layer.
-    std::vector<ggml_tensor *> bn_scale_inputs; // each [d_model]
-    std::vector<ggml_tensor *> bn_bias_inputs;  // each [d_model]
+    std::vector<ggml_tensor *> bn_scale_inputs;  // each [d_model]
+    std::vector<ggml_tensor *> bn_bias_inputs;   // each [d_model]
 
     // Optional variable-length batch masks (one or both null in single-shot
     // or same-length batch mode). Sized to per-encoder-frame T_enc.
-    ggml_tensor * attn_pad_mask_in = nullptr; // [T_enc, 1, 1, B] f32 add (-INF/0)
-    ggml_tensor * conv_pad_mask_in = nullptr; // [T_enc, 1, B, 1] f32 (0/1)
+    ggml_tensor * attn_pad_mask_in = nullptr;  // [T_enc, 1, 1, B] f32 add (-INF/0)
+    ggml_tensor * conv_pad_mask_in = nullptr;  // [T_enc, 1, B, 1] f32 (0/1)
 
     // Output.
-    ggml_tensor * out = nullptr; // == ctc_logits
+    ggml_tensor * out = nullptr;  // == ctc_logits
 
     ggml_cgraph * graph = nullptr;
 
@@ -78,4 +77,4 @@ EncoderBuild build_encoder_graph(ggml_context *        ctx,
                                  int                   n_batch       = 1,
                                  bool                  batch_var_len = false);
 
-} // namespace transcribe::medasr
+}  // namespace transcribe::medasr

@@ -30,7 +30,7 @@ void apply_family_invariants(transcribe_model & model) {
     // (`woitn` / `withitn`); the generic transcribe_run_params::itn enum
     // routes here. No PNC runtime toggle.
     transcribe::set_feature(&model, TRANSCRIBE_FEATURE_CANCELLATION, true);
-    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN,          true);
+    transcribe::set_feature(&model, TRANSCRIBE_FEATURE_ITN, true);
 }
 
-} // namespace transcribe::sensevoice
+}  // namespace transcribe::sensevoice

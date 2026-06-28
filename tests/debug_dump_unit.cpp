@@ -24,12 +24,13 @@
 //   - The compare_tensors.py side. That's exercised by numerical
 //     validation runs.
 
-#include "transcribe-debug.h"
-
-#include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
+#include "ggml.h"
+#include "transcribe-debug.h"
+
+#include <unistd.h>  // ::getpid()
 
 #include <cstdio>
 #include <cstdlib>
@@ -41,33 +42,28 @@
 #include <string>
 #include <vector>
 
-#include <unistd.h>   // ::getpid()
-
 namespace fs = std::filesystem;
 
 namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ_INT(actual, expected)                                      \
-    do {                                                                    \
-        const long long _a = static_cast<long long>(actual);                \
-        const long long _e = static_cast<long long>(expected);              \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: %s = %lld, expected %lld\n",          \
-                         __FILE__, __LINE__, #actual, _a, _e);              \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ_INT(actual, expected)                                                                           \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
 // Create a fresh temporary directory under the system temp dir,
@@ -75,17 +71,21 @@ int g_failures = 0;
 fs::path make_unique_dump_dir() {
     fs::path base = fs::temp_directory_path() / "transcribe-debug-dump-test";
     base /= std::to_string(::getpid());
-    fs::remove_all(base); // ensure clean state in case of leftover
+    fs::remove_all(base);  // ensure clean state in case of leftover
     fs::create_directories(base);
     return base;
 }
 
 std::vector<uint8_t> read_file(const fs::path & p) {
     std::ifstream f(p, std::ios::binary);
-    if (!f) return {};
+    if (!f) {
+        return {};
+    }
     f.seekg(0, std::ios::end);
     const std::streampos len = f.tellg();
-    if (len < 0) return {};
+    if (len < 0) {
+        return {};
+    }
     f.seekg(0, std::ios::beg);
     std::vector<uint8_t> out(static_cast<size_t>(len));
     f.read(reinterpret_cast<char *>(out.data()), len);
@@ -94,7 +94,9 @@ std::vector<uint8_t> read_file(const fs::path & p) {
 
 std::string read_text(const fs::path & p) {
     std::ifstream f(p);
-    if (!f) return {};
+    if (!f) {
+        return {};
+    }
     std::stringstream ss;
     ss << f.rdbuf();
     return ss.str();
@@ -104,7 +106,7 @@ bool contains(const std::string & haystack, const std::string & needle) {
     return haystack.find(needle) != std::string::npos;
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     // ----- Setup ------------------------------------------------------
@@ -119,18 +121,15 @@ int main() {
     }
 
     if (!transcribe::debug::init()) {
-        std::fprintf(stderr, "FAIL: debug::init() returned false despite "
+        std::fprintf(stderr,
+                     "FAIL: debug::init() returned false despite "
                      "TRANSCRIBE_DUMP_DIR being set\n");
         return EXIT_FAILURE;
     }
     CHECK(transcribe::debug::enabled());
-    if (transcribe::debug::dump_dir() == nullptr ||
-        std::strcmp(transcribe::debug::dump_dir(), dump_dir.c_str()) != 0)
-    {
+    if (transcribe::debug::dump_dir() == nullptr || std::strcmp(transcribe::debug::dump_dir(), dump_dir.c_str()) != 0) {
         std::fprintf(stderr, "FAIL: dump_dir() = \"%s\", expected \"%s\"\n",
-                     transcribe::debug::dump_dir() ?
-                       transcribe::debug::dump_dir() : "(null)",
-                     dump_dir.c_str());
+                     transcribe::debug::dump_dir() ? transcribe::debug::dump_dir() : "(null)", dump_dir.c_str());
         ++g_failures;
     }
 
@@ -140,13 +139,15 @@ int main() {
     // fast-to-slow ordering). On disk this should land as
     // numpy/row-major shape [5, 3]. The data is arange(0..15) so
     // expected min=0, max=14, mean=7.
-    ggml_init_params init {};
-    init.mem_size   = 4 * 1024 * 1024;
-    init.mem_buffer = nullptr;
-    init.no_alloc   = true;
+    ggml_init_params init{};
+    init.mem_size      = 4 * 1024 * 1024;
+    init.mem_buffer    = nullptr;
+    init.no_alloc      = true;
     ggml_context * ctx = ggml_init(init);
     CHECK(ctx != nullptr);
-    if (ctx == nullptr) return EXIT_FAILURE;
+    if (ctx == nullptr) {
+        return EXIT_FAILURE;
+    }
 
     ggml_tensor * t = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 5);
     CHECK(t != nullptr);
@@ -164,7 +165,9 @@ int main() {
     // to mutate or read.
     ggml_backend_t backend = ggml_backend_cpu_init();
     CHECK(backend != nullptr);
-    if (backend == nullptr) return EXIT_FAILURE;
+    if (backend == nullptr) {
+        return EXIT_FAILURE;
+    }
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     CHECK(buffer != nullptr);
 
@@ -191,9 +194,7 @@ int main() {
             const float * f = reinterpret_cast<const float *>(bytes.data());
             for (int i = 0; i < 15; ++i) {
                 if (f[i] != src[i]) {
-                    std::fprintf(stderr,
-                                 "FAIL .f32[%d] = %f, expected %f\n",
-                                 i, f[i], src[i]);
+                    std::fprintf(stderr, "FAIL .f32[%d] = %f, expected %f\n", i, f[i], src[i]);
                     ++g_failures;
                 }
             }

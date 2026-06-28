@@ -10,14 +10,13 @@
 
 #pragma once
 
+#include "ggml-backend.h"
+#include "ggml.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
-
-#include "ggml.h"
-#include "ggml-backend.h"
 
 #include <cstdint>
 #include <deque>
@@ -44,19 +43,19 @@ void apply_family_invariants(transcribe_model & model);
 // ---------------------------------------------------------------------------
 
 struct MoonshineStreamingKvCache {
-    ggml_tensor * self_k = nullptr;
-    ggml_tensor * self_v = nullptr;
+    ggml_tensor * self_k  = nullptr;
+    ggml_tensor * self_v  = nullptr;
     ggml_tensor * cross_k = nullptr;
     ggml_tensor * cross_v = nullptr;
 
-    ggml_context * ctx = nullptr;
+    ggml_context *        ctx    = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
 
-    int n_ctx = 0;
-    int n     = 0;
-    int head  = 0;
-    int T_enc = 0;
-    int n_batch = 1;   // utterance batch width (>1 for the offline batched decoder)
+    int n_ctx   = 0;
+    int n       = 0;
+    int head    = 0;
+    int T_enc   = 0;
+    int n_batch = 1;  // utterance batch width (>1 for the offline batched decoder)
 
     bool cross_populated = false;
 
@@ -69,14 +68,14 @@ struct MoonshineStreamingKvCache {
             ggml_free(ctx);
             ctx = nullptr;
         }
-        self_k = nullptr;
-        self_v = nullptr;
-        cross_k = nullptr;
-        cross_v = nullptr;
-        n = 0;
-        head = 0;
-        T_enc = 0;
-        n_batch = 1;
+        self_k          = nullptr;
+        self_v          = nullptr;
+        cross_k         = nullptr;
+        cross_v         = nullptr;
+        n               = 0;
+        head            = 0;
+        T_enc           = 0;
+        n_batch         = 1;
         cross_populated = false;
     }
 };
@@ -105,10 +104,10 @@ bool kv_cache_init_batched(MoonshineStreamingKvCache & cache,
 // ---------------------------------------------------------------------------
 
 struct MoonshineStreamingModel final : public transcribe_model {
-    Tokenizer                   tok;
-    MoonshineStreamingHParams   hparams;
-    MoonshineStreamingWeights   weights;
-    ggml_context *              ctx_meta = nullptr;
+    Tokenizer                 tok;
+    MoonshineStreamingHParams hparams;
+    MoonshineStreamingWeights weights;
+    ggml_context *            ctx_meta = nullptr;
 
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
@@ -120,17 +119,16 @@ struct MoonshineStreamingModel final : public transcribe_model {
 };
 
 struct MoonshineStreamingSession final : public transcribe_session {
-    ggml_context *        compute_ctx = nullptr;
-    ggml_backend_sched_t  sched       = nullptr;
+    ggml_context *       compute_ctx = nullptr;
+    ggml_backend_sched_t sched       = nullptr;
 
     // Host-side mirror of the post-adapter encoder hidden. The adapter
     // pos_emb add (and proj when present) is applied once per session;
     // this host buffer feeds the cross_kv precompute graph.
     std::vector<float> adapter_host;
-    int                enc_T = 0;   // T_enc
+    int                enc_T = 0;  // T_enc
 
     MoonshineStreamingKvCache kv_cache;
-
 
     bool encoder_use_flash = true;
     bool decoder_use_flash = true;
@@ -160,32 +158,32 @@ struct MoonshineStreamingSession final : public transcribe_session {
     //
     // These fields are NOT touched by clear_result — the family owns its
     // per-utterance audio + encoder scratch.
-    std::vector<float>                stream_pcm_buffer;
-    int64_t                           stream_pcm_start_sample = 0;
-    std::vector<float>                stream_adapter_committed;
-    std::vector<std::vector<float>>   stream_cross_k_committed;
-    std::vector<std::vector<float>>   stream_cross_v_committed;
-    int32_t                           stream_T_emitted             = 0;
+    std::vector<float>               stream_pcm_buffer;
+    int64_t                          stream_pcm_start_sample = 0;
+    std::vector<float>               stream_adapter_committed;
+    std::vector<std::vector<float>>  stream_cross_k_committed;
+    std::vector<std::vector<float>>  stream_cross_v_committed;
+    int32_t                          stream_T_emitted      = 0;
     // T_emitted captured at the last successful partial decode; lets
     // stream_feed / stream_finalize skip a redundant decode when no
     // new encoder frames have been committed since the previous one.
-    int32_t                           stream_last_decoded_T        = 0;
+    int32_t                          stream_last_decoded_T = 0;
     // Recent partial-decode token id sequences, used to compute the
     // longest common prefix that's safe to mark committed across feeds.
     // Reset at stream_begin; updated after every successful partial decode.
-    std::deque<std::vector<int32_t>>  stream_token_id_history;
+    std::deque<std::vector<int32_t>> stream_token_id_history;
     // Geometry, resolved at stream_begin (constant per stream).
-    int32_t                           stream_L_total_frames        = 0;
-    int32_t                           stream_R_total_frames        = 0;
-    int32_t                           stream_frontend_pad_frames   = 0;
-    int32_t                           stream_samples_per_enc_frame = 0;
+    int32_t                          stream_L_total_frames        = 0;
+    int32_t                          stream_R_total_frames        = 0;
+    int32_t                          stream_frontend_pad_frames   = 0;
+    int32_t                          stream_samples_per_enc_frame = 0;
     // Minimum gap (encoder frames) between per-feed AR decode runs, from the
     // family extension. 0 = decode every advance; finalize always decodes once.
-    int32_t                           stream_min_decode_frames     = 0;
-    transcribe_run_params                 stream_run_params {};
+    int32_t                          stream_min_decode_frames     = 0;
+    transcribe_run_params            stream_run_params{};
 
     MoonshineStreamingSession() = default;
     ~MoonshineStreamingSession() override;
 };
 
-} // namespace transcribe::moonshine_streaming
+}  // namespace transcribe::moonshine_streaming

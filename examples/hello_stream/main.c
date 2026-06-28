@@ -44,13 +44,11 @@
 #include <string.h>
 
 // --- audio loading (NOT part of the transcribe API) -----------------------
-static float * load_wav_mono(const char * path, int * out_n_samples,
-                             unsigned int * out_rate) {
-    unsigned int channels = 0;
-    unsigned int rate     = 0;
-    drwav_uint64 frames   = 0;
-    float * interleaved = drwav_open_file_and_read_pcm_frames_f32(
-        path, &channels, &rate, &frames, NULL);
+static float * load_wav_mono(const char * path, int * out_n_samples, unsigned int * out_rate) {
+    unsigned int channels    = 0;
+    unsigned int rate        = 0;
+    drwav_uint64 frames      = 0;
+    float *      interleaved = drwav_open_file_and_read_pcm_frames_f32(path, &channels, &rate, &frames, NULL);
     if (interleaved == NULL) {
         return NULL;
     }
@@ -71,6 +69,7 @@ static float * load_wav_mono(const char * path, int * out_n_samples,
     *out_n_samples = (int) frames;
     return mono;
 }
+
 // --------------------------------------------------------------------------
 
 // Print the current UI-facing stream text split.
@@ -86,22 +85,18 @@ static float * load_wav_mono(const char * path, int * out_n_samples,
 static void print_partial(struct transcribe_session * session) {
     struct transcribe_stream_text text;
     transcribe_stream_text_init(&text);
-    if (transcribe_stream_get_text(session, &text) != TRANSCRIBE_OK ||
-        text.full_text == NULL || *text.full_text == '\0')
-    {
+    if (transcribe_stream_get_text(session, &text) != TRANSCRIBE_OK || text.full_text == NULL ||
+        *text.full_text == '\0') {
         return;
     }
-    printf("    committed=\"%s\" tentative=\"%s\" raw=\"%s\"\n",
-           text.committed_text ? text.committed_text : "",
-           text.tentative_text ? text.tentative_text : "",
-           text.full_text ? text.full_text : "");
+    printf("    committed=\"%s\" tentative=\"%s\" raw=\"%s\"\n", text.committed_text ? text.committed_text : "",
+           text.tentative_text ? text.tentative_text : "", text.full_text ? text.full_text : "");
     fflush(stdout);
 }
 
 int main(int argc, char ** argv) {
     if (argc < 3 || argc > 4) {
-        fprintf(stderr,
-                "usage: %s model.gguf audio.wav [chunk_ms=500]\n", argv[0]);
+        fprintf(stderr, "usage: %s model.gguf audio.wav [chunk_ms=500]\n", argv[0]);
         return 2;
     }
     const char * model_path = argv[1];
@@ -123,7 +118,8 @@ int main(int argc, char ** argv) {
     if (rate != 16000) {
         fprintf(stderr,
                 "error: audio must be 16 kHz (got %u Hz); resample first, "
-                "e.g. ffmpeg -i in.wav -ar 16000 -ac 1 out.wav\n", rate);
+                "e.g. ffmpeg -i in.wav -ar 16000 -ac 1 out.wav\n",
+                rate);
         free(pcm);
         return 1;
     }
@@ -132,10 +128,9 @@ int main(int argc, char ** argv) {
     //    returns a session that owns its model; transcribe_session_free
     //    later frees both.
     struct transcribe_session * session = NULL;
-    transcribe_status st = transcribe_open(model_path, NULL, NULL, &session);
+    transcribe_status           st      = transcribe_open(model_path, NULL, NULL, &session);
     if (st != TRANSCRIBE_OK) {
-        fprintf(stderr, "error: transcribe_open: %s\n",
-                transcribe_status_string(st));
+        fprintf(stderr, "error: transcribe_open: %s\n", transcribe_status_string(st));
         free(pcm);
         return 1;
     }
@@ -145,10 +140,8 @@ int main(int argc, char ** argv) {
     //    transcribe_stream_begin.
     struct transcribe_capabilities caps;
     transcribe_capabilities_init(&caps);
-    if (transcribe_model_get_capabilities(
-            transcribe_get_model(session), &caps) != TRANSCRIBE_OK ||
-        !caps.supports_streaming)
-    {
+    if (transcribe_model_get_capabilities(transcribe_get_model(session), &caps) != TRANSCRIBE_OK ||
+        !caps.supports_streaming) {
         fprintf(stderr,
                 "error: model does not advertise supports_streaming; "
                 "use a streaming-capable model.\n");
@@ -164,8 +157,7 @@ int main(int argc, char ** argv) {
     //    + the family's init function; this example sticks to defaults.
     st = transcribe_stream_begin(session, NULL, NULL);
     if (st != TRANSCRIBE_OK) {
-        fprintf(stderr, "error: stream_begin: %s\n",
-                transcribe_status_string(st));
+        fprintf(stderr, "error: stream_begin: %s\n", transcribe_status_string(st));
         transcribe_session_free(session);
         free(pcm);
         return 1;
@@ -178,26 +170,24 @@ int main(int argc, char ** argv) {
     //    moved"; transcribe_stream_get_text then reads the UI-facing
     //    committed/tentative split.
     const int chunk_samples = chunk_ms * 16000 / 1000;
-    int pos = 0;
-    int feed_idx = 0;
+    int       pos           = 0;
+    int       feed_idx      = 0;
     while (pos < n_samples) {
         int take = chunk_samples;
-        if (pos + take > n_samples) take = n_samples - pos;
+        if (pos + take > n_samples) {
+            take = n_samples - pos;
+        }
 
         struct transcribe_stream_update upd;
         transcribe_stream_update_init(&upd);
         st = transcribe_stream_feed(session, pcm + pos, take, &upd);
         if (st != TRANSCRIBE_OK) {
-            fprintf(stderr, "error: stream_feed[%d]: %s\n",
-                    feed_idx, transcribe_status_string(st));
+            fprintf(stderr, "error: stream_feed[%d]: %s\n", feed_idx, transcribe_status_string(st));
             break;
         }
 
-        printf("feed[%2d]: input=%lld ms buffered=%lld ms%s\n",
-               feed_idx,
-               (long long) upd.input_received_ms,
-               (long long) upd.buffered_ms,
-               upd.result_changed ? "  (result changed)" : "");
+        printf("feed[%2d]: input=%lld ms buffered=%lld ms%s\n", feed_idx, (long long) upd.input_received_ms,
+               (long long) upd.buffered_ms, upd.result_changed ? "  (result changed)" : "");
         if (upd.result_changed) {
             print_partial(session);
         }
@@ -215,13 +205,10 @@ int main(int argc, char ** argv) {
         transcribe_stream_update_init(&fin);
         st = transcribe_stream_finalize(session, &fin);
         if (st != TRANSCRIBE_OK) {
-            fprintf(stderr, "error: stream_finalize: %s\n",
-                    transcribe_status_string(st));
+            fprintf(stderr, "error: stream_finalize: %s\n", transcribe_status_string(st));
         } else {
-            printf("finalize: revision=%d input=%lld ms committed=%lld ms\n",
-                   fin.revision,
-                   (long long) fin.input_received_ms,
-                   (long long) fin.audio_committed_ms);
+            printf("finalize: revision=%d input=%lld ms committed=%lld ms\n", fin.revision,
+                   (long long) fin.input_received_ms, (long long) fin.audio_committed_ms);
             print_partial(session);
         }
     }

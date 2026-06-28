@@ -70,8 +70,7 @@ struct transcribe_voxtral_realtime_stream_ext {
  * Fills ext.size/kind and num_delay_tokens = -1 (model default),
  * min_decode_interval_ms = -1 (family default).
  */
-TRANSCRIBE_API void transcribe_voxtral_realtime_stream_ext_init(
-    struct transcribe_voxtral_realtime_stream_ext * ext);
+TRANSCRIBE_API void transcribe_voxtral_realtime_stream_ext_init(struct transcribe_voxtral_realtime_stream_ext * ext);
 
 #ifdef __cplusplus
 } /* extern "C" */

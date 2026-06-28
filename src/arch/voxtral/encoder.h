@@ -27,16 +27,16 @@ struct VoxtralHParams;
 struct VoxtralWeights;
 
 struct EncoderDumps {
-    ggml_tensor * enc_out  = nullptr;  // final encoder LayerNorm output
-    ggml_tensor * proj_out = nullptr;  // projector output (audio embeds)
-    std::vector<ggml_tensor *> block_outs;  // per-block residual outputs
+    ggml_tensor *              enc_out  = nullptr;  // final encoder LayerNorm output
+    ggml_tensor *              proj_out = nullptr;  // projector output (audio embeds)
+    std::vector<ggml_tensor *> block_outs;          // per-block residual outputs
 };
 
 struct EncoderBuild {
-    ggml_tensor * mel_in   = nullptr;  // [n_mels, n_mel_frames] input
-    ggml_tensor * out      = nullptr;  // proj.out [dec_hidden, n_audio_tokens]
-    EncoderDumps  dumps {};
-    ggml_cgraph * graph    = nullptr;
+    ggml_tensor * mel_in = nullptr;  // [n_mels, n_mel_frames] input
+    ggml_tensor * out    = nullptr;  // proj.out [dec_hidden, n_audio_tokens]
+    EncoderDumps  dumps{};
+    ggml_cgraph * graph = nullptr;
 };
 
 // Build the encoder+projector forward graph for ONE 30 s chunk.
@@ -62,4 +62,4 @@ EncoderBuild build_encoder_graph_batched(ggml_context *         ctx,
                                          int                    n_chunks,
                                          bool                   use_flash);
 
-} // namespace transcribe::voxtral
+}  // namespace transcribe::voxtral

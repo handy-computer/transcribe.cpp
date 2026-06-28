@@ -22,7 +22,7 @@
 #include <vector>
 
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
-#  error "TRANSCRIBE_TEST_SAMPLES_DIR must be defined by the build system"
+#    error "TRANSCRIBE_TEST_SAMPLES_DIR must be defined by the build system"
 #endif
 
 namespace {
@@ -31,19 +31,18 @@ const std::string g_samples_dir = TRANSCRIBE_TEST_SAMPLES_DIR;
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 void test_load_jfk() {
-    const std::string path = g_samples_dir + "/jfk.wav";
+    const std::string  path = g_samples_dir + "/jfk.wav";
     std::vector<float> pcm;
-    std::string err;
+    std::string        err;
 
     const bool ok = transcribe_cli::load_wav_mono_16k(path, pcm, err);
     if (!ok) {
@@ -76,9 +75,8 @@ void test_load_jfk() {
 
 void test_load_missing() {
     std::vector<float> pcm = { 1.0f, 2.0f, 3.0f };
-    std::string err = "stale";
-    const bool ok = transcribe_cli::load_wav_mono_16k(
-        "/__wav_loader_smoke_missing__.wav", pcm, err);
+    std::string        err = "stale";
+    const bool         ok  = transcribe_cli::load_wav_mono_16k("/__wav_loader_smoke_missing__.wav", pcm, err);
     CHECK(!ok);
     CHECK(!err.empty());
     // out_pcm.clear() is the loader's first line; relying on it pins the
@@ -87,7 +85,7 @@ void test_load_missing() {
     CHECK(pcm.empty());
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_load_jfk();

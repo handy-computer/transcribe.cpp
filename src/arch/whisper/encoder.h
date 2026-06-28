@@ -24,14 +24,14 @@ struct WhisperHParams;
 struct WhisperWeights;
 
 struct EncoderDumps {
-    ggml_tensor * mel_in     = nullptr;
-    ggml_tensor * conv1_out  = nullptr;
-    ggml_tensor * conv2_out  = nullptr;
-    ggml_tensor * pos_emb    = nullptr;
-    ggml_tensor * embed_out  = nullptr;
-    ggml_tensor * block0_out = nullptr;
+    ggml_tensor * mel_in         = nullptr;
+    ggml_tensor * conv1_out      = nullptr;
+    ggml_tensor * conv2_out      = nullptr;
+    ggml_tensor * pos_emb        = nullptr;
+    ggml_tensor * embed_out      = nullptr;
+    ggml_tensor * block0_out     = nullptr;
     ggml_tensor * block_last_out = nullptr;
-    ggml_tensor * final_out  = nullptr;
+    ggml_tensor * final_out      = nullptr;
 
     // Every post-block residual stream output, in block order (alongside
     // block0_out / block_last_out for callers that want all N layers).
@@ -49,7 +49,7 @@ struct EncoderBuild {
     // after the stride-2 second conv.
     ggml_tensor * out = nullptr;
 
-    EncoderDumps  dumps {};
+    EncoderDumps  dumps{};
     ggml_cgraph * graph = nullptr;
 };
 
@@ -59,11 +59,11 @@ struct EncoderBuild {
 // even values are accepted for test fixtures). use_flash selects
 // ggml_flash_attn_ext vs. manual mul_mat + soft_max; the caller gates it
 // against backend support. backend_name is informational only.
-EncoderBuild build_encoder_graph(ggml_context *          compute_ctx,
-                                 const WhisperWeights &  weights,
-                                 const WhisperHParams &  hp,
-                                 int                     n_mel_frames,
-                                 bool                    use_flash = true,
-                                 const char *            backend_name = "");
+EncoderBuild build_encoder_graph(ggml_context *         compute_ctx,
+                                 const WhisperWeights & weights,
+                                 const WhisperHParams & hp,
+                                 int                    n_mel_frames,
+                                 bool                   use_flash    = true,
+                                 const char *           backend_name = "");
 
-} // namespace transcribe::whisper
+}  // namespace transcribe::whisper

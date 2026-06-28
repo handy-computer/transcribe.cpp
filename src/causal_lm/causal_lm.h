@@ -14,10 +14,9 @@
 
 #pragma once
 
-#include "transcribe.h"
-
-#include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml.h"
+#include "transcribe.h"
 
 #include <cstdint>
 #include <vector>
@@ -56,7 +55,7 @@ struct BlockParams {
     int   n_heads      = 0;
     int   n_kv_heads   = 0;
     int   head_dim     = 0;
-    int   max_position = 0;     // RoPE max position (passed to ggml_rope_ext)
+    int   max_position = 0;  // RoPE max position (passed to ggml_rope_ext)
     float rms_eps      = 0.0f;
     float rope_theta   = 0.0f;
 };
@@ -71,11 +70,11 @@ struct KvCache {
     ggml_context *        ctx    = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
 
-    int n_ctx    = 0;
-    int n        = 0;     // current fill (high-water mark)
-    int head     = 0;     // next write position
-    int n_batch  = 1;     // utterances packed along the batch axis
-                          // (offline batched decode); 1 == single-shot
+    int n_ctx   = 0;
+    int n       = 0;  // current fill (high-water mark)
+    int head    = 0;  // next write position
+    int n_batch = 1;  // utterances packed along the batch axis
+                      // (offline batched decode); 1 == single-shot
 
     void free();
 };
@@ -103,7 +102,7 @@ bool kv_init_batched(KvCache &      cache,
                      ggml_type      kv_type);
 
 struct BlockOpts {
-    bool use_flash             = true;
+    bool use_flash = true;
 
     // When true, after the post-attention residual add but before the FFN,
     // slice x to the last position only (output [hidden, 1]). Used on the
@@ -116,8 +115,8 @@ struct BlockOpts {
     // per-(layer,slot) byte offset becomes
     //   (kv_batch_slot + kv_n_batch * layer_idx) * n_ctx * kv_dim.
     // Defaults (0, 1) reproduce the single-shot offset.
-    int  kv_batch_slot = 0;
-    int  kv_n_batch    = 1;
+    int kv_batch_slot = 0;
+    int kv_n_batch    = 1;
 };
 
 // Block forward (prefill, T_seq > 1). Runs one block on `x`
@@ -126,18 +125,17 @@ struct BlockOpts {
 // i32. Returns the post-block hidden state ([hidden, T_seq], or
 // [hidden, 1] under opts.slice_last_before_ffn). Names no tensors; the
 // family's prefill builder owns naming and dump-point selection.
-ggml_tensor * block_prefill(
-    ggml_context *      ctx,
-    ggml_cgraph *       gf,
-    ggml_tensor *       x,
-    const BlockView &   view,
-    const BlockParams & params,
-    KvCache &           kv_cache,
-    int                 layer_idx,
-    int                 T_seq,
-    ggml_tensor *       mask,       // [T_seq, T_seq] f16
-    ggml_tensor *       positions,  // [T_seq] i32
-    BlockOpts           opts = {});
+ggml_tensor * block_prefill(ggml_context *      ctx,
+                            ggml_cgraph *       gf,
+                            ggml_tensor *       x,
+                            const BlockView &   view,
+                            const BlockParams & params,
+                            KvCache &           kv_cache,
+                            int                 layer_idx,
+                            int                 T_seq,
+                            ggml_tensor *       mask,       // [T_seq, T_seq] f16
+                            ggml_tensor *       positions,  // [T_seq] i32
+                            BlockOpts           opts = {});
 
 // Block forward (step, T_seq == 1). Runs one block on a single new token,
 // writing K/V for the row indexed by `kv_idx` (i64 [1]) into layer
@@ -145,39 +143,37 @@ ggml_tensor * block_prefill(
 // [max_n_kv, 1] f16 (zeros ≤ n_past, -inf beyond). `position` ([1] i32)
 // and `kv_idx` ([1] i64) are equal at runtime but kept distinct (RoPE
 // wants i32, set_rows wants i64).
-ggml_tensor * block_step(
-    ggml_context *      ctx,
-    ggml_cgraph *       gf,
-    ggml_tensor *       x,          // [hidden, 1]
-    const BlockView &   view,
-    const BlockParams & params,
-    KvCache &           kv_cache,
-    int                 layer_idx,
-    int                 max_n_kv,
-    ggml_tensor *       mask,       // [max_n_kv, 1] f16
-    ggml_tensor *       position,   // [1] i32
-    ggml_tensor *       kv_idx,     // [1] i64
-    bool                use_flash);
+ggml_tensor * block_step(ggml_context *      ctx,
+                         ggml_cgraph *       gf,
+                         ggml_tensor *       x,  // [hidden, 1]
+                         const BlockView &   view,
+                         const BlockParams & params,
+                         KvCache &           kv_cache,
+                         int                 layer_idx,
+                         int                 max_n_kv,
+                         ggml_tensor *       mask,      // [max_n_kv, 1] f16
+                         ggml_tensor *       position,  // [1] i32
+                         ggml_tensor *       kv_idx,    // [1] i64
+                         bool                use_flash);
 
 // Block forward (multi-position step). Like block_step but processes
 // T_seq positions in one forward: writes T_seq rows at the indices in
 // `kv_idx` (i64 [T_seq]) and reads the full [0, max_n_kv) window. `mask`
 // is [max_n_kv, T_seq] f16 — column `c` masks the c-th query position.
 // Used by the spec-decode verify pass.
-ggml_tensor * block_step_n(
-    ggml_context *      ctx,
-    ggml_cgraph *       gf,
-    ggml_tensor *       x,          // [hidden, T_seq]
-    const BlockView &   view,
-    const BlockParams & params,
-    KvCache &           kv_cache,
-    int                 layer_idx,
-    int                 T_seq,
-    int                 max_n_kv,
-    ggml_tensor *       mask,       // [max_n_kv, T_seq] f16
-    ggml_tensor *       positions,  // [T_seq] i32
-    ggml_tensor *       kv_idx,     // [T_seq] i64
-    bool                use_flash);
+ggml_tensor * block_step_n(ggml_context *      ctx,
+                           ggml_cgraph *       gf,
+                           ggml_tensor *       x,  // [hidden, T_seq]
+                           const BlockView &   view,
+                           const BlockParams & params,
+                           KvCache &           kv_cache,
+                           int                 layer_idx,
+                           int                 T_seq,
+                           int                 max_n_kv,
+                           ggml_tensor *       mask,       // [max_n_kv, T_seq] f16
+                           ggml_tensor *       positions,  // [T_seq] i32
+                           ggml_tensor *       kv_idx,     // [T_seq] i64
+                           bool                use_flash);
 
 // Block forward (batched step). Runs one block on B new tokens
 // (x = [hidden, B]), one per utterance stepping in lockstep against a
@@ -197,20 +193,19 @@ ggml_tensor * block_step_n(
 //
 // Requires use_flash (the manual GQA path is single-shot only). Returns
 // [hidden, B].
-ggml_tensor * block_step_batched(
-    ggml_context *      ctx,
-    ggml_cgraph *       gf,
-    ggml_tensor *       x,          // [hidden, B]
-    const BlockView &   view,
-    const BlockParams & params,
-    KvCache &           kv_cache,
-    int                 layer_idx,
-    int                 max_n_kv,
-    int                 n_batch,
-    ggml_tensor *       mask,       // [max_n_kv, 1, 1, B] f16
-    ggml_tensor *       position,   // [B] i32
-    ggml_tensor *       kv_idx,     // [1, B] i64
-    bool                use_flash);
+ggml_tensor * block_step_batched(ggml_context *      ctx,
+                                 ggml_cgraph *       gf,
+                                 ggml_tensor *       x,  // [hidden, B]
+                                 const BlockView &   view,
+                                 const BlockParams & params,
+                                 KvCache &           kv_cache,
+                                 int                 layer_idx,
+                                 int                 max_n_kv,
+                                 int                 n_batch,
+                                 ggml_tensor *       mask,      // [max_n_kv, 1, 1, B] f16
+                                 ggml_tensor *       position,  // [B] i32
+                                 ggml_tensor *       kv_idx,    // [1, B] i64
+                                 bool                use_flash);
 
 // Block forward (batched prefill). Runs one block over B prompts of T
 // tokens each (x = [hidden, T, B]), writing each utterance's K/V to
@@ -221,20 +216,19 @@ ggml_tensor * block_step_batched(
 // the step loop overwrites before attending, and the caller gathers only
 // each utterance's real last-position output. Requires use_flash.
 // Returns [hidden, T, B].
-ggml_tensor * block_prefill_batched(
-    ggml_context *      ctx,
-    ggml_cgraph *       gf,
-    ggml_tensor *       x,          // [hidden, T, B]
-    const BlockView &   view,
-    const BlockParams & params,
-    KvCache &           kv_cache,
-    int                 layer_idx,
-    int                 T_seq,
-    int                 n_batch,
-    ggml_tensor *       mask,       // [T_seq, T_seq] f16 causal (shared)
-    ggml_tensor *       positions,  // [T_seq] i32 (shared)
-    ggml_tensor *       kv_idx,     // [T_seq, B] i64 (idx[t,b] = t)
-    bool                use_flash);
+ggml_tensor * block_prefill_batched(ggml_context *      ctx,
+                                    ggml_cgraph *       gf,
+                                    ggml_tensor *       x,  // [hidden, T, B]
+                                    const BlockView &   view,
+                                    const BlockParams & params,
+                                    KvCache &           kv_cache,
+                                    int                 layer_idx,
+                                    int                 T_seq,
+                                    int                 n_batch,
+                                    ggml_tensor *       mask,       // [T_seq, T_seq] f16 causal (shared)
+                                    ggml_tensor *       positions,  // [T_seq] i32 (shared)
+                                    ggml_tensor *       kv_idx,     // [T_seq, B] i64 (idx[t,b] = t)
+                                    bool                use_flash);
 
 // Load-time gate/up packing.
 
@@ -266,12 +260,12 @@ struct PackedGateUpHandles {
 // new tensor and marks the buffer GGML_BACKEND_BUFFER_USAGE_WEIGHTS.
 // Returns false on alloc / size-mismatch failure; `out_handles` is left in
 // a state safe to free.
-bool pack_gate_up(ggml_backend_t                  backend,
-                  int                             hidden,
-                  int                             intermediate,
+bool pack_gate_up(ggml_backend_t                   backend,
+                  int                              hidden,
+                  int                              intermediate,
                   const std::vector<GateUpEntry> & entries,
-                  PackedGateUpHandles &           out_handles,
-                  const char *                    error_tag = "causal_lm");
+                  PackedGateUpHandles &            out_handles,
+                  const char *                     error_tag = "causal_lm");
 
 // Batched greedy step loop (offline transcribe_run_batch decode).
 
@@ -310,17 +304,16 @@ struct StepLoopStats {
 // session->poll_abort() once per step. The step graph must already be built
 // and allocated on `sched`. Returns TRANSCRIBE_ERR_ABORTED on abort,
 // TRANSCRIBE_ERR_GGUF on a compute failure, else TRANSCRIBE_OK.
-transcribe_status run_batched_step_loop(
-    transcribe_session *                session,
-    ggml_backend_sched_t                sched,
-    const StepBatchedIO &               io,
-    int                                 n_batch,
-    int                                 max_n_kv,
-    int32_t                             eos_id,
-    int                                 max_new,
-    const StepBatchedState &            state,
-    std::vector<std::vector<int32_t>> & generated,
-    StepLoopStats *                     stats = nullptr,
-    std::vector<char> *                 truncated_out = nullptr);
+transcribe_status run_batched_step_loop(transcribe_session *                session,
+                                        ggml_backend_sched_t                sched,
+                                        const StepBatchedIO &               io,
+                                        int                                 n_batch,
+                                        int                                 max_n_kv,
+                                        int32_t                             eos_id,
+                                        int                                 max_new,
+                                        const StepBatchedState &            state,
+                                        std::vector<std::vector<int32_t>> & generated,
+                                        StepLoopStats *                     stats         = nullptr,
+                                        std::vector<char> *                 truncated_out = nullptr);
 
-} // namespace transcribe::causal_lm
+}  // namespace transcribe::causal_lm

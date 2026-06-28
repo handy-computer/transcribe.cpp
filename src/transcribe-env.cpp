@@ -19,4 +19,4 @@ bool flag(const char * name) {
     return v != nullptr && v[0] != '0';
 }
 
-} // namespace transcribe::env
+}  // namespace transcribe::env

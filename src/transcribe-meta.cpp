@@ -10,10 +10,9 @@
 
 #include "transcribe-meta.h"
 
-#include "transcribe-model.h"
-#include "transcribe-log.h"
-
 #include "gguf.h"
+#include "transcribe-log.h"
+#include "transcribe-model.h"
 
 #include <cstring>
 #include <utility>
@@ -24,9 +23,7 @@ namespace transcribe {
 // Low-level scalar / string / string-array readers
 // ---------------------------------------------------------------------------
 
-KvResult read_string_kv(const gguf_context * ctx, const char * key,
-                        std::string & out)
-{
+KvResult read_string_kv(const gguf_context * ctx, const char * key, std::string & out) {
     const int64_t key_id = gguf_find_key(ctx, key);
     if (key_id < 0) {
         return KvResult::Absent;
@@ -58,9 +55,7 @@ KvResult read_bool_kv(const gguf_context * ctx, const char * key, bool & out) {
     return KvResult::Ok;
 }
 
-KvResult read_uint32_kv(const gguf_context * ctx, const char * key,
-                        uint32_t & out)
-{
+KvResult read_uint32_kv(const gguf_context * ctx, const char * key, uint32_t & out) {
     const int64_t key_id = gguf_find_key(ctx, key);
     if (key_id < 0) {
         return KvResult::Absent;
@@ -72,9 +67,7 @@ KvResult read_uint32_kv(const gguf_context * ctx, const char * key,
     return KvResult::Ok;
 }
 
-KvResult read_int32_kv(const gguf_context * ctx, const char * key,
-                       int32_t & out)
-{
+KvResult read_int32_kv(const gguf_context * ctx, const char * key, int32_t & out) {
     const int64_t key_id = gguf_find_key(ctx, key);
     if (key_id < 0) {
         return KvResult::Absent;
@@ -86,9 +79,7 @@ KvResult read_int32_kv(const gguf_context * ctx, const char * key,
     return KvResult::Ok;
 }
 
-KvResult read_float32_kv(const gguf_context * ctx, const char * key,
-                         float & out)
-{
+KvResult read_float32_kv(const gguf_context * ctx, const char * key, float & out) {
     const int64_t key_id = gguf_find_key(ctx, key);
     if (key_id < 0) {
         return KvResult::Absent;
@@ -100,9 +91,7 @@ KvResult read_float32_kv(const gguf_context * ctx, const char * key,
     return KvResult::Ok;
 }
 
-KvResult read_token_id_kv(const gguf_context * ctx, const char * key,
-                          int & out)
-{
+KvResult read_token_id_kv(const gguf_context * ctx, const char * key, int & out) {
     const int64_t key_id = gguf_find_key(ctx, key);
     if (key_id < 0) {
         return KvResult::Absent;
@@ -121,9 +110,7 @@ KvResult read_token_id_kv(const gguf_context * ctx, const char * key,
     return KvResult::BadType;
 }
 
-KvResult read_string_array_kv(const gguf_context * ctx, const char * key,
-                              std::vector<std::string> & out)
-{
+KvResult read_string_array_kv(const gguf_context * ctx, const char * key, std::vector<std::string> & out) {
     const int64_t key_id = gguf_find_key(ctx, key);
     if (key_id < 0) {
         return KvResult::Absent;
@@ -135,7 +122,7 @@ KvResult read_string_array_kv(const gguf_context * ctx, const char * key,
         return KvResult::BadType;
     }
 
-    const size_t n = gguf_get_arr_n(ctx, key_id);
+    const size_t             n = gguf_get_arr_n(ctx, key_id);
     std::vector<std::string> tmp;
     tmp.reserve(n);
     for (size_t i = 0; i < n; ++i) {
@@ -151,9 +138,7 @@ KvResult read_string_array_kv(const gguf_context * ctx, const char * key,
     return KvResult::Ok;
 }
 
-KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
-                             std::vector<int32_t> & out)
-{
+KvResult read_int32_array_kv(const gguf_context * ctx, const char * key, std::vector<int32_t> & out) {
     const int64_t key_id = gguf_find_key(ctx, key);
     if (key_id < 0) {
         return KvResult::Absent;
@@ -164,7 +149,7 @@ KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
     if (gguf_get_arr_type(ctx, key_id) != GGUF_TYPE_INT32) {
         return KvResult::BadType;
     }
-    const size_t n = gguf_get_arr_n(ctx, key_id);
+    const size_t n    = gguf_get_arr_n(ctx, key_id);
     // gguf_get_arr_data returns a pointer to the contiguous flat data
     // for scalar arrays. We memcpy into the destination so the caller
     // owns its own storage and the gguf_context can be freed
@@ -190,8 +175,7 @@ KvResult read_int32_array_kv(const gguf_context * ctx, const char * key,
 transcribe_status read_required_u32_kv(const gguf_context * gguf,
                                        const char *         key,
                                        const char *         error_tag,
-                                       int32_t &            out)
-{
+                                       int32_t &            out) {
     uint32_t v = 0;
     switch (read_uint32_kv(gguf, key, v)) {
         case KvResult::Ok:
@@ -199,9 +183,7 @@ transcribe_status read_required_u32_kv(const gguf_context * gguf,
             return TRANSCRIBE_OK;
         case KvResult::Absent:
         case KvResult::BadType:
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                         "%s: required KV \"%s\" missing or wrong type",
-                         error_tag, key);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: required KV \"%s\" missing or wrong type", error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_ERR_GGUF;
@@ -210,8 +192,7 @@ transcribe_status read_required_u32_kv(const gguf_context * gguf,
 transcribe_status read_required_f32_kv(const gguf_context * gguf,
                                        const char *         key,
                                        const char *         error_tag,
-                                       float &              out)
-{
+                                       float &              out) {
     float v = 0.0f;
     switch (read_float32_kv(gguf, key, v)) {
         case KvResult::Ok:
@@ -219,9 +200,7 @@ transcribe_status read_required_f32_kv(const gguf_context * gguf,
             return TRANSCRIBE_OK;
         case KvResult::Absent:
         case KvResult::BadType:
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                         "%s: required KV \"%s\" missing or wrong type",
-                         error_tag, key);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: required KV \"%s\" missing or wrong type", error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_ERR_GGUF;
@@ -230,8 +209,7 @@ transcribe_status read_required_f32_kv(const gguf_context * gguf,
 transcribe_status read_required_string_kv(const gguf_context * gguf,
                                           const char *         key,
                                           const char *         error_tag,
-                                          std::string &        out)
-{
+                                          std::string &        out) {
     std::string v;
     switch (read_string_kv(gguf, key, v)) {
         case KvResult::Ok:
@@ -239,9 +217,7 @@ transcribe_status read_required_string_kv(const gguf_context * gguf,
             return TRANSCRIBE_OK;
         case KvResult::Absent:
         case KvResult::BadType:
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                         "%s: required KV \"%s\" missing or wrong type",
-                         error_tag, key);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: required KV \"%s\" missing or wrong type", error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_ERR_GGUF;
@@ -251,8 +227,7 @@ transcribe_status read_optional_bool_kv(const gguf_context * gguf,
                                         const char *         key,
                                         const char *         error_tag,
                                         bool                 default_value,
-                                        bool &               out)
-{
+                                        bool &               out) {
     bool tmp = default_value;
     switch (read_bool_kv(gguf, key, tmp)) {
         case KvResult::Absent:
@@ -262,9 +237,7 @@ transcribe_status read_optional_bool_kv(const gguf_context * gguf,
             out = tmp;
             return TRANSCRIBE_OK;
         case KvResult::BadType:
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                         "%s: optional KV \"%s\" has wrong type",
-                         error_tag, key);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: optional KV \"%s\" has wrong type", error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_ERR_GGUF;
@@ -274,8 +247,7 @@ transcribe_status read_optional_string_kv(const gguf_context * gguf,
                                           const char *         key,
                                           const char *         error_tag,
                                           const char *         default_value,
-                                          std::string &        out)
-{
+                                          std::string &        out) {
     std::string v;
     switch (read_string_kv(gguf, key, v)) {
         case KvResult::Absent:
@@ -285,9 +257,7 @@ transcribe_status read_optional_string_kv(const gguf_context * gguf,
             out = std::move(v);
             return TRANSCRIBE_OK;
         case KvResult::BadType:
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                         "%s: optional KV \"%s\" has wrong type",
-                         error_tag, key);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: optional KV \"%s\" has wrong type", error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_ERR_GGUF;
@@ -297,8 +267,7 @@ transcribe_status read_optional_int32_kv(const gguf_context * gguf,
                                          const char *         key,
                                          const char *         error_tag,
                                          int32_t              default_value,
-                                         int32_t &            out)
-{
+                                         int32_t &            out) {
     int32_t tmp = default_value;
     switch (read_int32_kv(gguf, key, tmp)) {
         case KvResult::Absent:
@@ -308,9 +277,7 @@ transcribe_status read_optional_int32_kv(const gguf_context * gguf,
             out = tmp;
             return TRANSCRIBE_OK;
         case KvResult::BadType:
-            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                         "%s: optional KV \"%s\" has wrong type",
-                         error_tag, key);
+            log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "%s: optional KV \"%s\" has wrong type", error_tag, key);
             return TRANSCRIBE_ERR_GGUF;
     }
     return TRANSCRIBE_ERR_GGUF;
@@ -326,23 +293,21 @@ namespace {
 // the strict-now contract. Absent leaves `field` alone (so the caller
 // can pre-populate a family default), Ok updates it, BadType returns
 // TRANSCRIBE_ERR_GGUF.
-transcribe_status read_capability_bool(const gguf_context * gguf,
-                                       const char *         key,
-                                       bool &               field)
-{
+transcribe_status read_capability_bool(const gguf_context * gguf, const char * key, bool & field) {
     switch (read_bool_kv(gguf, key, field)) {
-        case KvResult::Absent:  return TRANSCRIBE_OK;
-        case KvResult::Ok:      return TRANSCRIBE_OK;
-        case KvResult::BadType: return TRANSCRIBE_ERR_GGUF;
+        case KvResult::Absent:
+            return TRANSCRIBE_OK;
+        case KvResult::Ok:
+            return TRANSCRIBE_OK;
+        case KvResult::BadType:
+            return TRANSCRIBE_ERR_GGUF;
     }
-    return TRANSCRIBE_ERR_GGUF; // unreachable; placates -Wreturn-type
+    return TRANSCRIBE_ERR_GGUF;  // unreachable; placates -Wreturn-type
 }
 
-} // namespace
+}  // namespace
 
-transcribe_status read_capability_kv(const gguf_context *      gguf,
-                                     transcribe_capabilities & caps)
-{
+transcribe_status read_capability_kv(const gguf_context * gguf, transcribe_capabilities & caps) {
     if (gguf == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -351,31 +316,23 @@ transcribe_status read_capability_kv(const gguf_context *      gguf,
     // here: every family has a fixed, code-set ceiling and no converter
     // emits stt.capability.timestamps. A KV-driven override (which could
     // only lower the ceiling, never raise it) is a future change.
-    if (auto st = read_capability_bool(gguf, "stt.capability.translate",
-                                       caps.supports_translate);
-        st != TRANSCRIBE_OK)
-    {
+    if (auto st = read_capability_bool(gguf, "stt.capability.translate", caps.supports_translate);
+        st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_capability_bool(gguf, "stt.capability.lang_detect",
-                                       caps.supports_language_detect);
-        st != TRANSCRIBE_OK)
-    {
+    if (auto st = read_capability_bool(gguf, "stt.capability.lang_detect", caps.supports_language_detect);
+        st != TRANSCRIBE_OK) {
         return st;
     }
-    if (auto st = read_capability_bool(gguf, "stt.capability.streaming",
-                                       caps.supports_streaming);
-        st != TRANSCRIBE_OK)
-    {
+    if (auto st = read_capability_bool(gguf, "stt.capability.streaming", caps.supports_streaming);
+        st != TRANSCRIBE_OK) {
         return st;
     }
 
     return TRANSCRIBE_OK;
 }
 
-transcribe_status read_languages_kv(const gguf_context * gguf,
-                                    transcribe_model &   model)
-{
+transcribe_status read_languages_kv(const gguf_context * gguf, transcribe_model & model) {
     if (gguf == nullptr) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -423,4 +380,4 @@ transcribe_status read_languages_kv(const gguf_context * gguf,
     return TRANSCRIBE_OK;
 }
 
-} // namespace transcribe
+}  // namespace transcribe

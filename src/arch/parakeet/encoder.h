@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "ggml.h" // ggml_type
+#include "ggml.h"  // ggml_type
 
 #include <string>
 #include <utility>
@@ -43,7 +43,7 @@ struct ParakeetWeights;
 // building, or the scheduler may reuse its buffer before the dump pass.
 struct EncoderDumps {
     // Pre-encode. ne=[d_model, T_enc, 1, 1].
-    ggml_tensor * pre_encode_out = nullptr;
+    ggml_tensor * pre_encode_out    = nullptr;
     // Block 0 sub-step outputs. Each ne=[d_model, T_enc, 1, 1].
     ggml_tensor * block0_after_ff1  = nullptr;
     ggml_tensor * block0_after_attn = nullptr;
@@ -54,12 +54,12 @@ struct EncoderDumps {
     // final_out. Layer indices synthesize file names like
     // "enc.block.21.out" because conf::named renames in place and the
     // trailing "enc.final" rename overwrites the spot-check name.
-    ggml_tensor * mid_block_out  = nullptr;
-    ggml_tensor * last_block_out = nullptr;
-    int           mid_block_idx  = -1;
-    int           last_block_idx = -1;
+    ggml_tensor * mid_block_out     = nullptr;
+    ggml_tensor * last_block_out    = nullptr;
+    int           mid_block_idx     = -1;
+    int           last_block_idx    = -1;
     // Final encoder output. Aliases last_block_out (same pointer).
-    ggml_tensor * final_out = nullptr;
+    ggml_tensor * final_out         = nullptr;
 
     // All-block output handles for the layer-by-layer divergence bisect.
     // Populated unconditionally; mark_tensor_for_dump is only called on
@@ -143,7 +143,7 @@ struct EncoderBuild {
     // Named intermediate handles for the dump harness. Any field
     // that's nullptr is "not yet wired in this sub-stage" and the
     // driver simply skips it.
-    EncoderDumps dumps {};
+    EncoderDumps dumps{};
 
     // The forward graph. ggml_build_forward_expand has been called
     // with `out`.
@@ -185,20 +185,20 @@ struct BufferedStreamMaskOverride {
 // handle becomes ne=[n_mel_frames, n_mels, 1, n_batch] and `out` becomes
 // ne=[d_model, T_enc, n_batch]. Variable-length batching pads to a common
 // n_mel_frames and masks the overhang — that masking is the caller's job.
-EncoderBuild build_encoder_graph(ggml_context *          compute_ctx,
-                                 const ParakeetWeights & weights,
-                                 const ParakeetHParams & hp,
-                                 int                     n_mel_frames,
-                                 ggml_type               kv_type = GGML_TYPE_COUNT,
-                                 const char *            backend_name = "",
-                                 const BufferedStreamMaskOverride * buf_mask = nullptr,
-                                 int                     n_batch = 1,
+EncoderBuild build_encoder_graph(ggml_context *                     compute_ctx,
+                                 const ParakeetWeights &            weights,
+                                 const ParakeetHParams &            hp,
+                                 int                                n_mel_frames,
+                                 ggml_type                          kv_type       = GGML_TYPE_COUNT,
+                                 const char *                       backend_name  = "",
+                                 const BufferedStreamMaskOverride * buf_mask      = nullptr,
+                                 int                                n_batch       = 1,
                                  // When true and n_batch > 1, allocate the
                                  // variable-length batch masks (attn_pad_mask_in
                                  // + conv_pad_mask_in sized for the batch) and
                                  // wire them into every conformer block. The
                                  // driver fills them from per-utterance lengths.
-                                 bool                    batch_var_len = false);
+                                 bool                               batch_var_len = false);
 
 // Per-layer streaming cache I/O for the streaming encoder graph.
 // The inputs are persistent backend tensors (allocated outside the
@@ -263,14 +263,13 @@ struct StreamingEncoderCacheIO {
 // with per-layer tensor handles from the persistent cache buffer.
 // `cache_io.channel_out` and `cache_io.time_out` are populated by
 // this function.
-EncoderBuild build_encoder_graph_streaming(
-    ggml_context *          compute_ctx,
-    const ParakeetWeights & weights,
-    const ParakeetHParams & hp,
-    int                     n_mel_chunk_frames,
-    int                     drop_extra_pre_encoded,
-    StreamingEncoderCacheIO & cache_io,
-    ggml_type               kv_type = GGML_TYPE_COUNT,
-    const char *            backend_name = "");
+EncoderBuild build_encoder_graph_streaming(ggml_context *            compute_ctx,
+                                           const ParakeetWeights &   weights,
+                                           const ParakeetHParams &   hp,
+                                           int                       n_mel_chunk_frames,
+                                           int                       drop_extra_pre_encoded,
+                                           StreamingEncoderCacheIO & cache_io,
+                                           ggml_type                 kv_type      = GGML_TYPE_COUNT,
+                                           const char *              backend_name = "");
 
-} // namespace transcribe::parakeet
+}  // namespace transcribe::parakeet

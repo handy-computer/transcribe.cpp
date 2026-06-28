@@ -18,7 +18,6 @@
 //     GGUF. If unset/missing (or a sample is missing), exits 77 ("skipped").
 
 #include "transcribe.h"
-
 #include "wav.h"
 
 #include <sys/stat.h>
@@ -32,29 +31,26 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ_INT(actual, expected)                                      \
-    do {                                                                    \
-        const long long _a = static_cast<long long>(actual);                \
-        const long long _e = static_cast<long long>(expected);              \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr,                                            \
-                         "FAIL %s:%d: %s = %lld, expected %lld\n",          \
-                         __FILE__, __LINE__, #actual, _a, _e);              \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ_INT(actual, expected)                                                                           \
+    do {                                                                                                         \
+        const long long _a = static_cast<long long>(actual);                                                     \
+        const long long _e = static_cast<long long>(expected);                                                   \
+        if (_a != _e) {                                                                                          \
+            std::fprintf(stderr, "FAIL %s:%d: %s = %lld, expected %lld\n", __FILE__, __LINE__, #actual, _a, _e); \
+            ++g_failures;                                                                                        \
+        }                                                                                                        \
     } while (0)
 
 bool file_exists(const std::string & path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path.c_str(), &st) == 0;
 }
 
@@ -72,7 +68,7 @@ bool load_sample(const std::string & name, std::vector<float> & pcm) {
     return true;
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const char * model_path = std::getenv("TRANSCRIBE_MOONSHINE_STREAMING_TINY_GGUF");
@@ -84,17 +80,23 @@ int main() {
     }
 
     std::vector<float> pcm_short, pcm_long;
-    if (!load_sample("jfk.wav", pcm_short)) return 77;
-    if (!load_sample("love-loss.wav", pcm_long)) return 77;
+    if (!load_sample("jfk.wav", pcm_short)) {
+        return 77;
+    }
+    if (!load_sample("love-loss.wav", pcm_long)) {
+        return 77;
+    }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
     struct transcribe_model * model = nullptr;
     if (transcribe_model_load_file(model_path, &mp, &model) != TRANSCRIBE_OK) {
         std::fprintf(stderr, "model load failed: %s\n", model_path);
         return 1;
     }
 
-    transcribe_session_params sp; transcribe_session_params_init(&sp);
+    transcribe_session_params sp;
+    transcribe_session_params_init(&sp);
     struct transcribe_session * s = nullptr;
     if (transcribe_session_init(model, &sp, &s) != TRANSCRIBE_OK) {
         std::fprintf(stderr, "session init failed\n");
@@ -126,8 +128,7 @@ int main() {
     transcribe_model_free(model);
 
     if (g_failures > 0) {
-        std::fprintf(stderr, "moonshine_streaming_batch_truncation: %d failures\n",
-                     g_failures);
+        std::fprintf(stderr, "moonshine_streaming_batch_truncation: %d failures\n", g_failures);
         return EXIT_FAILURE;
     }
     std::fprintf(stdout, "moonshine_streaming_batch_truncation: ok\n");

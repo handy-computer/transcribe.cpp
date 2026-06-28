@@ -15,13 +15,15 @@ namespace transcribe {
 
 namespace {
 
-constexpr float kPreemphasis = 0.97f;     // kaldi default
-constexpr float kMelLowFreq  = 20.0f;     // kaldi default
-constexpr float kMelHighFreq = 0.0f;      // 0 → use sample_rate / 2
+constexpr float kPreemphasis = 0.97f;  // kaldi default
+constexpr float kMelLowFreq  = 20.0f;  // kaldi default
+constexpr float kMelHighFreq = 0.0f;   // 0 → use sample_rate / 2
 
 int next_pow2(int n) {
     int p = 1;
-    while (p < n) p <<= 1;
+    while (p < n) {
+        p <<= 1;
+    }
     return p;
 }
 
@@ -30,6 +32,7 @@ int next_pow2(int n) {
 double hz_to_mel(double f) {
     return 1127.0 * std::log(1.0 + f / 700.0);
 }
+
 double mel_to_hz(double m) {
     return 700.0 * (std::exp(m / 1127.0) - 1.0);
 }
@@ -41,8 +44,7 @@ std::vector<float> build_htk_mel_filterbank(int   sample_rate,
                                             int   padded_n_fft,
                                             int   n_mels,
                                             float low_freq,
-                                            float high_freq)
-{
+                                            float high_freq) {
     const int n_freq = padded_n_fft / 2 + 1;
     if (high_freq <= 0.0f) {
         high_freq = static_cast<float>(sample_rate) * 0.5f;
@@ -52,8 +54,7 @@ std::vector<float> build_htk_mel_filterbank(int   sample_rate,
     const double mel_step = (mel_high - mel_low) / (n_mels + 1);
 
     // kaldi-style fft_bin_width = sample_rate / padded_n_fft.
-    const double fft_bin_width = static_cast<double>(sample_rate) /
-                                 static_cast<double>(padded_n_fft);
+    const double fft_bin_width = static_cast<double>(sample_rate) / static_cast<double>(padded_n_fft);
 
     std::vector<float> fb(static_cast<size_t>(n_mels) * n_freq, 0.0f);
     for (int m = 0; m < n_mels; ++m) {
@@ -66,7 +67,7 @@ std::vector<float> build_htk_mel_filterbank(int   sample_rate,
 
         for (int b = 0; b < n_freq; ++b) {
             const double bin_hz = b * fft_bin_width;
-            double w = 0.0;
+            double       w      = 0.0;
             if (bin_hz > left_hz && bin_hz < right_hz) {
                 if (bin_hz <= center_hz) {
                     w = (bin_hz - left_hz) / (center_hz - left_hz);
@@ -74,7 +75,9 @@ std::vector<float> build_htk_mel_filterbank(int   sample_rate,
                     w = (right_hz - bin_hz) / (right_hz - center_hz);
                 }
             }
-            if (w < 0.0) w = 0.0;
+            if (w < 0.0) {
+                w = 0.0;
+            }
             fb[static_cast<size_t>(m) * n_freq + b] = static_cast<float>(w);
         }
     }
@@ -85,13 +88,14 @@ std::vector<float> build_htk_mel_filterbank(int   sample_rate,
 std::vector<float> build_hamming_window(int N) {
     std::vector<float> w(static_cast<size_t>(N));
     if (N <= 1) {
-        for (auto & v : w) v = 1.0f;
+        for (auto & v : w) {
+            v = 1.0f;
+        }
         return w;
     }
     const double a = 2.0 * M_PI / (N - 1);
     for (int i = 0; i < N; ++i) {
-        w[static_cast<size_t>(i)] =
-            static_cast<float>(0.54 - 0.46 * std::cos(a * i));
+        w[static_cast<size_t>(i)] = static_cast<float>(0.54 - 0.46 * std::cos(a * i));
     }
     return w;
 }
@@ -107,7 +111,7 @@ void fft_radix2(double * data, int n) {
         }
         j ^= bit;
         if (i < j) {
-            std::swap(data[2 * i],     data[2 * j]);
+            std::swap(data[2 * i], data[2 * j]);
             std::swap(data[2 * i + 1], data[2 * j + 1]);
         }
     }
@@ -119,41 +123,35 @@ void fft_radix2(double * data, int n) {
             double w_re = 1.0;
             double w_im = 0.0;
             for (int k = 0; k < len / 2; ++k) {
-                const int a = 2 * (i + k);
-                const int b = 2 * (i + k + len / 2);
-                const double u_re = data[a];
-                const double u_im = data[a + 1];
-                const double v_re = data[b]     * w_re - data[b + 1] * w_im;
-                const double v_im = data[b]     * w_im + data[b + 1] * w_re;
-                data[a]     = u_re + v_re;
-                data[a + 1] = u_im + v_im;
-                data[b]     = u_re - v_re;
-                data[b + 1] = u_im - v_im;
+                const int    a      = 2 * (i + k);
+                const int    b      = 2 * (i + k + len / 2);
+                const double u_re   = data[a];
+                const double u_im   = data[a + 1];
+                const double v_re   = data[b] * w_re - data[b + 1] * w_im;
+                const double v_im   = data[b] * w_im + data[b + 1] * w_re;
+                data[a]             = u_re + v_re;
+                data[a + 1]         = u_im + v_im;
+                data[b]             = u_re - v_re;
+                data[b + 1]         = u_im - v_im;
                 const double tmp_re = w_re * wlen_re - w_im * wlen_im;
                 const double tmp_im = w_re * wlen_im + w_im * wlen_re;
-                w_re = tmp_re;
-                w_im = tmp_im;
+                w_re                = tmp_re;
+                w_im                = tmp_im;
             }
         }
     }
 }
 
-} // namespace
+}  // namespace
 
-KaldiFbankFrontend::KaldiFbankFrontend(KaldiFbankParams params)
-    : params_(std::move(params))
-    , padded_n_fft_(next_pow2(params_.win_length))
-{
-    mel_fb_ = build_htk_mel_filterbank(
-        params_.sample_rate, padded_n_fft_, params_.n_mels,
-        kMelLowFreq, kMelHighFreq);
+KaldiFbankFrontend::KaldiFbankFrontend(KaldiFbankParams params) :
+    params_(std::move(params)),
+    padded_n_fft_(next_pow2(params_.win_length)) {
+    mel_fb_ = build_htk_mel_filterbank(params_.sample_rate, padded_n_fft_, params_.n_mels, kMelLowFreq, kMelHighFreq);
     window_ = build_hamming_window(params_.win_length);
 }
 
-int KaldiFbankFrontend::compute(const float *        pcm,
-                                size_t               n_samples,
-                                std::vector<float> & out_features) const
-{
+int KaldiFbankFrontend::compute(const float * pcm, size_t n_samples, std::vector<float> & out_features) const {
     const int win_length = params_.win_length;
     const int hop_length = params_.hop_length;
     const int n_mels     = params_.n_mels;
@@ -167,9 +165,8 @@ int KaldiFbankFrontend::compute(const float *        pcm,
     }
 
     // Snip-edges framing: T_frames = 1 + floor((N - win_length) / hop).
-    const int T_frames = 1 + static_cast<int>(
-        (n_samples - static_cast<size_t>(win_length)) /
-        static_cast<size_t>(hop_length));
+    const int T_frames =
+        1 + static_cast<int>((n_samples - static_cast<size_t>(win_length)) / static_cast<size_t>(hop_length));
     if (T_frames <= 0) {
         out_features.clear();
         return 0;
@@ -208,22 +205,18 @@ int KaldiFbankFrontend::compute(const float *        pcm,
         // depends on x[i-1] from BEFORE preemph) — kaldi works backward
         // i = N-1 .. 1, then handles i=0.
         for (int i = win_length - 1; i >= 1; --i) {
-            frame_f[static_cast<size_t>(i)] -=
-                kPreemphasis * frame_f[static_cast<size_t>(i - 1)];
+            frame_f[static_cast<size_t>(i)] -= kPreemphasis * frame_f[static_cast<size_t>(i - 1)];
         }
         frame_f[0] *= (1.0f - kPreemphasis);
 
         // Step 4: apply hamming window.
         for (int i = 0; i < win_length; ++i) {
-            frame_f[static_cast<size_t>(i)] *=
-                window_[static_cast<size_t>(i)];
+            frame_f[static_cast<size_t>(i)] *= window_[static_cast<size_t>(i)];
         }
 
         // Step 5: pad to padded_n_fft and FFT.
         for (int i = 0; i < padded_n_fft_; ++i) {
-            const float re = i < win_length
-                ? frame_f[static_cast<size_t>(i)]
-                : 0.0f;
+            const float re   = i < win_length ? frame_f[static_cast<size_t>(i)] : 0.0f;
             frame[2 * i]     = static_cast<double>(re);
             frame[2 * i + 1] = 0.0;
         }
@@ -231,10 +224,9 @@ int KaldiFbankFrontend::compute(const float *        pcm,
 
         // Step 6: power spectrum.
         for (int b = 0; b < n_freq; ++b) {
-            const double re = frame[2 * b];
-            const double im = frame[2 * b + 1];
-            power[static_cast<size_t>(b)] =
-                static_cast<float>(re * re + im * im);
+            const double re               = frame[2 * b];
+            const double im               = frame[2 * b + 1];
+            power[static_cast<size_t>(b)] = static_cast<float>(re * re + im * im);
         }
 
         // Step 7-8: HTK mel filterbank + log with energy_floor. funasr
@@ -243,14 +235,13 @@ int KaldiFbankFrontend::compute(const float *        pcm,
         // the underflow-floor `FLT_MIN`. log of that floor is ~ -15.94.
         float * mel_row = mel.data() + static_cast<size_t>(t) * n_mels;
         for (int m = 0; m < n_mels; ++m) {
-            const float * fb_row =
-                mel_fb_.data() + static_cast<size_t>(m) * n_freq;
-            float acc = 0.0f;
+            const float * fb_row = mel_fb_.data() + static_cast<size_t>(m) * n_freq;
+            float         acc    = 0.0f;
             for (int b = 0; b < n_freq; ++b) {
                 acc += fb_row[b] * power[static_cast<size_t>(b)];
             }
-            constexpr float kMelEpsilon = 1.1920928955078125e-07f;
-            const float floored = std::max(acc, kMelEpsilon);
+            constexpr float kMelEpsilon     = 1.1920928955078125e-07f;
+            const float     floored         = std::max(acc, kMelEpsilon);
             mel_row[static_cast<size_t>(m)] = std::log(floored);
         }
     }
@@ -268,22 +259,21 @@ int KaldiFbankFrontend::compute(const float *        pcm,
     const int T_lfr    = (T_frames + lfr_n - 1) / lfr_n;
     out_features.assign(static_cast<size_t>(T_lfr) * d_input, 0.0f);
     for (int t_lfr = 0; t_lfr < T_lfr; ++t_lfr) {
-        float * out_row =
-            out_features.data() + static_cast<size_t>(t_lfr) * d_input;
+        float * out_row = out_features.data() + static_cast<size_t>(t_lfr) * d_input;
         for (int k = 0; k < lfr_m; ++k) {
             const int padded_idx = t_lfr * lfr_n + k;
             // Map padded index back to real mel frame.
-            int src;
+            int       src;
             if (padded_idx < left_pad) {
                 src = 0;
             } else {
                 src = padded_idx - left_pad;
-                if (src >= T_frames) src = T_frames - 1;
+                if (src >= T_frames) {
+                    src = T_frames - 1;
+                }
             }
-            const float * src_row =
-                mel.data() + static_cast<size_t>(src) * n_mels;
-            std::memcpy(out_row + static_cast<size_t>(k) * n_mels,
-                        src_row, sizeof(float) * n_mels);
+            const float * src_row = mel.data() + static_cast<size_t>(src) * n_mels;
+            std::memcpy(out_row + static_cast<size_t>(k) * n_mels, src_row, sizeof(float) * n_mels);
         }
         // Step 10: optional per-feature CMVN: (x + shift) * scale.
         if (params_.apply_cmvn) {
@@ -298,4 +288,4 @@ int KaldiFbankFrontend::compute(const float *        pcm,
     return T_lfr;
 }
 
-} // namespace transcribe
+}  // namespace transcribe

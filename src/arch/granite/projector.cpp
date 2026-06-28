@@ -14,13 +14,11 @@
 
 #include "projector.h"
 
+#include "ggml.h"
 #include "granite.h"
-#include "weights.h"
-
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
-
-#include "ggml.h"
+#include "weights.h"
 
 #include <cmath>
 #include <cstdio>
@@ -43,19 +41,16 @@ ggml_tensor * qformer_layer_norm(ggml_context * ctx,
                                  ggml_tensor *  x,
                                  ggml_tensor *  gamma,
                                  ggml_tensor *  beta,
-                                 float          eps)
-{
+                                 float          eps) {
     ggml_tensor * y = ggml_norm(ctx, x, eps);
-    y = ggml_mul(ctx, y, gamma);
+    y               = ggml_mul(ctx, y, gamma);
     if (beta != nullptr) {
         y = ggml_add(ctx, y, beta);
     }
     return y;
 }
 
-ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x,
-                     ggml_tensor * w, ggml_tensor * b)
-{
+ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) {
     ggml_tensor * y = ggml_mul_mat(ctx, w, x);
     if (b != nullptr) {
         y = ggml_add(ctx, y, b);
@@ -67,25 +62,23 @@ ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x,
 // q, k, v all have ne = [hidden, n_seq, batch]; attention runs per `batch`
 // (= nblocks for cross-attn). head_dim = hidden / n_heads.
 ggml_tensor * qformer_attn(ggml_context * ctx,
-                           ggml_tensor *  q_in,   // [hidden, q_seq, batch]
-                           ggml_tensor *  k_in,   // [hidden, k_seq, batch]
-                           ggml_tensor *  v_in,   // [hidden, k_seq, batch]
+                           ggml_tensor *  q_in,  // [hidden, q_seq, batch]
+                           ggml_tensor *  k_in,  // [hidden, k_seq, batch]
+                           ggml_tensor *  v_in,  // [hidden, k_seq, batch]
                            int            n_heads,
-                           int            head_dim)
-{
+                           int            head_dim) {
     const int64_t hidden = q_in->ne[0];
     const int64_t q_seq  = q_in->ne[1];
     const int64_t k_seq  = k_in->ne[1];
     const int64_t batch  = q_in->ne[2];
     const float   scale  = 1.0f / std::sqrt(static_cast<float>(head_dim));
-    (void)hidden;
+    (void) hidden;
 
     // Reshape into (head_dim, n_heads, seq, batch).
     auto split_heads = [&](ggml_tensor * t, int64_t seq) {
-        ggml_tensor * r = ggml_reshape_4d(ctx, t,
-                                          head_dim, n_heads, seq, batch);
+        ggml_tensor * r = ggml_reshape_4d(ctx, t, head_dim, n_heads, seq, batch);
         // Permute to (head_dim, seq, n_heads, batch): args (0, 2, 1, 3).
-        r = ggml_cont(ctx, ggml_permute(ctx, r, 0, 2, 1, 3));
+        r               = ggml_cont(ctx, ggml_permute(ctx, r, 0, 2, 1, 3));
         return r;
     };
     ggml_tensor * q = split_heads(q_in, q_seq);
@@ -96,7 +89,7 @@ ggml_tensor * qformer_attn(ggml_context * ctx,
     // ggml_mul_mat(k, q) on (head_dim, seq, n_heads, batch) yields
     // (k_seq, q_seq, n_heads, batch).
     ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-    kq = ggml_scale(ctx, kq, scale);
+    kq               = ggml_scale(ctx, kq, scale);
 
     // Softmax over ne[0] = k_seq.
     ggml_tensor * attn = ggml_soft_max(ctx, kq);
@@ -112,77 +105,74 @@ ggml_tensor * qformer_attn(ggml_context * ctx,
     // n_heads adjacent to head_dim so the reshape interleaves correctly:
     out = ggml_cont(ctx, ggml_permute(ctx, out, 0, 2, 1, 3));
     // out ne = [head_dim, n_heads, q_seq, batch]
-    out = ggml_reshape_3d(ctx, out,
-                          static_cast<int64_t>(head_dim) * n_heads,
-                          q_seq, batch);
+    out = ggml_reshape_3d(ctx, out, static_cast<int64_t>(head_dim) * n_heads, q_seq, batch);
     return out;
 }
 
 // One BLIP-2 Q-Former layer.
 //
 // Granite uses cross_attention_frequency=1 (every layer has cross-attn).
-ggml_tensor * qformer_layer(ggml_context *          ctx,
-                            ggml_tensor *           query,        // [hidden, num_queries, nblocks]
-                            ggml_tensor *           enc_window,   // [hidden_enc, window_size, nblocks]
+ggml_tensor * qformer_layer(ggml_context *           ctx,
+                            ggml_tensor *            query,       // [hidden, num_queries, nblocks]
+                            ggml_tensor *            enc_window,  // [hidden_enc, window_size, nblocks]
                             const GraniteProjBlock & b,
-                            int                     n_heads,
-                            int                     head_dim,
-                            float                   ln_eps)
-{
+                            int                      n_heads,
+                            int                      head_dim,
+                            float                    ln_eps) {
     // -------- Self-attention sublayer --------
     ggml_tensor * sa_in = query;
     ggml_tensor * sa_q  = linear(ctx, sa_in, b.self_attn_q_w, b.self_attn_q_b);
     ggml_tensor * sa_k  = linear(ctx, sa_in, b.self_attn_k_w, b.self_attn_k_b);
     ggml_tensor * sa_v  = linear(ctx, sa_in, b.self_attn_v_w, b.self_attn_v_b);
     ggml_tensor * sa    = qformer_attn(ctx, sa_q, sa_k, sa_v, n_heads, head_dim);
-    sa = linear(ctx, sa, b.self_attn_out_w, b.self_attn_out_b);
-    sa = ggml_add(ctx, sa, sa_in);
-    sa = qformer_layer_norm(ctx, sa, b.norm_self_attn_w, b.norm_self_attn_b, ln_eps);
+    sa                  = linear(ctx, sa, b.self_attn_out_w, b.self_attn_out_b);
+    sa                  = ggml_add(ctx, sa, sa_in);
+    sa                  = qformer_layer_norm(ctx, sa, b.norm_self_attn_w, b.norm_self_attn_b, ln_eps);
 
     // -------- Cross-attention sublayer --------
     ggml_tensor * ca_in = sa;
-    ggml_tensor * ca_q  = linear(ctx, ca_in,      b.cross_attn_q_w, b.cross_attn_q_b);
+    ggml_tensor * ca_q  = linear(ctx, ca_in, b.cross_attn_q_w, b.cross_attn_q_b);
     ggml_tensor * ca_k  = linear(ctx, enc_window, b.cross_attn_k_w, b.cross_attn_k_b);
     ggml_tensor * ca_v  = linear(ctx, enc_window, b.cross_attn_v_w, b.cross_attn_v_b);
     ggml_tensor * ca    = qformer_attn(ctx, ca_q, ca_k, ca_v, n_heads, head_dim);
-    ca = linear(ctx, ca, b.cross_attn_out_w, b.cross_attn_out_b);
-    ca = ggml_add(ctx, ca, ca_in);
-    ca = qformer_layer_norm(ctx, ca, b.norm_cross_attn_w, b.norm_cross_attn_b, ln_eps);
+    ca                  = linear(ctx, ca, b.cross_attn_out_w, b.cross_attn_out_b);
+    ca                  = ggml_add(ctx, ca, ca_in);
+    ca                  = qformer_layer_norm(ctx, ca, b.norm_cross_attn_w, b.norm_cross_attn_b, ln_eps);
 
     // -------- FFN sublayer --------
-    ggml_tensor * ffn_in = ca;
-    ggml_tensor * mid    = linear(ctx, ffn_in, b.ffn_up_w, b.ffn_up_b);
+    ggml_tensor * ffn_in  = ca;
+    ggml_tensor * mid     = linear(ctx, ffn_in, b.ffn_up_w, b.ffn_up_b);
     // PyTorch's `gelu` (the default) is the exact erf form.
-    mid = ggml_gelu_erf(ctx, mid);
+    mid                   = ggml_gelu_erf(ctx, mid);
     ggml_tensor * ffn_out = linear(ctx, mid, b.ffn_down_w, b.ffn_down_b);
-    ffn_out = ggml_add(ctx, ffn_out, ffn_in);
-    ffn_out = qformer_layer_norm(ctx, ffn_out, b.norm_ffn_w, b.norm_ffn_b, ln_eps);
+    ffn_out               = ggml_add(ctx, ffn_out, ffn_in);
+    ffn_out               = qformer_layer_norm(ctx, ffn_out, b.norm_ffn_w, b.norm_ffn_b, ln_eps);
 
     return ffn_out;
 }
 
-} // namespace
+}  // namespace
 
 ProjectorBuild build_projector_graph(ggml_context *         ctx,
                                      const GraniteWeights & weights,
                                      const GraniteHParams & hp,
-                                     int                    T_enc)
-{
-    ProjectorBuild pb {};
+                                     int                    T_enc) {
+    ProjectorBuild pb{};
 
-    const int     window_size    = hp.window_size;            // 15
-    const int     downsample     = hp.downsample_rate;        // 5
-    const int     num_queries    = window_size / downsample;  // 3
-    const int     n_heads        = hp.prj_n_heads;            // 16
-    const int     prj_hidden     = hp.prj_hidden;             // 1024
-    const int     enc_hidden     = hp.prj_encoder_hidden_size; // 1024 or 2048 (-plus)
-    (void)hp.dec_hidden;             // text_hidden = 2048; consumed via proj.linear shape.
-    const float   ln_eps         = hp.prj_layer_norm_eps;     // 1e-12
+    const int window_size = hp.window_size;              // 15
+    const int downsample  = hp.downsample_rate;          // 5
+    const int num_queries = window_size / downsample;    // 3
+    const int n_heads     = hp.prj_n_heads;              // 16
+    const int prj_hidden  = hp.prj_hidden;               // 1024
+    const int enc_hidden  = hp.prj_encoder_hidden_size;  // 1024 or 2048 (-plus)
+    (void) hp.dec_hidden;                                // text_hidden = 2048; consumed via proj.linear shape.
+    const float ln_eps = hp.prj_layer_norm_eps;          // 1e-12
 
     if (prj_hidden % n_heads != 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "granite projector: prj_hidden (%d) not divisible by "
-                     "n_heads (%d)", prj_hidden, n_heads);
+                "granite projector: prj_hidden (%d) not divisible by "
+                "n_heads (%d)",
+                prj_hidden, n_heads);
         return pb;
     }
     const int head_dim = prj_hidden / n_heads;  // 64
@@ -198,8 +188,7 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     ggml_set_input(pb.enc_in);
 
     if (pb.t_enc_pad > 0) {
-        pb.enc_pad = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
-                                        enc_hidden, pb.t_enc_pad);
+        pb.enc_pad = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, enc_hidden, pb.t_enc_pad);
         named(pb.enc_pad, "proj.enc_pad");
         ggml_set_input(pb.enc_pad);
     }
@@ -216,9 +205,7 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     // pos_in_window = i % window_size). The ggml reshape with
     // (hidden_enc, window_size, nblocks) gives ne[1] = window_size as
     // the faster axis, exactly matching this layout.
-    ggml_tensor * enc_window = ggml_reshape_3d(ctx, enc_full,
-                                               enc_hidden, window_size,
-                                               pb.nblocks);
+    ggml_tensor * enc_window = ggml_reshape_3d(ctx, enc_full, enc_hidden, window_size, pb.nblocks);
 
     // Build query tensor.
     // weights.proj_top.query is stored at the GGUF's reference dtype
@@ -234,22 +221,17 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     //   embedding_output = self.layernorm(query_embeds)
     // Applying it after the layers instead silently corrupts the output —
     // the layers would operate on unnormalised queries.
-    query = qformer_layer_norm(ctx, query,
-                               weights.proj_top.qformer_final_norm_w,
-                               weights.proj_top.qformer_final_norm_b,
+    query = qformer_layer_norm(ctx, query, weights.proj_top.qformer_final_norm_w, weights.proj_top.qformer_final_norm_b,
                                ln_eps);
 
     // Broadcast (hidden, num_queries, 1, 1) → (hidden, num_queries, nblocks, 1).
-    query = ggml_repeat_4d(ctx, query,
-                           prj_hidden, num_queries, pb.nblocks, 1);
+    query = ggml_repeat_4d(ctx, query, prj_hidden, num_queries, pb.nblocks, 1);
     // ggml_repeat_4d emits a fresh contiguous tensor; we can pass it
     // directly into subsequent ops.
 
     // Q-Former layers.
     for (int i = 0; i < hp.prj_n_layers; ++i) {
-        query = qformer_layer(ctx, query, enc_window,
-                              weights.proj_blocks[i],
-                              n_heads, head_dim, ln_eps);
+        query = qformer_layer(ctx, query, enc_window, weights.proj_blocks[i], n_heads, head_dim, ln_eps);
     }
 
     // proj.qformer.out = Blip2QFormerModel.last_hidden_state, the encoder
@@ -267,16 +249,14 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     //   flat_idx = block_idx * num_queries + query_idx
     // because num_queries is faster than nblocks. Exactly matches the
     // upstream order.
-    ggml_tensor * tokens = ggml_reshape_2d(ctx, query,
-                                           prj_hidden,
-                                           static_cast<int64_t>(num_queries) * pb.nblocks);
+    ggml_tensor * tokens = ggml_reshape_2d(ctx, query, prj_hidden, static_cast<int64_t>(num_queries) * pb.nblocks);
 
     // Linear lift to text_hidden.
     ggml_tensor * out = ggml_mul_mat(ctx, weights.proj_top.linear_w, tokens);
-    out = ggml_add(ctx, out, weights.proj_top.linear_b);
+    out               = ggml_add(ctx, out, weights.proj_top.linear_b);
     named(out, "proj.out");
-    pb.out               = out;
-    pb.dumps.proj_out    = out;
+    pb.out            = out;
+    pb.dumps.proj_out = out;
     ggml_set_output(out);
     transcribe::debug::mark_tensor_for_dump(out);
 
@@ -297,4 +277,4 @@ ProjectorBuild build_projector_graph(ggml_context *         ctx,
     return pb;
 }
 
-} // namespace transcribe::granite
+}  // namespace transcribe::granite

@@ -25,9 +25,9 @@ extern "C" {
 #endif
 
 /* 'PKST' little-endian = 0x54534B50 */
-#define TRANSCRIBE_EXT_KIND_PARAKEET_STREAM           0x54534B50u
+#define TRANSCRIBE_EXT_KIND_PARAKEET_STREAM          0x54534B50u
 /* 'PKBS' little-endian = 0x53424B50 */
-#define TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM  0x53424B50u
+#define TRANSCRIBE_EXT_KIND_PARAKEET_BUFFERED_STREAM 0x53424B50u
 
 /*
  * Cache-aware streaming knob (nemotron-speech-streaming-en-0.6b).
@@ -64,8 +64,7 @@ struct transcribe_parakeet_stream_ext {
 };
 
 /* Fills ext.size/kind and att_context_right = -1 (model default). */
-TRANSCRIBE_API void transcribe_parakeet_stream_ext_init(
-    struct transcribe_parakeet_stream_ext * ext);
+TRANSCRIBE_API void transcribe_parakeet_stream_ext_init(struct transcribe_parakeet_stream_ext * ext);
 
 /*
  * Chunked-attention (buffered) streaming knob (parakeet-unified-en-0.6b).
@@ -104,8 +103,7 @@ struct transcribe_parakeet_buffered_stream_ext {
 };
 
 /* Fills ext.size/kind and left/chunk/right_ms = -1 (model default). */
-TRANSCRIBE_API void transcribe_parakeet_buffered_stream_ext_init(
-    struct transcribe_parakeet_buffered_stream_ext * ext);
+TRANSCRIBE_API void transcribe_parakeet_buffered_stream_ext_init(struct transcribe_parakeet_buffered_stream_ext * ext);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -32,11 +32,9 @@ std::string format_size_t(size_t v) {
     return std::string(buf);
 }
 
-} // namespace
+}  // namespace
 
-bool load_wav_mono_16k(const std::string &  path,
-                       std::vector<float> & out_pcm,
-                       std::string &        out_error) {
+bool load_wav_mono_16k(const std::string & path, std::vector<float> & out_pcm, std::string & out_error) {
     out_pcm.clear();
     out_error.clear();
 
@@ -55,11 +53,9 @@ bool load_wav_mono_16k(const std::string &  path,
     const size_t       total_frames = static_cast<size_t>(wav.totalPCMFrameCount);
 
     if (sample_rate != kRequiredSampleRate) {
-        out_error = "WAV sample rate is " + std::to_string(sample_rate)
-                  + " Hz; transcribe.cpp v1 only accepts 16000 Hz."
-                  + " Resample first, e.g.:\n"
-                  + "  sox '" + path + "' -r 16000 -c 1 out.wav\n"
-                  + "  ffmpeg -i '" + path + "' -ar 16000 -ac 1 out.wav";
+        out_error = "WAV sample rate is " + std::to_string(sample_rate) +
+                    " Hz; transcribe.cpp v1 only accepts 16000 Hz." + " Resample first, e.g.:\n" + "  sox '" + path +
+                    "' -r 16000 -c 1 out.wav\n" + "  ffmpeg -i '" + path + "' -ar 16000 -ac 1 out.wav";
         drwav_uninit(&wav);
         return false;
     }
@@ -77,8 +73,7 @@ bool load_wav_mono_16k(const std::string &  path,
     }
 
     if (total_frames > kMaxFrames) {
-        out_error = "WAV file is implausibly long ("
-                  + format_size_t(total_frames) + " frames); refusing to load";
+        out_error = "WAV file is implausibly long (" + format_size_t(total_frames) + " frames); refusing to load";
         drwav_uninit(&wav);
         return false;
     }
@@ -89,9 +84,8 @@ bool load_wav_mono_16k(const std::string &  path,
     // size_t on a 32-bit host, or against a malformed header reporting
     // an absurd channel count even though we already gated total_frames.
     if (channels > std::numeric_limits<size_t>::max() / total_frames) {
-        out_error = "WAV interleaved buffer size overflows size_t ("
-                  + format_size_t(total_frames) + " frames * "
-                  + std::to_string(channels) + " channels)";
+        out_error = "WAV interleaved buffer size overflows size_t (" + format_size_t(total_frames) + " frames * " +
+                    std::to_string(channels) + " channels)";
         drwav_uninit(&wav);
         return false;
     }
@@ -102,14 +96,12 @@ bool load_wav_mono_16k(const std::string &  path,
     // format conversions for us (PCM int16/24/32, float32/64, A-law,
     // mu-law).
     std::vector<float> interleaved(interleaved_count);
-    const size_t       got = drwav_read_pcm_frames_f32(
-        &wav, total_frames, interleaved.data());
+    const size_t       got = drwav_read_pcm_frames_f32(&wav, total_frames, interleaved.data());
     drwav_uninit(&wav);
 
     if (got != total_frames) {
-        out_error = "WAV decode short read: expected "
-                  + format_size_t(total_frames) + " frames, got "
-                  + format_size_t(got);
+        out_error =
+            "WAV decode short read: expected " + format_size_t(total_frames) + " frames, got " + format_size_t(got);
         return false;
     }
 
@@ -130,4 +122,4 @@ bool load_wav_mono_16k(const std::string &  path,
     return true;
 }
 
-} // namespace transcribe_cli
+}  // namespace transcribe_cli

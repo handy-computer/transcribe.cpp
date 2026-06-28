@@ -30,14 +30,14 @@ struct MoonshineStreamingHParams;
 struct MoonshineStreamingWeights;
 
 struct EncoderDumps {
-    ggml_tensor * audio_in     = nullptr;
-    ggml_tensor * cmvn_out     = nullptr;
-    ggml_tensor * comp_out     = nullptr;
-    ggml_tensor * linear_out   = nullptr;
-    ggml_tensor * conv1_out    = nullptr;
-    ggml_tensor * conv2_out    = nullptr;
+    ggml_tensor *              audio_in   = nullptr;
+    ggml_tensor *              cmvn_out   = nullptr;
+    ggml_tensor *              comp_out   = nullptr;
+    ggml_tensor *              linear_out = nullptr;
+    ggml_tensor *              conv1_out  = nullptr;
+    ggml_tensor *              conv2_out  = nullptr;
     std::vector<ggml_tensor *> block_outs;
-    ggml_tensor * final_out    = nullptr;
+    ggml_tensor *              final_out = nullptr;
 };
 
 struct EncoderBuild {
@@ -53,7 +53,7 @@ struct EncoderBuild {
     // Output: final encoder hidden state [d_model, T_enc] f32.
     ggml_tensor * out = nullptr;
 
-    EncoderDumps  dumps {};
+    EncoderDumps  dumps{};
     ggml_cgraph * graph = nullptr;
 
     // Number of encoder frames produced for the supplied n_samples.
@@ -76,11 +76,11 @@ int encoder_t_enc(const MoonshineStreamingHParams & hp, int n_samples);
 bool dump_block_index(int i, int n_layers);
 
 // Build the encoder forward graph in compute_ctx.
-EncoderBuild build_encoder_graph(ggml_context *                       compute_ctx,
-                                 const MoonshineStreamingWeights &    weights,
-                                 const MoonshineStreamingHParams &    hp,
-                                 int                                  n_samples,
-                                 bool                                 use_flash = false);
+EncoderBuild build_encoder_graph(ggml_context *                    compute_ctx,
+                                 const MoonshineStreamingWeights & weights,
+                                 const MoonshineStreamingHParams & hp,
+                                 int                               n_samples,
+                                 bool                              use_flash = false);
 
 // Build a host-side sliding-window mask of shape [T_enc, T_enc] for the
 // (L, R) window. Allowed positions are 0.0; blocked are -INF.
@@ -90,9 +90,6 @@ EncoderBuild build_encoder_graph(ggml_context *                       compute_ct
 //   || (k-q >= 1 && k-q < R)  // up to R-1 positions ahead
 //
 // Caller-provided buffer must be at least T_enc*T_enc floats.
-void build_sliding_window_mask(int     T_enc,
-                               int     left_window,
-                               int     right_window,
-                               float * out_mask);
+void build_sliding_window_mask(int T_enc, int left_window, int right_window, float * out_mask);
 
-} // namespace transcribe::moonshine_streaming
+}  // namespace transcribe::moonshine_streaming

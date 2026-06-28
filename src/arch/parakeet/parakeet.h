@@ -9,9 +9,9 @@
 
 #include "decoder.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
 
@@ -50,14 +50,12 @@ namespace transcribe::parakeet {
 // pass effective_T = ctx.total / encoder_frame2audio_samples — the conv
 // frontend may produce T_enc > effective_T, and those trailing frames
 // must be masked or they contaminate valid frames' attention scores.
-void compute_chunked_limited_with_rc_mask(
-    float * out_buf,
-    int     T,
-    int     left_context_frames,
-    int     chunk_size_frames,
-    int     right_context_frames,
-    int     pad_length);
-
+void compute_chunked_limited_with_rc_mask(float * out_buf,
+                                          int     T,
+                                          int     left_context_frames,
+                                          int     chunk_size_frames,
+                                          int     right_context_frames,
+                                          int     pad_length);
 
 // Family defaults — applied before transcribe::read_capability_kv runs
 // (KV present overrides, KV absent leaves the default). Defined in
@@ -84,8 +82,8 @@ struct ParakeetModel final : public transcribe_model {
 
     // Fused BN parameters live in a separate ggml context + buffer,
     // computed at load time from the raw BN tensors. Freed in dtor.
-    ggml_context *          bn_fused_ctx    = nullptr;
-    ggml_backend_buffer_t   bn_fused_buffer = nullptr;
+    ggml_context *        bn_fused_ctx    = nullptr;
+    ggml_backend_buffer_t bn_fused_buffer = nullptr;
 
     // On a CPU primary backend, the conformer 1×1 pointwise conv weights
     // are dequantized from F16 to F32 at load: CPUs without native F16
@@ -94,8 +92,8 @@ struct ParakeetModel final : public transcribe_model {
     // No-op on GPU backends and on non-CPU primary backends. The F16
     // source tensors stay resident (ggml can't free individual slots);
     // the weight slot is repointed at the F32 copy.
-    ggml_context *          conv_pw_f32_ctx    = nullptr;
-    ggml_backend_buffer_t   conv_pw_f32_buffer = nullptr;
+    ggml_context *        conv_pw_f32_ctx    = nullptr;
+    ggml_backend_buffer_t conv_pw_f32_buffer = nullptr;
 
     // Mel front-end, constructed once at load() from the hparams
     // (precomputes Hann window + Slaney mel filterbank).
@@ -178,20 +176,20 @@ struct ParakeetStreamingCaches {
     //   chunk_size_first=105, chunk_size_subsequent=112,
     //   mel_fed_first=105, mel_fed_subsequent=121 (9 cache + 112 new),
     //   drop_extra_first=0, drop_extra_subsequent=2.
-    int att_context_right            = 0;
-    int att_context_left             = 0;
-    int chunk_size_first             = 0;
-    int chunk_size_subsequent        = 0;
-    int mel_fed_first                = 0;
-    int mel_fed_subsequent           = 0;
-    int drop_extra_first             = 0;
-    int drop_extra_subsequent        = 0;
+    int  att_context_right     = 0;
+    int  att_context_left      = 0;
+    int  chunk_size_first      = 0;
+    int  chunk_size_subsequent = 0;
+    int  mel_fed_first         = 0;
+    int  mel_fed_subsequent    = 0;
+    int  drop_extra_first      = 0;
+    int  drop_extra_subsequent = 0;
     // Whether the next emit_streaming_chunk is the FIRST in this stream.
-    bool is_first_chunk              = true;
+    bool is_first_chunk        = true;
 
     // Per-stream chunk counter (NeMo's step_num). Resets at stream_begin,
     // increments per emit; indexes dump filenames.
-    int chunk_step              = 0;
+    int chunk_step = 0;
 
     bool initialized = false;
 };
@@ -219,21 +217,21 @@ struct ParakeetStreamingDecoderState {
 struct ParakeetSession final : public transcribe_session {
     // Compute context: cgraph + intermediate tensor metadata. no_alloc;
     // data lives in sched-managed buffers. Reset each run().
-    ggml_context *        compute_ctx    = nullptr;
+    ggml_context * compute_ctx = nullptr;
 
     // Multi-backend scheduler. Persists across calls; manages compute
     // buffer allocation and reuses buffers when topology is unchanged.
-    ggml_backend_sched_t  sched          = nullptr;
+    ggml_backend_sched_t sched = nullptr;
 
     // Encoder forward output, borrowed into compute_ctx; invalidated when
     // compute_ctx is reset next run().
     ggml_tensor * encoder_out = nullptr;
 
     // Per-context scratch reused across runs.
-    std::vector<float> mel_buf;
-    std::vector<float> pos_buf;
-    std::vector<float> pos_div_term;
-    std::vector<float> enc_host;
+    std::vector<float>    mel_buf;
+    std::vector<float>    pos_buf;
+    std::vector<float>    pos_div_term;
+    std::vector<float>    enc_host;
     std::vector<TdtToken> raw_tokens;
 
     // Per-call timings and the TDT decode result (tokens / words /
@@ -246,16 +244,16 @@ struct ParakeetSession final : public transcribe_session {
     // stream_finalize drains the buffer through the inference helper;
     // stream_reset clears (keeping capacity). NOT touched by
     // clear_result (the family owns its per-utterance audio scratch).
-    std::vector<float>   stream_pcm_buffer;
-    transcribe_run_params    stream_run_params {};
+    std::vector<float>    stream_pcm_buffer;
+    transcribe_run_params stream_run_params{};
 
     // ---- incremental streaming state (cache-aware) ----
     //
     // Allocated on the first stream_begin for ChunkedLimited variants,
     // zeroed at each stream_begin, persists across feed/finalize within
     // an utterance, freed in the dtor.
-    ParakeetStreamingCaches        stream_caches;
-    ParakeetStreamingDecoderState  stream_dec_state;
+    ParakeetStreamingCaches       stream_caches;
+    ParakeetStreamingDecoderState stream_dec_state;
 
     // ---- Buffered streaming state (parakeet-unified-en-0.6b) ----
     //
@@ -268,31 +266,31 @@ struct ParakeetSession final : public transcribe_session {
     // ContextSize, updated per-chunk via buf_ctx_add_frames (NeMo's
     // add_frames_get_removed_). The RNN-T state rides on stream_dec_state
     // (same predictor/joint path, no per-layer encoder cache).
-    int32_t buf_left_frames   = 0;  // L (expected)
-    int32_t buf_chunk_frames  = 0;  // C
-    int32_t buf_right_frames  = 0;  // R
-    int32_t buf_samples_left  = 0;  // L * encoder_frame2audio_samples
-    int32_t buf_samples_chunk = 0;
-    int32_t buf_samples_right = 0;
+    int32_t buf_left_frames     = 0;  // L (expected)
+    int32_t buf_chunk_frames    = 0;  // C
+    int32_t buf_right_frames    = 0;  // R
+    int32_t buf_samples_left    = 0;  // L * encoder_frame2audio_samples
+    int32_t buf_samples_chunk   = 0;
+    int32_t buf_samples_right   = 0;
     // Next sample index in stream_pcm_buffer to feed (= NeMo's
     // `left_sample` at the start of the next step). 0 at stream_begin;
     // advances by num_new_samples after each emit.
     int64_t buf_next_audio_read = 0;
     // Buffer's internal ContextSize. (0,0,0) at stream_begin; ramps up
     // as audio arrives until it saturates at (samples_left, chunk, right).
-    int64_t buf_ctx_left  = 0;
-    int64_t buf_ctx_chunk = 0;
-    int64_t buf_ctx_right = 0;
+    int64_t buf_ctx_left        = 0;
+    int64_t buf_ctx_chunk       = 0;
+    int64_t buf_ctx_right       = 0;
     // Whether step 0 (the initial fill of samples_chunk+samples_right)
     // has run. False at stream_begin; first emit flips it.
-    bool    buf_initialized = false;
+    bool    buf_initialized     = false;
     // Per-stream chunk step counter (== NeMo's `step_num`). Used for
     // per-chunk dump file naming.
-    int32_t buf_chunk_step = 0;
-    bool    buf_active = false;
+    int32_t buf_chunk_step      = 0;
+    bool    buf_active          = false;
 
     ParakeetSession() = default;
     ~ParakeetSession() override;
 };
 
-} // namespace transcribe::parakeet
+}  // namespace transcribe::parakeet

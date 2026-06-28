@@ -26,9 +26,8 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "ggml.h"
+#include "weights.h"
 
 #include <cstdint>
 
@@ -39,9 +38,9 @@ struct ggml_tensor;
 namespace transcribe::granite_nar {
 
 struct DecoderDumps {
-    ggml_tensor * flat_embeds  = nullptr;  // [hidden, T_total] post-scatter,
-                                           //  pre-embedding_multiplier
-    ggml_tensor * text_logits  = nullptr;  // [vocab, n_text] over text part only
+    ggml_tensor * flat_embeds = nullptr;  // [hidden, T_total] post-scatter,
+                                          //  pre-embedding_multiplier
+    ggml_tensor * text_logits = nullptr;  // [vocab, n_text] over text part only
 };
 
 struct ForwardBuild {
@@ -52,10 +51,10 @@ struct ForwardBuild {
     ggml_tensor * positions_in = nullptr;  // [T_total] i32 RoPE positions
 
     // Output (lm_head sliced over the text portion).
-    ggml_tensor * out          = nullptr;  // [vocab, n_text]
+    ggml_tensor * out = nullptr;  // [vocab, n_text]
 
-    DecoderDumps  dumps {};
-    ggml_cgraph * graph        = nullptr;
+    DecoderDumps  dumps{};
+    ggml_cgraph * graph = nullptr;
 
     int n_audio_tokens = 0;
     int n_text         = 0;
@@ -72,9 +71,7 @@ ForwardBuild build_forward_graph(ggml_context *            ctx,
 
 // Host-side helper: insert eos_id between every adjacent pair (and at
 // the head/tail) of `hyp_ids`. Length grows from n to 2n + 1.
-void add_insertion_slots(const std::vector<int32_t> & hyp_ids,
-                         int32_t                      eos_id,
-                         std::vector<int32_t> &       out);
+void add_insertion_slots(const std::vector<int32_t> & hyp_ids, int32_t eos_id, std::vector<int32_t> & out);
 
 // Host-side argmax+collapse decoder: walks the text-portion logits row
 // by row, picks the argmax per row, collapses consecutive duplicates,
@@ -85,4 +82,4 @@ void argmax_collapse_drop_eos(const std::vector<float> & text_logits,
                               int32_t                    eos_id,
                               std::vector<int32_t> &     out_ids);
 
-} // namespace transcribe::granite_nar
+}  // namespace transcribe::granite_nar

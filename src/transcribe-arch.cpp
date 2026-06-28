@@ -11,22 +11,69 @@
 namespace transcribe {
 
 // Per-family Arch instances. Defined in src/arch/<family>/model.cpp.
-namespace parakeet           { extern const Arch arch; }
-namespace cohere             { extern const Arch arch; }
-namespace canary             { extern const Arch arch; }
-namespace qwen3_asr          { extern const Arch arch; }
-namespace voxtral            { extern const Arch arch; }
-namespace voxtral_realtime   { extern const Arch arch; }
-namespace canary_qwen        { extern const Arch arch; }
-namespace whisper            { extern const Arch arch; }
-namespace moonshine          { extern const Arch arch; }
-namespace moonshine_streaming { extern const Arch arch; }
-namespace sensevoice         { extern const Arch arch; }
-namespace funasr_nano        { extern const Arch arch; }
-namespace gigaam             { extern const Arch arch; }
-namespace granite            { extern const Arch arch; }
-namespace granite_nar        { extern const Arch arch; }
-namespace medasr             { extern const Arch arch; }
+namespace parakeet {
+extern const Arch arch;
+}
+
+namespace cohere {
+extern const Arch arch;
+}
+
+namespace canary {
+extern const Arch arch;
+}
+
+namespace qwen3_asr {
+extern const Arch arch;
+}
+
+namespace voxtral {
+extern const Arch arch;
+}
+
+namespace voxtral_realtime {
+extern const Arch arch;
+}
+
+namespace canary_qwen {
+extern const Arch arch;
+}
+
+namespace whisper {
+extern const Arch arch;
+}
+
+namespace moonshine {
+extern const Arch arch;
+}
+
+namespace moonshine_streaming {
+extern const Arch arch;
+}
+
+namespace sensevoice {
+extern const Arch arch;
+}
+
+namespace funasr_nano {
+extern const Arch arch;
+}
+
+namespace gigaam {
+extern const Arch arch;
+}
+
+namespace granite {
+extern const Arch arch;
+}
+
+namespace granite_nar {
+extern const Arch arch;
+}
+
+namespace medasr {
+extern const Arch arch;
+}
 
 const Arch * find_arch(const char * name) {
     if (name == nullptr) {
@@ -34,21 +81,9 @@ const Arch * find_arch(const char * name) {
     }
 
     static const Arch * const k_archs[] = {
-        &parakeet::arch,
-        &cohere::arch,
-        &canary::arch,
-        &qwen3_asr::arch,
-        &voxtral::arch,
-        &voxtral_realtime::arch,
-        &canary_qwen::arch,
-        &whisper::arch,
-        &moonshine::arch,
-        &moonshine_streaming::arch,
-        &sensevoice::arch,
-        &funasr_nano::arch,
-        &gigaam::arch,
-        &granite::arch,
-        &granite_nar::arch,
+        &parakeet::arch,         &cohere::arch,      &canary::arch,  &qwen3_asr::arch, &voxtral::arch,
+        &voxtral_realtime::arch, &canary_qwen::arch, &whisper::arch, &moonshine::arch, &moonshine_streaming::arch,
+        &sensevoice::arch,       &funasr_nano::arch, &gigaam::arch,  &granite::arch,   &granite_nar::arch,
         &medasr::arch,
     };
     constexpr size_t k_n = sizeof(k_archs) / sizeof(k_archs[0]);
@@ -65,4 +100,4 @@ const Arch * find_arch(const char * name) {
     return nullptr;
 }
 
-} // namespace transcribe
+}  // namespace transcribe

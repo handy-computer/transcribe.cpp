@@ -29,9 +29,8 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "ggml.h"
+#include "weights.h"
 
 #include <vector>
 
@@ -58,20 +57,17 @@ struct EncoderTiming {
 // Apply the 3x stride-2 pad-1 kernel-3 downsampling formula three times.
 int32_t aftercnn_len(int32_t mel_len);
 
-EncoderTiming compute_encoder_timing(int32_t n_mel_frames,
-                                     const QwenAsrHParams & hp);
+EncoderTiming compute_encoder_timing(int32_t n_mel_frames, const QwenAsrHParams & hp);
 
 // Sinusoidal position table, row-major "[length, d_model]" layout.
 // Matches SinusoidsPositionEmbedding: the first d_model/2 channels are
 // sin(p * inv_ts[k]), the second d_model/2 are cos(p * inv_ts[k]).
-std::vector<float> build_sinusoid_pe(int32_t d_model, int32_t length,
-                                     double max_timescale = 10000.0);
+std::vector<float> build_sinusoid_pe(int32_t d_model, int32_t length, double max_timescale = 10000.0);
 
 // Additive attention bias [T_enc, T_enc]. All zeros — full bidirectional
 // attention over the pad-trimmed sequence (the eager baseline, not vLLM's
 // cu_seqlens block-diagonal pattern).
-std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t,
-                                         const QwenAsrHParams & hp);
+std::vector<float> build_cu_seqlens_mask(const EncoderTiming & t, const QwenAsrHParams & hp);
 
 struct EncoderDumps {
     ggml_tensor * mel_in         = nullptr;  // graph input
@@ -88,9 +84,9 @@ struct EncoderBuild {
     ggml_tensor * pos_emb_in = nullptr;  // [d_model, per_chunk_aftercnn]
     ggml_tensor * mask_in    = nullptr;  // [T_enc, T_enc]
     ggml_tensor * out        = nullptr;  // [output_dim, T_enc]
-    EncoderDumps  dumps {};
-    ggml_cgraph * graph      = nullptr;
-    EncoderTiming timing {};
+    EncoderDumps  dumps{};
+    ggml_cgraph * graph = nullptr;
+    EncoderTiming timing{};
 };
 
 EncoderBuild build_encoder_graph(ggml_context *         ctx,
@@ -110,10 +106,10 @@ struct EncoderBuildBatched {
     ggml_tensor * out        = nullptr;  // [output_dim, T_pad_max, B]
     ggml_cgraph * graph      = nullptr;
 
-    int n_batch       = 0;
-    int n_chunks_max  = 0;
-    int T_per_chunk   = 0;
-    int T_pad_max     = 0;  // n_chunks_max * per_chunk_aftercnn
+    int n_batch      = 0;
+    int n_chunks_max = 0;
+    int T_per_chunk  = 0;
+    int T_pad_max    = 0;  // n_chunks_max * per_chunk_aftercnn
 };
 
 // Build one encoder graph that processes B utterances in parallel on the
@@ -135,4 +131,4 @@ EncoderBuildBatched build_encoder_graph_batched(ggml_context *         ctx,
                                                 int                    n_batch,
                                                 bool                   use_flash = false);
 
-} // namespace transcribe::qwen3_asr
+}  // namespace transcribe::qwen3_asr

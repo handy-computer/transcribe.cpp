@@ -6,15 +6,14 @@
 
 #pragma once
 
+#include "ggml-backend.h"
+#include "ggml.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
-
-#include "ggml.h"
-#include "ggml-backend.h"
 
 #include <cstdint>
 #include <optional>
@@ -39,18 +38,18 @@ void apply_family_invariants(transcribe_model & model);
 // ---------------------------------------------------------------------------
 
 struct CanaryKvCache {
-    ggml_tensor * self_k = nullptr;
-    ggml_tensor * self_v = nullptr;
+    ggml_tensor * self_k  = nullptr;
+    ggml_tensor * self_v  = nullptr;
     ggml_tensor * cross_k = nullptr;
     ggml_tensor * cross_v = nullptr;
 
-    ggml_context * ctx = nullptr;
+    ggml_context *        ctx    = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
 
     int n_ctx = 0;
     int n     = 0;
     int head  = 0;
-    int T_enc = 0;   // T_enc_max for a batched cache (shorter utts padded)
+    int T_enc = 0;  // T_enc_max for a batched cache (shorter utts padded)
 
     // Utterance batch width. 1 for single-shot; > 1 for the offline batched
     // decoder. Self slab (layer, b) at (b + n_batch*layer)*n_ctx*hidden;
@@ -68,13 +67,13 @@ struct CanaryKvCache {
             ggml_free(ctx);
             ctx = nullptr;
         }
-        self_k = nullptr;
-        self_v = nullptr;
-        cross_k = nullptr;
-        cross_v = nullptr;
-        n = 0;
-        head = 0;
-        n_batch = 1;
+        self_k          = nullptr;
+        self_v          = nullptr;
+        cross_k         = nullptr;
+        cross_v         = nullptr;
+        n               = 0;
+        head            = 0;
+        n_batch         = 1;
         cross_populated = false;
     }
 };
@@ -99,21 +98,21 @@ bool kv_cache_init_batched(CanaryKvCache & cache,
                            ggml_type       kv_type);
 
 struct CanaryModel final : public transcribe_model {
-    Tokenizer       tok;
-    CanaryHParams   hparams;
-    CanaryWeights   weights;
-    ggml_context *  ctx_meta = nullptr;
+    Tokenizer      tok;
+    CanaryHParams  hparams;
+    CanaryWeights  weights;
+    ggml_context * ctx_meta = nullptr;
 
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
 
     // Fused BN parameters (same as parakeet/cohere).
-    ggml_context *          bn_fused_ctx    = nullptr;
-    ggml_backend_buffer_t   bn_fused_buffer = nullptr;
+    ggml_context *        bn_fused_ctx    = nullptr;
+    ggml_backend_buffer_t bn_fused_buffer = nullptr;
 
     // CPU-only F16 -> F32 promotion buffer for conformer 1x1 pointwise convs.
-    ggml_context *          conv_pw_f32_ctx    = nullptr;
-    ggml_backend_buffer_t   conv_pw_f32_buffer = nullptr;
+    ggml_context *        conv_pw_f32_ctx    = nullptr;
+    ggml_backend_buffer_t conv_pw_f32_buffer = nullptr;
 
     std::optional<transcribe::MelFrontend> mel;
 
@@ -124,9 +123,9 @@ struct CanaryModel final : public transcribe_model {
 };
 
 struct CanarySession final : public transcribe_session {
-    ggml_context *        compute_ctx = nullptr;
-    ggml_backend_sched_t  sched       = nullptr;
-    ggml_tensor *         encoder_out = nullptr;
+    ggml_context *       compute_ctx = nullptr;
+    ggml_backend_sched_t sched       = nullptr;
+    ggml_tensor *        encoder_out = nullptr;
 
     CanaryKvCache kv_cache;
 
@@ -134,7 +133,6 @@ struct CanarySession final : public transcribe_session {
     std::vector<float> pos_buf;
     std::vector<float> pos_div_term;
     std::vector<float> enc_host;
-
 
     // Per-stage flash-attention controls. ggml's Metal flash kernel lacks a
     // path for some encoder rel-pos MHSA dk values (96 for 180m-flash, 128
@@ -146,4 +144,4 @@ struct CanarySession final : public transcribe_session {
     ~CanarySession() override;
 };
 
-} // namespace transcribe::canary
+}  // namespace transcribe::canary

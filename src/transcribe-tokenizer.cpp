@@ -12,15 +12,14 @@
 
 #include "transcribe-tokenizer.h"
 
+#include "gguf.h"
+#include "transcribe-log.h"
 #include "transcribe-meta.h"
 #include "transcribe-unicode.h"
-#include "transcribe-log.h"
-
-#include "gguf.h"
 
 #include <algorithm>
-#include <cstring>
 #include <cstdio>
+#include <cstring>
 #include <queue>
 #include <string>
 #include <vector>
@@ -51,8 +50,7 @@ template <typename T>
 KvResult read_typed_array_kv(const gguf_context * ctx,
                              const char *         key,
                              gguf_type            expected_element_type,
-                             std::vector<T> &     out)
-{
+                             std::vector<T> &     out) {
     const int64_t key_id = gguf_find_key(ctx, key);
     if (key_id < 0) {
         return KvResult::Absent;
@@ -64,7 +62,7 @@ KvResult read_typed_array_kv(const gguf_context * ctx,
         return KvResult::BadType;
     }
 
-    const size_t n = gguf_get_arr_n(ctx, key_id);
+    const size_t   n = gguf_get_arr_n(ctx, key_id);
     std::vector<T> tmp(n);
     if (n > 0) {
         const void * data = gguf_get_arr_data(ctx, key_id);
@@ -77,7 +75,7 @@ KvResult read_typed_array_kv(const gguf_context * ctx,
     return KvResult::Ok;
 }
 
-} // namespace
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Vocabulary accessors.
@@ -124,8 +122,12 @@ bool Tokenizer::has_encoder() const {
     // GGUF "gpt2" with merges → HF byte-unicode + merge-rank encoder.
     // Decode-only raw-bytes (whisper.cpp .bin) → tiktoken-style
     // encoder using piece_to_id_ as the rank table.
-    if (model_ == "gpt2" && !merge_rank_.empty()) return true;
-    if (decode_mode_ == DecodeMode::RawBytes && !tokens_.empty()) return true;
+    if (model_ == "gpt2" && !merge_rank_.empty()) {
+        return true;
+    }
+    if (decode_mode_ == DecodeMode::RawBytes && !tokens_.empty()) {
+        return true;
+    }
     return false;
 }
 
@@ -147,22 +149,31 @@ namespace {
 // it (Vietnamese diacritics, all CJK, Cyrillic outside the base set,
 // etc.). Without this reassembly the model output contains literal
 // "<0xE1><0xBB><0x95>" instead of the intended Unicode character.
-std::string decode_sentencepiece(const std::vector<std::string> & tokens,
-                                 const int *                       ids,
-                                 int                               n)
-{
+std::string decode_sentencepiece(const std::vector<std::string> & tokens, const int * ids, int n) {
     auto hex_nibble = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
-        if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        }
+        if (c >= 'A' && c <= 'F') {
+            return 10 + (c - 'A');
+        }
+        if (c >= 'a' && c <= 'f') {
+            return 10 + (c - 'a');
+        }
         return -1;
     };
     auto try_byte_fallback = [&](const std::string & p) -> int {
-        if (p.size() != 6) return -1;
-        if (p[0] != '<' || p[1] != '0' || p[2] != 'x' || p[5] != '>') return -1;
+        if (p.size() != 6) {
+            return -1;
+        }
+        if (p[0] != '<' || p[1] != '0' || p[2] != 'x' || p[5] != '>') {
+            return -1;
+        }
         const int hi = hex_nibble(p[3]);
         const int lo = hex_nibble(p[4]);
-        if (hi < 0 || lo < 0) return -1;
+        if (hi < 0 || lo < 0) {
+            return -1;
+        }
         return (hi << 4) | lo;
     };
 
@@ -173,17 +184,15 @@ std::string decode_sentencepiece(const std::vector<std::string> & tokens,
         if (id < 0 || static_cast<size_t>(id) >= tokens.size()) {
             continue;
         }
-        const std::string & p = tokens[static_cast<size_t>(id)];
-        const int byte = try_byte_fallback(p);
+        const std::string & p    = tokens[static_cast<size_t>(id)];
+        const int           byte = try_byte_fallback(p);
         if (byte >= 0) {
             out.push_back(static_cast<char>(byte));
             continue;
         }
         size_t j = 0;
         while (j < p.size()) {
-            if (j + k_sp_space_len <= p.size() &&
-                std::memcmp(p.data() + j, k_sp_space, k_sp_space_len) == 0)
-            {
+            if (j + k_sp_space_len <= p.size() && std::memcmp(p.data() + j, k_sp_space, k_sp_space_len) == 0) {
                 out.push_back(' ');
                 j += k_sp_space_len;
             } else {
@@ -197,10 +206,7 @@ std::string decode_sentencepiece(const std::vector<std::string> & tokens,
 
 // Raw-byte decode: tokens already contain raw UTF-8 byte sequences
 // (legacy whisper.cpp .bin tiktoken-style vocab). Concatenate verbatim.
-std::string decode_raw_bytes(const std::vector<std::string> & tokens,
-                             const int *                       ids,
-                             int                               n)
-{
+std::string decode_raw_bytes(const std::vector<std::string> & tokens, const int * ids, int n) {
     std::string out;
     out.reserve(static_cast<size_t>(n) * 2);
     for (int i = 0; i < n; ++i) {
@@ -215,10 +221,7 @@ std::string decode_raw_bytes(const std::vector<std::string> & tokens,
 
 // GPT-2 byte-level decode: invert the bytes_to_unicode mapping per
 // codepoint to recover raw UTF-8 bytes.
-std::string decode_gpt2_bytes(const std::vector<std::string> & tokens,
-                              const int *                       ids,
-                              int                               n)
-{
+std::string decode_gpt2_bytes(const std::vector<std::string> & tokens, const int * ids, int n) {
     std::string out;
     out.reserve(static_cast<size_t>(n) * 2);
     std::string one_cpt;
@@ -229,10 +232,9 @@ std::string decode_gpt2_bytes(const std::vector<std::string> & tokens,
             continue;
         }
         const std::string & p = tokens[static_cast<size_t>(id)];
-        size_t j = 0;
+        size_t              j = 0;
         while (j < p.size()) {
-            const size_t w = std::min(p.size() - j,
-                                      unicode::len_utf8(p[j]));
+            const size_t w = std::min(p.size() - j, unicode::len_utf8(p[j]));
             one_cpt.assign(p.data() + j, w);
             const int byte = unicode::unicode_to_byte(one_cpt);
             if (byte >= 0) {
@@ -250,7 +252,7 @@ std::string decode_gpt2_bytes(const std::vector<std::string> & tokens,
     return out;
 }
 
-} // namespace
+}  // namespace
 
 std::string Tokenizer::decode(const int * ids, int n) const {
     if (ids == nullptr || n <= 0) {
@@ -293,20 +295,22 @@ struct Bigram {
     int         left  = -1;
     int         right = -1;
     std::string text;
-    int         rank  = 0;
-    size_t      size  = 0;
+    int         rank = 0;
+    size_t      size = 0;
 };
 
 struct BigramGreater {
     bool operator()(const Bigram & a, const Bigram & b) const {
         // Lower rank wins; on ties, lower `left` index wins (same
         // tiebreaker as llama.cpp's comparator).
-        if (a.rank != b.rank) return a.rank > b.rank;
+        if (a.rank != b.rank) {
+            return a.rank > b.rank;
+        }
         return a.left > b.left;
     }
 };
 
-} // namespace
+}  // namespace
 
 // Tiktoken-style encoder for raw-bytes vocabularies (whisper.cpp .bin):
 //   - pretokens are pure UTF-8 byte sequences (no GPT-2 byte-unicode remap),
@@ -323,12 +327,10 @@ struct BigramGreater {
 // dispatch into it cleanly.
 namespace {
 
-transcribe_status encode_tiktoken_raw_bytes(
-    const std::string &                                     text,
-    const std::string &                                     pre,
-    const std::unordered_map<std::string, int32_t> &        piece_to_id,
-    std::vector<int32_t> &                                  out_ids)
-{
+transcribe_status encode_tiktoken_raw_bytes(const std::string &                              text,
+                                            const std::string &                              pre,
+                                            const std::unordered_map<std::string, int32_t> & piece_to_id,
+                                            std::vector<int32_t> &                           out_ids) {
     out_ids.clear();
     if (text.empty()) {
         return TRANSCRIBE_OK;
@@ -342,15 +344,13 @@ transcribe_status encode_tiktoken_raw_bytes(
         // raw bytes without a regex would produce a different
         // tokenization. Reject loudly.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "tokenizer.encode: pretokenizer \"%s\" not "
-                     "supported with raw-bytes vocab",
-                     pre.c_str());
+                "tokenizer.encode: pretokenizer \"%s\" not "
+                "supported with raw-bytes vocab",
+                pre.c_str());
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
 
-    auto rank_of_concat = [&](const std::string & left,
-                              const std::string & right) -> int
-    {
+    auto rank_of_concat = [&](const std::string & left, const std::string & right) -> int {
         std::string key;
         key.reserve(left.size() + right.size());
         key.append(left);
@@ -364,11 +364,15 @@ transcribe_status encode_tiktoken_raw_bytes(
     std::priority_queue<Bigram, std::vector<Bigram>, BigramGreater> queue;
 
     auto push_bigram = [&](int l, int r) {
-        if (l < 0 || r < 0) return;
-        const std::string left (symbols[l].text, symbols[l].n);
+        if (l < 0 || r < 0) {
+            return;
+        }
+        const std::string left(symbols[l].text, symbols[l].n);
         const std::string right(symbols[r].text, symbols[r].n);
-        const int rank = rank_of_concat(left, right);
-        if (rank < 0) return;
+        const int         rank = rank_of_concat(left, right);
+        if (rank < 0) {
+            return;
+        }
         Bigram bg;
         bg.left  = l;
         bg.right = r;
@@ -380,7 +384,9 @@ transcribe_status encode_tiktoken_raw_bytes(
 
     out_ids.reserve(words.size() * 2);
     for (const auto & word : words) {
-        while (!queue.empty()) queue.pop();
+        while (!queue.empty()) {
+            queue.pop();
+        }
         symbols.clear();
 
         // Seed: one symbol per BYTE (not codepoint). Tiktoken-style
@@ -391,9 +397,7 @@ transcribe_status encode_tiktoken_raw_bytes(
             s.text = word.data() + off;
             s.n    = 1;
             s.prev = static_cast<int>(off) - 1;
-            s.next = (off + 1 == word.size())
-                         ? -1
-                         : static_cast<int>(off) + 1;
+            s.next = (off + 1 == word.size()) ? -1 : static_cast<int>(off) + 1;
             symbols.push_back(s);
         }
 
@@ -406,26 +410,36 @@ transcribe_status encode_tiktoken_raw_bytes(
             queue.pop();
             Symbol & left  = symbols[bg.left];
             Symbol & right = symbols[bg.right];
-            if (left.n == 0 || right.n == 0) continue;
-            if (left.n + right.n != bg.size) continue;
-            if (std::memcmp(left.text,  bg.text.data(),           left.n)  != 0) continue;
-            if (std::memcmp(right.text, bg.text.data() + left.n,  right.n) != 0) continue;
+            if (left.n == 0 || right.n == 0) {
+                continue;
+            }
+            if (left.n + right.n != bg.size) {
+                continue;
+            }
+            if (std::memcmp(left.text, bg.text.data(), left.n) != 0) {
+                continue;
+            }
+            if (std::memcmp(right.text, bg.text.data() + left.n, right.n) != 0) {
+                continue;
+            }
 
             left.n += right.n;
-            right.n = 0;
+            right.n   = 0;
             left.next = right.next;
             if (right.next >= 0) {
                 symbols[right.next].prev = bg.left;
             }
             push_bigram(left.prev, bg.left);
-            push_bigram(bg.left,   left.next);
+            push_bigram(bg.left, left.next);
         }
 
         for (int i = 0; i != -1; i = symbols[i].next) {
             const Symbol & s = symbols[i];
-            if (s.n == 0) continue;
+            if (s.n == 0) {
+                continue;
+            }
             const std::string piece(s.text, s.n);
-            const auto it = piece_to_id.find(piece);
+            const auto        it = piece_to_id.find(piece);
             if (it != piece_to_id.end()) {
                 out_ids.push_back(it->second);
                 continue;
@@ -435,12 +449,12 @@ transcribe_status encode_tiktoken_raw_bytes(
             // structurally broken.
             for (size_t j = 0; j < piece.size(); ++j) {
                 const std::string sub(piece, j, 1);
-                const auto it2 = piece_to_id.find(sub);
+                const auto        it2 = piece_to_id.find(sub);
                 if (it2 == piece_to_id.end()) {
                     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                 "tokenizer.encode: byte 0x%02X not in "
-                                 "vocab",
-                                 static_cast<unsigned>(static_cast<unsigned char>(piece[j])));
+                            "tokenizer.encode: byte 0x%02X not in "
+                            "vocab",
+                            static_cast<unsigned>(static_cast<unsigned char>(piece[j])));
                     return TRANSCRIBE_ERR_GGUF;
                 }
                 out_ids.push_back(it2->second);
@@ -450,11 +464,9 @@ transcribe_status encode_tiktoken_raw_bytes(
     return TRANSCRIBE_OK;
 }
 
-} // namespace
+}  // namespace
 
-transcribe_status Tokenizer::encode(const std::string &    text,
-                                    std::vector<int32_t> & out_ids) const
-{
+transcribe_status Tokenizer::encode(const std::string & text, std::vector<int32_t> & out_ids) const {
     out_ids.clear();
 
     // Raw-bytes mode: tiktoken-style encoder, no merge table needed.
@@ -477,8 +489,8 @@ transcribe_status Tokenizer::encode(const std::string &    text,
         // is never what a caller wants. Surface the configuration
         // gap instead.
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "tokenizer.encode: \"gpt2\" tokenizer loaded without "
-                     "tokenizer.ggml.merges; encode unavailable");
+                "tokenizer.encode: \"gpt2\" tokenizer loaded without "
+                "tokenizer.ggml.merges; encode unavailable");
         return TRANSCRIBE_ERR_GGUF;
     }
     if (text.empty()) {
@@ -498,8 +510,9 @@ transcribe_status Tokenizer::encode(const std::string &    text,
     } else {
         if (pre_ != "qwen2" && !pre_.empty()) {
             log_msg(TRANSCRIBE_LOG_LEVEL_WARN,
-                         "tokenizer.encode: unknown tokenizer.ggml.pre "
-                         "\"%s\"; falling back to qwen2", pre_.c_str());
+                    "tokenizer.encode: unknown tokenizer.ggml.pre "
+                    "\"%s\"; falling back to qwen2",
+                    pre_.c_str());
         }
         words = unicode::pretokenize_qwen2(text);
     }
@@ -511,9 +524,7 @@ transcribe_status Tokenizer::encode(const std::string &    text,
     symbols.reserve(64);
     std::priority_queue<Bigram, std::vector<Bigram>, BigramGreater> queue;
 
-    auto rank_of = [&](const std::string & left,
-                       const std::string & right) -> int
-    {
+    auto rank_of = [&](const std::string & left, const std::string & right) -> int {
         std::string key;
         key.reserve(left.size() + 1 + right.size());
         key.append(left);
@@ -524,11 +535,15 @@ transcribe_status Tokenizer::encode(const std::string &    text,
     };
 
     auto push_bigram = [&](int l, int r) {
-        if (l < 0 || r < 0) return;
-        const std::string left (symbols[l].text, symbols[l].n);
+        if (l < 0 || r < 0) {
+            return;
+        }
+        const std::string left(symbols[l].text, symbols[l].n);
         const std::string right(symbols[r].text, symbols[r].n);
-        const int rank = rank_of(left, right);
-        if (rank < 0) return;
+        const int         rank = rank_of(left, right);
+        if (rank < 0) {
+            return;
+        }
         Bigram bg;
         bg.left  = l;
         bg.right = r;
@@ -540,18 +555,19 @@ transcribe_status Tokenizer::encode(const std::string &    text,
 
     for (const auto & word : words) {
         // Drain any stale entries from a previous word.
-        while (!queue.empty()) queue.pop();
+        while (!queue.empty()) {
+            queue.pop();
+        }
         symbols.clear();
 
         // Seed: one symbol per UTF-8 codepoint of the byte-encoded
         // word. Codepoint-level chunking matches the Python reference
         // (HF tokenizers iterate codepoints before merging).
-        int index = 0;
+        int    index  = 0;
         size_t offset = 0;
         while (offset < word.size()) {
-            const size_t clen = std::min(word.size() - offset,
-                                         unicode::len_utf8(word[offset]));
-            Symbol s;
+            const size_t clen = std::min(word.size() - offset, unicode::len_utf8(word[offset]));
+            Symbol       s;
             s.text = word.data() + offset;
             s.n    = clen;
             s.prev = index - 1;
@@ -571,18 +587,26 @@ transcribe_status Tokenizer::encode(const std::string &    text,
 
             Symbol & left  = symbols[bg.left];
             Symbol & right = symbols[bg.right];
-            if (left.n == 0 || right.n == 0) continue;
+            if (left.n == 0 || right.n == 0) {
+                continue;
+            }
 
             // Stale-entry check: if either side has been merged into
             // something else since this bigram was pushed, the
             // concatenation won't match `bg.text` and we drop it.
-            if (left.n + right.n != bg.size) continue;
-            if (std::memcmp(left.text,  bg.text.data(),            left.n)  != 0) continue;
-            if (std::memcmp(right.text, bg.text.data() + left.n,   right.n) != 0) continue;
+            if (left.n + right.n != bg.size) {
+                continue;
+            }
+            if (std::memcmp(left.text, bg.text.data(), left.n) != 0) {
+                continue;
+            }
+            if (std::memcmp(right.text, bg.text.data() + left.n, right.n) != 0) {
+                continue;
+            }
 
             // Merge right into left; unlink right.
             left.n += right.n;
-            right.n = 0;
+            right.n   = 0;
             left.next = right.next;
             if (right.next >= 0) {
                 symbols[right.next].prev = bg.left;
@@ -590,14 +614,16 @@ transcribe_status Tokenizer::encode(const std::string &    text,
 
             // Enqueue new neighbor bigrams around the enlarged left.
             push_bigram(left.prev, bg.left);
-            push_bigram(bg.left,   left.next);
+            push_bigram(bg.left, left.next);
         }
 
         for (int i = 0; i != -1; i = symbols[i].next) {
             const Symbol & s = symbols[i];
-            if (s.n == 0) continue;
+            if (s.n == 0) {
+                continue;
+            }
             const std::string piece(s.text, s.n);
-            const auto it = piece_to_id_.find(piece);
+            const auto        it = piece_to_id_.find(piece);
             if (it != piece_to_id_.end()) {
                 out_ids.push_back(it->second);
                 continue;
@@ -606,15 +632,15 @@ transcribe_status Tokenizer::encode(const std::string &    text,
             // single-byte tokens. Each byte of the byte-encoded
             // pretoken is itself a one-codepoint piece that the
             // vocab carries; the converter guarantees this.
-            for (size_t j = 0; j < piece.size(); /*++j*/ ) {
-                const size_t clen = std::min(piece.size() - j,
-                                             unicode::len_utf8(piece[j]));
+            for (size_t j = 0; j < piece.size(); /*++j*/) {
+                const size_t      clen = std::min(piece.size() - j, unicode::len_utf8(piece[j]));
                 const std::string sub(piece, j, clen);
-                const auto it2 = piece_to_id_.find(sub);
+                const auto        it2 = piece_to_id_.find(sub);
                 if (it2 == piece_to_id_.end()) {
                     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                 "tokenizer.encode: byte-fallback piece "
-                                 "not in vocab (\"%s\")", sub.c_str());
+                            "tokenizer.encode: byte-fallback piece "
+                            "not in vocab (\"%s\")",
+                            sub.c_str());
                     return TRANSCRIBE_ERR_GGUF;
                 }
                 out_ids.push_back(it2->second);
@@ -654,9 +680,7 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
     // surface as NOT_IMPLEMENTED so the caller can tell "the file is
     // fine, the library is just not ready for this tokenizer" from
     // "the file is broken."
-    if (model_ != "unigram" && model_ != "bpe" && model_ != "gpt2" &&
-        model_ != "char")
-    {
+    if (model_ != "unigram" && model_ != "bpe" && model_ != "gpt2" && model_ != "char") {
         return TRANSCRIBE_ERR_NOT_IMPLEMENTED;
     }
     if (model_ == "gpt2") {
@@ -711,9 +735,7 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
     // Optional: scores. Absent is fine (we clear and move on); BadType
     // is a converter bug and propagates as ERR_GGUF. The length-must-
     // match contract on Ok is a separate, narrower check.
-    switch (read_typed_array_kv<float>(gguf, "tokenizer.ggml.scores",
-                                       GGUF_TYPE_FLOAT32, scores_))
-    {
+    switch (read_typed_array_kv<float>(gguf, "tokenizer.ggml.scores", GGUF_TYPE_FLOAT32, scores_)) {
         case KvResult::Absent:
             scores_.clear();
             break;
@@ -727,9 +749,7 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
     }
 
     // Optional: token_type.
-    switch (read_typed_array_kv<int32_t>(gguf, "tokenizer.ggml.token_type",
-                                         GGUF_TYPE_INT32, token_type_))
-    {
+    switch (read_typed_array_kv<int32_t>(gguf, "tokenizer.ggml.token_type", GGUF_TYPE_INT32, token_type_)) {
         case KvResult::Absent:
             token_type_.clear();
             break;
@@ -762,11 +782,12 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
                 // position 1 so a merge whose left side is a single
                 // space (" ") still parses correctly — matches
                 // llama.cpp's bpe_ranks loader.
-                const size_t sp = line.find(' ', 1);
+                const size_t        sp   = line.find(' ', 1);
                 if (sp == std::string::npos) {
                     log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                                 "tokenizer.load: merge %zu has no space "
-                                 "separator: \"%s\"", i, line.c_str());
+                            "tokenizer.load: merge %zu has no space "
+                            "separator: \"%s\"",
+                            i, line.c_str());
                     return TRANSCRIBE_ERR_GGUF;
                 }
                 std::string key;
@@ -782,21 +803,28 @@ transcribe_status Tokenizer::load(const gguf_context * gguf) {
     // Optional special token ids.
     auto read_special = [&](const char * key, int & field) -> transcribe_status {
         switch (read_token_id_kv(gguf, key, field)) {
-            case KvResult::Absent:  return TRANSCRIBE_OK;
-            case KvResult::Ok:      return TRANSCRIBE_OK;
-            case KvResult::BadType: return TRANSCRIBE_ERR_GGUF;
+            case KvResult::Absent:
+                return TRANSCRIBE_OK;
+            case KvResult::Ok:
+                return TRANSCRIBE_OK;
+            case KvResult::BadType:
+                return TRANSCRIBE_ERR_GGUF;
         }
         return TRANSCRIBE_ERR_GGUF;
     };
 
-    if (auto st = read_special("tokenizer.ggml.unknown_token_id", unk_id_);
-        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_special("tokenizer.ggml.bos_token_id", bos_id_);
-        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_special("tokenizer.ggml.eos_token_id", eos_id_);
-        st != TRANSCRIBE_OK) return st;
-    if (auto st = read_special("tokenizer.ggml.blank_token_id", blank_id_);
-        st != TRANSCRIBE_OK) return st;
+    if (auto st = read_special("tokenizer.ggml.unknown_token_id", unk_id_); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_special("tokenizer.ggml.bos_token_id", bos_id_); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_special("tokenizer.ggml.eos_token_id", eos_id_); st != TRANSCRIBE_OK) {
+        return st;
+    }
+    if (auto st = read_special("tokenizer.ggml.blank_token_id", blank_id_); st != TRANSCRIBE_OK) {
+        return st;
+    }
 
     return TRANSCRIBE_OK;
 }
@@ -813,11 +841,9 @@ namespace {
 // the RawBytes loader (whisper.cpp .bin) gets a tiktoken-style
 // encoder via piece_to_id_ ranks; the Gpt2ByteUnicode decode-only
 // loader (no merges populated) reports has_encoder() == false.
-transcribe_status install_decode_only_vocab(
-    std::vector<std::string> &                  tokens_dst,
-    std::unordered_map<std::string, int32_t> &  piece_to_id_dst,
-    std::vector<std::string>                    tokens_src)
-{
+transcribe_status install_decode_only_vocab(std::vector<std::string> &                 tokens_dst,
+                                            std::unordered_map<std::string, int32_t> & piece_to_id_dst,
+                                            std::vector<std::string>                   tokens_src) {
     if (tokens_src.empty()) {
         return TRANSCRIBE_ERR_INVALID_ARG;
     }
@@ -830,15 +856,13 @@ transcribe_status install_decode_only_vocab(
     return TRANSCRIBE_OK;
 }
 
-} // namespace
+}  // namespace
 
-transcribe_status Tokenizer::load_decode_only_gpt2(
-    std::vector<std::string>   tokens,
-    const DecodeOnlySpecials & specials)
-{
-    if (auto st = install_decode_only_vocab(tokens_, piece_to_id_,
-                                            std::move(tokens));
-        st != TRANSCRIBE_OK) return st;
+transcribe_status Tokenizer::load_decode_only_gpt2(std::vector<std::string>   tokens,
+                                                   const DecodeOnlySpecials & specials) {
+    if (auto st = install_decode_only_vocab(tokens_, piece_to_id_, std::move(tokens)); st != TRANSCRIBE_OK) {
+        return st;
+    }
 
     decode_mode_ = DecodeMode::Gpt2ByteUnicode;
     model_.clear();
@@ -855,13 +879,11 @@ transcribe_status Tokenizer::load_decode_only_gpt2(
     return TRANSCRIBE_OK;
 }
 
-transcribe_status Tokenizer::load_decode_only_raw_bytes(
-    std::vector<std::string>   tokens,
-    const DecodeOnlySpecials & specials)
-{
-    if (auto st = install_decode_only_vocab(tokens_, piece_to_id_,
-                                            std::move(tokens));
-        st != TRANSCRIBE_OK) return st;
+transcribe_status Tokenizer::load_decode_only_raw_bytes(std::vector<std::string>   tokens,
+                                                        const DecodeOnlySpecials & specials) {
+    if (auto st = install_decode_only_vocab(tokens_, piece_to_id_, std::move(tokens)); st != TRANSCRIBE_OK) {
+        return st;
+    }
 
     decode_mode_ = DecodeMode::RawBytes;
     model_.clear();
@@ -878,4 +900,4 @@ transcribe_status Tokenizer::load_decode_only_raw_bytes(
     return TRANSCRIBE_OK;
 }
 
-} // namespace transcribe
+}  // namespace transcribe

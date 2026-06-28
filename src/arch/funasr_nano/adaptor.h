@@ -22,23 +22,23 @@ struct FunAsrNanoHParams;
 struct FunAsrNanoWeights;
 
 struct AdaptorDumps {
-    ggml_tensor * linear1_out  = nullptr;  // post-linear, pre-ReLU
-    ggml_tensor * linear2_out  = nullptr;
-    ggml_tensor * block0_out   = nullptr;
-    ggml_tensor * adaptor_out  = nullptr;
+    ggml_tensor * linear1_out = nullptr;  // post-linear, pre-ReLU
+    ggml_tensor * linear2_out = nullptr;
+    ggml_tensor * block0_out  = nullptr;
+    ggml_tensor * adaptor_out = nullptr;
 };
 
 struct AdaptorBuild {
-    ggml_tensor * enc_in  = nullptr;   // [encoder_dim, T_lfr] f32
-    ggml_tensor * out     = nullptr;   // [llm_dim, T_lfr]
-    AdaptorDumps  dumps {};
-    ggml_cgraph * graph   = nullptr;
+    ggml_tensor * enc_in = nullptr;  // [encoder_dim, T_lfr] f32
+    ggml_tensor * out    = nullptr;  // [llm_dim, T_lfr]
+    AdaptorDumps  dumps{};
+    ggml_cgraph * graph = nullptr;
 };
 
-AdaptorBuild build_adaptor_graph(ggml_context *             compute_ctx,
-                                 const FunAsrNanoWeights &  weights,
-                                 const FunAsrNanoHParams &  hp,
-                                 int                        T_in);
+AdaptorBuild build_adaptor_graph(ggml_context *            compute_ctx,
+                                 const FunAsrNanoWeights & weights,
+                                 const FunAsrNanoHParams & hp,
+                                 int                       T_in);
 
 // Compute the LLM-injected slice length for use_low_frame_rate=true.
 // Mirrors FunASR's data_load_speech formula:
@@ -51,4 +51,4 @@ AdaptorBuild build_adaptor_graph(ggml_context *             compute_ctx,
 // equals the input frame count.
 int compute_fake_token_len(int T_lfr, bool use_low_frame_rate);
 
-} // namespace transcribe::funasr_nano
+}  // namespace transcribe::funasr_nano

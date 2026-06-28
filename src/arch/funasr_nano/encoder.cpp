@@ -11,14 +11,12 @@
 
 #include "encoder.h"
 
-#include "weights.h"
-
 #include "conformer/conformer.h"
+#include "ggml.h"
 #include "sanm/sanm.h"
 #include "transcribe-debug.h"
 #include "transcribe-log.h"
-
-#include "ggml.h"
+#include "weights.h"
 
 #include <cmath>
 #include <cstdio>
@@ -56,19 +54,18 @@ void mark_dump(ggml_tensor *& slot, ggml_tensor * t, const char * name) {
     slot = t;
 }
 
-} // namespace
+}  // namespace
 
-EncoderBuild build_encoder_graph(ggml_context *             ctx,
-                                 const FunAsrNanoWeights &  w,
-                                 const FunAsrNanoHParams &  hp,
-                                 int                        n_lfr_frames)
-{
-    EncoderBuild eb {};
+EncoderBuild build_encoder_graph(ggml_context *            ctx,
+                                 const FunAsrNanoWeights & w,
+                                 const FunAsrNanoHParams & hp,
+                                 int                       n_lfr_frames) {
+    EncoderBuild eb{};
     if (ctx == nullptr || n_lfr_frames <= 0) {
         log_msg(TRANSCRIBE_LOG_LEVEL_ERROR,
-                     "funasr_nano encoder: invalid arg "
-                     "(ctx=%p, n_lfr_frames=%d)",
-                     static_cast<void *>(ctx), n_lfr_frames);
+                "funasr_nano encoder: invalid arg "
+                "(ctx=%p, n_lfr_frames=%d)",
+                static_cast<void *>(ctx), n_lfr_frames);
         return eb;
     }
 
@@ -76,7 +73,7 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
     const int d_model = hp.enc_d_model;
     const int T       = n_lfr_frames;
 
-    const sanm::SanmBlockParams block_params {
+    const sanm::SanmBlockParams block_params{
         /*n_heads=*/hp.enc_n_heads,
         /*d_model=*/d_model,
         /*kernel=*/hp.enc_kernel,
@@ -92,9 +89,9 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
     ggml_set_input(eb.pe_in);
 
     // Embedding scale + PE add.
-    const float embed_scale = std::sqrt(static_cast<float>(d_model));
-    ggml_tensor * x = ggml_scale(ctx, eb.frontend_in, embed_scale);
-    x = ggml_add(ctx, x, eb.pe_in);
+    const float   embed_scale = std::sqrt(static_cast<float>(d_model));
+    ggml_tensor * x           = ggml_scale(ctx, eb.frontend_in, embed_scale);
+    x                         = ggml_add(ctx, x, eb.pe_in);
     mark_dump(eb.dumps.embed_out, x, "enc.embed.out");
 
     // encoders0[0] (560 → 512 projection).
@@ -106,8 +103,7 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
         const int last_idx = n_main - 1;
         const int mid_idx  = n_main / 2;
         for (int i = 0; i < n_main; ++i) {
-            x = sanm::sanm_block_residual(
-                ctx, x, to_sanm_view(w.encoders[i]), block_params);
+            x = sanm::sanm_block_residual(ctx, x, to_sanm_view(w.encoders[i]), block_params);
             if (i == 0) {
                 mark_dump(eb.dumps.encoders_first, x, "enc.encoders.0.out");
             } else if (i == mid_idx) {
@@ -130,8 +126,7 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
         const int last_idx = n_tp - 1;
         const int mid_idx  = n_tp / 2;
         for (int i = 0; i < n_tp; ++i) {
-            x = sanm::sanm_block_residual(
-                ctx, x, to_sanm_view(w.tp_encoders[i]), block_params);
+            x = sanm::sanm_block_residual(ctx, x, to_sanm_view(w.tp_encoders[i]), block_params);
             if (i == 0) {
                 mark_dump(eb.dumps.tp_encoders_first, x, "enc.tp_encoders.0.out");
             } else if (i == mid_idx) {
@@ -161,4 +156,4 @@ EncoderBuild build_encoder_graph(ggml_context *             ctx,
     return eb;
 }
 
-} // namespace transcribe::funasr_nano
+}  // namespace transcribe::funasr_nano

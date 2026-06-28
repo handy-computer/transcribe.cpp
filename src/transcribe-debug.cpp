@@ -8,10 +8,9 @@
 
 #include "transcribe-debug.h"
 
-#include "transcribe-env.h"
-
-#include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml.h"
+#include "transcribe-env.h"
 
 #include <cmath>
 #include <cstdarg>
@@ -42,7 +41,9 @@ std::string g_dump_dir;
 std::vector<std::string> g_name_prefix_stack;
 
 std::string make_prefixed_name(const char * name) {
-    if (g_name_prefix_stack.empty()) return std::string(name);
+    if (g_name_prefix_stack.empty()) {
+        return std::string(name);
+    }
     return g_name_prefix_stack.back() + name;
 }
 
@@ -79,7 +80,7 @@ bool name_is_safe(const char * name) {
 //   ggml ne = [4, 4, 4, 4]    -> shape = [4, 4, 4, 4]
 std::vector<int64_t> row_major_shape(const ggml_tensor * t) {
     std::vector<int64_t> out;
-    int last = GGML_MAX_DIMS - 1;
+    int                  last = GGML_MAX_DIMS - 1;
     while (last > 0 && t->ne[last] == 1) {
         --last;
     }
@@ -109,7 +110,7 @@ void warn(const char * fmt, ...) {
     va_end(ap);
 }
 
-} // namespace
+}  // namespace
 
 bool init() {
     if (g_initialized) {
@@ -124,9 +125,7 @@ bool init() {
     }
     g_dump_dir = env;
     g_enabled  = true;
-    std::fprintf(stderr,
-                 "transcribe-debug: dumping tensors to %s\n",
-                 g_dump_dir.c_str());
+    std::fprintf(stderr, "transcribe-debug: dumping tensors to %s\n", g_dump_dir.c_str());
     return true;
 }
 
@@ -163,13 +162,19 @@ const char * dump_sub_blocks_spec() {
 }
 
 void push_name_prefix(const char * prefix) {
-    if (!enabled() || prefix == nullptr) return;
+    if (!enabled() || prefix == nullptr) {
+        return;
+    }
     g_name_prefix_stack.emplace_back(prefix);
 }
 
 void pop_name_prefix() {
-    if (!enabled()) return;
-    if (!g_name_prefix_stack.empty()) g_name_prefix_stack.pop_back();
+    if (!enabled()) {
+        return;
+    }
+    if (!g_name_prefix_stack.empty()) {
+        g_name_prefix_stack.pop_back();
+    }
 }
 
 void mark_tensor_for_dump(ggml_tensor * tensor) {
@@ -178,10 +183,7 @@ void mark_tensor_for_dump(ggml_tensor * tensor) {
     }
 }
 
-void dump_tensor(const char *        name,
-                 const ggml_tensor * tensor,
-                 const char *        stage)
-{
+void dump_tensor(const char * name, const ggml_tensor * tensor, const char * stage) {
     if (!enabled()) {
         return;
     }
@@ -190,13 +192,11 @@ void dump_tensor(const char *        name,
         return;
     }
     if (!name_is_safe(name)) {
-        warn("dump_tensor: rejecting unsafe name \"%s\"",
-             name ? name : "(null)");
+        warn("dump_tensor: rejecting unsafe name \"%s\"", name ? name : "(null)");
         return;
     }
     if (tensor->type != GGML_TYPE_F32) {
-        warn("dump_tensor(\"%s\"): only fp32 supported, got %s",
-             name, ggml_type_name(tensor->type));
+        warn("dump_tensor(\"%s\"): only fp32 supported, got %s", name, ggml_type_name(tensor->type));
         return;
     }
 
@@ -213,8 +213,7 @@ void dump_tensor(const char *        name,
         return;
     }
     if (nbytes % sizeof(float) != 0) {
-        warn("dump_tensor(\"%s\"): nbytes (%zu) not a multiple of sizeof(float)",
-             name, nbytes);
+        warn("dump_tensor(\"%s\"): nbytes (%zu) not a multiple of sizeof(float)", name, nbytes);
         return;
     }
 
@@ -225,8 +224,7 @@ void dump_tensor(const char *        name,
     try {
         host.resize(nbytes);
     } catch (const std::bad_alloc &) {
-        warn("dump_tensor(\"%s\"): malloc failed for %zu bytes",
-             name, nbytes);
+        warn("dump_tensor(\"%s\"): malloc failed for %zu bytes", name, nbytes);
         return;
     }
     ggml_backend_tensor_get(tensor, host.data(), 0, nbytes);
@@ -235,15 +233,19 @@ void dump_tensor(const char *        name,
     // aids — the actual numerical comparison is byte-level via the
     // .f32 file. Computed in fp64 to avoid catastrophic cancellation
     // on the mean.
-    const size_t n_elem = nbytes / sizeof(float);
-    const float * fdata = reinterpret_cast<const float *>(host.data());
-    float vmin = std::numeric_limits<float>::infinity();
-    float vmax = -std::numeric_limits<float>::infinity();
-    double vsum = 0.0;
+    const size_t  n_elem = nbytes / sizeof(float);
+    const float * fdata  = reinterpret_cast<const float *>(host.data());
+    float         vmin   = std::numeric_limits<float>::infinity();
+    float         vmax   = -std::numeric_limits<float>::infinity();
+    double        vsum   = 0.0;
     for (size_t i = 0; i < n_elem; ++i) {
         const float v = fdata[i];
-        if (v < vmin) vmin = v;
-        if (v > vmax) vmax = v;
+        if (v < vmin) {
+            vmin = v;
+        }
+        if (v > vmax) {
+            vmax = v;
+        }
         vsum += static_cast<double>(v);
     }
     const double vmean = vsum / static_cast<double>(n_elem);
@@ -261,15 +263,12 @@ void dump_tensor(const char *        name,
     {
         std::ofstream f32(f32_path, std::ios::binary | std::ios::trunc);
         if (!f32) {
-            warn("dump_tensor(\"%s\"): cannot open %s for write",
-                 name, f32_path.c_str());
+            warn("dump_tensor(\"%s\"): cannot open %s for write", name, f32_path.c_str());
             return;
         }
-        f32.write(reinterpret_cast<const char *>(host.data()),
-                  static_cast<std::streamsize>(nbytes));
+        f32.write(reinterpret_cast<const char *>(host.data()), static_cast<std::streamsize>(nbytes));
         if (!f32) {
-            warn("dump_tensor(\"%s\"): write failed for %s",
-                 name, f32_path.c_str());
+            warn("dump_tensor(\"%s\"): write failed for %s", name, f32_path.c_str());
             return;
         }
     }
@@ -279,8 +278,7 @@ void dump_tensor(const char *        name,
     {
         std::ofstream js(json_path, std::ios::trunc);
         if (!js) {
-            warn("dump_tensor(\"%s\"): cannot open %s for write",
-                 name, json_path.c_str());
+            warn("dump_tensor(\"%s\"): cannot open %s for write", name, json_path.c_str());
             return;
         }
         const std::vector<int64_t> shape = row_major_shape(tensor);
@@ -292,7 +290,9 @@ void dump_tensor(const char *        name,
         }
         js << "  \"shape\": [";
         for (size_t i = 0; i < shape.size(); ++i) {
-            if (i) js << ", ";
+            if (i) {
+                js << ", ";
+            }
             js << shape[i];
         }
         js << "],\n";
@@ -302,14 +302,19 @@ void dump_tensor(const char *        name,
         // value round-trips visibly. The .f32 file is the
         // bit-precise source of truth; these are for humans.
         js.precision(9);
-        js << "  \"min\": ";  write_json_float(js, vmin);  js << ",\n";
-        js << "  \"max\": ";  write_json_float(js, vmax);  js << ",\n";
-        js << "  \"mean\": "; write_json_float(js, vmean); js << ",\n";
+        js << "  \"min\": ";
+        write_json_float(js, vmin);
+        js << ",\n";
+        js << "  \"max\": ";
+        write_json_float(js, vmax);
+        js << ",\n";
+        js << "  \"mean\": ";
+        write_json_float(js, vmean);
+        js << ",\n";
         js << "  \"source\": { \"kind\": \"cpp\" }\n";
         js << "}\n";
         if (!js) {
-            warn("dump_tensor(\"%s\"): write failed for %s",
-                 name, json_path.c_str());
+            warn("dump_tensor(\"%s\"): write failed for %s", name, json_path.c_str());
             return;
         }
     }
@@ -320,19 +325,16 @@ void dump_host_f32(const char *      name,
                    long long         n_elem,
                    const long long * shape,
                    int               n_dims,
-                   const char *      stage)
-{
+                   const char *      stage) {
     if (!enabled()) {
         return;
     }
     if (data == nullptr || n_elem <= 0) {
-        warn("dump_host_f32(\"%s\"): null data or zero elements",
-             name ? name : "(null)");
+        warn("dump_host_f32(\"%s\"): null data or zero elements", name ? name : "(null)");
         return;
     }
     if (!name_is_safe(name)) {
-        warn("dump_host_f32: rejecting unsafe name \"%s\"",
-             name ? name : "(null)");
+        warn("dump_host_f32: rejecting unsafe name \"%s\"", name ? name : "(null)");
         return;
     }
     if (shape == nullptr || n_dims <= 0) {
@@ -342,28 +344,30 @@ void dump_host_f32(const char *      name,
     long long shape_product = 1;
     for (int i = 0; i < n_dims; ++i) {
         if (shape[i] <= 0) {
-            warn("dump_host_f32(\"%s\"): non-positive shape[%d]=%lld",
-                 name, i, shape[i]);
+            warn("dump_host_f32(\"%s\"): non-positive shape[%d]=%lld", name, i, shape[i]);
             return;
         }
         shape_product *= shape[i];
     }
     if (shape_product != n_elem) {
-        warn("dump_host_f32(\"%s\"): shape product %lld != n_elem %lld",
-             name, shape_product, n_elem);
+        warn("dump_host_f32(\"%s\"): shape product %lld != n_elem %lld", name, shape_product, n_elem);
         return;
     }
 
     const size_t nbytes = static_cast<size_t>(n_elem) * sizeof(float);
 
     // Stats for the JSON sidecar.
-    float vmin = std::numeric_limits<float>::infinity();
-    float vmax = -std::numeric_limits<float>::infinity();
+    float  vmin = std::numeric_limits<float>::infinity();
+    float  vmax = -std::numeric_limits<float>::infinity();
     double vsum = 0.0;
     for (long long i = 0; i < n_elem; ++i) {
         const float v = data[i];
-        if (v < vmin) vmin = v;
-        if (v > vmax) vmax = v;
+        if (v < vmin) {
+            vmin = v;
+        }
+        if (v > vmax) {
+            vmax = v;
+        }
         vsum += static_cast<double>(v);
     }
     const double vmean = vsum / static_cast<double>(n_elem);
@@ -375,15 +379,12 @@ void dump_host_f32(const char *      name,
     {
         std::ofstream f32(f32_path, std::ios::binary | std::ios::trunc);
         if (!f32) {
-            warn("dump_host_f32(\"%s\"): cannot open %s for write",
-                 name, f32_path.c_str());
+            warn("dump_host_f32(\"%s\"): cannot open %s for write", name, f32_path.c_str());
             return;
         }
-        f32.write(reinterpret_cast<const char *>(data),
-                  static_cast<std::streamsize>(nbytes));
+        f32.write(reinterpret_cast<const char *>(data), static_cast<std::streamsize>(nbytes));
         if (!f32) {
-            warn("dump_host_f32(\"%s\"): write failed for %s",
-                 name, f32_path.c_str());
+            warn("dump_host_f32(\"%s\"): write failed for %s", name, f32_path.c_str());
             return;
         }
     }
@@ -391,8 +392,7 @@ void dump_host_f32(const char *      name,
     {
         std::ofstream js(json_path, std::ios::trunc);
         if (!js) {
-            warn("dump_host_f32(\"%s\"): cannot open %s for write",
-                 name, json_path.c_str());
+            warn("dump_host_f32(\"%s\"): cannot open %s for write", name, json_path.c_str());
             return;
         }
         js << "{\n";
@@ -402,24 +402,31 @@ void dump_host_f32(const char *      name,
         }
         js << "  \"shape\": [";
         for (int i = 0; i < n_dims; ++i) {
-            if (i) js << ", ";
+            if (i) {
+                js << ", ";
+            }
             js << shape[i];
         }
         js << "],\n";
         js << "  \"dtype\": \"f32\",\n";
         js << "  \"layout\": \"row-major\",\n";
         js.precision(9);
-        js << "  \"min\": ";  write_json_float(js, vmin);  js << ",\n";
-        js << "  \"max\": ";  write_json_float(js, vmax);  js << ",\n";
-        js << "  \"mean\": "; write_json_float(js, vmean); js << ",\n";
+        js << "  \"min\": ";
+        write_json_float(js, vmin);
+        js << ",\n";
+        js << "  \"max\": ";
+        write_json_float(js, vmax);
+        js << ",\n";
+        js << "  \"mean\": ";
+        write_json_float(js, vmean);
+        js << ",\n";
         js << "  \"source\": { \"kind\": \"cpp\" }\n";
         js << "}\n";
         if (!js) {
-            warn("dump_host_f32(\"%s\"): write failed for %s",
-                 name, json_path.c_str());
+            warn("dump_host_f32(\"%s\"): write failed for %s", name, json_path.c_str());
             return;
         }
     }
 }
 
-} // namespace transcribe::debug
+}  // namespace transcribe::debug

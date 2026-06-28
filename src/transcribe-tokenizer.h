@@ -35,7 +35,7 @@ struct gguf_context;
 namespace transcribe {
 
 class Tokenizer {
-public:
+  public:
     Tokenizer() = default;
 
     // Read tokenizer.ggml.* keys from a gguf_context.
@@ -89,9 +89,9 @@ public:
     //
     // Returns TRANSCRIBE_OK on success, TRANSCRIBE_ERR_INVALID_ARG if
     // `tokens` is empty.
-    transcribe_status load_decode_only_gpt2(std::vector<std::string>   tokens,
-                                            const DecodeOnlySpecials & specials);
-    transcribe_status load_decode_only_gpt2(std::vector<std::string>   tokens) {
+    transcribe_status load_decode_only_gpt2(std::vector<std::string> tokens, const DecodeOnlySpecials & specials);
+
+    transcribe_status load_decode_only_gpt2(std::vector<std::string> tokens) {
         return load_decode_only_gpt2(std::move(tokens), DecodeOnlySpecials{});
     }
 
@@ -105,9 +105,9 @@ public:
     // need a separate merges list because the vocab id IS the merge
     // rank. encode() walks adjacent pairs and looks up "left+right"
     // in piece_to_id_ directly; has_encoder() returns true.
-    transcribe_status load_decode_only_raw_bytes(std::vector<std::string>   tokens,
-                                                 const DecodeOnlySpecials & specials);
-    transcribe_status load_decode_only_raw_bytes(std::vector<std::string>   tokens) {
+    transcribe_status load_decode_only_raw_bytes(std::vector<std::string> tokens, const DecodeOnlySpecials & specials);
+
+    transcribe_status load_decode_only_raw_bytes(std::vector<std::string> tokens) {
         return load_decode_only_raw_bytes(std::move(tokens), DecodeOnlySpecials{});
     }
 
@@ -115,9 +115,10 @@ public:
     // out-of-range id (matching the safe-sentinel pattern used by the
     // public result accessors). find(piece) returns -1 if the piece
     // is not in the vocabulary OR the synthesized special-piece map.
-    int                 n_tokens() const { return static_cast<int>(tokens_.size()); }
-    const std::string & token   (int id) const;
-    int                 find    (const std::string & piece) const;
+    int n_tokens() const { return static_cast<int>(tokens_.size()); }
+
+    const std::string & token(int id) const;
+    int                 find(const std::string & piece) const;
 
     // True if the token at `id` is a CONTROL-typed entry per the GGUF
     // tokenizer.ggml.token_type array (= TOKEN_TYPE_CONTROL = 3, the
@@ -128,7 +129,7 @@ public:
     // that did not carry a token_type array return false (= "not
     // control"), so this is safe to consult without a per-family
     // token-type guard.
-    bool                is_control(int id) const;
+    bool is_control(int id) const;
 
     // Register a synthesized "special-piece" literal that find() will
     // resolve. Used by source adapters that don't carry every special-
@@ -180,17 +181,21 @@ public:
     //                                  support encoding yet.
     //   TRANSCRIBE_ERR_GGUF            if "gpt2" is loaded without
     //                                  merges (the encoder needs them).
-    transcribe_status encode(const std::string &    text,
-                             std::vector<int32_t> & out_ids) const;
+    transcribe_status encode(const std::string & text, std::vector<int32_t> & out_ids) const;
 
     // Identification + special token ids. -1 if the corresponding key
     // was absent from the GGUF.
     const std::string & model_type() const { return model_; }
+
     const std::string & pretokenizer() const { return pre_; }
-    int                 unk_id   () const { return unk_id_; }
-    int                 bos_id   () const { return bos_id_; }
-    int                 eos_id   () const { return eos_id_; }
-    int                 blank_id () const { return blank_id_; }
+
+    int unk_id() const { return unk_id_; }
+
+    int bos_id() const { return bos_id_; }
+
+    int eos_id() const { return eos_id_; }
+
+    int blank_id() const { return blank_id_; }
 
     // True if encode() is available for this tokenizer. Callers that
     // want to gate a feature on encoder presence can branch on this
@@ -205,7 +210,7 @@ public:
     // strings with a warning.
     void set_pretokenizer(const std::string & pre) { pre_ = pre; }
 
-private:
+  private:
     // How decode() should reassemble token bytes. Set during load().
     //   SentencePiece    - U+2581 → ASCII space (unigram / bpe)
     //   Gpt2ByteUnicode  - invert GPT-2 byte-to-unicode per codepoint
@@ -221,11 +226,11 @@ private:
     };
 
     std::string              model_;
-    std::string              pre_;        // "qwen2" (default) or "gpt2"
+    std::string              pre_;  // "qwen2" (default) or "gpt2"
     DecodeMode               decode_mode_ = DecodeMode::SentencePiece;
     std::vector<std::string> tokens_;
-    std::vector<float>       scores_;     // optional, may be empty
-    std::vector<int32_t>     token_type_; // optional, may be empty
+    std::vector<float>       scores_;      // optional, may be empty
+    std::vector<int32_t>     token_type_;  // optional, may be empty
 
     // O(1) piece -> id lookup built at load time. Duplicates are rare
     // (only from the byte-fallback vocab augmentation); we keep the
@@ -254,4 +259,4 @@ private:
     int blank_id_ = -1;
 };
 
-} // namespace transcribe
+}  // namespace transcribe

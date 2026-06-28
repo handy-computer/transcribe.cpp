@@ -12,15 +12,23 @@ namespace transcribe {
 
 const char * kind_name(BackendKind kind) {
     switch (kind) {
-        case BackendKind::Cpu:      return "cpu";
-        case BackendKind::Metal:    return "metal";
-        case BackendKind::Vulkan:   return "vulkan";
-        case BackendKind::Cuda:     return "cuda";
-        case BackendKind::Sycl:     return "sycl";
-        case BackendKind::Accel:    return "accel";
-        case BackendKind::OtherGpu: return "gpu";
+        case BackendKind::Cpu:
+            return "cpu";
+        case BackendKind::Metal:
+            return "metal";
+        case BackendKind::Vulkan:
+            return "vulkan";
+        case BackendKind::Cuda:
+            return "cuda";
+        case BackendKind::Sycl:
+            return "sycl";
+        case BackendKind::Accel:
+            return "accel";
+        case BackendKind::OtherGpu:
+            return "gpu";
         case BackendKind::Unknown:
-        default:                    return "unknown";
+        default:
+            return "unknown";
     }
 }
 
@@ -30,45 +38,48 @@ const char * kind_name(BackendKind kind) {
 // intentional: registry names can get version suffixes or device
 // index suffixes in some ggml builds.
 static bool reg_name_is(const char * reg_name, const char * prefix) {
-    if (reg_name == nullptr || prefix == nullptr) return false;
+    if (reg_name == nullptr || prefix == nullptr) {
+        return false;
+    }
     return std::strncmp(reg_name, prefix, std::strlen(prefix)) == 0;
 }
 
-BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type,
-                                  const char * reg_name)
-{
+BackendKind classify_backend_type(enum ggml_backend_dev_type dev_type, const char * reg_name) {
     if (dev_type == GGML_BACKEND_DEVICE_TYPE_CPU) {
         return BackendKind::Cpu;
     }
     if (dev_type == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
         return BackendKind::Accel;
     }
-    if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU &&
-        dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU)
-    {
+    if (dev_type != GGML_BACKEND_DEVICE_TYPE_GPU && dev_type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
         return BackendKind::Unknown;
     }
 
-    if      (reg_name_is(reg_name, "MTL") ||
-             reg_name_is(reg_name, "Metal"))  return BackendKind::Metal;
-    else if (reg_name_is(reg_name, "Vulkan")) return BackendKind::Vulkan;
-    else if (reg_name_is(reg_name, "CUDA"))   return BackendKind::Cuda;
-    else if (reg_name_is(reg_name, "SYCL"))   return BackendKind::Sycl;
+    if (reg_name_is(reg_name, "MTL") || reg_name_is(reg_name, "Metal")) {
+        return BackendKind::Metal;
+    } else if (reg_name_is(reg_name, "Vulkan")) {
+        return BackendKind::Vulkan;
+    } else if (reg_name_is(reg_name, "CUDA")) {
+        return BackendKind::Cuda;
+    } else if (reg_name_is(reg_name, "SYCL")) {
+        return BackendKind::Sycl;
+    }
 
     return BackendKind::OtherGpu;
 }
 
 BackendKind classify_device(ggml_backend_dev_t dev) {
-    if (dev == nullptr) return BackendKind::Unknown;
+    if (dev == nullptr) {
+        return BackendKind::Unknown;
+    }
 
     // First cut: ggml's device-type classification. This tells us CPU
     // vs GPU vs IGPU vs ACCEL without any name matching. For GPU and
     // IGPU devices, the registry name resolves the vendor-specific kind.
-    const auto dev_type = ggml_backend_dev_type(dev);
-    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-    const char * reg_name =
-        (reg != nullptr) ? ggml_backend_reg_name(reg) : nullptr;
+    const auto         dev_type = ggml_backend_dev_type(dev);
+    ggml_backend_reg_t reg      = ggml_backend_dev_backend_reg(dev);
+    const char *       reg_name = (reg != nullptr) ? ggml_backend_reg_name(reg) : nullptr;
     return classify_backend_type(dev_type, reg_name);
 }
 
-} // namespace transcribe
+}  // namespace transcribe

@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "transcribe.h"
 #include "transcribe-backend.h"
+#include "transcribe.h"
 
 #include <string>
 #include <vector>
@@ -95,10 +95,10 @@ transcribe_status init_backends(transcribe_backend_request requested,
 // I/O or tensor-not-found failure. On failure ctx_meta's tensors
 // may be partially populated; the caller should discard the
 // whole model state on error.
-transcribe_status stream_tensor_data(const std::string &   path,
-                                     const gguf_context *  gguf_data,
-                                     ggml_context *        ctx_meta,
-                                     const char *          error_tag);
+transcribe_status stream_tensor_data(const std::string &  path,
+                                     const gguf_context * gguf_data,
+                                     ggml_context *       ctx_meta,
+                                     const char *         error_tag);
 
 // A single F16 → F32 promotion target: `dst_slot` is a pointer into a
 // family weights struct (e.g. &block.conv_pw1_w) that currently holds
@@ -134,12 +134,11 @@ struct ConvPwF32Slot {
 //     returns TRANSCRIBE_OK without modifying anything.
 //
 // error_tag: log prefix, e.g. "parakeet" or "cohere".
-transcribe_status promote_conv_pw_f16_to_f32_on_cpu(
-    const BackendPlan &                plan,
-    const std::vector<ConvPwF32Slot> & slots,
-    const char *                       error_tag,
-    ggml_context **                    out_ctx,
-    ggml_backend_buffer_t *            out_buffer);
+transcribe_status promote_conv_pw_f16_to_f32_on_cpu(const BackendPlan &                plan,
+                                                    const std::vector<ConvPwF32Slot> & slots,
+                                                    const char *                       error_tag,
+                                                    ggml_context **                    out_ctx,
+                                                    ggml_backend_buffer_t *            out_buffer);
 
 // Read a small F32 tensor from the GGUF file into a std::vector<float>.
 //
@@ -163,12 +162,11 @@ enum class ReadF32Result {
     ReadErr,  // I/O error during read
 };
 
-ReadF32Result read_f32_tensor_checked(
-    gguf_context *        gguf_ctx,
-    const std::string &   gguf_path,
-    const char *          tensor_name,
-    size_t                expected_elems,  // 0 = skip size check
-    const char *          error_tag,
-    std::vector<float> &  out);
+ReadF32Result read_f32_tensor_checked(gguf_context *       gguf_ctx,
+                                      const std::string &  gguf_path,
+                                      const char *         tensor_name,
+                                      size_t               expected_elems,  // 0 = skip size check
+                                      const char *         error_tag,
+                                      std::vector<float> & out);
 
-} // namespace transcribe::load_common
+}  // namespace transcribe::load_common

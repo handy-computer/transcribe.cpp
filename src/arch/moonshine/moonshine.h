@@ -11,14 +11,13 @@
 
 #pragma once
 
+#include "ggml-backend.h"
+#include "ggml.h"
 #include "transcribe-backend.h"
-#include "transcribe-session.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
 #include "weights.h"
-
-#include "ggml.h"
-#include "ggml-backend.h"
 
 #include <cstdint>
 #include <string>
@@ -48,19 +47,19 @@ void apply_family_invariants(transcribe_model & model);
 // ---------------------------------------------------------------------------
 
 struct MoonshineKvCache {
-    ggml_tensor * self_k = nullptr;
-    ggml_tensor * self_v = nullptr;
+    ggml_tensor * self_k  = nullptr;
+    ggml_tensor * self_v  = nullptr;
     ggml_tensor * cross_k = nullptr;
     ggml_tensor * cross_v = nullptr;
 
-    ggml_context * ctx = nullptr;
+    ggml_context *        ctx    = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
 
-    int n_ctx = 0;     // max self-attn sequence length
-    int n     = 0;     // current self-attn fill
-    int head  = 0;     // write head for next step
-    int T_enc = 0;     // encoder frame count in cross cache (T_enc_max if batched)
-    int n_batch = 1;   // utterance batch width (>1 for the offline batched decoder)
+    int n_ctx   = 0;  // max self-attn sequence length
+    int n       = 0;  // current self-attn fill
+    int head    = 0;  // write head for next step
+    int T_enc   = 0;  // encoder frame count in cross cache (T_enc_max if batched)
+    int n_batch = 1;  // utterance batch width (>1 for the offline batched decoder)
 
     bool cross_populated = false;
 
@@ -73,14 +72,14 @@ struct MoonshineKvCache {
             ggml_free(ctx);
             ctx = nullptr;
         }
-        self_k = nullptr;
-        self_v = nullptr;
-        cross_k = nullptr;
-        cross_v = nullptr;
-        n = 0;
-        head = 0;
-        T_enc = 0;
-        n_batch = 1;
+        self_k          = nullptr;
+        self_v          = nullptr;
+        cross_k         = nullptr;
+        cross_v         = nullptr;
+        n               = 0;
+        head            = 0;
+        T_enc           = 0;
+        n_batch         = 1;
         cross_populated = false;
     }
 };
@@ -109,10 +108,10 @@ bool kv_cache_init_batched(MoonshineKvCache & cache,
 // ---------------------------------------------------------------------------
 
 struct MoonshineModel final : public transcribe_model {
-    Tokenizer         tok;
-    MoonshineHParams  hparams;
-    MoonshineWeights  weights;
-    ggml_context *    ctx_meta = nullptr;
+    Tokenizer        tok;
+    MoonshineHParams hparams;
+    MoonshineWeights weights;
+    ggml_context *   ctx_meta = nullptr;
 
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
@@ -124,17 +123,16 @@ struct MoonshineModel final : public transcribe_model {
 };
 
 struct MoonshineSession final : public transcribe_session {
-    ggml_context *        compute_ctx = nullptr;
-    ggml_backend_sched_t  sched       = nullptr;
+    ggml_context *       compute_ctx = nullptr;
+    ggml_backend_sched_t sched       = nullptr;
 
     // Host-side mirror of the encoder output. Required because the
     // cross-KV graph runs in a fresh compute_ctx that does not share
     // tensor handles with the encoder graph.
     std::vector<float> enc_host;
-    int                enc_T = 0;   // number of encoder frames
+    int                enc_T = 0;  // number of encoder frames
 
     MoonshineKvCache kv_cache;
-
 
     // Flash-attention defaults — finalized per-backend in init_context.
     // Encoder: ON everywhere (~2x on long audio). Decoder: ON except Metal
@@ -150,4 +148,4 @@ struct MoonshineSession final : public transcribe_session {
     ~MoonshineSession() override;
 };
 
-} // namespace transcribe::moonshine
+}  // namespace transcribe::moonshine

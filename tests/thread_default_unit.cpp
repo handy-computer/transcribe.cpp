@@ -19,38 +19,37 @@
 #include <cstdio>
 
 #if defined(__linux__)
-#include <sched.h>
+#    include <sched.h>
 #elif defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX  // else <windows.h>'s min/max macros clobber std::min/std::max
-#define NOMINMAX
-#endif
-#include <windows.h>
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX  // else <windows.h>'s min/max macros clobber std::min/std::max
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
 #endif
 
 namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 // default_n_threads(): cap and range, independent of platform.
 void test_default_range_and_cap() {
     const int uncapped = transcribe::default_n_threads(/*cap=*/0);
-    CHECK(uncapped >= 1);                       // always at least one thread
+    CHECK(uncapped >= 1);  // always at least one thread
 
     const int capped8 = transcribe::default_n_threads(8);
     CHECK(capped8 >= 1);
-    CHECK(capped8 <= 8);                        // cap is honored
+    CHECK(capped8 <= 8);                              // cap is honored
     CHECK(capped8 == (uncapped < 8 ? uncapped : 8));  // cap = min(uncapped, 8)
 
     CHECK(transcribe::default_n_threads(1) == 1);     // cap of 1 pins to 1
@@ -86,7 +85,9 @@ void test_affinity_honored_linux() {
     int cpus[CPU_SETSIZE];
     int n_cpus = 0;
     for (int c = 0; c < CPU_SETSIZE && n_cpus < avail; ++c) {
-        if (CPU_ISSET(c, &original)) cpus[n_cpus++] = c;
+        if (CPU_ISSET(c, &original)) {
+            cpus[n_cpus++] = c;
+        }
     }
 
     // Pin to exactly one CPU -> default_n_threads must be 1.
@@ -119,8 +120,8 @@ void test_affinity_honored_linux() {
 // core count. Pin the process to K CPUs via SetProcessAffinityMask and expect K.
 // Skips gracefully if affinity changes aren't permitted.
 void test_affinity_honored_windows() {
-    const HANDLE proc = GetCurrentProcess();
-    DWORD_PTR proc_mask = 0, sys_mask = 0;
+    const HANDLE proc      = GetCurrentProcess();
+    DWORD_PTR    proc_mask = 0, sys_mask = 0;
     if (!GetProcessAffinityMask(proc, &proc_mask, &sys_mask) || proc_mask == 0) {
         std::fprintf(stderr, "SKIP affinity test: GetProcessAffinityMask failed\n");
         return;

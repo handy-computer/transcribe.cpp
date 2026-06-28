@@ -1,8 +1,8 @@
 // run_dispatch_unit.cpp - dispatcher-level transcribe_run behavior tests.
 
-#include "transcribe-session.h"
 #include "transcribe-arch.h"
 #include "transcribe-model.h"
+#include "transcribe-session.h"
 #include "transcribe.h"
 
 #include <cstdio>
@@ -13,34 +13,35 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 // Existing behavior: with no arch->run wired, transcribe_run clears the
 // previous snapshot and returns NOT_IMPLEMENTED.
 void test_no_run_hook_clears_and_not_implemented() {
     transcribe_session session;
-    session.full_text = "stale";
-    session.has_result = true;
-    session.t_mel_us = 1000;
+    session.full_text   = "stale";
+    session.has_result  = true;
+    session.t_mel_us    = 1000;
     session.t_encode_us = 2000;
     session.t_decode_us = 3000;
 
-    float pcm = 0.0f;
-    transcribe_run_params params; transcribe_run_params_init(&params);
+    float                 pcm = 0.0f;
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
     const transcribe_status st = transcribe_run(&session, &pcm, 1, &params);
 
     CHECK(st == TRANSCRIBE_ERR_NOT_IMPLEMENTED);
     CHECK(!session.has_result);
     CHECK(session.full_text.empty());
 
-    transcribe_timings t; transcribe_timings_init(&t);
+    transcribe_timings t;
+    transcribe_timings_init(&t);
     CHECK(transcribe_get_timings(&session, &t) == TRANSCRIBE_OK);
     CHECK(t.mel_ms == 0.0f);
     CHECK(t.encode_ms == 0.0f);
@@ -56,55 +57,46 @@ void test_no_run_hook_clears_and_not_implemented() {
 
 constexpr uint32_t kFakeRunKind = 0xF00D;
 
-bool g_run_called = false;
+bool              g_run_called          = false;
 transcribe_status g_run_validate_status = TRANSCRIBE_OK;
 
-transcribe_status fake_run(
-    transcribe_session *        session,
-    const float *               pcm,
-    int                         n_samples,
-    const transcribe_run_params * params)
-{
-    (void)pcm;
-    (void)n_samples;
-    (void)params;
-    g_run_called = true;
+transcribe_status fake_run(transcribe_session *          session,
+                           const float *                 pcm,
+                           int                           n_samples,
+                           const transcribe_run_params * params) {
+    (void) pcm;
+    (void) n_samples;
+    (void) params;
+    g_run_called        = true;
     // A successful run installs a fresh result.
-    session->full_text = "fresh result";
+    session->full_text  = "fresh result";
     session->has_result = true;
     return TRANSCRIBE_OK;
 }
 
-bool fake_accepts_run_kind(
-    const transcribe_model * model,
-    transcribe_ext_slot      slot,
-    uint32_t                 kind)
-{
-    (void)model;
+bool fake_accepts_run_kind(const transcribe_model * model, transcribe_ext_slot slot, uint32_t kind) {
+    (void) model;
     return slot == TRANSCRIBE_EXT_SLOT_RUN && kind == kFakeRunKind;
 }
 
-transcribe_status fake_run_validate(
-    const transcribe_session *   ctx,
-    const transcribe_run_params * params)
-{
-    (void)ctx;
-    (void)params;
+transcribe_status fake_run_validate(const transcribe_session * ctx, const transcribe_run_params * params) {
+    (void) ctx;
+    (void) params;
     return g_run_validate_status;
 }
 
 const transcribe::Arch & run_validate_arch() {
     static const transcribe::Arch arch = {
         "fake-run",
-        nullptr,                 // load
-        nullptr,                 // init_context
+        nullptr,  // load
+        nullptr,  // init_context
         fake_run,
-        nullptr,                 // run_batch
-        nullptr,                 // stream_validate
-        nullptr,                 // stream_begin
-        nullptr,                 // stream_feed
-        nullptr,                 // stream_finalize
-        nullptr,                 // stream_reset
+        nullptr,  // run_batch
+        nullptr,  // stream_validate
+        nullptr,  // stream_begin
+        nullptr,  // stream_feed
+        nullptr,  // stream_finalize
+        nullptr,  // stream_reset
         fake_accepts_run_kind,
         fake_run_validate,
     };
@@ -118,22 +110,23 @@ void test_run_validate_failure_preserves_snapshot() {
     model.arch = &run_validate_arch();
 
     transcribe_session session;
-    session.model = &model;
-    session.full_text = "previous result";
+    session.model      = &model;
+    session.full_text  = "previous result";
     session.has_result = true;
 
     transcribe_ext ext;
-    ext.size = sizeof(transcribe_ext);   // passes the generic header check
-    ext.kind = kFakeRunKind;             // accepted by the arch
+    ext.size = sizeof(transcribe_ext);  // passes the generic header check
+    ext.kind = kFakeRunKind;            // accepted by the arch
 
-    transcribe_run_params params; transcribe_run_params_init(&params);
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
     params.family = &ext;
 
-    g_run_called = false;
+    g_run_called          = false;
     g_run_validate_status = TRANSCRIBE_ERR_BAD_STRUCT_SIZE;
 
-    float pcm = 0.0f;
-    const transcribe_status st = transcribe_run(&session, &pcm, 1, &params);
+    float                   pcm = 0.0f;
+    const transcribe_status st  = transcribe_run(&session, &pcm, 1, &params);
 
     // Family preflight rejected the call BEFORE the snapshot was cleared
     // and BEFORE the run hook ran. The prior transcript survives intact.
@@ -151,22 +144,23 @@ void test_run_validate_success_clears_and_runs() {
     model.arch = &run_validate_arch();
 
     transcribe_session session;
-    session.model = &model;
-    session.full_text = "previous result";
+    session.model      = &model;
+    session.full_text  = "previous result";
     session.has_result = true;
 
     transcribe_ext ext;
     ext.size = sizeof(transcribe_ext);
     ext.kind = kFakeRunKind;
 
-    transcribe_run_params params; transcribe_run_params_init(&params);
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
     params.family = &ext;
 
-    g_run_called = false;
+    g_run_called          = false;
     g_run_validate_status = TRANSCRIBE_OK;
 
-    float pcm = 0.0f;
-    const transcribe_status st = transcribe_run(&session, &pcm, 1, &params);
+    float                   pcm = 0.0f;
+    const transcribe_status st  = transcribe_run(&session, &pcm, 1, &params);
 
     CHECK(st == TRANSCRIBE_OK);
     CHECK(g_run_called == true);
@@ -182,35 +176,35 @@ void test_run_validate_success_clears_and_runs() {
 // (run_batch == nullptr in run_validate_arch).
 // ---------------------------------------------------------------------------
 
-int g_abort_after = 0;   // number of poll_abort() calls allowed before firing
+int g_abort_after = 0;  // number of poll_abort() calls allowed before firing
 int g_abort_polls = 0;
 
 bool fake_abort_cb(void * u) {
-    (void)u;
+    (void) u;
     ++g_abort_polls;
     return g_abort_polls > g_abort_after;
 }
 
 void test_batch_abort_pads_missing_to_n() {
     transcribe_model model;
-    model.arch = &run_validate_arch();   // run_batch == nullptr -> serial fallback
+    model.arch = &run_validate_arch();  // run_batch == nullptr -> serial fallback
 
     transcribe_session session;
     session.model = &model;
 
-    transcribe_run_params params; transcribe_run_params_init(&params);
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
 
     g_run_validate_status = TRANSCRIBE_OK;
-    g_abort_polls = 0;
-    g_abort_after = 1;   // utterance 0 runs; abort fires before utterance 1
+    g_abort_polls         = 0;
+    g_abort_after         = 1;  // utterance 0 runs; abort fires before utterance 1
     transcribe_set_abort_callback(&session, fake_abort_cb, nullptr);
 
-    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
-    const float * pcm[3]      = { &s0, &s1, &s2 };
+    float         s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+    const float * pcm[3]       = { &s0, &s1, &s2 };
     const int     n_samples[3] = { 1, 1, 1 };
 
-    const transcribe_status st =
-        transcribe_run_batch(&session, pcm, n_samples, 3, &params);
+    const transcribe_status st = transcribe_run_batch(&session, pcm, n_samples, 3, &params);
 
     // Whole-batch status is ABORTED, but every input still owns a slot.
     CHECK(st == TRANSCRIBE_ERR_ABORTED);
@@ -234,17 +228,15 @@ void test_batch_abort_pads_missing_to_n() {
 // != nullptr branch in transcribe_run_batch.
 // ---------------------------------------------------------------------------
 
-transcribe_status fake_run_batch_abort(
-    transcribe_session *          session,
-    const float * const *         pcm,
-    const int *                   n_samples,
-    int                           n,
-    const transcribe_run_params * params)
-{
-    (void)pcm;
-    (void)n_samples;
-    (void)n;
-    (void)params;
+transcribe_status fake_run_batch_abort(transcribe_session *          session,
+                                       const float * const *         pcm,
+                                       const int *                   n_samples,
+                                       int                           n,
+                                       const transcribe_run_params * params) {
+    (void) pcm;
+    (void) n_samples;
+    (void) n;
+    (void) params;
     // Complete utterance 0, then abort before producing the rest. The hook
     // retains only what it finished; the dispatcher pads missing slots.
     transcribe_session::ResultSet rs;
@@ -258,17 +250,17 @@ transcribe_status fake_run_batch_abort(
 const transcribe::Arch & run_batch_abort_arch() {
     static const transcribe::Arch arch = {
         "fake-run-batch",
-        nullptr,                 // load
-        nullptr,                 // init_context
-        fake_run,                // run (required; dispatcher gates on it)
-        fake_run_batch_abort,    // run_batch (fast path)
-        nullptr,                 // stream_validate
-        nullptr,                 // stream_begin
-        nullptr,                 // stream_feed
-        nullptr,                 // stream_finalize
-        nullptr,                 // stream_reset
-        nullptr,                 // accepts_run_kind
-        nullptr,                 // run_validate
+        nullptr,               // load
+        nullptr,               // init_context
+        fake_run,              // run (required; dispatcher gates on it)
+        fake_run_batch_abort,  // run_batch (fast path)
+        nullptr,               // stream_validate
+        nullptr,               // stream_begin
+        nullptr,               // stream_feed
+        nullptr,               // stream_finalize
+        nullptr,               // stream_reset
+        nullptr,               // accepts_run_kind
+        nullptr,               // run_validate
     };
     return arch;
 }
@@ -280,14 +272,14 @@ void test_batch_fastpath_abort_pads_missing_to_n() {
     transcribe_session session;
     session.model = &model;
 
-    transcribe_run_params params; transcribe_run_params_init(&params);
+    transcribe_run_params params;
+    transcribe_run_params_init(&params);
 
-    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+    float         s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
     const float * pcm[3]       = { &s0, &s1, &s2 };
     const int     n_samples[3] = { 1, 1, 1 };
 
-    const transcribe_status st =
-        transcribe_run_batch(&session, pcm, n_samples, 3, &params);
+    const transcribe_status st = transcribe_run_batch(&session, pcm, n_samples, 3, &params);
 
     // Same invariant as the serial fallback, via the fast-path branch.
     CHECK(st == TRANSCRIBE_ERR_ABORTED);
@@ -302,7 +294,7 @@ void test_batch_fastpath_abort_pads_missing_to_n() {
     CHECK(std::strcmp(transcribe_batch_full_text(&session, 2), "") == 0);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_no_run_hook_clears_and_not_implemented();

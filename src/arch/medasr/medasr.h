@@ -5,13 +5,12 @@
 
 #pragma once
 
-#include "weights.h"
-
 #include "transcribe-backend.h"
 #include "transcribe-mel.h"
 #include "transcribe-model.h"
 #include "transcribe-session.h"
 #include "transcribe-tokenizer.h"
+#include "weights.h"
 
 #include <cstdint>
 #include <optional>
@@ -31,10 +30,10 @@ namespace transcribe::medasr {
 void apply_family_invariants(transcribe_model & model);
 
 struct MedAsrModel final : public transcribe_model {
-    Tokenizer        tok;
-    MedAsrHParams    hparams;
-    MedAsrWeights    weights;
-    ggml_context *   ctx_meta = nullptr;
+    Tokenizer      tok;
+    MedAsrHParams  hparams;
+    MedAsrWeights  weights;
+    ggml_context * ctx_meta = nullptr;
 
     transcribe::BackendPlan plan;
     ggml_backend_buffer_t   backend_buffer = nullptr;
@@ -53,13 +52,12 @@ struct MedAsrSession final : public transcribe_session {
 
     ggml_tensor * encoder_out = nullptr;
 
-    std::vector<float>   mel_buf;
-    std::vector<float>   enc_host;   // [d_enc * T_enc] f32 readback
-    std::vector<float>   logits_buf; // [vocab * T_enc] f32 readback
-
+    std::vector<float> mel_buf;
+    std::vector<float> enc_host;    // [d_enc * T_enc] f32 readback
+    std::vector<float> logits_buf;  // [vocab * T_enc] f32 readback
 
     MedAsrSession() = default;
     ~MedAsrSession() override;
 };
 
-} // namespace transcribe::medasr
+}  // namespace transcribe::medasr

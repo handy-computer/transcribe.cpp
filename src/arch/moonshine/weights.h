@@ -66,24 +66,24 @@ namespace transcribe::moonshine {
 
 struct MoonshineHParams {
     // Encoder.
-    int32_t enc_n_layers     = 0;
-    int32_t enc_d_model      = 0;
-    int32_t enc_n_heads      = 0;
-    int32_t enc_n_kv_heads   = 0;   // moonshine has no GQA on tiny: == n_heads
-    int32_t enc_ffn_dim      = 0;   // intermediate_size
-    std::string enc_activation;     // "gelu"
+    int32_t     enc_n_layers   = 0;
+    int32_t     enc_d_model    = 0;
+    int32_t     enc_n_heads    = 0;
+    int32_t     enc_n_kv_heads = 0;  // moonshine has no GQA on tiny: == n_heads
+    int32_t     enc_ffn_dim    = 0;  // intermediate_size
+    std::string enc_activation;      // "gelu"
 
     // Decoder.
-    int32_t dec_n_layers     = 0;
-    int32_t dec_d_model      = 0;   // == enc_d_model on every shipped variant
-    int32_t dec_n_heads      = 0;
-    int32_t dec_n_kv_heads   = 0;
-    int32_t dec_ffn_dim      = 0;   // intermediate_size (fc1 emits 2·this)
-    int32_t dec_max_position_embeddings = 0;  // 194 for tiny; both target
-                                              // length cap and rope max-seq
-    int32_t dec_vocab_size   = 0;
-    std::string dec_activation;     // "silu"
-    bool    dec_tie_word_embeddings = true;
+    int32_t     dec_n_layers                = 0;
+    int32_t     dec_d_model                 = 0;  // == enc_d_model on every shipped variant
+    int32_t     dec_n_heads                 = 0;
+    int32_t     dec_n_kv_heads              = 0;
+    int32_t     dec_ffn_dim                 = 0;  // intermediate_size (fc1 emits 2·this)
+    int32_t     dec_max_position_embeddings = 0;  // 194 for tiny; both target
+                                                  // length cap and rope max-seq
+    int32_t     dec_vocab_size              = 0;
+    std::string dec_activation;                   // "silu"
+    bool        dec_tie_word_embeddings = true;
 
     // Special tokens.
     int32_t bos_token_id           = -1;  // 1, decoder_start
@@ -95,18 +95,18 @@ struct MoonshineHParams {
     float   partial_rotary_factor = 0.9f;
     float   rope_theta            = 10000.0f;
     bool    attention_bias        = false;
-    int32_t pad_head_dim_multiple = 0;   // 8 for tiny; 0 means "do not pad"
+    int32_t pad_head_dim_multiple = 0;  // 8 for tiny; 0 means "do not pad"
 
     // Conv stem (3-layer raw-PCM frontend).
-    std::vector<int32_t> conv_channels;     // [enc_d_model, 2·enc_d_model, enc_d_model]
-    std::vector<int32_t> conv_kernel_sizes; // [127, 7, 3]
-    std::vector<int32_t> conv_strides;      // [64, 3, 2]
-    int32_t conv_groupnorm_num_groups = 1;
-    float   conv_groupnorm_eps        = 1e-5f;
+    std::vector<int32_t> conv_channels;      // [enc_d_model, 2·enc_d_model, enc_d_model]
+    std::vector<int32_t> conv_kernel_sizes;  // [127, 7, 3]
+    std::vector<int32_t> conv_strides;       // [64, 3, 2]
+    int32_t              conv_groupnorm_num_groups = 1;
+    float                conv_groupnorm_eps        = 1e-5f;
 
     // Frontend (raw waveform — no mel).
-    std::string fe_type;            // "raw"
-    int32_t     fe_sample_rate = 0; // 16000
+    std::string fe_type;             // "raw"
+    int32_t     fe_sample_rate = 0;  // 16000
 
     // Capability flags read from stt.capability.*.
     bool cap_lang_detect = false;
@@ -115,6 +115,7 @@ struct MoonshineHParams {
 
     // Derived helpers.
     int32_t enc_head_dim() const { return enc_n_heads > 0 ? enc_d_model / enc_n_heads : 0; }
+
     int32_t dec_head_dim() const { return dec_n_heads > 0 ? dec_d_model / dec_n_heads : 0; }
 
     // Padded head dim used inside attention. HF Moonshine pads each
@@ -126,13 +127,18 @@ struct MoonshineHParams {
     int32_t enc_head_dim_padded() const {
         const int32_t hd = enc_head_dim();
         const int32_t m  = pad_head_dim_multiple;
-        if (m <= 0 || hd <= 0) return hd;
+        if (m <= 0 || hd <= 0) {
+            return hd;
+        }
         return ((hd + m - 1) / m) * m;
     }
+
     int32_t dec_head_dim_padded() const {
         const int32_t hd = dec_head_dim();
         const int32_t m  = pad_head_dim_multiple;
-        if (m <= 0 || hd <= 0) return hd;
+        if (m <= 0 || hd <= 0) {
+            return hd;
+        }
         return ((hd + m - 1) / m) * m;
     }
 
@@ -145,17 +151,17 @@ struct MoonshineHParams {
     int32_t enc_head_dim_rot() const {
         const int32_t hd = enc_head_dim();
         const int32_t r  = static_cast<int32_t>(static_cast<float>(hd) * partial_rotary_factor);
-        return r & ~int32_t{1};
+        return r & ~int32_t{ 1 };
     }
+
     int32_t dec_head_dim_rot() const {
         const int32_t hd = dec_head_dim();
         const int32_t r  = static_cast<int32_t>(static_cast<float>(hd) * partial_rotary_factor);
-        return r & ~int32_t{1};
+        return r & ~int32_t{ 1 };
     }
 };
 
-transcribe_status read_moonshine_hparams(const gguf_context * gguf,
-                                         MoonshineHParams &   hp);
+transcribe_status read_moonshine_hparams(const gguf_context * gguf, MoonshineHParams & hp);
 
 // ---------------------------------------------------------------------------
 // Weight slots
@@ -163,13 +169,13 @@ transcribe_status read_moonshine_hparams(const gguf_context * gguf,
 
 // Encoder conv stem: 3 Conv1d layers + GroupNorm right after conv0+tanh.
 struct MoonshineEncStem {
-    ggml_tensor * conv0_w     = nullptr;  // [127, 1,         d_model],   no bias
-    ggml_tensor * conv1_w     = nullptr;  // [7,   d_model,   2·d_model]
-    ggml_tensor * conv1_b     = nullptr;  // [2·d_model]
-    ggml_tensor * conv2_w     = nullptr;  // [3,   2·d_model, d_model]
-    ggml_tensor * conv2_b     = nullptr;  // [d_model]
-    ggml_tensor * gn_w        = nullptr;  // [d_model]   (num_groups=1, ε=1e-5)
-    ggml_tensor * gn_b        = nullptr;  // [d_model]
+    ggml_tensor * conv0_w = nullptr;  // [127, 1,         d_model],   no bias
+    ggml_tensor * conv1_w = nullptr;  // [7,   d_model,   2·d_model]
+    ggml_tensor * conv1_b = nullptr;  // [2·d_model]
+    ggml_tensor * conv2_w = nullptr;  // [3,   2·d_model, d_model]
+    ggml_tensor * conv2_b = nullptr;  // [d_model]
+    ggml_tensor * gn_w    = nullptr;  // [d_model]   (num_groups=1, ε=1e-5)
+    ggml_tensor * gn_b    = nullptr;  // [d_model]
 };
 
 struct MoonshineEncTop {
@@ -185,11 +191,11 @@ struct MoonshineEncBlock {
     ggml_tensor * attn_v_w    = nullptr;
     ggml_tensor * attn_out_w  = nullptr;
 
-    ggml_tensor * norm_ffn_w  = nullptr;
-    ggml_tensor * ffn_fc1_w   = nullptr;  // [d_model, ffn_dim]
-    ggml_tensor * ffn_fc1_b   = nullptr;  // [ffn_dim]
-    ggml_tensor * ffn_fc2_w   = nullptr;  // [ffn_dim, d_model]
-    ggml_tensor * ffn_fc2_b   = nullptr;  // [d_model]
+    ggml_tensor * norm_ffn_w = nullptr;
+    ggml_tensor * ffn_fc1_w  = nullptr;  // [d_model, ffn_dim]
+    ggml_tensor * ffn_fc1_b  = nullptr;  // [ffn_dim]
+    ggml_tensor * ffn_fc2_w  = nullptr;  // [ffn_dim, d_model]
+    ggml_tensor * ffn_fc2_b  = nullptr;  // [d_model]
 };
 
 // Decoder top: tied token embed + final LN.
@@ -202,11 +208,11 @@ struct MoonshineDecTop {
 // cross-attn. Decoder MLP is SwiGLU: fc1 emits 2·ffn_dim, fc2 takes ffn_dim.
 struct MoonshineDecBlock {
     // Self-attention (causal, partial RoPE on q/k).
-    ggml_tensor * norm_self_w  = nullptr;
-    ggml_tensor * self_q_w     = nullptr;
-    ggml_tensor * self_k_w     = nullptr;
-    ggml_tensor * self_v_w     = nullptr;
-    ggml_tensor * self_out_w   = nullptr;
+    ggml_tensor * norm_self_w = nullptr;
+    ggml_tensor * self_q_w    = nullptr;
+    ggml_tensor * self_k_w    = nullptr;
+    ggml_tensor * self_v_w    = nullptr;
+    ggml_tensor * self_out_w  = nullptr;
 
     // Cross-attention (queries decoder state against encoder; no RoPE).
     ggml_tensor * norm_cross_w = nullptr;
@@ -216,23 +222,23 @@ struct MoonshineDecBlock {
     ggml_tensor * cross_out_w  = nullptr;
 
     // SwiGLU MLP.
-    ggml_tensor * norm_ffn_w   = nullptr;
-    ggml_tensor * ffn_fc1_w    = nullptr;  // [d_model, 2·ffn_dim]
-    ggml_tensor * ffn_fc1_b    = nullptr;  // [2·ffn_dim]
-    ggml_tensor * ffn_fc2_w    = nullptr;  // [ffn_dim, d_model]
-    ggml_tensor * ffn_fc2_b    = nullptr;  // [d_model]
+    ggml_tensor * norm_ffn_w = nullptr;
+    ggml_tensor * ffn_fc1_w  = nullptr;  // [d_model, 2·ffn_dim]
+    ggml_tensor * ffn_fc1_b  = nullptr;  // [2·ffn_dim]
+    ggml_tensor * ffn_fc2_w  = nullptr;  // [ffn_dim, d_model]
+    ggml_tensor * ffn_fc2_b  = nullptr;  // [d_model]
 };
 
 struct MoonshineWeights {
-    MoonshineEncStem                 enc_stem;
-    MoonshineEncTop                  enc_top;
-    std::vector<MoonshineEncBlock>   enc_blocks;
-    MoonshineDecTop                  dec_top;
-    std::vector<MoonshineDecBlock>   dec_blocks;
+    MoonshineEncStem               enc_stem;
+    MoonshineEncTop                enc_top;
+    std::vector<MoonshineEncBlock> enc_blocks;
+    MoonshineDecTop                dec_top;
+    std::vector<MoonshineDecBlock> dec_blocks;
 };
 
 transcribe_status build_moonshine_weights(ggml_context *           ctx_meta,
                                           const MoonshineHParams & hp,
                                           MoonshineWeights &       weights);
 
-} // namespace transcribe::moonshine
+}  // namespace transcribe::moonshine

@@ -1,0 +1,24 @@
+name: clang-format
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Supersede in-flight runs on the same ref.
+concurrency:
+  group: clang-format-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang-format:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.2.0
+      - name: clang-format gate
+        # Our C/C++ must match the pinned clang-format. Scope (vendored excluded)
+        # and the pinned version both live in scripts/ci/clang-format.sh.
+        run: scripts/ci/clang-format.sh --check

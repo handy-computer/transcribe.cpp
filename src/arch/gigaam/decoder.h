@@ -21,19 +21,19 @@ struct GigaamHParams;
 // that.
 struct HostDecoderWeights {
     // RNN-T fields.
-    std::vector<float> pred_embed;         // [pred_vocab, pred_hidden]
-    std::vector<std::vector<float>> lstm_Wx; // per layer
+    std::vector<float>              pred_embed;  // [pred_vocab, pred_hidden]
+    std::vector<std::vector<float>> lstm_Wx;     // per layer
     std::vector<std::vector<float>> lstm_Wh;
     std::vector<std::vector<float>> lstm_b;
-    std::vector<float> joint_enc_w;
-    std::vector<float> joint_enc_b;
-    std::vector<float> joint_pred_w;
-    std::vector<float> joint_pred_b;
-    std::vector<float> joint_out_w;
-    std::vector<float> joint_out_b;
+    std::vector<float>              joint_enc_w;
+    std::vector<float>              joint_enc_b;
+    std::vector<float>              joint_pred_w;
+    std::vector<float>              joint_pred_b;
+    std::vector<float>              joint_out_w;
+    std::vector<float>              joint_out_b;
     // CTC fields.
-    std::vector<float> ctc_w;              // [n_classes, d_model]
-    std::vector<float> ctc_b;
+    std::vector<float>              ctc_w;  // [n_classes, d_model]
+    std::vector<float>              ctc_b;
 };
 
 // Read the predictor + joint (or CTC head) tensors from backend memory
@@ -67,4 +67,4 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & host,
                                     std::vector<int> &         out_tokens,
                                     std::vector<int> &         out_frames);
 
-} // namespace transcribe::gigaam
+}  // namespace transcribe::gigaam

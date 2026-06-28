@@ -51,17 +51,16 @@ namespace {
 int g_failures = 0;
 int g_skipped  = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 bool file_exists(const char * path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path, &st) == 0;
 }
 
@@ -77,7 +76,7 @@ void test_silero_rejected() {
         return;
     }
     transcribe::bin_loader::WhisperBinModel m;
-    const auto rc = transcribe::bin_loader::parse_whisper_bin(path, m);
+    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path, m);
     CHECK(rc == TRANSCRIBE_ERR_UNSUPPORTED_ARCH);
 }
 
@@ -88,7 +87,7 @@ void test_truncated_rejected() {
         return;
     }
     transcribe::bin_loader::WhisperBinModel m;
-    const auto rc = transcribe::bin_loader::parse_whisper_bin(path, m);
+    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path, m);
     // for-tests fixtures pass the hparams gate (real geometry) but
     // fail at the tensor-manifest pass with no tensors declared.
     CHECK(rc == TRANSCRIBE_ERR_GGUF);
@@ -101,17 +100,17 @@ void test_tiny_q8_parsed() {
         return;
     }
     transcribe::bin_loader::WhisperBinModel m;
-    const auto rc = transcribe::bin_loader::parse_whisper_bin(path, m);
+    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path, m);
     CHECK(rc == TRANSCRIBE_OK);
 
     // Tiny multilingual whisper geometry.
     CHECK(m.hp.n_audio_layer == 4);
-    CHECK(m.hp.n_text_layer  == 4);
+    CHECK(m.hp.n_text_layer == 4);
     CHECK(m.hp.n_audio_state == 384);
-    CHECK(m.hp.n_text_state  == 384);
-    CHECK(m.hp.n_audio_head  == 6);
-    CHECK(m.hp.n_text_head   == 6);
-    CHECK(m.hp.n_mels        == 80);
+    CHECK(m.hp.n_text_state == 384);
+    CHECK(m.hp.n_audio_head == 6);
+    CHECK(m.hp.n_text_head == 6);
+    CHECK(m.hp.n_mels == 80);
     CHECK(m.is_multilingual);
     CHECK(m.num_languages == 99);
 
@@ -125,11 +124,15 @@ void test_tiny_q8_parsed() {
     CHECK(m.tensors.size() >= 160 && m.tensors.size() <= 200);
 
     // Spot-check a couple of canonical legacy names.
-    bool saw_conv1 = false;
+    bool saw_conv1     = false;
     bool saw_token_emb = false;
     for (const auto & t : m.tensors) {
-        if (t.name == "encoder.conv1.weight") saw_conv1 = true;
-        if (t.name == "decoder.token_embedding.weight") saw_token_emb = true;
+        if (t.name == "encoder.conv1.weight") {
+            saw_conv1 = true;
+        }
+        if (t.name == "decoder.token_embedding.weight") {
+            saw_token_emb = true;
+        }
     }
     CHECK(saw_conv1);
     CHECK(saw_token_emb);
@@ -137,8 +140,7 @@ void test_tiny_q8_parsed() {
 
 void test_missing_path() {
     transcribe::bin_loader::WhisperBinModel m;
-    const auto rc = transcribe::bin_loader::parse_whisper_bin(
-        "/nonexistent/path/that/does/not/exist.bin", m);
+    const auto rc = transcribe::bin_loader::parse_whisper_bin("/nonexistent/path/that/does/not/exist.bin", m);
     CHECK(rc == TRANSCRIBE_ERR_FILE_NOT_FOUND);
 }
 
@@ -147,16 +149,17 @@ void test_missing_path() {
 // so the parser will fail at the manifest stage if it gets past the
 // header checks — but for these tests we only care about the
 // hparams + mel-filter-dim gates.
-bool write_synthetic_bin(const std::string &  path,
-                         int32_t              n_vocab,
-                         int32_t              n_audio_layer,
-                         int32_t              n_text_layer,
-                         int32_t              n_mels,
-                         int32_t              n_mel_filters,
-                         int32_t              n_fft_filters)
-{
+bool write_synthetic_bin(const std::string & path,
+                         int32_t             n_vocab,
+                         int32_t             n_audio_layer,
+                         int32_t             n_text_layer,
+                         int32_t             n_mels,
+                         int32_t             n_mel_filters,
+                         int32_t             n_fft_filters) {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) return false;
+    if (!f) {
+        return false;
+    }
     auto wi = [&](int32_t v) {
         f.write(reinterpret_cast<const char *>(&v), sizeof(v));
     };
@@ -164,33 +167,30 @@ bool write_synthetic_bin(const std::string &  path,
     f.write(reinterpret_cast<const char *>(&magic), sizeof(magic));
     // 11 × int32 hparams.
     wi(n_vocab);
-    wi(1500);              // n_audio_ctx
-    wi(384);               // n_audio_state
-    wi(6);                 // n_audio_head
+    wi(1500);  // n_audio_ctx
+    wi(384);   // n_audio_state
+    wi(6);     // n_audio_head
     wi(n_audio_layer);
-    wi(448);               // n_text_ctx
-    wi(384);               // n_text_state
-    wi(6);                 // n_text_head
+    wi(448);   // n_text_ctx
+    wi(384);   // n_text_state
+    wi(6);     // n_text_head
     wi(n_text_layer);
     wi(n_mels);
-    wi(0);                 // ftype
+    wi(0);  // ftype
     // mel filter dims, then n_mel_filters * n_fft_filters floats.
     wi(n_mel_filters);
     wi(n_fft_filters);
-    const size_t fb_bytes =
-        static_cast<size_t>(n_mel_filters) *
-        static_cast<size_t>(n_fft_filters) * sizeof(float);
+    const size_t fb_bytes = static_cast<size_t>(n_mel_filters) * static_cast<size_t>(n_fft_filters) * sizeof(float);
     std::vector<char> zeros(fb_bytes, 0);
     f.write(zeros.data(), zeros.size());
     return static_cast<bool>(f);
 }
 
 void test_bad_n_fft() {
-    char tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
-    const int fd = ::mkstemps(tmpl, 4);
+    char      tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
+    const int fd     = ::mkstemps(tmpl, 4);
     if (fd < 0) {
-        std::fprintf(stderr,
-                     "SKIP: could not create tempfile for synthetic bin\n");
+        std::fprintf(stderr, "SKIP: could not create tempfile for synthetic bin\n");
         ++g_skipped;
         return;
     }
@@ -200,15 +200,13 @@ void test_bad_n_fft() {
     // Whisper-shaped hparams but non-canonical n_fft (200 instead of
     // 201). Parser must reject before we even get to the vocab phase.
     if (!write_synthetic_bin(path, 51865, 4, 4, 80, 80, 200)) {
-        std::fprintf(stderr,
-                     "SKIP: failed to write synthetic .bin\n");
+        std::fprintf(stderr, "SKIP: failed to write synthetic .bin\n");
         ++g_skipped;
         ::unlink(path.c_str());
         return;
     }
     transcribe::bin_loader::WhisperBinModel m;
-    const auto rc = transcribe::bin_loader::parse_whisper_bin(
-        path.c_str(), m);
+    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path.c_str(), m);
     CHECK(rc == TRANSCRIBE_ERR_GGUF);
     ::unlink(path.c_str());
 }
@@ -218,8 +216,8 @@ void test_distil_layer_count_accepted() {
     // whisper-shaped hparams should pass the hparams gate. We don't
     // care that the parser later fails at "no tensors" — the hparams
     // check should not be the gating step.
-    char tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
-    const int fd = ::mkstemps(tmpl, 4);
+    char      tmpl[] = "/tmp/transcribe_bin_test_XXXXXX.bin";
+    const int fd     = ::mkstemps(tmpl, 4);
     if (fd < 0) {
         ++g_skipped;
         return;
@@ -233,8 +231,7 @@ void test_distil_layer_count_accepted() {
         return;
     }
     transcribe::bin_loader::WhisperBinModel m;
-    const auto rc = transcribe::bin_loader::parse_whisper_bin(
-        path.c_str(), m);
+    const auto                              rc = transcribe::bin_loader::parse_whisper_bin(path.c_str(), m);
     // Header + mel filters parse; we then run out of bytes for the
     // vocab/tensor sections. The expected status is ERR_GGUF (with a
     // "no tensors" / truncated diagnostic), NOT UNSUPPORTED_ARCH —
@@ -243,7 +240,7 @@ void test_distil_layer_count_accepted() {
     ::unlink(path.c_str());
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     test_missing_path();
@@ -254,9 +251,7 @@ int main() {
     test_tiny_q8_parsed();
 
     if (g_failures > 0) {
-        std::fprintf(stderr,
-                     "FAILED: %d check(s); %d sub-test(s) skipped\n",
-                     g_failures, g_skipped);
+        std::fprintf(stderr, "FAILED: %d check(s); %d sub-test(s) skipped\n", g_failures, g_skipped);
         return 1;
     }
     std::fprintf(stderr, "OK (%d sub-test(s) skipped)\n", g_skipped);

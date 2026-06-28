@@ -17,7 +17,6 @@ namespace transcribe::flash {
 // both flags in the same direction; if both are set, FORCE wins. The flags
 // are in/out: updated in-place if an override is set, left untouched
 // otherwise.
-void apply_env_overrides(bool & encoder_use_flash,
-                         bool & decoder_use_flash);
+void apply_env_overrides(bool & encoder_use_flash, bool & decoder_use_flash);
 
-} // namespace transcribe::flash
+}  // namespace transcribe::flash

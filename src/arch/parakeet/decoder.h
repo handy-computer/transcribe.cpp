@@ -27,10 +27,9 @@
 
 #pragma once
 
-#include "transcribe.h"
-
-#include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml.h"
+#include "transcribe.h"
 
 #include <cstdint>
 #include <string>
@@ -74,10 +73,10 @@ struct HostLstmLayer {
 };
 
 struct HostPredictor {
-    int                       pred_hidden = 0;
-    int                       pred_vocab  = 0; // includes the +1 start row
-    std::vector<float>        embed_w;          // [pred_vocab, pred_hidden]
-    std::vector<HostLstmLayer> lstm;            // pred_n_layers entries
+    int                        pred_hidden = 0;
+    int                        pred_vocab  = 0;  // includes the +1 start row
+    std::vector<float>         embed_w;          // [pred_vocab, pred_hidden]
+    std::vector<HostLstmLayer> lstm;             // pred_n_layers entries
 
     // --- resident ggml LSTM weights (immutable, model-owned) ---
     // fp32 mirror of the per-layer Wx/Wh/b, made resident once at load so
@@ -86,7 +85,7 @@ struct HostPredictor {
     // closest to the host reference at no speed cost. Owned here, freed by
     // dtor. On build failure lstm_ready stays false (hard decode error).
     ggml_context *        lstm_w_ctx     = nullptr;
-    ggml_backend_t        lstm_w_backend = nullptr; // alloc-only; never compute'd
+    ggml_backend_t        lstm_w_backend = nullptr;  // alloc-only; never compute'd
     ggml_backend_buffer_t lstm_w_buf     = nullptr;
     bool                  lstm_ready     = false;
 
@@ -99,20 +98,20 @@ struct HostPredictor {
 };
 
 struct HostJoint {
-    int         d_enc       = 0; // encoder d_model
+    int         d_enc       = 0;  // encoder d_model
     int         pred_hidden = 0;
     int         joint_h     = 0;
-    int         joint_n     = 0; // total output classes (vocab+blank+durations)
+    int         joint_n     = 0;  // total output classes (vocab+blank+durations)
     std::string activation;       // "relu" / "sigmoid" / "tanh"
 
     // Host fp32 weight mirrors — LOAD-TIME SCRATCH ONLY: filled at load,
     // uploaded into the resident ggml tensors below, then freed. (out_w is
     // not mirrored — gw_w is built straight from the model tensor.)
-    std::vector<float> enc_w;    // [joint_h, d_enc]       (freed after load)
-    std::vector<float> enc_b;    // [joint_h]              (freed after load)
-    std::vector<float> pred_w;   // [joint_h, pred_hidden] (freed after load)
-    std::vector<float> pred_b;   // [joint_h]              (freed after load)
-    std::vector<float> out_b;    // [joint_n]              (freed after load)
+    std::vector<float> enc_w;   // [joint_h, d_enc]       (freed after load)
+    std::vector<float> enc_b;   // [joint_h]              (freed after load)
+    std::vector<float> pred_w;  // [joint_h, pred_hidden] (freed after load)
+    std::vector<float> pred_b;  // [joint_h]              (freed after load)
+    std::vector<float> out_b;   // [joint_n]              (freed after load)
 
     // --- resident ggml weights (immutable, model-owned) ---
     // The whole joint runs as one ggml graph (build_joint_graph), so
@@ -122,14 +121,14 @@ struct HostJoint {
     // context; the mutable per-decode state lives in a stack-local
     // JointGraph (reentrant). Owned here, freed by dtor.
     ggml_context *        w_ctx     = nullptr;
-    ggml_backend_t        w_backend = nullptr; // alloc-only; never graph_compute'd
+    ggml_backend_t        w_backend = nullptr;  // alloc-only; never graph_compute'd
     ggml_backend_buffer_t w_buf     = nullptr;
-    ggml_tensor *         g_enc_w   = nullptr; // [d_enc, joint_h] fp32 weight
-    ggml_tensor *         g_enc_b   = nullptr; // [joint_h] fp32 bias
-    ggml_tensor *         g_pred_w  = nullptr; // [pred_hidden, joint_h] fp32 weight
-    ggml_tensor *         g_pred_b  = nullptr; // [joint_h] fp32 bias
-    ggml_tensor *         gw_w      = nullptr; // [joint_h, joint_n] fp32 weight
-    ggml_tensor *         gw_b      = nullptr; // [joint_n] fp32 bias
+    ggml_tensor *         g_enc_w   = nullptr;  // [d_enc, joint_h] fp32 weight
+    ggml_tensor *         g_enc_b   = nullptr;  // [joint_h] fp32 bias
+    ggml_tensor *         g_pred_w  = nullptr;  // [pred_hidden, joint_h] fp32 weight
+    ggml_tensor *         g_pred_b  = nullptr;  // [joint_h] fp32 bias
+    ggml_tensor *         gw_w      = nullptr;  // [joint_h, joint_n] fp32 weight
+    ggml_tensor *         gw_b      = nullptr;  // [joint_n] fp32 bias
     bool                  w_ready   = false;
 
     HostJoint() = default;
@@ -144,11 +143,11 @@ struct HostJoint {
 // projecting d_enc -> n_classes (= vocab + 1 blank). Stored row-major
 // [n_classes, d_enc] so per-frame logits = W @ enc_t + b.
 struct HostCtcHead {
-    int                 n_classes = 0; // == vocab + 1
-    int                 blank_id  = 0; // NeMo convention: blank lives at n_classes - 1
-    int                 d_enc     = 0;
-    std::vector<float>  weight;        // [n_classes, d_enc]
-    std::vector<float>  bias;          // [n_classes]
+    int                n_classes = 0;  // == vocab + 1
+    int                blank_id  = 0;  // NeMo convention: blank lives at n_classes - 1
+    int                d_enc     = 0;
+    std::vector<float> weight;         // [n_classes, d_enc]
+    std::vector<float> bias;           // [n_classes]
 };
 
 // Decoder head selector. Mirrors ParakeetHParams::HeadKind so the
@@ -162,22 +161,21 @@ enum class HostHeadKind { TDT, RNNT, CTC };
 // empty; for RNNT tdt_durations is empty and only the tdt_max_symbols
 // cap is reused.
 struct HostDecoderWeights {
-    HostHeadKind           head_kind        = HostHeadKind::TDT;
-    HostPredictor          predictor;        // empty for CTC
-    HostJoint              joint;            // empty for CTC
-    HostCtcHead            ctc_head;         // empty for TDT/RNNT
-    std::vector<int32_t>   tdt_durations;    // empty for RNNT/CTC
-    int                    tdt_max_symbols  = 0;
-    int                    blank_id         = 0; // unified: TDT/RNNT == pred_vocab - 1; CTC == ctc_head.blank_id
-    int                    n_vocab          = 0; // raw SP vocab size (excludes blank)
+    HostHeadKind         head_kind = HostHeadKind::TDT;
+    HostPredictor        predictor;            // empty for CTC
+    HostJoint            joint;                // empty for CTC
+    HostCtcHead          ctc_head;             // empty for TDT/RNNT
+    std::vector<int32_t> tdt_durations;        // empty for RNNT/CTC
+    int                  tdt_max_symbols = 0;
+    int                  blank_id        = 0;  // unified: TDT/RNNT == pred_vocab - 1; CTC == ctc_head.blank_id
+    int                  n_vocab         = 0;  // raw SP vocab size (excludes blank)
 };
 
 // Build host mirrors from a loaded ParakeetModel. Reads tensor bytes
 // via ggml_backend_tensor_get so it works on every backend. Returns
 // TRANSCRIBE_OK on success; on failure logs to stderr and leaves
 // `out` in an indeterminate state.
-transcribe_status build_host_decoder_weights(const ParakeetModel & model,
-                                             HostDecoderWeights &  out);
+transcribe_status build_host_decoder_weights(const ParakeetModel & model, HostDecoderWeights & out);
 
 // One (h, c) pair per LSTM layer. The decoder owns one "current"
 // (committed) state and one "scratch" state (computed each iteration,
@@ -198,7 +196,7 @@ struct LstmState {
 // hop_length / sample_rate) for the public result accessors.
 struct TdtToken {
     int   id              = 0;
-    float p               = 0.0f; // entropy-based confidence
+    float p               = 0.0f;  // entropy-based confidence
     int   step_at_emit    = 0;
     int   duration_frames = 0;
 };
@@ -244,16 +242,15 @@ transcribe_status decode_rnnt_greedy(const HostDecoderWeights & w,
 // index of this chunk's first frame (so step_at_emit lands in
 // stream-wide coordinates). state_io must have been reset to a fresh
 // start-of-sequence state at stream_begin (last_token_io = -1).
-transcribe_status decode_rnnt_greedy_streaming(
-    const HostDecoderWeights & w,
-    const float *              enc_out,
-    int                        T_enc_new,
-    int                        d_enc,
-    LstmState &                state_io,
-    int &                      last_token_io,
-    int                        frame_offset,
-    int                        n_threads,
-    std::vector<TdtToken> &    out_tokens);
+transcribe_status decode_rnnt_greedy_streaming(const HostDecoderWeights & w,
+                                               const float *              enc_out,
+                                               int                        T_enc_new,
+                                               int                        d_enc,
+                                               LstmState &                state_io,
+                                               int &                      last_token_io,
+                                               int                        frame_offset,
+                                               int                        n_threads,
+                                               std::vector<TdtToken> &    out_tokens);
 
 // Run CTC greedy decode end-to-end. Per-frame: logits = W @ enc[t] + b,
 // argmax; collapse rule "drop adjacent duplicates, then drop blanks"
@@ -267,4 +264,4 @@ transcribe_status decode_ctc_greedy(const HostDecoderWeights & w,
                                     int                        n_threads,
                                     std::vector<TdtToken> &    out_tokens);
 
-} // namespace transcribe::parakeet
+}  // namespace transcribe::parakeet

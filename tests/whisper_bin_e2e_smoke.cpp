@@ -28,7 +28,6 @@
 
 #include "transcribe.h"
 #include "transcribe/whisper.h"
-
 #include "wav.h"
 
 #include <sys/stat.h>
@@ -40,37 +39,37 @@
 #include <vector>
 
 #ifndef TRANSCRIBE_TEST_SAMPLES_DIR
-#  error "TRANSCRIBE_TEST_SAMPLES_DIR must be defined by the build system"
+#    error "TRANSCRIBE_TEST_SAMPLES_DIR must be defined by the build system"
 #endif
 
 namespace {
 
-int g_failures = 0;
+int g_failures     = 0;
 int g_subtests_run = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
 bool file_exists(const char * path) {
-    struct stat st {};
+    struct stat st{};
     return ::stat(path, &st) == 0;
 }
 
 bool contains(const char * haystack, const char * needle) {
-    if (haystack == nullptr) return false;
+    if (haystack == nullptr) {
+        return false;
+    }
     return std::strstr(haystack, needle) != nullptr;
 }
 
 bool load_wav(const char * fname, std::vector<float> & out) {
     std::string err;
-    return transcribe_cli::load_wav_mono_16k(
-        std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/" + fname, out, err);
+    return transcribe_cli::load_wav_mono_16k(std::string(TRANSCRIBE_TEST_SAMPLES_DIR) + "/" + fname, out, err);
 }
 
 const char * env_or_null(const char * key) {
@@ -87,25 +86,24 @@ void test_multilingual(const char * model_path) {
         return;
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
-    mp.backend = TRANSCRIBE_BACKEND_CPU;
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+    mp.backend               = TRANSCRIBE_BACKEND_CPU;
     transcribe_model * model = nullptr;
-    transcribe_status st =
-        transcribe_model_load_file(model_path, &mp, &model);
+    transcribe_status  st    = transcribe_model_load_file(model_path, &mp, &model);
     CHECK(st == TRANSCRIBE_OK);
     if (st != TRANSCRIBE_OK || model == nullptr) {
-        std::fprintf(stderr, "FAIL load (multi): %s\n",
-                     transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL load (multi): %s\n", transcribe_status_string(st));
         return;
     }
 
     // Identity / capabilities.
     CHECK(std::strcmp(transcribe_model_arch_string(model), "whisper") == 0);
     CHECK(contains(transcribe_model_variant_string(model), "whisper-tiny"));
-    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
-    const bool caps_ok =
-        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
-    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
+    transcribe_capabilities caps_buf;
+    transcribe_capabilities_init(&caps_buf);
+    const bool                      caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps    = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(caps->native_sample_rate == 16000);
@@ -124,14 +122,15 @@ void test_multilingual(const char * model_path) {
 
     // Tokenizer: encode is now available via tiktoken-style merge loop.
     {
-        int32_t buf[64];
+        int32_t   buf[64];
         const int n = transcribe_tokenize(model, " hello world", buf, 64);
         CHECK(n > 0);
     }
 
-    transcribe_session_params cp; transcribe_session_params_init(&cp);
+    transcribe_session_params cp;
+    transcribe_session_params_init(&cp);
     transcribe_session * ctx = nullptr;
-    st = transcribe_session_init(model, &cp, &ctx);
+    st                       = transcribe_session_init(model, &cp, &ctx);
     CHECK(st == TRANSCRIBE_OK);
     if (st != TRANSCRIBE_OK || ctx == nullptr) {
         transcribe_model_free(model);
@@ -140,10 +139,10 @@ void test_multilingual(const char * model_path) {
 
     // English JFK with explicit hint.
     {
-        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_run_params rp;
+        transcribe_run_params_init(&rp);
         rp.language = "en";
-        st = transcribe_run(ctx, jfk.data(),
-                            static_cast<int>(jfk.size()), &rp);
+        st          = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
         const char * text = transcribe_full_text(ctx);
         CHECK(text != nullptr);
@@ -156,10 +155,10 @@ void test_multilingual(const char * model_path) {
     // German with explicit --language de — exercises the
     // arithmetic-derived lang_token_ids on the .bin path.
     {
-        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_run_params rp;
+        transcribe_run_params_init(&rp);
         rp.language = "de";
-        st = transcribe_run(ctx, german.data(),
-                            static_cast<int>(german.size()), &rp);
+        st          = transcribe_run(ctx, german.data(), static_cast<int>(german.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
         const char * text = transcribe_full_text(ctx);
         CHECK(text != nullptr);
@@ -193,26 +192,28 @@ void test_multilingual(const char * model_path) {
             "ending <|endoftext|> here",
         };
         for (const char * t : literals) {
-            transcribe_run_params rp; transcribe_run_params_init(&rp);
+            transcribe_run_params rp;
+            transcribe_run_params_init(&rp);
             rp.language = "en";
-            transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
+            transcribe_whisper_run_ext wp;
+            transcribe_whisper_run_ext_init(&wp);
             wp.initial_prompt = t;
-            rp.family = &wp.ext;
-            st = transcribe_run(ctx, jfk.data(),
-                                static_cast<int>(jfk.size()), &rp);
+            rp.family         = &wp.ext;
+            st                = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
             CHECK(st == TRANSCRIBE_ERR_INVALID_ARG);
         }
     }
 
     // Text initial_prompt — now ACCEPTED (tiktoken encoder works).
     {
-        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_run_params rp;
+        transcribe_run_params_init(&rp);
         rp.language = "en";
-        transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
+        transcribe_whisper_run_ext wp;
+        transcribe_whisper_run_ext_init(&wp);
         wp.initial_prompt = "Inaugural address";
-        rp.family = &wp.ext;
-        st = transcribe_run(ctx, jfk.data(),
-                            static_cast<int>(jfk.size()), &rp);
+        rp.family         = &wp.ext;
+        st                = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(contains(transcribe_full_text(ctx), "country"));
     }
@@ -230,21 +231,13 @@ void test_multilingual(const char * model_path) {
     {
         std::vector<float> product_pcm;
         if (!load_wav("product-names.wav", product_pcm)) {
-            std::fprintf(stderr,
-                         "FAIL: could not load product-names.wav\n");
+            std::fprintf(stderr, "FAIL: could not load product-names.wav\n");
             ++g_failures;
         } else {
             auto product_hits = [](const char * text) {
                 const char * terms[] = {
-                    "QuirkQuid",
-                    "P3-Quattro",
-                    "O3-Omni",
-                    "B3-BondX",
-                    "E3-Equity",
-                    "W3-WrapZ",
-                    "O2-Outlier",
-                    "U3-UniFund",
-                    "M3-Mover",
+                    "QuirkQuid", "P3-Quattro", "O3-Omni",    "B3-BondX", "E3-Equity",
+                    "W3-WrapZ",  "O2-Outlier", "U3-UniFund", "M3-Mover",
                 };
                 int n = 0;
                 for (const char * term : terms) {
@@ -255,25 +248,23 @@ void test_multilingual(const char * model_path) {
                 return n;
             };
 
-            transcribe_run_params rp; transcribe_run_params_init(&rp);
+            transcribe_run_params rp;
+            transcribe_run_params_init(&rp);
             rp.language = "en";
-            st = transcribe_run(ctx, product_pcm.data(),
-                                static_cast<int>(product_pcm.size()), &rp);
+            st          = transcribe_run(ctx, product_pcm.data(), static_cast<int>(product_pcm.size()), &rp);
             CHECK(st == TRANSCRIBE_OK);
-            const int unprompted_hits =
-                product_hits(transcribe_full_text(ctx));
+            const int unprompted_hits = product_hits(transcribe_full_text(ctx));
 
-            transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
+            transcribe_whisper_run_ext wp;
+            transcribe_whisper_run_ext_init(&wp);
             wp.initial_prompt =
                 "QuirkQuid Quill Inc, P3-Quattro, O3-Omni, "
                 "B3-BondX, E3-Equity, W3-WrapZ, O2-Outlier, "
                 "U3-UniFund, M3-Mover";
             rp.family = &wp.ext;
-            st = transcribe_run(ctx, product_pcm.data(),
-                                static_cast<int>(product_pcm.size()), &rp);
+            st        = transcribe_run(ctx, product_pcm.data(), static_cast<int>(product_pcm.size()), &rp);
             CHECK(st == TRANSCRIBE_OK);
-            const int prompted_hits =
-                product_hits(transcribe_full_text(ctx));
+            const int prompted_hits = product_hits(transcribe_full_text(ctx));
             CHECK(prompted_hits >= 5);
             CHECK(prompted_hits > unprompted_hits + 3);
         }
@@ -282,19 +273,19 @@ void test_multilingual(const char * model_path) {
     // prompt_tokens (pre-encoded ids) — round-trip through
     // transcribe_tokenize.
     {
-        int32_t tok_buf[32];
-        const int n = transcribe_tokenize(model, " inaugural address",
-                                          tok_buf, 32);
+        int32_t   tok_buf[32];
+        const int n = transcribe_tokenize(model, " inaugural address", tok_buf, 32);
         CHECK(n > 0);
         if (n > 0) {
-            transcribe_run_params rp; transcribe_run_params_init(&rp);
+            transcribe_run_params rp;
+            transcribe_run_params_init(&rp);
             rp.language = "en";
-            transcribe_whisper_run_ext wp; transcribe_whisper_run_ext_init(&wp);
+            transcribe_whisper_run_ext wp;
+            transcribe_whisper_run_ext_init(&wp);
             wp.prompt_tokens   = tok_buf;
             wp.n_prompt_tokens = static_cast<size_t>(n);
-            rp.family = &wp.ext;
-            st = transcribe_run(ctx, jfk.data(),
-                                static_cast<int>(jfk.size()), &rp);
+            rp.family          = &wp.ext;
+            st                 = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
             CHECK(st == TRANSCRIBE_OK);
             CHECK(contains(transcribe_full_text(ctx), "country"));
         }
@@ -313,23 +304,22 @@ void test_english_only(const char * model_path) {
         return;
     }
 
-    transcribe_model_load_params mp; transcribe_model_load_params_init(&mp);
-    mp.backend = TRANSCRIBE_BACKEND_CPU;
+    transcribe_model_load_params mp;
+    transcribe_model_load_params_init(&mp);
+    mp.backend               = TRANSCRIBE_BACKEND_CPU;
     transcribe_model * model = nullptr;
-    transcribe_status st =
-        transcribe_model_load_file(model_path, &mp, &model);
+    transcribe_status  st    = transcribe_model_load_file(model_path, &mp, &model);
     CHECK(st == TRANSCRIBE_OK);
     if (st != TRANSCRIBE_OK || model == nullptr) {
-        std::fprintf(stderr, "FAIL load (.en): %s\n",
-                     transcribe_status_string(st));
+        std::fprintf(stderr, "FAIL load (.en): %s\n", transcribe_status_string(st));
         return;
     }
 
     CHECK(contains(transcribe_model_variant_string(model), "whisper-tiny.en"));
-    transcribe_capabilities caps_buf; transcribe_capabilities_init(&caps_buf);
-    const bool caps_ok =
-        transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
-    const transcribe_capabilities * caps = caps_ok ? &caps_buf : nullptr;
+    transcribe_capabilities caps_buf;
+    transcribe_capabilities_init(&caps_buf);
+    const bool                      caps_ok = transcribe_model_get_capabilities(model, &caps_buf) == TRANSCRIBE_OK;
+    const transcribe_capabilities * caps    = caps_ok ? &caps_buf : nullptr;
     CHECK(caps != nullptr);
     if (caps != nullptr) {
         CHECK(!caps->supports_language_detect);
@@ -341,9 +331,10 @@ void test_english_only(const char * model_path) {
         }
     }
 
-    transcribe_session_params cp; transcribe_session_params_init(&cp);
+    transcribe_session_params cp;
+    transcribe_session_params_init(&cp);
     transcribe_session * ctx = nullptr;
-    st = transcribe_session_init(model, &cp, &ctx);
+    st                       = transcribe_session_init(model, &cp, &ctx);
     CHECK(st == TRANSCRIBE_OK);
     if (st != TRANSCRIBE_OK || ctx == nullptr) {
         transcribe_model_free(model);
@@ -353,39 +344,39 @@ void test_english_only(const char * model_path) {
     // No language hint — lang detection short-circuits to "en"
     // because the model only advertises one language.
     {
-        transcribe_run_params rp; transcribe_run_params_init(&rp);
-        st = transcribe_run(ctx, jfk.data(),
-                            static_cast<int>(jfk.size()), &rp);
+        transcribe_run_params rp;
+        transcribe_run_params_init(&rp);
+        st = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(contains(transcribe_full_text(ctx), "country"));
     }
 
     // Explicit --language en accepted (no <|en|> token to resolve).
     {
-        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_run_params rp;
+        transcribe_run_params_init(&rp);
         rp.language = "en";
-        st = transcribe_run(ctx, jfk.data(),
-                            static_cast<int>(jfk.size()), &rp);
+        st          = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
         CHECK(st == TRANSCRIBE_OK);
         CHECK(contains(transcribe_full_text(ctx), "country"));
     }
 
     // Non-English language — rejected with a non-OK status.
     {
-        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_run_params rp;
+        transcribe_run_params_init(&rp);
         rp.language = "de";
-        st = transcribe_run(ctx, jfk.data(),
-                            static_cast<int>(jfk.size()), &rp);
+        st          = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
         CHECK(st != TRANSCRIBE_OK);
     }
 
     // Translate task — rejected (no <|translate|> token).
     {
-        transcribe_run_params rp; transcribe_run_params_init(&rp);
+        transcribe_run_params rp;
+        transcribe_run_params_init(&rp);
         rp.task     = TRANSCRIBE_TASK_TRANSLATE;
         rp.language = "en";
-        st = transcribe_run(ctx, jfk.data(),
-                            static_cast<int>(jfk.size()), &rp);
+        st          = transcribe_run(ctx, jfk.data(), static_cast<int>(jfk.size()), &rp);
         CHECK(st != TRANSCRIBE_OK);
     }
 
@@ -394,15 +385,13 @@ void test_english_only(const char * model_path) {
     ++g_subtests_run;
 }
 
-} // namespace
+}  // namespace
 
 int main() {
     const char * multi_path = env_or_null("TRANSCRIBE_WHISPER_BIN_TINY_Q8_0");
     const char * en_path    = env_or_null("TRANSCRIBE_WHISPER_BIN_TINY_EN");
 
-    if ((multi_path == nullptr || !file_exists(multi_path)) &&
-        (en_path    == nullptr || !file_exists(en_path)))
-    {
+    if ((multi_path == nullptr || !file_exists(multi_path)) && (en_path == nullptr || !file_exists(en_path))) {
         std::fprintf(stderr,
                      "SKIP: neither TRANSCRIBE_WHISPER_BIN_TINY_Q8_0 nor "
                      "TRANSCRIBE_WHISPER_BIN_TINY_EN is set\n");
@@ -417,8 +406,7 @@ int main() {
     }
 
     if (g_failures > 0) {
-        std::fprintf(stderr, "FAILED: %d check(s) (%d subtest(s) ran)\n",
-                     g_failures, g_subtests_run);
+        std::fprintf(stderr, "FAILED: %d check(s) (%d subtest(s) ran)\n", g_failures, g_subtests_run);
         return 1;
     }
     std::fprintf(stderr, "OK (%d subtest(s) ran)\n", g_subtests_run);

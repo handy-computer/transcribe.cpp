@@ -14,12 +14,11 @@
 //     dst slots are unchanged.
 //   - Empty slots: no-op, no crash.
 
-#include "transcribe-load-common.h"
-#include "transcribe-backend.h"
-
-#include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml.h"
+#include "transcribe-backend.h"
+#include "transcribe-load-common.h"
 
 #include <cmath>
 #include <cstdio>
@@ -30,40 +29,36 @@ namespace {
 
 int g_failures = 0;
 
-#define CHECK(cond)                                                         \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "FAIL %s:%d: %s\n",                        \
-                         __FILE__, __LINE__, #cond);                        \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK(cond)                                                              \
+    do {                                                                         \
+        if (!(cond)) {                                                           \
+            std::fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            ++g_failures;                                                        \
+        }                                                                        \
     } while (0)
 
-#define CHECK_EQ(actual, expected)                                          \
-    do {                                                                    \
-        const auto _a = (actual);                                           \
-        const auto _e = (expected);                                         \
-        if (_a != _e) {                                                     \
-            std::fprintf(stderr, "FAIL %s:%d: got %d, expected %d\n",       \
-                         __FILE__, __LINE__,                                \
-                         static_cast<int>(_a),                              \
-                         static_cast<int>(_e));                             \
-            ++g_failures;                                                   \
-        }                                                                   \
+#define CHECK_EQ(actual, expected)                                                                              \
+    do {                                                                                                        \
+        const auto _a = (actual);                                                                               \
+        const auto _e = (expected);                                                                             \
+        if (_a != _e) {                                                                                         \
+            std::fprintf(stderr, "FAIL %s:%d: got %d, expected %d\n", __FILE__, __LINE__, static_cast<int>(_a), \
+                         static_cast<int>(_e));                                                                 \
+            ++g_failures;                                                                                       \
+        }                                                                                                       \
     } while (0)
 
 // Bail macro for setup prerequisites: if the condition fails, log and
 // return EXIT_FAILURE immediately rather than crashing on a null deref.
-#define REQUIRE(cond)                                                       \
-    do {                                                                    \
-        if (!(cond)) {                                                      \
-            std::fprintf(stderr, "SETUP FAIL %s:%d: %s\n",                  \
-                         __FILE__, __LINE__, #cond);                        \
-            return EXIT_FAILURE;                                            \
-        }                                                                   \
+#define REQUIRE(cond)                                                                  \
+    do {                                                                               \
+        if (!(cond)) {                                                                 \
+            std::fprintf(stderr, "SETUP FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            return EXIT_FAILURE;                                                       \
+        }                                                                              \
     } while (0)
 
-} // namespace
+}  // namespace
 
 int main() {
     using namespace transcribe;
@@ -73,18 +68,17 @@ int main() {
     // -----------------------------------------------------------------
     // Set up a CPU backend and a small F16 tensor.
     // -----------------------------------------------------------------
-    ggml_backend_t cpu_be =
-        ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    ggml_backend_t cpu_be = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     if (cpu_be == nullptr) {
         std::fprintf(stderr, "SKIP: could not init CPU backend\n");
         return 77;
     }
 
     // Create a ggml context with two small F16 tensors.
-    const int64_t n_elem = 16;
-    const size_t ctx_size = 2 * ggml_tensor_overhead() + 256;
-    ggml_init_params init_params = {ctx_size, nullptr, true};
-    ggml_context * ctx = ggml_init(init_params);
+    const int64_t    n_elem      = 16;
+    const size_t     ctx_size    = 2 * ggml_tensor_overhead() + 256;
+    ggml_init_params init_params = { ctx_size, nullptr, true };
+    ggml_context *   ctx         = ggml_init(init_params);
     REQUIRE(ctx != nullptr);
 
     ggml_tensor * t1 = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, n_elem);
@@ -95,8 +89,7 @@ int main() {
     ggml_set_name(t2, "test.conv_pw2");
 
     // Allocate and fill with known F16 values.
-    ggml_backend_buffer_t src_buffer =
-        ggml_backend_alloc_ctx_tensors(ctx, cpu_be);
+    ggml_backend_buffer_t src_buffer = ggml_backend_alloc_ctx_tensors(ctx, cpu_be);
     REQUIRE(src_buffer != nullptr);
 
     // Write deterministic F16 values: 1.0, 2.0, ..., 16.0 for t1;
@@ -106,13 +99,11 @@ int main() {
         for (int64_t i = 0; i < n_elem; ++i) {
             f16_data[i] = ggml_fp32_to_fp16(static_cast<float>(i + 1));
         }
-        ggml_backend_tensor_set(t1, f16_data.data(), 0,
-                                n_elem * sizeof(ggml_fp16_t));
+        ggml_backend_tensor_set(t1, f16_data.data(), 0, n_elem * sizeof(ggml_fp16_t));
         for (int64_t i = 0; i < n_elem; ++i) {
             f16_data[i] = ggml_fp32_to_fp16(-static_cast<float>(i + 1));
         }
-        ggml_backend_tensor_set(t2, f16_data.data(), 0,
-                                n_elem * sizeof(ggml_fp16_t));
+        ggml_backend_tensor_set(t2, f16_data.data(), 0, n_elem * sizeof(ggml_fp16_t));
     }
 
     // -----------------------------------------------------------------
@@ -124,18 +115,17 @@ int main() {
         plan.primary_kind = BackendKind::Cpu;
         plan.scheduler_list.push_back(cpu_be);
 
-        ggml_tensor * slot1 = t1;
-        ggml_tensor * slot2 = t2;
+        ggml_tensor *              slot1 = t1;
+        ggml_tensor *              slot2 = t2;
         std::vector<ConvPwF32Slot> slots = {
-            {&slot1, t1},
-            {&slot2, t2},
+            { &slot1, t1 },
+            { &slot2, t2 },
         };
 
-        ggml_context *          out_ctx    = nullptr;
-        ggml_backend_buffer_t   out_buffer = nullptr;
+        ggml_context *        out_ctx    = nullptr;
+        ggml_backend_buffer_t out_buffer = nullptr;
 
-        transcribe_status st = promote_conv_pw_f16_to_f32_on_cpu(
-            plan, slots, "test-promote", &out_ctx, &out_buffer);
+        transcribe_status st = promote_conv_pw_f16_to_f32_on_cpu(plan, slots, "test-promote", &out_ctx, &out_buffer);
 
         CHECK_EQ(st, TRANSCRIBE_OK);
         REQUIRE(out_ctx != nullptr);
@@ -150,16 +140,14 @@ int main() {
         // Read back F32 values and verify round-trip.
         std::vector<float> f32_out(n_elem);
 
-        ggml_backend_tensor_get(slot1, f32_out.data(), 0,
-                                n_elem * sizeof(float));
+        ggml_backend_tensor_get(slot1, f32_out.data(), 0, n_elem * sizeof(float));
         for (int64_t i = 0; i < n_elem; ++i) {
             // F16 round-trip is exact for small integers.
             float expected = static_cast<float>(i + 1);
             CHECK(std::fabs(f32_out[i] - expected) < 1e-4f);
         }
 
-        ggml_backend_tensor_get(slot2, f32_out.data(), 0,
-                                n_elem * sizeof(float));
+        ggml_backend_tensor_get(slot2, f32_out.data(), 0, n_elem * sizeof(float));
         for (int64_t i = 0; i < n_elem; ++i) {
             float expected = -static_cast<float>(i + 1);
             CHECK(std::fabs(f32_out[i] - expected) < 1e-4f);
@@ -185,16 +173,15 @@ int main() {
         plan.primary_kind = BackendKind::Metal;
         plan.scheduler_list.push_back(cpu_be);
 
-        ggml_tensor * slot1 = t1;
+        ggml_tensor *              slot1 = t1;
         std::vector<ConvPwF32Slot> slots = {
-            {&slot1, t1},
+            { &slot1, t1 },
         };
 
-        ggml_context *          out_ctx    = nullptr;
-        ggml_backend_buffer_t   out_buffer = nullptr;
+        ggml_context *        out_ctx    = nullptr;
+        ggml_backend_buffer_t out_buffer = nullptr;
 
-        transcribe_status st = promote_conv_pw_f16_to_f32_on_cpu(
-            plan, slots, "test-noop", &out_ctx, &out_buffer);
+        transcribe_status st = promote_conv_pw_f16_to_f32_on_cpu(plan, slots, "test-noop", &out_ctx, &out_buffer);
 
         CHECK_EQ(st, TRANSCRIBE_OK);
         // No-op: outparams not touched, slot not repointed.
@@ -212,13 +199,12 @@ int main() {
         plan.primary_kind = BackendKind::Cpu;
         plan.scheduler_list.push_back(cpu_be);
 
-        std::vector<ConvPwF32Slot> slots; // empty
+        std::vector<ConvPwF32Slot> slots;  // empty
 
-        ggml_context *          out_ctx    = nullptr;
-        ggml_backend_buffer_t   out_buffer = nullptr;
+        ggml_context *        out_ctx    = nullptr;
+        ggml_backend_buffer_t out_buffer = nullptr;
 
-        transcribe_status st = promote_conv_pw_f16_to_f32_on_cpu(
-            plan, slots, "test-empty", &out_ctx, &out_buffer);
+        transcribe_status st = promote_conv_pw_f16_to_f32_on_cpu(plan, slots, "test-empty", &out_ctx, &out_buffer);
 
         CHECK_EQ(st, TRANSCRIBE_OK);
         CHECK(out_ctx == nullptr);

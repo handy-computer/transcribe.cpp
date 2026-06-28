@@ -7,9 +7,8 @@
 
 #include "transcribe-loader.h"
 
-#include "transcribe-meta.h"
-
 #include "gguf.h"
+#include "transcribe-meta.h"
 
 #include <sys/stat.h>
 
@@ -26,7 +25,7 @@ Loader::~Loader() {
 
 gguf_context * Loader::release_gguf() {
     gguf_context * out = gguf_;
-    gguf_ = nullptr;
+    gguf_              = nullptr;
     return out;
 }
 
@@ -52,7 +51,7 @@ namespace {
 // doesn't (in which case the caller should hand off to
 // gguf_init_from_file unchanged).
 bool path_is_present(const char * path) {
-    struct stat st {};
+    struct stat st{};
     if (::stat(path, &st) == 0) {
         return true;
     }
@@ -66,7 +65,7 @@ bool path_is_present(const char * path) {
     return true;
 }
 
-} // namespace
+}  // namespace
 
 transcribe_status Loader::open(const char * path) {
     if (path == nullptr) {
@@ -83,7 +82,7 @@ transcribe_status Loader::open(const char * path) {
     // gguf_init_from_file skips the entire tensor-allocation block; with
     // no_alloc=true any future code path that does pass a ctx will not
     // read the data blob.
-    gguf_init_params init_params {};
+    gguf_init_params init_params{};
     init_params.no_alloc = true;
     init_params.ctx      = nullptr;
 
@@ -139,4 +138,4 @@ transcribe_status Loader::open(const char * path) {
     return TRANSCRIBE_OK;
 }
 
-} // namespace transcribe
+}  // namespace transcribe
