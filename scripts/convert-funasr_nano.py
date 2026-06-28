@@ -98,13 +98,15 @@ from pathlib import Path
 import numpy as np
 import torch
 import yaml
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
-from huggingface_hub import snapshot_download
+from gguf import GGMLQuantizationType, LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import download_snapshot, looks_like_repo_id  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     slug_from_repo_id,
@@ -472,7 +474,7 @@ def compute_size_label(total_params: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def convert(model_dir: Path, out_path: Path, variant: str, display_name: str) -> None:
+def convert(model_dir: Path, out_path: Path, variant: str, display_name: str, repo_id: str | None = None) -> None:
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (per-tensor BF16; norms/biases F32)")
     _patch_fun_asr_nano_imports()
 
@@ -555,50 +557,59 @@ def convert(model_dir: Path, out_path: Path, variant: str, display_name: str) ->
     print(f"Total params: {total_params:,} -> size_label={size_label}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "funasr_nano")
+    writer = gguf_writer(str(out_path), "funasr_nano")
 
     # ----- general.* -----
-    # FunASR Model Open Source License Agreement v1.1 attribution
-    # requirement (`MODEL_LICENSE` 2.2): "you must attribute the source
-    # and author information and retain relevant model names". Bake the
-    # canonical attribution into the GGUF KV so downstream consumers
-    # (anyone loading the converted file) see source + author + model
-    # names without having to read external docs.
-    writer.add_string("general.name",         display_name)
-    writer.add_string("general.basename",     variant.rsplit("-", 1)[0] if "-" in variant else variant)
-    writer.add_string("general.size_label",   size_label)
-    writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",    hp["languages"])
-    writer.add_string("general.author",       "Alibaba Group / FunAudioLLM")
-    writer.add_string("general.organization", "FunAudioLLM")
-    writer.add_string("general.license",      "FunASR-Model-License-1.1")
-    writer.add_string("general.license.link",
-                      "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE")
-    writer.add_string("general.url",
-                      f"https://huggingface.co/FunAudioLLM/{display_name}")
-    writer.add_string("general.source.url",
-                      "https://github.com/modelscope/FunASR")
-    # Model-name retention (license clause 2.2): list every canonical
-    # upstream component the checkpoint stitches together. Anyone using,
-    # copying, modifying, or sharing this GGUF must keep these visible.
-    writer.add_array("general.tags", [
-        "asr",
-        "speech-recognition",
-        "audio-llm",
-        "FunASRNano",
-        display_name,
-        "SenseVoiceEncoderSmall",
-        "Qwen3-0.6B",
-    ])
-    writer.add_string("general.description",
-                      f"{display_name} (Alibaba FunAudioLLM): "
-                      "SenseVoiceEncoderSmall encoder + 2-layer audio "
-                      "adaptor + Qwen3-0.6B LLM. Bundled Qwen3-0.6B "
-                      "weights are derivative of Qwen/Qwen3-0.6B "
-                      "(Apache-2.0). Converted from FunAudioLLM/"
-                      f"{display_name} model.pt; see "
-                      "https://github.com/modelscope/FunASR/blob/main/"
-                      "MODEL_LICENSE for FunASR redistribution terms.")
+    # Clean per-variant display name (the headline general.name). The
+    # `display_name` variable below is the repo-cased slug, still used for
+    # the url / tags / description attribution strings.
+    _CLEAN_NAME = {
+        "fun-asr-nano-2512":     "Fun-ASR Nano",
+        "fun-asr-mlt-nano-2512": "Fun-ASR Nano Multilingual",
+    }
+    clean_name = _CLEAN_NAME.get(variant)
+    if clean_name is None:
+        raise RuntimeError(
+            f"unrecognised funasr_nano variant {variant!r}; "
+            f"expected one of {sorted(_CLEAN_NAME)}"
+        )
+    add_general_identity(
+        writer,
+        name=clean_name,
+        basename=variant.rsplit("-", 1)[0] if "-" in variant else variant,
+        size_label=size_label,
+        file_type=int(REFERENCE_FILE_TYPE),
+        languages=hp["languages"],
+        version="2512",
+        author="Alibaba Group / FunAudioLLM",
+        organization="FunAudioLLM",
+        license="apache-2.0",
+        license_name="Apache License 2.0",
+        license_link="https://www.apache.org/licenses/LICENSE-2.0",
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+        url=f"https://huggingface.co/FunAudioLLM/{display_name}",
+        source_url="https://github.com/modelscope/FunASR",
+        # Component attribution: list every canonical upstream component
+        # the checkpoint stitches together so downstream consumers see
+        # source + model names without reading external docs.
+        tags=[
+            "asr",
+            "speech-recognition",
+            "audio-llm",
+            "FunASRNano",
+            display_name,
+            "SenseVoiceEncoderSmall",
+            "Qwen3-0.6B",
+        ],
+        description=(
+            f"{display_name} (Alibaba FunAudioLLM): "
+            "SenseVoiceEncoderSmall encoder + 2-layer audio "
+            "adaptor + Qwen3-0.6B LLM. Bundled Qwen3-0.6B "
+            "weights are derivative of Qwen/Qwen3-0.6B "
+            "(Apache-2.0). Converted from FunAudioLLM/"
+            f"{display_name} model.pt."
+        ),
+    )
 
     # ----- stt.variant -----
     writer.add_string("stt.variant", variant)
@@ -804,29 +815,6 @@ def convert(model_dir: Path, out_path: Path, variant: str, display_name: str) ->
 # ---------------------------------------------------------------------------
 
 
-def _looks_like_repo_id(s: str) -> bool:
-    return "/" in s and not Path(s).exists()
-
-
-def _download_snapshot(repo_id: str, revision: str | None) -> Path:
-    slug = slug_from_repo_id(repo_id)
-    models_root = os.environ.get("TRANSCRIBE_MODELS_DIR")
-    local_dir = Path(models_root) / slug if models_root else None
-    if local_dir is not None:
-        local_dir.mkdir(parents=True, exist_ok=True)
-    if revision:
-        print(f"Downloading {repo_id}@{revision} from Hugging Face...")
-    else:
-        print(f"Downloading {repo_id} from Hugging Face "
-              f"(no revision pin; reproducibility depends on upstream)...")
-    resolved = snapshot_download(
-        repo_id=repo_id,
-        revision=revision,
-        local_dir=str(local_dir) if local_dir is not None else None,
-    )
-    return Path(resolved)
-
-
 SLUG_TO_VARIANT = {
     "Fun-ASR-Nano-2512": "fun-asr-nano-2512",
 }
@@ -850,9 +838,9 @@ def main(argv: list[str]) -> int:
                    help="stt.variant string (default: derived from slug)")
     args = p.parse_args(argv[1:])
 
-    if _looks_like_repo_id(args.model):
+    if looks_like_repo_id(args.model):
         repo_id = args.repo_id or args.model
-        model_dir = _download_snapshot(args.model, args.revision)
+        model_dir = download_snapshot(args.model, args.revision)
     else:
         model_dir = Path(args.model)
         if not model_dir.is_dir():
@@ -884,7 +872,7 @@ def main(argv: list[str]) -> int:
     else:
         output_slug = raw_slug or variant
 
-    convert(model_dir, out_path, variant, display_name=output_slug)
+    convert(model_dir, out_path, variant, display_name=output_slug, repo_id=repo_id)
     return 0
 
 

@@ -83,11 +83,19 @@ hparams and tensor catalog mapping. Shared logic lives in
 `scripts/lib/` (plain importable module, not an installable package —
 each per-family `uv` env adds `scripts/lib/` to `sys.path`):
 
-- `gguf_common.py` — GGUF metadata writer helpers, tensor name
-  canonicalization, fp32/f16/bf16 `encode_for_gguf()`, manifest writer,
-  file hashing.
+- `gguf_common.py` — GGUF identity/KV helpers (`add_general_identity`),
+  output-name derivation (`slug_from_repo_id`, `gguf_name`),
+  reference-dtype routing + fp32/f16/bf16 `encode_for_gguf()`,
+  special-token id helper (`safe_id`), and frontend-normalize
+  canonicalization (`canonicalize_normalize`).
 - `quant_policy.py` — preset name registry (names only; quantization
   math lives in `transcribe-quantize`).
+
+Manifest writing, file hashing, HF snapshot resolution, sharded
+safetensors reading, and tensor-name canonicalization are **currently
+duplicated per-converter**, not shared — candidates for extraction into
+`scripts/lib/`. The "Converter Manifest" section above describes the
+target contract, not a shared implementation that exists today.
 
 Family-specific converter code remains responsible for:
 

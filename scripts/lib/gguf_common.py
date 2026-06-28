@@ -39,6 +39,103 @@ def gguf_name(slug: str, quant: str) -> str:
     return f"{slug}-{quant.upper()}.gguf"
 
 
+def add_general_identity(
+    writer: gguf.GGUFWriter,
+    *,
+    name: str,
+    basename: str,
+    size_label: str | None = None,
+    file_type: GGMLQuantizationType | int | None = None,
+    languages: list[str] | None = None,
+    author: str | None = None,
+    organization: str | None = None,
+    version: str | None = None,
+    license: str | None = None,
+    license_name: str | None = None,
+    license_link: str | None = None,
+    repo_url: str | None = None,
+    url: str | None = None,
+    source_url: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """Write the conventional `general.*` identity block for a converter.
+
+    Centralises the GGUF metadata keys llama.cpp / ggml tooling expects so
+    every transcribe.cpp GGUF carries a consistent, human-friendly identity
+    instead of a bare slug. Keys map 1:1 onto the llama.cpp `Keys.General`
+    namespace (gguf-py/gguf/constants.py), so any inspector built for
+    llama.cpp or whisper.cpp reads them without surprises.
+
+    `general.architecture` is NOT written here — the GGUFWriter constructor
+    emits it automatically from its `arch` argument.
+
+    Required (every GGUF should carry these):
+      name         friendly display name, e.g. "Parakeet TDT 0.6B v3".
+                   This is the headline string; set it explicitly per
+                   variant rather than auto-composing from basename.
+      basename     family slug, e.g. "parakeet-tdt".
+
+    Recommended / optional (write what is known; None is skipped, leaving
+    the KV absent — pass exactly what the converter already emitted so the
+    existing key footprint is preserved):
+      size_label   parameter-count class, e.g. "0.6B" (compute_size_label).
+      file_type    reference dtype enum (int(REFERENCE_FILE_TYPE)).
+      languages    BCP-47 / ISO-639 codes the model supports.
+      author        creating lab/company, e.g. "NVIDIA", "OpenAI".
+      organization  upstream HF org, e.g. "nvidia", "openai".
+      version       model version string, e.g. "v3", "2507".
+      license       SPDX expression, e.g. "apache-2.0", "cc-by-4.0".
+      license_name  human-friendly license name.
+      license_link  URL to the full license text.
+      repo_url      canonical upstream repo (HF model page is fine).
+      url           homepage / paper / release page.
+      source_url    original project homepage when converted from another
+                    format (provenance; e.g. an upstream GitHub repo).
+      description   one-paragraph free-form description.
+      tags          search/classification tags.
+    """
+    if not name:
+        raise ValueError("general.name is required")
+    if not basename:
+        raise ValueError("general.basename is required")
+
+    writer.add_string("general.name",       name)
+    writer.add_string("general.basename",   basename)
+    if version is not None:
+        writer.add_string("general.version", version)
+    if size_label is not None:
+        writer.add_string("general.size_label", size_label)
+
+    if author is not None:
+        writer.add_string("general.author",       author)
+    if organization is not None:
+        writer.add_string("general.organization", organization)
+
+    if license is not None:
+        writer.add_string("general.license",      license)
+    if license_name is not None:
+        writer.add_string("general.license.name", license_name)
+    if license_link is not None:
+        writer.add_string("general.license.link", license_link)
+
+    if repo_url is not None:
+        writer.add_string("general.repo_url",    repo_url)
+    if url is not None:
+        writer.add_string("general.url",         url)
+    if source_url is not None:
+        writer.add_string("general.source.url",  source_url)
+    if description is not None:
+        writer.add_string("general.description", description)
+
+    if file_type is not None:
+        writer.add_uint32("general.file_type", int(file_type))
+    if languages is not None:
+        writer.add_array("general.languages",  languages)
+    if tags is not None:
+        writer.add_array("general.tags",   tags)
+
+
 # llama.cpp / whisper.cpp tokenizer.ggml.token_type values. We follow
 # the same conventions so an inspector built for either project can
 # read our GGUFs without surprises.
@@ -184,3 +281,66 @@ def canonicalize_normalize(raw) -> str:
         f"add an alias entry in scripts/lib/gguf_common.py "
         f"or update the intake schema enum."
     )
+
+
+# Large array / blob KVs, in canonical trailer order. These are relocated to the
+# end of the KV section so range-read consumers can fetch the small scalar
+# metadata (general.*, stt.*, tokenizer identity) without pulling the multi-MB
+# tokenizer tables. GGUF has no KV offset index — readers parse KVs sequentially
+# — so anything a remote consumer wants cheaply must precede these.
+BULK_KV_KEYS = (
+    "tokenizer.ggml.tokens",
+    "tokenizer.ggml.scores",
+    "tokenizer.ggml.token_type",
+    "tokenizer.ggml.merges",
+    "tokenizer.chat_template",
+)
+
+
+def move_bulk_metadata_last(writer) -> list[str]:
+    """Move the large tokenizer KVs to the end of every split's KV section.
+
+    The internal mechanism behind `gguf_writer()` — converters should build
+    their writer via that factory rather than calling this directly, so the
+    streaming-friendly layout is automatic and cannot be forgotten. Keeps the
+    small, range-read-friendly scalar metadata first regardless of the order the
+    converter emitted KVs in. Returns the keys actually moved (for logging and
+    tests); a no-op when none of the bulk keys are present.
+    """
+    kv_data = getattr(writer, "kv_data", None)
+    if not isinstance(kv_data, list) or not all(isinstance(s, dict) for s in kv_data):
+        raise RuntimeError(
+            "move_bulk_metadata_last: writer.kv_data is not the expected "
+            "list[dict] (gguf API drift?); refusing to reorder silently."
+        )
+    moved: list[str] = []
+    for shard in kv_data:
+        for key in BULK_KV_KEYS:
+            if key in shard:
+                shard[key] = shard.pop(key)  # dict preserves insertion order
+                if key not in moved:
+                    moved.append(key)
+    return moved
+
+
+class _BulkLastGGUFWriter(gguf.GGUFWriter):
+    """GGUFWriter that relocates the bulk tokenizer KVs to the trailer at write
+    time. Hooked at write_kv_data_to_file (not write_header_to_file): the header
+    pass calls add_shard_kv_data(), which appends split.* scalar KVs, so we must
+    reorder *after* those are present but immediately before the KV dict is
+    serialized. The header only writes the KV count, which reordering leaves
+    unchanged."""
+
+    def write_kv_data_to_file(self) -> None:
+        move_bulk_metadata_last(self)
+        super().write_kv_data_to_file()
+
+
+def gguf_writer(path, arch: str, **kwargs) -> gguf.GGUFWriter:
+    """Construct a GGUFWriter that automatically emits the bulk tokenizer KVs
+    (tokens / scores / token_type / merges / chat_template) in a trailer after
+    all scalar metadata, so remote consumers can range-read the small metadata
+    prefix without pulling the multi-MB tokenizer tables. Converters MUST build
+    their writer through this factory instead of gguf.GGUFWriter directly — that
+    is the single place the streaming layout is enforced."""
+    return _BulkLastGGUFWriter(path, arch, **kwargs)

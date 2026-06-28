@@ -122,6 +122,20 @@ transcribe_status Loader::open(const char * path) {
             break;
     }
 
+    // Copy every scalar-string KV into the metadata map. This mirrors
+    // llama.cpp's generic metadata accessor: the public API exposes one
+    // keyed getter (transcribe_model_meta_val_str) instead of a typed
+    // accessor per field, so adding a new string KV in the converter needs
+    // no API change. Non-string KVs (hparams, arrays such as the token
+    // list) are intentionally skipped — this is identity/display metadata.
+    const int64_t n_kv = gguf_get_n_kv(gguf_);
+    for (int64_t i = 0; i < n_kv; ++i) {
+        if (gguf_get_kv_type(gguf_, i) != GGUF_TYPE_STRING) {
+            continue;
+        }
+        meta_.emplace(gguf_get_key(gguf_, i), gguf_get_val_str(gguf_, i));
+    }
+
     return TRANSCRIBE_OK;
 }
 

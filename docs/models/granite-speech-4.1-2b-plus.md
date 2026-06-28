@@ -16,11 +16,9 @@ variant). Takes a 16 kHz mono WAV and produces a transcript, optionally
 interleaved with `[SS:N]` word-timestamp markers (centiseconds since
 segment start).
 
-Translation pairs: English ↔ French, English ↔ German, English ↔ Spanish,
-English ↔ Portuguese. Always via English — there is no direct fr↔de,
-fr↔es, etc. Pass the target language as a BCP-47 code via
-`--translate --target-language <code>`; the source language is inferred
-from the audio.
+This variant is transcription-only. Unlike the base
+[`granite-speech-4.1-2b`](granite-speech-4.1-2b.md), it does not perform
+speech translation.
 
 See IBM's [model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus)
 for training data, intended use, and upstream evaluation methodology.
@@ -81,15 +79,6 @@ interleaved with words:
 
 ```
 [SS:23] And [SS:52] so [SS:92] my [SS:121] fellow [SS:154] Americans ...
-```
-
-Translation:
-
-```bash
-build/bin/transcribe-cli \
-  -m models/granite-speech-4.1-2b-plus/granite-speech-4.1-2b-plus-Q8_0.gguf \
-  --translate --target-language de \
-  samples/jfk.wav
 ```
 
 ## Performance
@@ -153,7 +142,7 @@ Linux 6.18 (Fedora 43), transcribe.cpp `dbe5814`.
 |-----------------------------|--------|
 | Transcribe (English)        | Yes    |
 | Transcribe (fr/de/es/pt)    | Yes    |
-| Translate (En→X)            | Yes (`--translate --target-language <bcp47>`) |
+| Translate                   | No (ASR-only variant; use the base [granite-speech-4.1-2b](granite-speech-4.1-2b.md) for translation) |
 | Word-level timestamps       | Yes (`--timestamps word`, `[SS:N]` markers) |
 | Speaker diarization         | No (upstream supports via prompt; not exposed in v1 of transcribe.cpp) |
 

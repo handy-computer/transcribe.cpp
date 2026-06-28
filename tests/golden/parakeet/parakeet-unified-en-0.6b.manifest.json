@@ -44,7 +44,6 @@
       "word"
     ],
     "streaming": true,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "tolerance_file": "tests/tolerances/parakeet.json",

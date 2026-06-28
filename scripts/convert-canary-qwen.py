@@ -76,12 +76,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from gguf import GGMLQuantizationType, LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
+    add_general_identity,
     encode_for_gguf,
     gguf_name,
     reference_dtype_for,
@@ -102,7 +104,8 @@ REFERENCE_GGML_TYPE = GGMLQuantizationType.BF16
 VARIANT_PROFILES: dict[str, dict[str, Any]] = {
     "canary-qwen-2.5b": {
         "size_label":   "2.5B",
-        "license":      "CC-BY-4.0",
+        "license":      "cc-by-4.0",
+        "license_name": "Creative Commons Attribution 4.0",
         "license_link": "https://creativecommons.org/licenses/by/4.0/",
         "languages":    ["en"],
         # Upstream tokenizer to pull vocab.json + merges.txt + chat_template
@@ -174,7 +177,12 @@ def load_salm(model_spec: str):
 
 def fetch_lm_tokenizer(lm_repo: str) -> Path:
     """Snapshot-download the LM tokenizer files into the standard HF
-    cache (or $TRANSCRIBE_MODELS_DIR/<slug>/) and return the local dir."""
+    cache (or $TRANSCRIBE_MODELS_DIR/<slug>/) and return the local dir.
+
+    Intentionally does not use lib.hf_source.download_snapshot: this is a
+    partial fetch (allow_patterns) of tokenizer files from the LM backbone
+    repo, not a full checkpoint snapshot of the model being converted.
+    """
     from huggingface_hub import snapshot_download
 
     slug = slug_from_repo_id(lm_repo)
@@ -591,7 +599,7 @@ def resolve_variant(model_spec: str, repo_id_arg: str | None) -> tuple[str, dict
 # ---------------------------------------------------------------------------
 
 
-def convert(model_spec: str, out_path: Path, variant: str, profile: dict) -> None:
+def convert(model_spec: str, out_path: Path, variant: str, profile: dict, repo_id: str | None = None) -> None:
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
 
     model = load_salm(model_spec)
@@ -665,15 +673,23 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict) -> Non
     print(f"Tokenizer: {len(tok['tokens'])} tokens, {len(tok['merges'])} merges")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "canary_qwen")
+    writer = gguf_writer(str(out_path), "canary_qwen")
 
     # ---- general.* ----
-    writer.add_string("general.basename",     "canary-qwen")
-    writer.add_string("general.size_label",   profile["size_label"])
-    writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",    profile["languages"])
-    writer.add_string("general.license",      profile["license"])
-    writer.add_string("general.license.link", profile["license_link"])
+    add_general_identity(
+        writer,
+        name="Canary-Qwen 2.5B",
+        basename="canary-qwen",
+        size_label=profile["size_label"],
+        file_type=REFERENCE_FILE_TYPE,
+        languages=profile["languages"],
+        author="NVIDIA",
+        organization="nvidia",
+        license=profile["license"],
+        license_name=profile["license_name"],
+        license_link=profile["license_link"],
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+    )
 
     # ---- stt.variant + capability KV ----
     writer.add_string("stt.variant", variant)
@@ -917,7 +933,7 @@ def main(argv: list[str]) -> int:
         out_path = REPO_ROOT / "models" / variant / gguf_name(variant, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert(args.model, out_path, variant, profile)
+    convert(args.model, out_path, variant, profile, repo_id=(args.repo_id or args.model))
     return 0
 
 

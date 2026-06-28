@@ -159,7 +159,6 @@
       "none"
     ],
     "streaming": false,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "upstream_benchmarks": [
@@ -195,7 +194,7 @@
     "Qwen3-0.6B chat template: language hint (`language=\"中文\"`) and hotwords are passed through `model.generate()`. The exact prompt template (system/user formatting + audio token placement) is not in the config; Stage 2 must capture it from FunASR's generate() to round-trip into the GGUF chat template KV.",
     "Sibling variant in the wild: FunAudioLLM/Fun-ASR-MLT-Nano-2512 covers 31 languages with the same architecture. Family naming chosen (`funasr_nano`) accommodates it as a sibling variant when ported. Stage 1 confirms only fun-asr-nano-2512 here.",
     "ITN (`itn=True`) is exposed at the Python API level. SenseVoice handled this via prefix tokens; Fun-ASR-Nano likely handles it via the LLM prompt template. Stage 2 must capture the on/off prompt difference for round-trip into the C++ public API (mirroring the transcribe_sensevoice_params pattern landed earlier).",
-    "FunASR's VAD path uses a separate fsmn-vad model and is NOT a property of FunASRNano itself; capabilities.voice_activity_detection is therefore false. Same for diarization. Streaming is also false despite README marketing claims — the LLM decode loop is non-streaming."
+    "FunASR ships a separate fsmn-vad model for voice activity, but that is NOT a property of FunASRNano itself. Diarization likewise relies on separate models; capabilities.speaker_diarization is therefore false. Streaming is also false despite README marketing claims — the LLM decode loop is non-streaming."
   ],
   "intake_gaps": [
     {

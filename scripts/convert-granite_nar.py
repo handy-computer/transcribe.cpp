@@ -50,19 +50,17 @@ import torch
 from gguf import GGUFWriter, GGUFValueType
 from safetensors.torch import safe_open
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import resolve_model_dir  # noqa: E402
+from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
+    add_general_identity,
+)
+
 REF_DTYPE = "BF16"
 TOKEN_TYPE_NORMAL = 1
 TOKEN_TYPE_CONTROL = 3
 TOKEN_TYPE_USER_DEFINED = 4
-
-
-def hf_resolve(model_arg: str, revision: str | None):
-    """Return a local directory containing the HF model files."""
-    p = Path(model_arg).expanduser().resolve()
-    if p.is_dir():
-        return p
-    from huggingface_hub import snapshot_download
-    return Path(snapshot_download(model_arg, revision=revision))
 
 
 def read_tokenizer(model_dir: Path) -> dict:
@@ -471,7 +469,7 @@ def main(argv: list[str]) -> int:
     repo_id = args.repo_id or args.model
     variant = repo_id.split("/")[-1]
 
-    model_dir = hf_resolve(args.model, args.revision)
+    model_dir = resolve_model_dir(args.model, args.revision)
     print(f"Source: {model_dir}")
 
     config = json.loads((model_dir / "config.json").read_text())
@@ -499,16 +497,26 @@ def main(argv: list[str]) -> int:
     out_path = outdir / f"{variant}-{REF_DTYPE}.gguf"
     print(f"Writing GGUF: {out_path}")
 
-    writer = GGUFWriter(str(out_path), "granite_speech_nar")
+    writer = gguf_writer(str(out_path), "granite_speech_nar")
 
     # ---- general.* ----
-    writer.add_string("general.basename", "granite-speech-nar")
     languages = ["en", "fr", "de", "es", "pt"]
-    writer.add_array("general.languages", languages)
+    add_general_identity(
+        writer,
+        name="Granite Speech 4.1 2B NAR",
+        basename="granite-speech-nar",
+        languages=languages,
+        author="IBM",
+        organization="ibm-granite",
+        license="apache-2.0",
+        license_name="Apache License 2.0",
+        license_link="https://www.apache.org/licenses/LICENSE-2.0",
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+    )
 
     # ---- stt.variant + capabilities ----
     writer.add_string("stt.variant", variant)
-    writer.add_bool("stt.capability.translation", False)
+    writer.add_bool("stt.capability.translate", False)
     writer.add_bool("stt.capability.lang_detect", False)
     writer.add_bool("stt.capability.word_timestamps", False)
     writer.add_bool("stt.capability.speaker_diarization", False)

@@ -29,6 +29,7 @@
 #include "transcribe.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,14 @@ struct transcribe_model {
     // variant is whatever the family decided (loader leaves it empty if
     // stt.variant was absent; the family supplies a default).
     std::string variant;
+
+    // All scalar-string GGUF metadata KVs (general.*, stt.variant,
+    // tokenizer.ggml.model, chat_template, ...), keyed by GGUF key. Copied
+    // from the loader right after the per-family load() returns — the loader
+    // outlives that call, so no family handler has to populate this. Exposed
+    // read-only via transcribe_model_meta_val_str(); this mirrors llama.cpp's
+    // single generic metadata accessor rather than a typed accessor per field.
+    std::map<std::string, std::string> meta;
 
     // Runtime backend currently bound to this model. Empty string means
     // "no backend bound" — both pre-binding and the model == NULL case
@@ -158,12 +167,32 @@ struct transcribe_model {
     // calls this once after deciding the language list.
     void set_languages(std::vector<std::string> langs);
 
+    // Replace the translation-target language list (the set valid for
+    // run_params::target_language under TRANSCRIBE_TASK_TRANSLATE). Same
+    // model-owned-storage discipline as set_languages(): copies the
+    // strings in and republishes caps.translate_target_languages + count.
+    void set_translate_target_languages(std::vector<std::string> langs);
+
+    // Optional translation pair contract, stored as "src>dst" strings from
+    // stt.translation.pairs. Empty means "not advertised" and leaves generic
+    // pair validation inert.
+    void set_translation_pairs(std::vector<std::string> pairs);
+    bool allows_translation_pair(const char * src, const char * dst) const;
+
 private:
     // Backing storage for the languages chain. Kept private so the only
     // way to mutate it is through set_languages(), which guarantees the
     // capability struct's pointer + count stay in sync.
     std::vector<std::string>  language_storage_;
     std::vector<const char *> language_ptrs_;
+
+    // Backing storage for the translation-target chain, mutated only via
+    // set_translate_target_languages() for the same sync guarantee.
+    std::vector<std::string>  translate_target_storage_;
+    std::vector<const char *> translate_target_ptrs_;
+
+    // Backing storage for optional generic translation pair validation.
+    std::vector<std::string> translation_pair_storage_;
 };
 
 namespace transcribe {

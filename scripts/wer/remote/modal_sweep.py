@@ -131,6 +131,8 @@ image = (
             "samples/wer/raw/**", "samples/wer/librispeech-*/**",
             "samples/wer/fleurs-*/**", "samples/wer/*.manifest.jsonl",
             "reports/**",
+            "target/**", "**/target/**", "bindings/**", "samples/**",
+            "dist/**", "wheelhouse-local/**", "notes/**", "canary/**",
             "scripts/envs/**", "**/__pycache__/**", "**/.venv/**",
             "**/.uv/**", "**/.git/**", ".git/**",
             ".claude/**", "docs/**", "tests/golden/**",
@@ -164,6 +166,8 @@ ref_image = (
             "samples/wer/raw/**", "samples/wer/librispeech-*/**",
             "samples/wer/fleurs-*/**", "samples/wer/*.manifest.jsonl",
             "reports/**",
+            "target/**", "**/target/**", "bindings/**", "samples/**",
+            "dist/**", "wheelhouse-local/**", "notes/**", "canary/**",
             "scripts/envs/**/.venv/**", "**/__pycache__/**", "**/.uv/**",
             "**/.git/**", ".git/**",
             ".claude/**", "docs/**", "tests/golden/**",
@@ -285,7 +289,18 @@ def debug_dump(model_repo: str, model_file: str) -> dict:
         token=os.environ["HF_TOKEN"],
     )
     audio = "/work/samples/jfk.wav"
-    assert os.path.exists(audio), f"missing sample: {audio}"
+    if not os.path.exists(audio):
+        # samples/** is excluded from the source mount (it holds the multi-GB
+        # LibriSpeech extract), so synthesize a short 16 kHz tone — enough to
+        # exercise model load + first compute, which is where load-time CUDA
+        # crashes surface.
+        import wave, struct, math
+        audio = "/tmp/_debug_tone.wav"
+        with wave.open(audio, "w") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+            w.writeframes(b"".join(
+                struct.pack("<h", int(3000 * math.sin(2 * math.pi * 220 * i / 16000)))
+                for i in range(16000 * 3)))
     # TRANSCRIBE_DUMP_DIR pins intermediate tensors via ggml_set_output so
     # ggml_backend_tensor_get reads each one before the scheduler reuses
     # its buffer slot (otherwise post_* and early blocks alias to the
@@ -315,6 +330,14 @@ def dump_debug(model_repo: str, model_file: str) -> None:
     Prints stderr lines that contain STATS so we can diff F16 vs Q4_K_M."""
     result = debug_dump.remote(model_repo, model_file)
     print(f"=== {result['model_repo']} / {result['model_file']} (rc={result['rc']}) ===")
+    if result["rc"] != 0:
+        # Crash case (e.g. CUDA load/compute abort): the filtered STATS view
+        # would hide the actual error, so dump full stderr + stdout verbatim.
+        print("--- FULL STDERR (rc != 0) ---")
+        print(result["stderr"])
+        print("--- FULL STDOUT (rc != 0) ---")
+        print(result["stdout"])
+        return
     for line in result["stderr"].splitlines():
         if "STATS " in line or "FAIL" in line.upper() or "ERR" in line.upper():
             print(line)

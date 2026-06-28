@@ -20,6 +20,7 @@
 
 #include "transcribe.h"
 
+#include <map>
 #include <string>
 
 struct gguf_context;
@@ -69,6 +70,11 @@ public:
     const std::string & arch()    const { return arch_; }
     const std::string & variant() const { return variant_; }
 
+    // All scalar-string metadata KVs read on open(), keyed by GGUF key.
+    // Copied onto the model after dispatch and surfaced publicly via
+    // transcribe_model_meta_val_str(). Never affects dispatch.
+    const std::map<std::string, std::string> & meta() const { return meta_; }
+
     // Borrowed pointer to the underlying gguf_context. Valid until the
     // Loader is destroyed or release_gguf() is called. Returns nullptr
     // before a successful open().
@@ -83,6 +89,7 @@ private:
     std::string    path_;
     std::string    arch_;
     std::string    variant_;
+    std::map<std::string, std::string> meta_;
     gguf_context * gguf_ = nullptr;
 };
 

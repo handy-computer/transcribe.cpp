@@ -93,7 +93,6 @@
     "translation": null,
     "timestamps": [],
     "streaming": false,
-    "voice_activity_detection": null,
     "speaker_diarization": null
   },
   "upstream_benchmarks": [],

@@ -291,6 +291,43 @@ transcribe_status validate_run_params_common(
             return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
         }
     }
+    // Translation-target gate: for a TRANSLATE request naming a target
+    // language, reject up front when the model advertises a target set
+    // (n > 0) that does not include it. Mirrors the source-language check
+    // above and returns the same code. An empty/unadvertised set (old
+    // GGUFs, ASR-only models) makes this inert; family-level target/pair
+    // checks (e.g. canary's pivot pairs) still apply on top.
+    if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
+        params->target_language != nullptr &&
+        session->model->caps.n_translate_target_languages > 0 &&
+        session->model->caps.translate_target_languages != nullptr)
+    {
+        bool found = false;
+        for (int i = 0; i < session->model->caps.n_translate_target_languages; ++i) {
+            const char * entry =
+                session->model->caps.translate_target_languages[i];
+            if (entry != nullptr &&
+                std::strcmp(entry, params->target_language) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+        }
+    }
+    // Translation-pair gate: when a GGUF advertises exact src>dst pairs and
+    // the caller supplied both sides, reject unsupported directions before
+    // family dispatch. A missing source hint keeps this inert because most
+    // families do not perform generic language detection here.
+    if (params->task == TRANSCRIBE_TASK_TRANSLATE &&
+        params->language != nullptr &&
+        params->target_language != nullptr &&
+        !session->model->allows_translation_pair(params->language,
+                                                 params->target_language))
+    {
+        return TRANSCRIBE_ERR_UNSUPPORTED_LANGUAGE;
+    }
     return TRANSCRIBE_OK;
 }
 
@@ -1524,7 +1561,17 @@ extern "C" transcribe_status transcribe_model_load_file(
     // Hand off. The handler may take ownership of the gguf_context via
     // loader.release_gguf(); if it doesn't, the Loader destructor frees
     // it normally on stack unwinding.
-    return arch->load(loader, params, out_model);
+    const transcribe_status st = arch->load(loader, params, out_model);
+
+    // Copy the string-metadata map onto the model once, centrally. The
+    // loader read it during open() and outlives arch->load(), so we set it
+    // here instead of in every per-family handler. `variant` is owned by the
+    // family (it may default it when stt.variant was absent) and stays on its
+    // own accessor; this map is the generic general.* / display surface.
+    if (st == TRANSCRIBE_OK && out_model != nullptr && *out_model != nullptr) {
+        (*out_model)->meta = loader.meta();
+    }
+    return st;
 }
 
 extern "C" void transcribe_model_free(struct transcribe_model * model) {
@@ -2647,6 +2694,19 @@ extern "C" const char * transcribe_model_variant_string(const struct transcribe_
         return "";
     }
     return model->variant.c_str();
+}
+
+extern "C" const char * transcribe_model_meta_val_str(
+    const struct transcribe_model * model, const char * key) {
+    // Generic GGUF string-metadata getter, mirroring llama_model_meta_val_str.
+    // Returns a model-owned string (valid until the model is freed) or "" when
+    // the model/key is null or the key is absent. There is no fallback to the
+    // variant slug — callers that want one read transcribe_model_variant_string.
+    if (model == nullptr || key == nullptr) {
+        return "";
+    }
+    const auto it = model->meta.find(key);
+    return it != model->meta.end() ? it->second.c_str() : "";
 }
 
 extern "C" int transcribe_tokenize(

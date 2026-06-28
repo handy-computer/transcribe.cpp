@@ -61,13 +61,15 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from gguf import GGUFWriter, LlamaFileType
+from gguf import LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
+    add_general_identity,
     gguf_name,
     slug_from_repo_id,
 )
@@ -89,37 +91,59 @@ REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
 
 VARIANT_PROFILES: dict[str, dict[str, Any]] = {
     "canary-1b": {
+        "display_name":   "Canary 1B",
         "version":        "v1",
         "size_label":     "1B",
         "prompt_format":  "canary",
         # canary-1b is the only family member under a non-commercial
         # license. Surface it in general.license so downstream tooling
         # (and humans inspecting the GGUF) cannot miss the distinction.
-        "license":        "CC-BY-NC-4.0",
+        "license":        "cc-by-nc-4.0",
+        "license_name":   "Creative Commons Attribution-NonCommercial 4.0",
         "license_link":   "https://creativecommons.org/licenses/by-nc/4.0/",
     },
     "canary-1b-v2": {
+        "display_name":   "Canary 1B v2",
         "version":        "v2",
+        # AST excludes Latvian (lv): NVIDIA's card notes seamless-m4t, used
+        # to build the AST training data, does not support Latvian — so v2
+        # translates 24 of its 25 ASR languages. lv stays ASR-only.
+        "translation_exclude": ["lv"],
         "size_label":     "1B",
         "prompt_format":  "canary2",
-        "license":        "CC-BY-4.0",
+        "license":        "cc-by-4.0",
+        "license_name":   "Creative Commons Attribution 4.0",
         "license_link":   "https://creativecommons.org/licenses/by/4.0/",
     },
     "canary-1b-flash": {
+        "display_name":   "Canary 1B Flash",
         "version":        "1b-flash",
         "size_label":     "1B",
         "prompt_format":  "canary2",
-        "license":        "CC-BY-4.0",
+        "license":        "cc-by-4.0",
+        "license_name":   "Creative Commons Attribution 4.0",
         "license_link":   "https://creativecommons.org/licenses/by/4.0/",
     },
     "canary-180m-flash": {
+        "display_name":   "Canary 180M Flash",
         "version":        "180m-flash",
         "size_label":     "180M",
         "prompt_format":  "canary2",
-        "license":        "CC-BY-4.0",
+        "license":        "cc-by-4.0",
+        "license_name":   "Creative Commons Attribution 4.0",
         "license_link":   "https://creativecommons.org/licenses/by/4.0/",
     },
 }
+
+
+def english_pivot_pairs(languages: list[str]) -> list[str]:
+    """Canary translation is advertised only between English and X."""
+    return [
+        pair
+        for lang in languages
+        if lang != "en"
+        for pair in (f"en>{lang}", f"{lang}>en")
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +537,7 @@ def resolve_variant(model_spec: str, repo_id_arg: str | None) -> tuple[str, dict
 # ---------------------------------------------------------------------------
 
 
-def convert(model_spec: str, out_path: Path, variant: str, profile: dict, languages: list[str]) -> None:
+def convert(model_spec: str, out_path: Path, variant: str, profile: dict, languages: list[str], repo_id: str | None = None) -> None:
     from omegaconf import OmegaConf
 
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
@@ -566,21 +590,36 @@ def convert(model_spec: str, out_path: Path, variant: str, profile: dict, langua
     print(f"encoder_decoder_proj: {'present' if has_proj else 'absent (dims match)'}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "canary")
+    writer = gguf_writer(str(out_path), "canary")
 
     # ----- general.* -----
-    writer.add_string("general.basename",     "canary")
-    writer.add_string("general.size_label",   profile["size_label"])
-    writer.add_string("general.version",      profile["version"])
-    writer.add_uint32("general.file_type",    int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",    languages)
-    writer.add_string("general.license",      profile["license"])
-    writer.add_string("general.license.link", profile["license_link"])
+    add_general_identity(
+        writer,
+        name=profile["display_name"],
+        basename="canary",
+        size_label=profile["size_label"],
+        file_type=REFERENCE_FILE_TYPE,
+        languages=languages,
+        author="NVIDIA",
+        organization="nvidia",
+        version=profile["version"],
+        license=profile["license"],
+        license_name=profile["license_name"],
+        license_link=profile["license_link"],
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+    )
 
-    # ----- stt.variant + capability KV -----
+    # ----- stt.variant + capability/translation KVs -----
     writer.add_string("stt.variant", variant)
     writer.add_bool  ("stt.capability.translate",   True)
     writer.add_bool  ("stt.capability.lang_detect", False)
+    # Translation may cover a subset of the ASR languages (e.g. v2 omits
+    # Latvian). Derive the AST set from the ASR list minus the per-variant
+    # exclusion so target_languages and pairs stay accurate to the card.
+    xlat_exclude = set(profile.get("translation_exclude", ()))
+    xlat_langs = [lang for lang in languages if lang not in xlat_exclude]
+    writer.add_array ("stt.translation.target_languages", xlat_langs)
+    writer.add_array ("stt.translation.pairs", english_pivot_pairs(xlat_langs))
     # All shipping variants except canary-1b expose timestamp tokens.
     has_timestamps = "<|timestamp|>" in tok["specials"]
     writer.add_bool  ("stt.capability.timestamps",  has_timestamps)
@@ -837,7 +876,7 @@ def main(argv: list[str]) -> int:
         out_path = REPO_ROOT / "models" / variant / gguf_name(variant, REFERENCE_DTYPE_LABEL)
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert(args.model, out_path, variant, profile, languages)
+    convert(args.model, out_path, variant, profile, languages, repo_id=(args.repo_id or args.model))
     return 0
 
 

@@ -143,12 +143,12 @@
     ],
     "language_detection": true,
     "translation": true,
+    "translation_target_languages": ["en"],
     "timestamps": [
       "segment",
       "word"
     ],
     "streaming": false,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "tolerance_file": "tests/tolerances/whisper-medium.json",

@@ -38,7 +38,6 @@
     "translation": false,
     "timestamps": ["none"],
     "streaming": false,
-    "voice_activity_detection": false,
     "speaker_diarization": false
   },
   "tolerance_file": "tests/tolerances/funasr_nano.json",

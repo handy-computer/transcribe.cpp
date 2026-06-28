@@ -52,7 +52,6 @@
     "translation": false,
     "timestamps": [],
     "streaming": false,
-    "voice_activity_detection": false,
     "speaker_diarization": false,
     "comment": "Monolingual English ASR over a 105M Conformer-CTC. Model card publishes WER on internal medical-dictation datasets (RAD-DICT/GENERAL-DICT/FM-DICT) and on MIMIC Eye Gaze; no LibriSpeech number is reported. Stage 7 gates against the measured Oracle reference baseline on LibriSpeech test-clean — see reports/wer/medasr-REF.test-clean.{jsonl,score.json}."
   },

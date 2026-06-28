@@ -531,7 +531,8 @@ transcribe_status init_context(
 // replaces this body with the full pipeline.
 // Map a BCP-47 language code or English name to the language name the
 // granite-speech instruction expects. Returns nullptr for unsupported.
-// granite-speech (1b/2b/-plus) advertises fr / de / es / pt / ja.
+// granite-speech base AR variants advertise fr/de/es/pt/ja plus translate-only
+// targets it/zh; -plus is ASR-only, so this helper is not used for it.
 static const char * granite_target_language_name(const char * code_or_name) {
     if (code_or_name == nullptr || *code_or_name == '\0') return nullptr;
     std::string s = code_or_name;
@@ -541,6 +542,9 @@ static const char * granite_target_language_name(const char * code_or_name) {
     if (s == "es" || s == "spa" || s == "spanish")                   return "Spanish";
     if (s == "pt" || s == "por" || s == "portuguese")                return "Portuguese";
     if (s == "ja" || s == "jpn" || s == "japanese")                  return "Japanese";
+    if (s == "it" || s == "ita" || s == "italian")                   return "Italian";
+    if (s == "zh" || s == "zh-cn" || s == "cmn" ||
+        s == "mandarin" || s == "chinese")                           return "Mandarin";
     if (s == "en" || s == "eng" || s == "english")                   return "English";
     return nullptr;
 }

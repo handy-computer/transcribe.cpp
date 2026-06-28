@@ -460,6 +460,33 @@ int samples_per_encoder_frame(const MoonshineStreamingHParams & hp) {
     return 4 * hp.enc_frame_len;
 }
 
+// Greedy-decode generation budget, in tokens. Some inputs never trigger EOS
+// — a repeated-digit "double nine ... double nine" phone-number clip makes
+// the model emit one token forever, identical to the HF reference — so the
+// greedy loop needs a bound tighter than the architectural position cap
+// (dec_max_position_embeddings, thousands of tokens) to avoid a long,
+// pointless compute loop. The upstream model card recommends
+// max_new_tokens ~= audio_seconds * 6.5; we follow that, plus a small floor
+// so very short clips keep ample headroom, and let the caller take min()
+// with the position cap (so this only ever tightens, never loosens, the
+// existing wall). Audio length is derived from T_enc: one encoder frame
+// spans samples_per_encoder_frame(hp) PCM samples at the 16 kHz native rate.
+// Returns 0 when the frame geometry is unknown, meaning "no duration bound".
+int decode_generation_budget(const MoonshineStreamingHParams & hp, int T_enc) {
+    if (hp.enc_frame_len <= 0 || T_enc <= 0) {
+        return 0;
+    }
+    constexpr int64_t k_native_sr_hz   = 16000;
+    constexpr int64_t k_budget_num     = 13;  // 6.5 tokens/sec, numerator
+    constexpr int64_t k_budget_den     = 2;   //                 denominator
+    constexpr int64_t k_budget_floor   = 24;  // headroom for very short clips
+    const int64_t audio_samples =
+        static_cast<int64_t>(T_enc) * samples_per_encoder_frame(hp);
+    return static_cast<int>(
+        audio_samples * k_budget_num / (k_budget_den * k_native_sr_hz)
+        + k_budget_floor);
+}
+
 // Encoder helper: build the encoder graph for `n_samples` PCM,
 // upload PCM + per-layer sliding-window masks, compute, and read the
 // final-LN output into the caller-provided host vector. Updates
@@ -885,6 +912,15 @@ transcribe_status decode_from_kv_cache(
     const int eos           = hp.eos_token_id;             // 2
     const int max_pos       = hp.dec_max_position_embeddings;
 
+    // Effective stop bound for the greedy loop: the duration-based generation
+    // budget AND the hard decoder position cap, whichever is tighter. The
+    // duration budget bounds runaway loops (inputs the model never ends) to a
+    // few dozen tokens; the position cap remains the absolute backstop. A
+    // budget of 0 (unknown frame geometry) falls back to the position cap.
+    const int dur_budget = decode_generation_budget(hp, T_enc);
+    const int gen_cap    = (dur_budget > 0 && (max_pos <= 0 || dur_budget < max_pos))
+                         ? dur_budget : max_pos;
+
     std::vector<int32_t> generated_ids;
     int next_token = -1;
     int n_past     = 0;
@@ -1011,7 +1047,7 @@ transcribe_status decode_from_kv_cache(
     // dec.logits_raw.gen20 dumps the logits that predict the 20th
     // emitted token (n_past == 20 at that step). Matches moonshine.
     constexpr int k_mid_gen_step = 20;
-    while (next_token != eos && n_past < max_pos) {
+    while (next_token != eos && n_past < gen_cap) {
         if (cc->poll_abort()) return TRANSCRIBE_ERR_ABORTED;
 
         const bool is_mid_gen = (n_past == k_mid_gen_step);
@@ -1031,20 +1067,24 @@ transcribe_status decode_from_kv_cache(
     }
 
     // The greedy loop exits either because next_token == eos (complete) or
-    // because n_past reached the position cap (max_pos). When the last token
-    // was not eos the transcript hit the output cap before end-of-stream and
+    // because n_past reached gen_cap — the tighter of the duration-based
+    // generation budget and the hard position cap (max_pos). When the last
+    // token was not eos the transcript hit the cap before end-of-stream and
     // is incomplete: flag it via transcribe_was_truncated() and emit one WARN,
-    // mirroring qwen3_asr. The loop itself is unchanged — this only observes
-    // its exit. See docs/input-limits.md.
+    // mirroring qwen3_asr. Reaching the duration budget (gen_cap < max_pos)
+    // typically means a hallucination loop the model never ends — bounding it
+    // here avoids a long, pointless decode. See docs/input-limits.md.
     if (next_token != eos) {
         cc->was_truncated = true;
+        const bool hit_duration_budget = (gen_cap < max_pos) || (max_pos <= 0);
         transcribe::log_msg(
             TRANSCRIBE_LOG_LEVEL_WARN,
             "moonshine run: output truncated at %d tokens — decode reached the "
-            "position cap (%d) before end-of-stream; the transcript may be "
-            "incomplete. This model is intended for short utterances. See "
-            "transcribe_capabilities.max_audio_ms.",
-            static_cast<int>(generated_ids.size()), max_pos);
+            "%s (%d) before end-of-stream; the transcript may be incomplete. "
+            "See transcribe_capabilities.max_audio_ms.",
+            static_cast<int>(generated_ids.size()),
+            hit_duration_budget ? "generation budget" : "position cap",
+            gen_cap);
     }
 
     cc->t_decode_us += ggml_time_us() - t_decode_start;

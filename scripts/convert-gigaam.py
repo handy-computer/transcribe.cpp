@@ -86,15 +86,17 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
+from gguf import GGMLQuantizationType, LlamaFileType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
     TOKEN_TYPE_UNUSED,
+    add_general_identity,
     gguf_name,
     safe_id,
     slug_from_repo_id,
@@ -156,6 +158,15 @@ VARIANT_PROFILES: dict[str, dict] = {
 GENERAL_BASENAME = "gigaam-v3"
 GENERAL_VERSION  = "v3"
 GENERAL_LANGUAGES = ["ru"]
+
+
+# Friendly general.name per variant slug (== profile["variant"]).
+VARIANT_DISPLAY_NAMES: dict[str, str] = {
+    "gigaam-v3-ctc":      "GigaAM v3 CTC",
+    "gigaam-v3-e2e-ctc":  "GigaAM v3 E2E-CTC",
+    "gigaam-v3-rnnt":     "GigaAM v3 RNN-T",
+    "gigaam-v3-e2e-rnnt": "GigaAM v3 E2E-RNN-T",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +488,7 @@ def tensor_to_fp32_numpy(t) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def convert(variant_key: str, slug: str, out_path: Path) -> None:
+def convert(variant_key: str, slug: str, out_path: Path, repo_id: str | None = None) -> None:
     from omegaconf import OmegaConf
 
     print(f"Output dtype: {REFERENCE_DTYPE_LABEL} (source/reference dtype)")
@@ -587,14 +598,29 @@ def convert(variant_key: str, slug: str, out_path: Path) -> None:
     print(f"Total params (encoder+head): {total:,} -> size_label={size_label}")
 
     print(f"Writing GGUF to {out_path}")
-    writer = GGUFWriter(str(out_path), "gigaam")
+    writer = gguf_writer(str(out_path), "gigaam")
 
     # ----- general.* -----
-    writer.add_string("general.basename",   GENERAL_BASENAME)
-    writer.add_string("general.size_label", size_label)
-    writer.add_string("general.version",    GENERAL_VERSION)
-    writer.add_uint32("general.file_type",  int(REFERENCE_FILE_TYPE))
-    writer.add_array ("general.languages",  GENERAL_LANGUAGES)
+    if profile["variant"] not in VARIANT_DISPLAY_NAMES:
+        raise ValueError(
+            f"unknown gigaam variant: {profile['variant']!r}; "
+            f"add it to VARIANT_DISPLAY_NAMES"
+        )
+    add_general_identity(
+        writer,
+        name=VARIANT_DISPLAY_NAMES[profile["variant"]],
+        basename=GENERAL_BASENAME,
+        size_label=size_label,
+        version=GENERAL_VERSION,
+        file_type=REFERENCE_FILE_TYPE,
+        languages=GENERAL_LANGUAGES,
+        author="Salute Developers",
+        organization="ai-sage",
+        license="mit",
+        license_name="MIT License",
+        license_link="https://opensource.org/license/mit",
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+    )
 
     # ----- stt.variant + head_kind -----
     writer.add_string("stt.variant", profile["variant"])
@@ -826,7 +852,7 @@ def main(argv: list[str]) -> int:
     else:
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert(variant_key, slug, out_path)
+    convert(variant_key, slug, out_path, repo_id=args.model)
     return 0
 
 

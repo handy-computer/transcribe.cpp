@@ -70,12 +70,15 @@ from gguf import GGMLQuantizationType, GGUFWriter, LlamaFileType
 from safetensors.torch import safe_open
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.hf_source import resolve_model_dir  # noqa: E402
 from lib.gguf_common import (  # noqa: E402
+    gguf_writer,
     TOKEN_TYPE_BYTE,
     TOKEN_TYPE_CONTROL,
     TOKEN_TYPE_NORMAL,
     TOKEN_TYPE_UNKNOWN,
     TOKEN_TYPE_UNUSED,
+    add_general_identity,
     encode_for_gguf,
     reference_dtype_for,
     slug_from_repo_id,
@@ -88,14 +91,6 @@ REFERENCE_FILE_TYPE = LlamaFileType.ALL_F32
 
 
 # ---- Source resolution ----------------------------------------------------
-
-
-def hf_resolve(model_arg: str, revision: str | None) -> Path:
-    p = Path(model_arg).expanduser().resolve()
-    if p.is_dir():
-        return p
-    from huggingface_hub import snapshot_download
-    return Path(snapshot_download(model_arg, revision=revision))
 
 
 # ---- Hparam extraction ----------------------------------------------------
@@ -350,7 +345,7 @@ def main(argv: list[str]) -> int:
     repo_id = args.repo_id or args.model
     slug = slug_from_repo_id(repo_id)
 
-    model_dir = hf_resolve(args.model, args.revision)
+    model_dir = resolve_model_dir(args.model, args.revision)
     print(f"Source: {model_dir}")
 
     config = json.loads((model_dir / "config.json").read_text())
@@ -378,16 +373,26 @@ def main(argv: list[str]) -> int:
     out_path = outdir / f"{slug}-{REF_DTYPE}.gguf"
     print(f"Writing GGUF: {out_path}")
 
-    writer = GGUFWriter(str(out_path), ARCH_KEY)
+    writer = gguf_writer(str(out_path), ARCH_KEY)
 
     # ---- general.* ----
-    writer.add_string("general.basename", "medasr")
-    writer.add_uint32("general.file_type", int(REFERENCE_FILE_TYPE))
-    writer.add_array("general.languages", ["en"])
+    add_general_identity(
+        writer,
+        name="MedASR",
+        basename="medasr",
+        file_type=REFERENCE_FILE_TYPE,
+        languages=["en"],
+        author="Google",
+        organization="google",
+        license="other",
+        license_name="health-ai-developer-foundations",
+        license_link="https://developers.google.com/health-ai-developer-foundations/terms",
+        repo_url=(f"https://huggingface.co/{repo_id}" if repo_id else None),
+    )
 
     # ---- stt.variant + capabilities ----
     writer.add_string("stt.variant", slug)
-    writer.add_bool("stt.capability.translation", False)
+    writer.add_bool("stt.capability.translate", False)
     writer.add_bool("stt.capability.lang_detect", False)
     writer.add_bool("stt.capability.word_timestamps", False)
     writer.add_bool("stt.capability.speaker_diarization", False)
