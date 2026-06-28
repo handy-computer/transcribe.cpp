@@ -38,6 +38,23 @@ variants (where the tiny cross-check against the HF Transformers reference
 on the same manifest landed within 0.01pp of our port), and is not a
 numerical drift in the port.
 
+**One utterance the model cannot end.** A single LibriSpeech test-clean clip —
+`7176-92135-0020` (7.2 s; reference *"DOUBLE NINE TWO THREE ELSINORE DOUBLE NINE
+YES HALLO IS THAT YOU HORATIO HAMLET SPEAKING"*) — drives the **medium** model
+into a hallucination loop: it collapses the repeated digits into an endless run
+of a single token and never emits end-of-stream. This is a property of the
+upstream weights, **not the port** — the HF Transformers reference does the
+identical thing (with `max_new_tokens` unbounded it emits an uninterrupted
+stream of `9`s and never stops). The tiny and small variants terminate normally
+on this clip; only medium loops. Our decoder bounds the runaway with a
+duration-based generation budget (≈6.5 tokens per second of audio, plus a small
+floor — matching the model card's recommended `max_new_tokens ≈ audio_seconds ×
+6.5`), so the loop stops after a few dozen tokens instead of grinding to the
+decoder's position cap. The utterance is flagged via
+`transcribe_was_truncated()` and surfaced as an `output truncated` error
+(non-zero exit); its incomplete transcript is counted as a miss in the 2.16%
+WER above, so the baseline already includes this one pathological utterance.
+
 Q6_K / Q5_K_M / Q4_K_M GGUFs are not currently shipped for this variant.
 
 ## Quick Start
